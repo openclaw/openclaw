@@ -772,4 +772,41 @@ describe("device-pair /pair approve", () => {
       text: "⚠️ This command requires operator.admin to approve this pairing request.",
     });
   });
+
+  it("fails closed when gateway scopes are absent", async () => {
+    vi.mocked(listDevicePairing).mockResolvedValueOnce({
+      pending: [
+        {
+          requestId: "req-1",
+          deviceId: "victim-phone",
+          publicKey: "victim-public-key",
+          displayName: "Victim Phone",
+          platform: "ios",
+          ts: Date.now(),
+        },
+      ],
+      paired: [],
+    });
+    vi.mocked(approveDevicePairing).mockImplementationOnce(async () => ({
+      status: "forbidden",
+      missingScope: "operator.admin",
+    }));
+
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "approve latest",
+        commandBody: "/pair approve latest",
+        gatewayClientScopes: undefined,
+      }),
+    );
+
+    expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1", {
+      callerScopes: [],
+    });
+    expect(result).toEqual({
+      text: "⚠️ This command requires operator.admin to approve this pairing request.",
+    });
+  });
 });
