@@ -487,12 +487,35 @@ function buildMissingPairingScopeReply(): { text: string } {
   };
 }
 
-function isMissingPairingScope(gatewayClientScopes: string[] | null): boolean {
-  return Boolean(
-    gatewayClientScopes &&
-    !gatewayClientScopes.includes("operator.pairing") &&
-    !gatewayClientScopes.includes("operator.admin"),
-  );
+function isInternalGatewayPairingCaller(params: {
+  channel: string;
+  gatewayClientScopes?: readonly string[] | null;
+}): boolean {
+  return params.channel === "webchat" || Array.isArray(params.gatewayClientScopes);
+}
+
+function isMissingPairingScope(params: {
+  channel: string;
+  gatewayClientScopes?: readonly string[] | null;
+}): boolean {
+  if (!isInternalGatewayPairingCaller(params)) {
+    return false;
+  }
+  const gatewayClientScopes = params.gatewayClientScopes;
+  return !Array.isArray(gatewayClientScopes)
+    ? true
+    : !gatewayClientScopes.includes("operator.pairing") &&
+        !gatewayClientScopes.includes("operator.admin");
+}
+
+function resolveApprovalCallerScopes(params: {
+  channel: string;
+  gatewayClientScopes?: readonly string[] | null;
+}): readonly string[] | undefined {
+  if (!isInternalGatewayPairingCaller(params)) {
+    return undefined;
+  }
+  return Array.isArray(params.gatewayClientScopes) ? params.gatewayClientScopes : [];
 }
 
 const PAIR_SETUP_NON_ISSUING_ACTIONS = new Set([
@@ -569,7 +592,7 @@ export default definePluginEntry({
         const action = tokens[0]?.toLowerCase() ?? "";
         const gatewayClientScopes = Array.isArray(ctx.gatewayClientScopes)
           ? ctx.gatewayClientScopes
-          : null;
+          : undefined;
         api.logger.info?.(
           `device-pair: /pair invoked channel=${ctx.channel} sender=${ctx.senderId ?? "unknown"} action=${
             action || "new"
@@ -591,7 +614,7 @@ export default definePluginEntry({
         }
 
         if (action === "approve") {
-          if (isMissingPairingScope(gatewayClientScopes)) {
+          if (isMissingPairingScope({ channel: ctx.channel, gatewayClientScopes })) {
             return buildMissingPairingScopeReply();
           }
           const requested = tokens[1]?.trim();
@@ -622,16 +645,21 @@ export default definePluginEntry({
           if (!pending) {
             return { text: "Pairing request not found." };
           }
-          const approved = gatewayClientScopes
-            ? await approveDevicePairing(pending.requestId, {
-                callerScopes: gatewayClientScopes,
-              })
-            : await approveDevicePairing(pending.requestId);
+          const callerScopes = resolveApprovalCallerScopes({
+            channel: ctx.channel,
+            gatewayClientScopes,
+          });
+          const approved =
+            callerScopes === undefined
+              ? await approveDevicePairing(pending.requestId)
+              : await approveDevicePairing(pending.requestId, { callerScopes });
           if (!approved) {
             return { text: "Pairing request not found." };
           }
           if (approved.status === "forbidden") {
-            return { text: `⚠️ Cannot approve a request requiring ${approved.missingScope}.` };
+            return {
+              text: `⚠️ This command requires ${approved.missingScope} to approve this pairing request.`,
+            };
           }
           const label = approved.device.displayName?.trim() || approved.device.deviceId;
           const platform = approved.device.platform?.trim();
@@ -640,7 +668,7 @@ export default definePluginEntry({
         }
 
         if (action === "cleanup" || action === "clear" || action === "revoke") {
-          if (isMissingPairingScope(gatewayClientScopes)) {
+          if (isMissingPairingScope({ channel: ctx.channel, gatewayClientScopes })) {
             return buildMissingPairingScopeReply();
           }
           const cleared = await clearDeviceBootstrapTokens();
@@ -656,7 +684,10 @@ export default definePluginEntry({
         if (authLabelResult.error) {
           return { text: `Error: ${authLabelResult.error}` };
         }
-        if (issuesPairSetupCode(action) && isMissingPairingScope(gatewayClientScopes)) {
+        if (
+          issuesPairSetupCode(action) &&
+          isMissingPairingScope({ channel: ctx.channel, gatewayClientScopes })
+        ) {
           return buildMissingPairingScopeReply();
         }
 
