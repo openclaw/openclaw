@@ -317,6 +317,53 @@ describe("verifyPlivoWebhook", () => {
     expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
     expect(second.isReplay).toBe(true);
   });
+
+  it("detects V3 replay when query parameters are reordered", () => {
+    const authToken = "test-auth-token";
+    const nonce = "nonce-v3-reorder";
+    const postBody = "CallUUID=uuid&CallStatus=in-progress";
+
+    const urlA = "https://example.com/voice/webhook?flow=answer&callId=abc";
+    const urlB = "https://example.com/voice/webhook?callId=abc&flow=answer";
+
+    const signatureA = plivoV3Signature({ authToken, urlWithQuery: urlA, postBody, nonce });
+    const signatureB = plivoV3Signature({ authToken, urlWithQuery: urlB, postBody, nonce });
+    expect(signatureA).toBe(signatureB);
+
+    const first = verifyPlivoWebhook(
+      {
+        headers: {
+          host: "example.com",
+          "x-forwarded-proto": "https",
+          "x-plivo-signature-v3": signatureA,
+          "x-plivo-signature-v3-nonce": nonce,
+        },
+        rawBody: postBody,
+        url: urlA,
+        method: "POST",
+        query: { flow: "answer", callId: "abc" },
+      },
+      authToken,
+    );
+
+    const second = verifyPlivoWebhook(
+      {
+        headers: {
+          host: "example.com",
+          "x-forwarded-proto": "https",
+          "x-plivo-signature-v3": signatureB,
+          "x-plivo-signature-v3-nonce": nonce,
+        },
+        rawBody: postBody,
+        url: urlB,
+        method: "POST",
+        query: { callId: "abc", flow: "answer" },
+      },
+      authToken,
+    );
+
+    expectReplayResultPair(first, second);
+  });
 });
 
 describe("verifyTelnyxWebhook", () => {
