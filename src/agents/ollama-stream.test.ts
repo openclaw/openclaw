@@ -6,7 +6,7 @@ import {
   convertToOllamaMessages,
   parseNdjsonStream,
   resolveOllamaBaseUrlForRun,
-} from "../../extensions/ollama/api.js";
+} from "../plugin-sdk/ollama.js";
 
 describe("convertToOllamaMessages", () => {
   it("converts user text messages", () => {
