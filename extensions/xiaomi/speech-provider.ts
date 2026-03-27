@@ -141,7 +141,7 @@ export function buildMimoSpeechProvider(): SpeechProviderPlugin {
         audioBuffer,
         outputFormat: "wav",
         fileExtension: ".wav",
-        voiceCompatible: req.target === "voice-note",
+        voiceCompatible: false,
       };
     },
 
