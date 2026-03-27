@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import {
   isOllamaCompatProvider,
   resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "../../../../extensions/ollama/src/stream.js";
-import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+} from "../../../plugin-sdk/ollama.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import { buildEmbeddedSystemPrompt } from "../system-prompt.js";

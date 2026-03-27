@@ -110,6 +110,7 @@
   "msteams",
   "nextcloud-talk",
   "nostr",
+  "ollama",
   "provider-auth",
   "provider-auth-api-key",
   "provider-auth-result",
