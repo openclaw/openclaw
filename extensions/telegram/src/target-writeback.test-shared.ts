@@ -7,6 +7,21 @@ export const loadCronStore = vi.fn();
 export const resolveCronStorePath = vi.fn();
 export const saveCronStore = vi.fn();
 
+vi.mock("openclaw/plugin-sdk/runtime-env", () => {
+  const logger = {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    child: () => logger,
+  };
+  return {
+    createSubsystemLogger: () => logger,
+    danger: (value: unknown) => String(value),
+    logVerbose: vi.fn(),
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
