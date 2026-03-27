@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
+import { applyLitellmProviderConfig } from "../../extensions/litellm/onboard.js";
 import {
   applyMinimaxApiConfig,
   applyMinimaxApiProviderConfig,
@@ -36,7 +37,6 @@ import {
 } from "../../extensions/xai/onboard.js";
 import { applyXiaomiConfig, applyXiaomiProviderConfig } from "../../extensions/xiaomi/onboard.js";
 import { applyZaiConfig, applyZaiProviderConfig } from "../../extensions/zai/onboard.js";
-import { applyLitellmProviderConfig } from "../../extensions/litellm/onboard.js";
 import { SYNTHETIC_DEFAULT_MODEL_ID } from "../agents/synthetic-models.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
