@@ -1,7 +1,11 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
-import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
+import {
+  readAcpSessionEntry,
+  resolveSessionStorePathForAcp,
+} from "../acp/runtime/session-meta.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
+import { loadSessionStore, resolveSessionStoreEntry } from "../config/sessions/store.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -185,9 +189,45 @@ export function startAcpSpawnParentStreamRelay(params: {
       }),
     );
   };
+
+  // Check if parent session is a visible Discord channel/thread.
+  // For Discord, suppress intermediate progress/stall/resumed events to avoid
+  // cluttering the thread with duplicate-looking messages.
+  const isDiscordVisibleChannel = (): boolean => {
+    try {
+      const storePathResult = resolveSessionStorePathForAcp({
+        sessionKey: parentSessionKey,
+      });
+      const store = loadSessionStore(storePathResult.storePath);
+      const resolved = resolveSessionStoreEntry({ store, sessionKey: parentSessionKey });
+      const channel = resolved.existing?.channel;
+      return channel === "discord";
+    } catch {
+      return false;
+    }
+  };
+
+  const shouldSuppressSystemEvent = (contextKey: string): boolean => {
+    if (!contextKey) {
+      return false;
+    }
+    const suppressedContexts = [":progress", ":stall", ":resumed"];
+    for (const ctx of suppressedContexts) {
+      if (contextKey.endsWith(ctx)) {
+        return isDiscordVisibleChannel();
+      }
+    }
+    return false;
+  };
+
   const emit = (text: string, contextKey: string) => {
     const cleaned = text.trim();
     if (!cleaned) {
+      return;
+    }
+    if (shouldSuppressSystemEvent(contextKey)) {
+      logEvent("system_event_suppressed", { contextKey, reason: "discord_visible_channel" });
+      wake();
       return;
     }
     logEvent("system_event", { contextKey, text: cleaned });
