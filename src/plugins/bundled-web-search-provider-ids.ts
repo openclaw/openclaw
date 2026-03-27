@@ -10,7 +10,5 @@ export function resolveBundledWebSearchPluginId(
   if (!(normalizedProviderId in BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS)) {
     return undefined;
   }
-  return BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS[
-    normalizedProviderId as keyof typeof BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS
-  ];
+  return BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS[normalizedProviderId];
 }

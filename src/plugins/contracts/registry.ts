@@ -127,10 +127,10 @@ function loadWebSearchProviderContractRegistry(): WebSearchProviderContractEntry
       pluginIds: BUNDLED_WEB_SEARCH_PLUGIN_IDS,
     });
     webSearchProviderContractRegistryCache = registry.webSearchProviders.map((entry) => ({
-        pluginId: entry.pluginId,
-        provider: entry.provider,
-        credentialValue: resolveWebSearchCredentialValue(entry.provider),
-      }));
+      pluginId: entry.pluginId,
+      provider: entry.provider,
+      credentialValue: resolveWebSearchCredentialValue(entry.provider),
+    }));
   }
   return webSearchProviderContractRegistryCache;
 }
