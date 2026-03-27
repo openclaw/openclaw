@@ -128,19 +128,20 @@ and provider plugins have dedicated guides linked above.
 
 A single plugin can register any number of capabilities via the `api` object:
 
-| Capability           | Registration method                           | Detailed guide                                                                  |
-| -------------------- | --------------------------------------------- | ------------------------------------------------------------------------------- |
-| Text inference (LLM) | `api.registerProvider(...)`                   | [Provider Plugins](/plugins/sdk-provider-plugins)                               |
-| Channel / messaging  | `api.registerChannel(...)`                    | [Channel Plugins](/plugins/sdk-channel-plugins)                                 |
-| Speech (TTS/STT)     | `api.registerSpeechProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Media understanding  | `api.registerMediaUnderstandingProvider(...)` | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Image generation     | `api.registerImageGenerationProvider(...)`    | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Web search           | `api.registerWebSearchProvider(...)`          | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Agent tools          | `api.registerTool(...)`                       | Below                                                                           |
-| Custom commands      | `api.registerCommand(...)`                    | [Entry Points](/plugins/sdk-entrypoints)                                        |
-| Event hooks          | `api.registerHook(...)`                       | [Entry Points](/plugins/sdk-entrypoints)                                        |
-| HTTP routes          | `api.registerHttpRoute(...)`                  | [Internals](/plugins/architecture#gateway-http-routes)                          |
-| CLI subcommands      | `api.registerCli(...)`                        | [Entry Points](/plugins/sdk-entrypoints)                                        |
+| Capability            | Registration method                           | Detailed guide                                                                  |
+| --------------------- | --------------------------------------------- | ------------------------------------------------------------------------------- |
+| Text inference (LLM)  | `api.registerProvider(...)`                   | [Provider Plugins](/plugins/sdk-provider-plugins)                               |
+| CLI inference backend | `api.registerCliBackend(...)`                 | [CLI Backends](/gateway/cli-backends)                                           |
+| Channel / messaging   | `api.registerChannel(...)`                    | [Channel Plugins](/plugins/sdk-channel-plugins)                                 |
+| Speech (TTS/STT)      | `api.registerSpeechProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Media understanding   | `api.registerMediaUnderstandingProvider(...)` | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Image generation      | `api.registerImageGenerationProvider(...)`    | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Web search            | `api.registerWebSearchProvider(...)`          | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Agent tools           | `api.registerTool(...)`                       | Below                                                                           |
+| Custom commands       | `api.registerCommand(...)`                    | [Entry Points](/plugins/sdk-entrypoints)                                        |
+| Event hooks           | `api.registerHook(...)`                       | [Entry Points](/plugins/sdk-entrypoints)                                        |
+| HTTP routes           | `api.registerHttpRoute(...)`                  | [Internals](/plugins/architecture#gateway-http-routes)                          |
+| CLI subcommands       | `api.registerCli(...)`                        | [Entry Points](/plugins/sdk-entrypoints)                                        |
 
 For the full registration API, see [SDK Overview](/plugins/sdk-overview#registration-api).
 
@@ -223,6 +224,15 @@ internal imports — never import your own plugin through its SDK path.
 <Check>Internal imports use local modules, not SDK self-imports</Check>
 <Check>Tests pass (`pnpm test -- extensions/my-plugin/`)</Check>
 <Check>`pnpm check` passes (in-repo plugins)</Check>
+
+## Beta Release Testing
+
+1. Watch for GitHub release tags on [openclaw/openclaw](https://github.com/openclaw/openclaw/releases) and subscribe via `Watch` > `Releases`. Beta tags look like `v2026.3.N-beta.1`. You can also turn on notifications for the official OpenClaw X account [@openclaw](https://x.com/openclaw) for release announcements.
+2. Test your plugin against the beta tag as soon as it appears. The window before stable is typically only a few hours.
+3. Post in your plugin's thread in the `plugin-forum` Discord channel after testing with either `all good` or what broke. If you do not have a thread yet, create one.
+4. If something breaks, open or update an issue titled `Beta blocker: <plugin-name> - <summary>` and apply the `beta-blocker` label. Put the issue link in your thread.
+5. Open a PR to `main` titled `fix(<plugin-id>): beta blocker - <summary>` and link the issue in both the PR and your Discord thread. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation. Blockers with a PR get merged; blockers without one might ship anyway. Maintainers watch these threads during beta testing.
+6. Silence means green. If you miss the window, your fix likely lands in the next cycle.
 
 ## Next steps
 

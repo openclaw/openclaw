@@ -121,6 +121,22 @@ export function listInspectedDirectoryEntriesFromSources<InspectedAccount>(
   });
 }
 
+export function createInspectedDirectoryEntriesLister<InspectedAccount>(params: {
+  kind: "user" | "group";
+  inspectAccount: (
+    cfg: OpenClawConfig,
+    accountId?: string | null,
+  ) => InspectedAccount | null | undefined;
+  resolveSources: (account: InspectedAccount) => Iterable<unknown>[];
+  normalizeId: (entry: string) => string | null | undefined;
+}) {
+  return async (configParams: DirectoryConfigParams): Promise<ChannelDirectoryEntry[]> =>
+    listInspectedDirectoryEntriesFromSources({
+      ...configParams,
+      ...params,
+    });
+}
+
 export function listResolvedDirectoryEntriesFromSources<ResolvedAccount>(
   params: DirectoryConfigParams & {
     kind: "user" | "group";
@@ -137,6 +153,19 @@ export function listResolvedDirectoryEntriesFromSources<ResolvedAccount>(
     limit: params.limit,
     normalizeId: params.normalizeId,
   });
+}
+
+export function createResolvedDirectoryEntriesLister<ResolvedAccount>(params: {
+  kind: "user" | "group";
+  resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
+  resolveSources: (account: ResolvedAccount) => Iterable<unknown>[];
+  normalizeId: (entry: string) => string | null | undefined;
+}) {
+  return async (configParams: DirectoryConfigParams): Promise<ChannelDirectoryEntry[]> =>
+    listResolvedDirectoryEntriesFromSources({
+      ...configParams,
+      ...params,
+    });
 }
 
 export function listDirectoryUserEntriesFromAllowFrom(params: {

@@ -342,7 +342,7 @@ type ImageGenerateSandboxConfig = {
 async function loadReferenceImages(params: {
   imageInputs: string[];
   maxBytes?: number;
-  localRoots: string[];
+  workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
 }): Promise<
   Array<{
@@ -402,6 +402,14 @@ async function loadReferenceImages(params: {
           };
     const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
 
+    const localRoots = resolveMediaToolLocalRoots(
+      params.workspaceDir,
+      {
+        workspaceOnly: params.sandboxConfig?.workspaceOnly === true,
+      },
+      resolvedPath ? [resolvedPath] : undefined,
+    );
+
     const media = isDataUrl
       ? decodeDataUrl(resolvedImage)
       : params.sandboxConfig
@@ -412,7 +420,7 @@ async function loadReferenceImages(params: {
           })
         : await loadWebMedia(resolvedPath ?? resolvedImage, {
             maxBytes: params.maxBytes,
-            localRoots: params.localRoots,
+            localRoots,
           });
     if (media.kind !== "image") {
       throw new ToolInputError(`Unsupported media type: ${media.kind}`);
@@ -471,9 +479,6 @@ export function createImageGenerateTool(options?: {
   }
   const effectiveCfg =
     applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
-  const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
-    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
-  });
   const sandboxConfig =
     options?.sandbox && options.sandbox.root.trim()
       ? {
@@ -549,7 +554,7 @@ export function createImageGenerateTool(options?: {
       const count = resolveRequestedCount(params);
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,
-        localRoots,
+        workspaceDir: options?.workspaceDir,
         sandboxConfig,
       });
       const inputImages = loadedReferenceImages.map((entry) => entry.sourceImage);

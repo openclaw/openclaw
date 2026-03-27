@@ -20,8 +20,8 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.dmPolicy).toBe("pairing");
     expect(result.groupPolicy).toBe("allowlist");
     // requireMention has no schema-level default now — it is resolved at runtime
-    // by resolveFeishuReplyPolicy(), which defaults to false for groupPolicy=open
-    // and true otherwise.
+    // through shared channel group-policy resolution, with an open-group override
+    // that defaults to false only when requireMention is otherwise unset.
     expect(result.requireMention).toBeUndefined();
   });
 

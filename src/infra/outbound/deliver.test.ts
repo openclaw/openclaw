@@ -104,6 +104,8 @@ const whatsappChunkConfig: OpenClawConfig = {
   channels: { whatsapp: { textChunkLimit: 4000 } },
 };
 
+const expectedResolvedTmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
+
 type DeliverOutboundArgs = Parameters<DeliverModule["deliverOutboundPayloads"]>[0];
 type DeliverOutboundPayload = DeliverOutboundArgs["payloads"][number];
 type DeliverSession = DeliverOutboundArgs["session"];
@@ -502,7 +504,7 @@ describe("deliverOutboundPayloads", () => {
       "123",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
+        mediaLocalRoots: expect.arrayContaining([expectedResolvedTmpRoot]),
       }),
     );
   });
@@ -522,7 +524,7 @@ describe("deliverOutboundPayloads", () => {
       "+1555",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
+        mediaLocalRoots: expect.arrayContaining([expectedResolvedTmpRoot]),
       }),
     );
   });
@@ -585,7 +587,7 @@ describe("deliverOutboundPayloads", () => {
       "+1555",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
+        mediaLocalRoots: expect.arrayContaining([expectedResolvedTmpRoot]),
       }),
     );
   });
@@ -605,7 +607,7 @@ describe("deliverOutboundPayloads", () => {
       "imessage:+15551234567",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
+        mediaLocalRoots: expect.arrayContaining([expectedResolvedTmpRoot]),
       }),
     );
   });

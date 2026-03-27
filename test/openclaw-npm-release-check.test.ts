@@ -225,7 +225,7 @@ describe("collectReleasePackageMetadataErrors", () => {
         license: "MIT",
         repository: { url: "git+https://github.com/openclaw/openclaw.git" },
         bin: { openclaw: "openclaw.mjs" },
-        peerDependencies: { "node-llama-cpp": "3.16.2" },
+        peerDependencies: { "node-llama-cpp": "3.18.1" },
         peerDependenciesMeta: { "node-llama-cpp": { optional: true } },
       }),
     ).toEqual([]);
@@ -239,7 +239,7 @@ describe("collectReleasePackageMetadataErrors", () => {
         license: "MIT",
         repository: { url: "git+https://github.com/openclaw/openclaw.git" },
         bin: { openclaw: "openclaw.mjs" },
-        peerDependencies: { "node-llama-cpp": "3.16.2" },
+        peerDependencies: { "node-llama-cpp": "3.18.1" },
       }),
     ).toContain('package.json peerDependenciesMeta["node-llama-cpp"].optional must be true.');
   });

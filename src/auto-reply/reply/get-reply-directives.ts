@@ -361,7 +361,7 @@ export async function resolveReplyDirectives(params: {
     };
   }
 
-  const requireMention = resolveGroupRequireMention({
+  const requireMention = await resolveGroupRequireMention({
     cfg,
     ctx: sessionCtx,
     groupResolution,
@@ -448,7 +448,9 @@ export async function resolveReplyDirectives(params: {
   }
 
   let contextTokens = resolveContextTokens({
+    cfg,
     agentCfg,
+    provider,
     model,
   });
 

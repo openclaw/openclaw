@@ -1,12 +1,21 @@
 import os from "node:os";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 
 type MockFn = (...args: unknown[]) => unknown;
 type MockImplementationTarget = {
   mockImplementation: (implementation: (opts: { method?: string }) => Promise<unknown>) => unknown;
 };
+type SessionStore = Record<string, Record<string, unknown>>;
+type SessionStoreMutator = (store: SessionStore) => unknown;
+type HookRunner = {
+  hasHooks: (name?: string) => boolean;
+  runSubagentSpawning?: (...args: unknown[]) => Promise<unknown>;
+};
 
-export function createSubagentSpawnTestConfig(workspaceDir = os.tmpdir()) {
+export function createSubagentSpawnTestConfig(
+  workspaceDir = os.tmpdir(),
+  overrides?: Record<string, unknown>,
+) {
   return {
     session: {
       mainKey: "main",
@@ -27,6 +36,7 @@ export function createSubagentSpawnTestConfig(workspaceDir = os.tmpdir()) {
         workspace: workspaceDir,
       },
     },
+    ...overrides,
   };
 }
 
@@ -57,11 +67,58 @@ export function createDefaultSessionHelperMocks() {
   };
 }
 
+export function installSessionStoreCaptureMock(
+  updateSessionStoreMock: {
+    mockImplementation: (
+      implementation: (storePath: string, mutator: SessionStoreMutator) => Promise<SessionStore>,
+    ) => unknown;
+  },
+  params?: {
+    operations?: string[];
+    onStore?: (store: SessionStore) => void;
+  },
+) {
+  updateSessionStoreMock.mockImplementation(
+    async (_storePath: string, mutator: SessionStoreMutator) => {
+      params?.operations?.push("store:update");
+      const store: SessionStore = {};
+      await mutator(store);
+      params?.onStore?.(store);
+      return store;
+    },
+  );
+}
+
+export function expectPersistedRuntimeModel(params: {
+  persistedStore: SessionStore | undefined;
+  sessionKey: string | RegExp;
+  provider: string;
+  model: string;
+}) {
+  const [persistedKey, persistedEntry] = Object.entries(params.persistedStore ?? {})[0] ?? [];
+  if (typeof params.sessionKey === "string") {
+    expect(persistedKey).toBe(params.sessionKey);
+  } else {
+    expect(persistedKey).toMatch(params.sessionKey);
+  }
+  expect(persistedEntry).toMatchObject({
+    modelProvider: params.provider,
+    model: params.model,
+  });
+}
+
 export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
   loadConfig?: () => Record<string, unknown>;
   updateSessionStoreMock?: MockFn;
   pruneLegacyStoreKeysMock?: MockFn;
+  registerSubagentRunMock?: MockFn;
+  emitSessionLifecycleEventMock?: MockFn;
+  hookRunner?: HookRunner;
+  resolveAgentConfig?: (cfg: Record<string, unknown>, agentId: string) => unknown;
+  resolveAgentWorkspaceDir?: (cfg: Record<string, unknown>, agentId: string) => string;
+  resolveSubagentSpawnModelSelection?: () => string | undefined;
+  resolveSandboxRuntimeStatus?: () => { sandboxed: boolean };
   workspaceDir?: string;
   sessionStorePath?: string;
 }) {
@@ -106,14 +163,17 @@ export async function loadSubagentSpawnModuleForTest(params: {
     });
   }
 
-  vi.doMock("./subagent-registry.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("./subagent-registry.js")>();
-    return {
-      ...actual,
-      countActiveRunsForSession: () => 0,
-      registerSubagentRun: () => {},
-    };
-  });
+  if (params.emitSessionLifecycleEventMock) {
+    vi.doMock("../sessions/session-lifecycle-events.js", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../sessions/session-lifecycle-events.js")>();
+      return {
+        ...actual,
+        emitSessionLifecycleEvent: (...args: unknown[]) =>
+          params.emitSessionLifecycleEventMock?.(...args),
+      };
+    });
+  }
 
   vi.doMock("./subagent-announce.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("./subagent-announce.js")>();
@@ -127,7 +187,9 @@ export async function loadSubagentSpawnModuleForTest(params: {
     const actual = await importOriginal<typeof import("./agent-scope.js")>();
     return {
       ...actual,
-      resolveAgentWorkspaceDir: () => params.workspaceDir ?? os.tmpdir(),
+      resolveAgentConfig: params.resolveAgentConfig ?? actual.resolveAgentConfig,
+      resolveAgentWorkspaceDir:
+        params.resolveAgentWorkspaceDir ?? (() => params.workspaceDir ?? os.tmpdir()),
     };
   });
 
@@ -135,19 +197,55 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getSubagentDepthFromSessionStore: () => 0,
   }));
 
+  vi.doMock("./model-selection.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./model-selection.js")>();
+    return {
+      ...actual,
+      resolveSubagentSpawnModelSelection:
+        params.resolveSubagentSpawnModelSelection ?? actual.resolveSubagentSpawnModelSelection,
+    };
+  });
+
+  vi.doMock("./sandbox/runtime-status.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./sandbox/runtime-status.js")>();
+    return {
+      ...actual,
+      resolveSandboxRuntimeStatus:
+        params.resolveSandboxRuntimeStatus ?? actual.resolveSandboxRuntimeStatus,
+    };
+  });
+
   vi.doMock("../plugins/hook-runner-global.js", () => ({
-    getGlobalHookRunner: () => ({ hasHooks: () => false }),
+    getGlobalHookRunner: () => params.hookRunner ?? { hasHooks: () => false },
   }));
 
-  vi.doMock("../utils/delivery-context.js", () => ({
-    normalizeDeliveryContext: identityDeliveryContext,
-  }));
+  vi.doMock("../utils/delivery-context.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../utils/delivery-context.js")>();
+    return {
+      ...actual,
+      normalizeDeliveryContext: identityDeliveryContext,
+    };
+  });
 
-  vi.doMock("./tools/sessions-helpers.js", () => createDefaultSessionHelperMocks());
+  vi.doMock("./tools/sessions-helpers.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./tools/sessions-helpers.js")>();
+    return {
+      ...actual,
+      ...createDefaultSessionHelperMocks(),
+    };
+  });
 
-  const { resetSubagentRegistryForTests } = await import("./subagent-registry.js");
+  const subagentRegistry = await import("./subagent-registry.js");
+  if (params.registerSubagentRunMock) {
+    vi.spyOn(subagentRegistry, "registerSubagentRun").mockImplementation(
+      (...args: Parameters<typeof subagentRegistry.registerSubagentRun>) =>
+        params.registerSubagentRunMock?.(...args) as ReturnType<
+          typeof subagentRegistry.registerSubagentRun
+        >,
+    );
+  }
   return {
     ...(await import("./subagent-spawn.js")),
-    resetSubagentRegistryForTests,
+    resetSubagentRegistryForTests: subagentRegistry.resetSubagentRegistryForTests,
   };
 }

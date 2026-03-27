@@ -196,6 +196,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
             baseUrl: account.baseUrl,
             password: account.config.password ?? null,
             timeoutMs,
+            allowPrivateNetwork: account.config.allowPrivateNetwork === true,
           }),
         resolveAccountSnapshot: ({ account, runtime, probe }) => {
           const running = runtime?.running ?? false;

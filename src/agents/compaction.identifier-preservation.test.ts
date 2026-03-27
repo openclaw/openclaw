@@ -65,7 +65,7 @@ describe("compaction identifier-preservation instructions", () => {
   }
 
   function firstSummaryInstructions() {
-    return mockGenerateSummary.mock.calls[0]?.[5];
+    return mockGenerateSummary.mock.calls[0]?.[6];
   }
 
   it("injects identifier-preservation guidance even without custom instructions", async () => {
@@ -101,7 +101,7 @@ describe("compaction identifier-preservation instructions", () => {
 
     expect(mockGenerateSummary.mock.calls.length).toBeGreaterThan(1);
     for (const call of mockGenerateSummary.mock.calls) {
-      expect(call[5]).toContain("Preserve all opaque identifiers exactly as written");
+      expect(call[6]).toContain("Preserve all opaque identifiers exactly as written");
     }
   });
 
@@ -114,7 +114,7 @@ describe("compaction identifier-preservation instructions", () => {
     });
 
     const mergedCall = mockGenerateSummary.mock.calls.at(-1);
-    const instructions = mergedCall?.[5] ?? "";
+    const instructions = mergedCall?.[6] ?? "";
     expect(instructions).toContain("Merge these partial summaries into a single cohesive summary.");
     expect(instructions).toContain("Prioritize customer-visible regressions.");
     expect((instructions.match(/Additional focus:/g) ?? []).length).toBe(1);

@@ -157,6 +157,7 @@ describe("delivery-queue recovery", () => {
         bestEffort: true,
         gifPlayback: true,
         silent: true,
+        gatewayClientScopes: ["operator.write"],
         mirror: {
           sessionKey: "agent:main:main",
           text: "a",
@@ -174,6 +175,7 @@ describe("delivery-queue recovery", () => {
         bestEffort: true,
         gifPlayback: true,
         silent: true,
+        gatewayClientScopes: ["operator.write"],
         mirror: {
           sessionKey: "agent:main:main",
           text: "a",

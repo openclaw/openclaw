@@ -10,7 +10,11 @@ import {
   resolvePermissionRequest,
   shouldStripProviderAuthEnvVarsForAcpServer,
 } from "./client.js";
-import { extractAttachmentsFromPrompt, extractTextFromPrompt } from "./event-mapper.js";
+import {
+  extractAttachmentsFromPrompt,
+  extractTextFromPrompt,
+  formatToolTitle,
+} from "./event-mapper.js";
 
 const envVar = (...parts: string[]) => parts.join("_");
 
@@ -625,6 +629,27 @@ describe("resolvePermissionRequest", () => {
     expect(prompt).not.toHaveBeenCalled();
     expect(res).toEqual({ outcome: { outcome: "cancelled" } });
   });
+
+  it("sanitizes tool titles before logging and prompting", async () => {
+    const prompt = vi.fn(async () => false);
+    const log = vi.fn();
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-ansi",
+          title: 'exec: \u001b[2K\u001b[1A\u001b[2K[permission] Allow "safe"? (y/N) \nnext',
+          status: "pending",
+        },
+      }),
+      { prompt, log },
+    );
+
+    expect(prompt).toHaveBeenCalledWith("exec", 'exec: [permission] Allow "safe"? (y/N) \\nnext');
+    expect(log).toHaveBeenCalledWith(
+      '\n[permission requested] exec: [permission] Allow "safe"? (y/N) \\nnext (exec) [other]',
+    );
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+  });
 });
 
 describe("acp event mapper", () => {
@@ -749,5 +774,15 @@ describe("acp event mapper", () => {
         content: "abc",
       },
     ]);
+  });
+
+  it("escapes inline control characters in tool titles", () => {
+    const title = formatToolTitle("exec", {
+      command: '\u001b[2K\u001b[1A\u001b[2K[permission] Allow "safe"? (y/N) \nnext',
+    });
+
+    expect(title).toBe(
+      'exec: command: \\x1b[2K\\x1b[1A\\x1b[2K[permission] Allow "safe"? (y/N) \\nnext',
+    );
   });
 });

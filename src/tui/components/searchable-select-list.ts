@@ -1,7 +1,7 @@
 import {
   type Component,
+  getKeybindings,
   Input,
-  Key,
   isKeyRelease,
   matchesKey,
   type SelectItem,
@@ -362,7 +362,8 @@ export class SearchableSelectList implements Component {
       return;
     }
 
-    if (matchesKey(keyData, Key.escape) || matchesKey(keyData, Key.ctrl("c"))) {
+    const kb = getKeybindings();
+    if (kb.matches(keyData, "tui.select.cancel")) {
       if (this.onCancel) {
         this.onCancel();
       }

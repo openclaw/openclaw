@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSendCfgThreadingRuntime,
   expectProvidedCfgSkipsRuntimeLoad,
@@ -38,6 +38,7 @@ const hoisted = vi.hoisted(() => ({
     random: "r",
     signature: "s",
   })),
+  mockFetchGuard: vi.fn(),
 }));
 
 vi.mock("./monitor.js", async () => {
@@ -65,6 +66,14 @@ vi.mock("./signature.js", async (importOriginal) => {
   return {
     ...actual,
     generateNextcloudTalkSignature: hoisted.generateNextcloudTalkSignature,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...original,
+    fetchWithSsrFGuard: hoisted.mockFetchGuard,
   };
 });
 
@@ -415,14 +424,23 @@ describe("resolveNextcloudTalkAccount", () => {
 describe("nextcloud-talk send cfg threading", () => {
   const fetchMock = vi.fn<typeof fetch>();
 
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    // Wire the SSRF guard mock to delegate to the global fetch mock
+    hoisted.mockFetchGuard.mockImplementation(async (p: { url: string; init?: RequestInit }) => {
+      const response = await globalThis.fetch(p.url, p.init);
+      return { response, release: async () => {}, finalUrl: p.url };
+    });
+  });
+
   afterEach(() => {
     fetchMock.mockReset();
+    hoisted.mockFetchGuard.mockReset();
     vi.unstubAllGlobals();
   });
 
   it("uses provided cfg for sendMessage and skips runtime loadConfig", async () => {
     const cfg = { source: "provided" } as const;
-    vi.stubGlobal("fetch", fetchMock);
     hoisted.resolveNextcloudTalkAccount.mockReturnValue({
       accountId: "default",
       baseUrl: "https://nextcloud.example.com",
@@ -459,7 +477,6 @@ describe("nextcloud-talk send cfg threading", () => {
   it("falls back to runtime cfg for sendReaction when cfg is omitted", async () => {
     const runtimeCfg = { source: "runtime" } as const;
     hoisted.loadConfig.mockReturnValueOnce(runtimeCfg);
-    vi.stubGlobal("fetch", fetchMock);
     hoisted.resolveNextcloudTalkAccount.mockReturnValue({
       accountId: "default",
       baseUrl: "https://nextcloud.example.com",

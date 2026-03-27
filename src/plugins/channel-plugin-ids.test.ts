@@ -24,24 +24,40 @@ describe("resolveGatewayStartupPluginIds", () => {
           channels: ["discord"],
           origin: "bundled",
           enabledByDefault: undefined,
+          providers: [],
+          cliBackends: [],
         },
         {
           id: "amazon-bedrock",
           channels: [],
           origin: "bundled",
           enabledByDefault: true,
+          providers: [],
+          cliBackends: [],
+        },
+        {
+          id: "anthropic",
+          channels: [],
+          origin: "bundled",
+          enabledByDefault: undefined,
+          providers: ["anthropic"],
+          cliBackends: ["claude-cli"],
         },
         {
           id: "diagnostics-otel",
           channels: [],
           origin: "bundled",
           enabledByDefault: undefined,
+          providers: [],
+          cliBackends: [],
         },
         {
           id: "custom-sidecar",
           channels: [],
           origin: "global",
           enabledByDefault: undefined,
+          providers: [],
+          cliBackends: [],
         },
       ],
       diagnostics: [],
@@ -55,6 +71,14 @@ describe("resolveGatewayStartupPluginIds", () => {
           "diagnostics-otel": { enabled: true },
         },
       },
+      agents: {
+        defaults: {
+          model: { primary: "claude-cli/claude-sonnet-4-6" },
+          models: {
+            "claude-cli/claude-sonnet-4-6": {},
+          },
+        },
+      },
     } as OpenClawConfig;
 
     expect(
@@ -63,7 +87,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         workspaceDir: "/tmp",
         env: process.env,
       }),
-    ).toEqual(["discord", "diagnostics-otel", "custom-sidecar"]);
+    ).toEqual(["discord", "anthropic", "diagnostics-otel", "custom-sidecar"]);
   });
 
   it("does not pull default-on bundled non-channel plugins into startup", () => {
@@ -76,5 +100,26 @@ describe("resolveGatewayStartupPluginIds", () => {
         env: process.env,
       }),
     ).toEqual(["discord", "custom-sidecar"]);
+  });
+
+  it("auto-loads bundled plugins referenced by configured provider ids", () => {
+    const config = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://example.com",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGatewayStartupPluginIds({
+        config,
+        workspaceDir: "/tmp",
+        env: process.env,
+      }),
+    ).toEqual(["discord", "anthropic", "custom-sidecar"]);
   });
 });
