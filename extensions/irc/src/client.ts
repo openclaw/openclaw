@@ -234,7 +234,8 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
     if (multilineCap && hasNewlines) {
       // Use BATCH for multiline messages
-      const lines = cleaned.split("\n").filter((l) => l.length > 0);
+      // trim() removes trailing newlines but preserves blank lines in the middle (paragraph breaks)
+      const lines = cleaned.trim().split("\n");
       batchCounter++;
       const batchId = `m${batchCounter}`;
       sendRaw(`BATCH +${batchId} draft/multiline ${normalizedTarget}`);
