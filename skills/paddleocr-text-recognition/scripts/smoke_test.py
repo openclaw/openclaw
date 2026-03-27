@@ -16,11 +16,11 @@ from pathlib import Path
 # Add scripts dir to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lib import DEFAULT_TIMEOUT
-
 
 def print_config_guide() -> None:
     """Print friendly configuration guide."""
+    from lib import DEFAULT_TIMEOUT
+
     print(
         f"""
 ============================================================
@@ -67,7 +67,11 @@ def main() -> int:
         print(f"  + httpx: {httpx.__version__}")
     except ImportError:
         print("  X httpx not installed")
-        print("\nPlease install dependencies:")
+        print(
+            "\nPlease install dependencies (from the skill directory, one level above scripts/):"
+        )
+        print("  pip install -r requirements.txt")
+        print("or at minimum:")
         print("  pip install httpx")
         return 1
 
