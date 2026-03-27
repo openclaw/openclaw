@@ -458,20 +458,11 @@ const PROBE_MARGIN_MS = 2 * 60 * 1000;
 const PROBE_SCOPE_DELIMITER = "::";
 const PROBE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PROBE_KEYS = 256;
-const probeKeyCache = new Map<string, string>();
 let lastProbeStatePruneAt = 0;
 
 function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
   const scope = String(agentDir ?? "").trim();
-  const base = scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
-
-  const cached = probeKeyCache.get(base);
-  if (cached) {
-    return cached;
-  }
-
-  probeKeyCache.set(base, base);
-  return base;
+  return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
 }
 
 function pruneProbeState(now: number): void {

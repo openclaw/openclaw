@@ -139,6 +139,36 @@ timeouts that exhausted profile rotation (other errors do not advance fallback).
 When a run starts with a model override (hooks or CLI), fallbacks still end at
 `agents.defaults.model.primary` after trying any configured fallbacks.
 
+### Retry timing before fallback
+
+Before OpenClaw advances to the next fallback candidate, it retries the current
+provider/model for transient classes (for example rate limits and overloaded
+responses) with exponential backoff.
+
+Current retry timing:
+
+- Base delay: 2 seconds
+- Growth: doubles each retry attempt
+- Max delay: 30 seconds
+- Jitter: 10%
+
+Retry budgets are reason-aware (`rate_limit`, `overloaded`, and optional auth
+retry budget) and are configured by runtime retry settings.
+
+### Probe throttling and memory behavior
+
+When all profiles for a provider are cooling down, OpenClaw may periodically
+probe the primary model to recover quickly near cooldown expiry. Probe attempts
+are throttled per scope (`agentDir::provider`).
+
+Probe throttle state is bounded:
+
+- Entries expire after 24 hours of inactivity
+- Maximum tracked keys: 256 (oldest are evicted first)
+
+This keeps long-running processes from growing probe-throttle memory without
+bound.
+
 ## Related config
 
 See [Gateway configuration](/gateway/configuration) for:
