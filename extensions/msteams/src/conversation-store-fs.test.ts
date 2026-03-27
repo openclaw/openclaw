@@ -126,6 +126,25 @@ describe("msteams conversation store (fs)", () => {
 });
 
 describe("msteams conversation store (memory)", () => {
+  it("normalizes conversation ids the same way as the fs store", async () => {
+    const store = createMSTeamsConversationStoreMemory();
+
+    await store.upsert("conv-norm;messageid=123", {
+      conversation: { id: "conv-norm" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u1" },
+    });
+
+    await expect(store.get("conv-norm")).resolves.toEqual(
+      expect.objectContaining({
+        conversation: { id: "conv-norm" },
+      }),
+    );
+    await expect(store.remove("conv-norm")).resolves.toBe(true);
+    await expect(store.get("conv-norm;messageid=123")).resolves.toBeNull();
+  });
+
   it("upserts, lists, removes, and resolves users by both AAD and Bot Framework ids", async () => {
     const store = createMSTeamsConversationStoreMemory([
       {
@@ -183,5 +202,28 @@ describe("msteams conversation store (memory)", () => {
     await expect(store.remove("conv-a")).resolves.toBe(true);
     await expect(store.get("conv-a")).resolves.toBeNull();
     await expect(store.remove("missing")).resolves.toBe(false);
+  });
+
+  it("preserves existing timezone when upsert omits timezone, matching the fs store", async () => {
+    const store = createMSTeamsConversationStoreMemory();
+
+    await store.upsert("conv-tz", {
+      conversation: { id: "conv-tz" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u1" },
+      timezone: "Europe/London",
+    });
+
+    await store.upsert("conv-tz", {
+      conversation: { id: "conv-tz" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u1" },
+    });
+
+    await expect(store.get("conv-tz")).resolves.toMatchObject({
+      timezone: "Europe/London",
+    });
   });
 });

@@ -1,235 +1,47 @@
-import type { Client } from "@buape/carbon";
 import { ChannelType, MessageType } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { dispatchMock } from "./monitor.tool-result.test-harness.js";
 import {
-  dispatchMock,
-  loadConfigMock,
-  readAllowFromStoreMock,
-  updateLastRouteMock,
-  upsertPairingRequestMock,
-} from "./monitor.tool-result.test-harness.js";
-import { createDiscordMessageHandler } from "./monitor/message-handler.js";
-import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
-import { createNoopThreadBindingManager } from "./monitor/thread-bindings.js";
-
-type Config = ReturnType<typeof import("../../../src/config/config.js").loadConfig>;
-
-const BASE_CFG: Config = {
-  agents: {
-    defaults: {
-      model: { primary: "anthropic/claude-opus-4-5" },
-      workspace: "/tmp/openclaw",
-    },
-  },
-  messages: {
-    inbound: { debounceMs: 0 },
-  },
-  session: { store: "/tmp/openclaw-sessions.json" },
-};
+  captureNextDispatchCtx,
+  type Config,
+  createGuildHandler,
+  createGuildMessageEvent,
+  createGuildTextClient,
+  createMentionRequiredGuildConfig,
+  createThreadChannel,
+  createThreadClient,
+  createThreadEvent,
+  resetDiscordToolResultHarness,
+} from "./monitor.tool-result.test-helpers.js";
 
 beforeEach(() => {
-  __resetDiscordChannelInfoCacheForTest();
-  updateLastRouteMock.mockClear();
-  dispatchMock.mockClear().mockImplementation(async ({ dispatcher }) => {
-    dispatcher.sendFinalReply({ text: "hi" });
-    return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
-  });
-  readAllowFromStoreMock.mockClear().mockResolvedValue([]);
-  upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
-  loadConfigMock.mockClear().mockReturnValue(BASE_CFG);
+  resetDiscordToolResultHarness();
 });
 
-function createHandlerBaseConfig(cfg: Config): Parameters<typeof createDiscordMessageHandler>[0] {
-  return {
-    cfg,
-    discordConfig: cfg.channels?.discord,
-    accountId: "default",
-    token: "token",
-    runtime: {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: (code: number): never => {
-        throw new Error(`exit ${code}`);
-      },
-    },
-    botUserId: "bot-id",
-    guildHistories: new Map(),
-    historyLimit: 0,
-    mediaMaxBytes: 10_000,
-    textLimit: 2000,
-    replyToMode: "off",
-    dmEnabled: true,
-    groupDmEnabled: false,
-    threadBindings: createNoopThreadBindingManager("default"),
-  };
-}
-
 async function createHandler(cfg: Config) {
-  loadConfigMock.mockReturnValue(cfg);
-  return createDiscordMessageHandler({
-    ...createHandlerBaseConfig(cfg),
-    guildEntries: cfg.channels?.discord?.guilds,
-  });
+  return createGuildHandler({ cfg });
 }
 
-function createGuildTextClient() {
+function createOpenGuildConfig(
+  channels: Record<string, { allow: boolean; includeThreadStarter?: boolean }>,
+  extra: Partial<Config> = {},
+): Config {
   return {
-    fetchChannel: vi.fn().mockResolvedValue({
-      id: "c1",
-      type: ChannelType.GuildText,
-      name: "general",
-    }),
-    rest: { get: vi.fn() },
-  } as unknown as Client;
-}
-
-function createGuildMessageEvent(params: {
-  messageId: string;
-  content: string;
-  messagePatch?: Record<string, unknown>;
-  eventPatch?: Record<string, unknown>;
-}) {
-  const messageBase = {
-    timestamp: new Date().toISOString(),
-    type: MessageType.Default,
-    attachments: [],
-    embeds: [],
-    mentionedEveryone: false,
-    mentionedUsers: [],
-    mentionedRoles: [],
-  };
-  return {
-    message: {
-      id: params.messageId,
-      content: params.content,
-      channelId: "c1",
-      ...messageBase,
-      author: { id: "u1", bot: false, username: "Ada" },
-      ...params.messagePatch,
-    },
-    author: { id: "u1", bot: false, username: "Ada" },
-    member: { nickname: "Ada" },
-    guild: { id: "g1", name: "Guild" },
-    guild_id: "g1",
-    ...params.eventPatch,
-  };
-}
-
-function createThreadChannel(params: { includeStarter?: boolean; type?: ChannelType } = {}) {
-  return {
-    id: "t1",
-    type: params.type ?? ChannelType.PublicThread,
-    name: "thread-name",
-    parentId: params.type === ChannelType.PublicThread ? "forum-1" : "p1",
-    parent: {
-      id: params.type === ChannelType.PublicThread ? "forum-1" : "p1",
-      name: params.type === ChannelType.PublicThread ? "support" : "general",
-    },
-    isThread: () => true,
-    ...(params.includeStarter
-      ? {
-          fetchStarterMessage: async () => ({
-            content: "starter message",
-            author: { tag: "Alice#1", username: "Alice" },
-            createdTimestamp: Date.now(),
-          }),
-        }
-      : {}),
-  };
-}
-
-function createThreadClient(
-  params: {
-    fetchChannel?: ReturnType<typeof vi.fn>;
-    restGet?: ReturnType<typeof vi.fn>;
-  } = {},
-) {
-  return {
-    fetchChannel:
-      params.fetchChannel ??
-      vi
-        .fn()
-        .mockResolvedValueOnce({
-          id: "t1",
-          type: ChannelType.PublicThread,
-          name: "thread-name",
-          parentId: "p1",
-          ownerId: "owner-1",
-        })
-        .mockResolvedValueOnce({
-          id: "p1",
-          type: ChannelType.GuildText,
-          name: "general",
-        }),
-    rest: {
-      get:
-        params.restGet ??
-        vi.fn().mockResolvedValue({
-          content: "starter message",
-          author: { id: "u1", username: "Alice", discriminator: "0001" },
-          timestamp: new Date().toISOString(),
-        }),
-    },
-  } as unknown as Client;
-}
-
-function createThreadEvent(messageId: string, channelId = "t1") {
-  return {
-    message: {
-      id: messageId,
-      content: "thread hello",
-      channelId,
-      timestamp: new Date().toISOString(),
-      type: MessageType.Default,
-      attachments: [],
-      embeds: [],
-      mentionedEveryone: false,
-      mentionedUsers: [],
-      mentionedRoles: [],
-      author: { id: "u1", bot: false, username: "Ada" },
-    },
-    author: { id: "u1", bot: false, username: "Ada" },
-    member: { nickname: "Ada" },
-    guild: { id: "g1", name: "Guild" },
-    guild_id: "g1",
-  };
-}
-
-function createMentionRequiredGuildConfig(overrides?: Partial<Config>): Config {
-  return {
-    ...BASE_CFG,
+    ...createMentionRequiredGuildConfig(),
+    ...extra,
     channels: {
       discord: {
         dm: { enabled: true, policy: "open" },
         groupPolicy: "open",
         guilds: {
           "*": {
-            requireMention: true,
-            channels: { c1: { allow: true } },
+            requireMention: false,
+            channels,
           },
         },
       },
     },
-    ...overrides,
   } as Config;
-}
-
-function captureNextDispatchCtx<
-  T extends {
-    SessionKey?: string;
-    ParentSessionKey?: string;
-    ThreadStarterBody?: string;
-    ThreadLabel?: string;
-    WasMentioned?: boolean;
-  },
->(): () => T | undefined {
-  let capturedCtx: T | undefined;
-  dispatchMock.mockImplementationOnce(async ({ ctx, dispatcher }) => {
-    capturedCtx = ctx as T;
-    dispatcher.sendFinalReply({ text: "hi" });
-    return { queuedFinal: true, counts: { final: 1 } };
-  });
-  return () => capturedCtx;
 }
 
 describe("discord tool result dispatch", () => {
@@ -289,21 +101,7 @@ describe("discord tool result dispatch", () => {
       ThreadStarterBody?: string;
       ThreadLabel?: string;
     }>();
-    const cfg = {
-      ...createMentionRequiredGuildConfig(),
-      channels: {
-        discord: {
-          dm: { enabled: true, policy: "open" },
-          groupPolicy: "open",
-          guilds: {
-            "*": {
-              requireMention: false,
-              channels: { p1: { allow: true } },
-            },
-          },
-        },
-      },
-    } as Config;
+    const cfg = createOpenGuildConfig({ p1: { allow: true } });
 
     const handler = await createHandler(cfg);
     const client = createThreadClient({
@@ -325,23 +123,9 @@ describe("discord tool result dispatch", () => {
 
   it("skips thread starter context when disabled", async () => {
     const getCapturedCtx = captureNextDispatchCtx<{ ThreadStarterBody?: string }>();
-    const cfg = {
-      ...createMentionRequiredGuildConfig(),
-      channels: {
-        discord: {
-          dm: { enabled: true, policy: "open" },
-          groupPolicy: "open",
-          guilds: {
-            "*": {
-              requireMention: false,
-              channels: {
-                p1: { allow: true, includeThreadStarter: false },
-              },
-            },
-          },
-        },
-      },
-    } as Config;
+    const cfg = createOpenGuildConfig({
+      p1: { allow: true, includeThreadStarter: false },
+    });
 
     const handler = await createHandler(cfg);
     const client = createThreadClient();
@@ -359,21 +143,7 @@ describe("discord tool result dispatch", () => {
       ThreadStarterBody?: string;
       ThreadLabel?: string;
     }>();
-    const cfg = {
-      ...createMentionRequiredGuildConfig(),
-      channels: {
-        discord: {
-          dm: { enabled: true, policy: "open" },
-          groupPolicy: "open",
-          guilds: {
-            "*": {
-              requireMention: false,
-              channels: { "forum-1": { allow: true } },
-            },
-          },
-        },
-      },
-    } as Config;
+    const cfg = createOpenGuildConfig({ "forum-1": { allow: true } });
 
     const fetchChannel = vi
       .fn()
@@ -411,22 +181,10 @@ describe("discord tool result dispatch", () => {
       SessionKey?: string;
       ParentSessionKey?: string;
     }>();
-    const cfg = {
-      ...createMentionRequiredGuildConfig(),
-      bindings: [{ agentId: "support", match: { channel: "discord", guildId: "g1" } }],
-      channels: {
-        discord: {
-          dm: { enabled: true, policy: "open" },
-          groupPolicy: "open",
-          guilds: {
-            "*": {
-              requireMention: false,
-              channels: { p1: { allow: true } },
-            },
-          },
-        },
-      },
-    } as Config;
+    const cfg = createOpenGuildConfig(
+      { p1: { allow: true } },
+      { bindings: [{ agentId: "support", match: { channel: "discord", guildId: "g1" } }] },
+    );
 
     const handler = await createHandler(cfg);
     const client = createThreadClient();

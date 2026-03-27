@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/providers/modelstudio",
+      "destination": "/providers/qwen_modelstudio"
+    },
+    {
       "source": "/platforms/oracle",
       "destination": "/install/oracle"
     },
@@ -1194,7 +1198,6 @@
                   "providers/litellm",
                   "providers/minimax",
                   "providers/mistral",
-                  "providers/modelstudio",
                   "providers/moonshot",
                   "providers/nvidia",
                   "providers/ollama",
@@ -1204,6 +1207,7 @@
                   "providers/openrouter",
                   "providers/perplexity-provider",
                   "providers/qianfan",
+                  "providers/qwen_modelstudio",
                   "providers/qwen",
                   "providers/sglang",
                   "providers/synthetic",

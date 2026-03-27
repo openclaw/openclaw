@@ -1,6 +1,33 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { buildAnthropicCliBackend } from "../../extensions/anthropic/cli-backend.js";
+import { buildGoogleGeminiCliBackend } from "../../extensions/google/cli-backend.js";
+import { buildOpenAICodexCliBackend } from "../../extensions/openai/cli-backend.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
+
+beforeEach(() => {
+  const registry = createEmptyPluginRegistry();
+  registry.cliBackends = [
+    {
+      pluginId: "anthropic",
+      backend: buildAnthropicCliBackend(),
+      source: "test",
+    },
+    {
+      pluginId: "openai",
+      backend: buildOpenAICodexCliBackend(),
+      source: "test",
+    },
+    {
+      pluginId: "google",
+      backend: buildGoogleGeminiCliBackend(),
+      source: "test",
+    },
+  ];
+  setActivePluginRegistry(registry);
+});
 
 describe("resolveCliBackendConfig reliability merge", () => {
   it("defaults codex-cli to workspace-write for fresh and resume runs", () => {
@@ -65,9 +92,14 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     const resolved = resolveCliBackendConfig("claude-cli");
 
     expect(resolved).not.toBeNull();
+    expect(resolved?.config.output).toBe("jsonl");
+    expect(resolved?.config.args).toContain("stream-json");
+    expect(resolved?.config.args).toContain("--verbose");
     expect(resolved?.config.args).toContain("--permission-mode");
     expect(resolved?.config.args).toContain("bypassPermissions");
     expect(resolved?.config.args).not.toContain("--dangerously-skip-permissions");
+    expect(resolved?.config.resumeArgs).toContain("stream-json");
+    expect(resolved?.config.resumeArgs).toContain("--verbose");
     expect(resolved?.config.resumeArgs).toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).not.toContain("--dangerously-skip-permissions");
@@ -164,5 +196,26 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     ]);
     expect(resolved?.config.args).not.toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).not.toContain("bypassPermissions");
+  });
+});
+
+describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
+  it("uses Gemini CLI json args and existing-session resume mode", () => {
+    const resolved = resolveCliBackendConfig("google-gemini-cli");
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.bundleMcp).toBe(false);
+    expect(resolved?.config.args).toEqual(["--prompt", "--output-format", "json"]);
+    expect(resolved?.config.resumeArgs).toEqual([
+      "--resume",
+      "{sessionId}",
+      "--prompt",
+      "--output-format",
+      "json",
+    ]);
+    expect(resolved?.config.modelArg).toBe("--model");
+    expect(resolved?.config.sessionMode).toBe("existing");
+    expect(resolved?.config.sessionIdFields).toEqual(["session_id", "sessionId"]);
+    expect(resolved?.config.modelAliases?.pro).toBe("gemini-3.1-pro-preview");
   });
 });

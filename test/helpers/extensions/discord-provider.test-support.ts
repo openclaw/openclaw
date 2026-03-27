@@ -34,9 +34,16 @@ type ProviderMonitorTestMocks = {
       signal?: AbortSignal;
     }) => Promise<{ state: string }>
   >;
-  getPluginCommandSpecsMock: Mock<() => PluginCommandSpecMock[]>;
-  listNativeCommandSpecsForConfigMock: Mock<() => NativeCommandSpecMock[]>;
-  listSkillCommandsForAgentsMock: Mock<() => unknown[]>;
+  getPluginCommandSpecsMock: Mock<(provider?: string) => PluginCommandSpecMock[]>;
+  listNativeCommandSpecsForConfigMock: Mock<
+    (
+      cfg?: unknown,
+      params?: { skillCommands?: unknown[]; provider?: string },
+    ) => NativeCommandSpecMock[]
+  >;
+  listSkillCommandsForAgentsMock: Mock<
+    (params?: { cfg?: unknown; agentIds?: string[] }) => unknown[]
+  >;
   monitorLifecycleMock: Mock<(params: { threadBindings: { stop: () => void } }) => Promise<void>>;
   rememberDiscordManagedBotIdentityMock: Mock<() => void>;
   resolveDiscordAccountMock: Mock<() => unknown>;
@@ -108,11 +115,16 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
         state: "idle",
       }),
     ),
-    getPluginCommandSpecsMock: vi.fn<() => PluginCommandSpecMock[]>(() => []),
-    listNativeCommandSpecsForConfigMock: vi.fn<() => NativeCommandSpecMock[]>(() => [
-      { name: "cmd", description: "built-in", acceptsArgs: false },
-    ]),
-    listSkillCommandsForAgentsMock: vi.fn(() => []),
+    getPluginCommandSpecsMock: vi.fn<(provider?: string) => PluginCommandSpecMock[]>(() => []),
+    listNativeCommandSpecsForConfigMock: vi.fn<
+      (
+        cfg?: unknown,
+        params?: { skillCommands?: unknown[]; provider?: string },
+      ) => NativeCommandSpecMock[]
+    >(() => [{ name: "cmd", description: "built-in", acceptsArgs: false }]),
+    listSkillCommandsForAgentsMock: vi.fn<
+      (params?: { cfg?: unknown; agentIds?: string[] }) => unknown[]
+    >(() => []),
     monitorLifecycleMock: vi.fn(async (params: { threadBindings: { stop: () => void } }) => {
       params.threadBindings.stop();
     }),

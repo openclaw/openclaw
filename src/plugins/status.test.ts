@@ -1,4 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createCompatibilityNotice,
+  createCustomHook,
+  createPluginLoadResult,
+  createPluginRecord,
+  createTypedHook,
+  HOOK_ONLY_MESSAGE,
+  LEGACY_BEFORE_AGENT_START_MESSAGE,
+} from "./status.test-helpers.js";
 
 const loadConfigMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
@@ -27,32 +36,22 @@ vi.mock("../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: () => "/default-workspace",
 }));
 
+function setPluginLoadResult(overrides: Partial<ReturnType<typeof createPluginLoadResult>>) {
+  loadOpenClawPluginsMock.mockReturnValue(
+    createPluginLoadResult({
+      plugins: [],
+      ...overrides,
+    }),
+  );
+}
+
 describe("buildPluginStatusReport", () => {
   beforeEach(async () => {
     vi.resetModules();
     loadConfigMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     loadConfigMock.mockReturnValue({});
-    loadOpenClawPluginsMock.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-      channels: [],
-      providers: [],
-      speechProviders: [],
-      mediaUnderstandingProviders: [],
-      imageGenerationProviders: [],
-      videoGenerationProviders: [],
-      webSearchProviders: [],
-      tools: [],
-      hooks: [],
-      typedHooks: [],
-      channelSetups: [],
-      httpRoutes: [],
-      gatewayHandlers: {},
-      cliRegistrars: [],
-      services: [],
-      commands: [],
-    });
+    setPluginLoadResult({ plugins: [] });
     ({
       buildAllPluginInspectReports,
       buildPluginCompatibilityNotices,
@@ -83,52 +82,17 @@ describe("buildPluginStatusReport", () => {
   });
 
   it("normalizes bundled plugin versions to the core base release", () => {
-    loadOpenClawPluginsMock.mockReturnValue({
+    setPluginLoadResult({
       plugins: [
-        {
+        createPluginRecord({
           id: "whatsapp",
           name: "WhatsApp",
           description: "Bundled channel plugin",
           version: "2026.3.22",
-          source: "/tmp/whatsapp/index.ts",
           origin: "bundled",
-          enabled: true,
-          status: "loaded",
-          toolNames: [],
-          hookNames: [],
           channelIds: ["whatsapp"],
-          providerIds: [],
-          speechProviderIds: [],
-          mediaUnderstandingProviderIds: [],
-          imageGenerationProviderIds: [],
-          videoGenerationProviderIds: [],
-          webSearchProviderIds: [],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
-          hookCount: 0,
-          configSchema: false,
-        },
+        }),
       ],
-      diagnostics: [],
-      channels: [],
-      providers: [],
-      speechProviders: [],
-      mediaUnderstandingProviders: [],
-      imageGenerationProviders: [],
-      videoGenerationProviders: [],
-      webSearchProviders: [],
-      tools: [],
-      hooks: [],
-      typedHooks: [],
-      channelSetups: [],
-      httpRoutes: [],
-      gatewayHandlers: {},
-      cliRegistrars: [],
-      services: [],
-      commands: [],
     });
 
     const report = buildPluginStatusReport({
@@ -155,58 +119,22 @@ describe("buildPluginStatusReport", () => {
         },
       },
     });
-    loadOpenClawPluginsMock.mockReturnValue({
+    setPluginLoadResult({
       plugins: [
-        {
+        createPluginRecord({
           id: "google",
           name: "Google",
           description: "Google provider plugin",
-          source: "/tmp/google/index.ts",
           origin: "bundled",
-          enabled: true,
-          status: "loaded",
-          toolNames: [],
-          hookNames: [],
-          channelIds: [],
+          cliBackendIds: ["google-gemini-cli"],
           providerIds: ["google"],
-          speechProviderIds: [],
           mediaUnderstandingProviderIds: ["google"],
           imageGenerationProviderIds: ["google"],
-          videoGenerationProviderIds: [],
           webSearchProviderIds: ["google"],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
-          hookCount: 0,
-          configSchema: false,
-        },
+        }),
       ],
       diagnostics: [{ level: "warn", pluginId: "google", message: "watch this surface" }],
-      channels: [],
-      channelSetups: [],
-      providers: [],
-      speechProviders: [],
-      mediaUnderstandingProviders: [],
-      imageGenerationProviders: [],
-      videoGenerationProviders: [],
-      webSearchProviders: [],
-      tools: [],
-      hooks: [],
-      typedHooks: [
-        {
-          pluginId: "google",
-          hookName: "before_agent_start",
-          handler: () => undefined,
-          source: "/tmp/google/index.ts",
-        },
-      ],
-      httpRoutes: [],
-      gatewayHandlers: {},
-      cliRegistrars: [],
-      services: [],
-      commands: [],
+      typedHooks: [createTypedHook({ pluginId: "google", hookName: "before_agent_start" })],
     });
 
     const inspect = buildPluginInspectReport({ id: "google" });
@@ -215,6 +143,7 @@ describe("buildPluginStatusReport", () => {
     expect(inspect?.shape).toBe("hybrid-capability");
     expect(inspect?.capabilityMode).toBe("hybrid");
     expect(inspect?.capabilities.map((entry) => entry.kind)).toEqual([
+      "cli-backend",
       "text-inference",
       "media-understanding",
       "image-generation",
@@ -222,13 +151,7 @@ describe("buildPluginStatusReport", () => {
     ]);
     expect(inspect?.usesLegacyBeforeAgentStart).toBe(true);
     expect(inspect?.compatibility).toEqual([
-      {
-        pluginId: "google",
-        code: "legacy-before-agent-start",
-        severity: "warn",
-        message:
-          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
-      },
+      createCompatibilityNotice({ pluginId: "google", code: "legacy-before-agent-start" }),
     ]);
     expect(inspect?.policy).toEqual({
       allowPromptInjection: false,
@@ -242,94 +165,25 @@ describe("buildPluginStatusReport", () => {
   });
 
   it("builds inspect reports for every loaded plugin", () => {
-    loadOpenClawPluginsMock.mockReturnValue({
+    setPluginLoadResult({
       plugins: [
-        {
+        createPluginRecord({
           id: "lca",
           name: "LCA",
           description: "Legacy hook plugin",
-          source: "/tmp/lca/index.ts",
-          origin: "workspace",
-          enabled: true,
-          status: "loaded",
-          toolNames: [],
-          hookNames: [],
-          channelIds: [],
-          providerIds: [],
-          speechProviderIds: [],
-          mediaUnderstandingProviderIds: [],
-          imageGenerationProviderIds: [],
-          videoGenerationProviderIds: [],
-          webSearchProviderIds: [],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
           hookCount: 1,
-          configSchema: false,
-        },
-        {
+        }),
+        createPluginRecord({
           id: "microsoft",
           name: "Microsoft",
           description: "Hybrid capability plugin",
-          source: "/tmp/microsoft/index.ts",
           origin: "bundled",
-          enabled: true,
-          status: "loaded",
-          toolNames: [],
-          hookNames: [],
-          channelIds: [],
           providerIds: ["microsoft"],
-          speechProviderIds: [],
-          mediaUnderstandingProviderIds: [],
-          imageGenerationProviderIds: [],
-          videoGenerationProviderIds: [],
           webSearchProviderIds: ["microsoft"],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
-          hookCount: 0,
-          configSchema: false,
-        },
+        }),
       ],
-      diagnostics: [],
-      channels: [],
-      channelSetups: [],
-      providers: [],
-      speechProviders: [],
-      mediaUnderstandingProviders: [],
-      imageGenerationProviders: [],
-      videoGenerationProviders: [],
-      webSearchProviders: [],
-      tools: [],
-      hooks: [
-        {
-          pluginId: "lca",
-          events: ["message"],
-          entry: {
-            hook: {
-              name: "legacy",
-              handler: () => undefined,
-            },
-          },
-        },
-      ],
-      typedHooks: [
-        {
-          pluginId: "lca",
-          hookName: "before_agent_start",
-          handler: () => undefined,
-          source: "/tmp/lca/index.ts",
-        },
-      ],
-      httpRoutes: [],
-      gatewayHandlers: {},
-      cliRegistrars: [],
-      services: [],
-      commands: [],
+      hooks: [createCustomHook({ pluginId: "lca", events: ["message"] })],
+      typedHooks: [createTypedHook({ pluginId: "lca", hookName: "before_agent_start" })],
     });
 
     const inspect = buildAllPluginInspectReports();
@@ -343,222 +197,77 @@ describe("buildPluginStatusReport", () => {
     ]);
   });
 
-  it("builds compatibility warnings for legacy compatibility paths", () => {
-    loadOpenClawPluginsMock.mockReturnValue({
+  it("treats a CLI-backend-only plugin as a plain capability", () => {
+    setPluginLoadResult({
       plugins: [
-        {
+        createPluginRecord({
+          id: "anthropic",
+          name: "Anthropic",
+          cliBackendIds: ["claude-cli"],
+        }),
+      ],
+    });
+
+    const inspect = buildPluginInspectReport({ id: "anthropic" });
+
+    expect(inspect?.shape).toBe("plain-capability");
+    expect(inspect?.capabilityMode).toBe("plain");
+    expect(inspect?.capabilities).toEqual([{ kind: "cli-backend", ids: ["claude-cli"] }]);
+  });
+
+  it("builds compatibility warnings for legacy compatibility paths", () => {
+    setPluginLoadResult({
+      plugins: [
+        createPluginRecord({
           id: "lca",
           name: "LCA",
           description: "Legacy hook plugin",
-          source: "/tmp/lca/index.ts",
-          origin: "workspace",
-          enabled: true,
-          status: "loaded",
-          toolNames: [],
-          hookNames: [],
-          channelIds: [],
-          providerIds: [],
-          speechProviderIds: [],
-          mediaUnderstandingProviderIds: [],
-          imageGenerationProviderIds: [],
-          videoGenerationProviderIds: [],
-          webSearchProviderIds: [],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
           hookCount: 1,
-          configSchema: false,
-        },
+        }),
       ],
-      diagnostics: [],
-      channels: [],
-      channelSetups: [],
-      providers: [],
-      speechProviders: [],
-      mediaUnderstandingProviders: [],
-      imageGenerationProviders: [],
-      videoGenerationProviders: [],
-      webSearchProviders: [],
-      tools: [],
-      hooks: [],
-      typedHooks: [
-        {
-          pluginId: "lca",
-          hookName: "before_agent_start",
-          handler: () => undefined,
-          source: "/tmp/lca/index.ts",
-        },
-      ],
-      httpRoutes: [],
-      gatewayHandlers: {},
-      cliRegistrars: [],
-      services: [],
-      commands: [],
+      typedHooks: [createTypedHook({ pluginId: "lca", hookName: "before_agent_start" })],
     });
 
     expect(buildPluginCompatibilityWarnings()).toEqual([
-      "lca still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
-      "lca is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
+      `lca ${LEGACY_BEFORE_AGENT_START_MESSAGE}`,
+      `lca ${HOOK_ONLY_MESSAGE}`,
     ]);
   });
 
   it("builds structured compatibility notices with deterministic ordering", () => {
-    loadOpenClawPluginsMock.mockReturnValue({
+    setPluginLoadResult({
       plugins: [
-        {
+        createPluginRecord({
           id: "hook-only",
           name: "Hook Only",
-          description: "",
-          source: "/tmp/hook-only/index.ts",
-          origin: "workspace",
-          enabled: true,
-          status: "loaded",
-          toolNames: [],
-          hookNames: [],
-          channelIds: [],
-          providerIds: [],
-          speechProviderIds: [],
-          mediaUnderstandingProviderIds: [],
-          imageGenerationProviderIds: [],
-          videoGenerationProviderIds: [],
-          webSearchProviderIds: [],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
           hookCount: 1,
-          configSchema: false,
-        },
-        {
+        }),
+        createPluginRecord({
           id: "legacy-only",
           name: "Legacy Only",
-          description: "",
-          source: "/tmp/legacy-only/index.ts",
-          origin: "workspace",
-          enabled: true,
-          status: "loaded",
-          toolNames: [],
-          hookNames: [],
-          channelIds: [],
           providerIds: ["legacy-only"],
-          speechProviderIds: [],
-          mediaUnderstandingProviderIds: [],
-          imageGenerationProviderIds: [],
-          videoGenerationProviderIds: [],
-          webSearchProviderIds: [],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
           hookCount: 1,
-          configSchema: false,
-        },
+        }),
       ],
-      diagnostics: [],
-      channels: [],
-      channelSetups: [],
-      providers: [],
-      speechProviders: [],
-      mediaUnderstandingProviders: [],
-      imageGenerationProviders: [],
-      videoGenerationProviders: [],
-      webSearchProviders: [],
-      tools: [],
-      hooks: [
-        {
-          pluginId: "hook-only",
-          events: ["message"],
-          entry: {
-            hook: {
-              name: "legacy",
-              handler: () => undefined,
-            },
-          },
-        },
-      ],
-      typedHooks: [
-        {
-          pluginId: "legacy-only",
-          hookName: "before_agent_start",
-          handler: () => undefined,
-          source: "/tmp/legacy-only/index.ts",
-        },
-      ],
-      httpRoutes: [],
-      gatewayHandlers: {},
-      cliRegistrars: [],
-      services: [],
-      commands: [],
+      hooks: [createCustomHook({ pluginId: "hook-only", events: ["message"] })],
+      typedHooks: [createTypedHook({ pluginId: "legacy-only", hookName: "before_agent_start" })],
     });
 
     expect(buildPluginCompatibilityNotices()).toEqual([
-      {
-        pluginId: "hook-only",
-        code: "hook-only",
-        severity: "info",
-        message:
-          "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
-      },
-      {
-        pluginId: "legacy-only",
-        code: "legacy-before-agent-start",
-        severity: "warn",
-        message:
-          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
-      },
+      createCompatibilityNotice({ pluginId: "hook-only", code: "hook-only" }),
+      createCompatibilityNotice({ pluginId: "legacy-only", code: "legacy-before-agent-start" }),
     ]);
   });
 
   it("returns no compatibility warnings for modern capability plugins", () => {
-    loadOpenClawPluginsMock.mockReturnValue({
+    setPluginLoadResult({
       plugins: [
-        {
+        createPluginRecord({
           id: "modern",
           name: "Modern",
-          description: "",
-          source: "/tmp/modern/index.ts",
-          origin: "workspace",
-          enabled: true,
-          status: "loaded",
-          toolNames: [],
-          hookNames: [],
-          channelIds: [],
           providerIds: ["modern"],
-          speechProviderIds: [],
-          mediaUnderstandingProviderIds: [],
-          imageGenerationProviderIds: [],
-          videoGenerationProviderIds: [],
-          webSearchProviderIds: [],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
-          hookCount: 0,
-          configSchema: false,
-        },
+        }),
       ],
-      diagnostics: [],
-      channels: [],
-      channelSetups: [],
-      providers: [],
-      speechProviders: [],
-      mediaUnderstandingProviders: [],
-      imageGenerationProviders: [],
-      videoGenerationProviders: [],
-      webSearchProviders: [],
-      tools: [],
-      hooks: [],
-      typedHooks: [],
-      httpRoutes: [],
-      gatewayHandlers: {},
-      cliRegistrars: [],
-      services: [],
-      commands: [],
     });
 
     expect(buildPluginCompatibilityNotices()).toEqual([]);
@@ -566,55 +275,19 @@ describe("buildPluginStatusReport", () => {
   });
 
   it("populates bundleCapabilities from plugin record", () => {
-    loadOpenClawPluginsMock.mockReturnValue({
+    setPluginLoadResult({
       plugins: [
-        {
+        createPluginRecord({
           id: "claude-bundle",
           name: "Claude Bundle",
           description: "A bundle plugin with skills and commands",
           source: "/tmp/claude-bundle/.claude-plugin/plugin.json",
-          origin: "workspace",
-          enabled: true,
-          status: "loaded",
           format: "bundle",
           bundleFormat: "claude",
           bundleCapabilities: ["skills", "commands", "agents", "settings"],
           rootDir: "/tmp/claude-bundle",
-          toolNames: [],
-          hookNames: [],
-          channelIds: [],
-          providerIds: [],
-          speechProviderIds: [],
-          mediaUnderstandingProviderIds: [],
-          imageGenerationProviderIds: [],
-          videoGenerationProviderIds: [],
-          webSearchProviderIds: [],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
-          hookCount: 0,
-          configSchema: false,
-        },
+        }),
       ],
-      diagnostics: [],
-      channels: [],
-      channelSetups: [],
-      providers: [],
-      speechProviders: [],
-      mediaUnderstandingProviders: [],
-      imageGenerationProviders: [],
-      videoGenerationProviders: [],
-      webSearchProviders: [],
-      tools: [],
-      hooks: [],
-      typedHooks: [],
-      httpRoutes: [],
-      gatewayHandlers: {},
-      cliRegistrars: [],
-      services: [],
-      commands: [],
     });
 
     const inspect = buildPluginInspectReport({ id: "claude-bundle" });
@@ -626,51 +299,15 @@ describe("buildPluginStatusReport", () => {
   });
 
   it("returns empty bundleCapabilities and mcpServers for non-bundle plugins", () => {
-    loadOpenClawPluginsMock.mockReturnValue({
+    setPluginLoadResult({
       plugins: [
-        {
+        createPluginRecord({
           id: "plain-plugin",
           name: "Plain Plugin",
           description: "A regular plugin",
-          source: "/tmp/plain-plugin/index.ts",
-          origin: "workspace",
-          enabled: true,
-          status: "loaded",
-          toolNames: [],
-          hookNames: [],
-          channelIds: [],
           providerIds: ["plain"],
-          speechProviderIds: [],
-          mediaUnderstandingProviderIds: [],
-          imageGenerationProviderIds: [],
-          videoGenerationProviderIds: [],
-          webSearchProviderIds: [],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
-          hookCount: 0,
-          configSchema: false,
-        },
+        }),
       ],
-      diagnostics: [],
-      channels: [],
-      channelSetups: [],
-      providers: [],
-      speechProviders: [],
-      mediaUnderstandingProviders: [],
-      imageGenerationProviders: [],
-      videoGenerationProviders: [],
-      webSearchProviders: [],
-      tools: [],
-      hooks: [],
-      typedHooks: [],
-      httpRoutes: [],
-      gatewayHandlers: {},
-      cliRegistrars: [],
-      services: [],
-      commands: [],
     });
 
     const inspect = buildPluginInspectReport({ id: "plain-plugin" });
@@ -681,27 +318,18 @@ describe("buildPluginStatusReport", () => {
   });
 
   it("formats and summarizes compatibility notices", () => {
-    const notice = {
+    const notice = createCompatibilityNotice({
       pluginId: "legacy-plugin",
-      code: "legacy-before-agent-start" as const,
-      severity: "warn" as const,
-      message:
-        "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
-    };
+      code: "legacy-before-agent-start",
+    });
 
     expect(formatPluginCompatibilityNotice(notice)).toBe(
-      "legacy-plugin still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+      `legacy-plugin ${LEGACY_BEFORE_AGENT_START_MESSAGE}`,
     );
     expect(
       summarizePluginCompatibility([
         notice,
-        {
-          pluginId: "legacy-plugin",
-          code: "hook-only",
-          severity: "info",
-          message:
-            "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
-        },
+        createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" }),
       ]),
     ).toEqual({
       noticeCount: 2,

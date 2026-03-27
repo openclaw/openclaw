@@ -1,5 +1,5 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
-import { hasExplicitPluginConfig } from "./config-state.js";
+import { withBundledPluginVitestCompat } from "./bundled-compat.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
@@ -9,27 +9,7 @@ export function withBundledProviderVitestCompat(params: {
   pluginIds: readonly string[];
   env?: PluginLoadOptions["env"];
 }): PluginLoadOptions["config"] {
-  const env = params.env ?? process.env;
-  if (
-    !env.VITEST ||
-    hasExplicitPluginConfig(params.config?.plugins) ||
-    params.pluginIds.length === 0
-  ) {
-    return params.config;
-  }
-
-  return {
-    ...params.config,
-    plugins: {
-      ...params.config?.plugins,
-      enabled: true,
-      allow: [...params.pluginIds],
-      slots: {
-        ...params.config?.plugins?.slots,
-        memory: "none",
-      },
-    },
-  };
+  return withBundledPluginVitestCompat(params);
 }
 
 export function resolveBundledProviderCompatPluginIds(params: {

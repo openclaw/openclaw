@@ -1,3 +1,4 @@
+import { createSyntheticSourceInfo } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
@@ -22,9 +23,11 @@ function makeEntry(params: {
     skill: {
       name: params.name,
       description: `desc:${params.name}`,
-      source: params.source ?? "openclaw-workspace",
       filePath: `/tmp/${params.name}/SKILL.md`,
       baseDir: `/tmp/${params.name}`,
+      sourceInfo: createSyntheticSourceInfo(`/tmp/${params.name}/SKILL.md`, {
+        source: params.source ?? "openclaw-workspace",
+      }),
       disableModelInvocation: false,
     },
     frontmatter: {},

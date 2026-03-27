@@ -10,6 +10,9 @@
       "help": "SafeSearch level for DuckDuckGo results."
     }
   },
+  "contracts": {
+    "webSearchProviders": ["duckduckgo"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

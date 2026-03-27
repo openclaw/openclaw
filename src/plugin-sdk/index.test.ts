@@ -89,9 +89,6 @@ describe("plugin-sdk exports", () => {
   it("keeps the root runtime surface intentionally small", async () => {
     const runtimeExports = await collectRuntimeExports(path.join(import.meta.dirname, "index.ts"));
     expect([...runtimeExports].toSorted()).toEqual([
-      "buildFalImageGenerationProvider",
-      "buildGoogleImageGenerationProvider",
-      "buildOpenAIImageGenerationProvider",
       "delegateCompactionToRuntime",
       "emptyPluginConfigSchema",
       "onDiagnosticEvent",

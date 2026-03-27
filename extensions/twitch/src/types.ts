@@ -132,7 +132,7 @@ export type {
   OutboundDeliveryResult,
 };
 
-import type { z } from "zod";
+import type { z } from "openclaw/plugin-sdk/zod";
 // Import and re-export the schema type
 import type { TwitchConfigSchema } from "./config-schema.js";
 export type TwitchConfig = z.infer<typeof TwitchConfigSchema>;
