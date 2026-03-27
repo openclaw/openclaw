@@ -521,6 +521,7 @@ export async function runPreparedReply(
     storePath,
     isNewSession,
     hasAppliedImageModelOverride,
+    defaultProvider,
   });
   const authProfileId = authProfileResolved.authProfileId;
   const authProfileIdSource = authProfileResolved.authProfileIdSource;

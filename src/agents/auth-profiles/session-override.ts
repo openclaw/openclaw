@@ -64,6 +64,10 @@ export async function resolveSessionAuthProfileOverride(params: {
   /** True when images triggered a model switch to imageModel.
    *  In that case, preserve the saved auth profile even if provider differs. */
   hasAppliedImageModelOverride?: boolean;
+  /** The agent's default provider. Used to determine if the image model switch
+   *  is a true cross-provider switch (imageProvider !== defaultProvider).
+   *  Only cross-provider switches should skip persistence. */
+  defaultProvider?: string;
 }): Promise<ResolvedAuthProfile> {
   const {
     cfg,
@@ -75,6 +79,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     storePath,
     isNewSession,
     hasAppliedImageModelOverride,
+    defaultProvider,
   } = params;
   if (!sessionEntry || !sessionStore || !sessionKey) {
     return {
@@ -169,7 +174,12 @@ export async function resolveSessionAuthProfileOverride(params: {
   // persist normally since there's no transient switch.
   // Use clearedDueToProviderMismatch to detect when we had a mismatch, since current
   // is set to undefined in those branches before skipPersist is evaluated.
-  const skipPersist = hasAppliedImageModelOverride && clearedDueToProviderMismatch;
+  // CRITICAL: Only skip persistence when this is a true cross-provider switch
+  // (imageProvider !== defaultProvider). When the image model is on the same provider
+  // as the default, we should persist clear/rotation so the session converges.
+  const isCrossProviderImageSwitch =
+    hasAppliedImageModelOverride && defaultProvider !== undefined && provider !== defaultProvider;
+  const skipPersist = isCrossProviderImageSwitch && clearedDueToProviderMismatch;
 
   let next = current;
   if (isNewSession) {

@@ -92,6 +92,7 @@ describe("resolveSessionAuthProfileOverride", () => {
         storePath: undefined,
         isNewSession: false,
         hasAppliedImageModelOverride: true,
+        defaultProvider: "openai",
       });
 
       expect(resolved.authProfileId).toBe("anthropic:main");
