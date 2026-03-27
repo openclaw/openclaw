@@ -785,6 +785,7 @@ async function agentCommandInternal(
             sessionStore,
             storePath,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+            sessionHasHistory: !isNewSession,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (

@@ -54,8 +54,17 @@ export async function persistSessionEntry(params: PersistSessionEntryParams): Pr
 export function resolveFallbackRetryPrompt(params: {
   body: string;
   isFallbackRetry: boolean;
+  sessionHasHistory?: boolean;
 }): string {
   if (!params.isFallbackRetry) {
+    return params.body;
+  }
+  // When the session has no persisted history (e.g. a freshly-spawned subagent
+  // whose first attempt failed before the SessionManager flushed the user
+  // message to disk), the fallback model would receive only the generic
+  // recovery prompt and lose the original task entirely.  Preserve the
+  // original body in that case so the fallback model can execute the task.
+  if (!params.sessionHasHistory) {
     return params.body;
   }
   return "Continue where you left off. The previous model attempt failed or timed out.";
@@ -257,10 +266,12 @@ export function runAgentAttempt(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
+  sessionHasHistory?: boolean;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
+    sessionHasHistory: params.sessionHasHistory,
   });
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
