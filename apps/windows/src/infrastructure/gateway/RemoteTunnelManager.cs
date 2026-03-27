@@ -19,6 +19,8 @@ internal sealed class RemoteTunnelManager : IDisposable
     private bool _restartInFlight;
     private DateTimeOffset? _lastRestartAt;
     private int _lastLocalPort;
+    private string? _lastTunnelEndpoint;
+    private int _lastRemotePort;
 
     public RemoteTunnelManager(ILogger<RemoteTunnelManager> logger, IRemoteTunnelService tunnel)
     {
@@ -37,7 +39,10 @@ internal sealed class RemoteTunnelManager : IDisposable
         bool alreadyRunning;
         try
         {
-            alreadyRunning = _tunnel.IsConnected && !_restartInFlight;
+            // Reuse only when endpoint and remote port still match — config changes must reconnect.
+            alreadyRunning = _tunnel.IsConnected && !_restartInFlight
+                && _lastTunnelEndpoint == tunnelEndpoint
+                && _lastRemotePort     == remotePort;
             if (alreadyRunning)
                 _logger.LogInformation(
                     "reusing active SSH tunnel localPort={Port}", _lastLocalPort);
@@ -64,7 +69,9 @@ internal sealed class RemoteTunnelManager : IDisposable
             EndRestart();
             if (!result.IsError)
             {
-                _lastLocalPort = desiredPort;
+                _lastLocalPort       = desiredPort;
+                _lastTunnelEndpoint  = tunnelEndpoint;
+                _lastRemotePort      = remotePort;
                 _logger.LogInformation("ssh tunnel ready localPort={Port}", desiredPort);
             }
         }
@@ -77,7 +84,11 @@ internal sealed class RemoteTunnelManager : IDisposable
     {
         await _tunnel.DisconnectAsync(ct).ConfigureAwait(false);
         await _gate.WaitAsync(ct).ConfigureAwait(false);
-        try { _lastLocalPort = 0; }
+        try
+        {
+            _lastLocalPort      = 0;
+            _lastTunnelEndpoint = null;
+        }
         finally { _gate.Release(); }
     }
 

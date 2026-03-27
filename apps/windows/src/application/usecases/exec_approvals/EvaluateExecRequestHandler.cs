@@ -52,7 +52,8 @@ internal sealed class EvaluateExecRequestHandler
         var command = ParseStringArray(root, "command");
         var rawCommand = root.TryGetProperty("rawCommand", out var rc) ? rc.GetString() : null;
         var cwd = root.TryGetProperty("cwd", out var cwdEl) ? cwdEl.GetString() : null;
-        var envOverrides = ParseStringDict(root, "envOverrides");
+        // Gateway sends env; envOverrides is a compat alias. Merge with envOverrides winning.
+        var envOverrides = MergeEnv(ParseStringDict(root, "env"), ParseStringDict(root, "envOverrides"));
         var agentId = root.TryGetProperty("agentId", out var ai) ? ai.GetString()?.Trim() : null;
         if (string.IsNullOrEmpty(agentId)) agentId = null;
         var sessionKeyRaw = root.TryGetProperty("sessionKey", out var sk) ? sk.GetString()?.Trim() : null;
@@ -227,5 +228,16 @@ internal sealed class EvaluateExecRequestHandler
         foreach (var prop in el.EnumerateObject())
             dict[prop.Name] = prop.Value.GetString() ?? string.Empty;
         return dict;
+    }
+
+    private static IReadOnlyDictionary<string, string>? MergeEnv(
+        IReadOnlyDictionary<string, string>? primary,
+        IReadOnlyDictionary<string, string>? overrides)
+    {
+        if (primary is null)  return overrides;
+        if (overrides is null) return primary;
+        var merged = new Dictionary<string, string>(primary, StringComparer.OrdinalIgnoreCase);
+        foreach (var (k, v) in overrides) merged[k] = v;
+        return merged;
     }
 }
