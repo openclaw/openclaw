@@ -1046,7 +1046,7 @@ export async function executeJobCore(
   // skipWhenIdle: skip main-session jobs when the user has been idle too long.
   // This is the inverse of a "deferWhileActive" check — here we skip when there
   // has been *no* recent user interaction to avoid burning tokens while idle.
-  if (job.sessionTarget === "main" && job.skipWhenIdle !== false && job.skipWhenIdle) {
+  if (job.sessionTarget === "main" && job.schedule.kind !== "at" && job.skipWhenIdle !== false && job.skipWhenIdle) {
     const idleMs = job.skipWhenIdle.idleMs ?? DEFAULT_SKIP_WHEN_IDLE_MS;
     const lastInbound = state.deps.getLastInboundAtMs?.();
     const now = state.deps.nowMs();

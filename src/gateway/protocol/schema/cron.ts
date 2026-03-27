@@ -246,7 +246,7 @@ export const CronJobStateSchema = Type.Object(
 
 export const CronSkipWhenIdleSchema = Type.Object(
   {
-    idleMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    idleMs: Type.Optional(Type.Integer({ minimum: 1000 })),
   },
   { additionalProperties: false },
 );

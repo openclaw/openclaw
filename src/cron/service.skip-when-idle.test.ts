@@ -285,6 +285,59 @@ describe("skipWhenIdle", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
+  it("does not skip one-shot 'at' jobs even when session is idle", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const lastInbound = now - 45 * 60_000; // 45 min ago (idle > 30 min)
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    const atJob: CronJob = {
+      id: "one-shot-at-job",
+      name: "one-shot reminder",
+      enabled: true,
+      createdAtMs: now - 120_000,
+      updatedAtMs: now - 120_000,
+      schedule: { kind: "at", at: new Date(now - 1).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "one-shot reminder text" },
+      skipWhenIdle: { idleMs: 30 * 60_000 },
+      state: { nextRunAtMs: now - 1 },
+    };
+
+    await writeCronStoreSnapshot({ storePath, jobs: [atJob] });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      getLastInboundAtMs: () => lastInbound,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await onTimer(state);
+
+    // One-shot 'at' job should run despite idle session
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("one-shot reminder text", {
+      agentId: undefined,
+      sessionKey: undefined,
+      contextKey: "cron:one-shot-at-job",
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      jobs: CronJob[];
+    };
+    const job = persisted.jobs[0];
+    expect(job?.state.lastRunStatus).toBe("ok");
+    // Job should be disabled after successful one-shot run, not permanently
+    // killed by an idle skip.
+    expect(job?.enabled).toBe(false);
+  });
+
   it("respects custom idleMs value", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
