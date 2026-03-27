@@ -550,9 +550,7 @@ when you touch shared channel or provider surfaces.
 
 ### Channel contracts
 
-Located in `src/channels/plugins/contracts/*.contract.test.ts`, with shared
-channel seam coverage in `src/channels/plugins/plugins-core.test.ts` and
-`src/security/dm-policy-channel-smoke.test.ts`:
+Located in `src/channels/plugins/contracts/*.contract.test.ts`:
 
 - **plugin** - Basic plugin shape (id, name, capabilities)
 - **setup** - Setup wizard contract
@@ -566,8 +564,7 @@ channel seam coverage in `src/channels/plugins/plugins-core.test.ts` and
 
 ### Provider contracts
 
-Located in `src/plugins/contracts/*.contract.test.ts`, with shared provider
-seam coverage in `src/tts/tts.test.ts`.
+Located in `src/plugins/contracts/*.contract.test.ts`.
 
 - **status** - Channel status probes
 - **registry** - Plugin registry shape
