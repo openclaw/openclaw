@@ -6,6 +6,11 @@ import {
   resolveGatewayPort,
   resolveStateDir,
 } from "../config/config.js";
+import {
+  resolveConfigPath as resolveConfigPathFromPaths,
+  resolveGatewayPort as resolveGatewayPortFromPaths,
+  resolveStateDir as resolveStateDirFromPaths,
+} from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
@@ -94,6 +99,30 @@ const defaultGatewayCallDeps = {
 const gatewayCallDeps = {
   ...defaultGatewayCallDeps,
 };
+
+function resolveGatewayStateDir(env: NodeJS.ProcessEnv): string {
+  const resolveStateDirFn =
+    typeof gatewayCallDeps.resolveStateDir === "function"
+      ? gatewayCallDeps.resolveStateDir
+      : resolveStateDirFromPaths;
+  return resolveStateDirFn(env);
+}
+
+function resolveGatewayConfigPath(env: NodeJS.ProcessEnv): string {
+  const resolveConfigPathFn =
+    typeof gatewayCallDeps.resolveConfigPath === "function"
+      ? gatewayCallDeps.resolveConfigPath
+      : resolveConfigPathFromPaths;
+  return resolveConfigPathFn(env, resolveGatewayStateDir(env));
+}
+
+function resolveGatewayPortValue(config?: OpenClawConfig, env?: NodeJS.ProcessEnv): number {
+  const resolveGatewayPortFn =
+    typeof gatewayCallDeps.resolveGatewayPort === "function"
+      ? gatewayCallDeps.resolveGatewayPort
+      : resolveGatewayPortFromPaths;
+  return resolveGatewayPortFn(config, env);
+}
 
 export const __testing = {
   setDepsForTests(deps: Partial<typeof defaultGatewayCallDeps> | undefined): void {
@@ -203,13 +232,11 @@ export function buildGatewayConnectionDetails(
   } = {},
 ): GatewayConnectionDetails {
   const config = options.config ?? gatewayCallDeps.loadConfig();
-  const configPath =
-    options.configPath ??
-    gatewayCallDeps.resolveConfigPath(process.env, gatewayCallDeps.resolveStateDir(process.env));
+  const configPath = options.configPath ?? resolveGatewayConfigPath(process.env);
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const tlsEnabled = config.gateway?.tls?.enabled === true;
-  const localPort = gatewayCallDeps.resolveGatewayPort(config);
+  const localPort = resolveGatewayPortValue(config);
   const bindMode = config.gateway?.bind ?? "loopback";
   const scheme = tlsEnabled ? "wss" : "ws";
   // Self-connections should always target loopback; bind mode only controls listener exposure.
@@ -322,9 +349,7 @@ function resolveGatewayCallTimeout(timeoutValue: unknown): {
 
 function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewayCallContext {
   const config = opts.config ?? gatewayCallDeps.loadConfig();
-  const configPath =
-    opts.configPath ??
-    gatewayCallDeps.resolveConfigPath(process.env, gatewayCallDeps.resolveStateDir(process.env));
+  const configPath = opts.configPath ?? resolveGatewayConfigPath(process.env);
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode
     ? (config.gateway?.remote as GatewayRemoteSettings | undefined)
@@ -732,10 +757,7 @@ export async function resolveGatewayCredentialsWithSecretInputs(params: {
       : undefined;
   const context: ResolvedGatewayCallContext = {
     config: params.config,
-    configPath: gatewayCallDeps.resolveConfigPath(
-      process.env,
-      gatewayCallDeps.resolveStateDir(process.env),
-    ),
+    configPath: resolveGatewayConfigPath(process.env),
     isRemoteMode,
     remote: remoteFromOverride ?? remoteFromConfig,
     urlOverride: trimToUndefined(params.urlOverride),
