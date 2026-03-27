@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
+import * as logger from "../logger.js";
 import {
   applyToolPolicyPipeline,
   resetToolPolicyWarningCacheForTest,
@@ -32,8 +33,11 @@ function runAllowlistWarningStep(params: {
 }
 
 describe("tool-policy-pipeline", () => {
+  const logInfoSpy = vi.spyOn(logger, "logInfo").mockImplementation(() => {});
+
   beforeEach(() => {
     resetToolPolicyWarningCacheForTest();
+    logInfoSpy.mockClear();
   });
 
   test("strips allowlists that would otherwise disable core tools", () => {
@@ -192,5 +196,69 @@ describe("tool-policy-pipeline", () => {
       ],
     });
     expect(filtered.map((t) => (t as unknown as DummyTool).name)).toEqual(["exec"]);
+  });
+
+  test("emits audit log when a deny list removes tools", () => {
+    const tools = [
+      { name: "exec" },
+      { name: "browser" },
+      { name: "read" },
+    ] as unknown as DummyTool[];
+    applyToolPolicyPipeline({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      tools: tools as any,
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: [
+        {
+          policy: { deny: ["browser"] },
+          label: "tools.deny",
+        },
+      ],
+    });
+    expect(logInfoSpy).toHaveBeenCalledWith(
+      expect.stringContaining("tool-policy: tools.deny removed 1 tool(s): browser"),
+    );
+  });
+
+  test("emits audit log listing all removed tools sorted alphabetically", () => {
+    const tools = [
+      { name: "exec" },
+      { name: "browser" },
+      { name: "write" },
+      { name: "read" },
+    ] as unknown as DummyTool[];
+    applyToolPolicyPipeline({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      tools: tools as any,
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: [
+        {
+          policy: { allow: ["exec", "read"] },
+          label: "agent tools.allow",
+        },
+      ],
+    });
+    expect(logInfoSpy).toHaveBeenCalledWith(
+      expect.stringContaining("tool-policy: agent tools.allow removed 2 tool(s): browser, write"),
+    );
+  });
+
+  test("does not emit audit log when no tools are removed", () => {
+    const tools = [{ name: "exec" }] as unknown as DummyTool[];
+    applyToolPolicyPipeline({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      tools: tools as any,
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: [
+        {
+          policy: { allow: ["exec"] },
+          label: "tools.allow",
+        },
+      ],
+    });
+    expect(logInfoSpy).not.toHaveBeenCalled();
   });
 });

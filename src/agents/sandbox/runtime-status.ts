@@ -4,6 +4,7 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../../config/sessions/main-session.js";
+import { logInfo } from "../../logger.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
@@ -148,6 +149,17 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
   );
   if (!blockedByDeny && !blockedByAllow) {
     return undefined;
+  }
+
+  // Audit: log which sandbox policy rule blocked this tool and where it came from.
+  {
+    const source = blockedByDeny
+      ? runtime.toolPolicy.sources.deny
+      : runtime.toolPolicy.sources.allow;
+    const ruleType = blockedByDeny ? "deny" : "allow";
+    logInfo(
+      `tool-policy: sandbox ${ruleType} blocked "${tool}" (source=${source.source}, key=${source.key}, mode=${runtime.mode})`,
+    );
   }
 
   const reasons: string[] = [];

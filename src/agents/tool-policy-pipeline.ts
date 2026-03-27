@@ -1,3 +1,4 @@
+import { logInfo } from "../logger.js";
 import { filterToolsByPolicy } from "./pi-tools.policy.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
@@ -143,7 +144,23 @@ export function applyToolPolicyPipeline(params: {
     }
 
     const expanded = expandPolicyWithPluginGroups(policy, pluginGroups);
-    filtered = expanded ? filterToolsByPolicy(filtered, expanded) : filtered;
+    if (!expanded) {
+      continue;
+    }
+    const before = filtered;
+    filtered = filterToolsByPolicy(before, expanded);
+
+    // Audit: log which tools were removed by this pipeline step.
+    if (filtered.length < before.length) {
+      const removedNames = new Set(before.map((t) => t.name));
+      for (const t of filtered) {
+        removedNames.delete(t.name);
+      }
+      if (removedNames.size > 0) {
+        const names = [...removedNames].toSorted().join(", ");
+        logInfo(`tool-policy: ${step.label} removed ${removedNames.size} tool(s): ${names}`);
+      }
+    }
   }
   return filtered;
 }
