@@ -1,3 +1,4 @@
+import type { ZodType } from "zod";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
@@ -202,6 +203,24 @@ export function createPatchedAccountSetupAdapter(params: {
         scopeDefaultToAccounts: params.alwaysUseAccounts,
       });
     },
+  };
+}
+
+export function createZodSetupInputValidator<T extends ChannelSetupInput>(params: {
+  schema: ZodType<T>;
+  validate?: (params: { cfg: OpenClawConfig; accountId: string; input: T }) => string | null;
+}): NonNullable<ChannelSetupAdapter["validateInput"]> {
+  return (inputParams) => {
+    const parsed = params.schema.safeParse(inputParams.input);
+    if (!parsed.success) {
+      return parsed.error.issues[0]?.message ?? "invalid input";
+    }
+    return (
+      params.validate?.({
+        ...inputParams,
+        input: parsed.data,
+      }) ?? null
+    );
   };
 }
 

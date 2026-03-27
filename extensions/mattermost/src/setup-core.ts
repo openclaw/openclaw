@@ -1,4 +1,6 @@
 import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
+import { createZodSetupInputValidator } from "openclaw/plugin-sdk/setup";
+import { z } from "zod";
 import { resolveMattermostAccount, type ResolvedMattermostAccount } from "./mattermost/accounts.js";
 import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 import {
@@ -12,6 +14,15 @@ import {
 import { hasConfiguredSecretInput } from "./secret-input.js";
 
 const channel = "mattermost" as const;
+
+const MattermostSetupInputSchema = z
+  .object({
+    useEnv: z.boolean().optional(),
+    botToken: z.string().optional(),
+    token: z.string().optional(),
+    httpUrl: z.string().optional(),
+  })
+  .passthrough();
 
 export function isMattermostConfigured(account: ResolvedMattermostAccount): boolean {
   const tokenConfigured =
@@ -36,20 +47,23 @@ export const mattermostSetupAdapter: ChannelSetupAdapter = {
       accountId,
       name,
     }),
-  validateInput: ({ accountId, input }) => {
-    const token = input.botToken ?? input.token;
-    const baseUrl = normalizeMattermostBaseUrl(input.httpUrl);
-    if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-      return "Mattermost env vars can only be used for the default account.";
-    }
-    if (!input.useEnv && (!token || !baseUrl)) {
-      return "Mattermost requires --bot-token and --http-url (or --use-env).";
-    }
-    if (input.httpUrl && !baseUrl) {
-      return "Mattermost --http-url must include a valid base URL.";
-    }
-    return null;
-  },
+  validateInput: createZodSetupInputValidator({
+    schema: MattermostSetupInputSchema,
+    validate: ({ accountId, input }) => {
+      const token = input.botToken ?? input.token;
+      const baseUrl = normalizeMattermostBaseUrl(input.httpUrl);
+      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
+        return "Mattermost env vars can only be used for the default account.";
+      }
+      if (!input.useEnv && (!token || !baseUrl)) {
+        return "Mattermost requires --bot-token and --http-url (or --use-env).";
+      }
+      if (input.httpUrl && !baseUrl) {
+        return "Mattermost --http-url must include a valid base URL.";
+      }
+      return null;
+    },
+  }),
   applyAccountConfig: ({ cfg, accountId, input }) => {
     const token = input.botToken ?? input.token;
     const baseUrl = normalizeMattermostBaseUrl(input.httpUrl);

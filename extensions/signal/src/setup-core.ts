@@ -3,6 +3,7 @@ import {
   createDelegatedSetupWizardProxy,
   createDelegatedTextInputShouldPrompt,
   createPatchedAccountSetupAdapter,
+  createZodSetupInputValidator,
   createTopLevelChannelDmPolicy,
   normalizeE164,
   parseSetupEntriesAllowingWildcard,
@@ -18,6 +19,7 @@ import type {
   ChannelSetupWizardTextInput,
 } from "openclaw/plugin-sdk/setup";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { z } from "zod";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
@@ -30,6 +32,16 @@ const MAX_E164_DIGITS = 15;
 const DIGITS_ONLY = /^\d+$/;
 const INVALID_SIGNAL_ACCOUNT_ERROR =
   "Invalid E.164 phone number (must start with + and country code, e.g. +15555550123)";
+
+const SignalSetupInputSchema = z
+  .object({
+    signalNumber: z.string().optional(),
+    cliPath: z.string().optional(),
+    httpUrl: z.string().optional(),
+    httpHost: z.string().optional(),
+    httpPort: z.string().optional(),
+  })
+  .passthrough();
 
 export function normalizeSignalAccountInput(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
@@ -184,18 +196,21 @@ export const signalCompletionNote = {
 
 export const signalSetupAdapter: ChannelSetupAdapter = createPatchedAccountSetupAdapter({
   channelKey: channel,
-  validateInput: ({ input }) => {
-    if (
-      !input.signalNumber &&
-      !input.httpUrl &&
-      !input.httpHost &&
-      !input.httpPort &&
-      !input.cliPath
-    ) {
-      return "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.";
-    }
-    return null;
-  },
+  validateInput: createZodSetupInputValidator({
+    schema: SignalSetupInputSchema,
+    validate: ({ input }) => {
+      if (
+        !input.signalNumber &&
+        !input.httpUrl &&
+        !input.httpHost &&
+        !input.httpPort &&
+        !input.cliPath
+      ) {
+        return "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.";
+      }
+      return null;
+    },
+  }),
   buildPatch: (input) => buildSignalSetupPatch(input),
 });
 

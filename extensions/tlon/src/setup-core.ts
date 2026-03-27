@@ -4,11 +4,13 @@ import {
   normalizeAccountId,
   patchScopedAccountConfig,
   prepareScopedSetupConfig,
+  createZodSetupInputValidator,
   type ChannelSetupAdapter,
   type ChannelSetupInput,
   type ChannelSetupWizard,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
+import { z } from "zod";
 import { buildTlonAccountFields } from "./account-fields.js";
 import { normalizeShip } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount, type TlonResolvedAccount } from "./types.js";
@@ -28,6 +30,14 @@ export type TlonSetupInput = ChannelSetupInput & {
   autoDiscoverChannels?: boolean;
   ownerShip?: string;
 };
+
+const TlonSetupInputSchema = z
+  .object({
+    ship: z.string().optional(),
+    url: z.string().optional(),
+    code: z.string().optional(),
+  })
+  .passthrough() as z.ZodType<TlonSetupInput>;
 
 function isConfigured(account: TlonResolvedAccount): boolean {
   return Boolean(account.ship && account.url && account.code);
@@ -186,23 +196,25 @@ export const tlonSetupAdapter: ChannelSetupAdapter = {
       accountId,
       name,
     }),
-  validateInput: ({ cfg, accountId, input }) => {
-    const setupInput = input as TlonSetupInput;
-    const resolved = resolveTlonAccount(cfg, accountId ?? undefined);
-    const ship = setupInput.ship?.trim() || resolved.ship;
-    const url = setupInput.url?.trim() || resolved.url;
-    const code = setupInput.code?.trim() || resolved.code;
-    if (!ship) {
-      return "Tlon requires --ship.";
-    }
-    if (!url) {
-      return "Tlon requires --url.";
-    }
-    if (!code) {
-      return "Tlon requires --code.";
-    }
-    return null;
-  },
+  validateInput: createZodSetupInputValidator({
+    schema: TlonSetupInputSchema,
+    validate: ({ cfg, accountId, input }) => {
+      const resolved = resolveTlonAccount(cfg, accountId ?? undefined);
+      const ship = input.ship?.trim() || resolved.ship;
+      const url = input.url?.trim() || resolved.url;
+      const code = input.code?.trim() || resolved.code;
+      if (!ship) {
+        return "Tlon requires --ship.";
+      }
+      if (!url) {
+        return "Tlon requires --url.";
+      }
+      if (!code) {
+        return "Tlon requires --code.";
+      }
+      return null;
+    },
+  }),
   applyAccountConfig: ({ cfg, accountId, input }) =>
     applyTlonSetupConfig({
       cfg,

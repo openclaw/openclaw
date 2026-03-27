@@ -29,6 +29,7 @@ export {
   applySetupAccountConfigPatch,
   createEnvPatchedAccountSetupAdapter,
   createPatchedAccountSetupAdapter,
+  createZodSetupInputValidator,
   migrateBaseNameToDefaultAccount,
   patchScopedAccountConfig,
   prepareScopedSetupConfig,
