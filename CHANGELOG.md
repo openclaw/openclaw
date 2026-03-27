@@ -81,6 +81,8 @@ Docs: https://docs.openclaw.ai
 - Feishu/tools: stop synthetic agent ids like `agent-spawner` from being treated as Feishu account ids during tool execution, so tools fall back to the configured/default Feishu account unless the contextual id is a real enabled Feishu account. (#55627) Thanks @MonkeyLeeT.
 - Google/tools: strip empty `required: []` arrays from Gemini tool schemas so optional-only tool parameters no longer trigger Google validator 400s. (#52106) Thanks @oliviareid-svg.
 - Onboarding/TUI/local gateways: show the resolved gateway port in setup output, clarify no-daemon local health/dashboard messaging, and preserve loopback Control UI auth on reruns and explicit local gateway URLs so local quickstart flows recover cleanly. (#55730) Thanks @shakkernerd.
+- TUI/chat log: keep system messages as single logical entries and prune overflow at whole-message boundaries so wrapped system spacing stays intact. (#55732) Thanks @shakkernerd.
+- TUI/activation: validate `/activation` arguments in the TUI and reject invalid values instead of silently coercing them to `mention`. (#55733) Thanks @shakkernerd.
 
 ## 2026.3.24
 
