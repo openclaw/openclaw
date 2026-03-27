@@ -79,15 +79,20 @@ export async function noteMemorySearchHealth(
       );
       return;
     }
-    // Remote provider - check for API key. Local Ollama typically does not
-    // need an API key, so if the gateway probe says embeddings are ready,
-    // accept it without warning.
+    // Remote provider - check for API key. Local/default Ollama typically
+    // does not need an API key, but remote/custom-baseUrl Ollama deployments
+    // may. Only suppress the warning for the clearly local/no-auth case.
     if (hasRemoteApiKey || (await hasApiKeyForProvider(resolved.provider, cfg, agentDir))) {
       return;
     }
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       if (resolved.provider === "ollama") {
-        return;
+        const ollamaBaseUrl = resolved.remote?.baseUrl?.trim();
+        const ollamaLooksLocal =
+          !ollamaBaseUrl || /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(ollamaBaseUrl);
+        if (!hasRemoteApiKey && ollamaLooksLocal) {
+          return;
+        }
       }
       note(
         [
