@@ -8,6 +8,10 @@ import {
   SECRET_PROVIDER_ALIAS_PATTERN,
 } from "../secrets/ref-contract.js";
 
+export function buildSecretInputSchema() {
+  return secretInputSchema;
+}
+
 const providerSchema = z
   .string()
   .regex(
@@ -49,8 +53,3 @@ const secretInputSchema = z
     ]),
   ])
   .register(sensitive);
-
-/** Build the shared zod schema for secret inputs accepted by plugin auth/config surfaces. */
-export function buildSecretInputSchema() {
-  return secretInputSchema;
-}
