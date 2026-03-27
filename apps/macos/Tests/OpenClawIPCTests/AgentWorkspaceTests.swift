@@ -109,4 +109,70 @@ struct AgentWorkspaceTests {
 
         #expect(!AgentWorkspace.needsBootstrap(workspaceURL: tmp))
     }
+
+    @Test
+    func `needs bootstrap false when AGENTS is customized`() throws {
+        let tmp = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: tmp) }
+        try FileManager().createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        try """
+        # AGENTS.md - OpenClaw Workspace
+
+        Custom instructions for this agent only.
+        """.write(
+            to: tmp.appendingPathComponent(AgentWorkspace.agentsFilename),
+            atomically: true,
+            encoding: .utf8)
+        try AgentWorkspace.defaultSoulTemplate().write(
+            to: tmp.appendingPathComponent(AgentWorkspace.soulFilename),
+            atomically: true,
+            encoding: .utf8)
+        try AgentWorkspace.defaultIdentityTemplate().write(
+            to: tmp.appendingPathComponent(AgentWorkspace.identityFilename),
+            atomically: true,
+            encoding: .utf8)
+        try AgentWorkspace.defaultUserTemplate().write(
+            to: tmp.appendingPathComponent(AgentWorkspace.userFilename),
+            atomically: true,
+            encoding: .utf8)
+        try AgentWorkspace.defaultBootstrapTemplate().write(
+            to: tmp.appendingPathComponent(AgentWorkspace.bootstrapFilename),
+            atomically: true,
+            encoding: .utf8)
+
+        #expect(!AgentWorkspace.needsBootstrap(workspaceURL: tmp))
+    }
+
+    @Test
+    func `needs bootstrap true when workspace still matches defaults`() throws {
+        let tmp = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: tmp) }
+        try FileManager().createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        try AgentWorkspace.defaultTemplate().write(
+            to: tmp.appendingPathComponent(AgentWorkspace.agentsFilename),
+            atomically: true,
+            encoding: .utf8)
+        try AgentWorkspace.defaultSoulTemplate().write(
+            to: tmp.appendingPathComponent(AgentWorkspace.soulFilename),
+            atomically: true,
+            encoding: .utf8)
+        try AgentWorkspace.defaultIdentityTemplate().write(
+            to: tmp.appendingPathComponent(AgentWorkspace.identityFilename),
+            atomically: true,
+            encoding: .utf8)
+        try AgentWorkspace.defaultUserTemplate().write(
+            to: tmp.appendingPathComponent(AgentWorkspace.userFilename),
+            atomically: true,
+            encoding: .utf8)
+        try AgentWorkspace.defaultBootstrapTemplate().write(
+            to: tmp.appendingPathComponent(AgentWorkspace.bootstrapFilename),
+            atomically: true,
+            encoding: .utf8)
+
+        #expect(AgentWorkspace.needsBootstrap(workspaceURL: tmp))
+    }
 }

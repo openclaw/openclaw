@@ -67,7 +67,8 @@ enum AgentWorkspace {
     static func isTemplateOnlyWorkspace(workspaceURL: URL) -> Bool {
         guard let entries = try? self.workspaceEntries(workspaceURL: workspaceURL) else { return false }
         guard !entries.isEmpty else { return true }
-        return Set(entries).isSubset(of: self.templateEntries)
+        guard Set(entries).isSubset(of: self.templateEntries) else { return false }
+        return self.presentTemplateEntriesMatchDefaults(entries, workspaceURL: workspaceURL)
     }
 
     static func bootstrapSafety(for workspaceURL: URL) -> BootstrapSafety {
@@ -337,6 +338,38 @@ enum AgentWorkspace {
         let remainder = content[range.upperBound...]
         let trimmed = remainder.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed + "\n"
+    }
+
+    private static func presentTemplateEntriesMatchDefaults(_ entries: [String], workspaceURL: URL) -> Bool {
+        for entry in entries {
+            let expectedContents = self.defaultTemplateContents(for: entry)
+            guard let expectedContents else { return false }
+            let fileURL = workspaceURL.appendingPathComponent(entry)
+            guard let actualContents = try? String(contentsOf: fileURL, encoding: .utf8) else {
+                return false
+            }
+            if actualContents != expectedContents {
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func defaultTemplateContents(for entry: String) -> String? {
+        switch entry {
+        case self.agentsFilename:
+            return self.defaultTemplate()
+        case self.soulFilename:
+            return self.defaultSoulTemplate()
+        case self.identityFilename:
+            return self.defaultIdentityTemplate()
+        case self.userFilename:
+            return self.defaultUserTemplate()
+        case self.bootstrapFilename:
+            return self.defaultBootstrapTemplate()
+        default:
+            return nil
+        }
     }
 
     // Identity is written by the agent during the bootstrap ritual.
