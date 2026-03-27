@@ -503,7 +503,7 @@
   flex-shrink: 0;
   transition:
     background var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
+    color var(--duration-fast) ease;
   padding: 0;
 }
 
@@ -529,6 +529,7 @@
 
 .chat-send-btn--stop {
   background: var(--danger);
+  color: var(--destructive-foreground);
 }
 
 .chat-send-btn--stop:hover:not(:disabled) {
