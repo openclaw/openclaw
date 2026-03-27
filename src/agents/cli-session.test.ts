@@ -46,6 +46,35 @@ describe("cli-session helpers", () => {
     });
   });
 
+  it("invalidates legacy bindings when auth, prompt, or MCP state changes", () => {
+    const entry: SessionEntry = {
+      sessionId: "openclaw-session",
+      updatedAt: Date.now(),
+      cliSessionIds: { "claude-cli": "legacy-session" },
+      claudeCliSessionId: "legacy-session",
+    };
+    const binding = getCliSessionBinding(entry, "claude-cli");
+
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+      }),
+    ).toEqual({ invalidatedReason: "auth-profile" });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        extraSystemPromptHash: "prompt-hash",
+      }),
+    ).toEqual({ invalidatedReason: "system-prompt" });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        mcpConfigHash: "mcp-hash",
+      }),
+    ).toEqual({ invalidatedReason: "mcp" });
+  });
+
   it("invalidates reuse when stored auth profile or prompt shape changes", () => {
     const binding = {
       sessionId: "cli-session-1",
