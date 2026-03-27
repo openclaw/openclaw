@@ -131,12 +131,12 @@ async function runEnsureMinimaxApiKeyFlow(params: { confirmResult: boolean; text
   return { result, setCredential, confirm, text };
 }
 
-async function runMaybeApplyHuggingFaceToken(tokenProvider: string) {
+async function runMaybeApplyDemoToken(tokenProvider: string) {
   const setCredential = vi.fn(async () => undefined);
   const result = await maybeApplyApiKeyFromOption({
     token: "  opt-key  ",
     tokenProvider,
-    expectedProviders: ["huggingface"],
+    expectedProviders: ["demo-provider"],
     normalize: (value) => value.trim(),
     setCredential,
   });
@@ -187,21 +187,21 @@ afterEach(() => {
 
 describe("normalizeTokenProviderInput", () => {
   it("trims and lowercases non-empty values", () => {
-    expect(normalizeTokenProviderInput("  HuGgInGfAcE  ")).toBe("huggingface");
+    expect(normalizeTokenProviderInput("  DeMo-PrOvIdEr  ")).toBe("demo-provider");
     expect(normalizeTokenProviderInput("")).toBeUndefined();
   });
 });
 
 describe("maybeApplyApiKeyFromOption", () => {
   it("stores normalized token when provider matches", async () => {
-    const { result, setCredential } = await runMaybeApplyHuggingFaceToken("huggingface");
+    const { result, setCredential } = await runMaybeApplyDemoToken("demo-provider");
 
     expect(result).toBe("opt-key");
     expect(setCredential).toHaveBeenCalledWith("opt-key", undefined);
   });
 
   it("matches provider with whitespace/case normalization", async () => {
-    const { result, setCredential } = await runMaybeApplyHuggingFaceToken("  HuGgInGfAcE  ");
+    const { result, setCredential } = await runMaybeApplyDemoToken("  DeMo-PrOvIdEr  ");
 
     expect(result).toBe("opt-key");
     expect(setCredential).toHaveBeenCalledWith("opt-key", undefined);
@@ -212,8 +212,8 @@ describe("maybeApplyApiKeyFromOption", () => {
 
     const result = await maybeApplyApiKeyFromOption({
       token: "opt-key",
-      tokenProvider: "openai",
-      expectedProviders: ["huggingface"],
+      tokenProvider: "other-provider",
+      expectedProviders: ["demo-provider"],
       normalize: (value) => value.trim(),
       setCredential,
     });
@@ -387,14 +387,14 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
 
     const result = await ensureWithOptionEnvOrPrompt({
       token: "  opts-key  ",
-      tokenProvider: " HUGGINGFACE ",
-      expectedProviders: ["huggingface"],
-      provider: "huggingface",
-      envLabel: "HF_TOKEN",
+      tokenProvider: " DEMO-PROVIDER ",
+      expectedProviders: ["demo-provider"],
+      provider: "demo-provider",
+      envLabel: "DEMO_TOKEN",
       confirm,
       note,
-      noteMessage: "Hugging Face note",
-      noteTitle: "Hugging Face",
+      noteMessage: "Demo note",
+      noteTitle: "Demo",
       setCredential,
       text,
     });
@@ -417,20 +417,20 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
 
     const result = await ensureWithOptionEnvOrPrompt({
       token: "opts-key",
-      tokenProvider: "openai",
+      tokenProvider: "other-provider",
       expectedProviders: ["minimax"],
       provider: "minimax",
       envLabel: "MINIMAX_API_KEY",
       confirm,
       note,
-      noteMessage: "MiniMax note",
-      noteTitle: "MiniMax",
+      noteMessage: "Demo provider note",
+      noteTitle: "Demo provider",
       setCredential,
       text,
     });
 
     expect(result).toBe("env-key");
-    expect(note).toHaveBeenCalledWith("MiniMax note", "MiniMax");
+    expect(note).toHaveBeenCalledWith("Demo provider note", "Demo provider");
     expect(confirm).toHaveBeenCalled();
     expect(text).not.toHaveBeenCalled();
     expect(setCredential).toHaveBeenCalledWith("env-key", "plaintext");

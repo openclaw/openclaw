@@ -15,7 +15,7 @@ describe("delivery-queue policy", () => {
       "Bot was blocked by the user",
       "Forbidden: bot was kicked from the group chat",
       "chat_id is empty",
-      "Outbound not configured for channel: msteams",
+      "Outbound not configured for channel: demo-channel",
     ])("returns true for permanent error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(true);
     });
@@ -56,7 +56,7 @@ describe("delivery-queue policy", () => {
       const result = isEntryEligibleForRecoveryRetry(
         {
           id: "entry-1",
-          channel: "whatsapp",
+          channel: "demo-channel",
           to: "+1",
           payloads: [{ text: "a" }],
           enqueuedAt: now,
@@ -72,7 +72,7 @@ describe("delivery-queue policy", () => {
       const result = isEntryEligibleForRecoveryRetry(
         {
           id: "entry-2",
-          channel: "whatsapp",
+          channel: "demo-channel",
           to: "+1",
           payloads: [{ text: "a" }],
           enqueuedAt: now - 30_000,

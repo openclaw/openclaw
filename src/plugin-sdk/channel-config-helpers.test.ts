@@ -3,6 +3,7 @@ import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import {
   adaptScopedAccountAccessor,
+  authorizeConfigWrite,
   createScopedAccountConfigAccessors,
   createScopedChannelConfigAdapter,
   createScopedChannelConfigBase,
@@ -12,6 +13,7 @@ import {
   createTopLevelChannelConfigBase,
   createHybridChannelConfigBase,
   mapAllowFromEntries,
+  resolveChannelConfigWrites,
   resolveIMessageConfigAllowFrom,
   resolveIMessageConfigDefaultTo,
   resolveOptionalConfigString,
@@ -110,6 +112,55 @@ describe("provider config readers", () => {
       "user@example.com",
     ]);
     expect(resolveIMessageConfigDefaultTo({ cfg, accountId: "alt" })).toBe("alt:chat");
+  });
+});
+
+describe("config write helpers", () => {
+  it("matches account ids case-insensitively", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          configWrites: true,
+          accounts: {
+            Work: { configWrites: false },
+          },
+        },
+      },
+    };
+
+    expect(resolveChannelConfigWrites({ cfg, channelId: "telegram", accountId: "work" })).toBe(
+      false,
+    );
+  });
+
+  it("blocks account-scoped writes when the configured account key differs only by case", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          configWrites: true,
+          accounts: {
+            Work: { configWrites: false },
+          },
+        },
+      },
+    };
+
+    expect(
+      authorizeConfigWrite({
+        cfg,
+        target: {
+          kind: "account",
+          scope: { channelId: "telegram", accountId: "work" },
+        },
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: "target-disabled",
+      blockedScope: {
+        kind: "target",
+        scope: { channelId: "telegram", accountId: "work" },
+      },
+    });
   });
 });
 
