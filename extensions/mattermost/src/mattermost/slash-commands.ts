@@ -14,7 +14,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import { writeJsonAtomic } from "../../../../src/infra/json-files.js";
+import { writeJsonAtomic } from "openclaw/plugin-sdk/infra-runtime";
 import type { MattermostClient } from "./client.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -58,10 +58,31 @@ type PersistedMattermostRegisteredCommand = Omit<MattermostRegisteredCommand, "m
 
 type PersistedMattermostSlashCommandState = {
   version: 1;
+  ownerId?: string;
   commands: PersistedMattermostRegisteredCommand[];
 };
 
+export type MattermostPersistedSlashCommandState = {
+  ownerId: string | null;
+  commands: MattermostRegisteredCommand[];
+};
+
 const SLASH_COMMAND_STATE_VERSION = 1;
+
+export class MattermostIncompleteBlindCreateError extends Error {
+  readonly recoverableCommands: MattermostRegisteredCommand[];
+  override readonly cause: unknown;
+
+  constructor(
+    message: string,
+    params: { cause: unknown; recoverableCommands: MattermostRegisteredCommand[] },
+  ) {
+    super(message);
+    this.name = "MattermostIncompleteBlindCreateError";
+    this.cause = params.cause;
+    this.recoverableCommands = params.recoverableCommands;
+  }
+}
 
 /**
  * Payload sent by Mattermost when a slash command is invoked.
@@ -354,21 +375,33 @@ export async function loadPersistedSlashCommands(
   cachePath: string,
   log?: (msg: string) => void,
 ): Promise<MattermostRegisteredCommand[]> {
+  return (await loadPersistedSlashCommandState(cachePath, log)).commands;
+}
+
+export async function loadPersistedSlashCommandState(
+  cachePath: string,
+  log?: (msg: string) => void,
+): Promise<MattermostPersistedSlashCommandState> {
   try {
     const raw = await fs.readFile(cachePath, "utf8");
     const parsed = JSON.parse(raw) as Partial<PersistedMattermostSlashCommandState> | null;
     if (!parsed || parsed.version !== SLASH_COMMAND_STATE_VERSION) {
       log?.(`mattermost: ignoring slash command cache at ${cachePath} due to unsupported version`);
-      return [];
+      return { ownerId: null, commands: [] };
     }
-    return normalizePersistedCommands(parsed.commands);
+    const ownerId =
+      typeof parsed.ownerId === "string" && parsed.ownerId.trim() ? parsed.ownerId : null;
+    return {
+      ownerId,
+      commands: normalizePersistedCommands(parsed.commands),
+    };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
-      return [];
+      return { ownerId: null, commands: [] };
     }
     log?.(`mattermost: failed to load slash command cache ${cachePath}: ${String(err)}`);
-    return [];
+    return { ownerId: null, commands: [] };
   }
 }
 
@@ -377,11 +410,22 @@ export async function savePersistedSlashCommands(
   commands: MattermostRegisteredCommand[],
   log?: (msg: string) => void,
 ): Promise<void> {
+  await savePersistedSlashCommandState(cachePath, { commands }, log);
+}
+
+export async function savePersistedSlashCommandState(
+  cachePath: string,
+  state: { commands: MattermostRegisteredCommand[]; ownerId?: string | null },
+  log?: (msg: string) => void,
+): Promise<void> {
   try {
     const payload: PersistedMattermostSlashCommandState = {
       version: SLASH_COMMAND_STATE_VERSION,
-      commands: serializePersistedCommands(commands),
+      commands: serializePersistedCommands(state.commands),
     };
+    if (state.ownerId?.trim()) {
+      payload.ownerId = state.ownerId;
+    }
     await writeJsonAtomic(cachePath, payload, {
       mode: 0o600,
       trailingNewline: true,
@@ -622,6 +666,8 @@ export async function registerSlashCommands(params: {
     log?.(
       "mattermost: command listing failed and blind-create was incomplete; deleting commands created in this boot and keeping slash callbacks inactive",
     );
+    const createdCommandIds = new Set(createdThisRun.map((cmd) => cmd.id));
+    const recoverableCommands = registered.filter((cmd) => !createdCommandIds.has(cmd.id));
     for (const cmd of createdThisRun) {
       try {
         await deleteMattermostCommand(client, cmd.id);
@@ -629,9 +675,17 @@ export async function registerSlashCommands(params: {
         log?.(
           `mattermost: failed to delete blind-created command /${cmd.trigger} (id=${cmd.id}): ${String(err)}`,
         );
+        recoverableCommands.push(cmd);
       }
     }
-    throw listError;
+    const message =
+      listError instanceof Error
+        ? listError.message
+        : String(listError ?? "blind-create incomplete");
+    throw new MattermostIncompleteBlindCreateError(message, {
+      cause: listError,
+      recoverableCommands: cloneRegisteredCommands(recoverableCommands),
+    });
   }
 
   return registered;
@@ -644,11 +698,16 @@ export async function cleanupSlashCommands(params: {
   client: MattermostClient;
   commands: MattermostRegisteredCommand[];
   log?: (msg: string) => void;
+  shouldDelete?: (command: MattermostRegisteredCommand) => boolean | Promise<boolean>;
 }): Promise<MattermostRegisteredCommand[]> {
-  const { client, commands, log } = params;
+  const { client, commands, log, shouldDelete } = params;
   const remaining: MattermostRegisteredCommand[] = [];
   for (const cmd of commands) {
     if (!cmd.managed) {
+      remaining.push(cmd);
+      continue;
+    }
+    if (shouldDelete && !(await shouldDelete(cmd))) {
       remaining.push(cmd);
       continue;
     }

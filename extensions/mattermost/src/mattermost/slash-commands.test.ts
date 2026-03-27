@@ -6,7 +6,9 @@ import type { MattermostClient } from "./client.js";
 import {
   cleanupSlashCommands,
   DEFAULT_COMMAND_SPECS,
+  loadPersistedSlashCommandState,
   loadPersistedSlashCommands,
+  MattermostIncompleteBlindCreateError,
   mergePersistedSlashCommands,
   parseSlashCommandPayload,
   removePersistedSlashCommands,
@@ -15,6 +17,7 @@ import {
   resolveSlashCommandCachePath,
   resolveCommandText,
   resolveSlashCommandConfig,
+  savePersistedSlashCommandState,
   savePersistedSlashCommands,
   shouldBlindCreateFromListError,
 } from "./slash-commands.js";
@@ -402,6 +405,71 @@ describe("slash-commands", () => {
     expect(request).not.toHaveBeenCalledWith("/commands/cmd-cached-1", { method: "DELETE" });
   });
 
+  it("surfaces recoverable commands when blind-create rollback cannot delete them", async () => {
+    const request = vi.fn(async (path: string, init?: { method?: string; body?: string }) => {
+      if (path.startsWith("/commands?team_id=")) {
+        throw new Error(
+          "Mattermost API 403 Forbidden: You do not have the appropriate permissions.",
+        );
+      }
+      if (path === "/commands" && init?.method === "POST") {
+        const body = JSON.parse(init.body ?? "{}") as { trigger?: string };
+        if (body.trigger === "oc_status") {
+          return {
+            id: "cmd-created-1",
+            token: "tok-created-1",
+            team_id: "team-1",
+            creator_id: "bot-user",
+            trigger: "oc_status",
+            method: "P",
+            url: "http://gateway/callback",
+            auto_complete: true,
+          };
+        }
+        throw new Error("Mattermost API 400 Bad Request: trigger already exists");
+      }
+      if (path === "/commands/cmd-created-1" && init?.method === "DELETE") {
+        throw new Error("Mattermost API 500 Internal Server Error");
+      }
+      throw new Error(`unexpected request path: ${path}`);
+    });
+
+    const client = { request } as unknown as MattermostClient;
+    const error = await registerSlashCommands({
+      client,
+      teamId: "team-1",
+      creatorUserId: "bot-user",
+      callbackUrl: "http://gateway/callback",
+      commands: [
+        {
+          trigger: "oc_status",
+          description: "status",
+          autoComplete: true,
+        },
+        {
+          trigger: "oc_help",
+          description: "help",
+          autoComplete: true,
+        },
+      ],
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(MattermostIncompleteBlindCreateError);
+    expect(error).toMatchObject({
+      message: "Mattermost API 403 Forbidden: You do not have the appropriate permissions.",
+      recoverableCommands: [
+        {
+          id: "cmd-created-1",
+          trigger: "oc_status",
+          teamId: "team-1",
+          token: "tok-created-1",
+          callbackUrl: "http://gateway/callback",
+          managed: true,
+        },
+      ],
+    });
+  });
+
   it("returns the remaining commands after cleanup", async () => {
     const request = vi.fn(async (path: string, init?: { method?: string }) => {
       if (path === "/commands/cmd-managed-1" && init?.method === "DELETE") {
@@ -463,6 +531,51 @@ describe("slash-commands", () => {
     ]);
   });
 
+  it("keeps managed commands when cleanup is told not to delete them", async () => {
+    const request = vi.fn(async (path: string, init?: { method?: string }) => {
+      if (path === "/commands/cmd-managed-2" && init?.method === "DELETE") {
+        return undefined;
+      }
+      throw new Error(`unexpected request path: ${path}`);
+    });
+
+    const remaining = await cleanupSlashCommands({
+      client: { request } as unknown as MattermostClient,
+      commands: [
+        {
+          id: "cmd-managed-1",
+          trigger: "oc_status",
+          teamId: "team-1",
+          token: "tok-1",
+          callbackUrl: "http://gateway/callback",
+          managed: true,
+        },
+        {
+          id: "cmd-managed-2",
+          trigger: "oc_help",
+          teamId: "team-1",
+          token: "tok-2",
+          callbackUrl: "http://gateway/callback",
+          managed: true,
+        },
+      ],
+      shouldDelete: async (command) => command.id !== "cmd-managed-1",
+    });
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("/commands/cmd-managed-2", { method: "DELETE" });
+    expect(remaining).toEqual([
+      {
+        id: "cmd-managed-1",
+        trigger: "oc_status",
+        teamId: "team-1",
+        token: "tok-1",
+        callbackUrl: "http://gateway/callback",
+        managed: true,
+      },
+    ]);
+  });
+
   it("persists slash command cache to disk", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mm-slash-cache-"));
     const cachePath = resolveSlashCommandCachePath(stateDir, "default");
@@ -512,6 +625,58 @@ describe("slash-commands", () => {
 
       await removePersistedSlashCommands(cachePath);
       await expect(loadPersistedSlashCommands(cachePath)).resolves.toEqual([]);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists slash command cache ownership to disk", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mm-slash-cache-"));
+    const cachePath = resolveSlashCommandCachePath(stateDir, "default");
+
+    try {
+      await savePersistedSlashCommandState(cachePath, {
+        ownerId: "owner-1",
+        commands: [
+          {
+            id: "cmd-cache-1",
+            trigger: "oc_status",
+            teamId: "team-1",
+            token: "tok-cache-1",
+            callbackUrl: "http://gateway/callback",
+            managed: true,
+          },
+        ],
+      });
+
+      const raw = JSON.parse(await fs.readFile(cachePath, "utf8")) as {
+        ownerId?: string;
+        commands?: Array<Record<string, unknown>>;
+      };
+      expect(raw.ownerId).toBe("owner-1");
+      expect(raw.commands).toEqual([
+        {
+          id: "cmd-cache-1",
+          trigger: "oc_status",
+          teamId: "team-1",
+          token: "tok-cache-1",
+          callbackUrl: "http://gateway/callback",
+        },
+      ]);
+
+      await expect(loadPersistedSlashCommandState(cachePath)).resolves.toEqual({
+        ownerId: "owner-1",
+        commands: [
+          {
+            id: "cmd-cache-1",
+            trigger: "oc_status",
+            teamId: "team-1",
+            token: "tok-cache-1",
+            callbackUrl: "http://gateway/callback",
+            managed: false,
+          },
+        ],
+      });
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
