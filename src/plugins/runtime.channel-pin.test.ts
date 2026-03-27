@@ -25,7 +25,7 @@ describe("channel registry pinning", () => {
 
   it("preserves pinned channel registry across setActivePluginRegistry calls", () => {
     const startup = createEmptyPluginRegistry();
-    startup.channels = [{ plugin: { id: "slack" } }] as never;
+    startup.channels = [{ plugin: { id: "demo-channel" } }] as never;
     setActivePluginRegistry(startup);
     pinActivePluginChannelRegistry(startup);
 
@@ -39,19 +39,19 @@ describe("channel registry pinning", () => {
 
   it("re-pin invalidates cached channel lookups", () => {
     const setup = createEmptyPluginRegistry();
-    const setupPlugin = { id: "slack", meta: {} } as never;
+    const setupPlugin = { id: "demo-channel", meta: {} } as never;
     setup.channels = [{ plugin: setupPlugin }] as never;
     setActivePluginRegistry(setup);
     pinActivePluginChannelRegistry(setup);
 
-    expect(getChannelPlugin("slack")).toBe(setupPlugin);
+    expect(getChannelPlugin("demo-channel")).toBe(setupPlugin);
 
     const full = createEmptyPluginRegistry();
-    const fullPlugin = { id: "slack", meta: {} } as never;
+    const fullPlugin = { id: "demo-channel", meta: {} } as never;
     full.channels = [{ plugin: fullPlugin }] as never;
     setActivePluginRegistry(full);
 
-    expect(getChannelPlugin("slack")).toBe(setupPlugin);
+    expect(getChannelPlugin("demo-channel")).toBe(setupPlugin);
 
     const activeVersionBeforeRepin = getActivePluginRegistryVersion();
     const channelVersionBeforeRepin = getActivePluginChannelRegistryVersion();
@@ -59,7 +59,7 @@ describe("channel registry pinning", () => {
 
     expect(getActivePluginRegistryVersion()).toBe(activeVersionBeforeRepin);
     expect(getActivePluginChannelRegistryVersion()).toBe(channelVersionBeforeRepin + 1);
-    expect(getChannelPlugin("slack")).toBe(fullPlugin);
+    expect(getChannelPlugin("demo-channel")).toBe(fullPlugin);
   });
 
   it("updates channel registry on swap when not pinned", () => {
