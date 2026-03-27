@@ -18,6 +18,21 @@ title: "Audio and Voice Notes"
 - **Command parsing**: When transcription succeeds, `CommandBody`/`RawBody` are set to the transcript so slash commands still work.
 - **Verbose logging**: In `--verbose`, we log when transcription runs and when it replaces the body.
 
+## What changed for external models
+
+Previously, external chat-model routes such as `openrouter/...` could not receive audio
+attachments as audio input for transcription. In practice, that meant:
+
+- OpenClaw could transcribe audio with local CLIs or providers that expose dedicated STT APIs.
+- But simply selecting an external model like `openrouter/google/gemini-3-flash-preview`
+  did **not** make audio transcription work, because the model was never sent an audio payload.
+
+OpenClaw now supports an explicit OpenRouter audio-transcription path for `tools.media.audio`
+using multimodal `chat/completions` requests with `input_audio`.
+
+That means you can now use external multimodal models, for example OpenRouter Gemini Flash,
+as the backend that turns inbound voice notes into text.
+
 ## Auto-detection (default)
 
 If you **don’t configure models** and `tools.media.audio.enabled` is **not** set to `false`,
@@ -109,6 +124,27 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 }
 ```
 
+### Provider-only (OpenRouter Gemini)
+
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        models: [{ provider: "openrouter", model: "google/gemini-3-flash-preview" }],
+      },
+    },
+  },
+}
+```
+
+This is useful when, for example, a Telegram voice note is downloaded by OpenClaw and you want
+the transcript to come from an external multimodal model instead of Whisper/OpenAI/Deepgram.
+With the config above, the voice note enters the normal `tools.media.audio` pipeline and
+OpenClaw sends the audio bytes to OpenRouter using `input_audio`, then injects the returned
+transcript back into the inbound message context.
+
 ### Echo transcript to chat (opt-in)
 
 ```json5
@@ -132,6 +168,7 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 - Deepgram picks up `DEEPGRAM_API_KEY` when `provider: "deepgram"` is used.
 - Deepgram setup details: [Deepgram (audio transcription)](/providers/deepgram).
 - Mistral setup details: [Mistral](/providers/mistral).
+- OpenRouter audio via multimodal chat-completions is supported when you explicitly configure `provider: "openrouter"` in `tools.media.audio.models`.
 - Audio providers can override `baseUrl`, `headers`, and `providerOptions` via `tools.media.audio`.
 - Default size cap is 20MB (`tools.media.audio.maxBytes`). Oversize audio is skipped for that model and the next entry is tried.
 - Tiny/empty audio files below 1024 bytes are skipped before provider/CLI transcription.

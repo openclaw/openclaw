@@ -54,7 +54,14 @@ describe("openrouter plugin", () => {
       ),
     ).toEqual(["openrouter"]);
     expect(speechProviders).toHaveLength(0);
-    expect(mediaProviders).toHaveLength(0);
+    expect(mediaProviders).toHaveLength(1);
+    expect(
+      mediaProviders.map(
+        (provider) =>
+          // oxlint-disable-next-line typescript/no-explicit-any
+          (provider as any).id,
+      ),
+    ).toEqual(["openrouter"]);
     expect(imageProviders).toHaveLength(0);
   });
 });
