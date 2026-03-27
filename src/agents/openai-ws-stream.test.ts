@@ -717,6 +717,20 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(msg.usage.totalTokens).toBe(150);
   });
 
+  it("maps prompt_tokens and completion_tokens usage aliases", () => {
+    const response = makeResponseObject("resp_5b", "Hello");
+    (response as unknown as { usage?: Record<string, number> }).usage = {
+      prompt_tokens: 44,
+      completion_tokens: 11,
+      total_tokens: 55,
+    };
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.usage.input).toBe(44);
+    expect(msg.usage.output).toBe(11);
+    expect(msg.usage.totalTokens).toBe(55);
+  });
+
   it("sets model/provider/api from modelInfo", () => {
     const response = makeResponseObject("resp_6", "Hi");
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
