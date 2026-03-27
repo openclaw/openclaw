@@ -70,22 +70,6 @@ function normalizeManifestContracts(raw) {
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function normalizeLegacyCapabilityContracts(raw) {
-  return normalizeManifestContracts({
-    speechProviders: raw?.speechProviders,
-    mediaUnderstandingProviders: raw?.mediaUnderstandingProviders,
-    imageGenerationProviders: raw?.imageGenerationProviders,
-  });
-}
-
-function mergeManifestContracts(fallback, primary) {
-  const merged = {
-    ...fallback,
-    ...primary,
-  };
-  return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
 function normalizeObject(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -127,11 +111,6 @@ function normalizePluginManifest(raw) {
     return null;
   }
 
-  const contracts = mergeManifestContracts(
-    normalizeLegacyCapabilityContracts(raw),
-    normalizeManifestContracts(raw.contracts),
-  );
-
   return {
     id: raw.id.trim(),
     configSchema: raw.configSchema,
@@ -155,7 +134,9 @@ function normalizePluginManifest(raw) {
     ...(typeof raw.description === "string" ? { description: raw.description.trim() } : {}),
     ...(typeof raw.version === "string" ? { version: raw.version.trim() } : {}),
     ...(normalizeObject(raw.uiHints) ? { uiHints: raw.uiHints } : {}),
-    ...(contracts ? { contracts } : {}),
+    ...(normalizeManifestContracts(raw.contracts)
+      ? { contracts: normalizeManifestContracts(raw.contracts) }
+      : {}),
   };
 }
 
