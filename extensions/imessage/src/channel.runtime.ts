@@ -34,7 +34,7 @@ export async function sendIMessageOutbound(params: {
   return await send(params.to, params.text, {
     config: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
-    ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    ...(params.mediaLocalRoots === undefined ? {} : { mediaLocalRoots: params.mediaLocalRoots }),
     maxBytes,
     accountId: params.accountId ?? undefined,
     replyToId: params.replyToId ?? undefined,

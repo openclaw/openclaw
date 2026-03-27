@@ -41,6 +41,7 @@ export type MattermostWebSocketLike = {
 };
 
 export type MattermostWebSocketFactory = (url: string) => MattermostWebSocketLike;
+
 const MattermostEventPayloadSchema = z.object({
   event: z.string().optional(),
   data: z
