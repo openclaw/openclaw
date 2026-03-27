@@ -663,6 +663,22 @@ export async function getReplyFromConfig(
     }
   }
 
+  // Log final model selection when image model override was considered
+  if (hasAppliedImageModelOverride && opts?.modelOverride) {
+    const finalModelKey = modelKey(provider, model);
+    const overrideKey = modelKey(
+      resolveModelRefFromString({ raw: opts.modelOverride.trim(), defaultProvider, aliasIndex })
+        ?.ref.provider ?? defaultProvider,
+      resolveModelRefFromString({ raw: opts.modelOverride.trim(), defaultProvider, aliasIndex })
+        ?.ref.model ?? opts.modelOverride.trim(),
+    );
+    if (finalModelKey !== overrideKey) {
+      defaultRuntime.log?.(
+        `[image-model-switch] Final model ${finalModelKey} differs from Gateway override ${overrideKey}, stored override or directive took precedence`,
+      );
+    }
+  }
+
   const maybeEmitMissingResetHooks = async () => {
     if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
       return;
