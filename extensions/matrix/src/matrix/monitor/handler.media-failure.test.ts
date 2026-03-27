@@ -74,6 +74,57 @@ describe("createMatrixRoomMessageHandler media failures", () => {
     installMatrixMonitorTestRuntime();
   });
 
+  it("forwards the Matrix event body as originalFilename for media downloads", async () => {
+    downloadMatrixMediaMock.mockResolvedValue({
+      path: "/tmp/inbound/Screenshot-2026-03-27---uuid.png",
+      contentType: "image/png",
+      placeholder: "[matrix media]",
+    });
+    const { handler } = createMediaFailureHarness();
+
+    await handler(
+      "!room:example.org",
+      createImageEvent({
+        msgtype: "m.image",
+        body: " Screenshot 2026-03-27.png ",
+        url: "mxc://example/image",
+      }),
+    );
+
+    expect(downloadMatrixMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mxcUrl: "mxc://example/image",
+        maxBytes: 5 * 1024 * 1024,
+        originalFilename: "Screenshot 2026-03-27.png",
+      }),
+    );
+  });
+
+  it("prefers content.filename over body text when deriving originalFilename", async () => {
+    downloadMatrixMediaMock.mockResolvedValue({
+      path: "/tmp/inbound/Screenshot-2026-03-27---uuid.png",
+      contentType: "image/png",
+      placeholder: "[matrix media]",
+    });
+    const { handler } = createMediaFailureHarness();
+
+    await handler(
+      "!room:example.org",
+      createImageEvent({
+        msgtype: "m.image",
+        body: "can you review this screenshot?",
+        filename: "Screenshot 2026-03-27.png",
+        url: "mxc://example/image",
+      }),
+    );
+
+    expect(downloadMatrixMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        originalFilename: "Screenshot 2026-03-27.png",
+      }),
+    );
+  });
+
   it("replaces bare image filenames with an unavailable marker when unencrypted download fails", async () => {
     downloadMatrixMediaMock.mockRejectedValue(new Error("download failed"));
     const { handler, recordInboundSession, logger, runtime } = createMediaFailureHarness();
