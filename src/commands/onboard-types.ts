@@ -7,7 +7,6 @@ export type BuiltInAuthChoice =
   // Legacy alias for `setup-token` (kept for backwards CLI compatibility).
   | "oauth"
   | "setup-token"
-  | "claude-cli"
   | "token"
   | "chutes"
   | "deepseek-api-key"

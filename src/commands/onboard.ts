@@ -23,14 +23,22 @@ export async function setupWizardCommand(
 ) {
   assertSupportedRuntime(runtime);
   const originalAuthChoice = opts.authChoice;
-  const normalizedAuthChoice = normalizeLegacyOnboardAuthChoice(originalAuthChoice);
-  if (opts.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice)) {
-    runtime.error(formatDeprecatedNonInteractiveAuthChoiceError(originalAuthChoice));
+  const normalizedAuthChoice = normalizeLegacyOnboardAuthChoice(originalAuthChoice, {
+    env: process.env,
+  });
+  if (opts.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice, { env: process.env })) {
+    runtime.error(
+      formatDeprecatedNonInteractiveAuthChoiceError(originalAuthChoice, {
+        env: process.env,
+      })!,
+    );
     runtime.exit(1);
     return;
   }
-  if (isDeprecatedAuthChoice(originalAuthChoice)) {
-    runtime.log(resolveDeprecatedAuthChoiceReplacement(originalAuthChoice).message);
+  if (isDeprecatedAuthChoice(originalAuthChoice, { env: process.env })) {
+    runtime.log(
+      resolveDeprecatedAuthChoiceReplacement(originalAuthChoice, { env: process.env })!.message,
+    );
   }
   const flow = opts.flow === "manual" ? ("advanced" as const) : opts.flow;
   const normalizedOpts =
