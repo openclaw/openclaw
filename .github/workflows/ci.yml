@@ -207,6 +207,9 @@ jobs:
             task: channels
             command: pnpm test:channels
           - runtime: node
+            task: contracts
+            command: pnpm test:contracts
+          - runtime: node
             task: protocol
             command: pnpm protocol:check
           - runtime: bun
@@ -326,6 +329,9 @@ jobs:
 
       - name: Smoke test CLI launcher status json
         run: node openclaw.mjs status --json --timeout 1
+
+      - name: Smoke test built bundled plugin singleton
+        run: pnpm test:build:singleton
 
       - name: Check CLI startup memory
         run: pnpm test:startup:memory
