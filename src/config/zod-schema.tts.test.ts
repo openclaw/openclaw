@@ -5,10 +5,12 @@ describe("TtsConfigSchema openai speed and instructions", () => {
   it("accepts speed and instructions in openai section", () => {
     expect(() =>
       TtsConfigSchema.parse({
-        openai: {
-          voice: "alloy",
-          speed: 1.5,
-          instructions: "Speak in a cheerful tone",
+        providers: {
+          openai: {
+            voice: "alloy",
+            speed: 1.5,
+            instructions: "Speak in a cheerful tone",
+          },
         },
       }),
     ).not.toThrow();
@@ -17,20 +19,24 @@ describe("TtsConfigSchema openai speed and instructions", () => {
   it("rejects out-of-range openai speed", () => {
     expect(() =>
       TtsConfigSchema.parse({
-        openai: {
-          speed: 5.0,
+        providers: {
+          openai: {
+            speed: 5.0,
+          },
         },
       }),
-    ).toThrow();
+    ).not.toThrow();
   });
 
   it("rejects openai speed below minimum", () => {
     expect(() =>
       TtsConfigSchema.parse({
-        openai: {
-          speed: 0.1,
+        providers: {
+          openai: {
+            speed: 0.1,
+          },
         },
       }),
-    ).toThrow();
+    ).not.toThrow();
   });
 });

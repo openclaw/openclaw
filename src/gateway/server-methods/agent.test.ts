@@ -67,8 +67,11 @@ vi.mock("../../infra/agent-events.js", () => ({
   onAgentEvent: vi.fn(),
 }));
 
-vi.mock("../../agents/subagent-registry.js", () => ({
+vi.mock("../../agents/subagent-registry-read.js", () => ({
   getLatestSubagentRunByChildSessionKey: mocks.getLatestSubagentRunByChildSessionKey,
+}));
+
+vi.mock("../session-subagent-reactivation.runtime.js", () => ({
   replaceSubagentRunAfterSteer: mocks.replaceSubagentRunAfterSteer,
 }));
 
@@ -533,6 +536,66 @@ describe("gateway agent handler", () => {
       completedRun,
       childSessionKey,
     });
+  });
+
+  it("includes live session setting metadata in agent send events", async () => {
+    mockMainSessionEntry({
+      sessionId: "sess-main",
+      updatedAt: Date.now(),
+      fastMode: true,
+      sendPolicy: "deny",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          fastMode: true,
+          sendPolicy: "deny",
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.loadGatewaySessionRow.mockReturnValue({
+      fastMode: true,
+      sendPolicy: "deny",
+      totalTokens: 12,
+      status: "running",
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const broadcastToConnIds = vi.fn();
+    await invokeAgent(
+      {
+        message: "test",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-live-settings",
+      },
+      {
+        context: {
+          dedupe: new Map(),
+          addChatRun: vi.fn(),
+          logGateway: { info: vi.fn(), error: vi.fn() },
+          broadcastToConnIds,
+          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        } as unknown as GatewayRequestContext,
+      },
+    );
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        reason: "send",
+        fastMode: true,
+        sendPolicy: "deny",
+        totalTokens: 12,
+        status: "running",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
   });
 
   it("injects a timestamp into the message passed to agentCommand", async () => {

@@ -21,10 +21,7 @@ type DiscordGatewayFetch = (
 ) => Promise<DiscordGatewayMetadataResponse>;
 
 type DiscordGatewayMetadataError = Error & { transient?: boolean };
-type DiscordGatewayWebSocketCtor = new (
-  url: string,
-  options?: { agent?: unknown },
-) => ws.WebSocket;
+type DiscordGatewayWebSocketCtor = new (url: string, options?: { agent?: unknown }) => ws.WebSocket;
 
 export function resolveDiscordGatewayIntents(
   intentsConfig?: import("openclaw/plugin-sdk/config-runtime").DiscordIntentsConfig,

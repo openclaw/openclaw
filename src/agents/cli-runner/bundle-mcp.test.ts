@@ -15,6 +15,32 @@ afterEach(async () => {
 });
 
 describe("prepareCliBundleMcpConfig", () => {
+  it("injects a strict empty --mcp-config overlay for bundle-MCP-enabled backends without servers", async () => {
+    const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-empty-");
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs"],
+      },
+      workspaceDir,
+      config: {},
+    });
+
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(prepared.backend.args).toContain("--strict-mcp-config");
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    expect(typeof generatedConfigPath).toBe("string");
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    expect(raw.mcpServers).toEqual({});
+
+    await prepared.cleanup?.();
+  });
+
   it("injects a merged --mcp-config overlay for bundle-MCP-enabled backends", async () => {
     const env = captureEnv(["HOME"]);
     try {

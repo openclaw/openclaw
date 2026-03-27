@@ -169,10 +169,21 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       providers: ["anthropic"],
+      mediaUnderstandingProviders: ["anthropic"],
       providerAuthEnvVars: {
         anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
       },
       providerAuthChoices: [
+        {
+          provider: "anthropic",
+          method: "cli",
+          choiceId: "anthropic-cli",
+          choiceLabel: "Anthropic Claude CLI",
+          choiceHint: "Reuse a local Claude CLI login on this host",
+          groupId: "anthropic",
+          groupLabel: "Anthropic",
+          groupHint: "Claude CLI + setup-token + API key",
+        },
         {
           provider: "anthropic",
           method: "setup-token",
@@ -181,7 +192,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           choiceHint: "Run `claude setup-token` elsewhere, then paste the token here",
           groupId: "anthropic",
           groupLabel: "Anthropic",
-          groupHint: "setup-token + API key",
+          groupHint: "Claude CLI + setup-token + API key",
         },
         {
           provider: "anthropic",
@@ -190,7 +201,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           choiceLabel: "Anthropic API key",
           groupId: "anthropic",
           groupLabel: "Anthropic",
-          groupHint: "setup-token + API key",
+          groupHint: "Claude CLI + setup-token + API key",
           optionKey: "anthropicApiKey",
           cliFlag: "--anthropic-api-key",
           cliOption: "--anthropic-api-key <key>",
@@ -248,7 +259,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "brave",
-    idHint: "brave-plugin",
+    idHint: "brave",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -295,6 +306,29 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "Brave Search mode: web or llm-context.",
         },
       },
+    },
+  },
+  {
+    dirName: "browser",
+    idHint: "browser",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/browser-plugin",
+    packageVersion: "2026.3.25",
+    packageDescription: "OpenClaw browser tool plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "browser",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      enabledByDefault: true,
     },
   },
   {
@@ -488,6 +522,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      mediaUnderstandingProviders: ["deepgram"],
     },
   },
   {
@@ -795,7 +830,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "duckduckgo",
-    idHint: "duckduckgo-plugin",
+    idHint: "duckduckgo",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -859,11 +894,12 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      speechProviders: ["elevenlabs"],
     },
   },
   {
     dirName: "exa",
-    idHint: "exa-plugin",
+    idHint: "exa",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -925,6 +961,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       providers: ["fal"],
+      imageGenerationProviders: ["fal"],
       providerAuthEnvVars: {
         fal: ["FAL_KEY"],
       },
@@ -994,7 +1031,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "firecrawl",
-    idHint: "firecrawl-plugin",
+    idHint: "firecrawl",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -1082,7 +1119,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "google",
-    idHint: "google-plugin",
+    idHint: "google",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -1114,6 +1151,8 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         },
       },
       providers: ["google", "google-gemini-cli"],
+      mediaUnderstandingProviders: ["google"],
+      imageGenerationProviders: ["google"],
       providerAuthEnvVars: {
         google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
       },
@@ -1221,6 +1260,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      mediaUnderstandingProviders: ["groq"],
     },
   },
   {
@@ -1782,6 +1822,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      speechProviders: ["microsoft"],
     },
   },
   {
@@ -1854,6 +1895,8 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       providers: ["minimax", "minimax-portal"],
+      mediaUnderstandingProviders: ["minimax", "minimax-portal"],
+      imageGenerationProviders: ["minimax", "minimax-portal"],
       providerAuthEnvVars: {
         minimax: ["MINIMAX_API_KEY"],
         "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
@@ -1931,6 +1974,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       providers: ["mistral"],
+      mediaUnderstandingProviders: ["mistral"],
       providerAuthEnvVars: {
         mistral: ["MISTRAL_API_KEY"],
       },
@@ -2072,6 +2116,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         },
       },
       providers: ["moonshot"],
+      mediaUnderstandingProviders: ["moonshot"],
       providerAuthEnvVars: {
         moonshot: ["MOONSHOT_API_KEY"],
       },
@@ -2363,6 +2408,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       providers: ["openai", "openai-codex"],
+      speechProviders: ["openai"],
+      mediaUnderstandingProviders: ["openai", "openai-codex"],
+      imageGenerationProviders: ["openai"],
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
       },
@@ -2518,7 +2566,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "openshell",
-    idHint: "openshell-sandbox",
+    idHint: "openshell",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -2632,7 +2680,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "perplexity",
-    idHint: "perplexity-plugin",
+    idHint: "perplexity",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -2928,7 +2976,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "tavily",
-    idHint: "tavily-plugin",
+    idHint: "tavily",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -3969,7 +4017,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "xai",
-    idHint: "xai-plugin",
+    idHint: "xai",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -4101,6 +4149,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       providers: ["zai"],
+      mediaUnderstandingProviders: ["zai"],
       providerAuthEnvVars: {
         zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
       },
