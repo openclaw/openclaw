@@ -127,6 +127,60 @@ export function mapHookExternalContentSource(
 
 const FULLWIDTH_ASCII_OFFSET = 0xfee0;
 
+// Map of Cyrillic/Greek/Latin-extended confusable characters to their ASCII
+// equivalents. These glyphs are visually identical (or near-identical) to
+// standard Latin letters and can be used to craft boundary-marker spoofs
+// that bypass ASCII-only regex checks while still being read as the original
+// text by downstream LLMs.
+const CONFUSABLE_LETTER_MAP: Record<number, string> = {
+  // Cyrillic uppercase confusables
+  0x0410: "A", // А -> A
+  0x0412: "B", // В -> B
+  0x0421: "C", // С -> C
+  0x0415: "E", // Е -> E
+  0x041d: "H", // Н -> H
+  0x041a: "K", // К -> K
+  0x041c: "M", // М -> M
+  0x041e: "O", // О -> O
+  0x0420: "P", // Р -> P
+  0x0405: "S", // Ѕ -> S
+  0x0422: "T", // Т -> T
+  0x0425: "X", // Х -> X
+  // Cyrillic lowercase confusables
+  0x0430: "a", // а -> a
+  0x0441: "c", // с -> c
+  0x0435: "e", // е -> e
+  0x043e: "o", // о -> o
+  0x0440: "p", // р -> p
+  0x0455: "s", // ѕ -> s
+  0x0445: "x", // х -> x
+  // Greek uppercase confusables
+  0x0391: "A", // Α -> A
+  0x0392: "B", // Β -> B
+  0x0395: "E", // Ε -> E
+  0x0397: "H", // Η -> H
+  0x039a: "K", // Κ -> K
+  0x039c: "M", // Μ -> M
+  0x039d: "N", // Ν -> N
+  0x039f: "O", // Ο -> O
+  0x03a1: "P", // Ρ -> P
+  0x03a4: "T", // Τ -> T
+  0x03a7: "X", // Χ -> X
+  // Greek lowercase confusables
+  0x03b1: "a", // α -> a
+  0x03b5: "e", // ε -> e
+  0x03b9: "i", // ι -> i
+  0x03ba: "k", // κ -> k
+  0x03bd: "v", // ν -> v
+  0x03bf: "o", // ο -> o
+  0x03c1: "p", // ρ -> p
+  0x03c4: "t", // τ -> t
+  0x03c7: "x", // χ -> x
+  // Latin-extended confusables (common in spoofing attacks)
+  0x0190: "E", // Ɛ -> E (open E)
+  0x01a4: "P", // Ƥ -> P
+};
+
 // Map of Unicode angle bracket homoglyphs to their ASCII equivalents.
 const ANGLE_BRACKET_MAP: Record<number, string> = {
   0xff1c: "<", // fullwidth <
@@ -159,6 +213,18 @@ const ANGLE_BRACKET_MAP: Record<number, string> = {
   0x02c3: ">", // modifier letter right arrowhead
 };
 
+// Auto-derive the confusable + angle-bracket character class from the map keys
+// so the regex and maps can never diverge (addresses PR review feedback).
+const CONFUSABLE_CHAR_RE = new RegExp(
+  `[\\uFF21-\\uFF3A\\uFF41-\\uFF5A${[
+    ...Object.keys(CONFUSABLE_LETTER_MAP),
+    ...Object.keys(ANGLE_BRACKET_MAP),
+  ]
+    .map((k) => `\\u${Number(k).toString(16).padStart(4, "0")}`)
+    .join("")}]`,
+  "g",
+);
+
 function foldMarkerChar(char: string): string {
   const code = char.charCodeAt(0);
   if (code >= 0xff21 && code <= 0xff3a) {
@@ -166,6 +232,10 @@ function foldMarkerChar(char: string): string {
   }
   if (code >= 0xff41 && code <= 0xff5a) {
     return String.fromCharCode(code - FULLWIDTH_ASCII_OFFSET);
+  }
+  const confusable = CONFUSABLE_LETTER_MAP[code];
+  if (confusable) {
+    return confusable;
   }
   const bracket = ANGLE_BRACKET_MAP[code];
   if (bracket) {
@@ -182,10 +252,7 @@ function foldMarkerText(input: string): string {
       // Strip invisible format characters that can split marker tokens without changing
       // how downstream models interpret the apparent boundary text.
       .replace(MARKER_IGNORABLE_CHAR_RE, "")
-      .replace(
-        /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u300A\u300B\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF\u276C\u276D\u276E\u276F\u02C2\u02C3]/g,
-        (char) => foldMarkerChar(char),
-      )
+      .replace(CONFUSABLE_CHAR_RE, (char) => foldMarkerChar(char))
   );
 }
 
