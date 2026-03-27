@@ -4,6 +4,14 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { loadJsonFile, saveJsonFile } from "./json-file.js";
 
+async function withJsonPath<T>(
+  run: (params: { root: string; pathname: string }) => Promise<T> | T,
+): Promise<T> {
+  return withTempDir({ prefix: "openclaw-json-file-" }, async (root) =>
+    run({ root, pathname: path.join(root, "config.json") }),
+  );
+}
+
 describe("json-file helpers", () => {
   it.each([
     {
@@ -23,8 +31,7 @@ describe("json-file helpers", () => {
       },
     },
   ])("returns undefined for $name", async ({ setup }) => {
-    await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
-      const pathname = path.join(root, "config.json");
+    await withJsonPath(({ pathname }) => {
       setup(pathname);
       expect(loadJsonFile(pathname)).toBeUndefined();
     });
@@ -62,8 +69,7 @@ describe("json-file helpers", () => {
       },
     },
   ])("writes the latest payload for $name", async ({ setup }) => {
-    await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
-      const pathname = path.join(root, "config.json");
+    await withJsonPath(({ pathname }) => {
       setup(pathname);
       saveJsonFile(pathname, { enabled: true, count: 2 });
       expect(loadJsonFile(pathname)).toEqual({ enabled: true, count: 2 });
