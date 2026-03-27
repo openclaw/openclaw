@@ -6,6 +6,7 @@ import {
   colorize,
   defaultRuntime,
   formatErrorMessage,
+  getModelsCommandSecretTargetIds,
   isRich,
   resolveCommandSecretRefsViaGateway,
   setVerbose,
@@ -53,10 +54,14 @@ type LoadedMemoryCommandConfig = {
 };
 
 function getMemoryCommandSecretTargetIds(): Set<string> {
-  return new Set([
+  const targetIds = new Set([
     "agents.defaults.memorySearch.remote.apiKey",
     "agents.list[].memorySearch.remote.apiKey",
   ]);
+  for (const id of getModelsCommandSecretTargetIds()) {
+    targetIds.add(id);
+  }
+  return targetIds;
 }
 
 async function loadMemoryCommandConfig(commandName: string): Promise<LoadedMemoryCommandConfig> {

@@ -240,12 +240,15 @@ describe("memory cli", () => {
     expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         commandName: "memory status",
-        targetIds: new Set([
-          "agents.defaults.memorySearch.remote.apiKey",
-          "agents.list[].memorySearch.remote.apiKey",
-        ]),
+        targetIds: expect.any(Set),
       }),
     );
+    const call = resolveCommandSecretRefsViaGateway.mock.calls.at(-1)?.[0] as
+      | { targetIds?: Set<string> }
+      | undefined;
+    expect(call?.targetIds?.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
+    expect(call?.targetIds?.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
+    expect(call?.targetIds?.has("models.providers.*.apiKey")).toBe(true);
   });
 
   it("logs gateway secret diagnostics for non-json status output", async () => {

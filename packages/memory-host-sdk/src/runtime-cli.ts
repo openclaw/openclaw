@@ -2,6 +2,7 @@
 
 export { formatErrorMessage, withManager } from "../../../src/cli/cli-utils.js";
 export { formatHelpExamples } from "../../../src/cli/help-format.js";
+export { getModelsCommandSecretTargetIds } from "../../../src/cli/command-secret-targets.js";
 export { resolveCommandSecretRefsViaGateway } from "../../../src/cli/command-secret-gateway.js";
 export { withProgress, withProgressTotals } from "../../../src/cli/progress.js";
 export { defaultRuntime } from "../../../src/runtime.js";
