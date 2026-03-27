@@ -76,7 +76,11 @@ enum HostEnvSecurityPolicy {
         "CURL_HOME",
         "BROWSER",
         "SDKMAN_DIR",
-        "NVM_DIR"
+        "NVM_DIR",
+        "CLASSPATH",
+        "GOFLAGS",
+        "PHPRC",
+        "XDG_CONFIG_HOME"
     ]
 
     static let blockedOverridePrefixes: [String] = [
