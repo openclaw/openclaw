@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
+import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { listProfilesForProvider } from "./auth-profiles/profiles.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
@@ -304,6 +305,7 @@ export function resolveMissingProviderApiKey(params: {
 export function createProviderApiKeyResolver(
   env: NodeJS.ProcessEnv,
   authStore: ReturnType<typeof ensureAuthProfileStore>,
+  config?: OpenClawConfig,
 ): ProviderApiKeyResolver {
   return (provider: string): { apiKey: string | undefined; discoveryApiKey?: string } => {
     const envVar = resolveEnvApiKeyVarName(provider, env);
@@ -314,9 +316,19 @@ export function createProviderApiKeyResolver(
       };
     }
     const fromProfiles = resolveApiKeyFromProfiles({ provider, store: authStore, env });
+    if (fromProfiles?.apiKey) {
+      return {
+        apiKey: fromProfiles.apiKey,
+        discoveryApiKey: fromProfiles.discoveryApiKey,
+      };
+    }
+    const fromConfig = resolveConfigBackedProviderAuth({
+      provider,
+      config,
+    });
     return {
-      apiKey: fromProfiles?.apiKey,
-      discoveryApiKey: fromProfiles?.discoveryApiKey,
+      apiKey: fromConfig?.apiKey,
+      discoveryApiKey: fromConfig?.discoveryApiKey,
     };
   };
 }
@@ -324,6 +336,7 @@ export function createProviderApiKeyResolver(
 export function createProviderAuthResolver(
   env: NodeJS.ProcessEnv,
   authStore: ReturnType<typeof ensureAuthProfileStore>,
+  config?: OpenClawConfig,
 ): ProviderAuthResolver {
   return (provider: string, options?: { oauthMarker?: string }) => {
     const ids = listProfilesForProvider(authStore, provider);
@@ -377,6 +390,19 @@ export function createProviderAuthResolver(
       };
     }
 
+    const fromConfig = resolveConfigBackedProviderAuth({
+      provider,
+      config,
+    });
+    if (fromConfig) {
+      return {
+        apiKey: fromConfig.apiKey,
+        discoveryApiKey: fromConfig.discoveryApiKey,
+        mode: fromConfig.mode,
+        source: "none",
+      };
+    }
+
     return {
       apiKey: undefined,
       discoveryApiKey: undefined,
@@ -384,4 +410,40 @@ export function createProviderAuthResolver(
       source: "none" as const,
     };
   };
+}
+
+function resolveConfigBackedProviderAuth(params: { provider: string; config?: OpenClawConfig }):
+  | {
+      apiKey: string;
+      discoveryApiKey?: string;
+      mode: "api_key";
+      source: "config";
+    }
+  | undefined {
+  const synthetic = resolveProviderSyntheticAuthWithPlugin({
+    provider: params.provider,
+    config: params.config,
+    context: {
+      config: params.config,
+      provider: params.provider,
+      providerConfig: params.config?.models?.providers?.[params.provider],
+    },
+  });
+  const apiKey = synthetic?.apiKey?.trim();
+  if (!apiKey) {
+    return undefined;
+  }
+  return isNonSecretApiKeyMarker(apiKey)
+    ? {
+        apiKey,
+        discoveryApiKey: toDiscoveryApiKey(apiKey),
+        mode: "api_key",
+        source: "config",
+      }
+    : {
+        apiKey: resolveNonEnvSecretRefApiKeyMarker("file"),
+        discoveryApiKey: toDiscoveryApiKey(apiKey),
+        mode: "api_key",
+        source: "config",
+      };
 }

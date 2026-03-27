@@ -305,8 +305,8 @@ export async function resolveImplicitProviders(
     ...params,
     authStore,
     env,
-    resolveProviderApiKey: createProviderApiKeyResolver(env, authStore),
-    resolveProviderAuth: createProviderAuthResolver(env, authStore),
+    resolveProviderApiKey: createProviderApiKeyResolver(env, authStore, params.config),
+    resolveProviderAuth: createProviderAuthResolver(env, authStore, params.config),
   };
 
   for (const order of PLUGIN_DISCOVERY_ORDERS) {
