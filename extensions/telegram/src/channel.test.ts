@@ -307,6 +307,7 @@ describe("telegramPlugin duplicate token guard", () => {
 
   it("falls back to direct probe helpers when Telegram runtime is uninitialized", async () => {
     try {
+      const freshTelegramPlugin = (await import("./channel.js?fallback-probe")).telegramPlugin;
       clearTelegramRuntime();
       const moduleProbeTelegram = vi.spyOn(probeModule, "probeTelegram").mockResolvedValue({
         ok: true,
@@ -317,7 +318,7 @@ describe("telegramPlugin duplicate token guard", () => {
       const account = resolveAccount(cfg, "ops");
 
       await expect(
-        telegramPlugin.status!.probeAccount!({
+        freshTelegramPlugin.status!.probeAccount!({
           account,
           timeoutMs: 1234,
           cfg,
@@ -340,6 +341,7 @@ describe("telegramPlugin duplicate token guard", () => {
 
   it("prefers runtime Telegram helpers over imported module mocks when runtime is set", async () => {
     probeTelegramMock.mockReset();
+    const freshTelegramPlugin = (await import("./channel.js?runtime-probe")).telegramPlugin;
     const runtimeProbeTelegram = vi.fn(async () => ({
       ok: true,
       bot: { username: "runtimebot" },
@@ -358,7 +360,7 @@ describe("telegramPlugin duplicate token guard", () => {
     const account = resolveAccount(cfg, "ops");
 
     await expect(
-      telegramPlugin.status!.probeAccount!({
+      freshTelegramPlugin.status!.probeAccount!({
         account,
         timeoutMs: 4321,
         cfg,
