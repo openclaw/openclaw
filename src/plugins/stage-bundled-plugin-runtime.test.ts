@@ -359,6 +359,41 @@ describe("stageBundledPluginRuntime", () => {
     expect(fs.existsSync(path.join(repoRoot, "dist-runtime"))).toBe(false);
   });
 
+  it("falls back to copying runtime files when file symlinks are denied", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-copy-fallback-");
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "feishu");
+    const distSkillDir = path.join(distPluginDir, "skills", "feishu-doc");
+    fs.mkdirSync(distSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(distPluginDir, "index.js"), "export default {}\n", "utf8");
+    fs.writeFileSync(path.join(distSkillDir, "SKILL.md"), "# Feishu Doc\n", "utf8");
+
+    const realSymlinkSync = fs.symlinkSync.bind(fs);
+    const symlinkSpy = vi.spyOn(fs, "symlinkSync").mockImplementation(((target, link, type) => {
+      const linkPath = String(link);
+      if (linkPath.endsWith(path.join("skills", "feishu-doc", "SKILL.md"))) {
+        const err = Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+        throw err;
+      }
+      return realSymlinkSync(String(target), linkPath, type);
+    }) as typeof fs.symlinkSync);
+
+    expect(() => stageBundledPluginRuntime({ repoRoot })).not.toThrow();
+
+    const runtimeSkillPath = path.join(
+      repoRoot,
+      "dist-runtime",
+      "extensions",
+      "feishu",
+      "skills",
+      "feishu-doc",
+      "SKILL.md",
+    );
+    expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(runtimeSkillPath, "utf8")).toBe("# Feishu Doc\n");
+
+    symlinkSpy.mockRestore();
+  });
+
   it("tolerates EEXIST when an identical runtime symlink is materialized concurrently", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-eexist-");
     const distPluginDir = path.join(repoRoot, "dist", "extensions", "feishu");

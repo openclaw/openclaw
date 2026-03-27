@@ -34,8 +34,19 @@ function ensureSymlink(targetValue, targetPath, type) {
   fs.symlinkSync(targetValue, targetPath, type);
 }
 
+function isSymlinkPermissionFallbackError(error) {
+  return error?.code === "EPERM" || error?.code === "EACCES";
+}
+
 function symlinkPath(sourcePath, targetPath, type) {
-  ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
+  try {
+    ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
+  } catch (error) {
+    if (!isSymlinkPermissionFallbackError(error)) {
+      throw error;
+    }
+    fs.copyFileSync(sourcePath, targetPath);
+  }
 }
 
 function shouldWrapRuntimeJsFile(sourcePath) {
