@@ -302,10 +302,19 @@ def _extract_text(result: dict) -> str:
         raise ValueError("Invalid response schema: result.ocrResults must be an array")
 
     all_text = []
-    for item in pages:
+    for i, item in enumerate(pages):
         if not isinstance(item, dict):
-            continue
-        texts = item.get("prunedResult", {}).get("rec_texts", [])
+            raise ValueError(
+                f"Invalid response schema: result.ocrResults[{i}] must be an object"
+            )
+
+        pruned = item.get("prunedResult")
+        if not isinstance(pruned, dict):
+            raise ValueError(
+                f"Invalid response schema: result.ocrResults[{i}].prunedResult must be an object"
+            )
+
+        texts = pruned.get("rec_texts", [])
         if texts:
             all_text.append("\n".join(texts))
     return "\n\n".join(all_text)
