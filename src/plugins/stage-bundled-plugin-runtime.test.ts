@@ -259,7 +259,6 @@ describe("stageBundledPluginRuntime", () => {
     expect(fs.lstatSync(runtimeManifestPath).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(runtimeManifestPath, "utf8")).toBe("{}\n");
     expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("ok\n");
-    // Windows often denies file symlinks without Developer Mode; overlay may copy instead.
     if (process.platform !== "win32") {
       expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(true);
     }

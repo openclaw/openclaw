@@ -43,7 +43,7 @@ function ensureSymlink(targetValue, targetPath, type) {
 function symlinkPathOrCopyFile(sourcePath, targetPath) {
   const linkTarget = relativeSymlinkTarget(sourcePath, targetPath);
   try {
-    ensureSymlink(linkTarget, targetPath);
+    ensureSymlink(linkTarget, targetPath, "file");
   } catch (error) {
     if (process.platform === "win32" && WIN32_FILE_SYMLINK_FALLBACK_CODES.has(error?.code)) {
       fs.copyFileSync(sourcePath, targetPath);
