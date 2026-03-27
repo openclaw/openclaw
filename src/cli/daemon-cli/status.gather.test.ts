@@ -196,6 +196,22 @@ describe("gatherDaemonStatus", () => {
     expect(status.rpc?.ok).toBe(true);
   });
 
+  it("forwards requireRpc and configPath to the daemon probe", async () => {
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      requireRpc: true,
+      deep: false,
+    });
+
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requireRpc: true,
+        configPath: "/tmp/openclaw-daemon/openclaw.json",
+      }),
+    );
+  });
+
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {
     const status = await gatherDaemonStatus({
       rpc: { url: "wss://override.example:18790" },

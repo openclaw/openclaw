@@ -226,8 +226,7 @@ export async function runGatewayLoop(params: {
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).
     // SIGTERM/SIGINT still exit after a graceful shutdown.
     let isFirstStart = true;
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
+    for (;;) {
       onIteration();
       try {
         server = await params.start();
