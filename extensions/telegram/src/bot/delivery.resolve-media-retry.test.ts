@@ -155,7 +155,7 @@ async function expectTransientGetFileRetrySuccess() {
     expect.objectContaining({
       url: `https://api.telegram.org/file/bot${BOT_TOKEN}/voice/file_0.oga`,
       ssrfPolicy: {
-        allowRfc2544BenchmarkRange: true,
+        allowRfc2544BenchmarkRange: false,
         allowedHostnames: ["api.telegram.org"],
       },
     }),
