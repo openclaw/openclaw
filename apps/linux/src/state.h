@@ -4,8 +4,14 @@
  * State definitions for the OpenClaw Linux Companion App.
  *
  * Declares the core state structures and accessors used to communicate
- * status across the systemd, health probe, and UI layers.
- * Tracks asynchronous in-flight states and update timestamps.
+ * status across the systemd, gateway client, and UI layers.
+ *
+ * Status Precedence Rule:
+ *   Runtime connectivity (HTTP + WS + RPC/auth) determines whether
+ *   the gateway is operational. Systemd contributes management/install
+ *   context, not primary liveness truth. The state machine must not
+ *   regress into "systemd inactive => gateway down" when the native
+ *   client is successfully attached.
  *
  * Author: Thiago Camargo <thiagocmc@proton.me>
  */
@@ -36,49 +42,33 @@ typedef struct {
     gboolean deactivating;
     gboolean failed;
     char *unit_name;
-    char *working_directory;
     char *active_state;
     char *sub_state;
-    char **exec_start_argv;
-    char **environment;
 } SystemdState;
 
 typedef struct {
-    gboolean in_flight;
-    gint64 last_updated; // g_get_real_time() in microseconds
-    
-    gboolean loaded;
-    gboolean rpc_ok;
-    gboolean health_healthy;
+    gint64 last_updated; /* g_get_real_time() in microseconds */
+
+    gboolean http_ok;       /* GET /health succeeded */
+    gboolean ws_connected;  /* WebSocket handshake complete */
+    gboolean rpc_ok;        /* RPC channel operational */
+    gboolean auth_ok;       /* Auth handshake succeeded */
+    gboolean config_valid;  /* Config loaded successfully */
+
+    char *endpoint_host;
+    int endpoint_port;
+    char *gateway_version;
+    char *auth_source;
+    char *last_error;
+
     gboolean config_audit_ok;
     int config_issues_count;
-    char *bind_host;
-    int port;
-    char *probe_url;
 } HealthState;
 
-typedef struct {
-    gboolean in_flight;
-    gint64 last_updated; // g_get_real_time() in microseconds
-    
-    gboolean ran;
-    gboolean reachable;
-    gboolean connect_ok;
-    gboolean rpc_ok;
-    gboolean timed_out;
-    char *summary;
-} ProbeState;
-
 void state_init(void);
-void probe_state_clear(ProbeState *ps);
 void health_state_clear(HealthState *hs);
 void state_update_systemd(const SystemdState *sys_state);
-
-void state_set_health_in_flight(gboolean in_flight);
 void state_update_health(const HealthState *health_state);
-
-void state_set_probe_in_flight(gboolean in_flight);
-void state_update_probe(const ProbeState *probe_state);
 
 AppState state_get_current(void);
 const char* state_get_current_string(void);
@@ -86,11 +76,10 @@ guint64 state_get_health_generation(void);
 
 SystemdState* state_get_systemd(void);
 HealthState* state_get_health(void);
-ProbeState* state_get_probe(void);
 
 const gchar* systemd_get_canonical_unit_name(void);
 
-// Callbacks (implemented elsewhere)
+/* Callbacks (implemented elsewhere) */
 void notify_on_transition(AppState old_state, AppState new_state);
 void tray_update_from_state(AppState state);
-void state_on_probe_refresh_requested(void);
+void state_on_gateway_refresh_requested(void);

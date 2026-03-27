@@ -17,6 +17,7 @@ adwaita_dep = dependency('libadwaita-1')
 appindicator_dep = dependency('ayatana-appindicator3-0.1')
 gtk3_dep = dependency('gtk+-3.0')
 json_glib_dep = dependency('json-glib-1.0')
+soup_dep = dependency('libsoup-3.0')
 gio_dep = dependency('gio-2.0')
 gio_unix_dep = dependency('gio-unix-2.0')
 glib_dep = dependency('glib-2.0')
@@ -25,14 +26,17 @@ glib_dep = dependency('glib-2.0')
 libexec_path = get_option('prefix') / get_option('libexecdir') / meson.project_name()
 add_project_arguments('-DOPENCLAW_LIBEXEC_DIR="' + libexec_path + '"', language: 'c')
 
-# Main app (GTK4 + Libadwaita + JSON-GLib + GIO)
+# Main app (GTK4 + Libadwaita + JSON-GLib + libsoup-3.0 + GIO)
 sources = [
   'src/main.c',
   'src/tray.c',
   'src/systemd.c',
   'src/systemd_helpers.c',
-  'src/health.c',
-  'src/health_helpers.c',
+  'src/gateway_config.c',
+  'src/gateway_http.c',
+  'src/gateway_protocol.c',
+  'src/gateway_ws.c',
+  'src/gateway_client.c',
   'src/state.c',
   'src/notify.c',
   'src/diagnostics.c',
@@ -41,7 +45,7 @@ sources = [
 
 executable('openclaw-linux',
   sources,
-  dependencies : [gtk4_dep, adwaita_dep, json_glib_dep, gio_dep, gio_unix_dep],
+  dependencies : [gtk4_dep, adwaita_dep, json_glib_dep, soup_dep, gio_dep, gio_unix_dep],
   install : true)
 
 # Tray helper (GTK3 + Ayatana AppIndicator)
@@ -66,11 +70,11 @@ test_state_exe = executable('test_state',
 test('state', test_state_exe)
 
 test_systemd_exe = executable('test_systemd_helpers',
-  ['tests/test_systemd_helpers.c', 'src/systemd_helpers.c', 'src/log.c'],
+  ['tests/test_systemd_helpers.c', 'src/systemd_helpers.c'],
   dependencies : [glib_dep, gio_dep, gio_unix_dep])
 test('systemd_helpers', test_systemd_exe)
 
-test_health_exe = executable('test_health_parse',
-  ['tests/test_health_parse.c', 'src/health_helpers.c'],
+test_gateway_exe = executable('test_gateway',
+  ['tests/test_gateway.c', 'src/gateway_config.c', 'src/gateway_protocol.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep])
-test('health_parse', test_health_exe)
+test('gateway', test_gateway_exe)

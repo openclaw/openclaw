@@ -4,38 +4,63 @@
  * Normalized state machine for the OpenClaw Linux Companion App.
  *
  * Computes an explicit 8-case normalized operational state (e.g. Running,
- * Degraded, Error) based on systemd properties and JSON status outputs.
- * Preserves secondary deep probe (gateway probe) data for diagnostics
- * without allowing it to falsely override the primary tray state.
+ * Degraded, Error) based on native gateway client connectivity and
+ * systemd service context.
+ *
+ * Status Precedence Rule:
+ *   1. PRIMARY: Runtime connectivity (HTTP + WS + RPC/auth) determines
+ *      whether the gateway is operational, regardless of systemd state.
+ *   2. SECONDARY: Systemd contributes management/install context only.
+ *   3. INVARIANT: compute_state() must NOT return STOPPED, NOT_INSTALLED,
+ *      or USER_SYSTEMD_UNAVAILABLE when native gateway connectivity
+ *      is established.
  *
  * Author: Thiago Camargo <thiagocmc@proton.me>
  */
 
 #include <glib.h>
+#include <string.h>
 #include "log.h"
 #include "state.h"
 
 static AppState current_state = STATE_NOT_INSTALLED;
 static SystemdState current_sys_state = {0};
 static HealthState current_health_state = {0};
-static ProbeState current_probe_state = {0};
 static guint64 current_health_generation = 0;
 static gboolean initial_hydration_done = FALSE;
-static gboolean initial_probe_fired = FALSE;
-
-static gboolean is_probe_disabled_state(AppState state) {
-    return state == STATE_NOT_INSTALLED || 
-           state == STATE_USER_SYSTEMD_UNAVAILABLE || 
-           state == STATE_SYSTEM_UNSUPPORTED || 
-           state == STATE_STOPPED;
-}
+static gboolean initial_refresh_fired = FALSE;
 
 static AppState compute_state(void) {
-    // Note: The primary normalized state is computed strictly from:
-    // 1. systemd properties
-    // 2. `gateway status --json` output (health lane)
-    // The deep probe lane is intentionally excluded from the main tray truth
-    // to avoid false negatives from network timeouts.
+    gboolean has_health_data = (current_health_state.last_updated > 0);
+    gboolean gateway_reachable = has_health_data && current_health_state.http_ok;
+    gboolean gateway_connected = gateway_reachable && current_health_state.ws_connected;
+
+    /*
+     * PRIMARY: Runtime connectivity determines operational state.
+     * If the native client has confirmed gateway reachability, this takes
+     * precedence over systemd state for the "is the gateway usable?" question.
+     * A local gateway may be started manually, by another supervisor, or by
+     * a pre-existing process outside the systemd unit the companion expects.
+     */
+    if (gateway_connected) {
+        if (!current_health_state.rpc_ok || !current_health_state.auth_ok) {
+            return STATE_DEGRADED;
+        }
+        if (!current_health_state.config_audit_ok && current_health_state.config_issues_count > 0) {
+            return STATE_RUNNING_WITH_WARNING;
+        }
+        return STATE_RUNNING;
+    }
+
+    if (gateway_reachable && !gateway_connected) {
+        /* HTTP /health succeeded but WebSocket not connected — partial health */
+        return STATE_DEGRADED;
+    }
+
+    /*
+     * SECONDARY: When native connectivity has not been established,
+     * consult systemd for install/management context.
+     */
     if (current_sys_state.systemd_unavailable) {
         return STATE_USER_SYSTEMD_UNAVAILABLE;
     }
@@ -48,34 +73,35 @@ static AppState compute_state(void) {
     if (current_sys_state.failed) return STATE_ERROR;
     if (current_sys_state.activating) return STATE_STARTING;
     if (current_sys_state.deactivating) return STATE_STOPPING;
-    
+
     if (current_sys_state.active) {
-        // Startup Hydration Guard:
-        // If the systemd service is active, but we haven't received a real health payload
-        // from the gateway yet (last_updated == 0), we default to STATE_RUNNING.
-        // This intentional startup rule prevents the tray from flashing 'STATE_DEGRADED'
-        // momentarily while waiting for lane 2 (health probe) to produce its first sample.
-        if (current_health_state.last_updated > 0) {
-            if (!current_health_state.loaded) {
-                return STATE_DEGRADED;
-            }
-            if (!current_health_state.rpc_ok || !current_health_state.health_healthy) {
-                return STATE_DEGRADED;
-            }
-            if (!current_health_state.config_audit_ok && current_health_state.config_issues_count > 0) {
-                return STATE_RUNNING_WITH_WARNING;
-            }
+        /*
+         * Startup Hydration Guard:
+         * Systemd says active but native client hasn't confirmed health yet.
+         * If we have health data showing HTTP unreachable, report degraded.
+         * Otherwise assume running while the native client establishes.
+         */
+        if (has_health_data && !current_health_state.http_ok) {
+            return STATE_DEGRADED;
         }
         return STATE_RUNNING;
     }
-    
+
     return STATE_STOPPED;
 }
 
 void state_init(void) {
     current_state = STATE_NOT_INSTALLED;
     initial_hydration_done = FALSE;
-    initial_probe_fired = FALSE;
+    initial_refresh_fired = FALSE;
+
+    g_free(current_sys_state.active_state);
+    g_free(current_sys_state.sub_state);
+    g_free(current_sys_state.unit_name);
+    memset(&current_sys_state, 0, sizeof(SystemdState));
+
+    health_state_clear(&current_health_state);
+    current_health_generation = 0;
 }
 
 static const char* state_enum_to_string(AppState s) {
@@ -109,147 +135,91 @@ static void trigger_updates(AppState new_state) {
             OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "trigger_updates post-notify");
         }
     }
-    // Note: Tray/UI updates may still occur even when the normalized state enum
-    // does not change. This is intentional because detailed lane data (like
-    // in_flight flags, timestamps, probe summary) can still change and needs rendering.
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "trigger_updates pre-tray state=%s",
               state_enum_to_string(current_state));
     tray_update_from_state(current_state);
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "trigger_updates post-tray");
 }
 
-static gboolean idle_request_probe_refresh(gpointer user_data) {
+static gboolean idle_request_gateway_refresh(gpointer user_data) {
     (void)user_data;
-    state_on_probe_refresh_requested();
+    state_on_gateway_refresh_requested();
     return G_SOURCE_REMOVE;
 }
 
 void health_state_clear(HealthState *hs) {
     if (!hs) return;
-    gboolean in_flight = hs->in_flight;
-    g_free(hs->bind_host);
-    g_free(hs->probe_url);
+    g_free(hs->endpoint_host);
+    g_free(hs->gateway_version);
+    g_free(hs->auth_source);
+    g_free(hs->last_error);
     memset(hs, 0, sizeof(HealthState));
-    hs->in_flight = in_flight;
-}
-
-void probe_state_clear(ProbeState *ps) {
-    if (!ps) return;
-    gboolean in_flight = ps->in_flight;
-    g_free(ps->summary);
-    memset(ps, 0, sizeof(ProbeState));
-    ps->in_flight = in_flight;
 }
 
 void state_update_systemd(const SystemdState *sys_state) {
-    AppState old_state = current_state;
-    gboolean became_active = (!current_sys_state.active && sys_state->active);
+    gboolean was_active = current_sys_state.active;
+    gboolean became_active = (!was_active && sys_state->active);
+    gboolean became_inactive = (was_active && !sys_state->active);
     gboolean unit_changed = (g_strcmp0(current_sys_state.unit_name, sys_state->unit_name) != 0);
 
     g_free(current_sys_state.active_state);
     g_free(current_sys_state.sub_state);
     g_free(current_sys_state.unit_name);
-    g_free(current_sys_state.working_directory);
-    g_strfreev(current_sys_state.exec_start_argv);
-    g_strfreev(current_sys_state.environment);
-    
+
     current_sys_state = *sys_state;
     current_sys_state.systemd_unavailable = sys_state->systemd_unavailable;
     current_sys_state.active_state = g_strdup(sys_state->active_state);
     current_sys_state.sub_state = g_strdup(sys_state->sub_state);
     current_sys_state.unit_name = g_strdup(sys_state->unit_name);
-    current_sys_state.working_directory = g_strdup(sys_state->working_directory);
-    if (sys_state->exec_start_argv) {
-        current_sys_state.exec_start_argv = g_strdupv(sys_state->exec_start_argv);
-    } else {
-        current_sys_state.exec_start_argv = NULL;
-    }
-    if (sys_state->environment) {
-        current_sys_state.environment = g_strdupv(sys_state->environment);
-    } else {
-        current_sys_state.environment = NULL;
-    }
-    
-    AppState predicted_new_state = compute_state();
-    
-    // Clear stale diagnostics when entering a state where background probes are disabled.
-    // This prevents the UI from showing old "Healthy" or "Reachable" strings for dead services.
-    if (!is_probe_disabled_state(old_state) && is_probe_disabled_state(predicted_new_state)) {
-        health_state_clear(&current_health_state);
-        probe_state_clear(&current_probe_state);
-        
-        current_health_generation++;
-    } else if (became_active || unit_changed) {
-        // Reset the health snapshot explicitly on the relevant systemd transition
-        // or unit retargeting so the state model has a clear freshness boundary.
-        health_state_clear(&current_health_state);
-        probe_state_clear(&current_probe_state);
-        
-        current_health_generation++;
-    }
-    
-    AppState new_state = compute_state();
-    
-    gboolean is_supported = (new_state != STATE_NOT_INSTALLED && new_state != STATE_SYSTEM_UNSUPPORTED && new_state != STATE_USER_SYSTEMD_UNAVAILABLE);
-    gboolean should_trigger_probes = is_supported && (!initial_probe_fired || became_active || unit_changed);
 
-    if (should_trigger_probes) {
-        initial_probe_fired = TRUE;
-        // Re-run immediate probes on any freshness-boundary transition (first hydration,
-        // activation, or unit retargeting) to avoid leaving the UI in a stale or generic 
-        // "Running" state until the next periodic timer fires.
-        // Defer probes asynchronously to keep state mutation fast and decoupled
-        g_idle_add(idle_request_probe_refresh, NULL);
+    if (became_active || unit_changed) {
+        current_health_generation++;
     }
-    
+
+    /*
+     * When systemd reports the service has stopped, do NOT clear native
+     * health data. The native HTTP/WS client is the authoritative source
+     * of gateway reachability. Instead, trigger an immediate native health
+     * refresh so the client discovers the real state. If the gateway is
+     * truly gone, the HTTP check will fail and native state will update
+     * naturally. If the gateway is still alive (started out-of-band),
+     * native state stays correct.
+     */
+
+    AppState new_state = compute_state();
+
+    gboolean should_trigger_refresh = (!initial_refresh_fired || became_active || became_inactive || unit_changed);
+    if (should_trigger_refresh) {
+        initial_refresh_fired = TRUE;
+        g_idle_add(idle_request_gateway_refresh, NULL);
+    }
+
     trigger_updates(new_state);
     initial_hydration_done = TRUE;
 }
 
-void state_set_health_in_flight(gboolean in_flight) {
-    current_health_state.in_flight = in_flight;
-}
-
 void state_update_health(const HealthState *health_state) {
-    g_free(current_health_state.bind_host);
-    g_free(current_health_state.probe_url);
-    
-    // Only update the snapshot payload and timestamp.
-    // The in_flight flag is strictly owned by state_set_health_in_flight.
+    g_free(current_health_state.endpoint_host);
+    g_free(current_health_state.gateway_version);
+    g_free(current_health_state.auth_source);
+    g_free(current_health_state.last_error);
+
     current_health_state.last_updated = health_state->last_updated;
-    current_health_state.loaded = health_state->loaded;
+    current_health_state.http_ok = health_state->http_ok;
+    current_health_state.ws_connected = health_state->ws_connected;
     current_health_state.rpc_ok = health_state->rpc_ok;
-    current_health_state.health_healthy = health_state->health_healthy;
+    current_health_state.auth_ok = health_state->auth_ok;
+    current_health_state.config_valid = health_state->config_valid;
+    current_health_state.endpoint_port = health_state->endpoint_port;
     current_health_state.config_audit_ok = health_state->config_audit_ok;
     current_health_state.config_issues_count = health_state->config_issues_count;
-    current_health_state.port = health_state->port;
-    
-    current_health_state.bind_host = g_strdup(health_state->bind_host);
-    current_health_state.probe_url = g_strdup(health_state->probe_url);
-    
+
+    current_health_state.endpoint_host = g_strdup(health_state->endpoint_host);
+    current_health_state.gateway_version = g_strdup(health_state->gateway_version);
+    current_health_state.auth_source = g_strdup(health_state->auth_source);
+    current_health_state.last_error = g_strdup(health_state->last_error);
+
     trigger_updates(compute_state());
-}
-
-void state_set_probe_in_flight(gboolean in_flight) {
-    current_probe_state.in_flight = in_flight;
-}
-
-void state_update_probe(const ProbeState *probe_state) {
-    g_free(current_probe_state.summary);
-    
-    // Note: Probe updates do not feed compute_state(). 
-    // Deep probe remains diagnostics-only by design.
-    
-    // Only update the snapshot payload and timestamp.
-    // The in_flight flag is strictly owned by state_set_probe_in_flight.
-    current_probe_state.last_updated = probe_state->last_updated;
-    current_probe_state.ran = probe_state->ran;
-    current_probe_state.reachable = probe_state->reachable;
-    current_probe_state.connect_ok = probe_state->connect_ok;
-    current_probe_state.rpc_ok = probe_state->rpc_ok;
-    current_probe_state.timed_out = probe_state->timed_out;
-    
-    current_probe_state.summary = g_strdup(probe_state->summary);
 }
 
 AppState state_get_current(void) {
@@ -282,8 +252,4 @@ guint64 state_get_health_generation(void) {
 
 HealthState* state_get_health(void) {
     return &current_health_state;
-}
-
-ProbeState* state_get_probe(void) {
-    return &current_probe_state;
 }

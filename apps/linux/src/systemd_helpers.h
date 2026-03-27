@@ -11,10 +11,4 @@ gchar* systemd_normalize_profile(const gchar *raw_profile);
 GPtrArray* systemd_helpers_get_user_unit_paths(const gchar *home_dir);
 GPtrArray* systemd_helpers_get_system_unit_paths(void);
 
-gboolean systemd_parse_service_properties(GVariant *props, const gchar *home_dir, gchar ***exec_start_argv_out, gchar **working_directory_out, gchar ***environment_out);
-
-// Exposed for testing
-gchar** systemd_parse_single_env_file(const gchar *env_file, const gchar *home_dir, const gchar *unit_dir, gboolean is_optional, gchar **file_env);
-gchar** systemd_parse_environment_file(const gchar *env_val, const gchar *home_dir, const gchar *unit_dir, gchar **file_env);
-
 #endif // OPENCLAW_LINUX_SYSTEMD_HELPERS_H

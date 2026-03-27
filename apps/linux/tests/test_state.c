@@ -9,7 +9,9 @@ void notify_on_transition(AppState old_state, AppState new_state) {
 void tray_update_from_state(AppState state) {
     (void)state;
 }
-void state_on_probe_refresh_requested(void) {}
+void state_on_gateway_refresh_requested(void) {}
+
+/* ── Basic systemd-only state tests ── */
 
 static void test_initial_state(void) {
     state_init();
@@ -31,6 +33,28 @@ static void test_active_without_fresh_health(void) {
     sys.installed = TRUE;
     sys.active = TRUE;
     state_update_systemd(&sys);
+    // Startup hydration guard: systemd active + no health data → RUNNING
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+}
+
+/* ── Native gateway connectivity tests ── */
+
+static void test_full_connectivity_running(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.config_valid = TRUE;
+    state_update_health(&hs);
+
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
 }
 
@@ -40,93 +64,180 @@ static void test_warning_health(void) {
     sys.installed = TRUE;
     sys.active = TRUE;
     state_update_systemd(&sys);
-    
+
     HealthState hs = {0};
     hs.last_updated = 12345;
-    hs.loaded = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
     hs.rpc_ok = TRUE;
-    hs.health_healthy = TRUE;
+    hs.auth_ok = TRUE;
     hs.config_audit_ok = FALSE;
     hs.config_issues_count = 1;
     state_update_health(&hs);
-    
+
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING_WITH_WARNING);
 }
 
-static void test_degraded_health(void) {
+static void test_degraded_rpc_fail(void) {
     state_init();
     SystemdState sys = {0};
     sys.installed = TRUE;
     sys.active = TRUE;
     state_update_systemd(&sys);
-    
-    HealthState hs = {0};
-    hs.last_updated = 12345;
-    hs.loaded = TRUE;
-    hs.rpc_ok = FALSE; // Degraded
-    hs.health_healthy = FALSE;
-    state_update_health(&hs);
-    
-    g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
-}
 
-static void test_entering_probe_disabled_clears_freshness(void) {
-    state_init();
-    SystemdState sys = {0};
-    sys.installed = TRUE;
-    sys.active = TRUE;
-    state_update_systemd(&sys);
-    
     HealthState hs = {0};
     hs.last_updated = 12345;
-    hs.loaded = TRUE;
-    hs.rpc_ok = TRUE;
-    hs.health_healthy = TRUE;
-    state_update_health(&hs);
-    
-    ProbeState ps = {0};
-    ps.last_updated = 12345;
-    ps.summary = g_strdup("Fully reachable");
-    state_update_probe(&ps);
-    g_free(ps.summary);
-    
-    // Transition to stopped
-    sys.active = FALSE;
-    state_update_systemd(&sys);
-    
-    g_assert_cmpint(state_get_health()->last_updated, ==, 0);
-    g_assert_cmpint(state_get_probe()->last_updated, ==, 0);
-    g_assert_null(state_get_probe()->summary);
-}
-
-static void test_activation_boundary_prevents_stale_inheritance(void) {
-    state_init();
-    SystemdState sys = {0};
-    sys.installed = TRUE;
-    sys.active = TRUE;
-    state_update_systemd(&sys);
-    
-    // Seed old degraded health
-    HealthState hs = {0};
-    hs.last_updated = 12345;
-    hs.loaded = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
     hs.rpc_ok = FALSE;
-    hs.health_healthy = FALSE;
+    hs.auth_ok = TRUE;
     state_update_health(&hs);
+
     g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
-    
-    // Stop it
-    sys.active = FALSE;
+}
+
+static void test_http_ok_ws_disconnected_is_degraded(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = FALSE;
+    state_update_health(&hs);
+
+    // HTTP reachable but WS not connected → partial health → DEGRADED
+    g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
+}
+
+/* ── STATUS PRECEDENCE: Runtime connectivity overrides systemd ── */
+
+static void test_precedence_systemd_inactive_native_connected(void) {
+    // CRITICAL: systemd says inactive, but native client is connected → RUNNING
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = FALSE; // systemd says stopped
     state_update_systemd(&sys);
     g_assert_cmpint(state_get_current(), ==, STATE_STOPPED);
-    
-    // Start it again
-    sys.active = TRUE;
-    state_update_systemd(&sys);
-    
-    // Should NOT inherit the degraded state before fresh health arrives
+
+    // Now the native gateway client connects
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    state_update_health(&hs);
+
+    // Runtime connectivity takes precedence → RUNNING
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
 }
+
+static void test_precedence_systemd_unavailable_native_connected(void) {
+    // CRITICAL: systemd unavailable, but native client is connected → RUNNING
+    state_init();
+    SystemdState sys = {0};
+    sys.systemd_unavailable = TRUE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_USER_SYSTEMD_UNAVAILABLE);
+
+    // Now the native gateway client connects
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    state_update_health(&hs);
+
+    // Runtime connectivity takes precedence → RUNNING
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+}
+
+static void test_precedence_systemd_active_http_down(void) {
+    // systemd says active, but HTTP unreachable → DEGRADED
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+
+    // HTTP health check fails
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = FALSE;
+    hs.ws_connected = FALSE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
+}
+
+static void test_precedence_not_installed_native_connected(void) {
+    // Systemd says not installed, but a manually started gateway is connected
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = FALSE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_NOT_INSTALLED);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    state_update_health(&hs);
+
+    // Runtime connectivity takes precedence → RUNNING
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+}
+
+static void test_precedence_native_connected_with_warning(void) {
+    // systemd inactive + native connected with config issues → RUNNING_WITH_WARNING
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = FALSE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.config_audit_ok = FALSE;
+    hs.config_issues_count = 2;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING_WITH_WARNING);
+}
+
+static void test_precedence_native_connected_auth_fail(void) {
+    // systemd inactive + native HTTP+WS connected but auth failed → DEGRADED
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = FALSE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = FALSE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
+}
+
+/* ── Lifecycle and generation tests ── */
 
 static void test_unit_retarget_bumps_generation(void) {
     state_init();
@@ -135,100 +246,33 @@ static void test_unit_retarget_bumps_generation(void) {
     sys.active = TRUE;
     sys.unit_name = "unitA.service";
     state_update_systemd(&sys);
-    
+
     guint64 gen1 = state_get_health_generation();
-    
+
     sys.unit_name = "unitB.service";
     state_update_systemd(&sys);
-    
+
     guint64 gen2 = state_get_health_generation();
     g_assert_cmpuint(gen2, >, gen1);
-}
-
-static void test_probe_disabled_transition_bumps_generation(void) {
-    state_init();
-    SystemdState sys = {0};
-    sys.installed = TRUE;
-    sys.active = TRUE;
-    state_update_systemd(&sys);
-    
-    guint64 gen1 = state_get_health_generation();
-    
-    sys.active = FALSE;
-    state_update_systemd(&sys);
-    
-    guint64 gen2 = state_get_health_generation();
-    g_assert_cmpuint(gen2, >, gen1);
-}
-
-static void test_restart_clears_payload_fields(void) {
-    state_init();
-    SystemdState sys = {0};
-    sys.installed = TRUE;
-    sys.active = TRUE;
-    state_update_systemd(&sys);
-    
-    HealthState hs = {0};
-    hs.last_updated = 12345;
-    hs.loaded = TRUE;
-    hs.rpc_ok = TRUE;
-    hs.health_healthy = TRUE;
-    hs.bind_host = g_strdup("127.0.0.1");
-    hs.probe_url = g_strdup("http://localhost");
-    state_update_health(&hs);
-    
-    ProbeState ps = {0};
-    ps.last_updated = 12345;
-    ps.ran = TRUE;
-    ps.reachable = TRUE;
-    ps.connect_ok = TRUE;
-    ps.rpc_ok = TRUE;
-    ps.summary = g_strdup("Everything OK");
-    state_update_probe(&ps);
-    
-    // Restart (stop then start)
-    sys.active = FALSE;
-    state_update_systemd(&sys);
-    sys.active = TRUE;
-    state_update_systemd(&sys);
-    
-    g_assert_cmpint(state_get_health()->rpc_ok, ==, FALSE);
-    g_assert_cmpint(state_get_health()->health_healthy, ==, FALSE);
-    g_assert_null(state_get_health()->bind_host);
-    g_assert_null(state_get_health()->probe_url);
-    
-    g_assert_cmpint(state_get_probe()->ran, ==, FALSE);
-    g_assert_cmpint(state_get_probe()->reachable, ==, FALSE);
-    g_assert_cmpint(state_get_probe()->connect_ok, ==, FALSE);
-    g_assert_cmpint(state_get_probe()->rpc_ok, ==, FALSE);
-    g_assert_null(state_get_probe()->summary);
-    
-    g_free(hs.bind_host);
-    g_free(hs.probe_url);
-    g_free(ps.summary);
 }
 
 static void test_repeated_running_stopped_transitions(void) {
     state_init();
     SystemdState sys = {0};
     sys.installed = TRUE;
-    
-    // 1st transition to running
+
     sys.active = TRUE;
     state_update_systemd(&sys);
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
-    
-    // 1st transition to stopped
+
     sys.active = FALSE;
     state_update_systemd(&sys);
     g_assert_cmpint(state_get_current(), ==, STATE_STOPPED);
-    
-    // 2nd transition to running
+
     sys.active = TRUE;
     state_update_systemd(&sys);
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
-    
-    // 2nd transition to stopped
+
     sys.active = FALSE;
     state_update_systemd(&sys);
     g_assert_cmpint(state_get_current(), ==, STATE_STOPPED);
@@ -241,9 +285,10 @@ static void test_transition_into_systemd_unavailable(void) {
     sys.active = TRUE;
     state_update_systemd(&sys);
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
-    
+
     sys.systemd_unavailable = TRUE;
     state_update_systemd(&sys);
+    // No native connectivity → systemd context used → UNAVAILABLE
     g_assert_cmpint(state_get_current(), ==, STATE_USER_SYSTEMD_UNAVAILABLE);
 }
 
@@ -252,105 +297,148 @@ static void test_repeated_unit_retargets(void) {
     SystemdState sys = {0};
     sys.installed = TRUE;
     sys.active = TRUE;
-    
+
     sys.unit_name = "unitA.service";
     state_update_systemd(&sys);
     guint64 gen1 = state_get_health_generation();
-    
+
     sys.unit_name = "unitB.service";
     state_update_systemd(&sys);
     guint64 gen2 = state_get_health_generation();
     g_assert_cmpuint(gen2, >, gen1);
-    
+
     sys.unit_name = "unitC.service";
     state_update_systemd(&sys);
     guint64 gen3 = state_get_health_generation();
     g_assert_cmpuint(gen3, >, gen2);
-    
-    // Retargeting to the same unit shouldn't bump generation unnecessarily, but state_update_systemd
-    // does check `g_strcmp0(current_sys_state.unit_name, sys_state->unit_name) != 0`
+
+    // Same unit → no generation bump
     sys.unit_name = "unitC.service";
     state_update_systemd(&sys);
     guint64 gen4 = state_get_health_generation();
     g_assert_cmpuint(gen4, ==, gen3);
 }
 
-static void test_consecutive_freshness_invalidation_idempotence(void) {
+static void test_health_zero_timestamp_preserves_systemd_running(void) {
     state_init();
     SystemdState sys = {0};
     sys.installed = TRUE;
     sys.active = TRUE;
     state_update_systemd(&sys);
-    
-    HealthState hs = {0};
-    hs.last_updated = 12345;
-    hs.loaded = TRUE;
-    hs.rpc_ok = TRUE;
-    hs.health_healthy = TRUE;
-    hs.bind_host = g_strdup("127.0.0.1");
-    hs.probe_url = g_strdup("http://localhost");
-    state_update_health(&hs);
-    
-    // First stop invalidates
-    sys.active = FALSE;
-    state_update_systemd(&sys);
-    g_assert_cmpint(state_get_health()->rpc_ok, ==, FALSE);
-    g_assert_null(state_get_health()->bind_host);
-    
-    // Second consecutive stop update shouldn't crash or leak, should be idempotent
-    state_update_systemd(&sys);
-    g_assert_cmpint(state_get_health()->rpc_ok, ==, FALSE);
-    g_assert_null(state_get_health()->bind_host);
-    
-    g_free(hs.bind_host);
-    g_free(hs.probe_url);
+
+    // Push a healthy state first
+    HealthState hs1 = {0};
+    hs1.last_updated = 12345;
+    hs1.http_ok = TRUE;
+    hs1.ws_connected = TRUE;
+    hs1.rpc_ok = TRUE;
+    hs1.auth_ok = TRUE;
+    state_update_health(&hs1);
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+
+    // Simulate zero-timestamp health update (e.g. during reinit)
+    HealthState hs_zero = {0};
+    hs_zero.last_updated = 0;
+    state_update_health(&hs_zero);
+
+    // Systemd still active + no valid health data → startup hydration guard → RUNNING
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
 }
 
-static void test_health_communicate_failure_preserves_running_state(void) {
+static void test_activation_boundary_health_persists_through_stop(void) {
+    /*
+     * Health data now persists through systemd stop. The native client is
+     * the authoritative source — a refresh is triggered on stop so the
+     * native client will discover the real state. Until then, the old
+     * health data remains and compute_state uses it.
+     */
     state_init();
     SystemdState sys = {0};
     sys.installed = TRUE;
     sys.active = TRUE;
     state_update_systemd(&sys);
-    
-    // First hydration
-    HealthState hs_initial = {0};
-    hs_initial.last_updated = 12345;
-    hs_initial.loaded = TRUE;
-    hs_initial.rpc_ok = TRUE;
-    hs_initial.health_healthy = TRUE;
-    state_update_health(&hs_initial);
+
+    // Seed connected state (degraded because rpc_ok=FALSE)
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = FALSE;
+    hs.auth_ok = TRUE;
+    state_update_health(&hs);
+    g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
+
+    // Stop: health persists, native connectivity takes precedence → still DEGRADED
+    sys.active = FALSE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
+
+    // Simulate native refresh detecting gateway is gone
+    HealthState hs_down = {0};
+    hs_down.last_updated = 12346;
+    hs_down.http_ok = FALSE;
+    hs_down.ws_connected = FALSE;
+    state_update_health(&hs_down);
+    // Now systemd says stopped + native says unreachable → STOPPED
+    g_assert_cmpint(state_get_current(), ==, STATE_STOPPED);
+}
+
+static void test_systemd_stop_does_not_regress_native_connected(void) {
+    /*
+     * CRITICAL: If the gateway is still reachable after systemd reports stop
+     * (e.g. started out-of-band), native connectivity must take precedence.
+     */
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    state_update_health(&hs);
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
-    
-    // Simulate communicate failure (0 timestamp, zeroed payload)
-    HealthState hs_fail = {0};
-    hs_fail.last_updated = 0;
-    // other fields false/0
-    state_update_health(&hs_fail);
-    
-    // Because last_updated is 0, the state machine should use the startup hydration guard
-    // and preserve STATE_RUNNING rather than transitioning to STATE_DEGRADED.
+
+    // Systemd says stopped, but native health persists → RUNNING
+    sys.active = FALSE;
+    state_update_systemd(&sys);
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
 }
 
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
-    
+
+    /* Basic systemd state tests */
     g_test_add_func("/state/initial_state", test_initial_state);
     g_test_add_func("/state/installed_inactive", test_installed_inactive);
     g_test_add_func("/state/active_without_fresh_health", test_active_without_fresh_health);
+
+    /* Native gateway connectivity tests */
+    g_test_add_func("/state/full_connectivity_running", test_full_connectivity_running);
     g_test_add_func("/state/warning_health", test_warning_health);
-    g_test_add_func("/state/degraded_health", test_degraded_health);
-    g_test_add_func("/state/entering_probe_disabled_clears_freshness", test_entering_probe_disabled_clears_freshness);
-    g_test_add_func("/state/activation_boundary_prevents_stale_inheritance", test_activation_boundary_prevents_stale_inheritance);
+    g_test_add_func("/state/degraded_rpc_fail", test_degraded_rpc_fail);
+    g_test_add_func("/state/http_ok_ws_disconnected_is_degraded", test_http_ok_ws_disconnected_is_degraded);
+
+    /* Status precedence tests (runtime connectivity overrides systemd) */
+    g_test_add_func("/state/precedence/systemd_inactive_native_connected", test_precedence_systemd_inactive_native_connected);
+    g_test_add_func("/state/precedence/systemd_unavailable_native_connected", test_precedence_systemd_unavailable_native_connected);
+    g_test_add_func("/state/precedence/systemd_active_http_down", test_precedence_systemd_active_http_down);
+    g_test_add_func("/state/precedence/not_installed_native_connected", test_precedence_not_installed_native_connected);
+    g_test_add_func("/state/precedence/native_connected_with_warning", test_precedence_native_connected_with_warning);
+    g_test_add_func("/state/precedence/native_connected_auth_fail", test_precedence_native_connected_auth_fail);
+
+    /* Lifecycle and generation tests */
     g_test_add_func("/state/unit_retarget_bumps_generation", test_unit_retarget_bumps_generation);
-    g_test_add_func("/state/probe_disabled_transition_bumps_generation", test_probe_disabled_transition_bumps_generation);
-    g_test_add_func("/state/restart_clears_payload_fields", test_restart_clears_payload_fields);
     g_test_add_func("/state/repeated_running_stopped_transitions", test_repeated_running_stopped_transitions);
     g_test_add_func("/state/transition_into_systemd_unavailable", test_transition_into_systemd_unavailable);
     g_test_add_func("/state/repeated_unit_retargets", test_repeated_unit_retargets);
-    g_test_add_func("/state/consecutive_freshness_invalidation_idempotence", test_consecutive_freshness_invalidation_idempotence);
-    g_test_add_func("/state/health_communicate_failure_preserves_running_state", test_health_communicate_failure_preserves_running_state);
-    
+    g_test_add_func("/state/health_zero_timestamp_preserves_systemd_running", test_health_zero_timestamp_preserves_systemd_running);
+    g_test_add_func("/state/activation_boundary_health_persists_through_stop", test_activation_boundary_health_persists_through_stop);
+    g_test_add_func("/state/systemd_stop_does_not_regress_native_connected", test_systemd_stop_does_not_regress_native_connected);
+
     return g_test_run();
 }

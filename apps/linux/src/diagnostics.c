@@ -3,11 +3,10 @@
  *
  * Diagnostics window and debug payload generation.
  *
- * Provides a plain-text Adwaita window detailing the dual-status
- * state of the companion app: the primary systemd/JSON status and
- * the secondary deep probe networking status. Exposes a canonical
- * formatter to ensure the displayed text and the copied clipboard
- * payload are always identical.
+ * Provides a plain-text Adwaita window detailing the gateway client
+ * connectivity state: systemd service context and native HTTP/WebSocket
+ * health. Exposes a canonical formatter to ensure the displayed text
+ * and the copied clipboard payload are always identical.
  *
  * Author: Thiago Camargo <thiagocmc@proton.me>
  */
@@ -39,46 +38,44 @@ static gchar* build_diagnostics_text(void) {
     const char *status = state_get_current_string();
     SystemdState *sys = state_get_systemd();
     HealthState *health = state_get_health();
-    ProbeState *probe = state_get_probe();
 
     g_autofree gchar *health_age = format_age(health->last_updated);
-    g_autofree gchar *probe_age = format_age(probe->last_updated);
 
     return g_strdup_printf(
-        "=== Primary Status ===\n"
-        "Source: Systemd + `gateway status --json`\n"
-        "Last updated: %s\n"
-        "Currently refreshing: %s\n\n"
-        "Normalized Status: %s\n"
+        "=== Systemd Service ===\n"
+        "Unit: %s\n"
         "ActiveState: %s\n"
-        "SubState: %s\n"
-        "Gateway Port: %d\n"
+        "SubState: %s\n\n"
+        "=== Gateway Client ===\n"
+        "Source: Native HTTP + WebSocket\n"
+        "Last updated: %s\n\n"
+        "Normalized Status: %s\n"
+        "Endpoint: %s:%d\n"
+        "HTTP Health: %s\n"
+        "WebSocket: %s\n"
         "RPC OK: %s\n"
-        "Healthy: %s\n"
-        "Config Issues: %d\n\n"
-        "=== Secondary Diagnostics ===\n"
-        "Source: `gateway probe`\n"
-        "Last updated: %s\n"
-        "Currently refreshing: %s\n\n"
-        "Reachable: %s\n"
-        "Connect OK: %s\n"
-        "RPC OK: %s\n"
-        "Summary: %s\n",
-        health_age,
-        health->in_flight ? "Yes" : "No",
-        status,
+        "Auth OK: %s\n"
+        "Auth Source: %s\n"
+        "Gateway Version: %s\n"
+        "Config Valid: %s\n"
+        "Config Issues: %d\n"
+        "Last Error: %s\n",
+        sys->unit_name ? sys->unit_name : "N/A",
         sys->active_state ? sys->active_state : "Unknown",
         sys->sub_state ? sys->sub_state : "Unknown",
-        health->port,
+        health_age,
+        status,
+        health->endpoint_host ? health->endpoint_host : "127.0.0.1",
+        health->endpoint_port,
+        health->http_ok ? "OK" : "Unreachable",
+        health->ws_connected ? "Connected" : "Disconnected",
         health->rpc_ok ? "Yes" : "No",
-        health->health_healthy ? "Yes" : "No",
+        health->auth_ok ? "Yes" : "No",
+        health->auth_source ? health->auth_source : "N/A",
+        health->gateway_version ? health->gateway_version : "N/A",
+        health->config_valid ? "Yes" : "No",
         health->config_issues_count,
-        probe_age,
-        probe->in_flight ? "Yes" : "No",
-        probe->ran ? (probe->reachable ? "Yes" : "No") : "Not run yet",
-        probe->ran ? (probe->connect_ok ? "Yes" : "No") : "Not run yet",
-        probe->ran ? (probe->rpc_ok ? "Yes" : "No") : "Not run yet",
-        probe->summary ? probe->summary : "N/A"
+        health->last_error ? health->last_error : "None"
     );
 }
 

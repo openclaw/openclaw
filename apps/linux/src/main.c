@@ -5,8 +5,9 @@
  *
  * Bootstraps the GTK4/Libadwaita application loop, defers initialization
  * logic until the app is fully registered via the `on_activate` signal,
- * and orchestrates the distinct timers for the 3-lane asynchronous polling
- * (Systemd events, Primary Status polling, Secondary Probe polling).
+ * and orchestrates the two runtime lanes:
+ *   Lane 1: Systemd D-Bus event subscription (service lifecycle context)
+ *   Lane 2: Native gateway client (HTTP health + WebSocket connectivity)
  *
  * Author: Thiago Camargo <thiagocmc@proton.me>
  */
@@ -16,33 +17,16 @@
 #include <glib.h>
 
 #include "log.h"
+#include "gateway_client.h"
 
 extern void tray_init(void);
 extern void systemd_init(void);
 extern void systemd_refresh(void);
-extern void health_init(void);
-extern void health_probe_gateway(void);
-extern void health_run_deep_probe(void);
-extern void health_probe_gateway_eager(void);
-extern void health_run_deep_probe_eager(void);
 extern void state_init(void);
 extern void notify_init(void);
 
-void state_on_probe_refresh_requested(void) {
-    health_probe_gateway_eager();
-    health_run_deep_probe_eager();
-}
-
-static gboolean on_status_poll(gpointer user_data) {
-    (void)user_data;
-    health_probe_gateway();
-    return G_SOURCE_CONTINUE;
-}
-
-static gboolean on_probe_poll(gpointer user_data) {
-    (void)user_data;
-    health_run_deep_probe();
-    return G_SOURCE_CONTINUE;
+void state_on_gateway_refresh_requested(void) {
+    gateway_client_refresh();
 }
 
 static void on_activate(GtkApplication *app, gpointer user_data) {
@@ -54,10 +38,9 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     if (initialized) return;
     initialized = TRUE;
 
-    // The app has 3 distinct asynchronous runtime lanes:
-    // Lane 1: Real-time systemd D-Bus event subscription lane.
-    // Lane 2: Periodic async primary status lane (gateway status --json) for operational health.
-    // Lane 3: Periodic async secondary deep probe lane (gateway probe) for diagnostics.
+    // The app has 2 distinct asynchronous runtime lanes:
+    // Lane 1: Real-time systemd D-Bus event subscription (service lifecycle context)
+    // Lane 2: Native gateway client (HTTP health polling + persistent WebSocket)
 
     // Startup Sequence:
     // 1. Initialize app state and notifications
@@ -73,15 +56,10 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     // 4. Perform the initial systemd state fetch so we don't start with a blank UI
     systemd_refresh();
 
-    // 5. Initialize health subsystem
-    health_init();
-
-    // 6. Start the disjoint lane timers
-    // Lane 2: Primary JSON Status (every 5 seconds)
-    g_timeout_add_seconds(5, on_status_poll, NULL);
-    
-    // Lane 3: Secondary Deep Probe (every 60 seconds)
-    g_timeout_add_seconds(60, on_probe_poll, NULL);
+    // 5. Initialize native gateway client (HTTP health polling + WebSocket)
+    // The gateway client manages its own internal timers for health polling
+    // and WebSocket reconnection with exponential backoff.
+    gateway_client_init();
 }
 
 int main(int argc, char **argv) {

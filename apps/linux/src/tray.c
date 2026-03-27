@@ -46,10 +46,7 @@ static void on_helper_data_stream_weak_notify(gpointer data, GObject *where_the_
 extern void systemd_start_gateway(void);
 extern void systemd_stop_gateway(void);
 extern void systemd_restart_gateway(void);
-extern void health_probe_gateway(void);
-extern void health_probe_gateway_eager(void);
-extern void health_run_deep_probe(void);
-extern void health_run_deep_probe_eager(void);
+extern void gateway_client_refresh(void);
 extern void diagnostics_show_window(void);
 
 static void handle_helper_action(const gchar *action) {
@@ -63,19 +60,13 @@ static void handle_helper_action(const gchar *action) {
     } else if (g_strcmp0(action, "RESTART") == 0) {
         systemd_restart_gateway();
     } else if (g_strcmp0(action, "REFRESH") == 0) {
-        // Run systemd discovery lane first so health lanes don't bail
-        // due to stale "Not Installed" state
+        // Run systemd discovery lane first for install/management context
         extern void systemd_refresh(void);
         systemd_refresh();
-        // Triggers async lanes. The health module itself enforces the
-        // single in-flight lock, so we don't pile up subprocesses here.
-        health_probe_gateway_eager();
-        health_run_deep_probe_eager();
+        // Trigger an immediate gateway client health check
+        gateway_client_refresh();
     } else if (g_strcmp0(action, "DIAGNOSTICS") == 0) {
-        // Note: Opening diagnostics may explicitly request a background deep probe refresh
-        // just in case the last one is stale. The probe execution remains guarded by 
-        // the lane's `in_flight` lock, so no overlapping probe jobs are created.
-        health_run_deep_probe();
+        gateway_client_refresh();
         diagnostics_show_window();
     } else if (g_strcmp0(action, "QUIT") == 0) {
         GApplication *app = g_application_get_default();
