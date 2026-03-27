@@ -30,8 +30,23 @@ type NormalizedAttachment = {
   mime: string;
   base64: string;
 };
+type SavedMedia = {
+  id: string;
+  path?: string; 
+};
 
 const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
+
+const MIME_TO_EXT: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/jpg":  ".jpg",
+  "image/png":  ".png",
+  "image/webp": ".webp",
+  "image/gif":  ".gif",
+  "image/avif": ".avif",
+  "image/bmp":  ".bmp",
+  "image/tiff": ".tiff",
+};
 
 function normalizeMime(mime?: string): string | undefined {
   if (!mime) return undefined;
@@ -49,6 +64,17 @@ function isValidBase64(value: string): boolean {
 
 function sanitizePathSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+}
+
+function ensureExtension(label: string, mime: string): string {
+  if (/\.[a-zA-Z0-9]+$/.test(label)) return label;
+  const ext = MIME_TO_EXT[mime.toLowerCase()] ?? "";
+  return ext ? `${label}${ext}` : label;
+}
+
+function extractMediaPath(savedMedia: SavedMedia, fallbackLabel: string): string {
+  const raw = savedMedia.path ?? savedMedia.id ?? fallbackLabel;
+  return raw.replace(/\\/g, "/");
 }
 
 function normalizeAttachment(
@@ -133,6 +159,12 @@ export async function parseMessageWithAttachments(
       continue;
     }
 
+    if (sizeBytes > maxBytes) {
+      throw new Error(
+        `attachment ${label}: exceeds size limit (${sizeBytes} > ${maxBytes} bytes)`,
+      );
+    }
+
     const providedMime = normalizeMime(mime);
     const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
 
@@ -145,7 +177,9 @@ export async function parseMessageWithAttachments(
       continue;
     }
     if (sniffedMime && providedMime && sniffedMime !== providedMime) {
-      log?.warn(`attachment ${label}: mime mismatch (${providedMime} -> ${sniffedMime}), using sniffed`);
+      log?.warn(
+        `attachment ${label}: mime mismatch (${providedMime} -> ${sniffedMime}), using sniffed`,
+      );
     }
     const finalMime = sniffedMime ?? providedMime ?? mime;
 
@@ -154,31 +188,29 @@ export async function parseMessageWithAttachments(
     if (sizeBytes > OFFLOAD_THRESHOLD_BYTES) {
       try {
         const buffer = Buffer.from(b64, "base64");
-        const savedMedia = await saveMediaBuffer(buffer, finalMime, "inbound");
-        // Use the path returned by the storage layer; fall back to a sanitized id only
-        // if the storage layer does not expose a resolved path.
-        const mediaPath = savedMedia.path ?? sanitizePathSegment(savedMedia.id || label);
+
+        const labelWithExt = ensureExtension(label, finalMime);
+
+        const savedMedia = (await saveMediaBuffer(
+          buffer,
+          finalMime,
+          "inbound",
+          labelWithExt,
+        )) as SavedMedia;
+
+        const mediaPath = extractMediaPath(savedMedia, labelWithExt);
 
         updatedMessage += `\n[media attached: ${mediaPath}]`;
         log?.info?.(`[Gateway] Intercepted large image payload. Saved to disk: ${mediaPath}`);
         isOffloaded = true;
       } catch (err) {
-        // Do not fall back to in-memory processing when the file also exceeds the hard
-        // memory limit — that would reintroduce the OOM risk this change is meant to fix.
-        if (sizeBytes > maxBytes) {
-          throw new Error(
-            `attachment ${label}: exceeds size limit and could not be offloaded to disk: ${err}`,
-          );
-        }
-        log?.warn(`[Gateway] Failed to save intercepted media to disk, falling back to memory: ${err}`);
+        log?.warn(
+          `[Gateway Error] Failed to save intercepted media to disk, falling back to memory: ${err}`,
+        );
       }
     }
 
     if (isOffloaded) continue;
-
-    if (sizeBytes > maxBytes) {
-      throw new Error(`attachment ${label}: exceeds size limit (${sizeBytes} > ${maxBytes} bytes)`);
-    }
 
     images.push({ type: "image", data: b64, mimeType: finalMime });
   }
