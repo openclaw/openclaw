@@ -151,7 +151,12 @@ async function readPayload(lockPath: string): Promise<LockPayload | null> {
 
 async function readPayloadFromHandle(handle: fs.FileHandle): Promise<LockPayload | null> {
   try {
-    const raw = await handle.readFile({ encoding: "utf8" });
+    // Always read from position 0 so callers don't silently read empty
+    // strings after prior reads/writes have advanced the file offset.
+    const stat = await handle.stat();
+    const buf = Buffer.alloc(stat.size);
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+    const raw = buf.toString("utf8", 0, bytesRead);
     return parseLockPayload(raw);
   } catch {
     return null;
@@ -306,7 +311,9 @@ export async function acquireWorkspaceLock(
   const kind = options.kind ?? "file";
   const timeoutMs = Math.max(0, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
-  const ttlMs = Math.max(1, options.ttlMs ?? DEFAULT_TTL_MS);
+  // Minimum 200ms keeps TTL above the refresh floor so locks cannot expire
+  // before the first withWorkspaceLock refresh fires (see refreshEveryMs).
+  const ttlMs = Math.max(200, options.ttlMs ?? DEFAULT_TTL_MS);
   const signal = options.signal;
 
   if (signal?.aborted) {
@@ -315,6 +322,10 @@ export async function acquireWorkspaceLock(
 
   const normalizedTarget = await normalizeTargetPath(targetPath, kind);
   const lockPath = await resolveLockPath(normalizedTarget, kind);
+  // Create intermediate directories for the lock file. For "file" targets we
+  // need both the target's parent chain AND the .openclaw.workspace-locks leaf.
+  // Use recursive:true so missing ancestors are created when the write tool
+  // locks a file that doesn't exist yet.
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
   const mapKey = lockMapKey(kind, normalizedTarget);
 
@@ -398,7 +409,9 @@ export async function withWorkspaceLock<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const lock = await acquireWorkspaceLock(targetPath, options);
-  const ttlMs = Math.max(1, options.ttlMs ?? DEFAULT_TTL_MS);
+  // Enforce a minimum TTL of 200ms so the refresh interval (ttl/2) is always
+  // >= 100ms and the lock cannot expire before the first refresh fires.
+  const ttlMs = Math.max(200, options.ttlMs ?? DEFAULT_TTL_MS);
   const refreshEveryMs = Math.max(100, Math.floor(ttlMs / 2));
   const timer = setInterval(() => {
     void lock.refresh().catch(() => undefined);

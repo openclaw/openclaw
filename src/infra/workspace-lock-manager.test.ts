@@ -820,4 +820,59 @@ describe("workspace lock manager", () => {
 
     await lock.release();
   });
+
+  it("should create lock artifacts but not the target file for missing-file paths", async () => {
+    const dir = await makeCaseDir();
+    const bogusFile = path.join(dir, "new-subdir", "file.txt");
+
+    const lock = await acquireWorkspaceLock(bogusFile, { kind: "file", timeoutMs: 100 });
+
+    // Lock artifacts are created, but the target file itself is not.
+    await expect(fs.stat(lock.lockPath)).resolves.toBeTruthy();
+    await expect(fs.stat(bogusFile)).rejects.toThrow();
+
+    await lock.release();
+  });
+
+  it("should enforce minimum TTL of 200ms so refresh can keep lock alive", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "short-ttl.txt");
+    await fs.writeFile(target, "");
+
+    // Even with ttlMs: 1, the lock should survive long enough for a 150ms
+    // critical section because the implementation clamps to 200ms.
+    let ranToCompletion = false;
+    await withWorkspaceLock(target, { kind: "file", ttlMs: 1, timeoutMs: 2000 }, async () => {
+      await new Promise((r) => setTimeout(r, 150));
+      ranToCompletion = true;
+    });
+    expect(ranToCompletion).toBe(true);
+  });
+
+  it("should refresh lock payload correctly after multiple reads (seek regression)", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "refresh-seek.txt");
+    await fs.writeFile(target, "");
+
+    const lock = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 1000,
+      ttlMs: 500,
+    });
+
+    // Refresh should update the expiry — read the lock file to verify.
+    await lock.refresh();
+    const raw1 = await fs.readFile(lock.lockPath, "utf8");
+    const payload1 = JSON.parse(raw1);
+
+    await new Promise((r) => setTimeout(r, 50));
+    await lock.refresh();
+    const raw2 = await fs.readFile(lock.lockPath, "utf8");
+    const payload2 = JSON.parse(raw2);
+
+    // The second refresh should have a later expiresAt than the first.
+    expect(Date.parse(payload2.expiresAt)).toBeGreaterThan(Date.parse(payload1.expiresAt));
+
+    await lock.release();
+  });
 });
