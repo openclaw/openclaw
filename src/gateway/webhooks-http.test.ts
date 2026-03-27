@@ -68,6 +68,20 @@ function createHandler(opts?: {
 }
 
 describe("webhooks-http", () => {
+  test("responds with plain text for validationToken query param (M365 handshake)", async () => {
+    const handler = createHandler({
+      config: { token: TOKEN, presets: ["m365-email"], maxBodyBytes: 256 * 1024, rawMode: [] },
+    });
+    const req = createMockReq({
+      url: `/webhooks/${TOKEN}/m365-email?validationToken=abc-123-def`,
+    });
+    const res = createMockRes();
+    const handled = await handler(req, res);
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(res._body).toBe("abc-123-def");
+  });
+
   test("returns false for non-webhook paths", async () => {
     const handler = createHandler();
     const req = createMockReq({ url: "/hooks/agent" });

@@ -589,6 +589,74 @@ only the JSON body through the webhook endpoint, event types are inferred from t
 
 This auto-detection means you can register a single webhook URL for all Shopify event types.
 
+### `m365-email` - Microsoft 365 Email
+
+Monitor a Microsoft 365 mailbox for new emails via [Microsoft Graph API change notifications](https://learn.microsoft.com/en-us/graph/webhooks).
+
+**Webhook URL:**
+
+```
+https://your-gateway.example.com/webhooks/{token}/m365-email
+```
+
+**Enable in config:**
+
+```json5
+{
+  hooks: {
+    webhooks: {
+      presets: ["m365-email"],
+    },
+  },
+}
+```
+
+**Create a subscription via Graph API:**
+
+```http
+POST https://graph.microsoft.com/v1.0/subscriptions
+Content-Type: application/json
+
+{
+  "changeType": "created",
+  "notificationUrl": "https://your-gateway.example.com/webhooks/{token}/m365-email",
+  "resource": "/users/{email}/mailFolders('inbox')/messages",
+  "expirationDateTime": "2026-04-30T00:00:00Z",
+  "clientState": "optional-state-string"
+}
+```
+
+During subscription creation, Microsoft sends a `?validationToken=...` GET/POST to confirm the
+endpoint is reachable. OpenClaw responds automatically with the token as plain text — no
+configuration needed.
+
+**Notification payload** (sent when a new email arrives):
+
+```json
+{
+  "value": [
+    {
+      "subscriptionId": "guid",
+      "clientState": "optional-state-string",
+      "changeType": "created",
+      "resource": "users/larry@example.com/messages/AAMkAGNm...",
+      "resourceData": {
+        "@odata.type": "#Microsoft.Graph.Message",
+        "@odata.id": "users/larry@example.com/messages/AAMkAGNm..."
+      }
+    }
+  ]
+}
+```
+
+The agent message includes the mailbox address, message ID, and change type. Use the message ID
+with the Graph API to fetch the full email content.
+
+**Subscription renewal:**
+
+Mailbox subscriptions expire after a maximum of 4,230 minutes (~3 days). Set up a cron job or
+scheduled skill to renew before expiration using `PATCH /subscriptions/{id}`.
+
 ## Security
 
 - The token is embedded in the URL path, which is encrypted over HTTPS. This is the

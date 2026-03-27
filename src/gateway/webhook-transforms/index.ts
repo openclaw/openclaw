@@ -1,3 +1,5 @@
+import type { M365EmailTransformResult } from "./m365-email.js";
+import { transformM365EmailPayload } from "./m365-email.js";
 import type { OwnerRezTransformResult } from "./ownerrez.js";
 import { transformOwnerRezPayload } from "./ownerrez.js";
 import type { QuickBooksTransformResult } from "./quickbooks.js";
@@ -20,6 +22,7 @@ const webhookTransforms: Record<string, WebhookTransformFn> = {
   quickbooks: transformQuickBooksPayload as WebhookTransformFn,
   ownerrez: transformOwnerRezPayload as WebhookTransformFn,
   shopify: transformShopifyPayload as WebhookTransformFn,
+  "m365-email": transformM365EmailPayload as WebhookTransformFn,
 };
 
 export function getWebhookTransform(source: string): WebhookTransformFn | undefined {
@@ -27,6 +30,7 @@ export function getWebhookTransform(source: string): WebhookTransformFn | undefi
 }
 
 export type {
+  M365EmailTransformResult,
   OwnerRezTransformResult,
   QuickBooksTransformResult,
   ReadAiTransformResult,

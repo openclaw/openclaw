@@ -118,6 +118,17 @@ export function createWebhooksRequestHandler(opts: {
       return true;
     }
 
+    // Handle Microsoft Graph API subscription validation handshake.
+    // Must respond 200 with the token as plain text before any other processing.
+    const validationToken = url.searchParams.get("validationToken");
+    if (validationToken) {
+      logWebhooks.info(`webhook validation handshake: source=${source}`);
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end(validationToken);
+      return true;
+    }
+
     // Check source is an enabled preset
     if (!webhooksConfig.presets.includes(source)) {
       logWebhooks.warn(`webhook source "${source}" is not an enabled preset`);
