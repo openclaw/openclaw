@@ -1,33 +1,58 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
+import type { ThemeRegistrationResolved } from "@pierre/diffs";
 import { RegisteredCustomThemes, ResolvedThemes, ResolvingThemes } from "@pierre/diffs";
 
-type RegisteredThemeLoader = NonNullable<ReturnType<typeof RegisteredCustomThemes.get>>;
-type RegisteredTheme = Awaited<ReturnType<RegisteredThemeLoader>>;
-const require = createRequire(import.meta.url);
+type PierreThemeName = "pierre-dark" | "pierre-light";
+const diffsRequire = createRequire(import.meta.resolve("@pierre/diffs"));
+const PIERRE_THEME_SPECS = [
+  ["pierre-dark", "@pierre/theme/themes/pierre-dark.json"],
+  ["pierre-light", "@pierre/theme/themes/pierre-light.json"],
+] as const satisfies ReadonlyArray<readonly [PierreThemeName, string]>;
 
-async function loadPierreTheme(
+function createThemeLoader(
+  themeName: PierreThemeName,
   themeSpecifier: string,
-  themeName: string,
-): Promise<RegisteredTheme> {
-  const themePath = require.resolve(themeSpecifier);
-  return {
-    ...(JSON.parse(await fs.readFile(themePath, "utf8")) as Record<string, unknown>),
-    name: themeName,
+): () => Promise<ThemeRegistrationResolved> {
+  let cachedTheme: ThemeRegistrationResolved | undefined;
+  return async () => {
+    if (cachedTheme) {
+      return cachedTheme;
+    }
+    const themePath = diffsRequire.resolve(themeSpecifier);
+    cachedTheme = {
+      ...(JSON.parse(await fs.readFile(themePath, "utf8")) as Record<string, unknown>),
+      name: themeName,
+    } as ThemeRegistrationResolved;
+    return cachedTheme;
   };
 }
 
-export async function ensurePierreThemesRegistered(): Promise<void> {
-  // Always overwrite the upstream loaders so the Node-safe path wins even if
-  // @pierre/diffs registered its JSON-import loaders earlier in this process.
-  RegisteredCustomThemes.set("pierre-light", () =>
-    loadPierreTheme("@pierre/theme/themes/pierre-light.json", "pierre-light"),
-  );
-  RegisteredCustomThemes.set("pierre-dark", () =>
-    loadPierreTheme("@pierre/theme/themes/pierre-dark.json", "pierre-dark"),
-  );
-  ResolvedThemes.delete("pierre-light");
-  ResolvedThemes.delete("pierre-dark");
-  ResolvingThemes.delete("pierre-light");
-  ResolvingThemes.delete("pierre-dark");
+const PIERRE_THEME_LOADERS = new Map(
+  PIERRE_THEME_SPECS.map(([themeName, themeSpecifier]) => [
+    themeName,
+    createThemeLoader(themeName, themeSpecifier),
+  ]),
+);
+
+export function ensurePierreThemesRegistered(): void {
+  let replacedThemeLoader = false;
+
+  for (const [themeName, loader] of PIERRE_THEME_LOADERS) {
+    if (RegisteredCustomThemes.get(themeName) !== loader) {
+      RegisteredCustomThemes.set(themeName, loader);
+      replacedThemeLoader = true;
+    }
+  }
+
+  if (!replacedThemeLoader) {
+    return;
+  }
+
+  // If another path swapped these loaders, clear the resolver caches so the
+  // next render rehydrates the highlighter with the Node-safe theme source.
+  for (const [themeName] of PIERRE_THEME_LOADERS) {
+    ResolvedThemes.delete(themeName);
+    ResolvingThemes.delete(themeName);
+  }
 }
