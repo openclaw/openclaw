@@ -468,8 +468,7 @@
             }
           },
           "azureEndpoint": {
-            "type": "string",
-            "format": "uri"
+            "type": "string"
           },
           "azureDeployment": {
             "type": "string"
