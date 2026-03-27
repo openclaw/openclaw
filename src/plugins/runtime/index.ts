@@ -2,7 +2,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import {
   listRuntimeImageGenerationProviders,
   generateImage,
-} from "../../image-generation/runtime.js";
+} from "../../plugin-sdk/image-generation-runtime.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   createLazyRuntimeMethod,
