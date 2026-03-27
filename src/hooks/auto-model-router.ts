@@ -55,6 +55,45 @@ function resolveRouterConfig(cfg: OpenClawConfig): RouterConfig {
   };
 }
 
+function validateRouterAnalysis(parsed: unknown, _config: RouterConfig): RouterAnalysis {
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Invalid router output: not an object");
+  }
+
+  const result = parsed as Record<string, unknown>;
+
+  if (typeof result.route !== "string" || !["local", "cloud"].includes(result.route)) {
+    throw new Error(
+      `Invalid router output: route must be 'local' or 'cloud', got ${String(result.route)}`,
+    );
+  }
+
+  if (typeof result.complexity !== "number" || result.complexity < 0 || result.complexity > 100) {
+    throw new Error(
+      `Invalid router output: complexity must be a number between 0 and 100, got ${String(result.complexity)}`,
+    );
+  }
+
+  if (typeof result.model !== "string" || !result.model.trim()) {
+    throw new Error(
+      `Invalid router output: model must be a non-empty string, got ${String(result.model)}`,
+    );
+  }
+
+  if (typeof result.emoji !== "string" || !["🏠", "☁️"].includes(result.emoji)) {
+    throw new Error(
+      `Invalid router output: emoji must be '🏠' or '☁️', got ${String(result.emoji)}`,
+    );
+  }
+
+  return {
+    route: result.route as "local" | "cloud",
+    complexity: result.complexity,
+    model: result.model.trim(),
+    emoji: result.emoji as "🏠" | "☁️",
+  };
+}
+
 export async function analyzeMessageComplexity(
   message: string,
   config: RouterConfig,
@@ -65,7 +104,8 @@ export async function analyzeMessageComplexity(
       timeout: 5000,
     });
 
-    return JSON.parse(stdout) as RouterAnalysis;
+    const parsed = JSON.parse(stdout);
+    return validateRouterAnalysis(parsed, config);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     log.warn(`Router analysis failed: ${errorMessage}, using cloud model`);
