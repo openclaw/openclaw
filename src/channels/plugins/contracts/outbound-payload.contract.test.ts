@@ -30,7 +30,11 @@ vi.mock("../../../../extensions/zalo/test-api.js", async (importOriginal) => {
 // This suite only validates payload adaptation. Keep zalouser's runtime-only
 // ZCA import graph mocked so local contract runs don't depend on native socket
 // deps being resolved through the extension runtime seam.
-vi.mock("../../../../extensions/zalouser/src/accounts.js", () => ({
+vi.mock("../../../../extensions/zalouser/test-api.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../extensions/zalouser/test-api.js")>();
+  return {
+    ...actual,
   listZalouserAccountIds: vi.fn(() => ["default"]),
   resolveDefaultZalouserAccountId: vi.fn(() => "default"),
   resolveZalouserAccountSync: vi.fn(() => ({
@@ -43,36 +47,26 @@ vi.mock("../../../../extensions/zalouser/src/accounts.js", () => ({
   })),
   getZcaUserInfo: vi.fn(async () => null),
   checkZcaAuthenticated: vi.fn(async () => false),
-}));
-
-vi.mock("../../../../extensions/zalouser/src/zalo-js.js", () => ({
-  checkZaloAuthenticated: vi.fn(async () => false),
-  getZaloUserInfo: vi.fn(async () => null),
-  listZaloFriendsMatching: vi.fn(async () => []),
-  listZaloGroupMembers: vi.fn(async () => []),
-  listZaloGroupsMatching: vi.fn(async () => []),
-  logoutZaloProfile: vi.fn(async () => {}),
-  resolveZaloAllowFromEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
-    entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
-  ),
-  resolveZaloGroupsByEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
-    entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
-  ),
-  startZaloQrLogin: vi.fn(async () => ({
-    message: "qr pending",
-    qrDataUrl: undefined,
-  })),
-  waitForZaloQrLogin: vi.fn(async () => ({
-    connected: false,
-    message: "login pending",
-  })),
-}));
-
-vi.mock("../../../../extensions/zalouser/test-api.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../../extensions/zalouser/test-api.js")>();
-  return {
-    ...actual,
+    checkZaloAuthenticated: vi.fn(async () => false),
+    getZaloUserInfo: vi.fn(async () => null),
+    listZaloFriendsMatching: vi.fn(async () => []),
+    listZaloGroupMembers: vi.fn(async () => []),
+    listZaloGroupsMatching: vi.fn(async () => []),
+    logoutZaloProfile: vi.fn(async () => {}),
+    resolveZaloAllowFromEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
+      entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
+    ),
+    resolveZaloGroupsByEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
+      entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
+    ),
+    startZaloQrLogin: vi.fn(async () => ({
+      message: "qr pending",
+      qrDataUrl: undefined,
+    })),
+    waitForZaloQrLogin: vi.fn(async () => ({
+      connected: false,
+      message: "login pending",
+    })),
     sendMessageZalouser: vi.fn().mockResolvedValue({ ok: true, messageId: "zlu-1" }),
     sendReactionZalouser: vi.fn().mockResolvedValue({ ok: true }),
   };
