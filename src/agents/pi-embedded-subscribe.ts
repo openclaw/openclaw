@@ -27,6 +27,30 @@ const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\
 const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
 const log = createSubsystemLogger("agent/embedded");
 
+/**
+ * Compute the longest common prefix of two strings.
+ */
+function longestCommonPrefix(a: string, b: string): string {
+  const minLen = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < minLen && a[i] === b[i]) {
+    i += 1;
+  }
+  return a.slice(0, i);
+}
+
+/**
+ * Compute the longest common suffix of two strings.
+ */
+function longestCommonSuffix(a: string, b: string): string {
+  let i = 1;
+  const maxLen = Math.min(a.length, b.length);
+  while (i <= maxLen && a[a.length - i] === b[b.length - i]) {
+    i += 1;
+  }
+  return a.slice(a.length - i + 1);
+}
+
 export type {
   BlockReplyChunking,
   SubscribeEmbeddedPiSessionParams,
@@ -583,8 +607,58 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // "Checking files" IS a prefix of "Checking files done".
     const rawPrior = state.lastStreamedReasoningRaw ?? "";
     const isRawAccumulated = text.startsWith(rawPrior);
-    // rawAccumulated: monotonically growing raw text
-    const rawAccumulated = isRawAccumulated ? text : rawPrior + text;
+
+    // Detect non-prefix full snapshot replacements. When a provider rewrites
+    // the assistant segment or sends a complete thinking snapshot that doesn't
+    // start with the previous raw content, we need to distinguish between:
+    // 1. An incremental delta (should be appended)
+    // 2. A full replacement snapshot (should replace the baseline)
+    //
+    // Heuristic: If the new text doesn't start with the prior text AND
+    // the prior text is not a prefix of the new text AND there's minimal
+    // overlap, treat it as a replacement rather than an append.
+    // This prevents corrupted thinking when providers send full snapshots
+    // without a preceding message_start reset.
+    let rawAccumulated: string;
+    let isReplacement = false;
+
+    if (isRawAccumulated) {
+      // Normal case: new text extends the previous content.
+      rawAccumulated = text;
+    } else if (!rawPrior) {
+      // No prior content: use the new text as-is.
+      rawAccumulated = text;
+    } else if (text.includes(rawPrior)) {
+      // New text contains prior as a substring (possibly with prefix trimmed).
+      // Treat as accumulated since the prior content is preserved.
+      rawAccumulated = text;
+    } else if (rawPrior.includes(text)) {
+      // Prior contains new text - this is a truncation or partial re-send.
+      // Treat the new text as the current baseline (replacement).
+      rawAccumulated = text;
+      isReplacement = true;
+    } else {
+      // Check for significant overlap to detect true replacements vs deltas.
+      // If the new text shares no significant prefix/suffix with the prior,
+      // it's likely a replacement snapshot from a provider rewrite.
+      const overlapThreshold = Math.min(rawPrior.length, text.length) * 0.3;
+      const commonPrefix = longestCommonPrefix(rawPrior, text);
+      const commonSuffix = longestCommonSuffix(rawPrior, text);
+
+      if (commonPrefix.length < overlapThreshold && commonSuffix.length < overlapThreshold) {
+        // No significant overlap: treat as a replacement.
+        rawAccumulated = text;
+        isReplacement = true;
+      } else {
+        // Some overlap: treat as an incremental delta (append).
+        rawAccumulated = rawPrior + text;
+      }
+    }
+
+    // On replacement, reset the emitted baseline so delta computation is correct.
+    if (isReplacement) {
+      state.lastEmittedReasoningRaw = undefined;
+    }
     state.lastStreamedReasoningRaw = rawAccumulated;
 
     const formatted = formatReasoningMessage(rawAccumulated);
