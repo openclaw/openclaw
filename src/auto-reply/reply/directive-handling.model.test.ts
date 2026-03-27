@@ -14,6 +14,10 @@ import {
 } from "./directive-handling.model.js";
 import { persistInlineDirectives } from "./directive-handling.persist.js";
 
+const liveModelSwitchMocks = vi.hoisted(() => ({
+  requestLiveSessionModelSwitch: vi.fn(),
+}));
+
 // Mock dependencies for directive handling persistence.
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: vi.fn(() => ({})),
@@ -31,6 +35,11 @@ vi.mock("../../config/sessions.js", () => ({
 
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
+}));
+
+vi.mock("../../agents/live-model-switch.js", () => ({
+  requestLiveSessionModelSwitch: (...args: unknown[]) =>
+    liveModelSwitchMocks.requestLiveSessionModelSwitch(...args),
 }));
 
 const TEST_AGENT_DIR = "/tmp/agent";
@@ -65,6 +74,7 @@ beforeEach(() => {
       store: { version: 1, profiles: {} },
     },
   ]);
+  liveModelSwitchMocks.requestLiveSessionModelSwitch.mockReset().mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -497,6 +507,28 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text).not.toContain("failed");
   });
 
+  it("requests a live restart when /model mutates an active session", async () => {
+    const directives = parseInlineDirectives("/model openai/gpt-4o");
+    const sessionEntry = createSessionEntry();
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+      }),
+    );
+
+    expect(liveModelSwitchMocks.requestLiveSessionModelSwitch).toHaveBeenCalledWith({
+      sessionEntry,
+      selection: {
+        provider: "openai",
+        model: "gpt-4o",
+        authProfileId: undefined,
+        authProfileIdSource: undefined,
+      },
+    });
+  });
+
   it("shows no model message when no /model directive", async () => {
     const directives = parseInlineDirectives("hello world");
     const sessionEntry = createSessionEntry();
@@ -549,6 +581,43 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.execSecurity).toBeUndefined();
     expect(sessionEntry.execAsk).toBeUndefined();
     expect(sessionEntry.execNode).toBeUndefined();
+  });
+
+  it("blocks internal operator.write verbose persistence in directive-only handling", async () => {
+    const directives = parseInlineDirectives("/verbose full");
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+        sessionStore,
+        surface: "webchat",
+        gatewayClientScopes: ["operator.write"],
+      }),
+    );
+
+    expect(result?.text).toContain("Verbose logging set for the current reply only.");
+    expect(result?.text).toContain("operator.admin");
+    expect(sessionEntry.verboseLevel).toBeUndefined();
+  });
+
+  it("allows internal operator.admin verbose persistence in directive-only handling", async () => {
+    const directives = parseInlineDirectives("/verbose full");
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+        sessionStore,
+        surface: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      }),
+    );
+
+    expect(result?.text).toContain("Verbose logging set to full.");
+    expect(sessionEntry.verboseLevel).toBe("full");
   });
 
   it("allows internal operator.admin exec persistence in directive-only handling", async () => {
@@ -613,5 +682,39 @@ describe("persistInlineDirectives internal exec scope gate", () => {
     expect(sessionEntry.execSecurity).toBeUndefined();
     expect(sessionEntry.execAsk).toBeUndefined();
     expect(sessionEntry.execNode).toBeUndefined();
+  });
+
+  it("skips verbose persistence for internal operator.write callers", async () => {
+    const allowedModelKeys = new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]);
+    const directives = parseInlineDirectives("/verbose full");
+    const sessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+    } as SessionEntry;
+    const sessionStore = { "agent:main:main": sessionEntry };
+
+    await persistInlineDirectives({
+      directives,
+      cfg: baseConfig(),
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/sessions.json",
+      elevatedEnabled: true,
+      elevatedAllowed: true,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => `Switched to ${label}`,
+      agentCfg: undefined,
+      surface: "webchat",
+      gatewayClientScopes: ["operator.write"],
+    });
+
+    expect(sessionEntry.verboseLevel).toBeUndefined();
   });
 });

@@ -413,6 +413,9 @@ describe("sendPollDiscord", () => {
 });
 
 function createMockRateLimitError(retryAfter = 0.001): RateLimitError {
+  const request = new Request("https://discord.com/api/v10/channels/789/messages", {
+    method: "POST",
+  });
   const response = new Response(null, {
     status: 429,
     headers: {

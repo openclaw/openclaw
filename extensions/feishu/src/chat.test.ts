@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerFeishuChatTools } from "./chat.js";
+import { createTestPluginApi } from "../../../test/helpers/extensions/plugin-api.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
+import type { OpenClawPluginApi } from "../runtime-api.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const chatGetMock = vi.hoisted(() => vi.fn());
@@ -10,8 +12,26 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
+let registerFeishuChatTools: typeof import("./chat.js").registerFeishuChatTools;
+
 describe("registerFeishuChatTools", () => {
+  function createChatToolApi(params: {
+    config: OpenClawPluginApi["config"];
+    registerTool: OpenClawPluginApi["registerTool"];
+  }): OpenClawPluginApi {
+    return createTestPluginApi({
+      id: "feishu-test",
+      name: "Feishu Test",
+      source: "local",
+      config: params.config,
+      runtime: createPluginRuntimeMock(),
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      registerTool: params.registerTool,
+    });
+  }
+
   beforeEach(() => {
+    vi.resetModules();
     vi.clearAllMocks();
     createFeishuClientMock.mockReturnValue({
       im: {
@@ -24,22 +44,27 @@ describe("registerFeishuChatTools", () => {
     });
   });
 
+  beforeEach(async () => {
+    ({ registerFeishuChatTools } = await import("./chat.js"));
+  });
+
   it("registers feishu_chat and handles info/members actions", async () => {
     const registerTool = vi.fn();
-    registerFeishuChatTools({
-      config: {
-        channels: {
-          feishu: {
-            enabled: true,
-            appId: "app_id",
-            appSecret: "app_secret", // pragma: allowlist secret
-            tools: { chat: true },
+    registerFeishuChatTools(
+      createChatToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { chat: true },
+            },
           },
         },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
-    } as any);
+        registerTool,
+      }),
+    );
 
     expect(registerTool).toHaveBeenCalledTimes(1);
     const tool = registerTool.mock.calls[0]?.[0];
@@ -98,20 +123,21 @@ describe("registerFeishuChatTools", () => {
 
   it("skips registration when chat tool is disabled", () => {
     const registerTool = vi.fn();
-    registerFeishuChatTools({
-      config: {
-        channels: {
-          feishu: {
-            enabled: true,
-            appId: "app_id",
-            appSecret: "app_secret", // pragma: allowlist secret
-            tools: { chat: false },
+    registerFeishuChatTools(
+      createChatToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { chat: false },
+            },
           },
         },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
-    } as any);
+        registerTool,
+      }),
+    );
     expect(registerTool).not.toHaveBeenCalled();
   });
 });

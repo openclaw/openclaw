@@ -238,6 +238,7 @@ function createDispatcher(): ReplyDispatcher {
     sendFinalReply: vi.fn(() => true),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
   };
 }
@@ -1034,7 +1035,9 @@ describe("dispatchReplyFromConfig", () => {
     const streamedText = blockCalls.map((call) => (call[0] as ReplyPayload).text ?? "").join("");
     expect(streamedText).toContain("hello");
     expect(streamedText).toContain("world");
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello world" }),
+    );
   });
 
   it("aborts ACP dispatch promptly when the caller abort signal fires", async () => {
@@ -1183,12 +1186,12 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver: vi.fn() });
 
     const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
-    expect(finalCalls.length).toBe(1);
-    const finalPayload = finalCalls[0]?.[0] as ReplyPayload | undefined;
-    expect(finalPayload?.text).toContain("Session ids resolved");
-    expect(finalPayload?.text).toContain("agent session id: inner-123");
-    expect(finalPayload?.text).toContain("acpx session id: acpx-123");
-    expect(finalPayload?.text).toContain("codex resume inner-123");
+    expect(finalCalls.length).toBe(2);
+    const noticePayload = finalCalls[1]?.[0] as ReplyPayload | undefined;
+    expect(noticePayload?.text).toContain("Session ids resolved");
+    expect(noticePayload?.text).toContain("agent session id: inner-123");
+    expect(noticePayload?.text).toContain("acpx session id: acpx-123");
+    expect(noticePayload?.text).toContain("codex resume inner-123");
   });
 
   it("posts resolved-session-id notice when ACP session is bound even without MessageThreadId", async () => {
@@ -1266,11 +1269,11 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver: vi.fn() });
 
     const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
-    expect(finalCalls.length).toBe(1);
-    const finalPayload = finalCalls[0]?.[0] as ReplyPayload | undefined;
-    expect(finalPayload?.text).toContain("Session ids resolved");
-    expect(finalPayload?.text).toContain("agent session id: inner-123");
-    expect(finalPayload?.text).toContain("acpx session id: acpx-123");
+    expect(finalCalls.length).toBe(2);
+    const noticePayload = finalCalls[1]?.[0] as ReplyPayload | undefined;
+    expect(noticePayload?.text).toContain("Session ids resolved");
+    expect(noticePayload?.text).toContain("agent session id: inner-123");
+    expect(noticePayload?.text).toContain("acpx session id: acpx-123");
   });
 
   it("honors send-policy deny before ACP runtime dispatch", async () => {
@@ -1665,7 +1668,9 @@ describe("dispatchReplyFromConfig", () => {
       .map((call) => ((call[0] as ReplyPayload).text ?? "").trim())
       .filter(Boolean);
     expect(blockTexts).toEqual(["What do you want to work on?"]);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "What do you want to work on?" }),
+    );
   });
 
   it("generates final-mode TTS audio after ACP block streaming completes", async () => {

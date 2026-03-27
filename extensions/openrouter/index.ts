@@ -5,7 +5,7 @@ import {
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { applyXaiModelCompat, DEFAULT_CONTEXT_TOKENS } from "openclaw/plugin-sdk/provider-models";
+import { DEFAULT_CONTEXT_TOKENS } from "openclaw/plugin-sdk/provider-models";
 import {
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
@@ -13,6 +13,8 @@ import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "openclaw/plugin-sdk/provider-stream";
+import { applyXaiModelCompat } from "openclaw/plugin-sdk/xai";
+import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildOpenrouterProvider } from "./provider-catalog.js";
 
@@ -154,5 +156,6 @@ export default definePluginEntry({
       },
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
     });
+    api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
   },
 });

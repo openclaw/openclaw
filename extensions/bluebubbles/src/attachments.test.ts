@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
 import "./test-mocks.js";
+import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import type { PluginRuntime } from "./runtime-api.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
@@ -295,6 +295,7 @@ describe("downloadBlueBubblesAttachment", () => {
     await downloadBlueBubblesAttachment(attachment, {
       serverUrl: "http://localhost:1234",
       password: "test",
+      cfg: { channels: { bluebubbles: {} } },
     });
 
     const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
@@ -308,6 +309,7 @@ describe("downloadBlueBubblesAttachment", () => {
     await downloadBlueBubblesAttachment(attachment, {
       serverUrl: "http://192.168.1.5:1234",
       password: "test",
+      cfg: { channels: { bluebubbles: {} } },
     });
 
     const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;

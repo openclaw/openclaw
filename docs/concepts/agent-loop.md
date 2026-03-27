@@ -145,7 +145,7 @@ See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook AP
 ## Timeouts
 
 - `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
-- Agent runtime: `agents.defaults.timeoutSeconds` default 600s; enforced in `runEmbeddedPiAgent` abort timer.
+- Agent runtime: `agents.defaults.timeoutSeconds` default 172800s (48 hours); enforced in `runEmbeddedPiAgent` abort timer.
 
 ## Where things can end early
 

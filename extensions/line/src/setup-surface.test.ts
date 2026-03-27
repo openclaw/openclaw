@@ -143,6 +143,18 @@ function collectRuntimeApiOverlapExports(params: {
       statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)
         ? statement.moduleSpecifier.text
         : undefined;
+    if (
+      moduleSpecifier === "../../extensions/line/runtime-api.js" &&
+      statement.exportClause &&
+      ts.isNamedExports(statement.exportClause)
+    ) {
+      for (const element of statement.exportClause.elements) {
+        if (!element.isTypeOnly) {
+          overlapExports.add(element.name.text);
+        }
+      }
+      continue;
+    }
     const normalized = moduleSpecifier ? normalizeModuleSpecifier(moduleSpecifier) : null;
     if (!normalized || !runtimeApiLocalModules.has(normalized)) {
       continue;
@@ -180,6 +192,7 @@ function collectRuntimeApiPreExports(runtimeApiPath: string): string[] {
     true,
   );
   const preExports = new Set<string>();
+  let pluginSdkLineRuntimeSeen = false;
 
   for (const statement of runtimeApiFile.statements) {
     if (!ts.isExportDeclaration(statement)) {
@@ -193,6 +206,7 @@ function collectRuntimeApiPreExports(runtimeApiPath: string): string[] {
       continue;
     }
     if (moduleSpecifier === "openclaw/plugin-sdk/line-runtime") {
+      pluginSdkLineRuntimeSeen = true;
       break;
     }
     const normalized = normalizeModuleSpecifier(moduleSpecifier);
@@ -204,6 +218,10 @@ function collectRuntimeApiPreExports(runtimeApiPath: string): string[] {
         preExports.add(element.name.text);
       }
     }
+  }
+
+  if (!pluginSdkLineRuntimeSeen) {
+    return [];
   }
 
   return Array.from(preExports).toSorted();

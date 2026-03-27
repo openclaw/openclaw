@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
+import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
@@ -54,13 +55,58 @@ vi.mock("./channel.runtime.js", () => ({
   },
 }));
 
-import { feishuPlugin } from "./channel.js";
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
+}));
+
+let feishuPlugin: typeof import("./channel.js").feishuPlugin;
 
 function getDescribedActions(cfg: OpenClawConfig): string[] {
   return [...(feishuPlugin.actions?.describeMessageTool?.({ cfg })?.actions ?? [])];
 }
 
+function createLegacyFeishuButtonCard(value: { command?: string; text?: string }) {
+  return {
+    schema: "2.0",
+    body: {
+      elements: [
+        {
+          tag: "action",
+          actions: [
+            {
+              tag: "button",
+              text: { tag: "plain_text", content: "Run /new" },
+              value,
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+async function expectLegacyFeishuCardPayloadRejected(cfg: OpenClawConfig, card: unknown) {
+  await expect(
+    feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: { to: "chat:oc_group_1", card },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never),
+  ).rejects.toThrow(
+    "Feishu card buttons that trigger text or commands must use structured interaction envelopes.",
+  );
+  expect(sendCardFeishuMock).not.toHaveBeenCalled();
+}
+
 describe("feishuPlugin.status.probeAccount", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ feishuPlugin } = await import("./channel.js"));
+  });
+
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {
       channels: {
@@ -204,6 +250,101 @@ describe("feishuPlugin actions", () => {
       replyInThread: false,
     });
     expect(result?.details).toMatchObject({ ok: true, messageId: "om_card", chatId: "oc_group_1" });
+  });
+
+  it("allows structured card button payloads", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    const card = {
+      schema: "2.0",
+      body: {
+        elements: [
+          {
+            tag: "action",
+            actions: [
+              {
+                tag: "button",
+                text: { tag: "plain_text", content: "Run /new" },
+                value: createFeishuCardInteractionEnvelope({
+                  k: "quick",
+                  a: "feishu.quick_actions.help",
+                  q: "/help",
+                  c: { u: "u123", h: "oc_group_1", t: "group", e: Date.now() + 60_000 },
+                }),
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: { to: "chat:oc_group_1", card },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        card,
+      }),
+    );
+  });
+
+  it("rejects raw legacy card command payloads", async () => {
+    await expectLegacyFeishuCardPayloadRejected(
+      cfg,
+      createLegacyFeishuButtonCard({ command: "/new" }),
+    );
+  });
+
+  it("rejects raw legacy card text payloads", async () => {
+    await expectLegacyFeishuCardPayloadRejected(
+      cfg,
+      createLegacyFeishuButtonCard({ text: "/new" }),
+    );
+  });
+
+  it("allows non-button controls to carry text metadata values", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    const card = {
+      schema: "2.0",
+      body: {
+        elements: [
+          {
+            tag: "action",
+            actions: [
+              {
+                tag: "select_static",
+                placeholder: { tag: "plain_text", content: "Pick one" },
+                value: { text: "display-only metadata" },
+                options: [
+                  {
+                    text: { tag: "plain_text", content: "Option A" },
+                    value: "a",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: { to: "chat:oc_group_1", card },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        card,
+      }),
+    );
   });
 
   it("sends media through the outbound adapter", async () => {

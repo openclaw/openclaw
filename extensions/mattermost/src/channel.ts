@@ -20,7 +20,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { MattermostConfigSchema } from "./config-schema.js";
+import { MattermostChannelConfigSchema } from "./config-surface.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
   listMattermostAccountIds,
@@ -40,7 +40,6 @@ import { sendMessageMattermost } from "./mattermost/send.js";
 import { resolveMattermostOpaqueTarget } from "./mattermost/target-resolution.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import {
-  buildChannelConfigSchema,
   createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -51,6 +50,7 @@ import { getMattermostRuntime } from "./runtime.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 import { mattermostSetupAdapter } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
+import type { MattermostConfig } from "./types.js";
 
 const mattermostSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedMattermostAccount>({
   channelKey: "mattermost",
@@ -112,36 +112,16 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "react") {
-      // Check reactions gate: per-account config takes precedence over base config
-      const mmBase = cfg?.channels?.mattermost as Record<string, unknown> | undefined;
-      const accounts = mmBase?.accounts as Record<string, Record<string, unknown>> | undefined;
       const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
-      const acctConfig = accounts?.[resolvedAccountId];
-      const acctActions = acctConfig?.actions as { reactions?: boolean } | undefined;
-      const baseActions = mmBase?.actions as { reactions?: boolean } | undefined;
-      const reactionsEnabled = acctActions?.reactions ?? baseActions?.reactions ?? true;
+      const mattermostConfig = cfg.channels?.mattermost as MattermostConfig | undefined;
+      const account = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
+      const reactionsEnabled =
+        account.config.actions?.reactions ?? mattermostConfig?.actions?.reactions ?? true;
       if (!reactionsEnabled) {
         throw new Error("Mattermost reactions are disabled in config");
       }
 
-      const postIdRaw =
-        typeof (params as any)?.messageId === "string"
-          ? (params as any).messageId
-          : typeof (params as any)?.postId === "string"
-            ? (params as any).postId
-            : "";
-      const postId = postIdRaw.trim();
-      if (!postId) {
-        throw new Error("Mattermost react requires messageId (post id)");
-      }
-
-      const emojiRaw = typeof (params as any)?.emoji === "string" ? (params as any).emoji : "";
-      const emojiName = emojiRaw.trim().replace(/^:+|:+$/g, "");
-      if (!emojiName) {
-        throw new Error("Mattermost react requires emoji");
-      }
-
-      const remove = (params as any)?.remove === true;
+      const { postId, emojiName, remove } = parseMattermostReactActionParams(params);
       if (remove) {
         const result = await removeMattermostReaction({
           cfg,
@@ -238,16 +218,38 @@ const meta = {
   quickstartAllowFrom: true,
 } as const;
 
-function readMattermostReplyToId(params: Record<string, unknown>): string | undefined {
-  const readNormalizedValue = (value: unknown) => {
-    if (typeof value !== "string") {
-      return undefined;
-    }
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  };
+function readTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
 
-  return readNormalizedValue(params.replyToId) ?? readNormalizedValue(params.replyTo);
+function parseMattermostReactActionParams(params: Record<string, unknown>): {
+  postId: string;
+  emojiName: string;
+  remove: boolean;
+} {
+  const postId = readTrimmedString(params.messageId) ?? readTrimmedString(params.postId);
+  if (!postId) {
+    throw new Error("Mattermost react requires messageId (post id)");
+  }
+
+  const emojiName = readTrimmedString(params.emoji)?.replace(/^:+|:+$/g, "");
+  if (!emojiName) {
+    throw new Error("Mattermost react requires emoji");
+  }
+
+  return {
+    postId,
+    emojiName,
+    remove: params.remove === true,
+  };
+}
+
+function readMattermostReplyToId(params: Record<string, unknown>): string | undefined {
+  return readTrimmedString(params.replyToId) ?? readTrimmedString(params.replyTo);
 }
 
 function normalizeAllowEntry(entry: string): string {
@@ -303,7 +305,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     reload: { configPrefixes: ["channels.mattermost"] },
-    configSchema: buildChannelConfigSchema(MattermostConfigSchema),
+    configSchema: MattermostChannelConfigSchema,
     config: {
       ...mattermostConfigAdapter,
       isConfigured: (account) => Boolean(account.botToken && account.baseUrl),

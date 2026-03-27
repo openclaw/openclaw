@@ -36,9 +36,10 @@ export {
   resolveDefaultGroupPolicy,
 } from "../config/runtime-group-policy.js";
 export {
+  normalizeIMessageHandle,
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
-} from "../../extensions/imessage/api.js";
+} from "./imessage-policy.js";
 export { IMessageConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
@@ -46,8 +47,4 @@ export {
   buildComputedAccountStatusSnapshot,
   collectStatusIssuesFromLastError,
 } from "./status-helpers.js";
-export {
-  monitorIMessageProvider,
-  probeIMessage,
-  sendMessageIMessage,
-} from "../../extensions/imessage/runtime-api.js";
+export { monitorIMessageProvider, probeIMessage, sendMessageIMessage } from "./imessage-runtime.js";

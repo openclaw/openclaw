@@ -8,7 +8,7 @@ describe("telegram approval buttons", () => {
     expect(buildTelegramExecApprovalButtons("fbd8daf7")).toEqual([
       [
         { text: "Allow Once", callback_data: "/approve fbd8daf7 allow-once" },
-        { text: "Allow Always", callback_data: "/approve fbd8daf7 allow-always" },
+        { text: "Allow Always", callback_data: "/approve fbd8daf7 always" },
       ],
       [{ text: "Deny", callback_data: "/approve fbd8daf7 deny" }],
     ]);

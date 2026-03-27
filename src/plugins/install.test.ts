@@ -27,6 +27,24 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
+const resolveCompatibilityHostVersionMock = vi.fn();
+
+vi.mock("./install.runtime.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./install.runtime.js")>("./install.runtime.js");
+  return {
+    ...actual,
+    resolveCompatibilityHostVersion: (...args: unknown[]) =>
+      resolveCompatibilityHostVersionMock(...args),
+    scanBundleInstallSource: (
+      ...args: Parameters<typeof installSecurityScan.scanBundleInstallSource>
+    ) => installSecurityScan.scanBundleInstallSource(...args),
+    scanPackageInstallSource: (
+      ...args: Parameters<typeof installSecurityScan.scanPackageInstallSource>
+    ) => installSecurityScan.scanPackageInstallSource(...args),
+  };
+});
+
 let suiteTempRoot = "";
 let suiteFixtureRoot = "";
 let tempDirCounter = 0;
@@ -505,6 +523,7 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.unstubAllEnvs();
+  resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.26");
 });
 
 describe("installPluginFromArchive", () => {
@@ -781,7 +800,7 @@ describe("installPluginFromDir", () => {
   });
 
   it("rejects plugins whose minHostVersion is newer than the current host", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.3.21");
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.3.21");
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
     const packageJsonPath = path.join(pluginDir, "package.json");
     const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
@@ -840,7 +859,7 @@ describe("installPluginFromDir", () => {
   });
 
   it("reports unknown host versions distinctly for minHostVersion-gated plugins", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "unknown");
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("unknown");
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
     const packageJsonPath = path.join(pluginDir, "package.json");
     const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {

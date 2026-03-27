@@ -265,7 +265,7 @@ export async function sendDiscordVoiceMessage(
   }
   const uploadUrlResponse = await request(async () => {
     const url = `${rest.options?.baseUrl ?? "https://discord.com/api"}/channels/${channelId}/attachments`;
-    const res = await fetch(url, {
+    const uploadUrlRequest = new Request(url, {
       method: "POST",
       headers: {
         Authorization: `Bot ${botToken}`,
@@ -275,6 +275,7 @@ export async function sendDiscordVoiceMessage(
         files: [{ filename, file_size: fileSize, id: "0" }],
       }),
     });
+    const res = await fetch(uploadUrlRequest);
     if (!res.ok) {
       if (res.status === 429) {
         const retryData = (await res.json().catch(() => ({}))) as {
