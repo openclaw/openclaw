@@ -7,4 +7,10 @@ export {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
 } from "./src/directory-config.js";
+export { resolveWhatsAppOutboundTarget } from "./src/resolve-outbound-target.js";
+export {
+  isWhatsAppGroupJid,
+  isWhatsAppUserTarget,
+  normalizeWhatsAppTarget,
+} from "./src/normalize-target.js";
 export { resolveWhatsAppGroupIntroHint } from "./src/runtime-api.js";
