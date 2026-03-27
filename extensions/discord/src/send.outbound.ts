@@ -329,6 +329,7 @@ type DiscordWebhookSendOpts = {
   username?: string;
   avatarUrl?: string;
   wait?: boolean;
+  proxyFetch?: typeof fetch;
 };
 
 function resolveWebhookExecutionUrl(params: {
@@ -363,7 +364,8 @@ export async function sendWebhookMessageDiscord(
   const replyTo = typeof opts.replyTo === "string" ? opts.replyTo.trim() : "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
 
-  const response = await fetch(
+  const fetchImpl = opts.proxyFetch ?? fetch;
+  const response = await fetchImpl(
     resolveWebhookExecutionUrl({
       webhookId,
       webhookToken,

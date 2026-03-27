@@ -3,11 +3,13 @@ import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RetryConfig } from "openclaw/plugin-sdk/infra-runtime";
 import type { RetryRunner } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
   mergeDiscordAccountConfig,
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
+import { resolveDiscordRestFetch } from "./monitor/rest-fetch.js";
 import { createDiscordRetryRunner } from "./retry.js";
 import { normalizeDiscordToken } from "./token.js";
 
@@ -30,8 +32,8 @@ function resolveToken(params: { accountId: string; fallbackToken?: string }) {
   return fallback;
 }
 
-function resolveRest(token: string, rest?: RequestClient) {
-  return rest ?? new RequestClient(token);
+function resolveRest(token: string, rest?: RequestClient, customFetch?: typeof fetch) {
+  return rest ?? new RequestClient(token, customFetch ? { fetch: customFetch } : undefined);
 }
 
 function resolveAccountWithoutToken(params: {
@@ -67,21 +69,25 @@ export function createDiscordRestClient(
       accountId: account.accountId,
       fallbackToken: account.token,
     });
-  const rest = resolveRest(token, opts.rest);
-  return { token, rest, account };
+  const proxyUrl = account.config.proxy?.trim();
+  const proxyFetch = proxyUrl
+    ? resolveDiscordRestFetch(proxyUrl, createNonExitingRuntime())
+    : undefined;
+  const rest = resolveRest(token, opts.rest, proxyFetch);
+  return { token, rest, account, proxyFetch };
 }
 
 export function createDiscordClient(
   opts: DiscordClientOpts,
   cfg?: ReturnType<typeof loadConfig>,
-): { token: string; rest: RequestClient; request: RetryRunner } {
-  const { token, rest, account } = createDiscordRestClient(opts, opts.cfg ?? cfg);
+): { token: string; rest: RequestClient; request: RetryRunner; proxyFetch?: typeof fetch } {
+  const { token, rest, account, proxyFetch } = createDiscordRestClient(opts, opts.cfg ?? cfg);
   const request = createDiscordRetryRunner({
     retry: opts.retry,
     configRetry: account.config.retry,
     verbose: opts.verbose,
   });
-  return { token, rest, request };
+  return { token, rest, request, proxyFetch };
 }
 
 export function resolveDiscordRest(opts: DiscordClientOpts) {
