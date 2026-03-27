@@ -42,6 +42,18 @@ type RegisterCliContext = {
   logger: typeof noopLogger;
 };
 
+function captureStdout() {
+  let output = "";
+  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+    output += String(chunk);
+    return true;
+  }) as typeof process.stdout.write);
+  return {
+    output: () => output,
+    restore: () => writeSpy.mockRestore(),
+  };
+}
+
 function setup(config: Record<string, unknown>): Registered {
   const methods = new Map<string, unknown>();
   const tools: unknown[] = [];
@@ -191,7 +203,7 @@ describe("voice-call plugin", () => {
       "utf8",
     );
 
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const stdout = captureStdout();
 
     try {
       await registerVoiceCallCli(program);
@@ -200,26 +212,25 @@ describe("voice-call plugin", () => {
         from: "user",
       });
 
-      expect(logSpy).toHaveBeenCalled();
-      const printed = String(logSpy.mock.calls.at(-1)?.[0] ?? "");
+      const printed = stdout.output();
       expect(printed).toContain('"recordsScanned": 2');
       expect(printed).toContain('"p50Ms": 100');
       expect(printed).toContain('"p95Ms": 200');
     } finally {
-      logSpy.mockRestore();
+      stdout.restore();
       fs.unlinkSync(tmpFile);
     }
   });
 
   it("CLI start prints JSON", async () => {
     const program = new Command();
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const stdout = captureStdout();
     await registerVoiceCallCli(program);
 
     await program.parseAsync(["voicecall", "start", "--to", "+1", "--message", "Hello"], {
       from: "user",
     });
-    expect(logSpy).toHaveBeenCalled();
-    logSpy.mockRestore();
+    expect(stdout.output()).toContain('"callId": "call-1"');
+    stdout.restore();
   });
 });
