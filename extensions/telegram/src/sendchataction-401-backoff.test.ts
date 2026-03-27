@@ -1,23 +1,36 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createTelegramSendChatActionHandler,
+  type CreateTelegramSendChatActionHandlerParams,
+} from "./sendchataction-401-backoff.js";
 
-const mocks = vi.hoisted(() => ({
-  computeBackoff: vi.fn((_policy, attempt: number) => attempt * 1000),
-  sleepWithAbort: vi.fn().mockResolvedValue(undefined),
-}));
+type TelegramSendChatActionTestRuntime = NonNullable<
+  CreateTelegramSendChatActionHandlerParams["runtime"]
+>;
 
-// Mock the runtime-exported backoff sleep that the handler actually imports.
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  computeBackoff: mocks.computeBackoff,
-  sleepWithAbort: mocks.sleepWithAbort,
-}));
+function createTestRuntime(): TelegramSendChatActionTestRuntime {
+  return {
+    computeBackoff: vi.fn((_policy, attempt: number) => attempt * 1000),
+    sleepWithAbort: vi.fn().mockResolvedValue(undefined),
+  };
+}
 
-let createTelegramSendChatActionHandler: typeof import("./sendchataction-401-backoff.js").createTelegramSendChatActionHandler;
+function createHandler(
+  params: Omit<CreateTelegramSendChatActionHandlerParams, "runtime"> & {
+    runtime?: TelegramSendChatActionTestRuntime;
+  },
+) {
+  const runtime = params.runtime ?? createTestRuntime();
+  return {
+    runtime,
+    handler: createTelegramSendChatActionHandler({
+      ...params,
+      runtime,
+    }),
+  };
+}
 
 describe("createTelegramSendChatActionHandler", () => {
-  beforeAll(async () => {
-    ({ createTelegramSendChatActionHandler } = await import("./sendchataction-401-backoff.js"));
-  });
-
   const make401Error = () => new Error("401 Unauthorized");
   const makeTransientNetworkError = () =>
     Object.assign(new Error("TypeError: fetch failed"), { code: "ETIMEDOUT" });
@@ -36,7 +49,7 @@ describe("createTelegramSendChatActionHandler", () => {
   it("calls sendChatActionFn on success", async () => {
     const fn = vi.fn().mockResolvedValue(true);
     const logger = vi.fn();
-    const handler = createTelegramSendChatActionHandler({
+    const { handler } = createHandler({
       sendChatActionFn: fn,
       logger,
     });
@@ -49,7 +62,7 @@ describe("createTelegramSendChatActionHandler", () => {
   it("applies exponential backoff on consecutive 401 errors", async () => {
     const fn = vi.fn().mockRejectedValue(make401Error());
     const logger = vi.fn();
-    const handler = createTelegramSendChatActionHandler({
+    const { handler } = createHandler({
       sendChatActionFn: fn,
       logger,
       maxConsecutive401: 5,
@@ -67,7 +80,7 @@ describe("createTelegramSendChatActionHandler", () => {
   it("suspends after maxConsecutive401 failures", async () => {
     const fn = vi.fn().mockRejectedValue(make401Error());
     const logger = vi.fn();
-    const handler = createTelegramSendChatActionHandler({
+    const { handler } = createHandler({
       sendChatActionFn: fn,
       logger,
       maxConsecutive401: 3,
@@ -95,7 +108,7 @@ describe("createTelegramSendChatActionHandler", () => {
       return Promise.resolve(true);
     });
     const logger = vi.fn();
-    const handler = createTelegramSendChatActionHandler({
+    const { handler } = createHandler({
       sendChatActionFn: fn,
       logger,
       maxConsecutive401: 5,
@@ -113,7 +126,7 @@ describe("createTelegramSendChatActionHandler", () => {
   it("suppresses repeated transient network errors during cooldown", async () => {
     const fn = vi.fn().mockRejectedValue(makeTransientNetworkError());
     const logger = vi.fn();
-    const handler = createTelegramSendChatActionHandler({
+    const { handler } = createHandler({
       sendChatActionFn: fn,
       logger,
       maxConsecutive401: 2,
@@ -130,7 +143,7 @@ describe("createTelegramSendChatActionHandler", () => {
   it("reset() clears suspension", async () => {
     const fn = vi.fn().mockRejectedValue(make401Error());
     const logger = vi.fn();
-    const handler = createTelegramSendChatActionHandler({
+    const { handler } = createHandler({
       sendChatActionFn: fn,
       logger,
       maxConsecutive401: 1,
@@ -156,7 +169,7 @@ describe("createTelegramSendChatActionHandler", () => {
         return Promise.resolve(true);
       });
       const logger = vi.fn();
-      const handler = createTelegramSendChatActionHandler({
+      const { handler } = createHandler({
         sendChatActionFn: fn,
         logger,
       });
@@ -175,7 +188,7 @@ describe("createTelegramSendChatActionHandler", () => {
   it("treats Telegram 429 responses as transient and does not suspend", async () => {
     const fn = vi.fn().mockRejectedValue(makeRateLimitError());
     const logger = vi.fn();
-    const handler = createTelegramSendChatActionHandler({
+    const { handler } = createHandler({
       sendChatActionFn: fn,
       logger,
     });
@@ -188,7 +201,7 @@ describe("createTelegramSendChatActionHandler", () => {
   it("treats Telegram 5xx responses as transient and does not suspend", async () => {
     const fn = vi.fn().mockRejectedValue(makeServerError());
     const logger = vi.fn();
-    const handler = createTelegramSendChatActionHandler({
+    const { handler } = createHandler({
       sendChatActionFn: fn,
       logger,
     });
@@ -201,7 +214,7 @@ describe("createTelegramSendChatActionHandler", () => {
   it("still throws unexpected non-transient errors", async () => {
     const fn = vi.fn().mockRejectedValue(makeUnexpectedError());
     const logger = vi.fn();
-    const handler = createTelegramSendChatActionHandler({
+    const { handler } = createHandler({
       sendChatActionFn: fn,
       logger,
     });
@@ -220,7 +233,7 @@ describe("createTelegramSendChatActionHandler", () => {
         .mockRejectedValueOnce(makeTransientNetworkError())
         .mockRejectedValueOnce(make401Error());
       const logger = vi.fn();
-      const handler = createTelegramSendChatActionHandler({
+      const { handler } = createHandler({
         sendChatActionFn: fn,
         logger,
         maxConsecutive401: 3,
@@ -241,7 +254,7 @@ describe("createTelegramSendChatActionHandler", () => {
   it("is shared across multiple chatIds (global handler)", async () => {
     const fn = vi.fn().mockRejectedValue(make401Error());
     const logger = vi.fn();
-    const handler = createTelegramSendChatActionHandler({
+    const { handler } = createHandler({
       sendChatActionFn: fn,
       logger,
       maxConsecutive401: 3,
