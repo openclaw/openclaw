@@ -14,14 +14,21 @@ const sendReactionSignal = vi.hoisted(() => vi.fn(async (..._args: unknown[]) =>
 const removeReactionSignal = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ ok: true })));
 const handleSlackAction = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => actionResult()));
 
+vi.mock("../../../../extensions/discord/src/actions/runtime.js", () => ({
+  handleDiscordAction: async (...args: unknown[]) => await handleDiscordAction(...args),
+}));
+
+vi.mock("../../../../extensions/signal/src/send-reactions.js", () => ({
+  sendReactionSignal: async (...args: unknown[]) => await sendReactionSignal(...args),
+  removeReactionSignal: async (...args: unknown[]) => await removeReactionSignal(...args),
+}));
+
 let discordMessageActions: typeof import("../../../../extensions/discord/runtime-api.js").discordMessageActions;
 let handleDiscordMessageAction: typeof import("./discord/handle-action.js").handleDiscordMessageAction;
 let telegramMessageActions: typeof import("../../../../extensions/telegram/runtime-api.js").telegramMessageActions;
-let signalMessageActions: typeof import("../../../../extensions/signal/src/message-actions.js").signalMessageActions;
-let createSlackActions: typeof import("../../../../extensions/slack/src/channel-actions.js").createSlackActions;
-let discordRuntimeModule: typeof import("../../../../extensions/discord/src/actions/runtime.js");
-let telegramChannelActionsModule: typeof import("../../../../extensions/telegram/src/channel-actions.js");
-let signalReactionModule: typeof import("../../../../extensions/signal/src/send-reactions.js");
+let signalMessageActions: typeof import("../../../../extensions/signal/api.js").signalMessageActions;
+let createSlackActions: typeof import("../../../../extensions/slack/test-api.js").createSlackActions;
+let telegramTestApiModule: typeof import("../../../../extensions/telegram/test-api.js");
 
 function getDescribedActions(params: {
   describeMessageTool?: ChannelMessageActionAdapter["describeMessageTool"];
@@ -198,30 +205,17 @@ beforeAll(async () => {
   vi.resetModules();
   ({ discordMessageActions } = await import("../../../../extensions/discord/runtime-api.js"));
   ({ handleDiscordMessageAction } = await import("./discord/handle-action.js"));
-  discordRuntimeModule = await import("../../../../extensions/discord/src/actions/runtime.js");
   ({ telegramMessageActions } = await import("../../../../extensions/telegram/runtime-api.js"));
-  telegramChannelActionsModule =
-    await import("../../../../extensions/telegram/src/channel-actions.js");
-  ({ signalMessageActions } = await import("../../../../extensions/signal/src/message-actions.js"));
-  signalReactionModule = await import("../../../../extensions/signal/src/send-reactions.js");
-  ({ createSlackActions } = await import("../../../../extensions/slack/src/channel-actions.js"));
+  telegramTestApiModule = await import("../../../../extensions/telegram/test-api.js");
+  ({ signalMessageActions } = await import("../../../../extensions/signal/api.js"));
+  ({ createSlackActions } = await import("../../../../extensions/slack/test-api.js"));
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
-  vi.spyOn(discordRuntimeModule, "handleDiscordAction").mockImplementation(
-    async (...args) => await handleDiscordAction(...args),
-  );
-  telegramChannelActionsModule.telegramMessageActionRuntime.handleTelegramAction = async (
-    ...args
-  ) => await handleTelegramAction(...args);
-  vi.spyOn(signalReactionModule, "sendReactionSignal").mockImplementation(
-    async (...args) => await sendReactionSignal(...args),
-  );
-  vi.spyOn(signalReactionModule, "removeReactionSignal").mockImplementation(
-    async (...args) => await removeReactionSignal(...args),
-  );
+  telegramTestApiModule.telegramMessageActionRuntime.handleTelegramAction = async (...args) =>
+    await handleTelegramAction(...args);
 });
 
 describe("discord message actions", () => {

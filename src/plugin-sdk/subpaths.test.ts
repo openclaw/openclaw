@@ -248,6 +248,18 @@ describe("plugin-sdk subpath exports", () => {
       "listDirectoryEntriesFromSources",
       "listResolvedDirectoryEntriesFromSources",
     ]);
+    expectSourceContains(
+      "memory-core-host-runtime-core",
+      'export * from "../../packages/memory-host-sdk/src/runtime-core.js";',
+    );
+    expectSourceContains(
+      "memory-core-host-runtime-cli",
+      'export * from "../../packages/memory-host-sdk/src/runtime-cli.js";',
+    );
+    expectSourceContains(
+      "memory-core-host-runtime-files",
+      'export * from "../../packages/memory-host-sdk/src/runtime-files.js";',
+    );
   });
 
   it("exports channel runtime helpers from the dedicated subpath", () => {
@@ -537,7 +549,6 @@ describe("plugin-sdk subpath exports", () => {
       "buildSglangProvider",
       "configureOpenAICompatibleSelfHostedProviderNonInteractive",
     ]);
-    expectSourceMentions("ollama-setup", ["buildOllamaProvider", "configureOllamaNonInteractive"]);
     expectSourceMentions("sandbox", ["registerSandboxBackend", "runPluginCommandWithTimeout"]);
 
     expectSourceMentions("secret-input", [

@@ -1,18 +1,8 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  buildElevenLabsSpeechProvider,
-  isValidVoiceId,
-} from "../../extensions/elevenlabs/speech-provider.ts";
-import { buildMicrosoftSpeechProvider } from "../../extensions/microsoft/speech-provider.ts";
-import { buildOpenAISpeechProvider } from "../../extensions/openai/speech-provider.ts";
-import {
-  isValidOpenAIModel,
-  isValidOpenAIVoice,
-  OPENAI_TTS_MODELS,
-  OPENAI_TTS_VOICES,
-  resolveOpenAITtsInstructions,
-} from "../../extensions/openai/tts.ts";
+import { buildElevenLabsSpeechProvider } from "../../extensions/elevenlabs/test-api.js";
+import { buildMicrosoftSpeechProvider } from "../../extensions/microsoft/test-api.js";
+import { buildOpenAISpeechProvider } from "../../extensions/openai/test-api.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -20,6 +10,11 @@ import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
 
 let completeSimple: typeof import("@mariozechner/pi-ai").completeSimple;
+let getApiKeyForModelMock: typeof import("../agents/model-auth.js").getApiKeyForModel;
+let requireApiKeyMock: typeof import("../agents/model-auth.js").requireApiKey;
+let resolveModelAsyncMock: typeof import("../agents/pi-embedded-runner/model.js").resolveModelAsync;
+let ensureCustomApiRegisteredMock: typeof import("../agents/custom-api-registry.js").ensureCustomApiRegistered;
+let prepareModelForSimpleCompletionMock: typeof import("../agents/simple-completion-transport.js").prepareModelForSimpleCompletion;
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
@@ -132,6 +127,13 @@ function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawC
 describe("tts", () => {
   beforeEach(async () => {
     ({ completeSimple } = await import("@mariozechner/pi-ai"));
+    ({ getApiKeyForModel: getApiKeyForModelMock, requireApiKey: requireApiKeyMock } =
+      await import("../agents/model-auth.js"));
+    ({ resolveModelAsync: resolveModelAsyncMock } =
+      await import("../agents/pi-embedded-runner/model.js"));
+    ({ ensureCustomApiRegistered: ensureCustomApiRegisteredMock } =
+      await import("../agents/custom-api-registry.js"));
+    prepareModelForSimpleCompletionMock = vi.fn(({ model }) => model);
     const registry = createEmptyPluginRegistry();
     registry.speechProviders = [
       { pluginId: "openai", provider: buildOpenAISpeechProvider(), source: "test" },
@@ -143,94 +145,6 @@ describe("tts", () => {
     vi.mocked(completeSimple).mockResolvedValue(
       mockAssistantMessage([{ type: "text", text: "Summary" }]),
     );
-  });
-
-  describe("isValidVoiceId", () => {
-    it("validates ElevenLabs voice ID length and character rules", () => {
-      const cases = [
-        { value: "pMsXgVXv3BLzUgSXRplE", expected: true },
-        { value: "21m00Tcm4TlvDq8ikWAM", expected: true },
-        { value: "EXAVITQu4vr4xnSDxMaL", expected: true },
-        { value: "a1b2c3d4e5", expected: true },
-        { value: "a".repeat(40), expected: true },
-        { value: "", expected: false },
-        { value: "abc", expected: false },
-        { value: "123456789", expected: false },
-        { value: "a".repeat(41), expected: false },
-        { value: "a".repeat(100), expected: false },
-        { value: "pMsXgVXv3BLz-gSXRplE", expected: false },
-        { value: "pMsXgVXv3BLz_gSXRplE", expected: false },
-        { value: "pMsXgVXv3BLz gSXRplE", expected: false },
-        { value: "../../../etc/passwd", expected: false },
-        { value: "voice?param=value", expected: false },
-      ] as const;
-      for (const testCase of cases) {
-        expect(isValidVoiceId(testCase.value), testCase.value).toBe(testCase.expected);
-      }
-    });
-  });
-
-  describe("isValidOpenAIVoice", () => {
-    it("accepts all valid OpenAI voices including newer additions", () => {
-      for (const voice of OPENAI_TTS_VOICES) {
-        expect(isValidOpenAIVoice(voice)).toBe(true);
-      }
-      for (const newerVoice of ["ballad", "cedar", "juniper", "marin", "verse"]) {
-        expect(isValidOpenAIVoice(newerVoice), newerVoice).toBe(true);
-      }
-    });
-
-    it("rejects invalid voice names", () => {
-      expect(isValidOpenAIVoice("invalid")).toBe(false);
-      expect(isValidOpenAIVoice("")).toBe(false);
-      expect(isValidOpenAIVoice("ALLOY")).toBe(false);
-      expect(isValidOpenAIVoice("alloy ")).toBe(false);
-      expect(isValidOpenAIVoice(" alloy")).toBe(false);
-    });
-
-    it("treats the default endpoint with trailing slash as the default endpoint", () => {
-      expect(isValidOpenAIVoice("kokoro-custom-voice", "https://api.openai.com/v1/")).toBe(false);
-    });
-  });
-
-  describe("isValidOpenAIModel", () => {
-    it("matches the supported model set and rejects unsupported values", () => {
-      expect(OPENAI_TTS_MODELS).toContain("gpt-4o-mini-tts");
-      expect(OPENAI_TTS_MODELS).toContain("tts-1");
-      expect(OPENAI_TTS_MODELS).toContain("tts-1-hd");
-      expect(OPENAI_TTS_MODELS).toHaveLength(3);
-      expect(Array.isArray(OPENAI_TTS_MODELS)).toBe(true);
-      expect(OPENAI_TTS_MODELS.length).toBeGreaterThan(0);
-      const cases = [
-        { model: "gpt-4o-mini-tts", expected: true },
-        { model: "tts-1", expected: true },
-        { model: "tts-1-hd", expected: true },
-        { model: "invalid", expected: false },
-        { model: "", expected: false },
-        { model: "gpt-4", expected: false },
-      ] as const;
-      for (const testCase of cases) {
-        expect(isValidOpenAIModel(testCase.model), testCase.model).toBe(testCase.expected);
-      }
-    });
-
-    it("treats the default endpoint with trailing slash as the default endpoint", () => {
-      expect(isValidOpenAIModel("kokoro-custom-model", "https://api.openai.com/v1/")).toBe(false);
-    });
-  });
-
-  describe("resolveOpenAITtsInstructions", () => {
-    it("keeps instructions only for gpt-4o-mini-tts variants", () => {
-      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", " Speak warmly ")).toBe(
-        "Speak warmly",
-      );
-      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts-2025-12-15", "Speak warmly")).toBe(
-        "Speak warmly",
-      );
-      expect(resolveOpenAITtsInstructions("tts-1", "Speak warmly")).toBeUndefined();
-      expect(resolveOpenAITtsInstructions("tts-1-hd", "Speak warmly")).toBeUndefined();
-      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", "   ")).toBeUndefined();
-    });
   });
 
   describe("resolveEdgeOutputFormat", () => {
@@ -355,108 +269,67 @@ describe("tts", () => {
   });
 
   describe("summarizeText", () => {
-    let summarizeTextForTest: typeof summarizeText;
-    let resolveTtsConfigForTest: typeof resolveTtsConfig;
-    let completeSimpleForTest: typeof import("@mariozechner/pi-ai").completeSimple;
-    let getApiKeyForModelForTest: typeof import("../agents/model-auth.js").getApiKeyForModel;
-    let resolveModelAsyncForTest: typeof import("../agents/pi-embedded-runner/model.js").resolveModelAsync;
-    let ensureCustomApiRegisteredForTest: typeof import("../agents/custom-api-registry.js").ensureCustomApiRegistered;
-
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: { tts: {} },
     };
 
-    beforeEach(async () => {
-      vi.resetModules();
-      vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
-        const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
-        return {
-          ...original,
-          completeSimple: vi.fn(),
-        };
-      });
-      vi.doMock("@mariozechner/pi-ai/oauth", async () => {
-        const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
-          "@mariozechner/pi-ai/oauth",
-        );
-        return {
-          ...actual,
-          getOAuthProviders: () => [],
-          getOAuthApiKey: vi.fn(async () => null),
-        };
-      });
-      vi.doMock("../agents/pi-embedded-runner/model.js", () => ({
-        resolveModel: vi.fn((provider: string, modelId: string) =>
-          createResolvedModel(provider, modelId),
-        ),
-        resolveModelAsync: vi.fn(async (provider: string, modelId: string) =>
-          createResolvedModel(provider, modelId),
-        ),
-      }));
-      vi.doMock("../agents/model-auth.js", () => ({
-        getApiKeyForModel: vi.fn(async () => ({
-          apiKey: "test-api-key",
-          source: "test",
-          mode: "api-key",
-        })),
-        requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
-      }));
-      vi.doMock("../agents/custom-api-registry.js", () => ({
-        ensureCustomApiRegistered: vi.fn(),
-      }));
-      ({ completeSimple: completeSimpleForTest } = await import("@mariozechner/pi-ai"));
-      ({ getApiKeyForModel: getApiKeyForModelForTest } = await import("../agents/model-auth.js"));
-      ({ resolveModelAsync: resolveModelAsyncForTest } =
-        await import("../agents/pi-embedded-runner/model.js"));
-      ({ ensureCustomApiRegistered: ensureCustomApiRegisteredForTest } =
-        await import("../agents/custom-api-registry.js"));
-      const ttsModule = await import("./tts.js");
-      summarizeTextForTest = ttsModule._test.summarizeText;
-      resolveTtsConfigForTest = ttsModule.resolveTtsConfig;
-      vi.mocked(completeSimpleForTest).mockResolvedValue(
-        mockAssistantMessage([{ type: "text", text: "Summary" }]),
-      );
-    });
-
     it("summarizes text and returns result with metrics", async () => {
       const mockSummary = "This is a summarized version of the text.";
-      const baseConfig = resolveTtsConfigForTest(baseCfg);
-      vi.mocked(completeSimpleForTest).mockResolvedValue(
+      const baseConfig = resolveTtsConfig(baseCfg);
+      vi.mocked(completeSimple).mockResolvedValue(
         mockAssistantMessage([{ type: "text", text: mockSummary }]),
       );
 
       const longText = "A".repeat(2000);
-      const result = await summarizeTextForTest({
-        text: longText,
-        targetLength: 1500,
-        cfg: baseCfg,
-        config: baseConfig,
-        timeoutMs: 30_000,
-      });
+      const result = await summarizeText(
+        {
+          text: longText,
+          targetLength: 1500,
+          cfg: baseCfg,
+          config: baseConfig,
+          timeoutMs: 30_000,
+        },
+        {
+          completeSimple,
+          getApiKeyForModel: getApiKeyForModelMock,
+          prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
+          requireApiKey: requireApiKeyMock,
+          resolveModelAsync: resolveModelAsyncMock,
+        },
+      );
 
       expect(result.summary).toBe(mockSummary);
       expect(result.inputLength).toBe(2000);
       expect(result.outputLength).toBe(mockSummary.length);
       expect(result.latencyMs).toBeGreaterThanOrEqual(0);
-      expect(completeSimpleForTest).toHaveBeenCalledTimes(1);
+      expect(completeSimple).toHaveBeenCalledTimes(1);
     });
 
     it("calls the summary model with the expected parameters", async () => {
-      const baseConfig = resolveTtsConfigForTest(baseCfg);
-      await summarizeTextForTest({
-        text: "Long text to summarize",
-        targetLength: 500,
-        cfg: baseCfg,
-        config: baseConfig,
-        timeoutMs: 30_000,
-      });
+      const baseConfig = resolveTtsConfig(baseCfg);
+      await summarizeText(
+        {
+          text: "Long text to summarize",
+          targetLength: 500,
+          cfg: baseCfg,
+          config: baseConfig,
+          timeoutMs: 30_000,
+        },
+        {
+          completeSimple,
+          getApiKeyForModel: getApiKeyForModelMock,
+          prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
+          requireApiKey: requireApiKeyMock,
+          resolveModelAsync: resolveModelAsyncMock,
+        },
+      );
 
-      const callArgs = vi.mocked(completeSimpleForTest).mock.calls[0];
+      const callArgs = vi.mocked(completeSimple).mock.calls[0];
       expect(callArgs?.[1]?.messages?.[0]?.role).toBe("user");
       expect(callArgs?.[2]?.maxTokens).toBe(250);
       expect(callArgs?.[2]?.temperature).toBe(0.3);
-      expect(getApiKeyForModelForTest).toHaveBeenCalledTimes(1);
+      expect(getApiKeyForModelMock).toHaveBeenCalledTimes(1);
     });
 
     it("uses summaryModel override when configured", async () => {
@@ -464,26 +337,30 @@ describe("tts", () => {
         agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
         messages: { tts: { summaryModel: "openai/gpt-4.1-mini" } },
       };
-      const config = resolveTtsConfigForTest(cfg);
-      await summarizeTextForTest({
-        text: "Long text to summarize",
-        targetLength: 500,
-        cfg,
-        config,
-        timeoutMs: 30_000,
-      });
-
-      expect(resolveModelAsyncForTest).toHaveBeenCalledWith(
-        "openai",
-        "gpt-4.1-mini",
-        undefined,
-        cfg,
+      const config = resolveTtsConfig(cfg);
+      await summarizeText(
+        {
+          text: "Long text to summarize",
+          targetLength: 500,
+          cfg,
+          config,
+          timeoutMs: 30_000,
+        },
+        {
+          completeSimple,
+          getApiKeyForModel: getApiKeyForModelMock,
+          prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
+          requireApiKey: requireApiKeyMock,
+          resolveModelAsync: resolveModelAsyncMock,
+        },
       );
+
+      expect(resolveModelAsyncMock).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
     });
 
-    it("registers the Ollama api before direct summarization", async () => {
-      const baseConfig = resolveTtsConfigForTest(baseCfg);
-      vi.mocked(resolveModelAsyncForTest).mockResolvedValue({
+    it("keeps the Ollama api for direct summarization", async () => {
+      const baseConfig = resolveTtsConfig(baseCfg);
+      vi.mocked(resolveModelAsyncMock).mockResolvedValue({
         ...createResolvedModel("ollama", "qwen3:8b", "ollama"),
         model: {
           ...createResolvedModel("ollama", "qwen3:8b", "ollama").model,
@@ -491,19 +368,29 @@ describe("tts", () => {
         },
       } as never);
 
-      await summarizeTextForTest({
-        text: "Long text to summarize",
-        targetLength: 500,
-        cfg: baseCfg,
-        config: baseConfig,
-        timeoutMs: 30_000,
-      });
+      await summarizeText(
+        {
+          text: "Long text to summarize",
+          targetLength: 500,
+          cfg: baseCfg,
+          config: baseConfig,
+          timeoutMs: 30_000,
+        },
+        {
+          completeSimple,
+          getApiKeyForModel: getApiKeyForModelMock,
+          prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
+          requireApiKey: requireApiKeyMock,
+          resolveModelAsync: resolveModelAsyncMock,
+        },
+      );
 
-      expect(ensureCustomApiRegisteredForTest).toHaveBeenCalledWith("ollama", expect.any(Function));
+      expect(vi.mocked(completeSimple).mock.calls[0]?.[0]?.api).toBe("ollama");
+      expect(ensureCustomApiRegisteredMock).not.toHaveBeenCalled();
     });
 
     it("validates targetLength bounds", async () => {
-      const baseConfig = resolveTtsConfigForTest(baseCfg);
+      const baseConfig = resolveTtsConfig(baseCfg);
       const cases = [
         { targetLength: 99, shouldThrow: true },
         { targetLength: 100, shouldThrow: false },
@@ -511,13 +398,22 @@ describe("tts", () => {
         { targetLength: 10001, shouldThrow: true },
       ] as const;
       for (const testCase of cases) {
-        const call = summarizeTextForTest({
-          text: "text",
-          targetLength: testCase.targetLength,
-          cfg: baseCfg,
-          config: baseConfig,
-          timeoutMs: 30_000,
-        });
+        const call = summarizeText(
+          {
+            text: "text",
+            targetLength: testCase.targetLength,
+            cfg: baseCfg,
+            config: baseConfig,
+            timeoutMs: 30_000,
+          },
+          {
+            completeSimple,
+            getApiKeyForModel: getApiKeyForModelMock,
+            prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
+            requireApiKey: requireApiKeyMock,
+            resolveModelAsync: resolveModelAsyncMock,
+          },
+        );
         if (testCase.shouldThrow) {
           await expect(call, String(testCase.targetLength)).rejects.toThrow(
             `Invalid targetLength: ${testCase.targetLength}`,
@@ -529,7 +425,7 @@ describe("tts", () => {
     });
 
     it("throws when summary output is missing or empty", async () => {
-      const baseConfig = resolveTtsConfigForTest(baseCfg);
+      const baseConfig = resolveTtsConfig(baseCfg);
       const cases = [
         { name: "no summary blocks", message: mockAssistantMessage([]) },
         {
@@ -538,15 +434,24 @@ describe("tts", () => {
         },
       ] as const;
       for (const testCase of cases) {
-        vi.mocked(completeSimpleForTest).mockResolvedValue(testCase.message);
+        vi.mocked(completeSimple).mockResolvedValue(testCase.message);
         await expect(
-          summarizeTextForTest({
-            text: "text",
-            targetLength: 500,
-            cfg: baseCfg,
-            config: baseConfig,
-            timeoutMs: 30_000,
-          }),
+          summarizeText(
+            {
+              text: "text",
+              targetLength: 500,
+              cfg: baseCfg,
+              config: baseConfig,
+              timeoutMs: 30_000,
+            },
+            {
+              completeSimple,
+              getApiKeyForModel: getApiKeyForModelMock,
+              prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
+              requireApiKey: requireApiKeyMock,
+              resolveModelAsync: resolveModelAsyncMock,
+            },
+          ),
           testCase.name,
         ).rejects.toThrow("No summary returned");
       }

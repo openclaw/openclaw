@@ -18,6 +18,31 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "./model-auth.js";
 
+vi.mock("../plugins/provider-runtime.js", () => ({
+  buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  resolveProviderSyntheticAuthWithPlugin: (params: {
+    provider: string;
+    context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
+  }) => {
+    if (params.provider !== "ollama") {
+      return undefined;
+    }
+    const providerConfig = params.context.providerConfig;
+    const hasApiConfig =
+      Boolean(providerConfig?.api?.trim()) ||
+      Boolean(providerConfig?.baseUrl?.trim()) ||
+      (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
+    if (!hasApiConfig) {
+      return undefined;
+    }
+    return {
+      apiKey: "ollama-local",
+      source: "models.providers.ollama (synthetic local key)",
+      mode: "api-key" as const,
+    };
+  },
+}));
+
 function createCustomProviderConfig(
   baseUrl: string,
   modelId = "llama3",

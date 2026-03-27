@@ -44,6 +44,7 @@ export type {
   ProviderAuthResult,
   ProviderAugmentModelCatalogContext,
   ProviderBuildMissingAuthMessageContext,
+  ProviderBuildUnknownModelHintContext,
   ProviderBuiltInModelSuppressionContext,
   ProviderBuiltInModelSuppressionResult,
   ProviderCacheTtlEligibilityContext,
@@ -80,10 +81,11 @@ export type {
   UsageWindow,
 } from "../infra/provider-usage.types.js";
 export type { ChannelMessageActionContext } from "../channels/plugins/types.js";
-export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+export type { ChannelConfigUiHint, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 
-export { emptyPluginConfigSchema, definePluginEntry } from "./plugin-entry.js";
+export { definePluginEntry } from "./plugin-entry.js";
+export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { KeyedAsyncQueue, enqueueKeyedTask } from "./keyed-async-queue.js";
 export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
@@ -198,6 +200,11 @@ type DefineChannelPluginEntryOptions<TPlugin = ChannelPlugin> = {
   registerFull?: (api: OpenClawPluginApi) => void;
 };
 
+type DefinedChannelPluginEntry<TPlugin> = ReturnType<typeof definePluginEntry> & {
+  channelPlugin: TPlugin;
+  setChannelRuntime?: (runtime: PluginRuntime) => void;
+};
+
 type CreateChannelPluginBaseOptions<TResolvedAccount> = {
   id: ChannelPlugin<TResolvedAccount>["id"];
   meta?: Partial<NonNullable<ChannelPlugin<TResolvedAccount>["meta"]>>;
@@ -249,8 +256,8 @@ export function defineChannelPluginEntry<TPlugin>({
   configSchema = emptyPluginConfigSchema,
   setRuntime,
   registerFull,
-}: DefineChannelPluginEntryOptions<TPlugin>) {
-  return definePluginEntry({
+}: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin> {
+  const entry = definePluginEntry({
     id,
     name,
     description,
@@ -264,6 +271,11 @@ export function defineChannelPluginEntry<TPlugin>({
       registerFull?.(api);
     },
   });
+  return {
+    ...entry,
+    channelPlugin: plugin,
+    ...(setRuntime ? { setChannelRuntime: setRuntime } : {}),
+  };
 }
 
 /**

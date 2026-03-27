@@ -118,6 +118,16 @@ name: test
 Hello from user`;
     expect(stripInboundMetadata(input)).toBe(input);
   });
+
+  it("ignores metadata blocks whose json decodes to a non-object", () => {
+    const input = `Sender (untrusted metadata):
+\`\`\`json
+["not","an","object"]
+\`\`\`
+Hello from user`;
+    expect(stripInboundMetadata(input)).toBe("Hello from user");
+    expect(extractInboundSenderLabel(input)).toBeNull();
+  });
 });
 
 describe("timestamp prefix stripping", () => {

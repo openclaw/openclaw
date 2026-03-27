@@ -27,6 +27,10 @@ export {
 export { normalizeProviderId } from "../agents/provider-id.js";
 export { normalizeXaiModelId } from "../agents/model-id-normalization.js";
 export {
+  createMoonshotThinkingWrapper,
+  resolveMoonshotThinkingType,
+} from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
+export {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
 } from "../plugins/provider-model-helpers.js";
@@ -78,7 +82,16 @@ export {
   CHUTES_MODEL_CATALOG,
   discoverChutesModels,
 } from "../agents/chutes-models.js";
-export { resolveOllamaApiBase } from "../agents/ollama-models.js";
+export {
+  buildOllamaModelDefinition,
+  enrichOllamaModelsWithContext,
+  fetchOllamaModels,
+  queryOllamaContextWindow,
+  resolveOllamaApiBase,
+  type OllamaModelWithContext,
+  type OllamaTagModel,
+  type OllamaTagsResponse,
+} from "../../extensions/ollama/api.js";
 export {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -116,7 +129,12 @@ export {
   DOUBAO_MODEL_CATALOG,
   buildDoubaoModelDefinition,
 } from "../agents/doubao-models.js";
-export { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-defaults.js";
+export {
+  OLLAMA_DEFAULT_BASE_URL,
+  OLLAMA_DEFAULT_CONTEXT_WINDOW,
+  OLLAMA_DEFAULT_COST,
+  OLLAMA_DEFAULT_MAX_TOKENS,
+} from "../../extensions/ollama/api.js";
 export { VLLM_DEFAULT_BASE_URL } from "../agents/vllm-defaults.js";
 export { SGLANG_DEFAULT_BASE_URL } from "../agents/sglang-defaults.js";
 export {

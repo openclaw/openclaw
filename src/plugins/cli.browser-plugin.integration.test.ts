@@ -23,27 +23,37 @@ describe("registerPluginCliCommands browser plugin integration", () => {
 
   it("registers the browser command from the bundled browser plugin", () => {
     const program = new Command();
-    registerPluginCliCommands(program, {
-      plugins: {
-        allow: ["browser"],
-      },
-    } as OpenClawConfig);
+    registerPluginCliCommands(
+      program,
+      {
+        plugins: {
+          allow: ["browser"],
+        },
+      } as OpenClawConfig,
+      undefined,
+      { pluginSdkResolution: "dist" },
+    );
 
     expect(program.commands.map((command) => command.name())).toContain("browser");
   });
 
   it("omits the browser command when the bundled browser plugin is disabled", () => {
     const program = new Command();
-    registerPluginCliCommands(program, {
-      plugins: {
-        allow: ["browser"],
-        entries: {
-          browser: {
-            enabled: false,
+    registerPluginCliCommands(
+      program,
+      {
+        plugins: {
+          allow: ["browser"],
+          entries: {
+            browser: {
+              enabled: false,
+            },
           },
         },
-      },
-    } as OpenClawConfig);
+      } as OpenClawConfig,
+      undefined,
+      { pluginSdkResolution: "dist" },
+    );
 
     expect(program.commands.map((command) => command.name())).not.toContain("browser");
   });

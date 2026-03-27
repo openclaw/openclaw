@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { probeGateway } from "../gateway/probe.js";
-import type { MemoryProviderStatus } from "../memory/types.js";
+import type { MemoryProviderStatus } from "../plugin-sdk/memory-core-host-engine-storage.js";
 import {
   pickGatewaySelfPresence,
   resolveGatewayProbeAuthResolution,

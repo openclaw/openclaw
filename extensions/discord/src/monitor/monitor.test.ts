@@ -19,19 +19,7 @@ import {
   resolvePluginConversationBindingApprovalMock,
   upsertPairingRequestMock,
 } from "../../../../test/helpers/extensions/discord-component-runtime.js";
-import {
-  clearDiscordComponentEntries,
-  registerDiscordComponentEntries,
-  resolveDiscordComponentEntry,
-  resolveDiscordModalEntry,
-} from "../components-registry.js";
-import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
-import * as sendComponents from "../send.components.js";
-import {
-  createDiscordComponentButton,
-  createDiscordComponentStringSelect,
-  createDiscordComponentModal,
-} from "./agent-components.js";
+import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import {
   resolveDiscordMemberAllowed,
@@ -52,6 +40,22 @@ import {
   resolveDiscordAutoThreadReplyPlan,
   resolveDiscordReplyDeliveryPlan,
 } from "./threading.js";
+
+type CreateDiscordComponentButton =
+  typeof import("./agent-components.js").createDiscordComponentButton;
+type CreateDiscordComponentModal =
+  typeof import("./agent-components.js").createDiscordComponentModal;
+type CreateDiscordComponentStringSelect =
+  typeof import("./agent-components.js").createDiscordComponentStringSelect;
+
+let createDiscordComponentButton: CreateDiscordComponentButton;
+let createDiscordComponentStringSelect: CreateDiscordComponentStringSelect;
+let createDiscordComponentModal: CreateDiscordComponentModal;
+let clearDiscordComponentEntries: typeof import("../components-registry.js").clearDiscordComponentEntries;
+let registerDiscordComponentEntries: typeof import("../components-registry.js").registerDiscordComponentEntries;
+let resolveDiscordComponentEntry: typeof import("../components-registry.js").resolveDiscordComponentEntry;
+let resolveDiscordModalEntry: typeof import("../components-registry.js").resolveDiscordModalEntry;
+let sendComponents: typeof import("../send.components.js");
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const dispatchReplyMock = vi.hoisted(() => vi.fn());
@@ -136,9 +140,9 @@ describe("discord component interactions", () => {
     };
   };
 
-  const createComponentContext = (
-    overrides?: Partial<Parameters<typeof createDiscordComponentButton>[0]>,
-  ) =>
+  type ComponentContext = Parameters<CreateDiscordComponentButton>[0];
+
+  const createComponentContext = (overrides?: Partial<ComponentContext>) =>
     ({
       cfg: createCfg(),
       accountId: "default",
@@ -147,7 +151,7 @@ describe("discord component interactions", () => {
       discordConfig: createDiscordConfig(),
       token: "token",
       ...overrides,
-    }) as Parameters<typeof createDiscordComponentButton>[0];
+    }) as ComponentContext;
 
   const createComponentButtonInteraction = (overrides: Partial<ButtonInteraction> = {}) => {
     const reply = vi.fn().mockResolvedValue(undefined);
@@ -307,7 +311,20 @@ describe("discord component interactions", () => {
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      createDiscordComponentButton,
+      createDiscordComponentStringSelect,
+      createDiscordComponentModal,
+    } = await import("./agent-components.js"));
+    ({
+      clearDiscordComponentEntries,
+      registerDiscordComponentEntries,
+      resolveDiscordComponentEntry,
+      resolveDiscordModalEntry,
+    } = await import("../components-registry.js"));
+    sendComponents = await import("../send.components.js");
     editDiscordComponentMessageMock = vi
       .spyOn(sendComponents, "editDiscordComponentMessage")
       .mockResolvedValue({
