@@ -6,7 +6,12 @@ import { theme } from "../terminal/theme.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
-type SystemEventOpts = GatewayRpcOpts & { text?: string; mode?: string; json?: boolean };
+type SystemEventOpts = GatewayRpcOpts & {
+  text?: string;
+  mode?: string;
+  agentId?: string;
+  json?: boolean;
+};
 type SystemGatewayOpts = GatewayRpcOpts & { json?: boolean };
 
 const normalizeWakeMode = (raw: unknown) => {
@@ -54,6 +59,7 @@ export function registerSystemCli(program: Command) {
       .description("Enqueue a system event and optionally trigger a heartbeat")
       .requiredOption("--text <text>", "System event text")
       .option("--mode <mode>", "Wake mode (now|next-heartbeat)", "next-heartbeat")
+      .option("--agent-id <agentId>", "Target agent id")
       .option("--json", "Output JSON", false),
   ).action(async (opts: SystemEventOpts) => {
     await runSystemGatewayCommand(
@@ -64,7 +70,14 @@ export function registerSystemCli(program: Command) {
           throw new Error("--text is required");
         }
         const mode = normalizeWakeMode(opts.mode);
-        return await callGatewayFromCli("wake", opts, { mode, text }, { expectFinal: false });
+        const agentId =
+          typeof opts.agentId === "string" ? opts.agentId.trim() || undefined : undefined;
+        return await callGatewayFromCli(
+          "wake",
+          opts,
+          { mode, text, ...(agentId ? { agentId } : {}) },
+          { expectFinal: false },
+        );
       },
       "ok",
     );
