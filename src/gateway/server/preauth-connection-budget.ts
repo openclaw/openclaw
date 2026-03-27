@@ -1,4 +1,5 @@
 const DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP = 32;
+const UNKNOWN_CLIENT_IP_BUDGET_KEY = "__openclaw_unknown_client_ip__";
 
 export function getMaxPreauthConnectionsPerIpFromEnv(env: NodeJS.ProcessEnv = process.env): number {
   const configured =
@@ -23,16 +24,17 @@ export function createPreauthConnectionBudget(
   limit = getMaxPreauthConnectionsPerIpFromEnv(),
 ): PreauthConnectionBudget {
   const counts = new Map<string, number>();
+  const normalizeBudgetKey = (clientIp: string | undefined) => {
+    const ip = clientIp?.trim();
+    // Trusted-proxy mode can intentionally leave client IP unresolved when
+    // forwarded headers are missing or invalid; keep those upgrades capped
+    // under a shared fallback bucket instead of failing open.
+    return ip || UNKNOWN_CLIENT_IP_BUDGET_KEY;
+  };
 
   return {
     acquire(clientIp) {
-      const ip = clientIp?.trim();
-      if (!ip) {
-        // Fail open when the socket has no usable client IP. Direct sockets
-        // normally populate remoteAddress, and falling closed here would risk
-        // rejecting legitimate local/test traffic on transport edge cases.
-        return true;
-      }
+      const ip = normalizeBudgetKey(clientIp);
       const next = (counts.get(ip) ?? 0) + 1;
       if (next > limit) {
         return false;
@@ -41,10 +43,7 @@ export function createPreauthConnectionBudget(
       return true;
     },
     release(clientIp) {
-      const ip = clientIp?.trim();
-      if (!ip) {
-        return;
-      }
+      const ip = normalizeBudgetKey(clientIp);
       const current = counts.get(ip);
       if (current === undefined) {
         return;

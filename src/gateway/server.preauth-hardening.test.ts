@@ -8,6 +8,7 @@ import { createPreauthConnectionBudget } from "./server/preauth-connection-budge
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { testState } from "./test-helpers.mocks.js";
 import { createGatewaySuiteHarness, readConnectChallengeNonce } from "./test-helpers.server.js";
+import { withTempConfig } from "./test-temp-config.js";
 
 let cleanupEnv: Array<() => void> = [];
 
@@ -208,5 +209,78 @@ describe("gateway pre-auth hardening", () => {
     } finally {
       await harness.close();
     }
+  });
+
+  it("rejects excess simultaneous unauthenticated sockets when trusted proxy headers are missing", async () => {
+    const previous = process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP;
+    process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP = "1";
+    cleanupEnv.push(() => {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP;
+      } else {
+        process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP = previous;
+      }
+    });
+    const previousAuth = testState.gatewayAuth;
+    testState.gatewayAuth = { mode: "none" };
+    cleanupEnv.push(() => {
+      testState.gatewayAuth = previousAuth;
+    });
+
+    await withTempConfig({
+      cfg: {
+        gateway: {
+          trustedProxies: ["127.0.0.1"],
+        },
+      },
+      prefix: "openclaw-preauth-proxy-",
+      run: async () => {
+        const harness = await createGatewaySuiteHarness();
+        try {
+          const firstWs = await harness.openWs();
+          await readConnectChallengeNonce(firstWs);
+
+          const rejected = await new Promise<{ status: number; body: string }>(
+            (resolve, reject) => {
+              const req = http.request({
+                host: "127.0.0.1",
+                port: harness.port,
+                path: "/",
+                headers: {
+                  Connection: "Upgrade",
+                  Upgrade: "websocket",
+                  "Sec-WebSocket-Key": "dGVzdC1rZXktMDEyMzQ1Ng==",
+                  "Sec-WebSocket-Version": "13",
+                },
+              });
+              req.once("upgrade", (_res, socket) => {
+                socket.destroy();
+                reject(new Error("expected websocket upgrade to be rejected"));
+              });
+              req.once("response", (res) => {
+                let body = "";
+                res.setEncoding("utf8");
+                res.on("data", (chunk) => {
+                  body += chunk;
+                });
+                res.once("end", () => {
+                  resolve({ status: res.statusCode ?? 0, body });
+                });
+              });
+              req.once("error", reject);
+              req.end();
+            },
+          );
+          expect(rejected).toEqual({
+            status: 503,
+            body: "Too many unauthenticated sockets",
+          });
+
+          firstWs.close();
+        } finally {
+          await harness.close();
+        }
+      },
+    });
   });
 });
