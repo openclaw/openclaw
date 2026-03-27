@@ -56,10 +56,11 @@ describe("discordOutbound", () => {
     resetDiscordOutboundMocks(hoisted);
   });
 
-  it("routes text sends to thread target when threadId is provided", async () => {
+  it("routes text sends to thread target when threadId matches to", async () => {
+    // Normal thread reply: `to` and `threadId` both refer to the thread channel.
     const result = await discordOutbound.sendText?.({
       cfg: {},
-      to: "channel:parent-1",
+      to: "channel:thread-1",
       text: "hello",
       accountId: "default",
       threadId: "thread-1",
@@ -70,6 +71,25 @@ describe("discordOutbound", () => {
       text: "hello",
       result,
     });
+  });
+
+  it("does not override explicit cross-channel target with thread context", async () => {
+    // Cross-channel send from a thread: `to` is a different channel than `threadId`.
+    // The explicit `to` must win — thread context must not hijack cross-channel sends.
+    // See: https://github.com/openclaw/openclaw/issues/55841
+    await discordOutbound.sendText?.({
+      cfg: {},
+      to: "channel:other-channel",
+      text: "cross-channel message",
+      accountId: "default",
+      threadId: "thread-1",
+    });
+
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:other-channel",
+      "cross-channel message",
+      expect.objectContaining({ accountId: "default" }),
+    );
   });
 
   it("uses webhook persona delivery for bound thread text replies", async () => {
@@ -84,7 +104,7 @@ describe("discordOutbound", () => {
 
     const result = await discordOutbound.sendText?.({
       cfg,
-      to: "channel:parent-1",
+      to: "channel:thread-1",
       text: "hello from persona",
       accountId: "default",
       threadId: "thread-1",
@@ -124,7 +144,7 @@ describe("discordOutbound", () => {
 
     const result = await discordOutbound.sendText?.({
       cfg: {},
-      to: "channel:parent-1",
+      to: "channel:thread-1",
       text: "silent update",
       accountId: "default",
       threadId: "thread-1",
@@ -146,7 +166,7 @@ describe("discordOutbound", () => {
 
     const result = await discordOutbound.sendText?.({
       cfg: {},
-      to: "channel:parent-1",
+      to: "channel:thread-1",
       text: "fallback",
       accountId: "default",
       threadId: "thread-1",
@@ -160,10 +180,10 @@ describe("discordOutbound", () => {
     });
   });
 
-  it("routes poll sends to thread target when threadId is provided", async () => {
+  it("routes poll sends to thread target when threadId matches to", async () => {
     const result = await discordOutbound.sendPoll?.({
       cfg: {},
-      to: "channel:parent-1",
+      to: "channel:thread-1",
       poll: {
         question: "Best snack?",
         options: ["banana", "apple"],

@@ -37,6 +37,15 @@ function resolveDiscordOutboundTarget(params: {
   if (!threadId) {
     return params.to;
   }
+  // Only substitute the thread channel when the explicit `to` target refers to
+  // the same channel. When the agent is sending to a *different* channel (cross-
+  // channel send), the explicit target must win — otherwise thread context from
+  // the inbound session silently overrides it and the message lands in the wrong
+  // place. See: https://github.com/openclaw/openclaw/issues/55841
+  const toNormalized = params.to.replace(/^channel:/i, "").trim();
+  if (toNormalized !== threadId) {
+    return params.to;
+  }
   return `channel:${threadId}`;
 }
 
