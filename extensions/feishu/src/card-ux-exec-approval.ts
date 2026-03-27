@@ -12,6 +12,7 @@ export function createExecApprovalCard(params: {
   host?: string;
   nodeId?: string;
   expiresAtMs: number;
+  chatType?: "p2p" | "group";
 }): Record<string, unknown> {
   const approvalSlug = params.approvalId.slice(0, 8);
   const bodyLines: string[] = [
@@ -29,6 +30,13 @@ export function createExecApprovalCard(params: {
   }
 
   const metadata = { approvalId: params.approvalId };
+  // Exec approval context omits u (user) and h (chat) — any configured
+  // approver may click from any surface (DM or channel). Include expiry
+  // and chat type so callbacks enforce TTL and route correctly.
+  const context: { e: number; t?: "p2p" | "group" } = {
+    e: params.expiresAtMs,
+    ...(params.chatType ? { t: params.chatType } : {}),
+  };
 
   return {
     schema: "2.0",
@@ -58,6 +66,7 @@ export function createExecApprovalCard(params: {
                 k: "button",
                 a: FEISHU_EXEC_APPROVAL_ALLOW_ONCE_ACTION,
                 m: metadata,
+                c: context,
               }),
             }),
             buildFeishuCardButton({
@@ -66,6 +75,7 @@ export function createExecApprovalCard(params: {
                 k: "button",
                 a: FEISHU_EXEC_APPROVAL_ALLOW_ALWAYS_ACTION,
                 m: metadata,
+                c: context,
               }),
             }),
             buildFeishuCardButton({
@@ -75,6 +85,7 @@ export function createExecApprovalCard(params: {
                 k: "button",
                 a: FEISHU_EXEC_APPROVAL_DENY_ACTION,
                 m: metadata,
+                c: context,
               }),
             }),
           ],

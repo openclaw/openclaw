@@ -4,72 +4,20 @@ import {
   buildExecApprovalPendingReplyPayload,
   resolveExecApprovalCommandDisplay,
 } from "openclaw/plugin-sdk/infra-runtime";
-import { normalizeMessageChannel, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { compileSafeRegex, testRegexWithBoundedInput } from "openclaw/plugin-sdk/security-runtime";
 import { createExecApprovalCard } from "./card-ux-exec-approval.js";
-import {
-  getFeishuExecApprovalApprovers,
-  isFeishuExecApprovalClientEnabled,
-  resolveFeishuExecApprovalConfig,
-} from "./exec-approvals.js";
 
-function matchesFeishuFilters(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  request: ExecApprovalRequest;
-}): boolean {
-  const config = resolveFeishuExecApprovalConfig({ cfg: params.cfg, accountId: params.accountId });
-  if (!config?.enabled) {
-    return false;
-  }
-  if (
-    getFeishuExecApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }).length === 0
-  ) {
-    return false;
-  }
-  if (config.agentFilter?.length) {
-    const agentId =
-      params.request.request.agentId ??
-      parseAgentSessionKey(params.request.request.sessionKey)?.agentId;
-    if (!agentId || !config.agentFilter.includes(agentId)) {
-      return false;
-    }
-  }
-  if (config.sessionFilter?.length) {
-    const sessionKey = params.request.request.sessionKey;
-    if (!sessionKey) {
-      return false;
-    }
-    const matches = config.sessionFilter.some((pattern) => {
-      if (sessionKey.includes(pattern)) {
-        return true;
-      }
-      const regex = compileSafeRegex(pattern);
-      return regex ? testRegexWithBoundedInput(regex, sessionKey) : false;
-    });
-    if (!matches) {
-      return false;
-    }
-  }
-  return true;
-}
-
-export function shouldSuppressFeishuExecApprovalForwardingFallback(params: {
+// Unlike Telegram (which has an independent TelegramExecApprovalHandler gateway
+// client to take over delivery), Feishu currently delivers exec approval cards
+// only via the forwarding fallback pipeline. Suppressing the fallback would
+// remove the only delivery route, causing approval requests to expire silently
+// with "no-approval-route". Always return false until a dedicated Feishu exec
+// approval handler client is implemented.
+export function shouldSuppressFeishuExecApprovalForwardingFallback(_params: {
   cfg: OpenClawConfig;
   target: { channel: string; accountId?: string | null };
   request: ExecApprovalRequest;
 }): boolean {
-  const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
-  if (channel !== "feishu") {
-    return false;
-  }
-  const requestChannel = normalizeMessageChannel(params.request.request.turnSourceChannel ?? "");
-  if (requestChannel !== "feishu") {
-    return false;
-  }
-  const accountId =
-    params.target.accountId?.trim() || params.request.request.turnSourceAccountId?.trim();
-  return matchesFeishuFilters({ cfg: params.cfg, accountId, request: params.request });
+  return false;
 }
 
 export function buildFeishuExecApprovalPendingPayload(params: {

@@ -40,6 +40,9 @@ describe("createExecApprovalCard", () => {
     expect(allowOnceValue.oc).toBe(FEISHU_CARD_INTERACTION_VERSION);
     expect(allowOnceValue.a).toBe(FEISHU_EXEC_APPROVAL_ALLOW_ONCE_ACTION);
     expect((allowOnceValue.m as Record<string, string>).approvalId).toBe("abcdef1234567890");
+    const allowOnceContext = allowOnceValue.c as Record<string, unknown>;
+    expect(allowOnceContext.e).toBeTypeOf("number");
+    expect(allowOnceContext.u).toBeUndefined();
 
     const allowAlwaysButton = actionElement.actions[1];
     expect((allowAlwaysButton.text as Record<string, string>).content).toBe("Allow Always");
@@ -52,6 +55,20 @@ describe("createExecApprovalCard", () => {
     expect((denyButton.text as Record<string, string>).content).toBe("Deny");
     expect(denyButton.type).toBe("danger");
     expect((denyButton.value as Record<string, unknown>).a).toBe(FEISHU_EXEC_APPROVAL_DENY_ACTION);
+  });
+
+  it("includes chatType in button context when provided", () => {
+    const card = createExecApprovalCard({
+      approvalId: "abcdef1234567890",
+      command: "ls",
+      expiresAtMs: Date.now() + 60_000,
+      chatType: "group",
+    });
+    const body = card.body as { elements: Array<Record<string, unknown>> };
+    const actionElement = body.elements[1] as { actions: Array<Record<string, unknown>> };
+    const buttonValue = actionElement.actions[0].value as Record<string, unknown>;
+    const context = buttonValue.c as Record<string, unknown>;
+    expect(context.t).toBe("group");
   });
 
   it("omits optional fields when not provided", () => {
