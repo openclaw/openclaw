@@ -363,6 +363,38 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("rejects hook session keys that target internal control namespaces", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:", "agent:"],
+      mappings: [
+        {
+          match: { path: "mapped-subagent" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          sessionKey: "agent:main:subagent:worker",
+        },
+      ],
+    };
+    await withGatewayServer(async ({ port }) => {
+      const requestDenied = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        sessionKey: "agent:main:subagent:worker",
+      });
+      expect(requestDenied.status).toBe(400);
+      const requestDeniedBody = (await requestDenied.json()) as { error?: string };
+      expect(requestDeniedBody.error).toContain("internal session namespace subagent:");
+
+      const mappedDenied = await postHook(port, "/hooks/mapped-subagent", { subject: "hello" });
+      expect(mappedDenied.status).toBe(400);
+      const mappedDeniedBody = (await mappedDenied.json()) as { error?: string };
+      expect(mappedDeniedBody.error).toContain("internal session namespace subagent:");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+    });
+  });
+
   test("respects hooks session policy for request + mapping session keys", async () => {
     testState.hooksConfig = {
       enabled: true,
