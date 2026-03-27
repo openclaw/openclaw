@@ -123,8 +123,8 @@ describe("ensureOpenClawCliOnPath", () => {
     expect(process.env.PATH).toBe("/bin");
   });
 
-  it("prepends mise shims when available", () => {
-    const { tmp, appBinDir, appCli } = setupAppCliRoot("case-mise");
+  it("appends mise shims after system dirs", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-mise");
     const miseDataDir = path.join(tmp, "mise");
     const shimsDir = path.join(miseDataDir, "shims");
     setDir(miseDataDir);
@@ -140,10 +140,10 @@ describe("ensureOpenClawCliOnPath", () => {
       homeDir: tmp,
       platform: "darwin",
     });
-    const appBinIndex = updated.indexOf(appBinDir);
+    const usrBinIndex = updated.indexOf("/usr/bin");
     const shimsIndex = updated.indexOf(shimsDir);
-    expect(appBinIndex).toBeGreaterThanOrEqual(0);
-    expect(shimsIndex).toBeGreaterThan(appBinIndex);
+    expect(usrBinIndex).toBeGreaterThanOrEqual(0);
+    expect(shimsIndex).toBeGreaterThan(usrBinIndex);
   });
 
   it.each([
@@ -222,7 +222,85 @@ describe("ensureOpenClawCliOnPath", () => {
     expect(updated.indexOf(xdgBinHome)).toBeLessThan(updated.indexOf(localBin));
   });
 
-  it("prepends Linuxbrew dirs when present", () => {
+  it("places ~/.local/bin AFTER /usr/bin to prevent PATH hijack", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-path-hijack");
+    const localBin = path.join(tmp, ".local", "bin");
+    setDir(path.join(tmp, ".local"));
+    setDir(localBin);
+
+    process.env.PATH = "/usr/bin:/bin";
+    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+    delete process.env.XDG_BIN_HOME;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+    const usrBinIndex = updated.indexOf("/usr/bin");
+    const localBinIndex = updated.indexOf(localBin);
+    expect(usrBinIndex).toBeGreaterThanOrEqual(0);
+    expect(localBinIndex).toBeGreaterThanOrEqual(0);
+    expect(localBinIndex).toBeGreaterThan(usrBinIndex);
+  });
+
+  it("places all user-writable home dirs after system dirs", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-user-writable-after-system");
+    const localBin = path.join(tmp, ".local", "bin");
+    const pnpmBin = path.join(tmp, ".local", "share", "pnpm");
+    const bunBin = path.join(tmp, ".bun", "bin");
+    const yarnBin = path.join(tmp, ".yarn", "bin");
+    setDir(path.join(tmp, ".local"));
+    setDir(localBin);
+    setDir(path.join(tmp, ".local", "share"));
+    setDir(pnpmBin);
+    setDir(path.join(tmp, ".bun"));
+    setDir(bunBin);
+    setDir(path.join(tmp, ".yarn"));
+    setDir(yarnBin);
+
+    process.env.PATH = "/usr/bin:/bin";
+    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+    delete process.env.XDG_BIN_HOME;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+    const usrBinIndex = updated.indexOf("/usr/bin");
+    for (const userDir of [localBin, pnpmBin, bunBin, yarnBin]) {
+      const idx = updated.indexOf(userDir);
+      expect(idx, `${userDir} should come after /usr/bin`).toBeGreaterThan(usrBinIndex);
+    }
+  });
+
+  it("appends Homebrew dirs after immutable OS dirs", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-homebrew-after-system");
+    setDir("/opt/homebrew/bin");
+    setDir("/usr/local/bin");
+
+    process.env.PATH = "/usr/bin:/bin";
+    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+    delete process.env.HOMEBREW_PREFIX;
+    delete process.env.HOMEBREW_BREW_FILE;
+    delete process.env.XDG_BIN_HOME;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "darwin",
+    });
+    const usrBinIndex = updated.indexOf("/usr/bin");
+    expect(usrBinIndex).toBeGreaterThanOrEqual(0);
+    expect(updated.indexOf("/opt/homebrew/bin")).toBeGreaterThan(usrBinIndex);
+    expect(updated.indexOf("/usr/local/bin")).toBeGreaterThan(usrBinIndex);
+  });
+
+  it("appends Linuxbrew dirs after system dirs", () => {
     const tmp = abs("/tmp/openclaw-path/case-linuxbrew");
     const execDir = path.join(tmp, "exec");
     setDir(tmp);
@@ -247,7 +325,9 @@ describe("ensureOpenClawCliOnPath", () => {
       homeDir: tmp,
       platform: "linux",
     });
-    expect(parts[0]).toBe(linuxbrewBin);
-    expect(parts[1]).toBe(linuxbrewSbin);
+    const usrBinIndex = parts.indexOf("/usr/bin");
+    expect(usrBinIndex).toBeGreaterThanOrEqual(0);
+    expect(parts.indexOf(linuxbrewBin)).toBeGreaterThan(usrBinIndex);
+    expect(parts.indexOf(linuxbrewSbin)).toBeGreaterThan(usrBinIndex);
   });
 });
