@@ -637,4 +637,113 @@ describe("ChatgptAppsMcpBridge", () => {
       },
     });
   });
+
+  it("supports wildcard connector enablement with explicit per-connector disables", async () => {
+    const release = vi.fn(async () => undefined);
+    const remoteClient = {
+      listTools: vi.fn(async () => ({ tools: [], nextCursor: undefined })),
+      listAllTools: vi.fn(async () => []),
+      callTool: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "wildcard-routing-ok" }],
+      })),
+      close: vi.fn(async () => undefined),
+    };
+    const bridge = new ChatgptAppsMcpBridge({
+      stateDir: "/tmp/openclaw-chatgpt-apps-test",
+      workspaceDir: "/tmp/openclaw-chatgpt-apps-test/workspace",
+      config: {} as never,
+      pluginConfig: {
+        chatgptApps: {
+          enabled: true,
+          chatgptBaseUrl: "https://chatgpt.com",
+          connectors: {
+            "*": { enabled: true },
+            gmail: { enabled: false },
+          },
+        },
+      },
+      acquireLease: (async () => ({
+        session: {
+          refreshInventory: async () => [
+            createApp({
+              id: "connector_2128aebfecb84f64a069897515042a44",
+              name: "Gmail",
+              isAccessible: true,
+              isEnabled: false,
+            }),
+            createApp({
+              id: "connector_5f3c8c41a1e54ad7a76272c89e2554fa",
+              name: "Google Drive",
+              isAccessible: true,
+              isEnabled: false,
+            }),
+            createApp({
+              id: "connector_947e0d954944416db111db556030eea6",
+              name: "Google Calendar",
+              isAccessible: true,
+              isEnabled: false,
+            }),
+          ],
+          listMcpServerStatus: async () => [
+            {
+              name: "codex_apps",
+              tools: {
+                gmail_search_emails: {
+                  name: "gmail_search_emails",
+                  description: "Search Gmail",
+                  inputSchema: { type: "object" as const },
+                },
+                google_drive_search: {
+                  name: "google_drive_search",
+                  description: "Search Drive",
+                  inputSchema: { type: "object" as const },
+                },
+                google_calendar_search: {
+                  name: "google_calendar_search",
+                  description: "Search Calendar",
+                  inputSchema: { type: "object" as const },
+                },
+              },
+              resources: [],
+              resourceTemplates: [],
+              authStatus: "bearerToken",
+            },
+          ],
+          onInventoryUpdate: () => () => {},
+          snapshot: () => ({
+            auth: {
+              status: "ok" as const,
+              accessToken: "token-1",
+              accountId: "acct-1",
+              planType: "business" as const,
+              identity: {
+                chatgptUserId: "user-1",
+                accountId: "acct-1",
+                isWorkspaceAccount: false,
+              },
+            },
+          }),
+        },
+        release,
+      })) as never,
+      remoteClientFactory: vi.fn(async () => remoteClient),
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "bridge-test-client", version: "1.0.0" });
+
+    disposers.push(async () => {
+      await client.close();
+    });
+    disposers.push(async () => {
+      await bridge.close();
+    });
+
+    await Promise.all([bridge.connect(serverTransport), client.connect(clientTransport)]);
+
+    const listedTools = await client.listTools();
+    expect(listedTools.tools.map((tool) => tool.name).sort()).toEqual([
+      "chatgpt_app__google_calendar__google_calendar_search",
+      "chatgpt_app__google_drive__google_drive_search",
+    ]);
+  });
 });

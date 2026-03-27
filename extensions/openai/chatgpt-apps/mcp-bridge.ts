@@ -316,19 +316,31 @@ function buildAllowedConnectorIds(params: {
   configuredConnectors: Record<string, { enabled: boolean }>;
 }): Set<string> {
   const configuredConnectorIds = Object.entries(params.configuredConnectors)
-    .filter(([, connector]) => connector.enabled)
-    .map(([connectorId]) => normalizeConnectorKey(connectorId))
-    .filter(Boolean);
+    .map(([connectorId, connector]) => ({
+      connectorId: normalizeConnectorKey(connectorId),
+      enabled: connector.enabled,
+    }))
+    .filter((entry) => entry.connectorId);
 
   if (Object.keys(params.configuredConnectors).length > 0) {
     const allowed = new Set<string>();
-    const configuredSet = new Set(configuredConnectorIds);
+    const wildcardEnabled =
+      params.configuredConnectors["*"] && params.configuredConnectors["*"]?.enabled === true;
+    const enabledSet = new Set(
+      configuredConnectorIds.filter((entry) => entry.enabled).map((entry) => entry.connectorId),
+    );
+    const disabledSet = new Set(
+      configuredConnectorIds.filter((entry) => !entry.enabled).map((entry) => entry.connectorId),
+    );
     for (const app of params.inventory) {
       if (!app.isAccessible) {
         continue;
       }
       for (const connectorId of deriveConnectorKeysFromApp(app)) {
-        if (configuredSet.has(connectorId)) {
+        if (disabledSet.has(connectorId)) {
+          continue;
+        }
+        if (wildcardEnabled || enabledSet.has(connectorId)) {
           allowed.add(connectorId);
         }
       }

@@ -99,6 +99,7 @@ export function resolveChatgptAppsConfig(pluginConfig: unknown): ChatgptAppsConf
 
 export function buildDerivedAppsConfig(config: ChatgptAppsConfig): AppsConfig {
   const apps: Record<string, { enabled: boolean }> = {};
+  const wildcardEnabled = config.connectors["*"]?.enabled ?? false;
 
   for (const [connectorId, connector] of Object.entries(config.connectors)) {
     apps[connectorId] = {
@@ -108,7 +109,7 @@ export function buildDerivedAppsConfig(config: ChatgptAppsConfig): AppsConfig {
 
   return {
     _default: {
-      enabled: false,
+      enabled: wildcardEnabled,
       destructive_enabled: false,
       open_world_enabled: false,
     },

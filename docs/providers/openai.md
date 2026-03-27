@@ -121,8 +121,8 @@ Advanced operator controls:
               pollIntervalMs: 3000,
             },
             connectors: {
+              "*": { enabled: true },
               gmail: { enabled: false },
-              google_drive: { enabled: true },
             },
           },
         },
@@ -131,6 +131,10 @@ Advanced operator controls:
   },
 }
 ```
+
+Connector overrides support a wildcard entry. Use `"*": { enabled: true }` to
+allow every accessible connector, then add explicit per-connector disables for
+the ones you want OpenClaw to hide locally.
 
 Use `openclaw plugins inspect openai` to inspect the ChatGPT apps runtime. Add
 `--hard-refresh` when you want OpenClaw to force a fresh app-directory fetch
@@ -149,6 +153,117 @@ external chat channels such as Slack or Discord because the flow depends on the
 operator completing an interactive browser step. After the link completes, the
 managed MCP bridge refreshes its tool list automatically so newly linked app
 tools appear without restarting the gateway.
+
+### Manual testing ChatGPT apps
+
+Use this checklist to verify the ChatGPT apps bridge end to end.
+
+1. Confirm the sidecar is healthy.
+   - Run `openclaw plugins inspect openai --hard-refresh`.
+   - Expect the ChatGPT apps runtime section to show a running sidecar, healthy
+     `sidecar` and `auth` diagnostics, and a non-empty inventory source when
+     apps are available.
+2. Verify the inventory tool.
+   - In a local interactive OpenClaw session, ask the agent to call
+     `chatgpt_apps` with `refresh: true`.
+   - Expect the result to group apps into `accessible`, `linkable`,
+     `linkedButLocallyDisabled`, and `unavailable`.
+3. Verify one already-linked connector.
+   - Pick an app from the `accessible` bucket and ask the agent to use one of
+     that connector's tools.
+   - Example: if Gmail is already linked, ask for a summary of recent email.
+   - Expect a normal tool result from the local ChatGPT apps bridge, without
+     restarting the gateway.
+4. Verify the link flow for one unlinked app.
+   - Pick an app from the `linkable` bucket and ask the agent to call
+     `chatgpt_app_link` with that `appId`.
+   - Complete the ChatGPT browser step.
+   - Expect the tool to return `linked` when the inventory flips to accessible,
+     or `pending` with the install URL if the flow needs more time.
+5. Verify post-link refresh.
+   - Run `openclaw plugins inspect openai --hard-refresh` again, or rerun
+     `chatgpt_apps` with `refresh: true`.
+   - Expect the app to move from `linkable` to `accessible`.
+   - Expect the connector's tools to appear without restarting OpenClaw.
+6. Verify local disable overrides.
+   - Set `plugins.entries.openai.config.chatgptApps.connectors.<connectorId>.enabled`
+     to `false` for a linked app.
+   - Refresh the inventory again.
+   - Expect the app to move into `linkedButLocallyDisabled`.
+   - Expect that connector's tools to stop appearing through the local bridge.
+
+Common failure signatures:
+
+- `auth_unavailable`: OpenClaw does not currently have a usable `openai-codex`
+  login. Re-run `openclaw models auth login --provider openai-codex`.
+- `sidecar_unavailable`: the local `codex app-server` process could not start
+  or answer.
+- `app_not_found`: the `appId` is not in the current ChatGPT app inventory.
+- `timed_out`: the browser flow did not finish before the link wait timeout.
+
+### Manual testing Gmail in TUI
+
+Use this flow when you want one concrete end-to-end connector test inside the
+local TUI.
+
+1. Confirm the OpenAI plugin is ready.
+   - Run `openclaw plugins inspect openai --hard-refresh`.
+   - Expect the ChatGPT apps runtime to show a healthy sidecar and auth state.
+   - If you use connector overrides, make sure Gmail is not disabled at
+     `plugins.entries.openai.config.chatgptApps.connectors.gmail.enabled`.
+2. Start the Gateway and open the TUI.
+   - Terminal 1: `openclaw gateway`
+   - Terminal 2: `openclaw tui`
+   - In the TUI, keep delivery off for local testing: `/deliver off`
+3. Switch the session to a Codex-backed model.
+   - In the TUI, run `/model openai-codex/gpt-5.4`.
+   - This keeps the provider and auth path aligned with the ChatGPT apps
+     bridge.
+4. Check whether Gmail is already accessible.
+   - Send this prompt in the TUI:
+
+```text
+Call the chatgpt_apps tool with refresh=true and tell me whether Gmail is in the accessible bucket.
+```
+
+- Expect a `chatgpt_apps` tool card in the TUI.
+- Expect Gmail to appear in `accessible` if the connector is already linked.
+
+5. Link Gmail if needed.
+   - If Gmail is only `linkable`, send this prompt:
+
+```text
+Find the Gmail app id from chatgpt_apps, then call chatgpt_app_link for that app and wait for completion.
+```
+
+- Complete the browser step in ChatGPT.
+- Rerun the previous inventory prompt until Gmail moves into `accessible`.
+
+6. Invoke Gmail through the bridge.
+   - Send this prompt in the TUI:
+
+```text
+Use the Gmail connector to summarize my 5 most recent unread emails. For each one, include the sender, subject, and one sentence on why it matters.
+```
+
+- Expect at least one TUI tool card whose name starts with
+  `chatgpt_app__gmail__`.
+- Expect the assistant response to summarize live Gmail data rather than
+  answer generically.
+
+7. Verify a second Gmail call, not just memory of the first answer.
+   - Send this follow-up prompt:
+
+```text
+Open the newest thread from that summary and tell me whether it contains any action items.
+```
+
+- Expect another `chatgpt_app__gmail__` tool card.
+- Expect the follow-up answer to depend on the actual thread contents.
+
+If the TUI answer does not show a Gmail bridge tool call, make the prompt more
+explicit by saying `use the Gmail connector tool` and rerun `chatgpt_apps` with
+`refresh=true` first.
 
 OpenAI's current Codex docs list `gpt-5.4` as the current Codex model. OpenClaw
 maps that to `openai-codex/gpt-5.4` for ChatGPT/Codex OAuth usage.

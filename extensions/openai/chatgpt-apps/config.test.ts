@@ -76,15 +76,19 @@ describe("buildDerivedAppsConfig", () => {
           pollIntervalMs: 3_000,
         },
         connectors: {
+          "*": { enabled: true },
           gmail: { enabled: false },
           google_drive: { enabled: true },
         },
       }),
     ).toEqual({
       _default: {
-        enabled: false,
+        enabled: true,
         destructive_enabled: false,
         open_world_enabled: false,
+      },
+      "*": {
+        enabled: true,
       },
       gmail: {
         enabled: false,
