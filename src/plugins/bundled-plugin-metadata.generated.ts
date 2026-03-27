@@ -761,6 +761,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           },
           label: "BlueBubbles",
           description: "iMessage via the BlueBubbles mac app + REST API.",
+          preferOver: ["imessage"],
         },
       },
     },
