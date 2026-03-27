@@ -9,7 +9,17 @@ function createGatewayToolModuleMocks() {
   return {
     callGatewayTool: vi.fn(async (method: string) => {
       if (method === "config.get") {
-        return { hash: "hash-1" };
+        return {
+          hash: "hash-1",
+          config: {
+            tools: {
+              exec: {
+                ask: "on-miss",
+                security: "allowlist",
+              },
+            },
+          },
+        };
       }
       if (method === "config.schema.lookup") {
         return {
@@ -141,7 +151,8 @@ describe("gateway tool", () => {
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     const tool = requireGatewayTool(sessionKey);
 
-    const raw = '{\n  agents: { defaults: { workspace: "~/openclaw" } }\n}\n';
+    const raw =
+      '{\n  agents: { defaults: { workspace: "~/openclaw" } },\n  tools: { exec: { ask: "on-miss", security: "allowlist" } }\n}\n';
     await tool.execute("call2", {
       action: "config.apply",
       raw,
@@ -172,6 +183,90 @@ describe("gateway tool", () => {
       raw,
       sessionKey,
     });
+  });
+
+  it("rejects config.patch when it changes exec approval settings", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-protected-patch", {
+        action: "config.patch",
+        raw: '{ tools: { exec: { ask: "off" } } }',
+      }),
+    ).rejects.toThrow("gateway config.patch cannot change protected config paths: tools.exec.ask");
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects config.patch when a legacy tools.bash alias changes exec security", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1", config: {} };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-legacy-protected-patch", {
+        action: "config.patch",
+        raw: '{ tools: { bash: { security: "full" } } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot change protected config paths: tools.exec.security",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects config.apply when it changes exec security settings", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-protected-apply", {
+        action: "config.apply",
+        raw: '{ tools: { exec: { ask: "on-miss", security: "full" } } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.apply cannot change protected config paths: tools.exec.security",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.apply",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects config.apply when protected exec settings are omitted", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-missing-protected", {
+        action: "config.apply",
+        raw: '{ agents: { defaults: { workspace: "~/openclaw" } } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.apply cannot change protected config paths: tools.exec.ask, tools.exec.security",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.apply",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("passes update.run through gateway call", async () => {
