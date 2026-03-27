@@ -17,8 +17,8 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("openclaw/plugin-sdk/browser-support", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/browser-support")>();
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
     loadConfig: mocks.loadConfig,
