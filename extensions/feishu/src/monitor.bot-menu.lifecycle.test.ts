@@ -95,7 +95,7 @@ describe("Feishu bot-menu lifecycle", () => {
 
     resolveBoundConversationMock.mockImplementation(() => ({
       bindingId: "binding-menu",
-      targetSessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+      targetSessionKey: "agent:main:feishu:direct:ou_user1",
     }));
 
     resolveAgentRouteMock.mockReturnValue({
@@ -182,7 +182,7 @@ describe("Feishu bot-menu lifecycle", () => {
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         AccountId: "acct-menu",
-        SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+        SessionKey: "agent:main:feishu:direct:ou_user1",
         MessageSid: "bot-menu:quick-actions:1700000000001",
       }),
     );

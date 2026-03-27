@@ -26,6 +26,8 @@ const {
   mockEnsureConfiguredBindingRouteReady,
   mockResolveBoundConversation,
   mockTouchBinding,
+  mockUnbindBinding,
+  mockDispatchReplyFromConfigAcp,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
     dispatcher: vi.fn(),
@@ -59,6 +61,11 @@ const {
   mockEnsureConfiguredBindingRouteReady: vi.fn(async (_params?: unknown) => ({ ok: true })),
   mockResolveBoundConversation: vi.fn(() => null),
   mockTouchBinding: vi.fn(),
+  mockUnbindBinding: vi.fn(async () => []),
+  mockDispatchReplyFromConfigAcp: vi.fn().mockResolvedValue({
+    queuedFinal: false,
+    counts: { final: 1 },
+  }),
 }));
 
 vi.mock("./reply-dispatcher.js", () => ({
@@ -89,6 +96,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
     getSessionBindingService: () => ({
       resolveByConversation: mockResolveBoundConversation,
       touch: mockTouchBinding,
+      unbind: mockUnbindBinding,
     }),
   };
 });
@@ -97,6 +105,7 @@ vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => ({
     resolveByConversation: mockResolveBoundConversation,
     touch: mockTouchBinding,
+    unbind: mockUnbindBinding,
   }),
 }));
 
@@ -124,6 +133,11 @@ describe("handleFeishuMessage ACP routing", () => {
     mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
     mockResolveBoundConversation.mockReset().mockReturnValue(null);
     mockTouchBinding.mockReset();
+    mockUnbindBinding.mockReset().mockResolvedValue([]);
+    mockDispatchReplyFromConfigAcp.mockReset().mockResolvedValue({
+      queuedFinal: false,
+      counts: { final: 1 },
+    });
     mockResolveAgentRoute.mockReset().mockReturnValue({
       agentId: "main",
       channel: "feishu",
@@ -168,10 +182,8 @@ describe("handleFeishuMessage ACP routing", () => {
             formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
             finalizeInboundContext: ((ctx: unknown) =>
               ctx) as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
-            dispatchReplyFromConfig: vi.fn().mockResolvedValue({
-              queuedFinal: false,
-              counts: { final: 1 },
-            }),
+            dispatchReplyFromConfig:
+              mockDispatchReplyFromConfigAcp as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"],
             withReplyDispatcher: vi.fn(
               async ({
                 run,
@@ -374,7 +386,7 @@ describe("handleFeishuMessage ACP routing", () => {
   it("routes Feishu topic messages through active bound conversations", async () => {
     mockResolveBoundConversation.mockReturnValue({
       bindingId: "default:oc_group_chat:topic:om_topic_root",
-      targetSessionKey: "agent:codex:acp:binding:feishu:default:feedface",
+      targetSessionKey: "agent:main:feishu:group:oc_group_chat:topic:om_topic_root",
       targetKind: "session",
       conversation: {
         channel: "feishu",
@@ -423,6 +435,70 @@ describe("handleFeishuMessage ACP routing", () => {
       }),
     );
     expect(mockTouchBinding).toHaveBeenCalledWith("default:oc_group_chat:topic:om_topic_root");
+  });
+
+  it("ignores stale bound conversation when route agent differs", async () => {
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "germany",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:germany:feishu:group:oc_group_chat",
+      mainSessionKey: "agent:germany:main",
+      matchedBy: "binding.peer",
+    });
+    mockResolveBoundConversation.mockReturnValue({
+      bindingId: "default:oc_group_chat:topic:om_topic_root",
+      targetSessionKey: "agent:main:feishu:group:oc_group_chat:topic:om_topic_root",
+      targetKind: "session",
+      conversation: {
+        channel: "feishu",
+        accountId: "default",
+        conversationId: "oc_group_chat:topic:om_topic_root",
+        parentConversationId: "oc_group_chat",
+      },
+      status: "active",
+      boundAt: 0,
+    } as any);
+
+    await dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: {
+          feishu: {
+            enabled: true,
+            allowFrom: ["ou_sender_1"],
+            groups: {
+              oc_group_chat: {
+                allow: true,
+                requireMention: false,
+                groupSessionScope: "group_topic",
+              },
+            },
+          },
+        },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-stale-bound",
+          chat_id: "oc_group_chat",
+          chat_type: "group",
+          message_type: "text",
+          root_id: "om_topic_root",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    expect(mockTouchBinding).not.toHaveBeenCalled();
+    expect(mockUnbindBinding).toHaveBeenCalledWith({
+      bindingId: "default:oc_group_chat:topic:om_topic_root",
+      reason: "stale-bound-agent-mismatch",
+    });
+    const call = mockDispatchReplyFromConfigAcp.mock.calls[0]?.[0] as
+      | { ctx?: { SessionKey?: string } }
+      | undefined;
+    expect(call?.ctx?.SessionKey).toBe("agent:germany:feishu:group:oc_group_chat");
   });
 });
 

@@ -124,7 +124,7 @@ describe("Feishu card-action lifecycle", () => {
 
     resolveBoundConversationMock.mockImplementation(() => ({
       bindingId: "binding-card",
-      targetSessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+      targetSessionKey: "agent:main:feishu:direct:ou_user1",
     }));
 
     resolveAgentRouteMock.mockReturnValue({
@@ -186,7 +186,7 @@ describe("Feishu card-action lifecycle", () => {
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         AccountId: "acct-card",
-        SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+        SessionKey: "agent:main:feishu:direct:ou_user1",
         MessageSid: "card-action-tok-card-once",
       }),
     );

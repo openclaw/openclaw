@@ -614,21 +614,38 @@ export async function handleFeishuMessage(params: {
       });
       const boundSessionKey = threadBinding?.targetSessionKey?.trim();
       if (threadBinding && boundSessionKey) {
-        route = {
-          ...route,
-          sessionKey: boundSessionKey,
-          agentId: resolveAgentIdFromSessionKey(boundSessionKey) || route.agentId,
-          lastRoutePolicy: deriveLastRoutePolicy({
+        const boundAgentId = resolveAgentIdFromSessionKey(boundSessionKey) || route.agentId;
+        if (normalizeAgentId(boundAgentId) === normalizeAgentId(route.agentId)) {
+          route = {
+            ...route,
             sessionKey: boundSessionKey,
-            mainSessionKey: route.mainSessionKey,
-          }),
-          matchedBy: "binding.channel",
-        };
-        configuredBinding = null;
-        getSessionBindingService().touch(threadBinding.bindingId);
-        log(
-          `feishu[${account.accountId}]: routed via bound conversation ${currentConversationId} -> ${boundSessionKey}`,
-        );
+            agentId: boundAgentId,
+            lastRoutePolicy: deriveLastRoutePolicy({
+              sessionKey: boundSessionKey,
+              mainSessionKey: route.mainSessionKey,
+            }),
+            matchedBy: "binding.channel",
+          };
+          configuredBinding = null;
+          getSessionBindingService().touch(threadBinding.bindingId);
+          log(
+            `feishu[${account.accountId}]: routed via bound conversation ${currentConversationId} -> ${boundSessionKey}`,
+          );
+        } else {
+          try {
+            await getSessionBindingService().unbind({
+              bindingId: threadBinding.bindingId,
+              reason: "stale-bound-agent-mismatch",
+            });
+          } catch (unbindErr) {
+            log(
+              `feishu[${account.accountId}]: failed to unbind stale conversation ${currentConversationId} -> ${boundSessionKey}: ${String(unbindErr)}`,
+            );
+          }
+          log(
+            `feishu[${account.accountId}]: ignore stale bound conversation ${currentConversationId} -> ${boundSessionKey} (routeAgent=${route.agentId}, boundAgent=${boundAgentId})`,
+          );
+        }
       }
     }
 
