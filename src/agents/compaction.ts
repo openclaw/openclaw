@@ -228,6 +228,7 @@ async function summarizeChunks(params: {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
+  headers?: Record<string, string>;
   signal: AbortSignal;
   reserveTokens: number;
   maxChunkTokens: number;
