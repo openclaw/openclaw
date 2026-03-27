@@ -623,3 +623,67 @@ describe("telegramPlugin outbound sendPayload forceDocument", () => {
     );
   });
 });
+
+// Regression: https://github.com/openclaw/openclaw/pull/55482
+// The health endpoint builds a minimal snapshot without `running` or
+// `tokenSource`. buildChannelSummary must derive those from the account
+// and probe result so the health response is accurate.
+describe("telegramPlugin buildChannelSummary health fallbacks", () => {
+  it("derives running and tokenSource from account when snapshot omits them", () => {
+    const account = resolveAccount(
+      {
+        channels: { telegram: { botToken: "tok" } },
+      } as OpenClawConfig,
+      "default",
+    );
+
+    // Minimal snapshot like the health endpoint produces: configured but
+    // no running/tokenSource fields, with a successful probe.
+    const snapshot = {
+      accountId: "default",
+      configured: true,
+      probe: { ok: true, bot: { username: "testbot" }, elapsedMs: 1 },
+    };
+
+    const summary = telegramPlugin.status!.buildChannelSummary!({
+      account,
+      cfg: {} as OpenClawConfig,
+      defaultAccountId: "default",
+      snapshot,
+    });
+
+    expect(summary).toMatchObject({
+      configured: true,
+      running: true,
+      tokenSource: account.tokenSource,
+    });
+  });
+
+  it("reports running=false when probe fails", () => {
+    const account = resolveAccount(
+      {
+        channels: { telegram: { botToken: "tok" } },
+      } as OpenClawConfig,
+      "default",
+    );
+
+    const snapshot = {
+      accountId: "default",
+      configured: true,
+      probe: { ok: false, elapsedMs: 1 },
+    };
+
+    const summary = telegramPlugin.status!.buildChannelSummary!({
+      account,
+      cfg: {} as OpenClawConfig,
+      defaultAccountId: "default",
+      snapshot,
+    });
+
+    expect(summary).toMatchObject({
+      configured: true,
+      running: false,
+      tokenSource: account.tokenSource,
+    });
+  });
+});
