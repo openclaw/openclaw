@@ -5,7 +5,7 @@ import * as dispatcherModule from "../../../../src/auto-reply/reply/provider-dis
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import type { DiscordAccountConfig } from "../../../../src/config/types.discord.js";
 import * as pluginCommandsModule from "../../../../src/plugins/commands.js";
-import { createDiscordNativeCommand } from "./native-command.js";
+import { __testing as nativeCommandTesting, createDiscordNativeCommand } from "./native-command.js";
 import {
   createMockCommandInteraction,
   type MockCommandInteraction,
@@ -68,13 +68,17 @@ function createCommand(cfg: OpenClawConfig, discordConfig?: DiscordAccountConfig
 }
 
 function createDispatchSpy() {
-  return vi.spyOn(dispatcherModule, "dispatchReplyWithDispatcher").mockResolvedValue({
+  const dispatchSpy = vi.spyOn(dispatcherModule, "dispatchReplyWithDispatcher").mockResolvedValue({
     counts: {
       final: 1,
       block: 0,
       tool: 0,
     },
   } as never);
+  nativeCommandTesting.setDispatchReplyWithDispatcher(
+    dispatcherModule.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
+  );
+  return dispatchSpy;
 }
 
 async function runGuildSlashCommand(params?: {
@@ -110,6 +114,9 @@ function expectUnauthorizedReply(interaction: MockCommandInteraction) {
 describe("Discord native slash commands with commands.allowFrom", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    nativeCommandTesting.setDispatchReplyWithDispatcher(
+      dispatcherModule.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
+    );
   });
 
   it("authorizes guild slash commands when commands.allowFrom.discord matches the sender", async () => {
