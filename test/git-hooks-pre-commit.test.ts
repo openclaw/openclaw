@@ -96,7 +96,7 @@ describe("git-hooks/pre-commit (integration)", () => {
       "process.exit(0);\n",
       "utf8",
     );
-    writeFileSync(path.join(dir, "package.json"), "{\"name\":\"tmp\"}\n", "utf8");
+    writeFileSync(path.join(dir, "package.json"), '{"name":"tmp"}\n', "utf8");
     writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
 
     const fakeBinDir = path.join(dir, "bin");
