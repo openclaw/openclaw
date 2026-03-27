@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { extractLeadingHttpStatus } from "../shared/assistant-error-format.js";
 import {
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
@@ -633,5 +634,70 @@ describe("createConfiguredOllamaStreamFn", () => {
         });
       },
     );
+  });
+});
+
+// Helper: mock fetch to return a non-2xx response with given status/body.
+async function withMockErrorFetch(
+  status: number,
+  body: string,
+  run: () => Promise<void>,
+): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = vi.fn(async () => {
+    return new Response(body, { status, statusText: "Error" });
+  }) as unknown as typeof fetch;
+  try {
+    await run();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+describe("createOllamaStreamFn HTTP error handling", () => {
+  it("formats non-2xx errors with leading status code for failover classification", async () => {
+    await withMockErrorFetch(503, "Service Unavailable", async () => {
+      const stream = await createOllamaTestStream({ baseUrl: "http://localhost:11434" });
+      const events = await collectStreamEvents(stream);
+
+      const errorEvent = events.find((e) => (e as { type: string }).type === "error") as
+        | { type: "error"; error: { errorMessage?: string } }
+        | undefined;
+      expect(errorEvent).toBeDefined();
+
+      const parsed = extractLeadingHttpStatus(errorEvent!.error.errorMessage ?? "");
+      expect(parsed).not.toBeNull();
+      expect(parsed!.code).toBe(503);
+    });
+  });
+
+  it("includes response body in the error message", async () => {
+    await withMockErrorFetch(500, "internal server error", async () => {
+      const stream = await createOllamaTestStream({ baseUrl: "http://localhost:11434" });
+      const events = await collectStreamEvents(stream);
+
+      const errorEvent = events.find((e) => (e as { type: string }).type === "error") as
+        | { type: "error"; error: { errorMessage?: string } }
+        | undefined;
+      expect(errorEvent).toBeDefined();
+      expect(errorEvent!.error.errorMessage).toContain("internal server error");
+      expect(errorEvent!.error.errorMessage).toMatch(/^500\s/);
+    });
+  });
+
+  it("handles 429 rate limit errors with parseable status", async () => {
+    await withMockErrorFetch(429, "Too Many Requests", async () => {
+      const stream = await createOllamaTestStream({ baseUrl: "http://localhost:11434" });
+      const events = await collectStreamEvents(stream);
+
+      const errorEvent = events.find((e) => (e as { type: string }).type === "error") as
+        | { type: "error"; error: { errorMessage?: string } }
+        | undefined;
+      expect(errorEvent).toBeDefined();
+
+      const parsed = extractLeadingHttpStatus(errorEvent!.error.errorMessage ?? "");
+      expect(parsed).not.toBeNull();
+      expect(parsed!.code).toBe(429);
+    });
   });
 });

@@ -679,6 +679,8 @@ export function createOllamaStreamFn(
 
         if (!response.ok) {
           const errorText = await response.text().catch(() => "unknown error");
+          // Format: "<status> <body>" so extractLeadingHttpStatus can parse
+          // the code and the failover classification system detects retriable errors.
           throw new Error(`${response.status} ${errorText}`);
         }
         if (!response.body) {
