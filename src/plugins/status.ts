@@ -6,7 +6,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
-import { withBundledPluginAllowlistCompat } from "./bundled-compat.js";
+import {
+  withBundledPluginAllowlistCompat,
+  withBundledPluginEnablementCompat,
+} from "./bundled-compat.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
@@ -160,9 +163,13 @@ export function buildPluginStatusReport(params?: {
     config,
     pluginIds: bundledProviderIds,
   });
+  const runtimeCompatConfig = withBundledPluginEnablementCompat({
+    config: effectiveConfig,
+    pluginIds: bundledProviderIds,
+  });
 
   const registry = loadOpenClawPlugins({
-    config: effectiveConfig,
+    config: runtimeCompatConfig,
     workspaceDir,
     env: params?.env,
     logger: createPluginLoaderLogger(log),
