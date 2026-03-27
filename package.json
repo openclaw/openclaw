@@ -696,6 +696,10 @@
       "types": "./dist/plugin-sdk/plugin-entry.d.ts",
       "default": "./dist/plugin-sdk/plugin-entry.js"
     },
+    "./plugin-sdk/provider-catalog-shared": {
+      "types": "./dist/plugin-sdk/provider-catalog-shared.d.ts",
+      "default": "./dist/plugin-sdk/provider-catalog-shared.js"
+    },
     "./plugin-sdk/provider-catalog": {
       "types": "./dist/plugin-sdk/provider-catalog.d.ts",
       "default": "./dist/plugin-sdk/provider-catalog.js"

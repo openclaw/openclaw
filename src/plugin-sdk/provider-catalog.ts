@@ -1,12 +1,11 @@
 // Public provider catalog helpers for provider plugins.
 
-export type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
-
+export type { ProviderCatalogContext, ProviderCatalogResult } from "./provider-catalog-shared.js";
 export {
   buildPairedProviderApiKeyCatalog,
   buildSingleProviderApiKeyCatalog,
   findCatalogTemplate,
-} from "../plugins/provider-catalog.js";
+} from "./provider-catalog-shared.js";
 export {
   ANTHROPIC_VERTEX_DEFAULT_MODEL_ID,
   buildAnthropicVertexProvider,
