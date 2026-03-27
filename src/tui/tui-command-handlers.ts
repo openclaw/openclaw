@@ -553,13 +553,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return await flushQueuedMessage();
     }
     const runId = randomUUID();
-    let startedRun = false;
     try {
       if (!isBtw) {
         chatLog.addUser(text);
         noteLocalRunId(runId);
         state.activeChatRunId = runId;
-        startedRun = true;
         setActivityStatus("sending");
       } else {
         noteLocalBtwRunId?.(runId);
@@ -593,7 +591,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         setActivityStatus("error");
       }
       tui.requestRender();
-      return startedRun;
+      return false;
     }
   };
 

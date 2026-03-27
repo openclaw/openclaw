@@ -201,6 +201,7 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
       if (toolCallCount === 0) {
         snapshot.latestAssistantText = text;
       } else {
+        snapshot.latestAssistantText = undefined;
         const explicitFinalText = extractExplicitFinalAssistantText(message)?.trim();
         if (explicitFinalText) {
           snapshot.latestAssistantText = explicitFinalText;

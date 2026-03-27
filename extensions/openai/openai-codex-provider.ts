@@ -28,6 +28,7 @@ import {
   isOpenAIApiBaseUrl,
   matchesExactOrPrefix,
 } from "./shared.js";
+import { refreshOpenAICodexOAuthCredential as refreshOpenAICodexOAuthCredentialRuntime } from "./openai-codex-provider.runtime.js";
 
 const PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
@@ -139,16 +140,10 @@ function resolveCodexForwardCompatModel(
 
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   try {
-    const { getOAuthApiKey } = await import("./openai-codex-provider.runtime.js");
-    const refreshed = await getOAuthApiKey("openai-codex", {
-      "openai-codex": cred,
-    });
-    if (!refreshed) {
-      throw new Error("OpenAI Codex OAuth refresh returned no credentials.");
-    }
+    const refreshed = await refreshOpenAICodexOAuthCredentialRuntime(cred);
     return {
       ...cred,
-      ...refreshed.newCredentials,
+      ...refreshed,
       type: "oauth" as const,
       provider: PROVIDER_ID,
       email: cred.email,
@@ -157,7 +152,7 @@ async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (
-      /extract\s+accountid\s+from\s+token/i.test(message) &&
+      /extract\s+account\s*id\s+from\s+token/i.test(message) &&
       typeof cred.access === "string" &&
       cred.access.trim().length > 0
     ) {

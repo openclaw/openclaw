@@ -60,11 +60,11 @@ function normalizeBundledChannelConfigs(
     const parsed = runtimeSchema.safeParse(value[channelId]);
     if (!parsed.success) {
       for (const issue of parsed.issues) {
+        const issuePath = Array.isArray(issue.path) ? issue.path : [];
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: issue.message ?? `Invalid channels.${channelId} config.`,
-          path: [channelId, ...(Array.isArray(issue.path) ? issue.path : [])],
-        });
+          ...issue,
+          path: [channelId, ...issuePath],
+        } as never);
       }
       continue;
     }

@@ -124,6 +124,32 @@ describe("captureSubagentCompletionReply", () => {
     vi.useRealTimers();
   });
 
+  it("clears earlier assistant text when a newer mixed tool-call turn has no explicit final", async () => {
+    vi.useFakeTimers();
+    chatHistoryMock.mockResolvedValue({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Older completed reply" }],
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Still working through the edits." },
+            { type: "toolCall", id: "call-1", name: "write", arguments: {} },
+          ],
+        },
+      ],
+    });
+
+    const pending = captureSubagentCompletionReply("agent:main:subagent:child");
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result).toBeUndefined();
+    vi.useRealTimers();
+  });
+
   it("keeps explicit <final> content from mixed assistant + tool-call turns", async () => {
     chatHistoryMock.mockResolvedValueOnce({
       messages: [

@@ -20,6 +20,7 @@ import plugin from "./index.js";
 const runtimeMocks = vi.hoisted(() => ({
   ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
   getOAuthApiKey: vi.fn(),
+  refreshOpenAICodexToken: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
@@ -28,6 +29,7 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
 
 vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthApiKey: runtimeMocks.getOAuthApiKey,
+  refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
 }));
 
 import { getOAuthApiKey as getCodexOAuthApiKey } from "./openai-codex-provider.runtime.js";

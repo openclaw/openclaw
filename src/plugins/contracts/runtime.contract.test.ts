@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __testing as openAICodexProviderRuntimeTesting } from "../../../extensions/openai/openai-codex-provider.runtime.js";
 import { createProviderUsageFetch, makeResponse } from "../../test-utils/provider-usage-fetch.js";
 import type { ProviderPlugin, ProviderRuntimeModel } from "../types.js";
 import { requireProviderContractProvider as requireBundledProviderContractProvider } from "./registry.js";
@@ -51,7 +52,12 @@ describe("provider runtime contract", () => {
   beforeEach(() => {
     getOAuthApiKeyMock.mockReset();
     getOAuthProvidersMock.mockClear();
+    openAICodexProviderRuntimeTesting.resetDepsForTests();
   }, CONTRACT_SETUP_TIMEOUT_MS);
+
+  afterEach(() => {
+    openAICodexProviderRuntimeTesting.resetDepsForTests();
+  });
 
   describe("anthropic", () => {
     it("owns anthropic 4.6 forward-compat resolution", () => {
@@ -525,8 +531,11 @@ describe("provider runtime contract", () => {
         expires: Date.now() - 60_000,
       };
 
-      getOAuthApiKeyMock.mockReset();
-      getOAuthApiKeyMock.mockRejectedValueOnce(new Error("Failed to extract accountId from token"));
+      openAICodexProviderRuntimeTesting.setDepsForTests({
+        refreshOpenAICodexToken: vi.fn(async () => {
+          throw new Error("Failed to extract accountId from token");
+        }),
+      });
 
       await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
     });

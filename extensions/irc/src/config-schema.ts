@@ -1,6 +1,5 @@
 import {
   buildChannelConfigSchema,
-  BlockStreamingCoalesceSchema,
   DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
@@ -11,6 +10,18 @@ import {
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 import { ircChannelConfigUiHints } from "./config-ui-hints.js";
+
+const IrcReplyRuntimeConfigSchemaShape = {
+  historyLimit: ReplyRuntimeConfigSchemaShape.historyLimit,
+  dmHistoryLimit: ReplyRuntimeConfigSchemaShape.dmHistoryLimit,
+  dms: ReplyRuntimeConfigSchemaShape.dms,
+  textChunkLimit: ReplyRuntimeConfigSchemaShape.textChunkLimit,
+  chunkMode: ReplyRuntimeConfigSchemaShape.chunkMode,
+  blockStreaming: ReplyRuntimeConfigSchemaShape.blockStreaming,
+  blockStreamingCoalesce: ReplyRuntimeConfigSchemaShape.blockStreamingCoalesce,
+  responsePrefix: ReplyRuntimeConfigSchemaShape.responsePrefix,
+  mediaMaxMb: ReplyRuntimeConfigSchemaShape.mediaMaxMb,
+} as const;
 
 const IrcGroupSchema = z
   .object({
@@ -66,7 +77,7 @@ export const IrcAccountSchemaBase = z
     channels: z.array(z.string()).optional(),
     mentionPatterns: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
-    ...ReplyRuntimeConfigSchemaShape,
+    ...IrcReplyRuntimeConfigSchemaShape,
   })
   .strict();
 

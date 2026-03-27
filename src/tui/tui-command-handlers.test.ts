@@ -49,7 +49,7 @@ function createHarness(params?: {
     sessionInfo: {},
   };
 
-  const { handleCommand } = createCommandHandlers({
+  const { handleCommand, sendMessageInternal } = createCommandHandlers({
     client: { sendChat, resetSession } as never,
     chatLog: { addUser, addSystem } as never,
     tui: { requestRender } as never,
@@ -79,6 +79,7 @@ function createHarness(params?: {
 
   return {
     handleCommand,
+    sendMessageInternal,
     sendChat,
     resetSession,
     setSession,
@@ -257,6 +258,19 @@ describe("tui command handlers", () => {
     });
 
     await handleCommand("/context");
+
+    expect(addSystem).toHaveBeenCalledWith("send failed: Error: gateway down");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("error");
+  });
+
+  it("returns false when a queued dispatch send throws before the run can continue", async () => {
+    const setActivityStatus = vi.fn();
+    const { sendMessageInternal, addSystem } = createHarness({
+      sendChat: vi.fn().mockRejectedValue(new Error("gateway down")),
+      setActivityStatus,
+    });
+
+    await expect(sendMessageInternal("/context", { allowQueue: false })).resolves.toBe(false);
 
     expect(addSystem).toHaveBeenCalledWith("send failed: Error: gateway down");
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
