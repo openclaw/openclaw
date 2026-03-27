@@ -206,6 +206,25 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("please now");
   });
 
+  it("treats /steer text as queue steer shorthand", () => {
+    const res = extractQueueDirective("/steer check progress");
+    expect(res.hasDirective).toBe(true);
+    expect(res.queueMode).toBe("steer");
+    expect(res.cleaned).toBe("check progress");
+  });
+
+  it("does not treat /steer with a numeric target as queue shorthand", () => {
+    const res = extractQueueDirective("/steer 2 check progress");
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe("/steer 2 check progress");
+  });
+
+  it("does not treat bare /steer as queue shorthand", () => {
+    const res = extractQueueDirective("/steer");
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe("/steer");
+  });
+
   it("extracts reply_to_current tag", () => {
     const res = extractReplyToTag("ok [[reply_to_current]]", "msg-1");
     expect(res.replyToId).toBe("msg-1");

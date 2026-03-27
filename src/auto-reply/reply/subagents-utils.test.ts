@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import {
   resolveSubagentLabel,
+  isSubagentIndexToken,
   resolveSubagentTargetFromRuns,
   sortSubagentRuns,
 } from "./subagents-utils.js";
@@ -58,6 +59,13 @@ describe("subagents utils", () => {
       makeRun({ runId: "c", startedAt: 12, createdAt: 20 }),
     ]);
     expect(sorted.map((entry) => entry.runId)).toEqual(["b", "c", "a"]);
+  });
+
+  it("recognizes numeric and #numeric subagent index tokens", () => {
+    expect(isSubagentIndexToken("2")).toBe(true);
+    expect(isSubagentIndexToken("#2")).toBe(true);
+    expect(isSubagentIndexToken("worker")).toBe(false);
+    expect(isSubagentIndexToken(undefined)).toBe(false);
   });
 
   it("selects last from sorted runs", () => {

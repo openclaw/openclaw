@@ -36,6 +36,11 @@ export type SubagentTargetResolution = {
   error?: string;
 };
 
+export function isSubagentIndexToken(token: string | undefined): boolean {
+  const trimmed = token?.trim();
+  return Boolean(trimmed && (/^\d+$/.test(trimmed) || /^#\d+$/.test(trimmed)));
+}
+
 export function resolveSubagentTargetFromRuns(params: {
   runs: SubagentRunRecord[];
   token: string | undefined;

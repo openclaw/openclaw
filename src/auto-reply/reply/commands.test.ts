@@ -2978,6 +2978,30 @@ describe("handleCommands subagents", () => {
     expect(trackedRuns[0].endedAt).toBeUndefined();
   });
 
+  it("lets main-session /steer messages fall through to queue steering", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/steer check progress", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(true);
+    expect(result.reply).toBeUndefined();
+  });
+
+  it("keeps bare /steer usage guidance", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/steer", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Usage: /steer <id|#> <message>");
+  });
+
   it("steers ended orchestrators that are still waiting on active descendants", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };

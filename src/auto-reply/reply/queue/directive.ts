@@ -1,5 +1,6 @@
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
+import { isSubagentIndexToken } from "../subagents-utils.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import type { QueueDropPolicy, QueueMode } from "./types.js";
 
@@ -146,6 +147,24 @@ export function extractQueueDirective(body?: string): {
   const re = /(?:^|\s)\/queue(?=$|\s|:)/i;
   const match = re.exec(body);
   if (!match) {
+    const steerMatch = /(?:^|\s)\/steer(?=$|\s|:)/i.exec(body);
+    if (steerMatch) {
+      const start = steerMatch.index + steerMatch[0].indexOf("/steer");
+      const argsStart = start + "/steer".length;
+      const trimmedArgs = body.slice(argsStart).trim();
+      const [firstToken] = trimmedArgs.split(/\s+/, 1);
+      if (trimmedArgs && !isSubagentIndexToken(firstToken)) {
+        const cleanedRaw = `${body.slice(0, start)} ${body.slice(argsStart)}`;
+        return {
+          cleaned: cleanedRaw.replace(/\s+/g, " ").trim(),
+          queueMode: "steer",
+          queueReset: false,
+          rawMode: "steer",
+          hasDirective: true,
+          hasOptions: false,
+        };
+      }
+    }
     return {
       cleaned: body.trim(),
       hasDirective: false,
