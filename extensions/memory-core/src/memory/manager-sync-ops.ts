@@ -32,14 +32,10 @@ import {
 } from "../engine-host-api.js";
 import {
   createEmbeddingProvider,
-  DEFAULT_GEMINI_EMBEDDING_MODEL,
-  DEFAULT_MISTRAL_EMBEDDING_MODEL,
-  DEFAULT_OLLAMA_EMBEDDING_MODEL,
-  DEFAULT_OPENAI_EMBEDDING_MODEL,
-  DEFAULT_VOYAGE_EMBEDDING_MODEL,
   type EmbeddingProvider,
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
+  resolveEmbeddingProviderFallbackModel,
 } from "./embeddings.js";
 import { buildFileEntry } from "./internal.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
@@ -1119,18 +1115,7 @@ export abstract class MemoryManagerSyncOps {
     }
     const fallbackFrom = this.provider.id as EmbeddingProviderId;
 
-    const fallbackModel =
-      fallback === "gemini"
-        ? DEFAULT_GEMINI_EMBEDDING_MODEL
-        : fallback === "openai"
-          ? DEFAULT_OPENAI_EMBEDDING_MODEL
-          : fallback === "voyage"
-            ? DEFAULT_VOYAGE_EMBEDDING_MODEL
-            : fallback === "mistral"
-              ? DEFAULT_MISTRAL_EMBEDDING_MODEL
-              : fallback === "ollama"
-                ? DEFAULT_OLLAMA_EMBEDDING_MODEL
-                : this.settings.model;
+    const fallbackModel = resolveEmbeddingProviderFallbackModel(fallback, this.settings.model);
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,

@@ -1,11 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { buildChannelConfigSchema } from "../src/channels/plugins/config-schema.js";
 
-function isBuiltChannelConfigSchema(
-  value: unknown,
-): value is { schema: Record<string, unknown>; uiHints?: Record<string, unknown> } {
+type BuiltChannelConfigSurface = {
+  schema: Record<string, unknown>;
+  uiHints?: Record<string, unknown>;
+};
+
+type JsonSchemaCapableSurface = {
+  toJSONSchema?: (params?: Record<string, unknown>) => unknown;
+  uiHints?: Record<string, unknown>;
+};
+
+function isBuiltChannelConfigSchema(value: unknown): value is BuiltChannelConfigSurface {
   if (!value || typeof value !== "object") {
     return false;
   }
@@ -13,9 +20,32 @@ function isBuiltChannelConfigSchema(
   return Boolean(candidate.schema && typeof candidate.schema === "object");
 }
 
-function resolveConfigSchemaExport(
+function buildSchemaSurface(value: unknown): BuiltChannelConfigSurface | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as JsonSchemaCapableSurface;
+  if (typeof candidate.toJSONSchema === "function") {
+    return {
+      schema: candidate.toJSONSchema({
+        target: "draft-07",
+        unrepresentable: "any",
+      }) as Record<string, unknown>,
+      ...(candidate.uiHints ? { uiHints: candidate.uiHints } : {}),
+    };
+  }
+  return {
+    schema: {
+      type: "object",
+      additionalProperties: true,
+    },
+    ...(candidate.uiHints ? { uiHints: candidate.uiHints } : {}),
+  };
+}
+
+function resolveChannelConfigSurfaceExport(
   imported: Record<string, unknown>,
-): { schema: Record<string, unknown>; uiHints?: Record<string, unknown> } | null {
+): BuiltChannelConfigSurface | null {
   for (const [name, value] of Object.entries(imported)) {
     if (name.endsWith("ChannelConfigSchema") && isBuiltChannelConfigSchema(value)) {
       return value;
@@ -29,8 +59,9 @@ function resolveConfigSchemaExport(
     if (isBuiltChannelConfigSchema(value)) {
       return value;
     }
-    if (value && typeof value === "object") {
-      return buildChannelConfigSchema(value as never);
+    const wrapped = buildSchemaSurface(value);
+    if (wrapped) {
+      return wrapped;
     }
   }
 
@@ -66,8 +97,7 @@ function shouldRetryViaIsolatedCopy(error: unknown): boolean {
     return false;
   }
   const code = "code" in error ? error.code : undefined;
-  const message = "message" in error && typeof error.message === "string" ? error.message : "";
-  return code === "ERR_MODULE_NOT_FOUND" && message.includes(`${path.sep}node_modules${path.sep}`);
+  return code === "ERR_MODULE_NOT_FOUND";
 }
 
 const SOURCE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
@@ -185,7 +215,7 @@ export async function loadChannelConfigSurfaceModule(
 
   try {
     const imported = (await import(pathToFileURL(modulePath).href)) as Record<string, unknown>;
-    return resolveConfigSchemaExport(imported);
+    return resolveChannelConfigSurfaceExport(imported);
   } catch (error) {
     if (!shouldRetryViaIsolatedCopy(error)) {
       throw error;
@@ -196,7 +226,7 @@ export async function loadChannelConfigSurfaceModule(
       const imported = (await import(
         `${pathToFileURL(isolatedCopy.copiedModulePath).href}?isolated=${Date.now()}`
       )) as Record<string, unknown>;
-      return resolveConfigSchemaExport(imported);
+      return resolveChannelConfigSurfaceExport(imported);
     } finally {
       isolatedCopy.cleanup();
     }
