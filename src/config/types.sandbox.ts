@@ -59,6 +59,18 @@ export type SandboxDockerSettings = {
    * Default behavior blocks container namespace joins to preserve sandbox isolation.
    */
   dangerouslyAllowContainerNamespaceJoin?: boolean;
+  /**
+   * Mount propagation mode for the workspace bind mount.
+   * - "private" (default): host sub-mounts inside the workspace are not visible in the container.
+   * - "rslave": host sub-mounts inside the workspace propagate into the container (read-only).
+   * - "rshared": host sub-mounts inside the workspace propagate bidirectionally.
+   *
+   * Set to "rslave" when the workspace directory contains host-level bind mounts
+   * (e.g. symlink targets mounted via `mount --bind`) that you want accessible to
+   * the sandbox file tools. Requires the host mount point to have shared propagation
+   * (`mount --make-shared`).
+   */
+  workspaceMountPropagation?: "private" | "rslave" | "rshared";
 };
 
 export type SandboxBrowserSettings = {
