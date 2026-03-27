@@ -116,6 +116,10 @@ Treat this section as the preservation contract for future upstream merges and r
 
 - Release-tag sync rule:
   merge the target upstream release tag first, preserve the deltas below on that tag line, validate them, and only then sync the resolved release line back into `main`.
+- Audit note (2026-03-27):
+  this section was historically incomplete and omitted at least some substantive older Vida deltas from prior release tags.
+  Until the next corrected fork release lands, do not use this section by itself as the preservation inventory for upstream merges.
+  Cross-check the historical `vida-v*` tags, substantive fork-only commits, and the current `v2026.3.24` merge plan before deciding a fork behavior can be dropped.
 - Full historical fork-only commit list:
   `git log --oneline upstream/main..main`
 - Diff vs upstream tip:
@@ -135,6 +139,14 @@ Treat this section as the preservation contract for future upstream merges and r
   Why: Vida routes browser-dependent hosted workflows through long-lived gateway processes, so indefinite reads or poorly classified transient failures create visible control-plane stalls and retries in production.
   Runtime files: `src/browser/client.ts`, `src/browser/client-fetch.ts`.
   Direct tests: `src/browser/client.test.ts`, `src/browser/client-fetch.error-classification.test.ts`.
+- Plugin request attribution for plugin-owned Vida OpenAI traffic:
+  Why: Vida plugins such as `memory-lancedb` still create their own OpenAI SDK clients inside lifecycle hooks, and those requests must carry `x-openclaw-agent-id` / `x-openclaw-session-key` when they traverse `${VIDA_API_BASE_URL}/openai/v1`.
+  Runtime files: `src/plugins/hook-runner-global.ts`, `src/plugins/hooks.ts`, `src/plugins/runtime/request-attribution-fetch.ts`, `src/plugins/runtime/request-attribution-scope.ts`.
+  Direct tests: `src/plugins/hooks.request-attribution.test.ts`, `src/plugins/runtime/request-attribution-fetch.test.ts`, `src/plugins/runtime/request-attribution-scope.test.ts`.
+- WhatsApp/Vida-specific session defaults and disconnect status extraction:
+  Why: Vida relies on the WhatsApp browser identity and nested disconnect status handling staying stable across upstream WhatsApp channel refactors.
+  Runtime files: `extensions/whatsapp/src/session.ts`, `extensions/whatsapp/src/session-errors.ts`.
+  Direct tests: `extensions/whatsapp/src/session.test.ts`, `extensions/whatsapp/src/session-errors.test.ts`.
 - Transcript/tool-result metadata preservation:
   Why: Vida needs downstream transcripts and relay metadata to stay correlated across the OpenResponses, provider, and audit surfaces even when tool output is chunked or sanitized.
   Runtime files: `src/agents/session-tool-result-guard-wrapper.ts`.
@@ -170,6 +182,8 @@ Do not treat the fork as self-contained. A release-tag merge is incomplete until
 - `a4b7a208f`: Reasoning-summary mapping in OpenResponses output.
 - `cfe0917f2`: Vida provider metadata/reasoning-effort passthrough.
 - `cca004332`: Malformed JSON hardening for Vida tool-call args.
+- `5c78c4d31`: Plugin request attribution for plugin-owned Vida OpenAI traffic.
+- `5059f9c83`: WhatsApp Vida browser identity + nested disconnect status handling.
 - `097bcb056`, `b2bf2bd4a`, `44be49c89`, `0408c7f7d`: Vida sync/release script stack.
 
 Update this section whenever a new fork-only patch is merged to `main`.

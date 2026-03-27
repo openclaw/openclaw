@@ -1,6 +1,12 @@
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getAgentScopedMediaLocalRoots, getDefaultMediaLocalRoots } from "./local-roots.js";
+import {
+  appendLocalMediaParentRoots,
+  getAgentScopedMediaLocalRoots,
+  getAgentScopedMediaLocalRootsForSources,
+  getDefaultMediaLocalRoots,
+} from "./local-roots.js";
 
 function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));
@@ -35,5 +41,54 @@ describe("local media roots", () => {
     expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "workspace-ops")));
     expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "sandboxes")));
     expect(normalizedRoots).not.toContain(normalizeHostPath(path.join(stateDir, "agents")));
+  });
+
+  it("adds concrete parent roots for local media sources without widening to filesystem root", () => {
+    const picturesDir =
+      process.platform === "win32" ? "C:\\Users\\peter\\Pictures" : "/Users/peter/Pictures";
+    const moviesDir =
+      process.platform === "win32" ? "C:\\Users\\peter\\Movies" : "/Users/peter/Movies";
+
+    const roots = appendLocalMediaParentRoots(
+      ["/tmp/base"],
+      [
+        path.join(picturesDir, "photo.png"),
+        pathToFileURL(path.join(moviesDir, "clip.mp4")).href,
+        "https://example.com/remote.png",
+        "/top-level-file.png",
+      ],
+    );
+
+    expect(roots.map(normalizeHostPath)).toEqual(
+      expect.arrayContaining([
+        normalizeHostPath("/tmp/base"),
+        normalizeHostPath(picturesDir),
+        normalizeHostPath(moviesDir),
+      ]),
+    );
+    expect(roots.map(normalizeHostPath)).not.toContain(normalizeHostPath("/"));
+  });
+
+  it("widens agent media roots for concrete local sources only when workspaceOnly is disabled", () => {
+    const stateDir = path.join("/tmp", "openclaw-flexible-media-roots-state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const flexibleRoots = getAgentScopedMediaLocalRootsForSources({
+      cfg: {},
+      agentId: "ops",
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
+    expect(flexibleRoots.map(normalizeHostPath)).toContain(
+      normalizeHostPath("/Users/peter/Pictures"),
+    );
+
+    const strictRoots = getAgentScopedMediaLocalRootsForSources({
+      cfg: { tools: { fs: { workspaceOnly: true } } },
+      agentId: "ops",
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
+    expect(strictRoots.map(normalizeHostPath)).not.toContain(
+      normalizeHostPath("/Users/peter/Pictures"),
+    );
   });
 });

@@ -19,6 +19,8 @@ export type BaseConfigSchemaResponse = {
   generatedAt: string;
 };
 
+type BaseConfigSchemaStablePayload = Omit<BaseConfigSchemaResponse, "generatedAt">;
+
 function cloneSchema<T>(value: T): T {
   if (typeof structuredClone === "function") {
     return structuredClone(value);
@@ -54,19 +56,42 @@ function stripChannelSchema(schema: ConfigSchema): ConfigSchema {
   return next;
 }
 
-export function computeBaseConfigSchemaResponse(params?: {
-  generatedAt?: string;
-}): BaseConfigSchemaResponse {
+let baseConfigSchemaStablePayload: BaseConfigSchemaStablePayload | null = null;
+
+function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
+  if (baseConfigSchemaStablePayload) {
+    return {
+      schema: cloneSchema(baseConfigSchemaStablePayload.schema),
+      uiHints: cloneSchema(baseConfigSchemaStablePayload.uiHints),
+      version: baseConfigSchemaStablePayload.version,
+    };
+  }
   const schema = OpenClawSchema.toJSONSchema({
     target: "draft-07",
     unrepresentable: "any",
   });
   schema.title = "OpenClawConfig";
-  const hints = applyDerivedTags(mapSensitivePaths(OpenClawSchema, "", buildBaseHints()));
-  return {
+  const stablePayload = {
     schema: stripChannelSchema(schema),
-    uiHints: hints,
+    uiHints: applyDerivedTags(mapSensitivePaths(OpenClawSchema, "", buildBaseHints())),
     version: VERSION,
+  } satisfies BaseConfigSchemaStablePayload;
+  baseConfigSchemaStablePayload = stablePayload;
+  return {
+    schema: cloneSchema(stablePayload.schema),
+    uiHints: cloneSchema(stablePayload.uiHints),
+    version: stablePayload.version,
+  };
+}
+
+export function computeBaseConfigSchemaResponse(params?: {
+  generatedAt?: string;
+}): BaseConfigSchemaResponse {
+  const stablePayload = computeBaseConfigSchemaStablePayload();
+  return {
+    schema: stablePayload.schema,
+    uiHints: stablePayload.uiHints,
+    version: stablePayload.version,
     generatedAt: params?.generatedAt ?? new Date().toISOString(),
   };
 }

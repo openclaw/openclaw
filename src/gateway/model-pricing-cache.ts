@@ -161,7 +161,14 @@ function canonicalizeOpenRouterLookupId(id: string): string {
   return `${provider}/${model}`;
 }
 
-function buildOpenRouterExactCandidates(ref: ModelRef): string[] {
+function buildOpenRouterExactCandidates(ref: ModelRef, seen = new Set<string>()): string[] {
+  const refKey = modelKey(ref.provider, ref.model);
+  if (seen.has(refKey)) {
+    return [];
+  }
+  const nextSeen = new Set(seen);
+  nextSeen.add(refKey);
+
   const candidates = new Set<string>();
   const canonicalProvider = canonicalizeOpenRouterProvider(ref.provider);
   const canonicalFullId = canonicalizeOpenRouterLookupId(modelKey(canonicalProvider, ref.model));
@@ -181,7 +188,7 @@ function buildOpenRouterExactCandidates(ref: ModelRef): string[] {
   if (WRAPPER_PROVIDERS.has(ref.provider) && ref.model.includes("/")) {
     const nestedRef = parseModelRef(ref.model, DEFAULT_PROVIDER);
     if (nestedRef) {
-      for (const candidate of buildOpenRouterExactCandidates(nestedRef)) {
+      for (const candidate of buildOpenRouterExactCandidates(nestedRef, nextSeen)) {
         candidates.add(candidate);
       }
     }

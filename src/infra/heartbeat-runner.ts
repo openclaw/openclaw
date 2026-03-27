@@ -80,7 +80,7 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { peekSystemEventEntries } from "./system-events.js";
+import { peekSystemEventEntries, resolveSystemEventDeliveryContext } from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -398,6 +398,7 @@ type HeartbeatSkipReason = "empty-heartbeat-file";
 type HeartbeatPreflight = HeartbeatReasonFlags & {
   session: ReturnType<typeof resolveHeartbeatSession>;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
+  turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
   hasTaggedCronEvents: boolean;
   shouldInspectPendingEvents: boolean;
   skipReason?: HeartbeatSkipReason;
@@ -427,6 +428,7 @@ async function resolveHeartbeatPreflight(params: {
     params.forcedSessionKey,
   );
   const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
+  const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
@@ -441,6 +443,7 @@ async function resolveHeartbeatPreflight(params: {
     ...reasonFlags,
     session,
     pendingEventEntries,
+    turnSourceDeliveryContext,
     hasTaggedCronEvents,
     shouldInspectPendingEvents,
   } satisfies Omit<HeartbeatPreflight, "skipReason">;
@@ -598,7 +601,16 @@ export async function runHeartbeatOnce(opts: {
     runStorePath = cronSession.storePath;
   }
 
-  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
+  const delivery = resolveHeartbeatDeliveryTarget({
+    cfg,
+    entry,
+    heartbeat,
+    // Isolated heartbeat runs drain system events from their dedicated
+    // `:heartbeat` session, not from the base session we peek during preflight.
+    // Reusing base-session turnSource routing here can pin later isolated runs
+    // to stale channels/threads because that base-session event context remains queued.
+    turnSource: useIsolatedSession ? undefined : preflight.turnSourceDeliveryContext,
+  });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {

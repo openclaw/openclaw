@@ -585,6 +585,7 @@ export async function runPreparedReply(
     shouldSteer,
     shouldFollowup,
     isActive,
+    isRunActive: () => isEmbeddedPiRunActive(sessionIdFinal),
     isStreaming,
     opts,
     typing,

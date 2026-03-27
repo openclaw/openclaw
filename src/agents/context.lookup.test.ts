@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type DiscoveredModel = { id: string; contextWindow: number };
 
@@ -65,6 +65,16 @@ async function importResolveContextTokensForModel() {
 describe("lookupContextTokens", () => {
   beforeEach(() => {
     vi.resetModules();
+  });
+
+  afterEach(async () => {
+    try {
+      const { resetContextWindowCacheForTest } = await import("./context.js");
+      resetContextWindowCacheForTest();
+    } catch {
+      // Ignore reset failures when a test aborts before the module loads.
+    }
+    await flushAsyncWarmup();
   });
 
   it("returns configured model context window on first lookup", async () => {

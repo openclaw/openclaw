@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
@@ -34,8 +34,13 @@ vi.mock("../send.js", async (importOriginal) => {
   };
 });
 
-const { maybeSendBindingMessage, resolveChannelIdForBinding } =
-  await import("./thread-bindings.discord-api.js");
+let maybeSendBindingMessage: typeof import("./thread-bindings.discord-api.js").maybeSendBindingMessage;
+let resolveChannelIdForBinding: typeof import("./thread-bindings.discord-api.js").resolveChannelIdForBinding;
+
+beforeAll(async () => {
+  ({ maybeSendBindingMessage, resolveChannelIdForBinding } =
+    await import("./thread-bindings.discord-api.js"));
+});
 
 describe("resolveChannelIdForBinding", () => {
   beforeEach(() => {

@@ -8,6 +8,7 @@ const resolveGatewayProgramArguments = vi.fn(async (_opts?: unknown) => ({
   programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
 }));
 const serviceInstall = vi.fn().mockResolvedValue(undefined);
+const serviceStage = vi.fn().mockResolvedValue(undefined);
 const serviceUninstall = vi.fn().mockResolvedValue(undefined);
 const serviceStop = vi.fn().mockResolvedValue(undefined);
 const serviceRestart = vi.fn().mockResolvedValue({ outcome: "completed" });
@@ -56,6 +57,7 @@ vi.mock("../daemon/service.js", async (importOriginal) => {
       label: "LaunchAgent",
       loadedText: "loaded",
       notLoadedText: "not loaded",
+      stage: serviceStage,
       install: serviceInstall,
       uninstall: serviceUninstall,
       stop: serviceStop,

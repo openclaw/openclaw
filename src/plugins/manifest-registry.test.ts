@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
 import {
   clearPluginManifestRegistryCache,
@@ -8,6 +8,8 @@ import {
 } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+
+vi.unmock("../version.js");
 
 const tempDirs: string[] = [];
 
@@ -58,6 +60,16 @@ function loadRegistry(candidates: PluginCandidate[]) {
     candidates,
     cache: false,
   });
+}
+
+function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+    OPENCLAW_VERSION: undefined,
+    VITEST: "true",
+    ...overrides,
+  };
 }
 
 function countDuplicateWarnings(registry: ReturnType<typeof loadPluginManifestRegistry>): number {
@@ -136,6 +148,7 @@ function expectUnsafeWorkspaceManifestRejected(params: {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   clearPluginManifestRegistryCache();
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -762,17 +775,15 @@ describe("loadPluginManifestRegistry", () => {
 
     const first = loadPluginManifestRegistry({
       cache: true,
-      env: {
-        ...process.env,
+      env: hermeticEnv({
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledA,
-      },
+      }),
     });
     const second = loadPluginManifestRegistry({
       cache: true,
-      env: {
-        ...process.env,
+      env: hermeticEnv({
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledB,
-      },
+      }),
     });
 
     expect(
@@ -814,22 +825,20 @@ describe("loadPluginManifestRegistry", () => {
     const first = loadPluginManifestRegistry({
       cache: true,
       config,
-      env: {
-        ...process.env,
+      env: hermeticEnv({
         HOME: homeA,
         OPENCLAW_HOME: undefined,
         OPENCLAW_STATE_DIR: path.join(homeA, ".state"),
-      },
+      }),
     });
     const second = loadPluginManifestRegistry({
       cache: true,
       config,
-      env: {
-        ...process.env,
+      env: hermeticEnv({
         HOME: homeB,
         OPENCLAW_HOME: undefined,
         OPENCLAW_STATE_DIR: path.join(homeB, ".state"),
-      },
+      }),
     });
 
     expect(
@@ -862,18 +871,16 @@ describe("loadPluginManifestRegistry", () => {
     const olderHost = loadPluginManifestRegistry({
       cache: true,
       candidates,
-      env: {
-        ...process.env,
+      env: hermeticEnv({
         OPENCLAW_VERSION: "2026.3.21",
-      },
+      }),
     });
     const newerHost = loadPluginManifestRegistry({
       cache: true,
       candidates,
-      env: {
-        ...process.env,
+      env: hermeticEnv({
         OPENCLAW_VERSION: "2026.3.22",
-      },
+      }),
     });
 
     expect(olderHost.plugins).toEqual([]);

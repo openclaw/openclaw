@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/provider-models";
 import { createOpenAIAttributionHeadersWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
+import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
 import {
   cloneFirstTemplateModel,
@@ -151,6 +152,7 @@ async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
       type: "oauth" as const,
       provider: PROVIDER_ID,
       email: cred.email,
+      displayName: cred.displayName,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -182,13 +184,19 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
     return { profiles: [] };
   }
 
+  const identity = resolveCodexAuthIdentity({
+    accessToken: creds.access,
+    email: typeof creds.email === "string" ? creds.email : undefined,
+  });
+
   return buildOauthProviderAuthResult({
     providerId: PROVIDER_ID,
     defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
     access: creds.access,
     refresh: creds.refresh,
     expires: creds.expires,
-    email: typeof creds.email === "string" ? creds.email : undefined,
+    email: identity.email,
+    profileName: identity.profileName,
   });
 }
 

@@ -10,13 +10,13 @@ import {
   satisfiesGatewayMinimum,
   satisfiesPluginApiRange,
   type ClawHubPackageChannel,
+  type ClawHubPackageCompatibility,
   type ClawHubPackageDetail,
   type ClawHubPackageFamily,
 } from "../infra/clawhub.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { installPluginFromArchive, type InstallPluginResult } from "./install.js";
 
-export const OPENCLAW_PLUGIN_API_VERSION = "1.2.0";
 export const CLAWHUB_INSTALL_ERROR_CODE = {
   INVALID_SPEC: "invalid_spec",
   PACKAGE_NOT_FOUND: "package_not_found",
@@ -104,10 +104,7 @@ async function resolveCompatiblePackageVersion(params: {
   | {
       ok: true;
       version: string;
-      compatibility?: {
-        pluginApiRange?: string;
-        minGatewayVersion?: string;
-      } | null;
+      compatibility?: ClawHubPackageCompatibility | null;
     }
   | ClawHubInstallFailure
 > {
@@ -143,10 +140,8 @@ async function resolveCompatiblePackageVersion(params: {
 
 function validateClawHubPluginPackage(params: {
   detail: ClawHubPackageDetail;
-  compatibility?: {
-    pluginApiRange?: string;
-    minGatewayVersion?: string;
-  } | null;
+  compatibility?: ClawHubPackageCompatibility | null;
+  runtimeVersion: string;
 }): ClawHubInstallFailure | null {
   const pkg = params.detail.package;
   if (!pkg) {
@@ -175,17 +170,17 @@ function validateClawHubPluginPackage(params: {
   }
 
   const compatibility = params.compatibility;
+  const runtimeVersion = params.runtimeVersion;
   if (
     compatibility?.pluginApiRange &&
-    !satisfiesPluginApiRange(OPENCLAW_PLUGIN_API_VERSION, compatibility.pluginApiRange)
+    !satisfiesPluginApiRange(runtimeVersion, compatibility.pluginApiRange)
   ) {
     return buildClawHubInstallFailure(
-      `Plugin "${pkg.name}" requires plugin API ${compatibility.pluginApiRange}, but this OpenClaw runtime exposes ${OPENCLAW_PLUGIN_API_VERSION}.`,
+      `Plugin "${pkg.name}" requires plugin API ${compatibility.pluginApiRange}, but this OpenClaw runtime exposes ${runtimeVersion}.`,
       CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
     );
   }
 
-  const runtimeVersion = resolveRuntimeServiceVersion();
   if (
     compatibility?.minGatewayVersion &&
     !satisfiesGatewayMinimum(runtimeVersion, compatibility.minGatewayVersion)
@@ -201,6 +196,7 @@ function validateClawHubPluginPackage(params: {
 function logClawHubPackageSummary(params: {
   detail: ClawHubPackageDetail;
   version: string;
+  compatibility?: ClawHubPackageCompatibility | null;
   logger?: PluginInstallLogger;
 }) {
   const pkg = params.detail.package;
@@ -212,9 +208,11 @@ function logClawHubPackageSummary(params: {
     `ClawHub ${pkg.family} ${pkg.name}@${params.version} channel=${pkg.channel}${verification}`,
   );
   const compatibilityParts = [
-    pkg.compatibility?.pluginApiRange ? `pluginApi=${pkg.compatibility.pluginApiRange}` : null,
-    pkg.compatibility?.minGatewayVersion
-      ? `minGateway=${pkg.compatibility.minGatewayVersion}`
+    params.compatibility?.pluginApiRange
+      ? `pluginApi=${params.compatibility.pluginApiRange}`
+      : null,
+    params.compatibility?.minGatewayVersion
+      ? `minGateway=${params.compatibility.minGatewayVersion}`
       : null,
   ].filter(Boolean);
   if (compatibilityParts.length > 0) {
@@ -276,9 +274,11 @@ export async function installPluginFromClawHub(params: {
   if (!versionState.ok) {
     return versionState;
   }
+  const runtimeVersion = resolveRuntimeServiceVersion();
   const validationFailure = validateClawHubPluginPackage({
     detail,
     compatibility: versionState.compatibility,
+    runtimeVersion,
   });
   if (validationFailure) {
     return validationFailure;
@@ -286,6 +286,7 @@ export async function installPluginFromClawHub(params: {
   logClawHubPackageSummary({
     detail,
     version: versionState.version,
+    compatibility: versionState.compatibility,
     logger: params.logger,
   });
 

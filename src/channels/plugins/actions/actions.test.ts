@@ -1,5 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { ChannelMessageActionAdapter } from "../types.js";
 
@@ -194,7 +194,7 @@ async function expectSlackSendRejected(params: Record<string, unknown>, error: R
   expect(handleSlackAction).not.toHaveBeenCalled();
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   vi.resetModules();
   ({ discordMessageActions } = await import("../../../../extensions/discord/runtime-api.js"));
   ({ handleDiscordMessageAction } = await import("./discord/handle-action.js"));
@@ -205,6 +205,9 @@ beforeEach(async () => {
   ({ signalMessageActions } = await import("../../../../extensions/signal/src/message-actions.js"));
   signalReactionModule = await import("../../../../extensions/signal/src/send-reactions.js");
   ({ createSlackActions } = await import("../../../../extensions/slack/src/channel-actions.js"));
+});
+
+beforeEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
   vi.spyOn(discordRuntimeModule, "handleDiscordAction").mockImplementation(
@@ -735,6 +738,37 @@ describe("telegramMessageActions", () => {
           to: "123",
           media: "https://example.com/voice.ogg",
           asVoice: true,
+        }),
+      },
+      {
+        name: "media-only send preserves asDocument",
+        action: "send" as const,
+        params: {
+          to: "123",
+          media: "https://example.com/photo.jpg",
+          asDocument: true,
+        },
+        expectedPayload: expect.objectContaining({
+          action: "sendMessage",
+          to: "123",
+          media: "https://example.com/photo.jpg",
+          asDocument: true,
+        }),
+      },
+      {
+        name: "explicit forceDocument false beats asDocument alias",
+        action: "send" as const,
+        params: {
+          to: "123",
+          media: "https://example.com/photo.jpg",
+          forceDocument: false,
+          asDocument: true,
+        },
+        expectedPayload: expect.objectContaining({
+          action: "sendMessage",
+          to: "123",
+          media: "https://example.com/photo.jpg",
+          forceDocument: false,
         }),
       },
       {

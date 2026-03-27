@@ -19,6 +19,12 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import {
+  hasInternalHookListeners,
+  triggerInternalHook,
+  type SessionPatchHookContext,
+  type SessionPatchHookEvent,
+} from "../../hooks/internal-hooks.js";
+import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -55,6 +61,7 @@ import {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   readSessionPreviewItemsFromTranscript,
+  resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
@@ -583,7 +590,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           key,
           store,
         });
-        const entry = target.storeKeys.map((candidate) => store[candidate]).find(Boolean);
+        const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
         if (!entry?.sessionId) {
           previews.push({ key, status: "missing", items: [] });
           continue;
@@ -892,6 +899,24 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, applied.error);
       return;
     }
+
+    if (hasInternalHookListeners("session", "patch")) {
+      const hookContext: SessionPatchHookContext = structuredClone({
+        sessionEntry: applied.entry,
+        patch: p,
+        cfg,
+      });
+      const hookEvent: SessionPatchHookEvent = {
+        type: "session",
+        action: "patch",
+        sessionKey: target.canonicalKey ?? key,
+        context: hookContext,
+        timestamp: new Date(),
+        messages: [],
+      };
+      void triggerInternalHook(hookEvent);
+    }
+
     const parsed = parseAgentSessionKey(target.canonicalKey ?? key);
     const agentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
     const resolved = resolveSessionModelRef(cfg, applied.entry, agentId);
@@ -1027,7 +1052,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const { target, storePath } = resolveGatewaySessionTargetFromKey(key);
     const store = loadSessionStore(storePath);
-    const entry = target.storeKeys.map((k) => store[k]).find(Boolean);
+    const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
     if (!entry?.sessionId) {
       respond(true, { messages: [] }, undefined);
       return;

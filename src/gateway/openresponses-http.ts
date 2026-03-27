@@ -6,7 +6,7 @@
  * @see https://www.open-responses.com/
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
@@ -35,7 +35,13 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { getHeader, resolveGatewayRequestContext } from "./http-utils.js";
+import {
+  getBearerToken,
+  getHeader,
+  resolveAgentIdForRequest,
+  resolveGatewayRequestContext,
+  resolveOpenAiCompatModelOverride,
+} from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
   CreateResponseBodySchema,
@@ -64,8 +70,8 @@ const DEFAULT_MAX_URL_PARTS = 8;
 const RESPONSE_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_RESPONSE_SESSION_ENTRIES = 500;
 type ResponseSessionScope = {
+  authSubject: string;
   agentId: string;
-  user?: string;
   requestedSessionKey?: string;
 };
 
@@ -77,23 +83,40 @@ type ResponseSessionEntry = ResponseSessionScope & {
 const responseSessionMap = new Map<string, ResponseSessionEntry>();
 
 function normalizeResponseSessionScope(scope: ResponseSessionScope): ResponseSessionScope {
-  const user = scope.user?.trim();
+  const authSubject = scope.authSubject.trim();
   const requestedSessionKey = scope.requestedSessionKey?.trim();
   return {
+    authSubject,
     agentId: scope.agentId,
-    user: user || undefined,
     requestedSessionKey: requestedSessionKey || undefined,
   };
 }
 
+function resolveResponseSessionAuthSubject(params: {
+  req: IncomingMessage;
+  auth: ResolvedGatewayAuth;
+}): string {
+  const bearer = getBearerToken(params.req);
+  if (bearer) {
+    return `bearer:${createHash("sha256").update(bearer).digest("hex")}`;
+  }
+  if (params.auth.mode === "trusted-proxy" && params.auth.trustedProxy?.userHeader) {
+    const user = getHeader(params.req, params.auth.trustedProxy.userHeader)?.trim();
+    if (user) {
+      return `trusted-proxy:${user}`;
+    }
+  }
+  return `gateway-auth:${params.auth.mode}`;
+}
+
 function createResponseSessionScope(params: {
   req: IncomingMessage;
+  auth: ResolvedGatewayAuth;
   agentId: string;
-  user?: string;
 }): ResponseSessionScope {
   return normalizeResponseSessionScope({
+    authSubject: resolveResponseSessionAuthSubject({ req: params.req, auth: params.auth }),
     agentId: params.agentId,
-    user: params.user,
     requestedSessionKey: getHeader(params.req, "x-openclaw-session-key"),
   });
 }
@@ -103,8 +126,8 @@ function matchesResponseSessionScope(
   scope: ResponseSessionScope,
 ): boolean {
   return (
+    entry.authSubject === scope.authSubject &&
     entry.agentId === scope.agentId &&
-    entry.user === scope.user &&
     entry.requestedSessionKey === scope.requestedSessionKey
   );
 }
@@ -176,14 +199,14 @@ export const __testing = {
     responseId: string,
     sessionKey: string,
     now: number,
-    scope: ResponseSessionScope = { agentId: "main" },
+    scope: ResponseSessionScope = { authSubject: "test", agentId: "main" },
   ) {
     storeResponseSession(responseId, sessionKey, normalizeResponseSessionScope(scope), now);
   },
   lookupResponseSessionAt(
     responseId: string | undefined,
     now: number,
-    scope: ResponseSessionScope = { agentId: "main" },
+    scope: ResponseSessionScope = { authSubject: "test", agentId: "main" },
   ) {
     return lookupResponseSession(responseId, normalizeResponseSessionScope(scope), now);
   },
@@ -402,6 +425,7 @@ async function runResponsesAgentCommand(params: {
   images: ImageContent[];
   clientTools: ClientToolDefinition[];
   extraSystemPrompt: string;
+  modelOverride?: string;
   streamParams: { maxTokens: number } | undefined;
   sessionKey: string;
   runId: string;
@@ -418,6 +442,7 @@ async function runResponsesAgentCommand(params: {
       images: params.images.length > 0 ? params.images : undefined,
       clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,
       extraSystemPrompt: params.extraSystemPrompt || undefined,
+      model: params.modelOverride,
       streamParams: params.streamParams ?? undefined,
       sessionKey: params.sessionKey,
       runId: params.runId,
@@ -488,6 +513,18 @@ export async function handleOpenResponsesHttpRequest(
   // `reasoning.effort` is accepted for parity but currently ignored.
   const reasoningLevel = reasoning ? "stream" : undefined;
   const reasoningSummary = Boolean(reasoning?.summary);
+  const agentId = resolveAgentIdForRequest({ req, model });
+  const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
+    req,
+    agentId,
+    model,
+  });
+  if (modelError) {
+    sendJson(res, 400, {
+      error: { message: modelError, type: "invalid_request_error" },
+    });
+    return true;
+  }
 
   // Extract images + files from input (Phase 2)
   let images: ImageContent[] = [];
@@ -627,15 +664,15 @@ export async function handleOpenResponsesHttpRequest(
     user,
     sessionPrefix: "openresponses",
     defaultMessageChannel: "webchat",
-    useMessageChannelHeader: false,
+    useMessageChannelHeader: true,
   });
   const responseSessionScope = createResponseSessionScope({
     req,
+    auth: opts.auth,
     agentId: resolved.agentId,
-    user,
   });
   // Resolve session key: reuse previous_response_id only when it matches the
-  // same agent/user/requested-session scope as the current request.
+  // same auth-subject/agent/requested-session scope as the current request.
   const previousSessionKey = lookupResponseSession(
     payload.previous_response_id,
     responseSessionScope,
@@ -818,6 +855,7 @@ export async function handleOpenResponsesHttpRequest(
         images,
         clientTools: resolvedClientTools,
         extraSystemPrompt,
+        modelOverride,
         streamParams,
         sessionKey,
         runId: responseId,
@@ -1102,6 +1140,7 @@ export async function handleOpenResponsesHttpRequest(
         images,
         clientTools: resolvedClientTools,
         extraSystemPrompt,
+        modelOverride,
         streamParams,
         sessionKey,
         runId: responseId,

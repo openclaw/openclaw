@@ -359,6 +359,7 @@ export async function modelsAuthPasteTokenCommand(
   },
   runtime: RuntimeEnv,
 ) {
+  const { agentDir } = await resolveModelsAuthContext();
   const rawProvider = opts.provider?.trim();
   if (!rawProvider) {
     throw new Error("Missing --provider.");
@@ -385,6 +386,7 @@ export async function modelsAuthPasteTokenCommand(
       token,
       ...(expires ? { expires } : {}),
     },
+    agentDir,
   });
 
   await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));

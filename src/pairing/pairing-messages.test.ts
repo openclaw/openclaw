@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { expectPairingReplyText } from "../../test/helpers/pairing-reply.js";
 import { captureEnv } from "../test-utils/env.js";
 import { buildPairingReply } from "./pairing-messages.js";
 
@@ -6,7 +7,8 @@ describe("buildPairingReply", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_PROFILE"]);
+    envSnapshot = captureEnv(["OPENCLAW_CONTAINER_HINT", "OPENCLAW_PROFILE"]);
+    delete process.env.OPENCLAW_CONTAINER_HINT;
     process.env.OPENCLAW_PROFILE = "isolated";
   });
 
@@ -50,8 +52,7 @@ describe("buildPairingReply", () => {
   for (const testCase of cases) {
     it(`formats pairing reply for ${testCase.channel}`, () => {
       const text = buildPairingReply(testCase);
-      expect(text).toContain(testCase.idLine);
-      expect(text).toContain(`Pairing code: ${testCase.code}`);
+      expectPairingReplyText(text, testCase);
       // CLI commands should respect OPENCLAW_PROFILE when set (most tests run with isolated profile)
       const commandRe = new RegExp(
         `(?:openclaw|openclaw) --profile isolated pairing approve ${testCase.channel} ${testCase.code}`,

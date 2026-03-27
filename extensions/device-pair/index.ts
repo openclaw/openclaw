@@ -11,9 +11,10 @@ import {
   renderQrPngBase64,
   revokeDeviceBootstrapToken,
   resolveGatewayBindUrl,
+  resolveGatewayPort,
   resolvePreferredOpenClawTmpDir,
-  resolveTailnetHostWithRunner,
   runPluginCommandWithTimeout,
+  resolveTailnetHostWithRunner,
   type OpenClawPluginApi,
 } from "./api.js";
 import {
@@ -42,8 +43,6 @@ function formatDurationMinutes(expiresAtMs: number): string {
   const minutes = Math.max(1, Math.ceil(msRemaining / 60_000));
   return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
-
-const DEFAULT_GATEWAY_PORT = 18789;
 
 type DevicePairPluginConfig = {
   publicUrl?: string;
@@ -173,26 +172,6 @@ function parseNormalizedGatewayUrl(raw: string): string | null {
   } catch {
     return null;
   }
-}
-
-function parsePositiveInteger(raw: string | undefined): number | null {
-  if (!raw) {
-    return null;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-function resolveGatewayPort(cfg: OpenClawPluginApi["config"]): number {
-  const envPort = parsePositiveInteger(process.env.OPENCLAW_GATEWAY_PORT?.trim());
-  if (envPort) {
-    return envPort;
-  }
-  const configPort = cfg.gateway?.port;
-  if (typeof configPort === "number" && Number.isFinite(configPort) && configPort > 0) {
-    return configPort;
-  }
-  return DEFAULT_GATEWAY_PORT;
 }
 
 function resolveScheme(

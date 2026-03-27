@@ -77,6 +77,7 @@ export default definePluginEntry({
         },
       },
       capabilities: {
+        openAiPayloadNormalizationMode: "moonshot-thinking",
         preserveAnthropicThinkingSignatures: false,
       },
     });

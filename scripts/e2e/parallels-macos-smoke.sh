@@ -31,6 +31,7 @@ GUEST_NPM_BIN="/opt/homebrew/bin/npm"
 
 MAIN_TGZ_DIR="$(mktemp -d)"
 MAIN_TGZ_PATH=""
+PACKED_MAIN_COMMIT_SHORT=""
 SERVER_PID=""
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-smoke.XXXXXX)"
 BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
@@ -41,6 +42,7 @@ TIMEOUT_ONBOARD_S=180
 TIMEOUT_GATEWAY_S=60
 TIMEOUT_AGENT_S=120
 TIMEOUT_PERMISSION_S=60
+TIMEOUT_DASHBOARD_S=60
 TIMEOUT_SNAPSHOT_S=180
 TIMEOUT_DISCORD_S=180
 
@@ -51,6 +53,8 @@ FRESH_GATEWAY_STATUS="skip"
 UPGRADE_GATEWAY_STATUS="skip"
 FRESH_AGENT_STATUS="skip"
 UPGRADE_AGENT_STATUS="skip"
+FRESH_DASHBOARD_STATUS="skip"
+UPGRADE_DASHBOARD_STATUS="skip"
 FRESH_DISCORD_STATUS="skip"
 UPGRADE_DISCORD_STATUS="skip"
 
@@ -129,6 +133,9 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --)
+      shift
+      ;;
     --vm)
       VM_NAME="$2"
       shift 2
@@ -438,6 +445,15 @@ guest_current_user_exec() {
     "$@"
 }
 
+guest_current_user_cli() {
+  local parts=() arg joined=""
+  for arg in "$@"; do
+    parts+=("$(shell_quote "$arg")")
+  done
+  joined="${parts[*]}"
+  guest_current_user_sh "$joined"
+}
+
 guest_script() {
   local mode script
   mode="$1"
@@ -553,8 +569,12 @@ extract_package_version_from_tgz() {
   tar -xOf "$1" package/package.json | python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])'
 }
 
+extract_package_build_commit_from_tgz() {
+  tar -xOf "$1" package/dist/build-info.json | python3 -c 'import json, sys; print(json.load(sys.stdin).get("commit", ""))'
+}
+
 pack_main_tgz() {
-  local short_head pkg
+  local short_head pkg packed_commit
   if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
     say "Pack target package tgz: $TARGET_PACKAGE_SPEC"
     pkg="$(
@@ -569,6 +589,7 @@ pack_main_tgz() {
   fi
   say "Pack current main tgz"
   ensure_current_build
+  stage_pack_runtime_deps
   short_head="$(git rev-parse --short HEAD)"
   pkg="$(
     npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
@@ -576,6 +597,9 @@ pack_main_tgz() {
   )"
   MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$short_head.tgz"
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
+  packed_commit="$(extract_package_build_commit_from_tgz "$MAIN_TGZ_PATH")"
+  [[ -n "$packed_commit" ]] || die "failed to read packed build commit from $MAIN_TGZ_PATH"
+  PACKED_MAIN_COMMIT_SHORT="${packed_commit:0:7}"
   say "Packed $MAIN_TGZ_PATH"
   tar -xOf "$MAIN_TGZ_PATH" package/dist/build-info.json
 }
@@ -585,7 +609,8 @@ verify_target_version() {
     verify_version_contains "$TARGET_EXPECT_VERSION"
     return
   fi
-  verify_version_contains "$(git rev-parse --short=7 HEAD)"
+  [[ -n "$PACKED_MAIN_COMMIT_SHORT" ]] || die "packed main commit not captured"
+  verify_version_contains "$PACKED_MAIN_COMMIT_SHORT"
 }
 
 current_build_commit() {
@@ -599,6 +624,10 @@ if not path.exists():
 else:
     print(json.loads(path.read_text()).get("commit", ""))
 PY
+}
+
+current_control_ui_ready() {
+  [[ -f "dist/control-ui/index.html" ]]
 }
 
 acquire_build_lock() {
@@ -628,15 +657,22 @@ ensure_current_build() {
   acquire_build_lock
   head="$(git rev-parse HEAD)"
   build_commit="$(current_build_commit)"
-  if [[ "$build_commit" == "$head" ]]; then
+  if [[ "$build_commit" == "$head" ]] && current_control_ui_ready; then
     release_build_lock
     return
   fi
   say "Build dist for current head"
   pnpm build
+  say "Build Control UI for current head"
+  pnpm ui:build
   build_commit="$(current_build_commit)"
   release_build_lock
   [[ "$build_commit" == "$head" ]] || die "dist/build-info.json still does not match HEAD after build"
+  current_control_ui_ready || die "dist/control-ui/index.html missing after ui build"
+}
+
+stage_pack_runtime_deps() {
+  node scripts/stage-bundled-plugin-runtime-deps.mjs
 }
 
 start_server() {
@@ -675,9 +711,9 @@ EOF
 }
 
 run_ref_onboard() {
-  guest_current_user_exec \
+  guest_current_user_cli \
     /usr/bin/env "OPENAI_API_KEY=$OPENAI_API_KEY_VALUE" \
-    "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" onboard \
+    "$GUEST_OPENCLAW_BIN" onboard \
     --non-interactive \
     --mode local \
     --auth-choice openai-api-key \
@@ -691,19 +727,94 @@ run_ref_onboard() {
 }
 
 verify_gateway() {
-  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" gateway status --deep --require-rpc
+  guest_current_user_cli "$GUEST_OPENCLAW_BIN" gateway status --deep --require-rpc
 }
 
 show_gateway_status_compat() {
-  if guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" gateway status --help | grep -Fq -- "--require-rpc"; then
-    guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" gateway status --deep --require-rpc
+  if guest_current_user_cli "$GUEST_OPENCLAW_BIN" gateway status --help | grep -Fq -- "--require-rpc"; then
+    guest_current_user_cli "$GUEST_OPENCLAW_BIN" gateway status --deep --require-rpc
     return
   fi
-  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" gateway status --deep
+  guest_current_user_cli "$GUEST_OPENCLAW_BIN" gateway status --deep
 }
 
 verify_turn() {
-  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" agent --agent main --message ping --json
+  guest_current_user_cli \
+    "$GUEST_OPENCLAW_BIN" agent \
+    --agent main \
+    --message "Reply with exact ASCII text OK only." \
+    --json
+}
+
+resolve_dashboard_url() {
+  local dashboard_url
+  dashboard_url="$(
+    guest_current_user_cli "$GUEST_OPENCLAW_BIN" dashboard --no-open \
+      | awk '/^Dashboard URL: / { sub(/^Dashboard URL: /, ""); print; exit }'
+  )"
+  dashboard_url="${dashboard_url//$'\r'/}"
+  dashboard_url="${dashboard_url//$'\n'/}"
+  [[ -n "$dashboard_url" ]] || {
+    echo "failed to resolve dashboard URL from openclaw dashboard --no-open" >&2
+    return 1
+  }
+  printf '%s\n' "$dashboard_url"
+}
+
+verify_dashboard_load() {
+  local dashboard_url dashboard_http_url dashboard_url_q dashboard_http_url_q cmd
+  dashboard_url="$(resolve_dashboard_url)"
+  dashboard_http_url="${dashboard_url%%#*}"
+  dashboard_url_q="$(shell_quote "$dashboard_url")"
+  dashboard_http_url_q="$(shell_quote "$dashboard_http_url")"
+  cmd="$(cat <<EOF
+set -eu
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:\${PATH:-}"
+if [ -z "\${HOME:-}" ]; then export HOME="/Users/\$(id -un)"; fi
+cd "\$HOME"
+dashboard_url=$dashboard_url_q
+dashboard_http_url=$dashboard_http_url_q
+dashboard_port=\$(printf '%s\n' "\$dashboard_http_url" | sed -E 's#^https?://[^:/]+:([0-9]+).*\$#\1#')
+if [ -z "\$dashboard_port" ] || [ "\$dashboard_port" = "\$dashboard_http_url" ]; then
+  echo "failed to parse dashboard port from \$dashboard_http_url" >&2
+  exit 1
+fi
+deadline=\$((SECONDS + 30))
+dashboard_ready=0
+while [ \$SECONDS -lt \$deadline ]; do
+  if curl -fsSL "\$dashboard_http_url" >/tmp/openclaw-dashboard-smoke.html 2>/dev/null; then
+    if grep -F '<title>OpenClaw Control</title>' /tmp/openclaw-dashboard-smoke.html >/dev/null; then
+      if grep -F '<openclaw-app></openclaw-app>' /tmp/openclaw-dashboard-smoke.html >/dev/null; then
+        dashboard_ready=1
+        break
+      fi
+    fi
+  fi
+  sleep 1
+done
+[ "\$dashboard_ready" = "1" ] || {
+  echo "dashboard HTML did not become ready at \$dashboard_http_url" >&2
+  exit 1
+}
+grep -F '<title>OpenClaw Control</title>' /tmp/openclaw-dashboard-smoke.html >/dev/null
+grep -F '<openclaw-app></openclaw-app>' /tmp/openclaw-dashboard-smoke.html >/dev/null
+pkill -x Safari >/dev/null 2>&1 || true
+open -a Safari "\$dashboard_url"
+deadline=\$((SECONDS + 20))
+while [ \$SECONDS -lt \$deadline ]; do
+  if pgrep -x Safari >/dev/null 2>&1; then
+    if lsof -nPiTCP:"\$dashboard_port" -sTCP:ESTABLISHED 2>/dev/null \
+      | awk 'NR > 1 && \$1 != "node" { found = 1 } END { exit found ? 0 : 1 }'; then
+      exit 0
+    fi
+  fi
+  sleep 1
+done
+echo "Safari did not establish a dashboard client connection on port \$dashboard_port" >&2
+exit 1
+EOF
+)"
+  guest_current_user_exec /bin/sh -lc "$cmd"
 }
 
 configure_discord_smoke() {
@@ -983,6 +1094,7 @@ summary = {
         "version": os.environ["SUMMARY_FRESH_MAIN_VERSION"],
         "gateway": os.environ["SUMMARY_FRESH_GATEWAY_STATUS"],
         "agent": os.environ["SUMMARY_FRESH_AGENT_STATUS"],
+        "dashboard": os.environ["SUMMARY_FRESH_DASHBOARD_STATUS"],
         "discord": os.environ["SUMMARY_FRESH_DISCORD_STATUS"],
     },
     "upgrade": {
@@ -992,6 +1104,7 @@ summary = {
         "mainVersion": os.environ["SUMMARY_UPGRADE_MAIN_VERSION"],
         "gateway": os.environ["SUMMARY_UPGRADE_GATEWAY_STATUS"],
         "agent": os.environ["SUMMARY_UPGRADE_AGENT_STATUS"],
+        "dashboard": os.environ["SUMMARY_UPGRADE_DASHBOARD_STATUS"],
         "discord": os.environ["SUMMARY_UPGRADE_DISCORD_STATUS"],
     },
 }
@@ -1028,6 +1141,8 @@ run_fresh_main_lane() {
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
   phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway
   FRESH_GATEWAY_STATUS="pass"
+  phase_run "fresh.dashboard-load" "$TIMEOUT_DASHBOARD_S" verify_dashboard_load
+  FRESH_DASHBOARD_STATUS="pass"
   phase_run "fresh.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn
   FRESH_AGENT_STATUS="pass"
   if discord_smoke_enabled; then
@@ -1061,6 +1176,8 @@ run_upgrade_lane() {
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
   phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway
   UPGRADE_GATEWAY_STATUS="pass"
+  phase_run "upgrade.dashboard-load" "$TIMEOUT_DASHBOARD_S" verify_dashboard_load
+  UPGRADE_DASHBOARD_STATUS="pass"
   phase_run "upgrade.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn
   UPGRADE_AGENT_STATUS="pass"
   if discord_smoke_enabled; then
@@ -1140,6 +1257,7 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_FRESH_MAIN_VERSION="$FRESH_MAIN_VERSION" \
   SUMMARY_FRESH_GATEWAY_STATUS="$FRESH_GATEWAY_STATUS" \
   SUMMARY_FRESH_AGENT_STATUS="$FRESH_AGENT_STATUS" \
+  SUMMARY_FRESH_DASHBOARD_STATUS="$FRESH_DASHBOARD_STATUS" \
   SUMMARY_FRESH_DISCORD_STATUS="$FRESH_DISCORD_STATUS" \
   SUMMARY_UPGRADE_PRECHECK_STATUS="$UPGRADE_PRECHECK_STATUS" \
   SUMMARY_UPGRADE_STATUS="$UPGRADE_STATUS" \
@@ -1147,6 +1265,7 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_UPGRADE_MAIN_VERSION="$UPGRADE_MAIN_VERSION" \
   SUMMARY_UPGRADE_GATEWAY_STATUS="$UPGRADE_GATEWAY_STATUS" \
   SUMMARY_UPGRADE_AGENT_STATUS="$UPGRADE_AGENT_STATUS" \
+  SUMMARY_UPGRADE_DASHBOARD_STATUS="$UPGRADE_DASHBOARD_STATUS" \
   SUMMARY_UPGRADE_DISCORD_STATUS="$UPGRADE_DISCORD_STATUS" \
   write_summary_json
 )"

@@ -8,6 +8,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
 import type { OpenClawPluginApi } from "./api.js";
+import type { PendingPairingRequest } from "./notify.ts";
 
 const pluginApiMocks = vi.hoisted(() => ({
   clearDeviceBootstrapTokens: vi.fn(async () => ({ removed: 2 })),
@@ -17,6 +18,7 @@ const pluginApiMocks = vi.hoisted(() => ({
   })),
   revokeDeviceBootstrapToken: vi.fn(async () => ({ removed: true })),
   renderQrPngBase64: vi.fn(async () => "ZmFrZXBuZw=="),
+  resolveGatewayPort: vi.fn(() => 18789),
   resolvePreferredOpenClawTmpDir: vi.fn(() => path.join(os.tmpdir(), "openclaw-device-pair-tests")),
 }));
 
@@ -35,6 +37,7 @@ vi.mock("./api.js", () => {
     revokeDeviceBootstrapToken: pluginApiMocks.revokeDeviceBootstrapToken,
     resolvePreferredOpenClawTmpDir: pluginApiMocks.resolvePreferredOpenClawTmpDir,
     resolveGatewayBindUrl: vi.fn(),
+    resolveGatewayPort: pluginApiMocks.resolveGatewayPort,
     resolveTailnetHostWithRunner: vi.fn(),
     runPluginCommandWithTimeout: vi.fn(),
   };
@@ -380,6 +383,49 @@ describe("device-pair /pair qr", () => {
 
     expect(pluginApiMocks.clearDeviceBootstrapTokens).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ text: "Invalidated 2 unused setup codes." });
+  });
+});
+
+describe("device-pair notify pending formatting", () => {
+  it("includes role and scopes for pending requests", async () => {
+    const { formatPendingRequests } =
+      await vi.importActual<typeof import("./notify.ts")>("./notify.ts");
+    const pending: PendingPairingRequest[] = [
+      {
+        requestId: "req-1",
+        deviceId: "device-1",
+        displayName: "dev one",
+        platform: "ios",
+        role: "operator",
+        scopes: ["operator.admin", "operator.read"],
+        remoteIp: "198.51.100.2",
+      },
+    ];
+
+    const text = formatPendingRequests(pending);
+    expect(text).toContain("Pending device pairing requests:");
+    expect(text).toContain("name=dev one");
+    expect(text).toContain("platform=ios");
+    expect(text).toContain("role=operator");
+    expect(text).toContain("scopes=operator.admin, operator.read");
+    expect(text).toContain("ip=198.51.100.2");
+  });
+
+  it("falls back to roles list and no scopes when role/scopes are absent", async () => {
+    const { formatPendingRequests } =
+      await vi.importActual<typeof import("./notify.ts")>("./notify.ts");
+    const pending: PendingPairingRequest[] = [
+      {
+        requestId: "req-2",
+        deviceId: "device-2",
+        roles: ["node", "operator"],
+        scopes: [],
+      },
+    ];
+
+    const text = formatPendingRequests(pending);
+    expect(text).toContain("role=node, operator");
+    expect(text).toContain("scopes=none");
   });
 });
 

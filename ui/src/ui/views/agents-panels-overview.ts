@@ -1,5 +1,10 @@
 import { html, nothing } from "lit";
-import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
+import type {
+  AgentIdentityResult,
+  AgentsFilesListResult,
+  AgentsListResult,
+  ModelCatalogEntry,
+} from "../types.ts";
 import {
   buildModelOptions,
   normalizeModelValue,
@@ -23,6 +28,7 @@ export function renderAgentOverview(params: {
   configLoading: boolean;
   configSaving: boolean;
   configDirty: boolean;
+  modelCatalog: ModelCatalogEntry[];
   onConfigReload: () => void;
   onConfigSave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
@@ -128,14 +134,16 @@ export function renderAgentOverview(params: {
             >
               ${
                 isDefault
-                  ? nothing
+                  ? html`
+                      <option value="">Not set</option>
+                    `
                   : html`
                       <option value="">
                         ${defaultPrimary ? `Inherit default (${defaultPrimary})` : "Inherit default"}
                       </option>
                     `
               }
-              ${buildModelOptions(configForm, effectivePrimary ?? undefined)}
+              ${buildModelOptions(configForm, effectivePrimary ?? undefined, params.modelCatalog)}
             </select>
           </label>
           <div class="field">

@@ -1,6 +1,7 @@
 import type { Client } from "@buape/carbon";
-import { ChannelType, MessageType } from "@buape/carbon";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MessageType } from "@buape/carbon";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectPairingReplyText } from "../../../test/helpers/pairing-reply.js";
 import {
   dispatchMock,
   loadConfigMock,
@@ -9,13 +10,21 @@ import {
   updateLastRouteMock,
   upsertPairingRequestMock,
 } from "./monitor.tool-result.test-harness.js";
-import { createDiscordMessageHandler } from "./monitor/message-handler.js";
-import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
-import { createNoopThreadBindingManager } from "./monitor/thread-bindings.js";
 
 type Config = ReturnType<typeof import("../../../src/config/config.js").loadConfig>;
+let ChannelType: typeof import("@buape/carbon").ChannelType;
+let createDiscordMessageHandler: typeof import("./monitor/message-handler.js").createDiscordMessageHandler;
+let __resetDiscordChannelInfoCacheForTest: typeof import("./monitor/message-utils.js").__resetDiscordChannelInfoCacheForTest;
+let createNoopThreadBindingManager: typeof import("./monitor/thread-bindings.js").createNoopThreadBindingManager;
 
-beforeEach(() => {
+beforeAll(async () => {
+  ({ ChannelType } = await import("@buape/carbon"));
+  ({ createDiscordMessageHandler } = await import("./monitor/message-handler.js"));
+  ({ __resetDiscordChannelInfoCacheForTest } = await import("./monitor/message-utils.js"));
+  ({ createNoopThreadBindingManager } = await import("./monitor/thread-bindings.js"));
+});
+
+beforeEach(async () => {
   __resetDiscordChannelInfoCacheForTest();
   sendMock.mockClear().mockResolvedValue(undefined);
   updateLastRouteMock.mockClear();
@@ -228,7 +237,10 @@ describe("discord tool result dispatch", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Your Discord user id: u2");
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
+    expectPairingReplyText(String(sendMock.mock.calls[0]?.[1] ?? ""), {
+      channel: "discord",
+      idLine: "Your Discord user id: u2",
+      code: "PAIRCODE",
+    });
   }, 10000);
 });

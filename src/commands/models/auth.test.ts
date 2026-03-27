@@ -315,6 +315,23 @@ describe("modelsAuthLoginCommand", () => {
     }
   });
 
+  it("writes pasted tokens to the resolved agent store", async () => {
+    const runtime = createRuntime();
+    mocks.clackText.mockResolvedValue("tok-fresh");
+
+    await modelsAuthPasteTokenCommand({ provider: "openai" }, runtime);
+
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "openai:manual",
+      credential: {
+        type: "token",
+        provider: "openai",
+        token: "tok-fresh",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+  });
+
   it("runs token auth for any token-capable provider plugin", async () => {
     const runtime = createRuntime();
     const runTokenAuth = vi.fn().mockResolvedValue({

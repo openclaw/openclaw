@@ -1,5 +1,5 @@
 import type { Message } from "grammy/types";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildTelegramThreadParams,
   buildTypingThreadParams,
@@ -9,6 +9,7 @@ import {
   hasBotMention,
   normalizeForwardedContext,
   resolveTelegramDirectPeerId,
+  resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
 } from "./helpers.js";
 
@@ -28,6 +29,49 @@ describe("resolveTelegramForumThreadId", () => {
     { isForum: true, messageThreadId: 99, expected: 99 },
   ])("resolves forum topic ids", ({ expected, ...params }) => {
     expect(resolveTelegramForumThreadId(params)).toBe(expected);
+  });
+});
+
+describe("resolveTelegramForumFlag", () => {
+  it("keeps explicit forum metadata when Telegram already provides it", async () => {
+    const getChat = vi.fn(async () => ({ is_forum: false }));
+    await expect(
+      resolveTelegramForumFlag({
+        chatId: -100123,
+        chatType: "supergroup",
+        isGroup: true,
+        isForum: true,
+        getChat,
+      }),
+    ).resolves.toBe(true);
+    expect(getChat).not.toHaveBeenCalled();
+  });
+
+  it("falls back to getChat for supergroups when is_forum is omitted", async () => {
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    await expect(
+      resolveTelegramForumFlag({
+        chatId: -100123,
+        chatType: "supergroup",
+        isGroup: true,
+        getChat,
+      }),
+    ).resolves.toBe(true);
+    expect(getChat).toHaveBeenCalledWith(-100123);
+  });
+
+  it("returns false when forum lookup is unavailable", async () => {
+    const getChat = vi.fn(async () => {
+      throw new Error("lookup failed");
+    });
+    await expect(
+      resolveTelegramForumFlag({
+        chatId: -100123,
+        chatType: "supergroup",
+        isGroup: true,
+        getChat,
+      }),
+    ).resolves.toBe(false);
   });
 });
 

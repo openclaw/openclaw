@@ -15,6 +15,7 @@ import { createTelegramRetryRunner } from "openclaw/plugin-sdk/infra-runtime";
 import type { RetryConfig } from "openclaw/plugin-sdk/infra-runtime";
 import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
+import { getImageMetadata } from "openclaw/plugin-sdk/media-runtime";
 import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -54,6 +55,8 @@ const InputFileCtor: typeof grammy.InputFile =
           public readonly fileName?: string,
         ) {}
       } as unknown as typeof grammy.InputFile);
+const MAX_TELEGRAM_PHOTO_DIMENSION_SUM = 10_000;
+const MAX_TELEGRAM_PHOTO_ASPECT_RATIO = 20;
 
 type TelegramSendOpts = {
   cfg?: ReturnType<typeof loadConfig>;
@@ -67,9 +70,9 @@ type TelegramSendOpts = {
   retry?: RetryConfig;
   textMode?: "markdown" | "html";
   plainText?: string;
-  /** Send audio as voice message (voice bubble) instead of audio file. Defaults to false. */
+  /** Send audio as voice message instead of audio file. Defaults to false. */
   asVoice?: boolean;
-  /** Send video as video note (voice bubble) instead of regular video. Defaults to false. */
+  /** Send video as video note instead of regular video. Defaults to false. */
   asVideoNote?: boolean;
   /** Send message silently (no notification). Defaults to false. */
   silent?: boolean;
@@ -506,7 +509,21 @@ function createTelegramRequestWithDiag(params: {
 }
 
 function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; input: string }) {
-  if (!CHAT_NOT_FOUND_RE.test(formatErrorMessage(err))) {
+  const errorMsg = formatErrorMessage(err);
+
+  // Check for 403 "bot is not a member" or "bot was blocked" errors
+  if (/403.*(bot.*not.*member|bot.*blocked|bot.*kicked)/i.test(errorMsg)) {
+    return new Error(
+      [
+        `Telegram send failed: bot is not a member of the chat, was blocked, or was kicked (chat_id=${params.chatId}).`,
+        `Telegram API said: ${errorMsg}.`,
+        "Fix: Add the bot to the channel/group, or ensure it has not been removed/blocked/kicked by the user.",
+        `Input was: ${JSON.stringify(params.input)}.`,
+      ].join(" "),
+    );
+  }
+
+  if (!CHAT_NOT_FOUND_RE.test(errorMsg)) {
     return err;
   }
   return new Error(
@@ -774,6 +791,39 @@ export async function sendMessageTelegram(
   const sendChunkedText = async (rawText: string, context: string) =>
     await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
 
+  async function shouldSendTelegramImageAsPhoto(buffer: Buffer): Promise<boolean> {
+    try {
+      const metadata = await getImageMetadata(buffer);
+      const width = metadata?.width;
+      const height = metadata?.height;
+
+      if (typeof width !== "number" || typeof height !== "number") {
+        sendLogger.warn("Photo dimensions are unavailable. Sending as document instead.");
+        return false;
+      }
+
+      const shorterSide = Math.min(width, height);
+      const longerSide = Math.max(width, height);
+      const isValidPhoto =
+        width + height <= MAX_TELEGRAM_PHOTO_DIMENSION_SUM &&
+        shorterSide > 0 &&
+        longerSide <= shorterSide * MAX_TELEGRAM_PHOTO_ASPECT_RATIO;
+
+      if (!isValidPhoto) {
+        sendLogger.warn(
+          `Photo dimensions (${width}x${height}) are not valid for Telegram photos. Sending as document instead.`,
+        );
+        return false;
+      }
+      return true;
+    } catch (err) {
+      sendLogger.warn(
+        `Failed to validate photo dimensions: ${formatErrorMessage(err)}. Sending as document instead.`,
+      );
+      return false;
+    }
+  }
+
   if (mediaUrl) {
     const media = await loadWebMedia(
       mediaUrl,
@@ -788,6 +838,12 @@ export async function sendMessageTelegram(
       contentType: media.contentType,
       fileName: media.fileName,
     });
+
+    // Validate photo dimensions before attempting sendPhoto
+    let sendImageAsPhoto = true;
+    if (kind === "image" && !isGif && !opts.forceDocument) {
+      sendImageAsPhoto = await shouldSendTelegramImageAsPhoto(media.buffer);
+    }
     const isVideoNote = kind === "video" && opts.asVideoNote === true;
     const fileName =
       media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind ?? "document")) ?? "file";
@@ -844,7 +900,7 @@ export async function sendMessageTelegram(
             ) as Promise<TelegramMessageLike>,
         };
       }
-      if (kind === "image" && !opts.forceDocument) {
+      if (kind === "image" && !opts.forceDocument && sendImageAsPhoto) {
         return {
           label: "photo",
           sender: (effectiveParams: Record<string, unknown> | undefined) =>

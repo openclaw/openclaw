@@ -6,16 +6,27 @@ import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import { resolveExecutablePath as resolveExecutableCandidatePath } from "./executable-path.js";
 import { expandHomePrefix } from "./home-dir.js";
 
-export type CommandResolution = {
+export type ExecutableResolution = {
   rawExecutable: string;
   resolvedPath?: string;
   resolvedRealPath?: string;
   executableName: string;
+};
+
+export type CommandResolution = {
+  execution: ExecutableResolution;
+  policy: ExecutableResolution;
   effectiveArgv?: string[];
   wrapperChain?: string[];
   policyBlocked?: boolean;
   blockedWrapper?: string;
 };
+
+function isCommandResolution(
+  resolution: CommandResolution | ExecutableResolution | null,
+): resolution is CommandResolution {
+  return Boolean(resolution && "execution" in resolution && "policy" in resolution);
+}
 
 function parseFirstToken(command: string): string | null {
   const trimmed = command.trim();
@@ -45,8 +56,30 @@ function tryResolveRealpath(filePath: string | undefined): string | undefined {
   }
 }
 
+function buildExecutableResolution(
+  rawExecutable: string,
+  params: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+): ExecutableResolution {
+  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, {
+    cwd: params.cwd,
+    env: params.env,
+  });
+  const resolvedRealPath = tryResolveRealpath(resolvedPath);
+  const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
+  return {
+    rawExecutable,
+    resolvedPath,
+    resolvedRealPath,
+    executableName,
+  };
+}
+
 function buildCommandResolution(params: {
   rawExecutable: string;
+  policyRawExecutable?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   effectiveArgv: string[];
@@ -54,22 +87,36 @@ function buildCommandResolution(params: {
   policyBlocked: boolean;
   blockedWrapper?: string;
 }): CommandResolution {
-  const resolvedPath = resolveExecutableCandidatePath(params.rawExecutable, {
-    cwd: params.cwd,
-    env: params.env,
-  });
-  const resolvedRealPath = tryResolveRealpath(resolvedPath);
-  const executableName = resolvedPath ? path.basename(resolvedPath) : params.rawExecutable;
-  return {
-    rawExecutable: params.rawExecutable,
-    resolvedPath,
-    resolvedRealPath,
-    executableName,
+  const execution = buildExecutableResolution(params.rawExecutable, params);
+  const policy = params.policyRawExecutable
+    ? buildExecutableResolution(params.policyRawExecutable, params)
+    : execution;
+  const resolution: CommandResolution = {
+    execution,
+    policy,
     effectiveArgv: params.effectiveArgv,
     wrapperChain: params.wrapperChain,
     policyBlocked: params.policyBlocked,
     blockedWrapper: params.blockedWrapper,
   };
+  // Compatibility getters for JS/tests while TS callers migrate to explicit targets.
+  return Object.defineProperties(resolution, {
+    rawExecutable: {
+      get: () => execution.rawExecutable,
+    },
+    resolvedPath: {
+      get: () => execution.resolvedPath,
+    },
+    resolvedRealPath: {
+      get: () => execution.resolvedRealPath,
+    },
+    executableName: {
+      get: () => execution.executableName,
+    },
+    policyResolution: {
+      get: () => (policy === execution ? undefined : policy),
+    },
+  });
 }
 
 export function resolveCommandResolution(
@@ -104,6 +151,7 @@ export function resolveCommandResolutionFromArgv(
   }
   return buildCommandResolution({
     rawExecutable,
+    policyRawExecutable: plan.policyArgv[0]?.trim(),
     effectiveArgv,
     wrapperChain: plan.wrapperChain,
     policyBlocked: plan.policyBlocked,
@@ -113,8 +161,8 @@ export function resolveCommandResolutionFromArgv(
   });
 }
 
-export function resolveAllowlistCandidatePath(
-  resolution: CommandResolution | null,
+function resolveExecutableCandidatePathFromResolution(
+  resolution: ExecutableResolution | null | undefined,
   cwd?: string,
 ): string | undefined {
   if (!resolution) {
@@ -138,9 +186,69 @@ export function resolveAllowlistCandidatePath(
   return path.resolve(base, expanded);
 }
 
+export function resolveExecutionTargetResolution(
+  resolution: CommandResolution | ExecutableResolution | null,
+): ExecutableResolution | null {
+  if (!resolution) {
+    return null;
+  }
+  return isCommandResolution(resolution) ? resolution.execution : resolution;
+}
+
+export function resolvePolicyTargetResolution(
+  resolution: CommandResolution | ExecutableResolution | null,
+): ExecutableResolution | null {
+  if (!resolution) {
+    return null;
+  }
+  return isCommandResolution(resolution) ? resolution.policy : resolution;
+}
+
+export function resolveExecutionTargetCandidatePath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutableCandidatePathFromResolution(
+    isCommandResolution(resolution) ? resolution.execution : resolution,
+    cwd,
+  );
+}
+
+export function resolvePolicyTargetCandidatePath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutableCandidatePathFromResolution(
+    isCommandResolution(resolution) ? resolution.policy : resolution,
+    cwd,
+  );
+}
+
+export function resolveApprovalAuditCandidatePath(
+  resolution: CommandResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolvePolicyTargetCandidatePath(resolution, cwd);
+}
+
+// Legacy alias kept while callers migrate to explicit target naming.
+export function resolveAllowlistCandidatePath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutionTargetCandidatePath(resolution, cwd);
+}
+
+export function resolvePolicyAllowlistCandidatePath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolvePolicyTargetCandidatePath(resolution, cwd);
+}
+
 export function matchAllowlist(
   entries: ExecAllowlistEntry[],
-  resolution: CommandResolution | null,
+  resolution: ExecutableResolution | null,
 ): ExecAllowlistEntry | null {
   if (!entries.length) {
     return null;

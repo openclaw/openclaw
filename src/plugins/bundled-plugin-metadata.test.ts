@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   collectBundledPluginMetadata,
   writeBundledPluginMetadataModule,
@@ -10,20 +9,14 @@ import {
   BUNDLED_PLUGIN_METADATA,
   resolveBundledPluginGeneratedPath,
 } from "./bundled-plugin-metadata.js";
+import {
+  createGeneratedPluginTempRoot,
+  installGeneratedPluginTempRootCleanup,
+  pluginTestRepoRoot as repoRoot,
+  writeJson,
+} from "./generated-plugin-test-helpers.js";
 
-const repoRoot = path.resolve(import.meta.dirname, "../..");
-const tempDirs: string[] = [];
-
-function writeJson(filePath: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0, tempDirs.length)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+installGeneratedPluginTempRootCleanup();
 
 describe("bundled plugin metadata", () => {
   it("matches the generated metadata snapshot", () => {
@@ -38,8 +31,7 @@ describe("bundled plugin metadata", () => {
   });
 
   it("prefers built generated paths when present and falls back to source paths", () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-plugin-metadata-"));
-    tempDirs.push(tempRoot);
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-metadata-");
 
     fs.mkdirSync(path.join(tempRoot, "plugin"), { recursive: true });
     fs.writeFileSync(path.join(tempRoot, "plugin", "index.ts"), "export {};\n", "utf8");
@@ -60,8 +52,7 @@ describe("bundled plugin metadata", () => {
   });
 
   it("supports check mode for stale generated artifacts", () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-plugin-generated-"));
-    tempDirs.push(tempRoot);
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-generated-");
 
     writeJson(path.join(tempRoot, "extensions", "alpha", "package.json"), {
       name: "@openclaw/alpha",

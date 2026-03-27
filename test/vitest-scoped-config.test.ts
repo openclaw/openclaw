@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import channelsConfig from "../vitest.channels.config.ts";
+import { createChannelsVitestConfig } from "../vitest.channels.config.ts";
 import { createExtensionsVitestConfig } from "../vitest.extensions.config.ts";
 import { createGatewayVitestConfig } from "../vitest.gateway.config.ts";
 import { createScopedVitestConfig, resolveVitestIsolation } from "../vitest.scoped-config.ts";
@@ -18,13 +21,15 @@ describe("resolveVitestIsolation", () => {
 
 describe("createScopedVitestConfig", () => {
   it("applies non-isolated mode by default", () => {
-    const config = createScopedVitestConfig(["src/example.test.ts"]);
+    const config = createScopedVitestConfig(["src/example.test.ts"], { env: {} });
     expect(config.test?.isolate).toBe(false);
+    expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
   });
 
   it("passes through a scoped root dir when provided", () => {
     const config = createScopedVitestConfig(["src/example.test.ts"], {
       dir: "src",
+      env: {},
     });
     expect(config.test?.dir).toBe("src");
     expect(config.test?.include).toEqual(["example.test.ts"]);
@@ -33,6 +38,7 @@ describe("createScopedVitestConfig", () => {
   it("relativizes scoped include and exclude patterns to the configured dir", () => {
     const config = createScopedVitestConfig(["extensions/**/*.test.ts"], {
       dir: "extensions",
+      env: {},
       exclude: ["extensions/channel/**", "dist/**"],
     });
 
@@ -42,11 +48,36 @@ describe("createScopedVitestConfig", () => {
 });
 
 describe("scoped vitest configs", () => {
+  const defaultChannelsConfig = createChannelsVitestConfig({});
   const defaultExtensionsConfig = createExtensionsVitestConfig({});
-  const defaultGatewayConfig = createGatewayVitestConfig();
+  const defaultGatewayConfig = createGatewayVitestConfig({});
 
   it("defaults channel tests to non-isolated mode", () => {
-    expect(channelsConfig.test?.isolate).toBe(false);
+    expect(defaultChannelsConfig.test?.isolate).toBe(false);
+  });
+
+  it("loads channel include overrides from OPENCLAW_VITEST_INCLUDE_FILE", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-channels-"));
+    try {
+      const includeFile = path.join(tempDir, "include.json");
+      fs.writeFileSync(
+        includeFile,
+        JSON.stringify([
+          "extensions/discord/src/monitor/message-handler.preflight.acp-bindings.test.ts",
+        ]),
+        "utf8",
+      );
+
+      const config = createChannelsVitestConfig({
+        OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+      });
+
+      expect(config.test?.include).toEqual([
+        "extensions/discord/src/monitor/message-handler.preflight.acp-bindings.test.ts",
+      ]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("defaults extension tests to non-isolated mode", () => {

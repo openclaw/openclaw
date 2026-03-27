@@ -77,6 +77,35 @@ describe("stageBundledPluginRuntime", () => {
     expect(runtimeModule.value).toBe(1);
   });
 
+  it("stages root runtime sidecars that bundled plugin boundaries resolve directly", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-sidecars-");
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "whatsapp");
+    fs.mkdirSync(distPluginDir, { recursive: true });
+    fs.writeFileSync(path.join(distPluginDir, "index.js"), "export default {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(distPluginDir, "light-runtime-api.js"),
+      "export const light = true;\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(distPluginDir, "runtime-api.js"),
+      "export const heavy = true;\n",
+      "utf8",
+    );
+
+    stageBundledPluginRuntime({ repoRoot });
+
+    const runtimePluginDir = path.join(repoRoot, "dist-runtime", "extensions", "whatsapp");
+    expect(fs.existsSync(path.join(runtimePluginDir, "light-runtime-api.js"))).toBe(true);
+    expect(fs.existsSync(path.join(runtimePluginDir, "runtime-api.js"))).toBe(true);
+    expect(fs.readFileSync(path.join(runtimePluginDir, "light-runtime-api.js"), "utf8")).toContain(
+      "../../../dist/extensions/whatsapp/light-runtime-api.js",
+    );
+    expect(fs.readFileSync(path.join(runtimePluginDir, "runtime-api.js"), "utf8")).toContain(
+      "../../../dist/extensions/whatsapp/runtime-api.js",
+    );
+  });
+
   it("keeps plugin command registration on the canonical dist graph when loaded from dist-runtime", async () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-commands-");
     const distPluginDir = path.join(repoRoot, "dist", "extensions", "demo");

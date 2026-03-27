@@ -62,8 +62,10 @@ import {
   getTelegramTextParts,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
+  resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
+  withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import {
@@ -620,6 +622,12 @@ export const registerTelegramHandlers = ({
   type TelegramEventAuthorizationMode = "reaction" | "callback-scope" | "callback-allowlist";
   type TelegramEventAuthorizationResult = { allowed: true } | { allowed: false; reason: string };
   type TelegramEventAuthorizationContext = TelegramGroupAllowContext & { dmPolicy: DmPolicy };
+  const getChat =
+    typeof (bot.api as { getChat?: unknown }).getChat === "function"
+      ? ((bot.api as { getChat: (chatId: string | number) => Promise<unknown> }).getChat.bind(
+          bot.api,
+        ) as (chatId: string | number) => Promise<unknown>)
+      : undefined;
 
   const TELEGRAM_EVENT_AUTH_RULES: Record<
     TelegramEventAuthorizationMode,
@@ -1204,7 +1212,13 @@ export const registerTelegramHandlers = ({
       }
 
       const messageThreadId = callbackMessage.message_thread_id;
-      const isForum = callbackMessage.chat.is_forum === true;
+      const isForum = await resolveTelegramForumFlag({
+        chatId,
+        chatType: callbackMessage.chat.type,
+        isGroup,
+        isForum: callbackMessage.chat.is_forum,
+        getChat,
+      });
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId,
         isGroup,
@@ -1238,8 +1252,9 @@ export const registerTelegramHandlers = ({
         return;
       }
 
+      const callbackThreadId = resolvedThreadId ?? dmThreadId;
       const callbackConversationId =
-        messageThreadId != null ? `${chatId}:topic:${messageThreadId}` : String(chatId);
+        callbackThreadId != null ? `${chatId}:topic:${callbackThreadId}` : String(chatId);
       const pluginBindingApproval = parsePluginBindingApprovalCustomId(data);
       if (pluginBindingApproval) {
         const resolved = await resolvePluginConversationBindingApproval({
@@ -1259,10 +1274,10 @@ export const registerTelegramHandlers = ({
           accountId,
           callbackId: callback.id,
           conversationId: callbackConversationId,
-          parentConversationId: messageThreadId != null ? String(chatId) : undefined,
+          parentConversationId: callbackThreadId != null ? String(chatId) : undefined,
           senderId: senderId || undefined,
           senderUsername: senderUsername || undefined,
-          threadId: messageThreadId,
+          threadId: callbackThreadId,
           isGroup,
           isForum,
           auth: {
@@ -1543,7 +1558,7 @@ export const registerTelegramHandlers = ({
       }
 
       const syntheticMessage = buildSyntheticTextMessage({
-        base: callbackMessage,
+        base: withResolvedTelegramForumFlag(callbackMessage, isForum),
         from: callback.from,
         text: data,
       });
@@ -1713,16 +1728,25 @@ export const registerTelegramHandlers = ({
     if (!msg) {
       return;
     }
+    const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+    const isForum = await resolveTelegramForumFlag({
+      chatId: msg.chat.id,
+      chatType: msg.chat.type,
+      isGroup,
+      isForum: msg.chat.is_forum,
+      getChat,
+    });
+    const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
     await handleInboundMessageLike({
       ctxForDedupe: ctx,
-      ctx: buildSyntheticContext(ctx, msg),
-      msg,
-      chatId: msg.chat.id,
-      isGroup: msg.chat.type === "group" || msg.chat.type === "supergroup",
-      isForum: msg.chat.is_forum === true,
-      messageThreadId: msg.message_thread_id,
-      senderId: msg.from?.id != null ? String(msg.from.id) : "",
-      senderUsername: msg.from?.username ?? "",
+      ctx: buildSyntheticContext(ctx, normalizedMsg),
+      msg: normalizedMsg,
+      chatId: normalizedMsg.chat.id,
+      isGroup,
+      isForum,
+      messageThreadId: normalizedMsg.message_thread_id,
+      senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
+      senderUsername: normalizedMsg.from?.username ?? "",
       requireConfiguredGroup: false,
       sendOversizeWarning: true,
       oversizeLogMessage: "media exceeds size limit",

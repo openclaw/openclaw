@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fetch as realFetch } from "undici";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_DOWNLOAD_DIR, DEFAULT_TRACE_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
@@ -14,9 +13,11 @@ import {
   getPwMocks,
   setBrowserControlServerEvaluateEnabled,
 } from "./server.control-server.test-harness.js";
+import { getBrowserTestFetch, type BrowserTestFetch } from "./test-fetch.js";
 
 const state = getBrowserControlServerTestState();
 const pwMocks = getPwMocks();
+const realFetch: BrowserTestFetch = (input, init) => getBrowserTestFetch()(input, init);
 
 async function withSymlinkPathEscape<T>(params: {
   rootDir: string;

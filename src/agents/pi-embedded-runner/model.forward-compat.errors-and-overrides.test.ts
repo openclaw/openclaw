@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelProviderConfig } from "../../config/config.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
 vi.mock("../pi-model-discovery.js", () => ({
@@ -38,6 +39,37 @@ function resolveModelForTest(
   return resolveModel(provider, modelId, agentDir, cfg, {
     runtimeHooks: createRuntimeHooks(),
   });
+}
+
+function createAnthropicTemplateModel() {
+  return {
+    id: "claude-sonnet-4-5",
+    name: "Claude Sonnet 4.5",
+    provider: "anthropic",
+    api: "anthropic-messages",
+    baseUrl: "https://api.anthropic.com",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+    contextWindow: 200000,
+    maxTokens: 64000,
+  };
+}
+
+function resolveAnthropicModelWithProviderOverrides(overrides: Partial<ModelProviderConfig>) {
+  mockDiscoveredModel({
+    provider: "anthropic",
+    modelId: "claude-sonnet-4-5",
+    templateModel: createAnthropicTemplateModel(),
+  });
+
+  return resolveModelForTest("anthropic", "claude-sonnet-4-5", "/tmp/agent", {
+    models: {
+      providers: {
+        anthropic: overrides,
+      },
+    },
+  } as unknown as OpenClawConfig);
 }
 
 describe("resolveModel forward-compat errors and overrides", () => {
@@ -234,67 +266,17 @@ describe("resolveModel forward-compat errors and overrides", () => {
   });
 
   it("applies provider baseUrl override to registry-found models", () => {
-    mockDiscoveredModel({
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-5",
-      templateModel: {
-        id: "claude-sonnet-4-5",
-        name: "Claude Sonnet 4.5",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        baseUrl: "https://api.anthropic.com",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-        contextWindow: 200000,
-        maxTokens: 64000,
-      },
+    const result = resolveAnthropicModelWithProviderOverrides({
+      baseUrl: "https://my-proxy.example.com",
     });
-
-    const cfg = {
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "https://my-proxy.example.com",
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("anthropic", "claude-sonnet-4-5", "/tmp/agent", cfg);
     expect(result.error).toBeUndefined();
     expect(result.model?.baseUrl).toBe("https://my-proxy.example.com");
   });
 
   it("applies provider headers override to registry-found models", () => {
-    mockDiscoveredModel({
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-5",
-      templateModel: {
-        id: "claude-sonnet-4-5",
-        name: "Claude Sonnet 4.5",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        baseUrl: "https://api.anthropic.com",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-        contextWindow: 200000,
-        maxTokens: 64000,
-      },
+    const result = resolveAnthropicModelWithProviderOverrides({
+      headers: { "X-Custom-Auth": "token-123" },
     });
-
-    const cfg = {
-      models: {
-        providers: {
-          anthropic: {
-            headers: { "X-Custom-Auth": "token-123" },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("anthropic", "claude-sonnet-4-5", "/tmp/agent", cfg);
     expect(result.error).toBeUndefined();
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
       "X-Custom-Auth": "token-123",

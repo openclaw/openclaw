@@ -27,9 +27,6 @@ Always import from a specific subpath:
 ```typescript
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-
-// Deprecated — will be removed in the next major release
-import { definePluginEntry } from "openclaw/plugin-sdk";
 ```
 
 Each subpath is a small, self-contained module. This keeps startup fast and
@@ -154,6 +151,13 @@ methods:
 | -------------------------------------------- | ----------------------------- |
 | `api.on(hookName, handler, opts?)`           | Typed lifecycle hook          |
 | `api.onConversationBindingResolved(handler)` | Conversation binding callback |
+
+### Hook decision semantics
+
+- `before_tool_call`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
+- `before_tool_call`: returning `{ block: false }` is treated as no decision (same as omitting `block`), not as an override.
+- `message_sending`: returning `{ cancel: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
+- `message_sending`: returning `{ cancel: false }` is treated as no decision (same as omitting `cancel`), not as an override.
 
 ### API object fields
 

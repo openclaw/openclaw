@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetInboundDedupe } from "../../../src/auto-reply/reply/inbound-dedupe.js";
 import {
   flush,
@@ -10,7 +10,7 @@ import {
   stopSlackMonitor,
 } from "./monitor.test-helpers.js";
 
-const { monitorSlackProvider } = await import("./monitor.js");
+let monitorSlackProvider: typeof import("./monitor.js").monitorSlackProvider;
 
 const slackTestState = getSlackTestState();
 
@@ -68,6 +68,14 @@ async function runMissingThreadScenario(params: {
 }
 
 beforeEach(() => {
+  resetInboundDedupe();
+});
+
+beforeAll(async () => {
+  ({ monitorSlackProvider } = await import("./monitor.js"));
+});
+
+beforeEach(async () => {
   resetInboundDedupe();
   resetSlackTestState({
     messages: { responsePrefix: "PFX" },

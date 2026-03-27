@@ -263,6 +263,27 @@ describe("GatewayBrowserClient", () => {
     expect(signedPayload).toContain("|stored-device-token|nonce-1");
   });
 
+  it("ignores cached operator device tokens that do not include read access", async () => {
+    localStorage.clear();
+    storeDeviceAuthToken({
+      deviceId: "device-1",
+      role: "operator",
+      token: "under-scoped-device-token",
+      scopes: [],
+    });
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.method).toBe("connect");
+    expect(connectFrame.params?.auth?.token).toBeUndefined();
+    const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
+    expect(signedPayload).not.toContain("under-scoped-device-token");
+  });
+
   it("retries once with device token after token mismatch when shared token is explicit", async () => {
     vi.useFakeTimers();
     const client = new GatewayBrowserClient({

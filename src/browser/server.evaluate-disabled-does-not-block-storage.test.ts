@@ -1,5 +1,5 @@
-import { fetch as realFetch } from "undici";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { getBrowserTestFetch } from "./test-fetch.js";
 import { getFreePort } from "./test-port.js";
 
 let testPort = 0;
@@ -69,6 +69,12 @@ let startBrowserControlServerFromConfig: typeof import("./server.js").startBrows
 let stopBrowserControlServer: typeof import("./server.js").stopBrowserControlServer;
 
 describe("browser control evaluate gating", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ startBrowserControlServerFromConfig, stopBrowserControlServer } =
+      await import("./server.js"));
+  });
+
   beforeEach(async () => {
     testPort = await getFreePort();
     prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
@@ -83,9 +89,6 @@ describe("browser control evaluate gating", () => {
     pwMocks.evaluateViaPlaywright.mockClear();
     routeCtxMocks.profileCtx.ensureTabAvailable.mockClear();
     routeCtxMocks.profileCtx.stopRunningBrowser.mockClear();
-    vi.resetModules();
-    ({ startBrowserControlServerFromConfig, stopBrowserControlServer } =
-      await import("./server.js"));
   });
 
   afterEach(async () => {
@@ -107,11 +110,11 @@ describe("browser control evaluate gating", () => {
     }
 
     await stopBrowserControlServer();
-    vi.resetModules();
   });
 
   it("blocks act:evaluate but still allows cookies/storage reads", async () => {
     await startBrowserControlServerFromConfig();
+    const realFetch = getBrowserTestFetch();
 
     const base = `http://127.0.0.1:${testPort}`;
 

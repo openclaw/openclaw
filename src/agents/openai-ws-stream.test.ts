@@ -8,9 +8,11 @@
  *  - Session registry helpers (releaseWsSession, hasWsSession)
  */
 
+import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResponseObject } from "./openai-ws-connection.js";
 import {
+  __testing as openAIWsStreamTesting,
   buildAssistantMessageFromResponse,
   convertMessagesToInputItems,
   convertTools,
@@ -168,40 +170,17 @@ const { MockManager } = vi.hoisted(() => {
   return { MockManager: TrackedMockManager };
 });
 
-vi.mock("./openai-ws-connection.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("./openai-ws-connection.js")>();
-  return {
-    ...original,
-    OpenAIWebSocketManager: MockManager,
-  };
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Mock pi-ai
-// ─────────────────────────────────────────────────────────────────────────────
-
 // Track if streamSimple (HTTP fallback) was called
 const streamSimpleCalls: Array<{ model: unknown; context: unknown }> = [];
-
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
-
-  const mockStreamSimple = vi.fn((model: unknown, context: unknown) => {
-    streamSimpleCalls.push({ model, context });
-    // Return a minimal AssistantMessageEventStream-like async iterable
-    const stream = original.createAssistantMessageEventStream();
-    queueMicrotask(() => {
-      const msg = makeFakeAssistantMessage("http fallback response");
-      stream.push({ type: "done", reason: "stop", message: msg });
-      stream.end();
-    });
-    return stream;
+const mockStreamSimple = vi.fn((model: unknown, context: unknown) => {
+  streamSimpleCalls.push({ model, context });
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => {
+    const msg = makeFakeAssistantMessage("http fallback response");
+    stream.push({ type: "done", reason: "stop", message: msg });
+    stream.end();
   });
-
-  return {
-    ...original,
-    streamSimple: mockStreamSimple,
-  };
+  return stream;
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -722,6 +701,10 @@ describe("createOpenAIWebSocketStreamFn", () => {
   beforeEach(() => {
     MockManager.reset();
     streamSimpleCalls.length = 0;
+    openAIWsStreamTesting.setDepsForTest({
+      createManager: (() => new MockManager()) as never,
+      streamSimple: mockStreamSimple,
+    });
   });
 
   afterEach(() => {
@@ -740,6 +723,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-store-default");
     releaseWsSession("sess-store-compat");
     releaseWsSession("sess-max-tokens-zero");
+    openAIWsStreamTesting.setDepsForTest();
   });
 
   it("connects to the WebSocket on first call", async () => {
@@ -1336,10 +1320,15 @@ describe("createOpenAIWebSocketStreamFn", () => {
 describe("releaseWsSession / hasWsSession", () => {
   beforeEach(() => {
     MockManager.reset();
+    openAIWsStreamTesting.setDepsForTest({
+      createManager: (() => new MockManager()) as never,
+      streamSimple: mockStreamSimple,
+    });
   });
 
   afterEach(() => {
     releaseWsSession("registry-test");
+    openAIWsStreamTesting.setDepsForTest();
   });
 
   it("hasWsSession returns false for unknown session", () => {

@@ -258,6 +258,15 @@ Common registration methods:
 | `registerContextEngine`              | Context engine       |
 | `registerService`                    | Background service   |
 
+Hook guard behavior for typed lifecycle hooks:
+
+- `before_tool_call`: `{ block: true }` is terminal; lower-priority handlers are skipped.
+- `before_tool_call`: `{ block: false }` is a no-op and does not clear an earlier block.
+- `message_sending`: `{ cancel: true }` is terminal; lower-priority handlers are skipped.
+- `message_sending`: `{ cancel: false }` is a no-op and does not clear an earlier cancel.
+
+For full typed hook behavior, see [SDK Overview](/plugins/sdk-overview#hook-decision-semantics).
+
 ## Related
 
 - [Building Plugins](/plugins/building-plugins) — create your own plugin

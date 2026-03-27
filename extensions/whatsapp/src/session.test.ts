@@ -5,9 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
-const { createWaSocket, formatError, logWebSelfId, waitForWaConnection } =
-  await import("./session.js");
 const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
+
+let createWaSocket: typeof import("./session.js").createWaSocket;
+let formatError: typeof import("./session.js").formatError;
+let getStatusCode: typeof import("./session.js").getStatusCode;
+let logWebSelfId: typeof import("./session.js").logWebSelfId;
+let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
 
 async function flushCredsUpdate() {
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -55,7 +59,10 @@ function mockCredsJsonSpies(readContents: string) {
 }
 
 describe("web session", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ createWaSocket, formatError, getStatusCode, logWebSelfId, waitForWaConnection } =
+      await import("./session.js"));
     vi.clearAllMocks();
     resetBaileysMocks();
     resetLoadConfigMock();
@@ -74,6 +81,11 @@ describe("web session", () => {
       expect.objectContaining({ printQRInTerminal: false }),
     );
     const passed = makeWASocket.mock.calls[0][0];
+    expect((passed as { browser?: unknown }).browser).toEqual([
+      "Vida Operator",
+      "web",
+      expect.any(String),
+    ]);
     const passedLogger = (passed as { logger?: { level?: string; trace?: unknown } }).logger;
     expect(passedLogger?.level).toBe("silent");
     expect(typeof passedLogger?.trace).toBe("function");
@@ -134,6 +146,36 @@ describe("web session", () => {
     readSpy.mockRestore();
   });
 
+  it("logWebSelfId prints cached lid details when creds include a lid", () => {
+    const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
+      if (typeof p !== "string") {
+        return false;
+      }
+      return p.endsWith("creds.json");
+    });
+    const readSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation((p) => {
+      if (typeof p === "string" && p.endsWith("creds.json")) {
+        return JSON.stringify({
+          me: { id: "12345@s.whatsapp.net", lid: "777@lid" },
+        });
+      }
+      throw new Error(`unexpected readFileSync path: ${String(p)}`);
+    });
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    logWebSelfId("/tmp/wa-creds", runtime as never, true);
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Web Channel: +12345 (jid 12345@s.whatsapp.net, lid 777@lid)"),
+    );
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
   it("formatError prints Boom-like payload message", () => {
     const err = {
       error: {
@@ -151,6 +193,19 @@ describe("web session", () => {
     expect(formatError(err)).toContain("status=408");
     expect(formatError(err)).toContain("Request Time-out");
     expect(formatError(err)).toContain("QR refs attempts ended");
+  });
+
+  it("extracts status from lastDisconnect.error wrapper", () => {
+    const err = {
+      lastDisconnect: {
+        error: {
+          output: {
+            statusCode: 401,
+          },
+        },
+      },
+    };
+    expect(getStatusCode(err)).toBe(401);
   });
 
   it("does not clobber creds backup when creds.json is corrupted", async () => {

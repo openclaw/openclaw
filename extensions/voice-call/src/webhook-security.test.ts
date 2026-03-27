@@ -256,6 +256,52 @@ describe("verifyPlivoWebhook", () => {
     expectReplayResultPair(first, second);
   });
 
+  it("treats query-only V2 variants as the same verified request", () => {
+    const authToken = "test-auth-token";
+    const nonce = "nonce-replay-v2";
+    const verificationUrl = "https://example.com/voice/webhook";
+    const signature = plivoV2Signature({
+      authToken,
+      urlNoQuery: verificationUrl,
+      nonce,
+    });
+
+    const baseHeaders = {
+      host: "example.com",
+      "x-forwarded-proto": "https",
+      "x-plivo-signature-v2": signature,
+      "x-plivo-signature-v2-nonce": nonce,
+    };
+    const rawBody = "CallUUID=uuid&CallStatus=in-progress";
+
+    const first = verifyPlivoWebhook(
+      {
+        headers: baseHeaders,
+        rawBody,
+        url: `${verificationUrl}?flow=answer&callId=abc`,
+        method: "POST",
+        query: { flow: "answer", callId: "abc" },
+      },
+      authToken,
+    );
+    const second = verifyPlivoWebhook(
+      {
+        headers: baseHeaders,
+        rawBody,
+        url: `${verificationUrl}?flow=getinput&callId=abc`,
+        method: "POST",
+        query: { flow: "getinput", callId: "abc" },
+      },
+      authToken,
+    );
+
+    expect(first.ok).toBe(true);
+    expect(first.verifiedRequestKey).toBeDefined();
+    expect(second.ok).toBe(true);
+    expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
+    expect(second.isReplay).toBe(true);
+  });
+
   it("returns a stable request key when verification is skipped", () => {
     const ctx = {
       headers: {},

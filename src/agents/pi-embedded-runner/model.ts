@@ -10,6 +10,7 @@ import {
 } from "../../plugins/provider-runtime.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { resolveGoogleGenerativeAiTransport } from "../google-generative-ai.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { normalizeModelCompat } from "../model-compat.js";
@@ -76,6 +77,13 @@ function normalizeResolvedModel(params: {
   agentDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> {
+  const normalizedInputModel =
+    Array.isArray(params.model.input) && params.model.input.length > 0
+      ? params.model
+      : ({
+          ...params.model,
+          input: ["text"],
+        } as Model<Api>);
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const pluginNormalized = runtimeHooks.normalizeProviderResolvedModelWithPlugin({
     provider: params.provider,
@@ -84,14 +92,36 @@ function normalizeResolvedModel(params: {
       config: params.cfg,
       agentDir: params.agentDir,
       provider: params.provider,
-      modelId: params.model.id,
-      model: params.model,
+      modelId: normalizedInputModel.id,
+      model: normalizedInputModel,
     },
   }) as Model<Api> | undefined;
   if (pluginNormalized) {
     return normalizeModelCompat(pluginNormalized);
   }
-  return normalizeResolvedProviderModel(params);
+  return normalizeResolvedProviderModel({
+    provider: params.provider,
+    model: normalizedInputModel,
+  });
+}
+
+function findInlineModelMatch(params: {
+  providers: Record<string, InlineProviderConfig>;
+  provider: string;
+  modelId: string;
+}) {
+  const inlineModels = buildInlineProviderModels(params.providers);
+  const exact = inlineModels.find(
+    (entry) => entry.provider === params.provider && entry.id === params.modelId,
+  );
+  if (exact) {
+    return exact;
+  }
+  const normalizedProvider = normalizeProviderId(params.provider);
+  return inlineModels.find(
+    (entry) =>
+      normalizeProviderId(entry.provider) === normalizedProvider && entry.id === params.modelId,
+  );
 }
 
 export { buildModelAliasLines };
@@ -146,10 +176,14 @@ function applyConfiguredProviderOverrides(params: {
       ? resolvedInput.filter((item) => item === "text" || item === "image")
       : (["text"] as Array<"text" | "image">);
 
-  return {
-    ...discoveredModel,
+  const resolvedTransport = resolveGoogleGenerativeAiTransport({
     api: configuredModel?.api ?? providerConfig.api ?? discoveredModel.api,
     baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
+  });
+  return {
+    ...discoveredModel,
+    api: resolvedTransport.api,
+    baseUrl: resolvedTransport.baseUrl ?? discoveredModel.baseUrl,
     reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
     input: normalizedInput,
     cost: configuredModel?.cost ?? discoveredModel.cost,
@@ -178,24 +212,30 @@ export function buildInlineProviderModels(
     const providerHeaders = sanitizeModelHeaders(entry?.headers, {
       stripSecretRefMarkers: true,
     });
-    return (entry?.models ?? []).map((model) => ({
-      ...model,
-      provider: trimmed,
-      baseUrl: entry?.baseUrl,
-      api: model.api ?? entry?.api,
-      headers: (() => {
-        const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
-          stripSecretRefMarkers: true,
-        });
-        if (!providerHeaders && !modelHeaders) {
-          return undefined;
-        }
-        return {
-          ...providerHeaders,
-          ...modelHeaders,
-        };
-      })(),
-    }));
+    return (entry?.models ?? []).map((model) => {
+      const transport = resolveGoogleGenerativeAiTransport({
+        api: model.api ?? entry?.api,
+        baseUrl: entry?.baseUrl,
+      });
+      return {
+        ...model,
+        provider: trimmed,
+        baseUrl: transport.baseUrl,
+        api: transport.api,
+        headers: (() => {
+          const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
+            stripSecretRefMarkers: true,
+          });
+          if (!providerHeaders && !modelHeaders) {
+            return undefined;
+          }
+          return {
+            ...providerHeaders,
+            ...modelHeaders,
+          };
+        })(),
+      };
+    });
   });
 }
 
@@ -212,11 +252,11 @@ function resolveExplicitModelWithRegistry(params: {
     return { kind: "suppressed" };
   }
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const inlineModels = buildInlineProviderModels(cfg?.models?.providers ?? {});
-  const normalizedProvider = normalizeProviderId(provider);
-  const inlineMatch = inlineModels.find(
-    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
-  );
+  const inlineMatch = findInlineModelMatch({
+    providers: cfg?.models?.providers ?? {},
+    provider,
+    modelId,
+  });
   if (inlineMatch?.api) {
     return {
       kind: "resolved",
@@ -249,9 +289,11 @@ function resolveExplicitModelWithRegistry(params: {
   }
 
   const providers = cfg?.models?.providers ?? {};
-  const fallbackInlineMatch = buildInlineProviderModels(providers).find(
-    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
-  );
+  const fallbackInlineMatch = findInlineModelMatch({
+    providers,
+    provider,
+    modelId,
+  });
   if (fallbackInlineMatch?.api) {
     return {
       kind: "resolved",
@@ -327,6 +369,10 @@ function resolveConfiguredFallbackModel(params: {
   if (!providerConfig && !modelId.startsWith("mock-")) {
     return undefined;
   }
+  const fallbackTransport = resolveGoogleGenerativeAiTransport({
+    api: providerConfig?.api ?? "openai-responses",
+    baseUrl: providerConfig?.baseUrl,
+  });
   return normalizeResolvedModel({
     provider,
     cfg,
@@ -334,9 +380,9 @@ function resolveConfiguredFallbackModel(params: {
     model: {
       id: modelId,
       name: modelId,
-      api: providerConfig?.api ?? "openai-responses",
+      api: fallbackTransport.api,
       provider,
-      baseUrl: providerConfig?.baseUrl,
+      baseUrl: fallbackTransport.baseUrl,
       reasoning: configuredModel?.reasoning ?? false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -385,6 +431,8 @@ export function resolveModel(
   agentDir?: string,
   cfg?: OpenClawConfig,
   options?: {
+    authStorage?: AuthStorage;
+    modelRegistry?: ModelRegistry;
     runtimeHooks?: ProviderRuntimeHooks;
   },
 ): {
@@ -394,8 +442,8 @@ export function resolveModel(
   modelRegistry: ModelRegistry;
 } {
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
-  const authStorage = discoverAuthStorage(resolvedAgentDir);
-  const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+  const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
+  const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
   const model = resolveModelWithRegistry({
     provider,
     modelId,
@@ -421,6 +469,8 @@ export async function resolveModelAsync(
   agentDir?: string,
   cfg?: OpenClawConfig,
   options?: {
+    authStorage?: AuthStorage;
+    modelRegistry?: ModelRegistry;
     retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ProviderRuntimeHooks;
   },
@@ -431,8 +481,8 @@ export async function resolveModelAsync(
   modelRegistry: ModelRegistry;
 }> {
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
-  const authStorage = discoverAuthStorage(resolvedAgentDir);
-  const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+  const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
+  const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
   const explicitModel = resolveExplicitModelWithRegistry({
     provider,
     modelId,

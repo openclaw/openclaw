@@ -1,5 +1,5 @@
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
-import { resolveFeishuAccount } from "./accounts.js";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { getFeishuRuntime } from "./runtime.js";
 
@@ -107,7 +107,7 @@ export async function addTypingIndicator(params: {
   runtime?: RuntimeEnv;
 }): Promise<TypingIndicatorState> {
   const { cfg, messageId, accountId, runtime } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     return { messageId, reactionId: null };
   }
@@ -168,7 +168,7 @@ export async function removeTypingIndicator(params: {
     return;
   }
 
-  const account = resolveFeishuAccount({ cfg, accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     return;
   }

@@ -7,6 +7,10 @@ vi.hoisted(() => {
 });
 
 import "./server-context.chrome-test-harness.js";
+import {
+  PROFILE_ATTACH_RETRY_TIMEOUT_MS,
+  PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
+} from "./cdp-timeouts.js";
 import * as chromeModule from "./chrome.js";
 import type { RunningChrome } from "./chrome.js";
 import type { BrowserServerState } from "./server-context.js";
@@ -109,5 +113,35 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
     expect(stopOpenClawChrome).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses a pre-existing loopback browser after an initial short probe miss", async () => {
+    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile } =
+      setupEnsureBrowserAvailableHarness();
+    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
+
+    isChromeReachable.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    isChromeCdpReady.mockResolvedValueOnce(true);
+
+    await expect(profile.ensureBrowserAvailable()).resolves.toBeUndefined();
+
+    expect(isChromeReachable).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:18800",
+      PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
+      {
+        allowPrivateNetwork: true,
+      },
+    );
+    expect(isChromeReachable).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:18800",
+      PROFILE_ATTACH_RETRY_TIMEOUT_MS,
+      {
+        allowPrivateNetwork: true,
+      },
+    );
+    expect(launchOpenClawChrome).not.toHaveBeenCalled();
+    expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });
 });

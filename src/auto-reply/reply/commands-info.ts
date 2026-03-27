@@ -1,14 +1,41 @@
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inventory.js";
 import { logVerbose } from "../../globals.js";
 import { listSkillCommandsForAgents } from "../skill-commands.js";
 import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
   buildHelpMessage,
+  buildToolsMessage,
 } from "../status.js";
+import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { buildContextReply } from "./commands-context-report.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import { buildStatusReply } from "./commands-status.js";
 import type { CommandHandler } from "./commands-types.js";
+import { resolveReplyToMode } from "./reply-threading.js";
+
+function extractGroupId(raw: string | undefined | null): string | undefined {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parts = trimmed.split(":").filter(Boolean);
+  if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
+    return parts.slice(2).join(":") || undefined;
+  }
+  if (
+    parts.length >= 2 &&
+    parts[0]?.toLowerCase() === "whatsapp" &&
+    trimmed.toLowerCase().includes("@g.us")
+  ) {
+    return parts.slice(1).join(":") || undefined;
+  }
+  if (parts.length >= 2 && (parts[0] === "group" || parts[0] === "channel")) {
+    return parts.slice(1).join(":") || undefined;
+  }
+  return undefined;
+}
 
 export const handleHelpCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -84,6 +111,86 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
     shouldContinue: false,
     reply: { text: buildCommandsMessage(params.cfg, skillCommands, { surface }) },
   };
+};
+
+export const handleToolsCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  let verbose = false;
+  if (normalized === "/tools" || normalized === "/tools compact") {
+    verbose = false;
+  } else if (normalized === "/tools verbose") {
+    verbose = true;
+  } else if (normalized.startsWith("/tools ")) {
+    return { shouldContinue: false, reply: { text: "Usage: /tools [compact|verbose]" } };
+  } else {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /tools from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+
+  try {
+    const agentId =
+      params.agentId ??
+      resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
+    const threadingContext = buildThreadingToolContext({
+      sessionCtx: params.ctx,
+      config: params.cfg,
+      hasRepliedRef: undefined,
+    });
+    const result = resolveEffectiveToolInventory({
+      cfg: params.cfg,
+      agentId,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
+      modelProvider: params.provider,
+      modelId: params.model,
+      messageProvider: params.command.channel,
+      senderIsOwner: params.command.senderIsOwner,
+      senderId: params.command.senderId,
+      senderName: params.ctx.SenderName,
+      senderUsername: params.ctx.SenderUsername,
+      senderE164: params.ctx.SenderE164,
+      accountId: params.ctx.AccountId,
+      currentChannelId: threadingContext.currentChannelId,
+      currentThreadTs:
+        typeof params.ctx.MessageThreadId === "string" ||
+        typeof params.ctx.MessageThreadId === "number"
+          ? String(params.ctx.MessageThreadId)
+          : undefined,
+      currentMessageId: threadingContext.currentMessageId,
+      groupId: params.sessionEntry?.groupId ?? extractGroupId(params.ctx.From),
+      groupChannel:
+        params.sessionEntry?.groupChannel ?? params.ctx.GroupChannel ?? params.ctx.GroupSubject,
+      groupSpace: params.sessionEntry?.space ?? params.ctx.GroupSpace,
+      replyToMode: resolveReplyToMode(
+        params.cfg,
+        params.ctx.OriginatingChannel ?? params.ctx.Provider,
+        params.ctx.AccountId,
+        params.ctx.ChatType,
+      ),
+    });
+    return {
+      shouldContinue: false,
+      reply: { text: buildToolsMessage(result, { verbose }) },
+    };
+  } catch (err) {
+    const message = String(err);
+    const text = message.includes("missing scope:")
+      ? "You do not have permission to view available tools."
+      : "Couldn't load available tools right now. Try again in a moment.";
+    return {
+      shouldContinue: false,
+      reply: { text },
+    };
+  }
 };
 
 export function buildCommandsPaginationKeyboard(
