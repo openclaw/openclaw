@@ -34,6 +34,10 @@ vi.mock("../agents/model-auth.js", () => ({
   hasUsableCustomProviderApiKey,
 }));
 
+const providerModelPickerContributionRuntime = vi.hoisted(() => ({
+  enabled: false,
+  resolve: vi.fn(() => []),
+}));
 const resolveProviderModelPickerEntries = vi.hoisted(() => vi.fn(() => []));
 const resolveProviderPluginChoice = vi.hoisted(() => vi.fn());
 const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
@@ -41,6 +45,11 @@ const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 const runProviderPluginAuthMethod = vi.hoisted(() => vi.fn());
 vi.mock("./model-picker.runtime.js", () => ({
   modelPickerRuntime: {
+    get resolveProviderModelPickerContributions() {
+      return providerModelPickerContributionRuntime.enabled
+        ? providerModelPickerContributionRuntime.resolve
+        : undefined;
+    },
     resolveProviderModelPickerEntries,
     resolveProviderPluginChoice,
     runProviderModelSelectedHook,
@@ -75,6 +84,7 @@ function createSelectAllMultiselect() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  providerModelPickerContributionRuntime.enabled = false;
 });
 
 describe("promptDefaultModel", () => {
@@ -143,6 +153,61 @@ describe("promptDefaultModel", () => {
         { id: "meta-llama/Meta-Llama-3-8B-Instruct", name: "meta-llama/Meta-Llama-3-8B-Instruct" },
       ],
     });
+  });
+
+  it("prefers provider model-picker contributions when the runtime exposes them", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+      },
+    ]);
+    providerModelPickerContributionRuntime.enabled = true;
+    providerModelPickerContributionRuntime.resolve.mockReturnValue([
+      {
+        id: "provider:model-picker:ollama",
+        kind: "provider",
+        surface: "models",
+        option: {
+          value: "ollama",
+          label: "Ollama",
+          hint: "Local/self-hosted setup",
+        },
+      },
+    ] as never);
+    resolveProviderModelPickerEntries.mockReturnValue([
+      {
+        value: "legacy-entry",
+        label: "Legacy entry",
+        hint: "Should not be used when contributions exist",
+      },
+    ] as never);
+
+    const select = vi.fn(async (params) => {
+      const ollama = params.options.find((opt: { value: string }) => opt.value === "ollama");
+      return (ollama?.value ?? "") as never;
+    });
+    const prompter = makePrompter({ select });
+
+    await promptDefaultModel({
+      config: { agents: { defaults: {} } } as OpenClawConfig,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      includeProviderPluginSetups: true,
+      ignoreAllowlist: true,
+      agentDir: "/tmp/openclaw-agent",
+      runtime: {} as never,
+    });
+
+    expect(providerModelPickerContributionRuntime.resolve).toHaveBeenCalledOnce();
+    expect(select.mock.calls[0]?.[0]?.options).toEqual(
+      expect.arrayContaining([expect.objectContaining({ value: "ollama", label: "Ollama" })]),
+    );
+    expect(select.mock.calls[0]?.[0]?.options).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ value: "legacy-entry" })]),
+    );
   });
 });
 
