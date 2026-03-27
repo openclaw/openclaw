@@ -196,25 +196,31 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       subAgentDir,
     );
 
-    // Main agent has fresh credentials (as if another agent already refreshed and wrote back)
+    // Main agent also starts with expired credentials
     saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          [profileId]: {
-            type: "oauth",
-            provider: "openai-codex",
-            access: "fresh-access-from-main",
-            refresh: "fresh-refresh-from-main",
-            expires: freshExpiry,
-          },
-        },
-      },
+      createExpiredOauthStore({ profileId, provider: "openai-codex" }),
       agentDir,
     );
 
-    // Plugin refresh throws refresh_token_reused
+    // Simulate a race: another process refreshes and writes fresh creds to the
+    // main store right before our refresh attempt. The mock writes fresh creds
+    // then throws refresh_token_reused (the token was already consumed).
     refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "fresh-access-from-main",
+              refresh: "fresh-refresh-from-main",
+              expires: freshExpiry,
+            },
+          },
+        },
+        agentDir,
+      );
       throw new Error(
         '401 {"error":{"message":"Your refresh token has already been used","type":"invalid_request_error","code":"refresh_token_reused"}}',
       );
@@ -230,6 +236,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     expect(result).not.toBeNull();
     expect(result?.apiKey).toBe("fresh-access-from-main");
     expect(result?.provider).toBe("openai-codex");
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
   it("still throws when refresh_token_reused fires and no fresh creds exist anywhere", async () => {

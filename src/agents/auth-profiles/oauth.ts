@@ -132,6 +132,12 @@ function isSameOAuthIdentity(a: OAuthCredential, b: OAuthCredential): boolean {
   if (a.provider !== b.provider) {
     return false;
   }
+  // accountId is the strongest identity signal (used by Codex CLI credentials).
+  const aAcct = (a as Record<string, unknown>).accountId;
+  const bAcct = (b as Record<string, unknown>).accountId;
+  if (aAcct && bAcct && aAcct !== bAcct) {
+    return false;
+  }
   if (a.email && b.email && a.email !== b.email) {
     return false;
   }
@@ -222,7 +228,7 @@ function adoptNewerMainOAuthCredential(params: {
     const mainCred = mainStore.profiles[params.profileId];
     if (
       mainCred?.type === "oauth" &&
-      mainCred.provider === params.cred.provider &&
+      isSameOAuthIdentity(params.cred, mainCred) &&
       Number.isFinite(mainCred.expires) &&
       (!Number.isFinite(params.cred.expires) || mainCred.expires > params.cred.expires)
     ) {
@@ -605,8 +611,12 @@ export async function resolveApiKeyForProfile(
       try {
         const mainStore = ensureAuthProfileStore(undefined); // main agent (no agentDir)
         const mainCred = mainStore.profiles[profileId];
-        if (mainCred?.type === "oauth" && Date.now() < mainCred.expires) {
-          // Main agent has fresh credentials - copy them to this agent and use them
+        if (
+          mainCred?.type === "oauth" &&
+          Date.now() < mainCred.expires &&
+          isSameOAuthIdentity(cred, mainCred)
+        ) {
+          // Main agent has fresh credentials for the same identity - copy and use
           refreshedStore.profiles[profileId] = { ...mainCred };
           saveAuthProfileStore(refreshedStore, params.agentDir);
           log.info("inherited fresh OAuth credentials from main agent", {

@@ -20,6 +20,8 @@ export const AUTH_STORE_LOCK_OPTIONS = {
   stale: 30_000,
 } as const;
 
+// Intentionally separate from AUTH_STORE_LOCK_OPTIONS for independent tuning:
+// this guards the global cross-agent OAuth refresh; the other guards per-store file writes.
 export const OAUTH_REFRESH_LOCK_OPTIONS = {
   retries: {
     retries: 10,

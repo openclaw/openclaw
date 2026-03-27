@@ -34,6 +34,9 @@ export function ensureAuthStoreFile(pathname: string) {
 }
 
 export function resolveOAuthRefreshLockPath(profileId: string): string {
-  const safeId = profileId.replace(/[^a-zA-Z0-9_.-]/g, "_");
+  const safeId = profileId.replace(
+    /[^a-zA-Z0-9_.-]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).padStart(2, "0")}`,
+  );
   return path.join(resolveStateDir(), "locks", "oauth-refresh", safeId);
 }
