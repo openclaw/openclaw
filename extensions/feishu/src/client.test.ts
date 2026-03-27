@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestPluginApi } from "../../../test/helpers/extensions/plugin-api.js";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
 
@@ -99,12 +100,24 @@ const baseAccount: ResolvedFeishuAccount = {
   appId: "app_123",
   appSecret: "secret_123", // pragma: allowlist secret
   domain: "feishu",
-  config: {} as FeishuConfig,
+  config: {},
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readCallOptions(
+  mock: { mock: { calls: unknown[][] } },
+  index = -1,
+): Record<string, unknown> {
+  const call = index < 0 ? mock.mock.calls.at(index)?.[0] : mock.mock.calls[index]?.[0];
+  return isRecord(call) ? call : {};
+}
+
 function firstWsClientOptions(): { agent?: unknown } {
-  const calls = wsClientCtorMock.mock.calls as unknown as Array<[options: { agent?: unknown }]>;
-  return calls[0]?.[0] ?? {};
+  const options = readCallOptions(wsClientCtorMock, 0);
+  return { agent: options.agent };
 }
 
 beforeAll(async () => {
@@ -179,11 +192,8 @@ afterEach(() => {
 
 describe("createFeishuClient HTTP timeout", () => {
   const getLastClientHttpInstance = () => {
-    const calls = clientCtorMock.mock.calls as unknown as Array<[options: unknown]>;
-    const lastCall = calls[calls.length - 1]?.[0] as
-      | { httpInstance?: { get: (...args: unknown[]) => Promise<unknown> } }
-      | undefined;
-    return lastCall?.httpInstance;
+    const httpInstance = readCallOptions(clientCtorMock).httpInstance;
+    return isRecord(httpInstance) ? httpInstance : undefined;
   };
 
   const expectGetCallTimeout = async (timeout: number) => {
@@ -199,22 +209,16 @@ describe("createFeishuClient HTTP timeout", () => {
   it("passes a custom httpInstance with default timeout to Lark.Client", () => {
     createFeishuClient({ appId: "app_1", appSecret: "secret_1", accountId: "timeout-test" }); // pragma: allowlist secret
 
-    const calls = clientCtorMock.mock.calls as unknown as Array<[options: unknown]>;
-    const lastCall = calls[calls.length - 1]?.[0] as { httpInstance?: unknown } | undefined;
-    expect(lastCall?.httpInstance).toBeDefined();
+    expect(readCallOptions(clientCtorMock).httpInstance).toBeDefined();
   });
 
   it("injects default timeout into HTTP request options", async () => {
     createFeishuClient({ appId: "app_2", appSecret: "secret_2", accountId: "timeout-inject" }); // pragma: allowlist secret
 
-    const calls = clientCtorMock.mock.calls as unknown as Array<[options: unknown]>;
-    const lastCall = calls[calls.length - 1]?.[0] as
-      | { httpInstance: { post: (...args: unknown[]) => Promise<unknown> } }
-      | undefined;
-    const httpInstance = lastCall?.httpInstance;
+    const httpInstance = getLastClientHttpInstance();
 
     expect(httpInstance).toBeDefined();
-    await httpInstance?.post(
+    await httpInstance?.post?.(
       "https://example.com/api",
       { data: 1 },
       { headers: { "X-Custom": "yes" } },
@@ -230,14 +234,10 @@ describe("createFeishuClient HTTP timeout", () => {
   it("allows explicit timeout override per-request", async () => {
     createFeishuClient({ appId: "app_3", appSecret: "secret_3", accountId: "timeout-override" }); // pragma: allowlist secret
 
-    const calls = clientCtorMock.mock.calls as unknown as Array<[options: unknown]>;
-    const lastCall = calls[calls.length - 1]?.[0] as
-      | { httpInstance: { get: (...args: unknown[]) => Promise<unknown> } }
-      | undefined;
-    const httpInstance = lastCall?.httpInstance;
+    const httpInstance = getLastClientHttpInstance();
 
     expect(httpInstance).toBeDefined();
-    await httpInstance?.get("https://example.com/api", { timeout: 5_000 });
+    await httpInstance?.get?.("https://example.com/api", { timeout: 5_000 });
 
     expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
       "https://example.com/api",
@@ -320,14 +320,10 @@ describe("createFeishuClient HTTP timeout", () => {
       config: { httpTimeoutMs: 45_000 },
     });
 
-    const calls = clientCtorMock.mock.calls as unknown as Array<[options: unknown]>;
-    expect(calls.length).toBe(2);
-
-    const lastCall = calls[calls.length - 1]?.[0] as
-      | { httpInstance: { get: (...args: unknown[]) => Promise<unknown> } }
-      | undefined;
-    expect(lastCall?.httpInstance).toBeDefined();
-    await lastCall?.httpInstance.get("https://example.com/api");
+    expect(clientCtorMock.mock.calls.length).toBe(2);
+    const httpInstance = getLastClientHttpInstance();
+    expect(httpInstance).toBeDefined();
+    await httpInstance?.get?.("https://example.com/api");
 
     expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
       "https://example.com/api",
@@ -340,13 +336,15 @@ describe("feishu plugin register", () => {
   it("registers the Feishu channel, tools, and subagent hooks", async () => {
     const { default: plugin } = await import("../index.js");
     const registerChannel = vi.fn();
-    const api = {
+    const api = createTestPluginApi({
+      id: "feishu-test",
+      name: "Feishu Test",
+      source: "local",
       runtime: { log: vi.fn() },
-      registerChannel,
       on: vi.fn(),
       config: {},
-      registrationMode: "full",
-    } as unknown as OpenClawPluginApi;
+      registerChannel,
+    });
 
     plugin.register(api);
 
