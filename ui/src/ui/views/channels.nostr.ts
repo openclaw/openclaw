@@ -80,14 +80,16 @@ export function renderNostrCard(params: {
           <div>
             <span class="label">Last inbound</span>
             <span
-              >${account.lastInboundAt
-                ? formatRelativeTimestamp(account.lastInboundAt)
-                : "n/a"}</span
+              >${
+                account.lastInboundAt ? formatRelativeTimestamp(account.lastInboundAt) : "n/a"
+              }</span
             >
           </div>
-          ${account.lastError
-            ? html` <div class="account-card-error">${account.lastError}</div> `
-            : nothing}
+          ${
+            account.lastError
+              ? html` <div class="account-card-error">${account.lastError}</div> `
+              : nothing
+          }
         </div>
       </div>
     `;
@@ -128,8 +130,9 @@ export function renderNostrCard(params: {
           style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;"
         >
           <div style="font-weight: 500;">Profile</div>
-          ${summaryConfigured
-            ? html`
+          ${
+            summaryConfigured
+              ? html`
                 <button
                   class="btn btn--sm"
                   @click=${onEditProfile}
@@ -138,13 +141,16 @@ export function renderNostrCard(params: {
                   Edit Profile
                 </button>
               `
-            : nothing}
+              : nothing
+          }
         </div>
-        ${hasAnyProfileData
-          ? html`
+        ${
+          hasAnyProfileData
+            ? html`
               <div class="status-list">
-                ${picture
-                  ? html`
+                ${
+                  picture
+                    ? html`
                       <div style="margin-bottom: 8px;">
                         <img
                           src=${picture}
@@ -156,33 +162,43 @@ export function renderNostrCard(params: {
                         />
                       </div>
                     `
-                  : nothing}
-                ${name
-                  ? html`<div><span class="label">Name</span><span>${name}</span></div>`
-                  : nothing}
-                ${displayName
-                  ? html`<div>
+                    : nothing
+                }
+                ${
+                  name
+                    ? html`<div><span class="label">Name</span><span>${name}</span></div>`
+                    : nothing
+                }
+                ${
+                  displayName
+                    ? html`<div>
                       <span class="label">Display Name</span><span>${displayName}</span>
                     </div>`
-                  : nothing}
-                ${about
-                  ? html`<div>
+                    : nothing
+                }
+                ${
+                  about
+                    ? html`<div>
                       <span class="label">About</span
                       ><span style="max-width: 300px; overflow: hidden; text-overflow: ellipsis;"
                         >${about}</span
                       >
                     </div>`
-                  : nothing}
-                ${nip05
-                  ? html`<div><span class="label">NIP-05</span><span>${nip05}</span></div>`
-                  : nothing}
+                    : nothing
+                }
+                ${
+                  nip05
+                    ? html`<div><span class="label">NIP-05</span><span>${nip05}</span></div>`
+                    : nothing
+                }
               </div>
             `
-          : html`
-              <div style="color: var(--text-muted); font-size: 13px">
-                No profile set. Click "Edit Profile" to add your name, bio, and avatar.
-              </div>
-            `}
+            : html`
+                <div style="color: var(--text-muted); font-size: 13px">
+                  No profile set. Click "Edit Profile" to add your name, bio, and avatar.
+                </div>
+              `
+        }
       </div>
     `;
   };
@@ -192,13 +208,14 @@ export function renderNostrCard(params: {
       <div class="card-title">Nostr</div>
       <div class="card-sub">Decentralized DMs via Nostr relays (NIP-04).</div>
       ${accountCountLabel}
-      ${hasMultipleAccounts
-        ? html`
+      ${
+        hasMultipleAccounts
+          ? html`
             <div class="account-card-list">
               ${nostrAccounts.map((account) => renderAccountCard(account))}
             </div>
           `
-        : html`
+          : html`
             <div class="status-list" style="margin-top: 16px;">
               <div>
                 <span class="label">Configured</span>
@@ -221,10 +238,13 @@ export function renderNostrCard(params: {
                 >
               </div>
             </div>
-          `}
-      ${summaryLastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">${summaryLastError}</div>`
-        : nothing}
+          `
+      }
+      ${
+        summaryLastError
+          ? html`<div class="callout danger" style="margin-top: 12px;">${summaryLastError}</div>`
+          : nothing
+      }
       ${renderProfileSection()} ${renderChannelConfigSection({ channelId: "nostr", props })}
 
       <div class="row" style="margin-top: 12px;">
