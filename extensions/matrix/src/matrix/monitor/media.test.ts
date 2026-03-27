@@ -71,6 +71,7 @@ describe("downloadMatrixMedia", () => {
       "image/png",
       "inbound",
       1024,
+      undefined,
     );
     expect(result?.path).toBe("/tmp/media");
   });
