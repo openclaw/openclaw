@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, FileOperations } from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -68,6 +68,10 @@ type ToolFailure = {
   toolName: string;
   summary: string;
   meta?: string;
+};
+
+type ModelRegistryWithLegacyAuthLookup = {
+  getApiKey?: (model: NonNullable<ExtensionContext["model"]>) => Promise<string | undefined>;
 };
 
 function clampNonNegativeInt(value: unknown, fallback: number): number {
@@ -616,7 +620,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
     let apiKey: string | undefined;
     try {
-      apiKey = await ctx.modelRegistry.getApiKey(model);
+      const modelRegistry = ctx.modelRegistry as ModelRegistryWithLegacyAuthLookup;
+      if (typeof modelRegistry.getApiKey !== "function") {
+        throw new Error("model registry auth lookup unavailable");
+      }
+      apiKey = await modelRegistry.getApiKey(model);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       log.warn(
