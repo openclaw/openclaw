@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
@@ -63,40 +62,6 @@ const MAX_RECENT_TURN_TEXT_CHARS = 600;
 const compactionSafeguardDeps = {
   summarizeInStages,
 };
-
-type ModelApiKeyResolver = {
-  getApiKeyAndHeaders?: (model: Model<Api>) => Promise<{
-    ok: boolean;
-    apiKey?: string;
-    headers?: Record<string, string>;
-  }>;
-  getApiKey?: (model: Model<Api>) => Promise<string | undefined>;
-  getApiKeyForProvider?: (provider: string) => Promise<string | undefined>;
-};
-
-async function resolveModelAuth(
-  modelRegistry: unknown,
-  model: Model<Api>,
-): Promise<{ apiKey?: string; headers?: Record<string, string> }> {
-  const registry = modelRegistry as ModelApiKeyResolver;
-  if (typeof registry.getApiKeyAndHeaders === "function") {
-    const resolved = await registry.getApiKeyAndHeaders(model);
-    if (resolved?.ok) {
-      return {
-        apiKey: resolved.apiKey,
-        headers: resolved.headers,
-      };
-    }
-    return {};
-  }
-  if (typeof registry.getApiKey === "function") {
-    return { apiKey: await registry.getApiKey(model) };
-  }
-  if (typeof registry.getApiKeyForProvider === "function") {
-    return { apiKey: await registry.getApiKeyForProvider(model.provider) };
-  }
-  return {};
-}
 
 type ToolFailure = {
   toolCallId: string;
@@ -649,13 +614,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    const fallbackHeaders =
-      model.headers && typeof model.headers === "object" && !Array.isArray(model.headers)
-        ? model.headers
-        : undefined;
-    const resolvedAuth = await resolveModelAuth(ctx.modelRegistry, model);
-    const apiKey = resolvedAuth.apiKey ?? "";
-    const headers = resolvedAuth.headers ?? fallbackHeaders;
+    const requestAuth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (!requestAuth.ok) {
+      log.warn(
+        `Compaction safeguard: request auth resolution failed for ${model.provider}/${model.id}: ${requestAuth.error}`,
+      );
+      setCompactionSafeguardCancelReason(
+        ctx.sessionManager,
+        `Compaction safeguard could not resolve request auth for ${model.provider}/${model.id}: ${requestAuth.error}`,
+      );
+      return { cancel: true };
+    }
+
+    const apiKey = requestAuth.apiKey ?? "";
+    const headers = requestAuth.headers ?? model.headers;
     if (!apiKey && !headers) {
       log.warn(
         "Compaction safeguard: no request auth available; cancelling compaction to preserve history.",
