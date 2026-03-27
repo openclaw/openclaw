@@ -28,12 +28,20 @@ const GLM5_MODEL_ID = "glm-5";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
 
+function isGlm5ForwardCompatModelId(modelId: string): boolean {
+  const lower = modelId.trim().toLowerCase();
+  return (
+    lower === GLM5_MODEL_ID ||
+    lower.startsWith(`${GLM5_MODEL_ID}.`) ||
+    lower.startsWith(`${GLM5_MODEL_ID}-`)
+  );
+}
+
 function resolveGlm5ForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
   const trimmedModelId = ctx.modelId.trim();
-  const lower = trimmedModelId.toLowerCase();
-  if (lower !== GLM5_MODEL_ID && !lower.startsWith(`${GLM5_MODEL_ID}-`)) {
+  if (!isGlm5ForwardCompatModelId(trimmedModelId)) {
     return undefined;
   }
 
@@ -287,7 +295,7 @@ export default definePluginEntry({
       isModernModelRef: ({ modelId }) => {
         const lower = modelId.trim().toLowerCase();
         return (
-          lower.startsWith("glm-5") ||
+          isGlm5ForwardCompatModelId(lower) ||
           lower.startsWith("glm-4.7") ||
           lower.startsWith("glm-4.7-flash") ||
           lower.startsWith("glm-4.7-flashx")

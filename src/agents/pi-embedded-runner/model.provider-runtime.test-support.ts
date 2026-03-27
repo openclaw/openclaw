@@ -82,6 +82,11 @@ function normalizeDynamicModel(params: { provider: string; model: ResolvedModelL
   return undefined;
 }
 
+function isGlm5ForwardCompatModelId(modelId: string): boolean {
+  const lower = modelId.trim().toLowerCase();
+  return lower === "glm-5" || lower.startsWith("glm-5.") || lower.startsWith("glm-5-");
+}
+
 function buildDynamicModel(
   params: DynamicModelContext,
   options: Required<
@@ -268,7 +273,7 @@ function buildDynamicModel(
       );
     }
     case "zai": {
-      if (lower !== "glm-5") {
+      if (!isGlm5ForwardCompatModelId(modelId)) {
         return undefined;
       }
       const template = findTemplate(params, "zai", ["glm-4.7"]);

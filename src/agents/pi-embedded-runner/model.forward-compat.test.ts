@@ -38,33 +38,22 @@ const ANTHROPIC_SONNET_EXPECTED = {
   reasoning: true,
 };
 
-const ZAI_GLM5_CASE = {
-  provider: "zai",
-  id: "glm-5",
-  expectedModel: {
+const ZAI_REGISTRY_ENTRIES = [
+  {
     provider: "zai",
-    id: "glm-5",
-    api: "openai-completions",
-    baseUrl: "https://api.z.ai/api/paas/v4",
-    reasoning: true,
-  },
-  registryEntries: [
-    {
+    modelId: "glm-4.7",
+    model: buildForwardCompatTemplate({
+      id: "glm-4.7",
+      name: "GLM-4.7",
       provider: "zai",
-      modelId: "glm-4.7",
-      model: buildForwardCompatTemplate({
-        id: "glm-4.7",
-        name: "GLM-4.7",
-        provider: "zai",
-        api: "openai-completions",
-        baseUrl: "https://api.z.ai/api/paas/v4",
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        maxTokens: 131072,
-      }),
-    },
-  ],
-} as const;
+      api: "openai-completions",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      maxTokens: 131072,
+    }),
+  },
+] as const;
 
 function createRuntimeHooks() {
   return createProviderRuntimeTestMock({
@@ -123,13 +112,13 @@ function runAnthropicSonnetForwardCompatFallback() {
   });
 }
 
-function runZaiForwardCompatFallback() {
+function runZaiForwardCompatFallback(modelId: string) {
   const result = resolveModelWithRegistry({
-    provider: ZAI_GLM5_CASE.provider,
-    modelId: ZAI_GLM5_CASE.id,
+    provider: "zai",
+    modelId,
     agentDir: "/tmp/agent",
     modelRegistry: createRegistry(
-      ZAI_GLM5_CASE.registryEntries.map((entry) => ({
+      ZAI_REGISTRY_ENTRIES.map((entry) => ({
         provider: entry.provider,
         modelId: entry.modelId,
         model: entry.model,
@@ -139,7 +128,13 @@ function runZaiForwardCompatFallback() {
   });
   expectResolvedForwardCompatFallbackWithRegistryResult({
     result,
-    expectedModel: ZAI_GLM5_CASE.expectedModel,
+    expectedModel: {
+      provider: "zai",
+      id: modelId,
+      api: "openai-completions",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      reasoning: true,
+    },
   });
 }
 
@@ -154,5 +149,11 @@ describe("resolveModel forward-compat tail", () => {
     runAnthropicSonnetForwardCompatFallback,
   );
 
-  it("builds a zai forward-compat fallback for glm-5", runZaiForwardCompatFallback);
+  it("builds a zai forward-compat fallback for glm-5", () => {
+    runZaiForwardCompatFallback("glm-5");
+  });
+
+  it("builds a zai forward-compat fallback for glm-5.1", () => {
+    runZaiForwardCompatFallback("glm-5.1");
+  });
 });
