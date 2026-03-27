@@ -7,34 +7,6 @@ const DEFAULT_PROGRAM_FILES = "C:\\Program Files";
 const DEFAULT_PROGRAM_FILES_X86 = "C:\\Program Files (x86)";
 const WINDOWS_NT_CURRENT_VERSION_KEY = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
 const WINDOWS_CURRENT_VERSION_KEY = "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion";
-const WINDOWS_DRIVE_LETTERS = [
-  "C",
-  "D",
-  "E",
-  "F",
-  "G",
-  "H",
-  "I",
-  "J",
-  "K",
-  "L",
-  "M",
-  "N",
-  "O",
-  "P",
-  "Q",
-  "R",
-  "S",
-  "T",
-  "U",
-  "V",
-  "W",
-  "X",
-  "Y",
-  "Z",
-  "A",
-  "B",
-] as const;
 const REG_QUERY_TIMEOUT_MS = 5_000;
 
 type QueryRegistryValue = (key: string, valueName: string) => string | null;
@@ -119,9 +91,29 @@ function getEnvValueCaseInsensitive(
   return actualKey ? env[actualKey] : undefined;
 }
 
-function locateWindowsRegExe(): string | null {
-  for (const drive of WINDOWS_DRIVE_LETTERS) {
-    const candidate = `${drive}:\\Windows\\System32\\reg.exe`;
+function getWindowsRegExeCandidates(env: Record<string, string | undefined>): readonly string[] {
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  for (const root of [
+    normalizeWindowsInstallRoot(getEnvValueCaseInsensitive(env, "SystemRoot")),
+    normalizeWindowsInstallRoot(getEnvValueCaseInsensitive(env, "WINDIR")),
+    DEFAULT_SYSTEM_ROOT,
+  ]) {
+    if (!root) {
+      continue;
+    }
+    const key = root.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    candidates.push(path.win32.join(root, "System32", "reg.exe"));
+  }
+  return candidates;
+}
+
+function locateWindowsRegExe(env: Record<string, string | undefined> = process.env): string | null {
+  for (const candidate of getWindowsRegExeCandidates(env)) {
     if (isReadableFileFn(candidate)) {
       return candidate;
     }
@@ -158,7 +150,7 @@ function runRegQuery(
 }
 
 function defaultQueryRegistryValue(key: string, valueName: string): string | null {
-  const regExe = locateWindowsRegExe();
+  const regExe = locateWindowsRegExe(process.env);
   if (!regExe) {
     return null;
   }
@@ -264,3 +256,8 @@ export function _resetWindowsInstallRootsForTests(
   isReadableFileFn = overrides.isReadableFile ?? defaultIsReadableFile;
   cachedProcessInstallRoots = null;
 }
+
+export const _private = {
+  getWindowsRegExeCandidates,
+  locateWindowsRegExe,
+};

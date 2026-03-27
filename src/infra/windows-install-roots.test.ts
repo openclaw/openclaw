@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  _private,
   _resetWindowsInstallRootsForTests,
   getWindowsInstallRoots,
   getWindowsProgramFilesRoots,
@@ -166,5 +167,29 @@ describe("getWindowsProgramFilesRoots", () => {
         "ProgramFiles(x86)": "E:\\Programs (x86)",
       }),
     ).toEqual(["D:\\Programs", "E:\\Programs (x86)"]);
+  });
+});
+
+describe("locateWindowsRegExe", () => {
+  it("prefers SystemRoot and WINDIR candidates over arbitrary drive scans", () => {
+    expect(
+      _private.getWindowsRegExeCandidates({
+        SystemRoot: "D:\\Windows",
+        WINDIR: "E:\\Windows",
+      }),
+    ).toEqual([
+      "D:\\Windows\\System32\\reg.exe",
+      "E:\\Windows\\System32\\reg.exe",
+      "C:\\Windows\\System32\\reg.exe",
+    ]);
+  });
+
+  it("dedupes equivalent roots case-insensitively", () => {
+    expect(
+      _private.getWindowsRegExeCandidates({
+        SystemRoot: "D:\\Windows\\",
+        windir: "d:\\windows",
+      }),
+    ).toEqual(["D:\\Windows\\System32\\reg.exe", "C:\\Windows\\System32\\reg.exe"]);
   });
 });
