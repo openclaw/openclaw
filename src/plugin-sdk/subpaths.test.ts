@@ -549,7 +549,6 @@ describe("plugin-sdk subpath exports", () => {
       "buildSglangProvider",
       "configureOpenAICompatibleSelfHostedProviderNonInteractive",
     ]);
-    expectSourceMentions("ollama-setup", ["buildOllamaProvider", "configureOllamaNonInteractive"]);
     expectSourceMentions("sandbox", ["registerSandboxBackend", "runPluginCommandWithTimeout"]);
 
     expectSourceMentions("secret-input", [
