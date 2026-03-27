@@ -2,7 +2,9 @@
   "id": "xiaomi",
   "enabledByDefault": true,
   "providers": ["xiaomi"],
-  "speechProviders": ["mimo"],
+  "contracts": {
+    "speechProviders": ["mimo"]
+  },
   "providerAuthEnvVars": {
     "xiaomi": ["XIAOMI_API_KEY"]
   },
