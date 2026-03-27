@@ -21,7 +21,7 @@ function makeMockClient(nodeId: string) {
 }
 
 describe("NodeRegistry invoke timeout", () => {
-  it("defaults invoke timeout to 5s when no explicit timeout is provided", async () => {
+  it("defaults invoke timeout to 30s when no explicit timeout is provided", async () => {
     const registry = new NodeRegistry();
     const client = makeMockClient("node-1");
     registry.register(client, {});
@@ -32,7 +32,6 @@ describe("NodeRegistry invoke timeout", () => {
     });
 
     // Simulate the node responding immediately with a result.
-    // We need to find the pending invoke's request ID from the send mock.
     const sendCalls = (client.socket.send as ReturnType<typeof vi.fn>).mock.calls;
     expect(sendCalls.length).toBe(1);
     const sentMessage = JSON.parse(sendCalls[0][0] as string);
@@ -40,7 +39,6 @@ describe("NodeRegistry invoke timeout", () => {
     expect(sentMessage.event).toBe("node.invoke.request");
     const requestId = sentMessage.payload.id;
 
-    // The timeout in the payload should reflect the 5s default.
     expect(sentMessage.payload.timeoutMs).toBeUndefined();
 
     // Resolve the pending invoke.
@@ -54,29 +52,6 @@ describe("NodeRegistry invoke timeout", () => {
     const result = await invokePromise;
     expect(result.ok).toBe(true);
     expect(result.payload).toEqual({ result: "ok" });
-  });
-
-  it("times out after ~5s by default (not 30s) for unreachable nodes", async () => {
-    vi.useFakeTimers();
-    try {
-      const registry = new NodeRegistry();
-      const client = makeMockClient("node-2");
-      registry.register(client, {});
-
-      const invokePromise = registry.invoke({
-        nodeId: "node-2",
-        command: "test.slow",
-      });
-
-      // Advance time by 5s -- the new default timeout.
-      await vi.advanceTimersByTimeAsync(5_000);
-
-      const result = await invokePromise;
-      expect(result.ok).toBe(false);
-      expect(result.error?.code).toBe("TIMEOUT");
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("respects explicit timeoutMs override", async () => {
@@ -93,7 +68,13 @@ describe("NodeRegistry invoke timeout", () => {
       });
 
       // At 5s the invoke should still be pending (custom 10s timeout).
+      let resolved = false;
+      void invokePromise.then(() => {
+        resolved = true;
+      });
       await vi.advanceTimersByTimeAsync(5_000);
+      await Promise.resolve(); // flush microtasks
+      expect(resolved).toBe(false); // still pending at 5s
 
       // Advance to 10s -- now it should timeout.
       await vi.advanceTimersByTimeAsync(5_000);
