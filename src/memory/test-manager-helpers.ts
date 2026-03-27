@@ -1,5 +1,7 @@
-import type { MemoryIndexManager } from "../../extensions/memory-core/src/memory/index.js";
 import type { OpenClawConfig } from "../config/config.js";
+
+type MemoryCoreModule = typeof import("../plugin-sdk/memory-core.js");
+type MemoryIndexManager = import("../plugin-sdk/memory-core.js").MemoryIndexManager;
 
 export async function getRequiredMemoryIndexManager(params: {
   cfg: OpenClawConfig;
@@ -7,8 +9,7 @@ export async function getRequiredMemoryIndexManager(params: {
   purpose?: "default" | "status";
 }): Promise<MemoryIndexManager> {
   await import("./embedding.test-mocks.js");
-  const { getMemorySearchManager } =
-    await import("../../extensions/memory-core/src/memory/index.js");
+  const { getMemorySearchManager }: MemoryCoreModule = await import("../plugin-sdk/memory-core.js");
   const result = await getMemorySearchManager({
     cfg: params.cfg,
     agentId: params.agentId ?? "main",

@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import type { GatewayPlugin } from "@buape/carbon/gateway";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 import type { WaitForDiscordGatewayStopParams } from "../monitor.gateway.js";
@@ -40,6 +41,21 @@ vi.mock("./gateway-registry.js", () => ({
   unregisterGateway: unregisterGatewayMock,
 }));
 
+type GatewayHarness = {
+  isConnected: boolean;
+  options: Record<string, unknown>;
+  disconnect: ReturnType<typeof vi.fn<() => void>>;
+  connect: ReturnType<typeof vi.fn<(resume?: boolean) => void>>;
+  state?: {
+    sessionId?: string | null;
+    resumeGatewayUrl?: string | null;
+    sequence?: number | null;
+  };
+  sequence?: number | null;
+  emitter: EventEmitter;
+  ws?: EventEmitter & { terminate?: () => void };
+};
+
 describe("runDiscordGatewayLifecycle", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -57,28 +73,13 @@ describe("runDiscordGatewayLifecycle", () => {
     stop?: () => Promise<void>;
     isDisallowedIntentsError?: (err: unknown) => boolean;
     pendingGatewayEvents?: DiscordGatewayEvent[];
-    gateway?: {
-      isConnected?: boolean;
-      options?: Record<string, unknown>;
-      disconnect?: () => void;
-      connect?: (resume?: boolean) => void;
-      state?: {
-        sessionId?: string | null;
-        resumeGatewayUrl?: string | null;
-        sequence?: number | null;
-      };
-      sequence?: number | null;
-      emitter?: EventEmitter;
-      ws?: EventEmitter & { terminate?: () => void };
-    };
+    gateway?: Partial<GatewayHarness>;
   }) => {
-    const gateway =
-      params?.gateway ??
-      (() => {
-        const defaultGateway = createGatewayHarness().gateway;
-        defaultGateway.isConnected = true;
-        return defaultGateway;
-      })();
+    const gateway = (() => {
+      const defaultGateway = createGatewayHarness().gateway;
+      defaultGateway.isConnected = true;
+      return params?.gateway ? { ...defaultGateway, ...params.gateway } : defaultGateway;
+    })();
     const start = vi.fn(params?.start ?? (async () => undefined));
     const stop = vi.fn(params?.stop ?? (async () => undefined));
     const threadStop = vi.fn();
@@ -121,7 +122,7 @@ describe("runDiscordGatewayLifecycle", () => {
       statusSink,
       lifecycleParams: {
         accountId: params?.accountId ?? "default",
-        gateway,
+        gateway: gateway as unknown as GatewayPlugin,
         runtime,
         isDisallowedIntentsError: params?.isDisallowedIntentsError ?? (() => false),
         voiceManager: null,
@@ -161,7 +162,7 @@ describe("runDiscordGatewayLifecycle", () => {
     ws?: EventEmitter & { terminate?: () => void };
   }) {
     const emitter = new EventEmitter();
-    const gateway = {
+    const gateway: GatewayHarness = {
       isConnected: false,
       options: {},
       disconnect: vi.fn(),

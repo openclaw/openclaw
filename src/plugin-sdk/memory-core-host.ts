@@ -66,16 +66,19 @@ export {
   type EmbeddingProviderResult,
   type GeminiEmbeddingClient,
   type MistralEmbeddingClient,
-  type OllamaEmbeddingClient,
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "../memory/embeddings.js";
+export type { OllamaEmbeddingClient } from "../../extensions/ollama/src/embedding-provider.js";
 export {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
   buildGeminiEmbeddingRequest,
 } from "../memory/embeddings-gemini.js";
 export { DEFAULT_MISTRAL_EMBEDDING_MODEL } from "../memory/embeddings-mistral.js";
-export { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "../memory/embeddings-ollama.js";
+export {
+  createOllamaEmbeddingProvider,
+  DEFAULT_OLLAMA_EMBEDDING_MODEL,
+} from "../../extensions/ollama/src/embedding-provider.js";
 export { DEFAULT_OPENAI_EMBEDDING_MODEL } from "../memory/embeddings-openai.js";
 export { DEFAULT_VOYAGE_EMBEDDING_MODEL } from "../memory/embeddings-voyage.js";
 export { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "../memory/batch-gemini.js";

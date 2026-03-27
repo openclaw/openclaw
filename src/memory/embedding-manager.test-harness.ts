@@ -2,14 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
-import type {
-  MemoryIndexManager,
-  MemorySearchManager,
-} from "../../extensions/memory-core/src/memory/index.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { MemorySearchManager } from "./types.js";
 
 type EmbeddingTestMocksModule = typeof import("./embedding.test-mocks.js");
-type MemoryIndexModule = typeof import("../../extensions/memory-core/src/memory/index.js");
+type MemoryCoreModule = typeof import("../plugin-sdk/memory-core.js");
+type MemoryIndexManager = MemorySearchManager & {
+  close: () => Promise<void>;
+  resetIndex: () => void;
+  dirty: boolean;
+};
 
 export function installEmbeddingManagerFixture(opts: {
   fixturePrefix: string;
@@ -30,12 +32,12 @@ export function installEmbeddingManagerFixture(opts: {
   let managerLarge: MemoryIndexManager | undefined;
   let managerSmall: MemoryIndexManager | undefined;
   let embedBatch: Mock<(texts: string[]) => Promise<number[][]>> | undefined;
-  let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
+  let getMemorySearchManager: MemoryCoreModule["getMemorySearchManager"];
   let resetEmbeddingMocks: EmbeddingTestMocksModule["resetEmbeddingMocks"];
 
   const resetManager = (manager: MemoryIndexManager) => {
-    (manager as unknown as { resetIndex: () => void }).resetIndex();
-    (manager as unknown as { dirty: boolean }).dirty = true;
+    manager.resetIndex();
+    manager.dirty = true;
   };
 
   const requireValue = <T>(value: T | undefined, name: string): T => {
@@ -64,7 +66,7 @@ export function installEmbeddingManagerFixture(opts: {
     const embeddingMocks = await import("./embedding.test-mocks.js");
     embedBatch = embeddingMocks.getEmbedBatchMock();
     resetEmbeddingMocks = embeddingMocks.resetEmbeddingMocks;
-    ({ getMemorySearchManager } = await import("../../extensions/memory-core/src/memory/index.js"));
+    ({ getMemorySearchManager } = await import("../plugin-sdk/memory-core.js"));
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), opts.fixturePrefix));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");

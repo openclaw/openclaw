@@ -3,6 +3,8 @@ import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { OllamaEmbeddingClient } from "../plugin-sdk/memory-core-host.js";
+import { createProviderEmbeddingProvider } from "../plugins/provider-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
@@ -15,7 +17,6 @@ import {
   createMistralEmbeddingProvider,
   type MistralEmbeddingClient,
 } from "./embeddings-mistral.js";
-import { createOllamaEmbeddingProvider, type OllamaEmbeddingClient } from "./embeddings-ollama.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
@@ -24,7 +25,7 @@ export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
-export type { OllamaEmbeddingClient } from "./embeddings-ollama.js";
+export type { OllamaEmbeddingClient } from "../plugin-sdk/memory-core-host.js";
 
 export type EmbeddingProvider = {
   id: string;
@@ -177,8 +178,41 @@ export async function createEmbeddingProvider(
       return { provider };
     }
     if (id === "ollama") {
-      const { provider, client } = await createOllamaEmbeddingProvider(options);
-      return { provider, ollama: client };
+      const pluginProvider = await createProviderEmbeddingProvider({
+        provider: id,
+        config: options.config,
+        context: {
+          config: options.config,
+          agentDir: options.agentDir,
+          provider: id,
+          model: options.model,
+          remote: options.remote
+            ? {
+                baseUrl: options.remote.baseUrl,
+                apiKey: options.remote.apiKey,
+                headers: options.remote.headers,
+              }
+            : undefined,
+          outputDimensionality: options.outputDimensionality,
+          taskType: options.taskType,
+        },
+      });
+      if (!pluginProvider) {
+        throw new Error('No embedding provider found for provider "ollama"');
+      }
+      return {
+        provider: {
+          id: pluginProvider.id,
+          model: pluginProvider.model,
+          maxInputTokens: pluginProvider.maxInputTokens,
+          embedQuery: pluginProvider.embedQuery,
+          embedBatch: pluginProvider.embedBatch,
+          embedBatchInputs: pluginProvider.embedBatchInputs as
+            | ((inputs: EmbeddingInput[]) => Promise<number[][]>)
+            | undefined,
+        },
+        ollama: pluginProvider.client as OllamaEmbeddingClient,
+      };
     }
     if (id === "gemini") {
       const { provider, client } = await createGeminiEmbeddingProvider(options);

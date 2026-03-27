@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryIndexManager } from "../../extensions/memory-core/src/memory/index.js";
+import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "../../extensions/ollama/src/embedding-provider.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings-ollama.js";
 import type {
   EmbeddingProvider,
   EmbeddingProviderResult,
