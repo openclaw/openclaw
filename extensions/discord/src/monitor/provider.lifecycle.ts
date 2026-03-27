@@ -119,7 +119,7 @@ export async function runDiscordGatewayLifecycle(params: {
       gatewaySupervisor: params.gatewaySupervisor,
       onGatewayEvent: handleGatewayEvent,
       registerForceStop: (callback) => {
-        reconnectController.registerForceStop((err) => {
+        reconnectController.registerForceStop((err: any) => {
           // Mark before the disconnect so the ensuing "Max reconnect attempts (0)"
           // is classified as reconnect-aborted, not reconnect-exhausted.
           params.gatewaySupervisor.markIntentionalAbort();

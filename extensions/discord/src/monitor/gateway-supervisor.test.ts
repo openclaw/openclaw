@@ -147,4 +147,56 @@ describe("createDiscordGatewaySupervisor", () => {
     expect(() => supervisor.dispose()).not.toThrow();
     expect(() => supervisor.markIntentionalAbort()).not.toThrow();
   });
+  it("keeps suppressing late gateway errors after dispose", () => {
+    const emitter = new EventEmitter();
+    const runtime = { error: vi.fn() };
+    const supervisor = createDiscordGatewaySupervisor({
+      gateway: { emitter },
+      isDisallowedIntentsError: () => false,
+      runtime: runtime as never,
+    });
+
+    supervisor.dispose();
+
+    expect(() =>
+      emitter.emit("error", new Error("Max reconnect attempts (0) reached after code 1005")),
+    ).not.toThrow();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("suppressed late gateway reconnect-exhausted error after dispose"),
+    );
+  });
+  it("intentionally classifies a reconnect event as reconnect-aborted", () => {
+    const emitter = new EventEmitter();
+    const seen: any[] = [];
+    const supervisor = createDiscordGatewaySupervisor({
+      gateway: { emitter } as any,
+      isDisallowedIntentsError: () => false,
+      runtime: { error: vi.fn() } as any,
+    });
+    supervisor.attachLifecycle((event) => seen.push(event));
+
+    supervisor.markIntentionalAbort();
+    emitter.emit("error", new Error("Max reconnect attempts (0) reached"));
+
+    expect(seen[0].type).toBe("reconnect-aborted");
+    expect(seen[0].shouldStopLifecycle).toBe(false);
+  });
+
+  it("resets the intentional abort flag after classifying a reconnect event", () => {
+    const emitter = new EventEmitter();
+    const seen: any[] = [];
+    const supervisor = createDiscordGatewaySupervisor({
+      gateway: { emitter } as any,
+      isDisallowedIntentsError: () => false,
+      runtime: { error: vi.fn() } as any,
+    });
+    supervisor.attachLifecycle((event) => seen.push(event));
+
+    supervisor.markIntentionalAbort();
+    emitter.emit("error", new Error("Max reconnect attempts (0) reached"));
+    expect(seen[0].type).toBe("reconnect-aborted");
+
+    emitter.emit("error", new Error("Max reconnect attempts (0) reached"));
+    expect(seen[1].type).toBe("reconnect-exhausted");
+  });
 });
