@@ -19,9 +19,9 @@ PaddleOCR Document Parser
 Simple CLI wrapper for the PaddleOCR document parsing library.
 
 Usage:
-    python scripts/paddleocr-doc-parsing/vl_caller.py --file-url "URL"
-    python scripts/paddleocr-doc-parsing/vl_caller.py --file-path "document.pdf"
-    python scripts/paddleocr-doc-parsing/vl_caller.py --file-path "doc.pdf" --pretty
+    python scripts/vl_caller.py --file-url "URL"
+    python scripts/vl_caller.py --file-path "document.pdf"
+    python scripts/vl_caller.py --file-path "doc.pdf" --pretty
 """
 
 import argparse
@@ -70,16 +70,16 @@ def main():
         epilog="""
 Examples:
   # Parse document from URL (result is auto-saved to the system temp directory)
-  python scripts/paddleocr-doc-parsing/vl_caller.py --file-url "https://example.com/document.pdf"
+  python scripts/vl_caller.py --file-url "https://example.com/document.pdf"
 
   # Parse local file (result is auto-saved to the system temp directory)
-  python scripts/paddleocr-doc-parsing/vl_caller.py --file-path "./invoice.pdf"
+  python scripts/vl_caller.py --file-path "./invoice.pdf"
 
   # Save result to a custom file path
-  python scripts/paddleocr-doc-parsing/vl_caller.py --file-url "URL" --output "./result.json" --pretty
+  python scripts/vl_caller.py --file-url "URL" --output "./result.json" --pretty
 
   # Print JSON to stdout without saving a file
-  python scripts/paddleocr-doc-parsing/vl_caller.py --file-url "URL" --stdout --pretty
+  python scripts/vl_caller.py --file-url "URL" --stdout --pretty
 Configuration:
   Set environment variables: PADDLEOCR_DOC_PARSING_API_URL, PADDLEOCR_ACCESS_TOKEN
   Optional: PADDLEOCR_DOC_PARSING_TIMEOUT

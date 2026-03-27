@@ -93,17 +93,17 @@ Raw fields may vary by model version and endpoint.
 
 ```bash
 # OCR from URL (result auto-saves to the system temp directory)
-python scripts/paddleocr-text-recognition/ocr_caller.py --file-url "URL" --pretty
+python scripts/ocr_caller.py --file-url "URL" --pretty
 
 # OCR local file (result auto-saves to the system temp directory)
-python scripts/paddleocr-text-recognition/ocr_caller.py --file-path "doc.pdf" --pretty
+python scripts/ocr_caller.py --file-path "doc.pdf" --pretty
 
 # OCR with explicit file type
-python scripts/paddleocr-text-recognition/ocr_caller.py --file-url "URL" --file-type 1 --pretty
+python scripts/ocr_caller.py --file-url "URL" --file-type 1 --pretty
 
 # Save result to a custom file path
-python scripts/paddleocr-text-recognition/ocr_caller.py --file-url "URL" --output "./result.json" --pretty
+python scripts/ocr_caller.py --file-url "URL" --output "./result.json" --pretty
 
 # Print JSON to stdout without saving a file
-python scripts/paddleocr-text-recognition/ocr_caller.py --file-url "URL" --stdout --pretty
+python scripts/ocr_caller.py --file-url "URL" --stdout --pretty
 ```

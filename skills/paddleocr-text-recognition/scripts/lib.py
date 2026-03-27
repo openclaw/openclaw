@@ -72,7 +72,7 @@ def get_config() -> tuple[str, str]:
         )
 
     # Normalize URL
-    if not api_url.startswith(("http://", "https://")):
+    if not api_url.startswith("https://"):
         api_url = f"https://{api_url}"
     api_path = urlparse(api_url).path.rstrip("/")
     if not api_path.endswith("/ocr"):
@@ -137,7 +137,14 @@ def _make_api_request(api_url: str, token: str, params: dict) -> dict:
         "Client-Platform": "official-skill",
     }
 
-    timeout = float(os.getenv("PADDLEOCR_OCR_TIMEOUT", str(DEFAULT_TIMEOUT)))
+    try:
+        timeout = float(os.getenv("PADDLEOCR_OCR_TIMEOUT", str(DEFAULT_TIMEOUT)))
+    except (ValueError, TypeError):
+        logger.warning(
+            "Invalid PADDLEOCR_OCR_TIMEOUT value, using default %ds",
+            DEFAULT_TIMEOUT,
+        )
+        timeout = float(DEFAULT_TIMEOUT)
 
     try:
         with httpx.Client(timeout=timeout) as client:

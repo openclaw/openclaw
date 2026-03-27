@@ -84,7 +84,7 @@ def optimize_image(
 
     # If still too large, reduce resolution
     scale_factor = 0.9
-    while new_size > max_size_mb and scale_factor > 0.3:
+    while new_size > max_size_mb and scale_factor >= 0.4:
         new_width = int(img.size[0] * scale_factor)
         new_height = int(img.size[1] * scale_factor)
 
@@ -120,7 +120,7 @@ Examples:
   python scripts/optimize_file.py input.jpg output.jpg --quality 70
 
 Supported formats:
-  - Images: PNG, JPG, JPEG, BMP, TIFF, TIF
+  - Images: PNG, JPG, JPEG, BMP, TIFF, TIF, WEBP
         """,
     )
 
@@ -149,11 +149,11 @@ Supported formats:
     # Determine file type
     ext = input_path.suffix.lower()
 
-    if ext in [".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif"]:
+    if ext in [".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"]:
         optimize_image(input_path, output_path, args.quality, args.target_size)
     else:
         print(f"ERROR: Unsupported file format: {ext}")
-        print("Supported: PNG, JPG, JPEG, BMP, TIFF, TIF")
+        print("Supported: PNG, JPG, JPEG, BMP, TIFF, TIF, WEBP")
         sys.exit(1)
 
     print(f"\nOptimized file saved to: {output_path}")

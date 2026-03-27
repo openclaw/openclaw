@@ -19,8 +19,8 @@ Smoke Test for PaddleOCR Text Recognition
 Verifies configuration and API connectivity.
 
 Usage:
-    python paddleocr-text-recognition/scripts/smoke_test.py
-    python paddleocr-text-recognition/scripts/smoke_test.py --skip-api-test
+    python scripts/smoke_test.py
+    python scripts/smoke_test.py --skip-api-test
 """
 
 import argparse
@@ -112,7 +112,7 @@ def main():
     # Use provided test URL or default
     test_url = (
         args.test_url
-        or "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/release/2.7/doc/imgs/11.jpg"
+        or "https://paddle-model-ecology.bj.bcebos.com/paddlex/imgs/demo_image/general_ocr_001.png"
     )
     print(f"  Test image: {test_url}")
 
@@ -143,10 +143,10 @@ def main():
     print("=" * 60)
     print("\nNext steps:")
     print(
-        '  python paddleocr-text-recognition/scripts/ocr_caller.py --file-url "URL" --pretty'
+        '  python scripts/ocr_caller.py --file-url "URL" --pretty'
     )
     print(
-        '  python paddleocr-text-recognition/scripts/ocr_caller.py --file-path "image.png" --pretty'
+        '  python scripts/ocr_caller.py --file-path "image.png" --pretty'
     )
     print(
         "  Results are auto-saved to the system temp directory; the caller prints the saved path."

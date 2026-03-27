@@ -14,7 +14,6 @@ metadata:
       env:
         - PADDLEOCR_OCR_API_URL
         - PADDLEOCR_ACCESS_TOKEN
-        - PADDLEOCR_OCR_TIMEOUT
       bins:
         - python
     primaryEnv: PADDLEOCR_ACCESS_TOKEN
@@ -45,7 +44,7 @@ Do not use this skill in the following situations:
 Install Python dependencies before using this skill. From the skill directory (`skills/paddleocr-text-recognition`):
 
 ```bash
-pip install -r scripts/requirements.txt
+pip install -r requirements.txt
 ```
 
 ## How to Use This Skill

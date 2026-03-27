@@ -13,7 +13,6 @@ metadata:
       env:
         - PADDLEOCR_DOC_PARSING_API_URL
         - PADDLEOCR_ACCESS_TOKEN
-        - PADDLEOCR_DOC_PARSING_TIMEOUT
       bins:
         - python
     primaryEnv: PADDLEOCR_ACCESS_TOKEN
@@ -47,13 +46,13 @@ metadata:
 Install Python dependencies before using this skill. From the skill directory (`skills/paddleocr-doc-parsing`):
 
 ```bash
-pip install -r scripts/requirements.txt
+pip install -r requirements.txt
 ```
 
 **Optional** — for document optimization and `split_pdf.py` (page extraction):
 
 ```bash
-pip install -r scripts/requirements-optimize.txt
+pip install -r requirements-optimize.txt
 ```
 
 ## How to Use This Skill

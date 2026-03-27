@@ -87,14 +87,14 @@ Raw fields may vary by model version and endpoint.
 
 ```bash
 # Parse document from URL (result auto-saves to the system temp directory)
-python scripts/paddleocr-doc-parsing/vl_caller.py --file-url "URL" --pretty
+python scripts/vl_caller.py --file-url "URL" --pretty
 
 # Parse local file (result auto-saves to the system temp directory)
-python scripts/paddleocr-doc-parsing/vl_caller.py --file-path "doc.pdf" --pretty
+python scripts/vl_caller.py --file-path "doc.pdf" --pretty
 
 # Save result to a custom file path
-python scripts/paddleocr-doc-parsing/vl_caller.py --file-url "URL" --output "./result.json" --pretty
+python scripts/vl_caller.py --file-url "URL" --output "./result.json" --pretty
 
 # Print JSON to stdout without saving a file
-python scripts/paddleocr-doc-parsing/vl_caller.py --file-url "URL" --stdout --pretty
+python scripts/vl_caller.py --file-url "URL" --stdout --pretty
 ```
