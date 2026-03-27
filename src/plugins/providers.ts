@@ -91,3 +91,32 @@ export function resolveNonBundledProviderPluginIds(params: {
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
 }
+
+export function resolveCatalogHookProviderPluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+}): string[] {
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  const enabledProviderPluginIds = registry.plugins
+    .filter(
+      (plugin) =>
+        plugin.providers.length > 0 &&
+        resolveEffectiveEnableState({
+          id: plugin.id,
+          origin: plugin.origin,
+          config: normalizedConfig,
+          rootConfig: params.config,
+        }).enabled,
+    )
+    .map((plugin) => plugin.id);
+  const bundledCompatPluginIds = resolveBundledProviderCompatPluginIds(params);
+  return [...new Set([...enabledProviderPluginIds, ...bundledCompatPluginIds])].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
+}
