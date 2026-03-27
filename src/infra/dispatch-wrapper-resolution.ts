@@ -42,6 +42,37 @@ const TIME_FLAG_OPTIONS = new Set([
   "--version",
 ]);
 const TIME_OPTIONS_WITH_VALUE = new Set(["-f", "--format", "-o", "--output"]);
+const SCRIPT_FLAG_OPTIONS = new Set([
+  "-a",
+  "--append",
+  "-e",
+  "--return",
+  "-f",
+  "--flush",
+  "--force",
+  "-q",
+  "--quiet",
+  "-h",
+  "--help",
+  "-V",
+  "--version",
+]);
+const SCRIPT_OPTIONS_WITH_VALUE = new Set([
+  "-B",
+  "--log-io",
+  "-E",
+  "--echo",
+  "-I",
+  "--log-in",
+  "-m",
+  "--logging-format",
+  "-O",
+  "--log-out",
+  "-o",
+  "--output-limit",
+  "-T",
+  "--log-timing",
+]);
 const TIMEOUT_FLAG_OPTIONS = new Set(["--foreground", "--preserve-status", "-v", "--verbose"]);
 const TIMEOUT_OPTIONS_WITH_VALUE = new Set(["-k", "--kill-after", "-s", "--signal"]);
 
@@ -259,6 +290,43 @@ function unwrapTimeInvocation(argv: string[]): string[] | null {
   });
 }
 
+function unwrapScriptInvocation(argv: string[]): string[] | null {
+  return scanWrapperInvocation(argv, {
+    separators: new Set(["--"]),
+    onToken: (_token, lower) => {
+      if (!lower.startsWith("-") || lower === "-") {
+        return "stop";
+      }
+      if (lower === "-c" || lower === "--command" || lower === "-t" || lower.startsWith("-t")) {
+        return "invalid";
+      }
+      if (SCRIPT_FLAG_OPTIONS.has(lower)) {
+        return "continue";
+      }
+      const [flag] = lower.split("=", 2);
+      if (SCRIPT_OPTIONS_WITH_VALUE.has(flag)) {
+        return lower.includes("=") ? "continue" : "consume-next";
+      }
+      return "invalid";
+    },
+    adjustCommandIndex: (commandIndex, currentArgv) => {
+      let sawTranscript = false;
+      for (let idx = commandIndex; idx < currentArgv.length; idx += 1) {
+        const token = currentArgv[idx]?.trim() ?? "";
+        if (!token) {
+          continue;
+        }
+        if (!sawTranscript) {
+          sawTranscript = true;
+          continue;
+        }
+        return idx;
+      }
+      return null;
+    },
+  });
+}
+
 function unwrapTimeoutInvocation(argv: string[]): string[] | null {
   return unwrapDashOptionInvocation(argv, {
     onFlag: (flag, lower) => {
@@ -294,6 +362,7 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
   { name: "ionice" },
   { name: "nice", unwrap: unwrapNiceInvocation, transparentUsage: true },
   { name: "nohup", unwrap: unwrapNohupInvocation, transparentUsage: true },
+  { name: "script", unwrap: unwrapScriptInvocation, transparentUsage: true },
   { name: "setsid" },
   { name: "stdbuf", unwrap: unwrapStdbufInvocation, transparentUsage: true },
   { name: "sudo" },
