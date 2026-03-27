@@ -1,4 +1,4 @@
-"""Backward-compatible façade — real code lives in ``src/research/``."""
+"""Deep Research Pipeline — decomposed package."""
 
 from src.research._core import DeepResearchPipeline, EvidencePiece, ResearchState
 
