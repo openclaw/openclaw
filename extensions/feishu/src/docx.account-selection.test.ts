@@ -1,17 +1,17 @@
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { registerFeishuDocTools } from "./docx.js";
+import { __testing as feishuDocTesting, registerFeishuDocTools } from "./docx.js";
+import { resolveFeishuToolAccount } from "./tool-account.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
-const createFeishuClientMock = vi.fn((creds: { appId?: string } | undefined) => ({
+const createFeishuToolClientMock = vi.fn((creds: { appId?: string } | undefined) => ({
   __appId: creds?.appId,
+  docx: {
+    documentBlock: {
+      list: vi.fn(async () => ({ code: 0, data: { items: [] } })),
+    },
+  },
 }));
-
-vi.mock("./client.js", () => {
-  return {
-    createFeishuClient: (creds: { appId?: string } | undefined) => createFeishuClientMock(creds),
-  };
-});
 
 // Patch SDK import so tool execution can run without network concerns.
 vi.mock("@larksuiteoapi/node-sdk", () => {
@@ -21,6 +21,20 @@ vi.mock("@larksuiteoapi/node-sdk", () => {
 });
 
 describe("feishu_doc account selection", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    feishuDocTesting.setDepsForTest({
+      createFeishuToolClient: ({ api, executeParams, defaultAccountId }) =>
+        createFeishuToolClientMock(
+          resolveFeishuToolAccount({ api, executeParams, defaultAccountId }),
+        ) as never,
+    });
+  });
+
+  afterEach(() => {
+    feishuDocTesting.setDepsForTest(null);
+  });
+
   function createDocEnabledConfig(): OpenClawPluginApi["config"] {
     return {
       channels: {
@@ -47,9 +61,9 @@ describe("feishu_doc account selection", () => {
     await docToolA.execute("call-a", { action: "list_blocks", doc_token: "d" });
     await docToolB.execute("call-b", { action: "list_blocks", doc_token: "d" });
 
-    expect(createFeishuClientMock).toHaveBeenCalledTimes(2);
-    expect(createFeishuClientMock.mock.calls[0]?.[0]?.appId).toBe("app-a");
-    expect(createFeishuClientMock.mock.calls[1]?.[0]?.appId).toBe("app-b");
+    expect(createFeishuToolClientMock).toHaveBeenCalledTimes(2);
+    expect(createFeishuToolClientMock.mock.calls[0]?.[0]?.appId).toBe("app-a");
+    expect(createFeishuToolClientMock.mock.calls[1]?.[0]?.appId).toBe("app-b");
   });
 
   test("explicit accountId param overrides agentAccountId context", async () => {
@@ -65,6 +79,6 @@ describe("feishu_doc account selection", () => {
       accountId: "a",
     });
 
-    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
+    expect(createFeishuToolClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
   });
 });

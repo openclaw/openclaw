@@ -1,25 +1,60 @@
 // Private runtime barrel for the bundled Feishu extension.
-// Keep this barrel thin and aligned with the local extension surface.
+// Keep named exports explicit so Jiti can preserve this surface when tests
+// partially load bundled channel config/runtime modules.
 
 export type {
+  AllowlistMatch,
+  AnyAgentTool,
+  BaseProbeResult,
+  ChannelGroupContext,
   ChannelMessageActionName,
   ChannelMeta,
   ChannelOutboundAdapter,
-  OpenClawConfig as ClawdbotConfig,
+  ChannelPlugin,
+  ClawdbotConfig,
+  GroupToolPolicyConfig,
+  HistoryEntry,
   OpenClawConfig,
   OpenClawPluginApi,
+  OutboundIdentity,
   PluginRuntime,
+  ReplyPayload,
   RuntimeEnv,
 } from "openclaw/plugin-sdk/feishu";
 export {
   DEFAULT_ACCOUNT_ID,
+  DEFAULT_GROUP_HISTORY_LIMIT,
   PAIRING_APPROVED_MESSAGE,
+  WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+  applyBasicWebhookRequestGuards,
+  buildAgentMediaPayload,
   buildChannelConfigSchema,
+  buildPendingHistoryContextFromMap,
   buildProbeChannelStatusSummary,
+  clearHistoryEntriesIfEnabled,
   createActionGate,
+  createChannelPairingController,
+  createChannelReplyPipeline,
+  createDedupeCache,
   createDefaultChannelRuntimeState,
+  createFixedWindowRateLimiter,
+  createPersistentDedupe,
+  createReplyPrefixContext,
+  createWebhookAnomalyTracker,
+  evaluateSenderGroupAccessForPolicy,
+  fetchWithSsrFGuard,
+  installRequestBodyLimitGuard,
+  logTypingFailure,
+  normalizeAgentId,
+  readJsonFileWithFallback,
+  recordPendingHistoryEntryIfEnabled,
+  resolveAgentOutboundIdentity,
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+  withTempDownloadPath,
 } from "openclaw/plugin-sdk/feishu";
-export * from "openclaw/plugin-sdk/feishu";
 export {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,

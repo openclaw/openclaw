@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardAdapter,
   createTestWizardPrompter,
@@ -28,14 +28,6 @@ import type { CoreConfig } from "./types.js";
 const hoisted = vi.hoisted(() => ({
   monitorIrcProvider: vi.fn(),
 }));
-
-vi.mock("./monitor.js", async () => {
-  const actual = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
-  return {
-    ...actual,
-    monitorIrcProvider: hoisted.monitorIrcProvider,
-  };
-});
 
 const ircConfigureAdapter = createPluginSetupWizardAdapter(ircPlugin);
 
