@@ -271,16 +271,21 @@ export async function waitForWebLogin(
       //
       // Try a restart for 515 directly, or for 401 if we haven't tried yet
       // (distinguishes post-QR 401 from a genuine logged-out session).
+      //
+      // Save originalStatus before restartLoginSocket — it mutates
+      // login.errorStatus on failure, which could skip the loggedOut
+      // cleanup path if the restart fails with a non-401 error.
+      const originalStatus = login.errorStatus;
       const isRestartCandidate =
-        login.errorStatus === 515 ||
-        (login.errorStatus === LOGGED_OUT_STATUS && !login.restartAttempted);
+        originalStatus === 515 ||
+        (originalStatus === LOGGED_OUT_STATUS && !login.restartAttempted);
       if (isRestartCandidate) {
         const restarted = await restartLoginSocket(login, runtime);
         if (restarted && isLoginFresh(login)) {
           continue;
         }
       }
-      if (login.errorStatus === LOGGED_OUT_STATUS) {
+      if (originalStatus === LOGGED_OUT_STATUS) {
         await logoutWeb({
           authDir: login.authDir,
           isLegacyAuthDir: login.isLegacyAuthDir,
