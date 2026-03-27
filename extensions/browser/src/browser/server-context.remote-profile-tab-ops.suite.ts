@@ -158,6 +158,57 @@ describe("browser server-context remote profile tab operations", () => {
     expect(second.targetId).toBe("A");
   });
 
+  it("skips Chrome internal UI targets for remote default selection", async () => {
+    const listPagesViaPlaywright = vi.fn(
+      createSequentialPageLister([
+        [
+          {
+            targetId: "OMNI",
+            title: "Omnibox",
+            url: "chrome://omnibox-popup.top-chrome/",
+            type: "page",
+          },
+        ],
+        [
+          {
+            targetId: "OMNI",
+            title: "Omnibox",
+            url: "chrome://omnibox-popup.top-chrome/",
+            type: "page",
+          },
+          {
+            targetId: "REAL",
+            title: "New Tab",
+            url: "about:blank",
+            type: "page",
+          },
+        ],
+      ]),
+    );
+    const createPageViaPlaywright = vi.fn(async () => ({
+      targetId: "REAL",
+      title: "New Tab",
+      url: "about:blank",
+      type: "page",
+    }));
+
+    vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+      createPageViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
+
+    const { state, remote } = createRemoteRouteHarness();
+
+    const selected = await remote.ensureTabAvailable();
+    expect(selected.targetId).toBe("REAL");
+    expect(state.profiles.get("remote")?.lastTargetId).toBe("REAL");
+    expect(createPageViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: "https://browserless.example/chrome?token=abc",
+      url: "about:blank",
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+  });
+
   it("rejects stale targetId for remote profiles even when only one tab remains", async () => {
     const responses = [
       [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],

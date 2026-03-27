@@ -23,6 +23,29 @@ type SelectionOps = {
   closeTab: (targetId: string) => Promise<void>;
 };
 
+function isBrowserInternalSurfaceUrl(url: string | undefined): boolean {
+  const normalized = url?.trim().toLowerCase() ?? "";
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    normalized.startsWith("chrome://") ||
+    normalized.startsWith("devtools://") ||
+    normalized.startsWith("edge://") ||
+    normalized.startsWith("brave://") ||
+    normalized.startsWith("vivaldi://") ||
+    normalized.startsWith("opera://")
+  );
+}
+
+function isDefaultNavigableTab(tab: BrowserTab): boolean {
+  if ((tab.type ?? "page") !== "page") {
+    return false;
+  }
+  return !isBrowserInternalSurfaceUrl(tab.url);
+}
+
 export function createProfileSelectionOps({
   profile,
   getProfileState,
@@ -41,8 +64,15 @@ export function createProfileSelectionOps({
       await openTab("about:blank");
     }
 
-    const tabs = await listTabs();
-    const candidates = capabilities.supportsPerTabWs ? tabs.filter((t) => Boolean(t.wsUrl)) : tabs;
+    const listCandidateTabs = async () => {
+      const tabs = await listTabs();
+      return capabilities.supportsPerTabWs ? tabs.filter((t) => Boolean(t.wsUrl)) : tabs;
+    };
+    let candidates = await listCandidateTabs();
+    if (!targetId && candidates.length > 0 && !candidates.some(isDefaultNavigableTab)) {
+      await openTab("about:blank");
+      candidates = await listCandidateTabs();
+    }
 
     const resolveById = (raw: string) => {
       const resolved = resolveTargetIdFromTabs(raw, candidates);
@@ -58,11 +88,11 @@ export function createProfileSelectionOps({
     const pickDefault = () => {
       const last = profileState.lastTargetId?.trim() || "";
       const lastResolved = last ? resolveById(last) : null;
-      if (lastResolved && lastResolved !== "AMBIGUOUS") {
+      if (lastResolved && lastResolved !== "AMBIGUOUS" && isDefaultNavigableTab(lastResolved)) {
         return lastResolved;
       }
       // Prefer a real page tab first (avoid service workers/background targets).
-      const page = candidates.find((t) => (t.type ?? "page") === "page");
+      const page = candidates.find(isDefaultNavigableTab);
       return page ?? candidates.at(0) ?? null;
     };
 
