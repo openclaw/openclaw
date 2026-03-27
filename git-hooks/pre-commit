@@ -50,15 +50,14 @@ git add -- "${files[@]}"
 
 # This hook is also exercised from lightweight temp repos in tests, where the
 # staged-file safety behavior matters but the full OpenClaw workspace does not
-# exist. Only run the repo-wide gate inside a real checkout.
+# exist. Only run the repo-wide validation gate inside a real checkout.
 if [[ -f "$ROOT_DIR/package.json" ]] && [[ -f "$ROOT_DIR/pnpm-lock.yaml" ]]; then
   cd "$ROOT_DIR"
   case "${FAST_COMMIT:-}" in
     1|true|TRUE|yes|YES|on|ON)
-      echo "FAST_COMMIT enabled: skipping pnpm format and pnpm check in pre-commit hook."
+      echo "FAST_COMMIT enabled: skipping pnpm check in pre-commit hook."
       ;;
     *)
-      pnpm format
       pnpm check
       ;;
   esac
