@@ -44,6 +44,7 @@ import {
   prependBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
 import {
+  hasCompletedBootstrapTurn,
   makeBootstrapWarn,
   resolveBootstrapContextForRun,
   resolveContextInjectionMode,
@@ -338,16 +339,25 @@ export async function runEmbeddedAttempt(
     const sessionLabel = params.sessionKey ?? params.sessionId;
 
     // When contextInjection is "continuation-skip", skip workspace bootstrap
-    // files on continuation turns (session file already exists) to save tokens.
-    // Bootstrap context is still fully injected on first message and after
-    // compaction (compact.ts always resolves full context independently).
+    // files on safe continuation turns to save tokens (~93% reduction).
+    //
+    // A turn is considered a safe continuation when ALL of:
+    //   1. contextInjection is "continuation-skip"
+    //   2. The session transcript has at least one completed assistant turn
+    //      (proving bootstrap context was previously injected and processed)
+    //   3. No compaction occurred after the last assistant turn (compaction
+    //      rewrites the transcript, so the first post-compaction retry must
+    //      re-inject full bootstrap context)
+    //   4. The run is not a heartbeat — heartbeat runs need HEARTBEAT.md via
+    //      the lightweight context filtering path in resolveBootstrapContextForRun
+    //
+    // compact.ts also resolves full bootstrap context independently for the
+    // compaction prompt itself.
     const contextInjectionMode = resolveContextInjectionMode(params.config);
     const isContinuationTurn =
       contextInjectionMode === "continuation-skip" &&
-      (await fs
-        .stat(params.sessionFile)
-        .then(() => true)
-        .catch(() => false));
+      params.bootstrapContextRunKind !== "heartbeat" &&
+      (await hasCompletedBootstrapTurn(params.sessionFile));
 
     const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = isContinuationTurn
       ? {

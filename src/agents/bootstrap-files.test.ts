@@ -8,6 +8,7 @@ import {
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import {
+  hasCompletedBootstrapTurn,
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
@@ -129,6 +130,95 @@ describe("resolveBootstrapContextForRun", () => {
     });
 
     expect(files).toEqual([]);
+  });
+});
+
+describe("hasCompletedBootstrapTurn", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "openclaw-bootstrap-turn-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns false when session file does not exist", async () => {
+    expect(await hasCompletedBootstrapTurn(path.join(tmpDir, "nonexistent.jsonl"))).toBe(false);
+  });
+
+  it("returns false for empty session file", async () => {
+    const file = path.join(tmpDir, "session.jsonl");
+    await fs.writeFile(file, "", "utf8");
+    expect(await hasCompletedBootstrapTurn(file)).toBe(false);
+  });
+
+  it("returns false for header-only session file (pre-created, no assistant turn)", async () => {
+    const file = path.join(tmpDir, "session.jsonl");
+    await fs.writeFile(
+      file,
+      JSON.stringify({ type: "session", sessionId: "test-123" }) + "\n",
+      "utf8",
+    );
+    expect(await hasCompletedBootstrapTurn(file)).toBe(false);
+  });
+
+  it("returns false for session with only user messages (no assistant turn yet)", async () => {
+    const file = path.join(tmpDir, "session.jsonl");
+    const lines = [
+      JSON.stringify({ type: "session", sessionId: "test-123" }),
+      JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }),
+    ];
+    await fs.writeFile(file, lines.join("\n") + "\n", "utf8");
+    expect(await hasCompletedBootstrapTurn(file)).toBe(false);
+  });
+
+  it("returns true for session with a completed assistant turn", async () => {
+    const file = path.join(tmpDir, "session.jsonl");
+    const lines = [
+      JSON.stringify({ type: "session", sessionId: "test-123" }),
+      JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }),
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "hi there" } }),
+    ];
+    await fs.writeFile(file, lines.join("\n") + "\n", "utf8");
+    expect(await hasCompletedBootstrapTurn(file)).toBe(true);
+  });
+
+  it("returns false when compaction occurred after last assistant turn (post-compaction retry)", async () => {
+    const file = path.join(tmpDir, "session.jsonl");
+    const lines = [
+      JSON.stringify({ type: "session", sessionId: "test-123" }),
+      JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }),
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "hi there" } }),
+      JSON.stringify({ type: "compaction", summary: "compacted" }),
+    ];
+    await fs.writeFile(file, lines.join("\n") + "\n", "utf8");
+    expect(await hasCompletedBootstrapTurn(file)).toBe(false);
+  });
+
+  it("returns true when assistant turn follows compaction (normal continuation after compaction)", async () => {
+    const file = path.join(tmpDir, "session.jsonl");
+    const lines = [
+      JSON.stringify({ type: "session", sessionId: "test-123" }),
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "old reply" } }),
+      JSON.stringify({ type: "compaction", summary: "compacted" }),
+      JSON.stringify({ type: "message", message: { role: "user", content: "new question" } }),
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "new reply" } }),
+    ];
+    await fs.writeFile(file, lines.join("\n") + "\n", "utf8");
+    expect(await hasCompletedBootstrapTurn(file)).toBe(true);
+  });
+
+  it("handles malformed JSON lines gracefully", async () => {
+    const file = path.join(tmpDir, "session.jsonl");
+    const lines = [
+      "not valid json",
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+      "{broken",
+    ];
+    await fs.writeFile(file, lines.join("\n") + "\n", "utf8");
+    expect(await hasCompletedBootstrapTurn(file)).toBe(true);
   });
 });
 

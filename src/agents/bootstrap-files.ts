@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
@@ -19,6 +20,65 @@ export type BootstrapContextMode = "full" | "lightweight";
 /** Resolve the effective context-injection mode from config (default: "always"). */
 export function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection {
   return config?.agents?.defaults?.contextInjection ?? "always";
+}
+
+/**
+ * Determine whether a session qualifies as a safe continuation turn for
+ * skipping bootstrap re-injection. This requires:
+ *
+ * 1. At least one completed assistant turn in the transcript (proving
+ *    bootstrap context was previously injected and processed).
+ * 2. No compaction entry after the last assistant turn (compaction
+ *    rewrites the transcript, so the post-compaction retry must
+ *    re-inject full bootstrap context).
+ *
+ * Returns false if the session file does not exist or cannot be read.
+ * The scan reads line-by-line and only inspects the `type` and
+ * `message.role` JSON fields, keeping overhead minimal even for large
+ * session files.
+ */
+export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<boolean> {
+  let content: string;
+  try {
+    content = await fs.readFile(sessionFile, "utf-8");
+  } catch {
+    return false;
+  }
+  if (!content) {
+    return false;
+  }
+
+  let hasAssistant = false;
+  let compactedAfterLastAssistant = false;
+
+  for (const line of content.split(/\r?\n/)) {
+    if (!line) {
+      continue;
+    }
+    // Fast string checks before parsing JSON to keep large-session overhead low.
+    if (line.includes('"assistant"') && line.includes('"message"')) {
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type === "message" && entry.message?.role === "assistant") {
+          hasAssistant = true;
+          compactedAfterLastAssistant = false;
+        }
+      } catch {
+        // Skip malformed lines
+      }
+    } else if (hasAssistant && line.includes('"compaction"')) {
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type === "compaction") {
+          compactedAfterLastAssistant = true;
+        }
+      } catch {
+        // Skip malformed lines
+      }
+    }
+  }
+
+  return hasAssistant && !compactedAfterLastAssistant;
 }
 
 export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
