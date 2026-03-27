@@ -89,6 +89,35 @@ describe("tools.fs.workspaceOnly", () => {
     });
   });
 
+  it("ignores host roots for sandboxed read/write/edit tools", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, agentRoot, sandbox }) => {
+      await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
+
+      const cfg = {
+        tools: {
+          fs: {
+            roots: [{ path: agentRoot, kind: "dir", access: "rw" }],
+          },
+        },
+      } as OpenClawConfig;
+      const tools = createOpenClawCodingTools({ sandbox, workspaceDir: sandboxRoot, config: cfg });
+      const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+
+      const readResult = await readTool?.execute("t-roots-read", { path: "/agent/secret.txt" });
+      expect(getTextContent(readResult)).toContain("shh");
+
+      await writeTool?.execute("t-roots-write", { path: "/agent/owned.txt", content: "x" });
+      expect(await fs.readFile(path.join(agentRoot, "owned.txt"), "utf8")).toBe("x");
+
+      await editTool?.execute("t-roots-edit", {
+        path: "/agent/secret.txt",
+        oldText: "shh",
+        newText: "ok",
+      });
+      expect(await fs.readFile(path.join(agentRoot, "secret.txt"), "utf8")).toBe("ok");
+    });
+  });
+
   it("rejects sandbox mounts outside the workspace root when enabled", async () => {
     await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
       await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
