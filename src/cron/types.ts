@@ -79,6 +79,13 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
+export type CronRetryPolicy = {
+  /** Maximum fixed-delay retries for this job after a failure. */
+  retryCount?: number;
+  /** Fixed retry delay in milliseconds. */
+  retryDelayMs?: number;
+};
+
 export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
 
 export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
@@ -111,6 +118,12 @@ type CronAgentTurnPayloadPatch = {
 } & Partial<CronAgentTurnPayloadFields>;
 export type CronJobState = {
   nextRunAtMs?: number;
+  /** Preserved natural next run for recurring schedules while a retry is pending. */
+  naturalNextRunAtMs?: number;
+  /** Pending fixed-delay retry wake for recurring schedules. */
+  retryNextRunAtMs?: number;
+  /** Current retry attempt within the active recurring failure cycle. */
+  retryAttempt?: number;
   runningAtMs?: number;
   lastRunAtMs?: number;
   /** Preferred execution outcome field. */
@@ -143,6 +156,8 @@ export type CronJob = CronJobBase<
   CronDelivery,
   CronFailureAlert | false
 > & {
+  retryCount?: number;
+  retryDelayMs?: number;
   state: CronJobState;
 };
 

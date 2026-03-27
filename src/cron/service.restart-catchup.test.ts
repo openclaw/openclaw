@@ -283,6 +283,74 @@ describe("CronService restart catch-up", () => {
     );
   });
 
+  it("preserves a persisted recurring retry wake across restart and runs at the retry time", async () => {
+    vi.setSystemTime(new Date("2025-12-13T10:05:00.000Z"));
+
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "retried" }));
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "restart-recurring-retry",
+        name: "hourly retrying job",
+        enabled: true,
+        createdAtMs: Date.parse("2025-12-10T10:00:00.000Z"),
+        updatedAtMs: Date.parse("2025-12-13T10:00:00.000Z"),
+        schedule: {
+          kind: "every",
+          everyMs: 60 * 60_000,
+          anchorMs: Date.parse("2025-12-13T10:00:00.000Z"),
+        },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "retry me" },
+        delivery: { mode: "none" },
+        retryCount: 1,
+        retryDelayMs: 10 * 60_000,
+        state: {
+          lastRunAtMs: Date.parse("2025-12-13T10:00:00.000Z"),
+          lastStatus: "error",
+          consecutiveErrors: 1,
+          naturalNextRunAtMs: Date.parse("2025-12-13T11:00:00.000Z"),
+          retryNextRunAtMs: Date.parse("2025-12-13T10:10:00.000Z"),
+          retryAttempt: 1,
+          nextRunAtMs: Date.parse("2025-12-13T10:10:00.000Z"),
+        },
+      },
+    ]);
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: runIsolatedAgentJob as never,
+    });
+
+    try {
+      await cron.start();
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+
+      vi.setSystemTime(new Date("2025-12-13T10:10:01.000Z"));
+      await cron.run("restart-recurring-retry", "due");
+
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+
+      const listedJobs = await cron.list({ includeDisabled: true });
+      const updated = listedJobs.find((job) => job.id === "restart-recurring-retry");
+      expect(updated?.state.naturalNextRunAtMs).toBe(Date.parse("2025-12-13T11:00:00.000Z"));
+      expect(updated?.state.retryNextRunAtMs).toBeUndefined();
+      expect(updated?.state.retryAttempt).toBeUndefined();
+      expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-13T11:00:00.000Z"));
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
+
   it("replays missed cron slot after restart when error backoff has already elapsed", async () => {
     vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
     await withRestartedCron(

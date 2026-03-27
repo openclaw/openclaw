@@ -548,6 +548,14 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     description: normalizeOptionalText(input.description),
     enabled,
     deleteAfterRun,
+    retryCount:
+      typeof input.retryCount === "number" && Number.isFinite(input.retryCount)
+        ? Math.max(0, Math.floor(input.retryCount))
+        : undefined,
+    retryDelayMs:
+      typeof input.retryDelayMs === "number" && Number.isFinite(input.retryDelayMs)
+        ? Math.max(0, Math.floor(input.retryDelayMs))
+        : undefined,
     createdAtMs: now,
     updatedAtMs: now,
     schedule,
@@ -584,6 +592,12 @@ export function applyJobPatch(
   }
   if (typeof patch.deleteAfterRun === "boolean") {
     job.deleteAfterRun = patch.deleteAfterRun;
+  }
+  if (typeof patch.retryCount === "number" && Number.isFinite(patch.retryCount)) {
+    job.retryCount = Math.max(0, Math.floor(patch.retryCount));
+  }
+  if (typeof patch.retryDelayMs === "number" && Number.isFinite(patch.retryDelayMs)) {
+    job.retryDelayMs = Math.max(0, Math.floor(patch.retryDelayMs));
   }
   if (patch.schedule) {
     if (patch.schedule.kind === "cron") {

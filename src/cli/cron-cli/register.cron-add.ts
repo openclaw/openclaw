@@ -88,6 +88,8 @@ export function registerCronAddCommand(cron: Command) {
       )
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
+      .option("--retry-count <n>", "Fixed-delay retry attempts for this job")
+      .option("--retry-delay <duration>", "Fixed retry delay (e.g. 10m, 1h)")
       .option("--light-context", "Use lightweight bootstrap context for agent jobs", false)
       .option("--announce", "Announce summary to a chat (subagent-style)", false)
       .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
@@ -121,6 +123,15 @@ export function registerCronAddCommand(cron: Command) {
             typeof opts.agent === "string" && opts.agent.trim()
               ? sanitizeAgentId(opts.agent.trim())
               : undefined;
+          const retryCount = parsePositiveIntOrUndefined(opts.retryCount);
+          if (opts.retryCount !== undefined && retryCount === undefined) {
+            throw new Error("Invalid --retry-count; must be a positive integer");
+          }
+          const retryDelayMs =
+            typeof opts.retryDelay === "string" ? parseDurationMs(opts.retryDelay) : undefined;
+          if (opts.retryDelay !== undefined && !retryDelayMs) {
+            throw new Error("Invalid --retry-delay; use e.g. 10m, 1h");
+          }
 
           const hasAnnounce = Boolean(opts.announce) || opts.deliver === true;
           const hasNoDeliver = opts.deliver === false;
@@ -230,6 +241,8 @@ export function registerCronAddCommand(cron: Command) {
             enabled: !opts.disabled,
             deleteAfterRun: opts.deleteAfterRun ? true : opts.keepAfterRun ? false : undefined,
             agentId,
+            retryCount,
+            retryDelayMs,
             sessionKey,
             schedule,
             sessionTarget,

@@ -53,6 +53,8 @@ export function registerCronEditCommand(cron: Command) {
       )
       .option("--model <model>", "Model override for agent jobs")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
+      .option("--retry-count <n>", "Set fixed-delay retry attempts")
+      .option("--retry-delay <duration>", "Set fixed retry delay (e.g. 10m, 1h)")
       .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
       .option("--announce", "Announce summary to a chat (subagent-style)")
@@ -125,6 +127,20 @@ export function registerCronEditCommand(cron: Command) {
           }
           if (typeof opts.wake === "string") {
             patch.wakeMode = opts.wake;
+          }
+          if (opts.retryCount !== undefined) {
+            const retryCount = Number.parseInt(String(opts.retryCount), 10);
+            if (!Number.isFinite(retryCount) || retryCount <= 0) {
+              throw new Error("Invalid --retry-count (must be a positive integer).");
+            }
+            patch.retryCount = retryCount;
+          }
+          if (typeof opts.retryDelay === "string") {
+            const retryDelayMs = parseDurationMs(String(opts.retryDelay));
+            if (!retryDelayMs) {
+              throw new Error("Invalid --retry-delay.");
+            }
+            patch.retryDelayMs = retryDelayMs;
           }
           if (opts.agent && opts.clearAgent) {
             throw new Error("Use --agent or --clear-agent, not both");

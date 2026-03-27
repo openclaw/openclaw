@@ -38,7 +38,7 @@ import {
   type OperatorScope,
 } from "./method-scopes.js";
 import { isSecureWebSocketUrl } from "./net.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
+import { PROTOCOL_VERSION } from "./protocol/version.js";
 
 type CallGatewayBaseOptions = {
   url?: string;

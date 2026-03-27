@@ -62,6 +62,42 @@ type StartupCatchupPlan = {
   deferredJobIds: string[];
 };
 
+type RecurringRetryState = {
+  naturalNextRunAtMs?: number;
+  retryNextRunAtMs?: number;
+  retryAttempt?: number;
+};
+
+function getRecurringRetryPolicy(job: CronJob): {
+  retryCount?: number;
+  retryDelayMs?: number;
+} {
+  const candidate = job as CronJob & {
+    retryCount?: unknown;
+    retryDelayMs?: unknown;
+  };
+  return {
+    retryCount:
+      typeof candidate.retryCount === "number" && Number.isFinite(candidate.retryCount)
+        ? Math.max(0, Math.floor(candidate.retryCount))
+        : undefined,
+    retryDelayMs:
+      typeof candidate.retryDelayMs === "number" && Number.isFinite(candidate.retryDelayMs)
+        ? Math.max(0, Math.floor(candidate.retryDelayMs))
+        : undefined,
+  };
+}
+
+function getRecurringRetryState(job: CronJob): RecurringRetryState {
+  return job.state as CronRunOutcome["status"] extends never ? never : RecurringRetryState;
+}
+
+function clearRecurringRetryState(job: CronJob) {
+  const state = getRecurringRetryState(job);
+  state.retryNextRunAtMs = undefined;
+  state.retryAttempt = undefined;
+}
+
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,
   job: CronJob,
@@ -308,6 +344,11 @@ export function applyJobResult(
   },
 ): boolean {
   const prevLastRunAtMs = job.state.lastRunAtMs;
+  const recurringRetryState = getRecurringRetryState(job);
+  const priorNaturalNextRunAtMs = recurringRetryState.naturalNextRunAtMs;
+  const priorRetryNextRunAtMs = recurringRetryState.retryNextRunAtMs;
+  const completedRetryCycle =
+    typeof priorRetryNextRunAtMs === "number" || recurringRetryState.retryAttempt !== undefined;
   const computeNextWithPreservedLastRun = (nowMs: number) => {
     const saved = job.state.lastRunAtMs;
     job.state.lastRunAtMs = prevLastRunAtMs;
@@ -414,8 +455,11 @@ export function applyJobResult(
         }
       }
     } else if (result.status === "error" && job.enabled) {
-      // Apply exponential backoff for errored jobs to prevent retry storms.
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
+      const preservedNaturalNextRunAtMs =
+        completedRetryCycle && typeof priorNaturalNextRunAtMs === "number"
+          ? priorNaturalNextRunAtMs
+          : undefined;
       let normalNext: number | undefined;
       try {
         normalNext =
@@ -428,24 +472,41 @@ export function applyJobResult(
         // and fall back to backoff-only schedule so the state update is not lost.
         recordScheduleComputeError({ state, job, err });
       }
-      const backoffNext = result.endedAt + backoff;
-      // Use whichever is later: the natural next run or the backoff delay.
-      job.state.nextRunAtMs =
-        normalNext !== undefined ? Math.max(normalNext, backoffNext) : backoffNext;
-      state.deps.log.info(
-        {
-          jobId: job.id,
-          consecutiveErrors: job.state.consecutiveErrors,
-          backoffMs: backoff,
-          nextRunAtMs: job.state.nextRunAtMs,
-        },
-        "cron: applying error backoff",
-      );
+      const effectiveNaturalNextRunAtMs =
+        preservedNaturalNextRunAtMs !== undefined ? preservedNaturalNextRunAtMs : normalNext;
+      recurringRetryState.naturalNextRunAtMs = effectiveNaturalNextRunAtMs;
+      const { retryCount, retryDelayMs } = getRecurringRetryPolicy(job);
+      const canRetry =
+        typeof retryCount === "number" &&
+        retryCount > 0 &&
+        typeof retryDelayMs === "number" &&
+        retryDelayMs > 0;
+      const nextAttempt = (recurringRetryState.retryAttempt ?? 0) + 1;
+      const retryAt = result.endedAt + (retryDelayMs ?? 0);
+      const fallbackNextRunAtMs = result.endedAt + backoff;
+      if (
+        canRetry &&
+        nextAttempt <= retryCount &&
+        typeof effectiveNaturalNextRunAtMs === "number" &&
+        retryAt < effectiveNaturalNextRunAtMs
+      ) {
+        recurringRetryState.retryAttempt = nextAttempt;
+        recurringRetryState.retryNextRunAtMs = retryAt;
+        job.state.nextRunAtMs = retryAt;
+      } else if (typeof effectiveNaturalNextRunAtMs === "number") {
+        clearRecurringRetryState(job);
+        job.state.nextRunAtMs = Math.max(effectiveNaturalNextRunAtMs, fallbackNextRunAtMs);
+      } else {
+        recurringRetryState.naturalNextRunAtMs = undefined;
+        clearRecurringRetryState(job);
+        job.state.nextRunAtMs = fallbackNextRunAtMs;
+      }
     } else if (job.enabled) {
       let naturalNext: number | undefined;
       try {
         naturalNext =
-          opts?.preserveSchedule && job.schedule.kind === "every"
+          (opts?.preserveSchedule || (completedRetryCycle && job.schedule.kind === "every")) &&
+          job.schedule.kind === "every"
             ? computeNextWithPreservedLastRun(result.endedAt)
             : computeJobNextRunAtMs(job, result.endedAt);
       } catch (err) {
@@ -454,18 +515,32 @@ export function applyJobResult(
         // so a persistent throw doesn't cause a MIN_REFIRE_GAP_MS hot loop.
         recordScheduleComputeError({ state, job, err });
       }
-      if (job.schedule.kind === "cron") {
+      if (
+        completedRetryCycle &&
+        typeof priorNaturalNextRunAtMs === "number" &&
+        priorNaturalNextRunAtMs > result.endedAt
+      ) {
+        recurringRetryState.naturalNextRunAtMs = priorNaturalNextRunAtMs;
+        clearRecurringRetryState(job);
+        job.state.nextRunAtMs = priorNaturalNextRunAtMs;
+      } else if (job.schedule.kind === "cron") {
         // Safety net: ensure the next fire is at least MIN_REFIRE_GAP_MS
         // after the current run ended.  Prevents spin-loops when the
         // schedule computation lands in the same second due to
         // timezone/croner edge cases (see #17821).
         const minNext = result.endedAt + MIN_REFIRE_GAP_MS;
-        job.state.nextRunAtMs =
+        recurringRetryState.naturalNextRunAtMs =
           naturalNext !== undefined ? Math.max(naturalNext, minNext) : minNext;
+        clearRecurringRetryState(job);
+        job.state.nextRunAtMs = recurringRetryState.naturalNextRunAtMs;
       } else {
+        recurringRetryState.naturalNextRunAtMs = naturalNext;
+        clearRecurringRetryState(job);
         job.state.nextRunAtMs = naturalNext;
       }
     } else {
+      recurringRetryState.naturalNextRunAtMs = undefined;
+      clearRecurringRetryState(job);
       job.state.nextRunAtMs = undefined;
     }
   }

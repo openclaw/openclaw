@@ -228,6 +228,9 @@ export const CronDeliveryPatchSchema = Type.Object(
 export const CronJobStateSchema = Type.Object(
   {
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    naturalNextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    retryNextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    retryAttempt: Type.Optional(Type.Integer({ minimum: 0 })),
     runningAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastRunStatus: Type.Optional(CronRunStatusSchema),
@@ -253,6 +256,8 @@ export const CronJobSchema = Type.Object(
     description: Type.Optional(Type.String()),
     enabled: Type.Boolean(),
     deleteAfterRun: Type.Optional(Type.Boolean()),
+    retryCount: Type.Optional(Type.Integer({ minimum: 1 })),
+    retryDelayMs: Type.Optional(Type.Integer({ minimum: 1 })),
     createdAtMs: Type.Integer({ minimum: 0 }),
     updatedAtMs: Type.Integer({ minimum: 0 }),
     schedule: CronScheduleSchema,
@@ -285,6 +290,8 @@ export const CronAddParamsSchema = Type.Object(
   {
     name: NonEmptyString,
     ...CronCommonOptionalFields,
+    retryCount: Type.Optional(Type.Integer({ minimum: 1 })),
+    retryDelayMs: Type.Optional(Type.Integer({ minimum: 1 })),
     schedule: CronScheduleSchema,
     sessionTarget: CronSessionTargetSchema,
     wakeMode: CronWakeModeSchema,
@@ -299,6 +306,8 @@ export const CronJobPatchSchema = Type.Object(
   {
     name: Type.Optional(NonEmptyString),
     ...CronCommonOptionalFields,
+    retryCount: Type.Optional(Type.Integer({ minimum: 1 })),
+    retryDelayMs: Type.Optional(Type.Integer({ minimum: 1 })),
     schedule: Type.Optional(CronScheduleSchema),
     sessionTarget: Type.Optional(CronSessionTargetSchema),
     wakeMode: Type.Optional(CronWakeModeSchema),

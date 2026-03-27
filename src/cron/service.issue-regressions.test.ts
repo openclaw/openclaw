@@ -94,6 +94,49 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
+  it("persists retry policy through real add and update service paths", async () => {
+    const store = makeStorePath();
+    const cron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
+
+    const created = await cron.add({
+      name: "retrying hourly",
+      enabled: true,
+      schedule: {
+        kind: "every",
+        everyMs: 60 * 60_000,
+        anchorMs: Date.parse("2026-02-06T10:00:00.000Z"),
+      },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "retry me" },
+      retryCount: 1,
+      retryDelayMs: 10 * 60_000,
+    });
+
+    expect(created.retryCount).toBe(1);
+    expect(created.retryDelayMs).toBe(10 * 60_000);
+
+    let listed = await cron.list({ includeDisabled: true });
+    let stored = listed.find((job) => job.id === created.id);
+    expect(stored?.retryCount).toBe(1);
+    expect(stored?.retryDelayMs).toBe(10 * 60_000);
+
+    const updated = await cron.update(created.id, {
+      retryCount: 3,
+      retryDelayMs: 15 * 60_000,
+    });
+
+    expect(updated.retryCount).toBe(3);
+    expect(updated.retryDelayMs).toBe(15 * 60_000);
+
+    listed = await cron.list({ includeDisabled: true });
+    stored = listed.find((job) => job.id === created.id);
+    expect(stored?.retryCount).toBe(3);
+    expect(stored?.retryDelayMs).toBe(15 * 60_000);
+
+    cron.stop();
+  });
+
   it("repairs isolated every jobs missing createdAtMs and sets nextWakeAtMs", async () => {
     const store = makeStorePath();
     await writeCronStoreSnapshot(store.storePath, [
@@ -705,6 +748,182 @@ describe("Cron issue regressions", () => {
     expect(overloadedJob).toBeDefined();
     expect(overloadedJob!.state.lastStatus).toBe("ok");
     expect(overloadedResult.runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("recurring every job schedules an earlier retry without shifting cadence", async () => {
+    const store = makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+    const naturalNextRunAtMs = Date.parse("2026-02-06T11:00:00.000Z");
+    const retryNextRunAtMs = Date.parse("2026-02-06T10:10:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "recurring-every-retry-before-natural",
+      name: "hourly reminder",
+      scheduledAt,
+      schedule: { kind: "every", everyMs: 60 * 60_000, anchorMs: scheduledAt },
+      payload: { kind: "agentTurn", message: "remind me hourly" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    cronJob.retryCount = 1;
+    cronJob.retryDelayMs = 10 * 60_000;
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: "error",
+        error: "temporary upstream error",
+      })
+      .mockResolvedValueOnce({ status: "ok", summary: "done" });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await onTimer(state);
+
+    const jobAfterFailure = state.store?.jobs.find(
+      (j) => j.id === "recurring-every-retry-before-natural",
+    );
+    expect(jobAfterFailure).toBeDefined();
+    expect(jobAfterFailure!.enabled).toBe(true);
+    expect(jobAfterFailure!.state.lastStatus).toBe("error");
+    expect(jobAfterFailure!.state.naturalNextRunAtMs).toBe(naturalNextRunAtMs);
+    expect(jobAfterFailure!.state.retryNextRunAtMs).toBe(retryNextRunAtMs);
+    expect(jobAfterFailure!.state.retryAttempt).toBe(1);
+    expect(jobAfterFailure!.state.nextRunAtMs).toBe(retryNextRunAtMs);
+
+    now = retryNextRunAtMs + 1;
+    await onTimer(state);
+
+    const jobAfterRetrySuccess = state.store?.jobs.find(
+      (j) => j.id === "recurring-every-retry-before-natural",
+    );
+    expect(jobAfterRetrySuccess).toBeDefined();
+    expect(jobAfterRetrySuccess!.state.lastStatus).toBe("ok");
+    expect(jobAfterRetrySuccess!.state.retryNextRunAtMs).toBeUndefined();
+    expect(jobAfterRetrySuccess!.state.retryAttempt).toBeUndefined();
+    expect(jobAfterRetrySuccess!.state.nextRunAtMs).toBe(naturalNextRunAtMs);
+    expect(jobAfterRetrySuccess!.state.naturalNextRunAtMs).toBe(naturalNextRunAtMs);
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("recurring every job does not schedule a retry when retryAt equals the natural next run", async () => {
+    const store = makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+    const naturalNextRunAtMs = Date.parse("2026-02-06T10:10:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "recurring-every-retry-equals-natural",
+      name: "ten minute reminder",
+      scheduledAt,
+      schedule: { kind: "every", everyMs: 10 * 60_000, anchorMs: scheduledAt },
+      payload: { kind: "agentTurn", message: "remind me every ten minutes" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    cronJob.retryCount = 1;
+    cronJob.retryDelayMs = 10 * 60_000;
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi.fn().mockResolvedValueOnce({
+      status: "error",
+      error: "temporary upstream error",
+    });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await onTimer(state);
+
+    const jobAfterFailure = state.store?.jobs.find(
+      (j) => j.id === "recurring-every-retry-equals-natural",
+    );
+    expect(jobAfterFailure).toBeDefined();
+    expect(jobAfterFailure!.enabled).toBe(true);
+    expect(jobAfterFailure!.state.lastStatus).toBe("error");
+    expect(jobAfterFailure!.state.naturalNextRunAtMs).toBe(naturalNextRunAtMs);
+    expect(jobAfterFailure!.state.retryNextRunAtMs).toBeUndefined();
+    expect(jobAfterFailure!.state.retryAttempt).toBeUndefined();
+    expect(jobAfterFailure!.state.nextRunAtMs).toBe(naturalNextRunAtMs);
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("recurring every job clears retry state and falls back to the natural schedule after retry exhaustion", async () => {
+    const store = makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+    const naturalNextRunAtMs = Date.parse("2026-02-06T11:00:00.000Z");
+    const retryNextRunAtMs = Date.parse("2026-02-06T10:10:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "recurring-every-retry-exhaustion",
+      name: "hourly reminder exhaustion",
+      scheduledAt,
+      schedule: { kind: "every", everyMs: 60 * 60_000, anchorMs: scheduledAt },
+      payload: { kind: "agentTurn", message: "keep retrying" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    cronJob.retryCount = 1;
+    cronJob.retryDelayMs = 10 * 60_000;
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({
+      status: "error",
+      error: "temporary upstream error",
+    });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await onTimer(state);
+
+    const jobAfterFirstFailure = state.store?.jobs.find(
+      (j) => j.id === "recurring-every-retry-exhaustion",
+    );
+    expect(jobAfterFirstFailure).toBeDefined();
+    expect(jobAfterFirstFailure!.state.lastStatus).toBe("error");
+    expect(jobAfterFirstFailure!.state.naturalNextRunAtMs).toBe(naturalNextRunAtMs);
+    expect(jobAfterFirstFailure!.state.retryNextRunAtMs).toBe(retryNextRunAtMs);
+    expect(jobAfterFirstFailure!.state.retryAttempt).toBe(1);
+    expect(jobAfterFirstFailure!.state.nextRunAtMs).toBe(retryNextRunAtMs);
+
+    now = retryNextRunAtMs + 1;
+    await onTimer(state);
+
+    const jobAfterExhaustion = state.store?.jobs.find(
+      (j) => j.id === "recurring-every-retry-exhaustion",
+    );
+    expect(jobAfterExhaustion).toBeDefined();
+    expect(jobAfterExhaustion!.enabled).toBe(true);
+    expect(jobAfterExhaustion!.state.lastStatus).toBe("error");
+    expect(jobAfterExhaustion!.state.lastError).toBe("temporary upstream error");
+    expect(jobAfterExhaustion!.state.retryNextRunAtMs).toBeUndefined();
+    expect(jobAfterExhaustion!.state.retryAttempt).toBeUndefined();
+    expect(jobAfterExhaustion!.state.naturalNextRunAtMs).toBe(naturalNextRunAtMs);
+    expect(jobAfterExhaustion!.state.nextRunAtMs).toBe(naturalNextRunAtMs);
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
   });
 
   it("#24355: one-shot job disabled after max transient retries", async () => {
@@ -1788,6 +2007,94 @@ describe("Cron issue regressions", () => {
     expect(job.state.lastError).toMatch(/^schedule error:/);
     expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
     expect(job.enabled).toBe(true);
+  });
+
+  it("does not let a stale preserved natural slot block a later valid recurring retry", () => {
+    const previousNaturalRunAtMs = Date.parse("2026-03-03T10:00:00.000Z");
+    const staleNaturalNextRunAtMs = Date.parse("2026-03-03T11:00:00.000Z");
+    const startedAt = staleNaturalNextRunAtMs;
+    const endedAt = startedAt + 5_000;
+    const retryNextRunAtMs = Date.parse("2026-03-03T11:10:05.000Z");
+    const trueNaturalNextRunAtMs = Date.parse("2026-03-03T12:00:00.000Z");
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-stale-preserved-natural-slot.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "stale-preserved-natural-slot",
+      name: "stale-preserved-natural-slot",
+      scheduledAt: previousNaturalRunAtMs,
+      schedule: { kind: "every", everyMs: 60 * 60_000, anchorMs: previousNaturalRunAtMs },
+      payload: { kind: "agentTurn", message: "retry me later" },
+      state: {
+        lastRunAtMs: previousNaturalRunAtMs,
+        nextRunAtMs: staleNaturalNextRunAtMs,
+        naturalNextRunAtMs: staleNaturalNextRunAtMs,
+      },
+    });
+    job.retryCount = 1;
+    job.retryDelayMs = 10 * 60_000;
+
+    applyJobResult(state, job, {
+      status: "error",
+      error: "temporary upstream error",
+      startedAt,
+      endedAt,
+    });
+
+    expect(job.state.retryAttempt).toBe(1);
+    expect(job.state.retryNextRunAtMs).toBe(retryNextRunAtMs);
+    expect(job.state.naturalNextRunAtMs).toBe(trueNaturalNextRunAtMs);
+    expect(job.state.nextRunAtMs).toBe(retryNextRunAtMs);
+  });
+
+  it("restores anchored recurring cadence when a retry succeeds after the preserved slot passes", () => {
+    const originalRunAtMs = Date.parse("2026-03-03T10:00:00.000Z");
+    const preservedNaturalNextRunAtMs = Date.parse("2026-03-03T11:00:00.000Z");
+    const retryStartedAt = Date.parse("2026-03-03T10:10:00.000Z");
+    const retryEndedAt = Date.parse("2026-03-03T11:05:00.000Z");
+    const restoredAnchoredNextRunAtMs = Date.parse("2026-03-03T12:00:00.000Z");
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-retry-overrun-cadence.json",
+      log: noopLogger,
+      nowMs: () => retryEndedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "retry-overrun-cadence",
+      name: "retry-overrun-cadence",
+      scheduledAt: originalRunAtMs,
+      schedule: { kind: "every", everyMs: 60 * 60_000, anchorMs: originalRunAtMs },
+      payload: { kind: "agentTurn", message: "stay anchored" },
+      state: {
+        lastRunAtMs: originalRunAtMs,
+        nextRunAtMs: retryStartedAt,
+        naturalNextRunAtMs: preservedNaturalNextRunAtMs,
+        retryNextRunAtMs: retryStartedAt,
+        retryAttempt: 1,
+      },
+    });
+
+    applyJobResult(state, job, {
+      status: "ok",
+      startedAt: retryStartedAt,
+      endedAt: retryEndedAt,
+    });
+
+    expect(job.state.retryAttempt).toBeUndefined();
+    expect(job.state.retryNextRunAtMs).toBeUndefined();
+    expect(job.state.naturalNextRunAtMs).toBe(restoredAnchoredNextRunAtMs);
+    expect(job.state.nextRunAtMs).toBe(restoredAnchoredNextRunAtMs);
   });
 
   it("force run preserves 'every' anchor while recording manual lastRunAtMs", () => {
