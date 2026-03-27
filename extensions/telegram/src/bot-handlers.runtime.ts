@@ -51,6 +51,7 @@ import {
   resolveInboundMediaFileId,
 } from "./bot-handlers.media.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
+import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
 import { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import {
   MEDIA_GROUP_TIMEOUT_MS,
@@ -149,6 +150,7 @@ export const registerTelegramHandlers = ({
     allMedia: TelegramMediaRef[];
     storeAllowFrom: string[];
     receivedAtMs: number;
+    options?: TelegramMessageContextOptions;
     debounceKey: string | null;
     debounceLane: TelegramDebounceLane;
     botUsername?: string;
@@ -234,6 +236,7 @@ export const registerTelegramHandlers = ({
           last.allMedia,
           last.storeAllowFrom,
           {
+            ...(last.options ?? {}),
             receivedAtMs: last.receivedAtMs,
             ingressBuffer: "inbound-debounce",
           },
@@ -400,7 +403,7 @@ export const registerTelegramHandlers = ({
           );
           continue;
         }
-        if (media) {
+        if (media?.path) {
           allMedia.push({
             path: media.path,
             contentType: media.contentType,
@@ -499,7 +502,7 @@ export const registerTelegramHandlers = ({
         telegramTransport,
         telegramCfg.apiRoot,
       );
-      if (!media) {
+      if (!media?.path) {
         return [];
       }
       return [
@@ -1064,7 +1067,7 @@ export const registerTelegramHandlers = ({
       return;
     }
 
-    const allMedia = media
+    const allMedia = media?.path
       ? [
           {
             path: media.path,
@@ -1086,6 +1089,7 @@ export const registerTelegramHandlers = ({
       msg,
       allMedia,
       storeAllowFrom,
+      options: media?.unavailableText ? { mediaUnavailableText: media.unavailableText } : undefined,
       receivedAtMs: Date.now(),
       debounceKey,
       debounceLane,
