@@ -290,13 +290,13 @@ describe("gateway hooks helpers", () => {
     ).toBe("slack:channel:c123");
   });
 
-  test("normalizeHookDispatchSessionKey preserves non-target agent scoped keys", () => {
+  test("normalizeHookDispatchSessionKey rebinds non-target agent scoped keys to the target agent", () => {
     expect(
       normalizeHookDispatchSessionKey({
         sessionKey: "agent:main:slack:channel:c123",
         targetAgentId: "hooks",
       }),
-    ).toBe("agent:main:slack:channel:c123");
+    ).toBe("slack:channel:c123");
   });
 
   test("resolveHooksConfig validates defaultSessionKey and generated fallback against prefixes", () => {
