@@ -7,6 +7,7 @@ import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../plugins/public-ar
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
+ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "bluebubbles",
   "discord",
