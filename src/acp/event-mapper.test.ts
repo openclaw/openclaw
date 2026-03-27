@@ -50,6 +50,17 @@ describe("extractToolCallContent", () => {
     expect(result).toEqual([{ type: "content", content: { type: "text", text: "fallback" } }]);
   });
 
+  it("skips image blocks with empty data or mimeType strings", () => {
+    const result = extractToolCallContent({
+      content: [
+        { type: "image", data: "", mimeType: "image/png" },
+        { type: "image", data: "iVBORw0KGgo=", mimeType: "" },
+        { type: "text", text: "fallback" },
+      ],
+    });
+    expect(result).toEqual([{ type: "content", content: { type: "text", text: "fallback" } }]);
+  });
+
   it("returns undefined for empty content", () => {
     expect(extractToolCallContent({})).toBeUndefined();
     expect(extractToolCallContent({ content: [] })).toBeUndefined();

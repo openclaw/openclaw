@@ -376,7 +376,9 @@ export function extractToolCallContent(value: unknown): ToolCallContent[] | unde
     } else if (
       entry?.type === "image" &&
       typeof entry.data === "string" &&
-      typeof entry.mimeType === "string"
+      entry.data.length > 0 &&
+      typeof entry.mimeType === "string" &&
+      entry.mimeType.length > 0
     ) {
       contents.push({
         type: "content",
