@@ -100,6 +100,32 @@ describe("sessions tools visibility", () => {
     });
   });
 
+  it("allows spawned ACP child sessions under tree visibility even when the child uses a different agent id", async () => {
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: { agentToAgent: { enabled: false } },
+    };
+    mockGatewayWithHistory((req) => {
+      if (req.method === "sessions.list" && req.params?.spawnedBy === "main") {
+        return { sessions: [{ key: "agent:opencode:acp:aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee" }] };
+      }
+      if (req.method === "sessions.resolve") {
+        const key = typeof req.params?.key === "string" ? String(req.params?.key) : "";
+        return { key };
+      }
+      return undefined;
+    });
+
+    const tool = getSessionsHistoryTool();
+    const result = await tool.execute("call-acp-child", {
+      sessionKey: "agent:opencode:acp:aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee",
+    });
+
+    expect(result.details).toMatchObject({
+      sessionKey: "agent:opencode:acp:aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee",
+    });
+  });
+
   it("allows broader access when tools.sessions.visibility=all", async () => {
     mockConfig = {
       session: { mainKey: "main", scope: "per-sender" },

@@ -141,6 +141,35 @@ describe("createSessionVisibilityGuard", () => {
     sessionsResolutionTesting.setDepsForTest();
   });
 
+  it("allows spawned tree targets even when the child session belongs to a different agent", async () => {
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async (request: { method?: string; params?: { key?: string } }) => {
+        if (request.method === "sessions.resolve") {
+          return { key: request.params?.key };
+        }
+        if (request.method === "sessions.list") {
+          return {
+            sessions: [{ key: "agent:opencode:acp:aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee" }],
+          };
+        }
+        return {};
+      }) as never,
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "history",
+      requesterSessionKey: "agent:main:main",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:opencode:acp:aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee")).toEqual({
+      allowed: true,
+    });
+
+    sessionsResolutionTesting.setDepsForTest();
+  });
+
   it("blocks cross-agent send when agent-to-agent is disabled", async () => {
     const guard = await createSessionVisibilityGuard({
       action: "send",
