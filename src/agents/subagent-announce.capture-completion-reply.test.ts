@@ -98,8 +98,9 @@ describe("captureSubagentCompletionReply", () => {
     vi.useRealTimers();
   });
 
-  it("returns partial assistant progress when the latest assistant turn is tool-only", async () => {
-    chatHistoryMock.mockResolvedValueOnce({
+  it("does not freeze mixed assistant + tool-call progress as a completion reply", async () => {
+    vi.useFakeTimers();
+    chatHistoryMock.mockResolvedValue({
       messages: [
         {
           role: "assistant",
@@ -115,8 +116,32 @@ describe("captureSubagentCompletionReply", () => {
       ],
     });
 
+    const pending = captureSubagentCompletionReply("agent:main:subagent:child");
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result).toBeUndefined();
+    vi.useRealTimers();
+  });
+
+  it("keeps explicit <final> content from mixed assistant + tool-call turns", async () => {
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "I'll write the file in parts.\n<final>Overview page updated.</final>",
+            },
+            { type: "toolCall", id: "call-1", name: "write", arguments: {} },
+          ],
+        },
+      ],
+    });
+
     const result = await captureSubagentCompletionReply("agent:main:subagent:child");
 
-    expect(result).toBe("Mapped the modules.");
+    expect(result).toBe("Overview page updated.");
   });
 });
