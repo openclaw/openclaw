@@ -12,7 +12,7 @@ import {
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_DEFAULT_COST,
 } from "../../src/plugin-sdk/provider-models.js";
-import { captureEnv } from "../../src/test-utils/env.js";
+import { captureEnv } from "../../test/helpers/extensions/env.js";
 import {
   applyKilocodeProviderConfig,
   applyKilocodeConfig,

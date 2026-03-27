@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withEnv } from "../../../src/test-utils/env.js";
+import { withEnv } from "../../../test/helpers/extensions/env.js";
 import { __testing } from "./grok-web-search-provider.js";
 
 describe("grok web search provider", () => {
