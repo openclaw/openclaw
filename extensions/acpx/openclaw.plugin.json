@@ -8,13 +8,16 @@
     "additionalProperties": false,
     "properties": {
       "command": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "expectedVersion": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "cwd": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "permissionMode": {
         "type": "string",
@@ -42,6 +45,7 @@
           "properties": {
             "command": {
               "type": "string",
+              "minLength": 1,
               "description": "Command to run the MCP server"
             },
             "args": {

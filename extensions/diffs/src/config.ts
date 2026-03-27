@@ -1,3 +1,5 @@
+import { buildPluginConfigSchema } from "openclaw/plugin-sdk/core";
+import { z } from "zod";
 import type { OpenClawPluginConfigSchema } from "../api.js";
 import {
   DIFF_IMAGE_QUALITY_PRESETS,
@@ -91,130 +93,79 @@ export const DEFAULT_DIFFS_PLUGIN_SECURITY: DiffsPluginSecurityConfig = {
   allowRemoteViewer: false,
 };
 
-const DIFFS_PLUGIN_CONFIG_JSON_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    defaults: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        fontFamily: { type: "string", default: DEFAULT_DIFFS_TOOL_DEFAULTS.fontFamily },
-        fontSize: {
-          type: "number",
-          minimum: 10,
-          maximum: 24,
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.fontSize,
-        },
-        lineSpacing: {
-          type: "number",
-          minimum: 1,
-          maximum: 3,
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.lineSpacing,
-        },
-        layout: {
-          type: "string",
-          enum: [...DIFF_LAYOUTS],
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.layout,
-        },
-        showLineNumbers: {
-          type: "boolean",
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.showLineNumbers,
-        },
-        diffIndicators: {
-          type: "string",
-          enum: [...DIFF_INDICATORS],
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.diffIndicators,
-        },
-        wordWrap: { type: "boolean", default: DEFAULT_DIFFS_TOOL_DEFAULTS.wordWrap },
-        background: { type: "boolean", default: DEFAULT_DIFFS_TOOL_DEFAULTS.background },
-        theme: {
-          type: "string",
-          enum: [...DIFF_THEMES],
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.theme,
-        },
-        fileFormat: {
-          type: "string",
-          enum: [...DIFF_OUTPUT_FORMATS],
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.fileFormat,
-        },
-        format: {
-          type: "string",
-          enum: [...DIFF_OUTPUT_FORMATS],
-        },
-        fileQuality: {
-          type: "string",
-          enum: [...DIFF_IMAGE_QUALITY_PRESETS],
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.fileQuality,
-        },
-        fileScale: {
-          type: "number",
-          minimum: 1,
-          maximum: 4,
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.fileScale,
-        },
-        fileMaxWidth: {
-          type: "number",
-          minimum: 640,
-          maximum: 2400,
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.fileMaxWidth,
-        },
-        imageFormat: {
-          type: "string",
-          enum: [...DIFF_OUTPUT_FORMATS],
-        },
-        imageQuality: {
-          type: "string",
-          enum: [...DIFF_IMAGE_QUALITY_PRESETS],
-        },
-        imageScale: {
-          type: "number",
-          minimum: 1,
-          maximum: 4,
-        },
-        imageMaxWidth: {
-          type: "number",
-          minimum: 640,
-          maximum: 2400,
-        },
-        mode: {
-          type: "string",
-          enum: [...DIFF_MODES],
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.mode,
-        },
-      },
-    },
-    security: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        allowRemoteViewer: {
-          type: "boolean",
-          default: DEFAULT_DIFFS_PLUGIN_SECURITY.allowRemoteViewer,
-        },
-      },
-    },
-  },
-} as const;
+const DiffsPluginJsonSchemaSource = z.strictObject({
+  defaults: z
+    .strictObject({
+      fontFamily: z.string().default(DEFAULT_DIFFS_TOOL_DEFAULTS.fontFamily).optional(),
+      fontSize: z.number().min(10).max(24).default(DEFAULT_DIFFS_TOOL_DEFAULTS.fontSize).optional(),
+      lineSpacing: z
+        .number()
+        .min(1)
+        .max(3)
+        .default(DEFAULT_DIFFS_TOOL_DEFAULTS.lineSpacing)
+        .optional(),
+      layout: z.enum(DIFF_LAYOUTS).default(DEFAULT_DIFFS_TOOL_DEFAULTS.layout).optional(),
+      showLineNumbers: z.boolean().default(DEFAULT_DIFFS_TOOL_DEFAULTS.showLineNumbers).optional(),
+      diffIndicators: z
+        .enum(DIFF_INDICATORS)
+        .default(DEFAULT_DIFFS_TOOL_DEFAULTS.diffIndicators)
+        .optional(),
+      wordWrap: z.boolean().default(DEFAULT_DIFFS_TOOL_DEFAULTS.wordWrap).optional(),
+      background: z.boolean().default(DEFAULT_DIFFS_TOOL_DEFAULTS.background).optional(),
+      theme: z.enum(DIFF_THEMES).default(DEFAULT_DIFFS_TOOL_DEFAULTS.theme).optional(),
+      fileFormat: z
+        .enum(DIFF_OUTPUT_FORMATS)
+        .default(DEFAULT_DIFFS_TOOL_DEFAULTS.fileFormat)
+        .optional(),
+      format: z.enum(DIFF_OUTPUT_FORMATS).optional(),
+      fileQuality: z
+        .enum(DIFF_IMAGE_QUALITY_PRESETS)
+        .default(DEFAULT_DIFFS_TOOL_DEFAULTS.fileQuality)
+        .optional(),
+      fileScale: z.number().min(1).max(4).default(DEFAULT_DIFFS_TOOL_DEFAULTS.fileScale).optional(),
+      fileMaxWidth: z
+        .number()
+        .min(640)
+        .max(2400)
+        .default(DEFAULT_DIFFS_TOOL_DEFAULTS.fileMaxWidth)
+        .optional(),
+      imageFormat: z.enum(DIFF_OUTPUT_FORMATS).optional(),
+      imageQuality: z.enum(DIFF_IMAGE_QUALITY_PRESETS).optional(),
+      imageScale: z.number().min(1).max(4).optional(),
+      imageMaxWidth: z.number().min(640).max(2400).optional(),
+      mode: z.enum(DIFF_MODES).default(DEFAULT_DIFFS_TOOL_DEFAULTS.mode).optional(),
+    })
+    .optional(),
+  security: z
+    .strictObject({
+      allowRemoteViewer: z
+        .boolean()
+        .default(DEFAULT_DIFFS_PLUGIN_SECURITY.allowRemoteViewer)
+        .optional(),
+    })
+    .optional(),
+});
 
-export const diffsPluginConfigSchema: OpenClawPluginConfigSchema = {
-  safeParse(value: unknown) {
-    if (value === undefined) {
-      return { success: true, data: undefined };
-    }
-    try {
-      return { success: true, data: resolveDiffsPluginDefaults(value) };
-    } catch (error) {
-      return {
-        success: false,
-        error: {
-          issues: [{ path: [], message: error instanceof Error ? error.message : String(error) }],
-        },
-      };
-    }
+export const diffsPluginConfigSchema: OpenClawPluginConfigSchema = buildPluginConfigSchema(
+  DiffsPluginJsonSchemaSource,
+  {
+    safeParse(value: unknown) {
+      if (value === undefined) {
+        return { success: true, data: undefined };
+      }
+      try {
+        return { success: true, data: resolveDiffsPluginDefaults(value) };
+      } catch (error) {
+        return {
+          success: false,
+          error: {
+            issues: [{ path: [], message: error instanceof Error ? error.message : String(error) }],
+          },
+        };
+      }
+    },
   },
-  jsonSchema: DIFFS_PLUGIN_CONFIG_JSON_SCHEMA,
-};
+);
 
 export function resolveDiffsPluginDefaults(config: unknown): DiffToolDefaults {
   if (!config || typeof config !== "object" || Array.isArray(config)) {
