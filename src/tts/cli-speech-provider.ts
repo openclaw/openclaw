@@ -56,8 +56,8 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
         const vars: Record<string, string> = {
           TEXT_FILE: textFile,
           OUTPUT_FILE: outputFile,
-          VOICE: cli.voice ?? "",
-          MODEL: cli.model ?? "",
+          ...(cli.voice ? { VOICE: cli.voice } : {}),
+          ...(cli.model ? { MODEL: cli.model } : {}),
         };
 
         const args = cli.args ? substituteCliArgs(cli.args, vars) : [textFile, outputFile];
