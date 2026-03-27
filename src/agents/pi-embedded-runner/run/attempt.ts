@@ -8,6 +8,12 @@ import {
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import {
+  isOllamaCompatProvider,
+  resolveOllamaCompatNumCtxEnabled,
+  shouldInjectOllamaCompatNumCtx,
+  wrapOllamaCompatNumCtx,
+} from "../../../../extensions/ollama/api.js";
+import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramReactionLevel,
 } from "../../../../extensions/telegram/api.js";
@@ -131,7 +137,6 @@ import {
   finalizeAttemptContextEngineTurn,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
-import { shouldInjectOllamaCompatNumCtx, wrapOllamaCompatNumCtx } from "./attempt.ollama-compat.js";
 import {
   buildAfterTurnRuntimeContext,
   prependSystemPromptAddition,
@@ -197,7 +202,7 @@ export {
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "./attempt.ollama-compat.js";
+} from "../../../../extensions/ollama/api.js";
 export {
   decodeHtmlEntitiesInObject,
   wrapStreamFnRepairMalformedToolCallArguments,
