@@ -344,7 +344,7 @@
 ## Image Generation Pipeline (smart-image-gen.py)
 
 - Script: `~/clawd/scripts/smart-image-gen.py`
-- Fallback order: SiliconFlow → Pollinations → Gemini API → Together → HuggingFace → **Browser (Grok/ChatGPT/Gemini)** → **Local SDXL-Turbo**
+- Fallback order: **Browser (Grok/ChatGPT/Gemini)** → **Local (tiny-sd GPU)**. No API keys used — all API-based providers removed.
 - Browser gen: `C:\mickey-browser\browser-image-gen.js` (unified script, persistent patchright profile at `C:\mickey-browser\patchright-profile\`)
 - Local gen: ~/clawd/scripts/local-image-gen.py (segmind/tiny-sd FP32 on GTX 1650, ~14s/image, 512x512, always available)
 - GTX 1650 note: FP16 produces black images (overflow), must use FP32. SDXL-Turbo too large for 4GB VRAM, use tiny-sd.
@@ -365,8 +365,18 @@
 - Managed by systemd: `systemctl --user restart openclaw-gateway.service`
 - Auth: `gateway.controlUi.dangerouslyDisableDeviceAuth: true` (bypasses device pairing)
 - Dashboard: `http://127.0.0.1:18789/#token=<token from openclaw dashboard --no-open>`
-- Cron jobs config: `/home/mark/.openclaw/cron/jobs.json` (owned by mark, 41 jobs, all gpt-4.1)
+- Cron jobs config: `/home/mark/.openclaw/cron/jobs.json` (owned by mark, 41 jobs)
+- Cron retry: `retryOn: [network, timeout, server_error]` — rate_limit NOT retried (fail fast to avoid snowball)
+- Model fallback: `gpt-4.1 → gpt-4o → groq/llama-3.3-70b-versatile` (groq as non-Copilot fallback)
+- Special models: MaC research (3 jobs) + 月度 Context 評估 use `copilot/claude-sonnet-4-6`
 - WebUI login issues: clear localStorage in browser, restart gateway to reset auth rate limiter
+
+## Scheduler Prompts (~/clawd/scheduler/prompts/)
+
+- All prompts use `message tool(action=send, channel=discord, target=channel:xxxx)` for Discord delivery
+- If prompts show `# (removed message tool calls)` — that's a sanitizer bug, replace with `message tool`
+- Mickey-Mao dialogue: both agents ALWAYS leave a message (no HEARTBEAT_OK), Discord → channel:1481531607562326136
+- 閉環規則: externalized to `~/clawd/scripts/close-loop.sh` (publish/task/rules subcommands)
 
 ## Windows/WSL Bridge
 
