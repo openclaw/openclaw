@@ -20,8 +20,8 @@ describe("buildWorkspaceSkillStatus", () => {
         sourceInfo: {
           path: "/tmp/os-scoped",
           source: "test",
-          scope: "project",
-          origin: "top-level",
+          scope: "project" as const,
+          origin: "top-level" as const,
           baseDir: "/tmp",
         },
         disableModelInvocation: false,

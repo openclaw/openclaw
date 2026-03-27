@@ -444,10 +444,9 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   // Warn when install is triggered from a non-bundled source.
   // Workspace/project/personal agent skills can contain attacker-controlled metadata.
   const trustedInstallSources = new Set(["openclaw-bundled", "openclaw-managed", "openclaw-extra"]);
-  const skillSource = entry.skill.sourceInfo.source;
-  if (!trustedInstallSources.has(skillSource)) {
+  if (!trustedInstallSources.has(entry.skill.sourceInfo.source)) {
     warnings.push(
-      `WARNING: Skill "${params.skillName}" install triggered from non-bundled source "${skillSource}". Verify the install recipe is trusted.`,
+      `WARNING: Skill "${params.skillName}" install triggered from non-bundled source "${entry.skill.sourceInfo.source}". Verify the install recipe is trusted.`,
     );
   }
   if (!spec) {

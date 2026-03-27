@@ -27,8 +27,8 @@ function makeEntry(params: {
       sourceInfo: {
         path: `/tmp/${params.name}/SKILL.md`,
         source: params.source ?? "openclaw-workspace",
-        scope: "project",
-        origin: "top-level",
+        scope: "project" as const,
+        origin: "top-level" as const,
         baseDir: `/tmp/${params.name}`,
       },
       disableModelInvocation: false,

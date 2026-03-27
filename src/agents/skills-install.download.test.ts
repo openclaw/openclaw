@@ -63,8 +63,8 @@ function buildEntry(name: string): SkillEntry {
       sourceInfo: {
         path: path.join(skillDir, "SKILL.md"),
         source: "openclaw-workspace",
-        scope: "project",
-        origin: "top-level",
+        scope: "project" as const,
+        origin: "top-level" as const,
         baseDir: skillDir,
       },
       disableModelInvocation: false,

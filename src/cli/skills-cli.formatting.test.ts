@@ -41,8 +41,8 @@ describe("skills-cli (e2e)", () => {
           sourceInfo: {
             path: path.join(baseDir, "SKILL.md"),
             source: "openclaw-bundled",
-            scope: "project",
-            origin: "top-level",
+            scope: "project" as const,
+            origin: "top-level" as const,
             baseDir,
           },
           disableModelInvocation: false,
