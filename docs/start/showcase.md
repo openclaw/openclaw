@@ -88,10 +88,26 @@ Full setup walkthrough (28m) by VelvetShark.
 
 <CardGroup cols={2}>
 
+<Card title="Zhihu Publisher Skill" icon="newspaper" href="https://github.com/delankesita/zhihu-publisher">
+  **@delankesita** • `publishing` `zhihu` `automation` `pip`
+
+Auto-publish articles to Zhihu with trending topics fetch, AI writing, and image upload. Install via `pip install zhihu-publisher`. Full workflow from hotspots → writing → publishing.
+
+  <img src="https://img.shields.io/github/stars/delankesita/zhihu-publisher" alt="GitHub stars" />
+</Card>
+
+<Card title="OpenClaw Skills Collection" icon="code" href="https://github.com/delankesita/openclaw-skills">
+  **@delankesita** • `skills` `collection` `publishing` `analysis`
+
+12+ skills for content creation, data analysis, and automation: WeWrite (WeChat MP), stock analysis, hot tracker, feed grabber, and more.
+
+  <img src="https://img.shields.io/github/stars/delankesita/openclaw-skills" alt="GitHub stars" />
+</Card>
+
 <Card title="PR Review → Telegram Feedback" icon="code-pull-request" href="https://x.com/i/status/2010878524543131691">
   **@bangnokia** • `review` `github` `telegram`
 
-OpenCode finishes the change → opens a PR → OpenClaw reviews the diff and replies in Telegram with “minor suggestions” plus a clear merge verdict (including critical fixes to apply first).
+OpenCode finishes the change → opens a PR → OpenClaw reviews the diff and replies in Telegram with "minor suggestions" plus a clear merge verdict (including critical fixes to apply first).
 
   <img src="/assets/showcase/pr-review-telegram.jpg" alt="OpenClaw PR review feedback delivered in Telegram" />
 </Card>
@@ -99,7 +115,7 @@ OpenCode finishes the change → opens a PR → OpenClaw reviews the diff and re
 <Card title="Wine Cellar Skill in Minutes" icon="wine-glass" href="https://x.com/i/status/2010916352454791216">
   **@prades_maxime** • `skills` `local` `csv`
 
-Asked “Robby” (@openclaw) for a local wine cellar skill. It requests a sample CSV export + where to store it, then builds/tests the skill fast (962 bottles in the example).
+Asked "Robby" (@openclaw) for a local wine cellar skill. It requests a sample CSV export + where to store it, then builds/tests the skill fast (962 bottles in the example).
 
   <img src="/assets/showcase/wine-cellar-skill.jpg" alt="OpenClaw building a local wine cellar skill from CSV" />
 </Card>
