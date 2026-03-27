@@ -86,12 +86,14 @@ describe("archive path helpers", () => {
     );
   });
 
+  const rootDir = path.join(path.sep, "tmp", "archive-root");
+
   it.each([
     {
       name: "keeps resolved output paths inside the root",
       relPath: "sub/file.txt",
       originalPath: "sub/file.txt",
-      expected: path.resolve(path.join(path.sep, "tmp", "archive-root"), "sub/file.txt"),
+      expected: path.resolve(rootDir, "sub/file.txt"),
     },
     {
       name: "rejects output paths that escape the root",
@@ -101,7 +103,6 @@ describe("archive path helpers", () => {
       message: "archive entry escapes targetDir: ../escape.txt",
     },
   ])("$name", ({ relPath, originalPath, escapeLabel, expected, message }) => {
-    const rootDir = path.join(path.sep, "tmp", "archive-root");
     if (message) {
       expectArchivePathError(
         () =>

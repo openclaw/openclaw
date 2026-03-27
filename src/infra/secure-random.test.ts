@@ -28,31 +28,32 @@ describe("secure-random", () => {
     expect(cryptoMocks.randomUUID).toHaveBeenCalledTimes(2);
   });
 
-  it("generates url-safe tokens with the default byte count", () => {
+  it.each([
+    {
+      name: "uses the default byte count",
+      byteCount: undefined,
+      expectedBytes: 16,
+      expectedToken: Buffer.alloc(16, 0xab).toString("base64url"),
+    },
+    {
+      name: "passes custom byte counts through",
+      byteCount: 18,
+      expectedBytes: 18,
+      expectedToken: Buffer.alloc(18, 0xab).toString("base64url"),
+    },
+    {
+      name: "supports zero-byte tokens",
+      byteCount: 0,
+      expectedBytes: 0,
+      expectedToken: "",
+    },
+  ])("generates url-safe tokens when $name", ({ byteCount, expectedBytes, expectedToken }) => {
     cryptoMocks.randomBytes.mockClear();
 
-    const defaultToken = generateSecureToken();
+    const token = byteCount === undefined ? generateSecureToken() : generateSecureToken(byteCount);
 
-    expect(cryptoMocks.randomBytes).toHaveBeenCalledWith(16);
-    expect(defaultToken).toMatch(/^[A-Za-z0-9_-]+$/);
-    expect(defaultToken).toHaveLength(Buffer.alloc(16, 0xab).toString("base64url").length);
-  });
-
-  it("passes custom byte counts through to crypto.randomBytes", () => {
-    cryptoMocks.randomBytes.mockClear();
-
-    const token18 = generateSecureToken(18);
-
-    expect(cryptoMocks.randomBytes).toHaveBeenCalledWith(18);
-    expect(token18).toBe(Buffer.alloc(18, 0xab).toString("base64url"));
-  });
-
-  it("supports zero-byte tokens without rewriting the requested size", () => {
-    cryptoMocks.randomBytes.mockClear();
-
-    const token = generateSecureToken(0);
-
-    expect(cryptoMocks.randomBytes).toHaveBeenCalledWith(0);
-    expect(token).toBe("");
+    expect(cryptoMocks.randomBytes).toHaveBeenCalledWith(expectedBytes);
+    expect(token).toBe(expectedToken);
+    expect(token).toMatch(/^[A-Za-z0-9_-]*$/);
   });
 });

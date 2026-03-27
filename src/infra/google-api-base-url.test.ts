@@ -6,27 +6,28 @@ describe("normalizeGoogleApiBaseUrl", () => {
     expect(normalizeGoogleApiBaseUrl()).toBe(DEFAULT_GOOGLE_API_BASE_URL);
   });
 
-  it("normalizes the bare Google API host to the Gemini v1beta root", () => {
-    expect(normalizeGoogleApiBaseUrl("https://generativelanguage.googleapis.com")).toBe(
-      DEFAULT_GOOGLE_API_BASE_URL,
-    );
-    expect(normalizeGoogleApiBaseUrl("https://generativelanguage.googleapis.com/")).toBe(
-      DEFAULT_GOOGLE_API_BASE_URL,
-    );
-  });
-
-  it("preserves explicit Google API paths", () => {
-    expect(normalizeGoogleApiBaseUrl("https://generativelanguage.googleapis.com/v1beta")).toBe(
-      DEFAULT_GOOGLE_API_BASE_URL,
-    );
-    expect(normalizeGoogleApiBaseUrl("https://generativelanguage.googleapis.com/v1")).toBe(
-      "https://generativelanguage.googleapis.com/v1",
-    );
-  });
-
-  it("preserves custom proxy paths", () => {
-    expect(normalizeGoogleApiBaseUrl("https://proxy.example.com/google/v1beta/")).toBe(
-      "https://proxy.example.com/google/v1beta",
-    );
+  it.each([
+    {
+      value: "https://generativelanguage.googleapis.com",
+      expected: DEFAULT_GOOGLE_API_BASE_URL,
+    },
+    {
+      value: "https://generativelanguage.googleapis.com/",
+      expected: DEFAULT_GOOGLE_API_BASE_URL,
+    },
+    {
+      value: "https://generativelanguage.googleapis.com/v1beta",
+      expected: DEFAULT_GOOGLE_API_BASE_URL,
+    },
+    {
+      value: "https://generativelanguage.googleapis.com/v1",
+      expected: "https://generativelanguage.googleapis.com/v1",
+    },
+    {
+      value: "https://proxy.example.com/google/v1beta/",
+      expected: "https://proxy.example.com/google/v1beta",
+    },
+  ])("normalizes %s", ({ value, expected }) => {
+    expect(normalizeGoogleApiBaseUrl(value)).toBe(expected);
   });
 });
