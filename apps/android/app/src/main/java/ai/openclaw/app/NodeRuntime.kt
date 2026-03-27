@@ -908,9 +908,9 @@ class NodeRuntime(
     return a2uiHandler.isTrustedCanvasActionUrl(rawUrl)
   }
 
-  fun loadChat(sessionKey: String) {
+  fun loadChat(sessionKey: String, sessionsLimit: Int? = null) {
     val key = sessionKey.trim().ifEmpty { resolveMainSessionKey() }
-    chat.load(key)
+    chat.load(key, sessionsLimit = sessionsLimit)
   }
 
   fun refreshChat() {

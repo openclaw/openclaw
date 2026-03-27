@@ -249,8 +249,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ensureRuntime().refreshHomeCanvasOverviewIfConnected()
   }
 
-  fun loadChat(sessionKey: String) {
-    ensureRuntime().loadChat(sessionKey)
+  fun loadChat(sessionKey: String, sessionsLimit: Int? = null) {
+    ensureRuntime().loadChat(sessionKey, sessionsLimit = sessionsLimit)
   }
 
   fun refreshChat() {

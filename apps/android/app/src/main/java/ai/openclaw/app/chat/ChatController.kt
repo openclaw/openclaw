@@ -72,10 +72,10 @@ class ChatController(
     _sessionId.value = null
   }
 
-  fun load(sessionKey: String) {
+  fun load(sessionKey: String, sessionsLimit: Int? = null) {
     val key = sessionKey.trim().ifEmpty { "main" }
     _sessionKey.value = key
-    scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
+    scope.launch { bootstrap(forceHealth = true, refreshSessions = true, sessionsLimit = sessionsLimit) }
   }
 
   fun applyMainSessionKey(mainSessionKey: String) {
@@ -251,7 +251,7 @@ class ChatController(
     }
   }
 
-  private suspend fun bootstrap(forceHealth: Boolean, refreshSessions: Boolean) {
+  private suspend fun bootstrap(forceHealth: Boolean, refreshSessions: Boolean, sessionsLimit: Int? = null) {
     _errorText.value = null
     _healthOk.value = false
     clearPendingRuns()
@@ -274,7 +274,7 @@ class ChatController(
 
       pollHealthIfNeeded(force = forceHealth)
       if (refreshSessions) {
-        fetchSessions(limit = 50)
+        fetchSessions(limit = sessionsLimit ?: 50)
       }
     } catch (err: Throwable) {
       _errorText.value = err.message
