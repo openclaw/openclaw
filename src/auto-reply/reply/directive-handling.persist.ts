@@ -16,6 +16,7 @@ import { resolveModelSelectionFromDirective } from "./directive-handling.model-s
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import {
   canPersistInternalExecDirective,
+  canPersistInternalVerboseDirective,
   enqueueModeSwitchEvents,
 } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
@@ -65,6 +66,10 @@ export async function persistInlineDirectives(params: {
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
   });
+  const allowInternalVerbosePersistence = canPersistInternalVerboseDirective({
+    surface: params.surface,
+    gatewayClientScopes: params.gatewayClientScopes,
+  });
   const activeAgentId = sessionKey
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
@@ -89,7 +94,11 @@ export async function persistInlineDirectives(params: {
       sessionEntry.thinkingLevel = directives.thinkLevel;
       updated = true;
     }
-    if (directives.hasVerboseDirective && directives.verboseLevel) {
+    if (
+      directives.hasVerboseDirective &&
+      directives.verboseLevel &&
+      allowInternalVerbosePersistence
+    ) {
       applyVerboseOverride(sessionEntry, directives.verboseLevel);
       updated = true;
     }
