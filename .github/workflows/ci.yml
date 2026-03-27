@@ -405,9 +405,24 @@ jobs:
           fi
 
           printf 'Scanning %s files with detect-secrets-hook.\n' "${#changed_files[@]}"
+          hook_log="$RUNNER_TEMP/detect-secrets-hook.log"
+          set +e
           detect-secrets-hook \
             --baseline "$trusted_baseline" \
-            "${changed_files[@]}"
+            "${changed_files[@]}" \
+            >"$hook_log" 2>&1
+          hook_rc=$?
+          set -e
+          cat "$hook_log"
+
+          if [ "$hook_rc" -eq 0 ]; then
+            exit 0
+          fi
+          if [ "$hook_rc" -eq 3 ] && ! grep -q "Potential secrets about to be committed" "$hook_log"; then
+            echo "detect-secrets-hook updated baseline metadata only; continuing."
+            exit 0
+          fi
+          exit "$hook_rc"
 
       - name: Detect secrets in PR title/body
         if: github.event_name == 'pull_request'
