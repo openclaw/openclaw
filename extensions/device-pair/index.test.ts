@@ -160,7 +160,12 @@ describe("device-pair /pair qr", () => {
 
   it("returns an inline QR image for webchat surfaces", async () => {
     const command = registerPairCommand();
-    const result = await command.handler(createCommandContext({ channel: "webchat" }));
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
     const text = requireText(result);
 
     expect(pluginApiMocks.renderQrPngBase64).toHaveBeenCalledTimes(1);
@@ -208,7 +213,12 @@ describe("device-pair /pair qr", () => {
     pluginApiMocks.renderQrPngBase64.mockRejectedValueOnce(new Error("render failed"));
 
     const command = registerPairCommand();
-    const result = await command.handler(createCommandContext({ channel: "webchat" }));
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
     const text = requireText(result);
 
     expect(pluginApiMocks.revokeDeviceBootstrapToken).toHaveBeenCalledWith({
@@ -426,6 +436,23 @@ describe("device-pair /pair qr", () => {
       text: "⚠️ This command requires operator.pairing for internal gateway callers.",
     });
   });
+
+  it("fails closed for cleanup when internal gateway scopes are absent", async () => {
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "cleanup",
+        commandBody: "/pair cleanup",
+        gatewayClientScopes: undefined,
+      }),
+    );
+
+    expect(pluginApiMocks.clearDeviceBootstrapTokens).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      text: "⚠️ This command requires operator.pairing for internal gateway callers.",
+    });
+  });
 });
 
 describe("device-pair /pair default setup code", () => {
@@ -462,6 +489,23 @@ describe("device-pair /pair default setup code", () => {
         args: "foo",
         commandBody: "/pair foo",
         gatewayClientScopes: ["operator.write"],
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      text: "⚠️ This command requires operator.pairing for internal gateway callers.",
+    });
+  });
+
+  it("fails closed for webchat setup code issuance when scopes are absent", async () => {
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: undefined,
       }),
     );
 
@@ -655,7 +699,44 @@ describe("device-pair /pair approve", () => {
     expect(result).toEqual({ text: "✅ Paired Victim Phone (ios)." });
   });
 
-  it("rejects approvals above the caller scopes", async () => {
+  it("fails closed for approvals when internal gateway scopes are absent", async () => {
+    vi.mocked(listDevicePairing).mockResolvedValueOnce({
+      pending: [
+        {
+          requestId: "req-1",
+          deviceId: "victim-phone",
+          publicKey: "victim-public-key",
+          displayName: "Victim Phone",
+          platform: "ios",
+          ts: Date.now(),
+        },
+      ],
+      paired: [],
+    });
+    vi.mocked(approveDevicePairing).mockResolvedValueOnce({
+      status: "forbidden",
+      missingScope: "operator.admin",
+    });
+
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "approve latest",
+        commandBody: "/pair approve latest",
+        gatewayClientScopes: undefined,
+      }),
+    );
+
+    expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1", {
+      callerScopes: [],
+    });
+    expect(result).toEqual({
+      text: "⚠️ This command requires operator.admin to approve this pairing request.",
+    });
+  });
+
+  it("rejects approvals that request scopes above the caller session", async () => {
     vi.mocked(listDevicePairing).mockResolvedValueOnce({
       pending: [
         {
@@ -684,8 +765,11 @@ describe("device-pair /pair approve", () => {
       }),
     );
 
+    expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1", {
+      callerScopes: ["operator.write", "operator.pairing"],
+    });
     expect(result).toEqual({
-      text: "⚠️ Cannot approve a request requiring operator.admin.",
+      text: "⚠️ This command requires operator.admin to approve this pairing request.",
     });
   });
 });
