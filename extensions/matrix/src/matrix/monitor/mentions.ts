@@ -9,17 +9,29 @@ const HTML_ENTITY_REPLACEMENTS: Readonly<Record<string, string>> = {
   nbsp: " ",
   quot: '"',
 };
+const MAX_UNICODE_SCALAR_VALUE = 0x10ffff;
+
+function decodeNumericHtmlEntity(match: string, rawValue: string, radix: 10 | 16): string {
+  const codePoint = Number.parseInt(rawValue, radix);
+  if (
+    !Number.isSafeInteger(codePoint) ||
+    codePoint < 0 ||
+    codePoint > MAX_UNICODE_SCALAR_VALUE ||
+    (codePoint >= 0xd800 && codePoint <= 0xdfff)
+  ) {
+    return match;
+  }
+  return String.fromCodePoint(codePoint);
+}
 
 function decodeHtmlEntities(value: string): string {
   return value.replace(/&(#x?[0-9a-f]+|\w+);/gi, (match, entity: string) => {
     const normalized = entity.toLowerCase();
     if (normalized.startsWith("#x")) {
-      const codePoint = Number.parseInt(normalized.slice(2), 16);
-      return Number.isNaN(codePoint) ? match : String.fromCodePoint(codePoint);
+      return decodeNumericHtmlEntity(match, normalized.slice(2), 16);
     }
     if (normalized.startsWith("#")) {
-      const codePoint = Number.parseInt(normalized.slice(1), 10);
-      return Number.isNaN(codePoint) ? match : String.fromCodePoint(codePoint);
+      return decodeNumericHtmlEntity(match, normalized.slice(1), 10);
     }
     return HTML_ENTITY_REPLACEMENTS[normalized] ?? match;
   });
