@@ -123,4 +123,73 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
       }),
     );
   });
+
+  it("records reply context for quoted poll start events inside always-threaded replies", async () => {
+    const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
+      client: {
+        getEvent: async (_roomId: string, eventId: string) => {
+          if (eventId === "$thread-root") {
+            return createMatrixTextMessageEvent({
+              eventId: "$thread-root",
+              sender: "@bob:example.org",
+              body: "Root topic",
+            });
+          }
+
+          return {
+            event_id: "$poll",
+            sender: "@alice:example.org",
+            type: "m.poll.start",
+            origin_server_ts: 1,
+            content: {
+              "m.poll.start": {
+                question: { "m.text": "Lunch?" },
+                kind: "m.poll.disclosed",
+                max_selections: 1,
+                answers: [
+                  { id: "a1", "m.text": "Pizza" },
+                  { id: "a2", "m.text": "Sushi" },
+                ],
+              },
+            },
+          } satisfies MatrixRawEvent;
+        },
+      } as unknown as Partial<MatrixClient>,
+      isDirectMessage: false,
+      threadReplies: "always",
+      getMemberDisplayName: async (_roomId, userId) => {
+        if (userId === "@alice:example.org") {
+          return "Alice";
+        }
+        if (userId === "@bob:example.org") {
+          return "Bob";
+        }
+        return "sender";
+      },
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$reply1",
+        body: "@room follow up",
+        relatesTo: {
+          rel_type: "m.thread",
+          event_id: "$thread-root",
+          "m.in_reply_to": { event_id: "$poll" },
+        },
+        mentions: { room: true },
+      }),
+    );
+
+    expect(finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        MessageThreadId: "$thread-root",
+        ReplyToId: undefined,
+        ReplyToSender: "Alice",
+        ReplyToBody: "[Poll]\nLunch?\n\n1. Pizza\n2. Sushi",
+        ThreadStarterBody: "Matrix thread root $thread-root from Bob:\nRoot topic",
+      }),
+    );
+  });
 });

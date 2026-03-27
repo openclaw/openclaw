@@ -1,9 +1,11 @@
 import {
-  formatMatrixMessageText,
-  resolveMatrixMessageAttachment,
-  resolveMatrixMessageBody,
-} from "../media-text.js";
+  formatPollAsText,
+  isPollStartType,
+  parsePollStartContent,
+  type PollStartContent,
+} from "../poll-types.js";
 import type { MatrixClient } from "../sdk.js";
+import { summarizeMatrixMessageContextEvent, trimMatrixMaybeString } from "./context-summary.js";
 import type { MatrixRawEvent } from "./types.js";
 
 const MAX_CACHED_REPLY_CONTEXTS = 256;
@@ -14,14 +16,6 @@ export type MatrixReplyContext = {
   replyToSender?: string;
 };
 
-function trimMaybeString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 function truncateReplyBody(value: string): string {
   if (value.length <= MAX_REPLY_BODY_LENGTH) {
     return value;
@@ -30,19 +24,14 @@ function truncateReplyBody(value: string): string {
 }
 
 export function summarizeMatrixReplyEvent(event: MatrixRawEvent): string | undefined {
-  const content = event.content as { body?: unknown; filename?: unknown; msgtype?: unknown };
-  const body = formatMatrixMessageText({
-    body: resolveMatrixMessageBody({
-      body: trimMaybeString(content.body),
-      filename: trimMaybeString(content.filename),
-      msgtype: trimMaybeString(content.msgtype),
-    }),
-    attachment: resolveMatrixMessageAttachment({
-      body: trimMaybeString(content.body),
-      filename: trimMaybeString(content.filename),
-      msgtype: trimMaybeString(content.msgtype),
-    }),
-  });
+  if (isPollStartType(event.type)) {
+    const pollSummary = parsePollStartContent(event.content as PollStartContent);
+    if (pollSummary) {
+      return truncateReplyBody(formatPollAsText(pollSummary));
+    }
+  }
+
+  const body = summarizeMatrixMessageContextEvent(event);
   return body ? truncateReplyBody(body) : undefined;
 }
 
@@ -96,13 +85,18 @@ export function createMatrixReplyContextResolver(params: {
       return remember(cacheKey, {});
     }
 
-    const senderId = trimMaybeString(rawEvent.sender);
+    const replyToBody = summarizeMatrixReplyEvent(rawEvent);
+    if (!replyToBody) {
+      return remember(cacheKey, {});
+    }
+
+    const senderId = trimMatrixMaybeString(rawEvent.sender);
     const senderName =
       senderId &&
       (await params.getMemberDisplayName(input.roomId, senderId).catch(() => undefined));
 
     return remember(cacheKey, {
-      replyToBody: summarizeMatrixReplyEvent(rawEvent),
+      replyToBody,
       replyToSender: senderName ?? senderId,
     });
   };

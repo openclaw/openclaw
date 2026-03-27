@@ -50,6 +50,28 @@ describe("matrix reply context", () => {
     ).toBe("[matrix image attachment]");
   });
 
+  it("summarizes poll start events from poll content", () => {
+    expect(
+      summarizeMatrixReplyEvent({
+        event_id: "$poll",
+        sender: "@alice:example.org",
+        type: "m.poll.start",
+        origin_server_ts: Date.now(),
+        content: {
+          "m.poll.start": {
+            question: { "m.text": "Lunch?" },
+            kind: "m.poll.disclosed",
+            max_selections: 1,
+            answers: [
+              { id: "a1", "m.text": "Pizza" },
+              { id: "a2", "m.text": "Sushi" },
+            ],
+          },
+        },
+      } as MatrixRawEvent),
+    ).toBe("[Poll]\nLunch?\n\n1. Pizza\n2. Sushi");
+  });
+
   it("resolves and caches reply context", async () => {
     const getEvent = vi.fn(async () => ({
       event_id: "$original",

@@ -1,9 +1,5 @@
-import {
-  formatMatrixMessageText,
-  resolveMatrixMessageAttachment,
-  resolveMatrixMessageBody,
-} from "../media-text.js";
 import type { MatrixClient } from "../sdk.js";
+import { summarizeMatrixMessageContextEvent, trimMatrixMaybeString } from "./context-summary.js";
 import type { MatrixRawEvent } from "./types.js";
 
 const MAX_TRACKED_THREAD_STARTERS = 256;
@@ -13,14 +9,6 @@ type MatrixThreadContext = {
   threadStarterBody?: string;
 };
 
-function trimMaybeString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 function truncateThreadStarterBody(value: string): string {
   if (value.length <= MAX_THREAD_STARTER_BODY_LENGTH) {
     return value;
@@ -29,27 +17,16 @@ function truncateThreadStarterBody(value: string): string {
 }
 
 export function summarizeMatrixThreadStarterEvent(event: MatrixRawEvent): string | undefined {
-  const content = event.content as { body?: unknown; filename?: unknown; msgtype?: unknown };
-  const body = formatMatrixMessageText({
-    body: resolveMatrixMessageBody({
-      body: trimMaybeString(content.body),
-      filename: trimMaybeString(content.filename),
-      msgtype: trimMaybeString(content.msgtype),
-    }),
-    attachment: resolveMatrixMessageAttachment({
-      body: trimMaybeString(content.body),
-      filename: trimMaybeString(content.filename),
-      msgtype: trimMaybeString(content.msgtype),
-    }),
-  });
+  const body = summarizeMatrixMessageContextEvent(event);
   if (body) {
     return truncateThreadStarterBody(body);
   }
-  const msgtype = trimMaybeString(content.msgtype);
+  const content = event.content as { msgtype?: unknown };
+  const msgtype = trimMatrixMaybeString(content.msgtype);
   if (msgtype) {
     return `Matrix ${msgtype} message`;
   }
-  const eventType = trimMaybeString(event.type);
+  const eventType = trimMatrixMaybeString(event.type);
   return eventType ? `Matrix ${eventType} event` : undefined;
 }
 
@@ -107,7 +84,7 @@ export function createMatrixThreadContextResolver(params: {
     }
 
     const rawEvent = rootEvent as MatrixRawEvent;
-    const senderId = trimMaybeString(rawEvent.sender);
+    const senderId = trimMatrixMaybeString(rawEvent.sender);
     const senderName =
       senderId &&
       (await params.getMemberDisplayName(input.roomId, senderId).catch(() => undefined));
