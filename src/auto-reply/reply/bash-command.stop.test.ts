@@ -105,14 +105,15 @@ describe("handleBashChatCommand stop", () => {
     expect(killProcessTreeMock).not.toHaveBeenCalled();
   });
 
-  it("skips killProcessTree when session has no pid", async () => {
+  it("fails stop when session has no pid", async () => {
     const session = buildRunningSession({ pid: undefined, child: undefined });
     getSessionMock.mockReturnValue(session);
     getFinishedSessionMock.mockReturnValue(undefined);
 
     const result = await handleBashChatCommand(buildParams("/bash stop session-1"));
 
-    expect(result.text).toContain("bash stopping");
+    expect(result.text).toContain("Unable to stop bash session");
+    expect(result.text).toContain("!poll session-1");
     expect(killProcessTreeMock).not.toHaveBeenCalled();
   });
 });
