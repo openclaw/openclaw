@@ -65,7 +65,6 @@ export function calculateAdaptiveColumnWidths(
   const cellIds = normalizeChildBlockIds(tableBlock.children);
 
   // Build block lookup map
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const blockMap = new Map<string, FeishuDocxBlock>();
   for (const block of blocks) {
     if (block.block_id) {
