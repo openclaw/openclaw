@@ -6,6 +6,7 @@ import {
 import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 
@@ -173,8 +174,7 @@ function resolveChannelAccountConfig(
   channelConfig: ChannelConfigWithAccounts,
   accountId?: string | null,
 ): AccountConfigWithWrites | undefined {
-  const normalized = normalizeAccountId(accountId);
-  return normalized ? channelConfig.accounts?.[normalized] : undefined;
+  return resolveAccountEntry(channelConfig.accounts, normalizeAccountId(accountId));
 }
 
 function listConfigWriteTargetScopes(target?: ConfigWriteTarget): ConfigWriteScope[] {
