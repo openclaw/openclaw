@@ -32,15 +32,7 @@ from pathlib import Path
 def optimize_image(
     input_path: Path, output_path: Path, quality: int = 85, max_size_mb: float = 20
 ):
-    """
-    Optimize image file by reducing quality and/or resolution
-
-    Args:
-        input_path: Input image path
-        output_path: Output image path
-        quality: JPEG quality (1-100, lower = smaller file)
-        max_size_mb: Target max size in MB
-    """
+    """Optimize image file by reducing quality and/or resolution."""
     try:
         from PIL import Image
     except ImportError:
@@ -50,16 +42,15 @@ def optimize_image(
 
     print(f"Optimizing image: {input_path}")
 
-    # Open image
     img = Image.open(input_path)
     original_size = input_path.stat().st_size / 1024 / 1024
 
     print(f"Original size: {original_size:.2f}MB")
     print(f"Original dimensions: {img.size[0]}x{img.size[1]}")
 
-    # Convert RGBA to RGB if needed (for JPEG)
-    if img.mode in ("RGBA", "LA", "P"):
-        # Create white background
+    is_jpeg = output_path.suffix.lower() in (".jpg", ".jpeg")
+
+    if is_jpeg and img.mode in ("RGBA", "LA", "P"):
         background = Image.new("RGB", img.size, (255, 255, 255))
         if img.mode == "P":
             img = img.convert("RGBA")
@@ -68,21 +59,16 @@ def optimize_image(
         )
         img = background
 
-    # Determine output format
-    output_format = output_path.suffix.lower()
-    if output_format in [".jpg", ".jpeg"]:
-        save_format = "JPEG"
-    elif output_format == ".png":
-        save_format = "PNG"
-    else:
-        save_format = "JPEG"
-        output_path = output_path.with_suffix(".jpg")
+    save_kwargs = {"optimize": True}
+    if is_jpeg or output_path.suffix.lower() == ".webp":
+        save_kwargs["quality"] = quality
 
-    # Try saving with specified quality
-    img.save(output_path, format=save_format, quality=quality, optimize=True)
-    new_size = output_path.stat().st_size / 1024 / 1024
+    def _save(image):
+        image.save(output_path, **save_kwargs)
+        return output_path.stat().st_size / 1024 / 1024
 
-    # If still too large, reduce resolution
+    new_size = _save(img)
+
     scale_factor = 0.9
     while new_size > max_size_mb and scale_factor >= 0.4:
         new_width = int(img.size[0] * scale_factor)
@@ -91,8 +77,7 @@ def optimize_image(
         print(f"Resizing to {new_width}x{new_height} (scale: {scale_factor:.2f})")
 
         resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        resized.save(output_path, format=save_format, quality=quality, optimize=True)
-        new_size = output_path.stat().st_size / 1024 / 1024
+        new_size = _save(resized)
 
         scale_factor -= 0.1
 
@@ -127,7 +112,7 @@ Supported formats:
     parser.add_argument("input", help="Input file path")
     parser.add_argument("output", help="Output file path")
     parser.add_argument(
-        "--quality", type=int, default=85, help="JPEG quality (1-100, default: 85)"
+        "--quality", type=int, default=85, help="JPEG/WebP quality (1-100, default: 85)"
     )
     parser.add_argument(
         "--target-size",
