@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
@@ -7,37 +6,22 @@ import {
   clearPluginManifestRegistryCache,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
+import {
+  cleanupTrackedTempDirs,
+  makeTrackedTempDir,
+  mkdirSafeDir,
+} from "../plugins/test-helpers/fs-fixtures.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 import { validateConfigObject } from "./validation.js";
 
 const tempDirs: string[] = [];
 
-function chmodSafeDir(dir: string) {
-  if (process.platform === "win32") {
-    return;
-  }
-  fs.chmodSync(dir, 0o755);
-}
-
-function mkdtempSafe(prefix: string) {
-  const dir = fs.mkdtempSync(prefix);
-  chmodSafeDir(dir);
-  return dir;
-}
-
-function mkdirSafe(dir: string) {
-  fs.mkdirSync(dir, { recursive: true });
-  chmodSafeDir(dir);
-}
-
 function makeTempDir() {
-  const dir = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-auto-enable-"));
-  tempDirs.push(dir);
-  return dir;
+  return makeTrackedTempDir("openclaw-plugin-auto-enable", tempDirs);
 }
 
 function writePluginManifestFixture(params: { rootDir: string; id: string; channels: string[] }) {
-  mkdirSafe(params.rootDir);
+  mkdirSafeDir(params.rootDir);
   fs.writeFileSync(
     path.join(params.rootDir, "openclaw.plugin.json"),
     JSON.stringify(
@@ -55,12 +39,20 @@ function writePluginManifestFixture(params: { rootDir: string; id: string; chann
 }
 
 /** Helper to build a minimal PluginManifestRegistry for testing. */
-function makeRegistry(plugins: Array<{ id: string; channels: string[] }>): PluginManifestRegistry {
+function makeRegistry(
+  plugins: Array<{
+    id: string;
+    channels: string[];
+    channelConfigs?: Record<string, { schema: Record<string, unknown>; preferOver?: string[] }>;
+  }>,
+): PluginManifestRegistry {
   return {
     plugins: plugins.map((p) => ({
       id: p.id,
       channels: p.channels,
+      channelConfigs: p.channelConfigs,
       providers: [],
+      cliBackends: [],
       skills: [],
       hooks: [],
       origin: "config" as const,
@@ -121,9 +113,7 @@ function applyWithBluebubblesImessageConfig(extra?: {
 afterEach(() => {
   clearPluginDiscoveryCache();
   clearPluginManifestRegistryCache();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("applyPluginAutoEnable", () => {
@@ -305,7 +295,7 @@ describe("applyPluginAutoEnable", () => {
   it("uses env-scoped catalog metadata for preferOver auto-enable decisions", () => {
     const stateDir = makeTempDir();
     const catalogPath = path.join(stateDir, "plugins", "catalog.json");
-    mkdirSafe(path.dirname(catalogPath));
+    mkdirSafeDir(path.dirname(catalogPath));
     fs.writeFileSync(
       catalogPath,
       JSON.stringify({
@@ -471,6 +461,38 @@ describe("applyPluginAutoEnable", () => {
   });
 
   describe("preferOver channel prioritization", () => {
+    it("uses manifest channel config preferOver metadata for plugin channels", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: {
+            primary: { someKey: "value" },
+            secondary: { someKey: "value" },
+          },
+        },
+        env: {},
+        manifestRegistry: makeRegistry([
+          {
+            id: "primary",
+            channels: ["primary"],
+            channelConfigs: {
+              primary: {
+                schema: { type: "object" },
+                preferOver: ["secondary"],
+              },
+            },
+          },
+          { id: "secondary", channels: ["secondary"] },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.primary?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.secondary?.enabled).toBeUndefined();
+      expect(result.changes.join("\n")).toContain("primary configured, enabled automatically.");
+      expect(result.changes.join("\n")).not.toContain(
+        "secondary configured, enabled automatically.",
+      );
+    });
+
     it("prefers bluebubbles: skips imessage auto-configure when both are configured", () => {
       const result = applyWithBluebubblesImessageConfig();
 

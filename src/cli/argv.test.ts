@@ -398,7 +398,6 @@ describe("argv helpers", () => {
       ["node", "openclaw", "config", "unset", "update"],
       ["node", "openclaw", "models", "list"],
       ["node", "openclaw", "models", "status"],
-      ["node", "openclaw", "memory", "status"],
       ["node", "openclaw", "update", "status", "--json"],
       ["node", "openclaw", "agent", "--message", "hi"],
     ] as const;

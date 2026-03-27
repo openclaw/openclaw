@@ -4,6 +4,7 @@ import {
   normalizeAccountId,
   patchScopedAccountConfig,
   prepareScopedSetupConfig,
+  createSetupInputPresenceValidator,
   type ChannelSetupAdapter,
   type ChannelSetupInput,
   type ChannelSetupWizard,
@@ -186,23 +187,24 @@ export const tlonSetupAdapter: ChannelSetupAdapter = {
       accountId,
       name,
     }),
-  validateInput: ({ cfg, accountId, input }) => {
-    const setupInput = input as TlonSetupInput;
-    const resolved = resolveTlonAccount(cfg, accountId ?? undefined);
-    const ship = setupInput.ship?.trim() || resolved.ship;
-    const url = setupInput.url?.trim() || resolved.url;
-    const code = setupInput.code?.trim() || resolved.code;
-    if (!ship) {
-      return "Tlon requires --ship.";
-    }
-    if (!url) {
-      return "Tlon requires --url.";
-    }
-    if (!code) {
-      return "Tlon requires --code.";
-    }
-    return null;
-  },
+  validateInput: createSetupInputPresenceValidator({
+    validate: ({ cfg, accountId, input }) => {
+      const resolved = resolveTlonAccount(cfg, accountId ?? undefined);
+      const ship = input.ship?.trim() || resolved.ship;
+      const url = input.url?.trim() || resolved.url;
+      const code = input.code?.trim() || resolved.code;
+      if (!ship) {
+        return "Tlon requires --ship.";
+      }
+      if (!url) {
+        return "Tlon requires --url.";
+      }
+      if (!code) {
+        return "Tlon requires --code.";
+      }
+      return null;
+    },
+  }),
   applyAccountConfig: ({ cfg, accountId, input }) =>
     applyTlonSetupConfig({
       cfg,
