@@ -1,5 +1,5 @@
 import { buildPluginConfigSchema } from "openclaw/plugin-sdk/core";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 import type { OpenClawPluginConfigSchema } from "../api.js";
 import {
   DIFF_IMAGE_QUALITY_PRESETS,

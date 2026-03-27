@@ -3,7 +3,8 @@ import { withBundledPluginAllowlistCompat } from "../bundled-compat.js";
 import { resolveBundledWebSearchPluginIds } from "../bundled-web-search.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import { __testing as providerTesting } from "../providers.js";
-import { providerContractCompatPluginIds, webSearchProviderContractRegistry } from "./registry.js";
+import { resolveBundledPluginWebSearchProviders } from "../web-search-providers.js";
+import { providerContractCompatPluginIds } from "./registry.js";
 import { uniqueSortedStrings } from "./testkit.js";
 
 function resolveBundledManifestProviderPluginIds() {
@@ -48,7 +49,7 @@ describe("plugin loader contract", () => {
       env: { VITEST: "1" } as NodeJS.ProcessEnv,
     });
     webSearchPluginIds = uniqueSortedStrings(
-      webSearchProviderContractRegistry.map((entry) => entry.pluginId),
+      resolveBundledPluginWebSearchProviders({}).map((entry) => entry.pluginId),
     );
     bundledWebSearchPluginIds = uniqueSortedStrings(resolveBundledWebSearchPluginIds({}));
     webSearchAllowlistCompatConfig = withBundledPluginAllowlistCompat({
