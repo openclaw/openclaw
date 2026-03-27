@@ -130,7 +130,7 @@ describe("runReplyAgent media path normalization", () => {
       defaultModel: "anthropic/claude",
       resolvedVerboseLevel: "off",
       isNewSession: false,
-      resetTriggered: false,
+      resetNoticeDelivered: false,
       blockStreamingEnabled: false,
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,

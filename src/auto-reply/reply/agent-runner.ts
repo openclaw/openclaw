@@ -85,7 +85,7 @@ export async function runReplyAgent(params: {
   agentCfgContextTokens?: number;
   resolvedVerboseLevel: VerboseLevel;
   isNewSession: boolean;
-  resetTriggered: boolean;
+  resetNoticeDelivered: boolean;
   blockStreamingEnabled: boolean;
   blockReplyChunking?: {
     minChars: number;
@@ -118,7 +118,7 @@ export async function runReplyAgent(params: {
     agentCfgContextTokens,
     resolvedVerboseLevel,
     isNewSession,
-    resetTriggered,
+    resetNoticeDelivered,
     blockStreamingEnabled,
     blockReplyChunking,
     resolvedBlockStreamingBreak,
@@ -671,8 +671,8 @@ export async function runReplyAgent(params: {
     let finalPayloads = guardedReplyPayloads;
     const verboseNotices: ReplyPayload[] = [];
 
-    // Skip when resetTriggered — pi-embedded already sends a more informative notice.
-    if (verboseEnabled && activeIsNewSession && !resetTriggered) {
+    // Skip when the reset notice was actually delivered — pi-embedded already sent a more informative notice.
+    if (verboseEnabled && activeIsNewSession && !resetNoticeDelivered) {
       verboseNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
     }
 

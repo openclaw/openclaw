@@ -126,13 +126,13 @@ async function sendResetSessionNotice(params: {
   model: string;
   defaultProvider: string;
   defaultModel: string;
-}): Promise<void> {
+}): Promise<boolean> {
   const route = resolveResetSessionNoticeRoute({
     ctx: params.ctx,
     command: params.command,
   });
   if (!route) {
-    return;
+    return false;
   }
   const { routeReply } = await loadRouteReplyRuntime();
   await routeReply({
@@ -151,6 +151,7 @@ async function sendResetSessionNotice(params: {
     threadId: params.threadId,
     cfg: params.cfg,
   });
+  return true;
 }
 
 type RunPreparedReplyParams = {
@@ -453,8 +454,12 @@ export async function runPreparedReply(
       }
     }
   }
+  // Track whether the reset notice was actually delivered, not just triggered.
+  // When the route is unavailable (e.g. webchat fallback), the notice is skipped
+  // and the verbose "New session" notice should still fire downstream.
+  let resetNoticeDelivered = false;
   if (resetTriggered && command.isAuthorizedSender) {
-    await sendResetSessionNotice({
+    resetNoticeDelivered = await sendResetSessionNotice({
       ctx,
       command,
       sessionKey,
@@ -605,7 +610,7 @@ export async function runPreparedReply(
     agentCfgContextTokens: agentCfg?.contextTokens,
     resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
     isNewSession,
-    resetTriggered,
+    resetNoticeDelivered,
     blockStreamingEnabled,
     blockReplyChunking,
     resolvedBlockStreamingBreak,
