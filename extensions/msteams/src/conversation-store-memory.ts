@@ -14,7 +14,11 @@ export function createMSTeamsConversationStoreMemory(
 
   return {
     upsert: async (conversationId, reference) => {
-      map.set(conversationId, reference);
+      const existing = map.get(conversationId);
+      map.set(conversationId, {
+        ...(existing?.timezone && !reference.timezone ? { timezone: existing.timezone } : {}),
+        ...reference,
+      });
     },
     get: async (conversationId) => {
       return map.get(conversationId) ?? null;
