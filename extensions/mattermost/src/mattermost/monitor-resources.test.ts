@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchMattermostChannel = vi.hoisted(() => vi.fn());
 const fetchMattermostUser = vi.hoisted(() => vi.fn());
@@ -18,6 +18,15 @@ vi.mock("./interactions.js", () => ({
 }));
 
 describe("mattermost monitor resources", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    fetchMattermostChannel.mockReset();
+    fetchMattermostUser.mockReset();
+    sendMattermostTyping.mockReset();
+    updateMattermostPost.mockReset();
+    buildButtonProps.mockReset();
+  });
+
   it("downloads media, preserves auth headers, and infers media kind", async () => {
     const fetchRemoteMedia = vi.fn(async () => ({
       buffer: new Uint8Array([1, 2, 3]),

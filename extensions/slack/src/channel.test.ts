@@ -1,22 +1,23 @@
 import { Type } from "@sinclair/typebox";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { slackPlugin } from "./channel.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import type { OpenClawConfig } from "./runtime-api.js";
+import { setSlackRuntime } from "./runtime.js";
 
 const handleSlackActionMock = vi.fn();
 
-vi.mock("./runtime.js", () => ({
-  getSlackRuntime: () => ({
+beforeEach(async () => {
+  handleSlackActionMock.mockReset();
+  setSlackRuntime({
     channel: {
       slack: {
         handleSlackAction: handleSlackActionMock,
       },
     },
-  }),
-}));
-
-import { slackPlugin } from "./channel.js";
+  } as never);
+});
 
 async function getSlackConfiguredState(cfg: OpenClawConfig) {
   const account = slackPlugin.config.resolveAccount(cfg, "default");
