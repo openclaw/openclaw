@@ -169,6 +169,41 @@ describe("web outbound", () => {
     });
   });
 
+  it("resolves defaultAccount case-insensitively against config keys", async () => {
+    // Listener registered with config key "Primary" (capital P).
+    // defaultAccount set to "primary" (lowercase) — must still find the listener.
+    const sendMessage = vi.fn(async () => ({ messageId: "msg-1" }));
+    const sendPoll = vi.fn(async () => ({ messageId: "poll-1" }));
+    const sendComposingTo = vi.fn(async () => {});
+
+    setActiveWebListener(null);
+    setActiveWebListener("Primary", {
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction: vi.fn(async () => {}),
+    });
+
+    const cfg = {
+      channels: {
+        whatsapp: {
+          defaultAccount: "primary",
+          accounts: { Primary: {} },
+        },
+      },
+    } as OpenClawConfig;
+
+    await sendMessageWhatsApp("+1555", "hi", { verbose: false, cfg });
+    await sendPollWhatsApp(
+      "+1555",
+      { question: "Q?", options: ["A", "B"], maxSelections: 1 },
+      { verbose: false, cfg },
+    );
+
+    expect(sendMessage).toHaveBeenCalled();
+    expect(sendPoll).toHaveBeenCalled();
+  });
+
   it("maps audio to PTT with opus mime when ogg", async () => {
     const buf = Buffer.from("audio");
     loadWebMediaMock.mockResolvedValueOnce({

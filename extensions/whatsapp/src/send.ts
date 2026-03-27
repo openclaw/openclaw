@@ -14,6 +14,25 @@ import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
 
+/**
+ * Resolves a listener map key by case-insensitively matching `requestedId`
+ * against the configured accounts keys. Listeners are registered with the raw
+ * config key (resolveWebAccountId trims only), so we return the matched key
+ * verbatim to ensure requireActiveWebListener's exact Map lookup succeeds.
+ */
+function resolveListenerAccountId(
+  requestedId: string | undefined,
+  accounts: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!requestedId) return undefined;
+  if (accounts && typeof accounts === "object") {
+    const lower = requestedId.toLowerCase();
+    const match = Object.keys(accounts).find((k) => k.toLowerCase() === lower);
+    if (match) return match;
+  }
+  return requestedId;
+}
+
 export async function sendMessageWhatsApp(
   to: string,
   body: string,
@@ -39,11 +58,15 @@ export async function sendMessageWhatsApp(
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
   const cfg = options.cfg ?? loadConfig();
-  // Read defaultAccount without normalizing so it matches the exact listener key
-  // (setActiveWebListener uses resolveWebAccountId which only trims, not lowercases).
-  const rawDefaultAccount = (cfg.channels?.whatsapp as { defaultAccount?: string } | undefined)
-    ?.defaultAccount;
-  const requestedAccountId = options.accountId?.trim() || rawDefaultAccount?.trim() || undefined;
+  // Resolve the listener key by case-insensitively matching the requested ID
+  // against the accounts config keys, then using the matched key as-is.
+  // Listeners are registered with the raw config key (setActiveWebListener →
+  // resolveWebAccountId trims only), so we must preserve that exact casing.
+  const whatsappCfg = cfg.channels?.whatsapp as
+    | { defaultAccount?: string; accounts?: Record<string, unknown> }
+    | undefined;
+  const requestedId = options.accountId?.trim() || whatsappCfg?.defaultAccount?.trim() || undefined;
+  const requestedAccountId = resolveListenerAccountId(requestedId, whatsappCfg?.accounts);
   const { listener: active, accountId: resolvedAccountId } =
     requireActiveWebListener(requestedAccountId);
   const account = resolveWhatsAppAccount({
@@ -176,11 +199,15 @@ export async function sendPollWhatsApp(
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
   const cfg = options.cfg ?? loadConfig();
-  // Read defaultAccount without normalizing so it matches the exact listener key
-  // (setActiveWebListener uses resolveWebAccountId which only trims, not lowercases).
-  const rawDefaultAccount = (cfg.channels?.whatsapp as { defaultAccount?: string } | undefined)
-    ?.defaultAccount;
-  const requestedAccountId = options.accountId?.trim() || rawDefaultAccount?.trim() || undefined;
+  // Resolve the listener key by case-insensitively matching the requested ID
+  // against the accounts config keys, then using the matched key as-is.
+  // Listeners are registered with the raw config key (setActiveWebListener →
+  // resolveWebAccountId trims only), so we must preserve that exact casing.
+  const whatsappCfg = cfg.channels?.whatsapp as
+    | { defaultAccount?: string; accounts?: Record<string, unknown> }
+    | undefined;
+  const requestedId = options.accountId?.trim() || whatsappCfg?.defaultAccount?.trim() || undefined;
+  const requestedAccountId = resolveListenerAccountId(requestedId, whatsappCfg?.accounts);
   const { listener: active } = requireActiveWebListener(requestedAccountId);
   const redactedTo = redactIdentifier(to);
   const logger = getChildLogger({
