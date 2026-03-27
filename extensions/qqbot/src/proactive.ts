@@ -1,26 +1,29 @@
 /**
  * QQ Bot proactive messaging helpers.
  *
- * This module records known users, sends proactive messages, and lists the
- * stored recipients.
+ * This module sends proactive messages and manages known-user queries.
+ * Known-user storage is delegated to `./known-users.ts`.
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
 import type { ResolvedQQBotAccount } from "./types.js";
 import { debugLog, debugError } from "./utils/debug-log.js";
 
-// Local types.
-
-/** Metadata for a user who has interacted with the bot before. */
-export interface KnownUser {
-  type: "c2c" | "group" | "channel";
-  openid: string;
-  accountId: string;
-  nickname?: string;
-  firstInteractionAt: number;
-  lastInteractionAt: number;
-}
+// Re-export known-user types and functions from the canonical module.
+export type { KnownUser } from "./known-users.js";
+export {
+  recordKnownUser,
+  listKnownUsers as listKnownUsersFromStore,
+  getKnownUser as getKnownUserFromStore,
+  removeKnownUser as removeKnownUserFromStore,
+  clearKnownUsers as clearKnownUsersFromStore,
+  flushKnownUsers,
+} from "./known-users.js";
+import {
+  listKnownUsers as listKnownUsersImpl,
+  removeKnownUser as removeKnownUserImpl,
+  clearKnownUsers as clearKnownUsersImpl,
+  getKnownUser as getKnownUserImpl,
+} from "./known-users.js";
 
 /** Options for proactive message sending. */
 export interface ProactiveSendOptions {
@@ -56,169 +59,38 @@ import {
   sendGroupImageMessage,
 } from "./api.js";
 import { resolveQQBotAccount } from "./config.js";
-// Known-user storage.
-import { getQQBotDataDir } from "./utils/platform.js";
 
-const STORAGE_DIR = getQQBotDataDir("data");
-const KNOWN_USERS_FILE = path.join(STORAGE_DIR, "known-users.json");
-
-// In-memory cache.
-let knownUsersCache: Map<string, KnownUser> | null = null;
-let cacheLastModified = 0;
-
-/** Ensure the storage directory exists. */
-function ensureStorageDir(): void {
-  if (!fs.existsSync(STORAGE_DIR)) {
-    fs.mkdirSync(STORAGE_DIR, { recursive: true });
-  }
-}
-
-/** Build a stable key for a known user entry. */
-function getUserKey(type: string, openid: string, accountId: string): string {
-  return `${accountId}:${type}:${openid}`;
-}
-
-/** Load known users from disk. */
-function loadKnownUsers(): Map<string, KnownUser> {
-  if (knownUsersCache !== null) {
-    // Reuse the cache when the backing file has not changed.
-    try {
-      const stat = fs.statSync(KNOWN_USERS_FILE);
-      if (stat.mtimeMs <= cacheLastModified) {
-        return knownUsersCache;
-      }
-    } catch {
-      // If the file disappeared, keep using the cached state.
-      return knownUsersCache;
-    }
-  }
-
-  const users = new Map<string, KnownUser>();
-
-  try {
-    if (fs.existsSync(KNOWN_USERS_FILE)) {
-      const data = fs.readFileSync(KNOWN_USERS_FILE, "utf-8");
-      const parsed = JSON.parse(data) as KnownUser[];
-      for (const user of parsed) {
-        const key = getUserKey(user.type, user.openid, user.accountId);
-        users.set(key, user);
-      }
-      cacheLastModified = fs.statSync(KNOWN_USERS_FILE).mtimeMs;
-    }
-  } catch (err) {
-    debugError(`[qqbot:proactive] Failed to load known users: ${err}`);
-  }
-
-  knownUsersCache = users;
-  return users;
-}
-
-/** Persist known users to disk. */
-function saveKnownUsers(users: Map<string, KnownUser>): void {
-  try {
-    ensureStorageDir();
-    const data = Array.from(users.values());
-    fs.writeFileSync(KNOWN_USERS_FILE, JSON.stringify(data, null, 2), "utf-8");
-    cacheLastModified = Date.now();
-    knownUsersCache = users;
-  } catch (err) {
-    debugError(`[qqbot:proactive] Failed to save known users: ${err}`);
-  }
-}
-
-/**
- * Record a known user when a message is received.
- */
-export function recordKnownUser(user: Omit<KnownUser, "firstInteractionAt">): void {
-  const users = loadKnownUsers();
-  const key = getUserKey(user.type, user.openid, user.accountId);
-
-  const existing = users.get(key);
-  const now = user.lastInteractionAt || Date.now();
-
-  users.set(key, {
-    ...user,
-    lastInteractionAt: now,
-    firstInteractionAt: existing?.firstInteractionAt ?? now,
-    // Prefer a freshly observed nickname when available.
-    nickname: user.nickname || existing?.nickname,
-  });
-
-  saveKnownUsers(users);
-  debugLog(`[qqbot:proactive] Recorded user: ${key}`);
-}
-
-/** Look up a known user entry. */
+/** Look up a known user entry (adapter for the old proactive API shape). */
 export function getKnownUser(
   type: string,
   openid: string,
   accountId: string,
-): KnownUser | undefined {
-  const users = loadKnownUsers();
-  const key = getUserKey(type, openid, accountId);
-  return users.get(key);
+): ReturnType<typeof getKnownUserImpl> {
+  return getKnownUserImpl(accountId, openid, type as "c2c" | "group");
 }
 
-/** List known users with optional filtering and sorting. */
-export function listKnownUsers(options?: ListKnownUsersOptions): KnownUser[] {
-  const users = loadKnownUsers();
-  let result = Array.from(users.values());
-
-  // Filter by conversation type.
-  if (options?.type) {
-    result = result.filter((u) => u.type === options.type);
-  }
-
-  // Filter by account.
-  if (options?.accountId) {
-    result = result.filter((u) => u.accountId === options.accountId);
-  }
-
-  // Sort newest-first by default.
-  if (options?.sortByLastInteraction !== false) {
-    result.sort((a, b) => b.lastInteractionAt - a.lastInteractionAt);
-  }
-
-  // Apply the result limit last.
-  if (options?.limit && options.limit > 0) {
-    result = result.slice(0, options.limit);
-  }
-
-  return result;
+/** List known users with optional filtering and sorting (adapter). */
+export function listKnownUsers(
+  options?: ListKnownUsersOptions,
+): ReturnType<typeof listKnownUsersImpl> {
+  const type = options?.type;
+  return listKnownUsersImpl({
+    type: type === "channel" ? undefined : (type as "c2c" | "group" | undefined),
+    accountId: options?.accountId,
+    limit: options?.limit,
+    sortBy: options?.sortByLastInteraction !== false ? "lastSeenAt" : undefined,
+    sortOrder: "desc",
+  });
 }
 
-/** Remove one known user entry. */
+/** Remove one known user entry (adapter). */
 export function removeKnownUser(type: string, openid: string, accountId: string): boolean {
-  const users = loadKnownUsers();
-  const key = getUserKey(type, openid, accountId);
-  const deleted = users.delete(key);
-  if (deleted) {
-    saveKnownUsers(users);
-  }
-  return deleted;
+  return removeKnownUserImpl(accountId, openid, type as "c2c" | "group");
 }
 
-/** Clear all known users, optionally scoped to a single account. */
+/** Clear all known users, optionally scoped to a single account (adapter). */
 export function clearKnownUsers(accountId?: string): number {
-  const users = loadKnownUsers();
-  let count = 0;
-
-  if (accountId) {
-    for (const [key, user] of users) {
-      if (user.accountId === accountId) {
-        users.delete(key);
-        count++;
-      }
-    }
-  } else {
-    count = users.size;
-    users.clear();
-  }
-
-  if (count > 0) {
-    saveKnownUsers(users);
-  }
-  return count;
+  return clearKnownUsersImpl(accountId);
 }
 
 /** Resolve account config and send a proactive message. */
@@ -354,9 +226,10 @@ export async function broadcastMessage(
   let failed = 0;
 
   for (const user of validUsers) {
+    const targetId = user.type === "group" ? (user.groupOpenid ?? user.openid) : user.openid;
     const result = await sendProactive(
       {
-        to: user.openid,
+        to: targetId,
         text,
         type: user.type as "c2c" | "group",
         accountId: user.accountId,
@@ -364,7 +237,7 @@ export async function broadcastMessage(
       cfg,
     );
 
-    results.push({ to: user.openid, result });
+    results.push({ to: targetId, result });
 
     if (result.success) {
       success++;
@@ -446,6 +319,6 @@ export function getKnownUsersStats(accountId?: string): {
     total: users.length,
     c2c: users.filter((u) => u.type === "c2c").length,
     group: users.filter((u) => u.type === "group").length,
-    channel: users.filter((u) => u.type === "channel").length,
+    channel: 0, // Channel users are not tracked in known-users storage.
   };
 }

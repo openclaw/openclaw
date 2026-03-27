@@ -460,7 +460,9 @@ export async function sendGroupMessage(
 ): Promise<MessageResponse> {
   const msgSeq = msgId ? getNextMsgSeq(msgId) : 1;
   const body = buildMessageBody(appId, content, msgId, msgSeq);
-  return apiRequest(accessToken, "POST", `/v2/groups/${groupOpenid}/messages`, body);
+  return sendAndNotify(appId, accessToken, "POST", `/v2/groups/${groupOpenid}/messages`, body, {
+    text: content,
+  });
 }
 
 function buildProactiveMessageBody(appId: string, content: string): Record<string, unknown> {

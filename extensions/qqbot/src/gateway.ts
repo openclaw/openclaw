@@ -7,6 +7,7 @@ import {
   getGatewayUrl,
   sendC2CMessage,
   sendChannelMessage,
+  sendDmMessage,
   sendGroupMessage,
   clearTokenCache,
   initApiConfig,
@@ -289,8 +290,8 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         await sendGroupMessage(account.appId, token, msg.groupOpenid, replyText, msg.messageId);
       } else if (msg.channelId) {
         await sendChannelMessage(token, msg.channelId, replyText, msg.messageId);
-      } else if (msg.type === "dm") {
-        await sendC2CMessage(account.appId, token, msg.senderId, replyText, msg.messageId);
+      } else if (msg.type === "dm" && msg.guildId) {
+        await sendDmMessage(token, msg.guildId, replyText, msg.messageId);
       }
 
       // Send the file attachment if the command produced one.
@@ -299,15 +300,19 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           const targetType =
             msg.type === "group"
               ? "group"
-              : msg.type === "c2c" || msg.type === "dm"
-                ? "c2c"
-                : "channel";
+              : msg.type === "dm"
+                ? "dm"
+                : msg.type === "c2c"
+                  ? "c2c"
+                  : "channel";
           const targetId =
             msg.type === "group"
               ? msg.groupOpenid || msg.senderId
-              : msg.type === "c2c" || msg.type === "dm"
-                ? msg.senderId
-                : msg.channelId || msg.senderId;
+              : msg.type === "dm"
+                ? msg.guildId || msg.senderId
+                : msg.type === "c2c"
+                  ? msg.senderId
+                  : msg.channelId || msg.senderId;
           const mediaCtx: MediaTargetContext = {
             targetType,
             targetId,
@@ -658,7 +663,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           ? event.type === "guild"
             ? `qqbot:channel:${event.channelId}`
             : `qqbot:group:${event.groupOpenid}`
-          : `qqbot:c2c:${event.senderId}`;
+          : event.type === "dm"
+            ? `qqbot:dm:${event.guildId}`
+            : `qqbot:c2c:${event.senderId}`;
 
         const hasTTS = !!resolveTTSConfig(cfg as Record<string, unknown>);
 
@@ -786,6 +793,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           senderId: event.senderId,
           messageId: event.messageId,
           channelId: event.channelId,
+          guildId: event.guildId,
           groupOpenid: event.groupOpenid,
         };
         const replyCtx: ReplyContext = { target: replyTarget, account, cfg, log };
@@ -1257,12 +1265,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                 });
               } else if (t === "AT_MESSAGE_CREATE") {
                 const event = d as GuildMessageEvent;
-                recordKnownUser({
-                  openid: event.author.id,
-                  type: "c2c", // Store guild users as c2c contacts for known-user tracking.
-                  nickname: event.author.username,
-                  accountId: account.accountId,
-                });
+                // Guild users cannot receive proactive C2C messages — skip known-user recording.
                 const guildRefs = parseRefIndices((event as any).message_scene?.ext);
                 trySlashCommandOrEnqueue({
                   type: "guild",
@@ -1279,12 +1282,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                 });
               } else if (t === "DIRECT_MESSAGE_CREATE") {
                 const event = d as GuildMessageEvent;
-                recordKnownUser({
-                  openid: event.author.id,
-                  type: "c2c",
-                  nickname: event.author.username,
-                  accountId: account.accountId,
-                });
+                // DM author.id is a guild-scoped ID, not a C2C openid — skip known-user recording.
                 const dmRefs = parseRefIndices((event as any).message_scene?.ext);
                 trySlashCommandOrEnqueue({
                   type: "dm",

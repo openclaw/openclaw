@@ -3,6 +3,7 @@ import {
   getAccessToken,
   sendC2CMessage,
   sendChannelMessage,
+  sendDmMessage,
   sendGroupMessage,
   sendProactiveC2CMessage,
   sendProactiveGroupMessage,
@@ -224,7 +225,7 @@ function parseTarget(to: string): { type: "c2c" | "group" | "channel"; id: strin
 
 /** Normalized target information for media sends. */
 export interface MediaTargetContext {
-  targetType: "c2c" | "group" | "channel";
+  targetType: "c2c" | "group" | "channel" | "dm";
   targetId: string;
   account: ResolvedQQBotAccount;
   replyToId?: string;
@@ -343,7 +344,7 @@ export async function sendPhoto(
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
       }
       debugLog(`${prefix} sendPhoto: channel does not support local/Base64 images`);
-      return { channel: "qqbot" };
+      return { channel: "qqbot", error: "Channel does not support local/Base64 images" };
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1322,6 +1323,10 @@ async function sendTextAfterMedia(ctx: MediaTargetContext, text: string): Promis
       await sendC2CMessage(ctx.account.appId, token, ctx.targetId, text, ctx.replyToId);
     } else if (ctx.targetType === "group") {
       await sendGroupMessage(ctx.account.appId, token, ctx.targetId, text, ctx.replyToId);
+    } else if (ctx.targetType === "channel") {
+      await sendChannelMessage(token, ctx.targetId, text, ctx.replyToId);
+    } else if (ctx.targetType === "dm") {
+      await sendDmMessage(token, ctx.targetId, text, ctx.replyToId);
     }
   } catch (err) {
     debugError(`[qqbot] sendTextAfterMedia failed: ${err}`);

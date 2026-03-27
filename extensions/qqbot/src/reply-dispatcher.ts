@@ -3,6 +3,7 @@ import {
   getAccessToken,
   sendC2CMessage,
   sendChannelMessage,
+  sendDmMessage,
   sendGroupMessage,
   clearTokenCache,
   sendC2CImageMessage,
@@ -41,6 +42,7 @@ export interface MessageTarget {
   senderId: string;
   messageId: string;
   channelId?: string;
+  guildId?: string;
   groupOpenid?: string;
 }
 
@@ -96,8 +98,8 @@ export async function sendTextToTarget(
         await sendGroupMessage(account.appId, token, target.groupOpenid, text, target.messageId);
       } else if (target.channelId) {
         await sendChannelMessage(token, target.channelId, text, target.messageId);
-      } else if (target.type === "dm") {
-        await sendC2CMessage(account.appId, token, target.senderId, text, target.messageId, refIdx);
+      } else if (target.type === "dm" && target.guildId) {
+        await sendDmMessage(token, target.guildId, text, target.messageId);
       }
     },
     ctx.log,
@@ -249,6 +251,8 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
             imageUrl,
             target.messageId,
           );
+        } else if (target.type === "dm" && target.guildId) {
+          await sendDmMessage(token, target.guildId, `![](${payload.path})`, target.messageId);
         } else if (target.channelId) {
           await sendChannelMessage(
             token,
@@ -303,6 +307,7 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
                 token,
                 target.senderId,
                 silkBase64,
+                undefined,
                 target.messageId,
                 ttsText,
                 silkPath,
@@ -313,8 +318,14 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
                 token,
                 target.groupOpenid,
                 silkBase64,
+                undefined,
                 target.messageId,
               );
+            } else if (target.type === "dm" && target.guildId) {
+              log?.error(
+                `[qqbot:${account.accountId}] Voice not supported in DM, sending text fallback`,
+              );
+              await sendDmMessage(token, target.guildId, ttsText, target.messageId);
             } else if (target.channelId) {
               log?.error(
                 `[qqbot:${account.accountId}] Voice not supported in channel, sending text fallback`,
@@ -366,6 +377,8 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
                 undefined,
                 target.messageId,
               );
+            } else if (target.type === "dm") {
+              log?.error(`[qqbot:${account.accountId}] Video not supported in DM`);
             } else if (target.channelId) {
               log?.error(`[qqbot:${account.accountId}] Video not supported in channel`);
             }
@@ -403,6 +416,8 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
                 videoBase64,
                 target.messageId,
               );
+            } else if (target.type === "dm") {
+              log?.error(`[qqbot:${account.accountId}] Video not supported in DM`);
             } else if (target.channelId) {
               log?.error(`[qqbot:${account.accountId}] Video not supported in channel`);
             }
@@ -460,6 +475,8 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
                 target.messageId,
                 fileName,
               );
+            } else if (target.type === "dm") {
+              log?.error(`[qqbot:${account.accountId}] File not supported in DM`);
             } else if (target.channelId) {
               log?.error(`[qqbot:${account.accountId}] File not supported in channel`);
             }
@@ -494,6 +511,8 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
                 target.messageId,
                 fileName,
               );
+            } else if (target.type === "dm") {
+              log?.error(`[qqbot:${account.accountId}] File not supported in DM`);
             } else if (target.channelId) {
               log?.error(`[qqbot:${account.accountId}] File not supported in channel`);
             }

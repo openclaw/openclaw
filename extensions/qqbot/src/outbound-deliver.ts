@@ -8,6 +8,7 @@
 
 import {
   sendC2CMessage,
+  sendDmMessage,
   sendGroupMessage,
   sendChannelMessage,
   sendC2CImageMessage,
@@ -36,6 +37,7 @@ export interface DeliverEventContext {
   senderId: string;
   messageId: string;
   channelId?: string;
+  guildId?: string;
   groupOpenid?: string;
   msgIdx?: string;
 }
@@ -150,13 +152,22 @@ export async function parseAndSendMediaTags(
 
   // Send queue items in order.
   const mediaTarget: MediaTargetContext = {
-    targetType: event.type === "c2c" ? "c2c" : event.type === "group" ? "group" : "channel",
+    targetType:
+      event.type === "c2c"
+        ? "c2c"
+        : event.type === "group"
+          ? "group"
+          : event.type === "dm"
+            ? "dm"
+            : "channel",
     targetId:
       event.type === "c2c"
         ? event.senderId
         : event.type === "group"
           ? event.groupOpenid!
-          : event.channelId!,
+          : event.type === "dm"
+            ? event.guildId!
+            : event.channelId!,
     account,
     replyToId: event.messageId,
     logPrefix: prefix,
@@ -431,6 +442,8 @@ async function sendTextChunks(
             chunk,
             event.messageId,
           );
+        } else if (event.type === "dm" && event.guildId) {
+          return await sendDmMessage(token, event.guildId, chunk, event.messageId);
         } else if (event.channelId) {
           return await sendChannelMessage(token, event.channelId, chunk, event.messageId);
         }
@@ -520,6 +533,8 @@ async function sendMarkdownReply(
               imageUrl,
               event.messageId,
             );
+          } else if (event.type === "dm" && event.guildId) {
+            log?.info(`${prefix} DM does not support rich media image, skipping Base64 image`);
           } else if (event.channelId) {
             log?.info(`${prefix} Channel does not support rich media, skipping Base64 image`);
           }
@@ -607,6 +622,8 @@ async function sendMarkdownReply(
               chunk,
               event.messageId,
             );
+          } else if (event.type === "dm" && event.guildId) {
+            return await sendDmMessage(token, event.guildId, chunk, event.messageId);
           } else if (event.channelId) {
             return await sendChannelMessage(token, event.channelId, chunk, event.messageId);
           }
@@ -636,13 +653,22 @@ async function sendPlainTextReply(
   const prefix = `[qqbot:${account.accountId}]`;
 
   const imgMediaTarget: MediaTargetContext = {
-    targetType: event.type === "c2c" ? "c2c" : event.type === "group" ? "group" : "channel",
+    targetType:
+      event.type === "c2c"
+        ? "c2c"
+        : event.type === "group"
+          ? "group"
+          : event.type === "dm"
+            ? "dm"
+            : "channel",
     targetId:
       event.type === "c2c"
         ? event.senderId
         : event.type === "group"
           ? event.groupOpenid!
-          : event.channelId!,
+          : event.type === "dm"
+            ? event.guildId!
+            : event.channelId!,
     account,
     replyToId: event.messageId,
     logPrefix: prefix,
