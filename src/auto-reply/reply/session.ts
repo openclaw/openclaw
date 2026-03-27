@@ -259,6 +259,9 @@ export async function initSessionState(params: {
   let persistedAuthProfileOverride: string | undefined;
   let persistedAuthProfileOverrideSource: SessionEntry["authProfileOverrideSource"];
   let persistedAuthProfileOverrideCompactionCount: number | undefined;
+  let persistedCliSessionIds: SessionEntry["cliSessionIds"];
+  let persistedCliSessionBindings: SessionEntry["cliSessionBindings"];
+  let persistedClaudeCliSessionId: string | undefined;
   let persistedLabel: string | undefined;
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
@@ -417,6 +420,9 @@ export async function initSessionState(params: {
       persistedAuthProfileOverride = entry.authProfileOverride;
       persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
+      persistedCliSessionIds = entry.cliSessionIds;
+      persistedCliSessionBindings = entry.cliSessionBindings;
+      persistedClaudeCliSessionId = entry.claudeCliSessionId;
       persistedLabel = entry.label;
     }
   }
@@ -473,6 +479,9 @@ export async function initSessionState(params: {
       persistedAuthProfileOverrideSource ?? baseEntry?.authProfileOverrideSource,
     authProfileOverrideCompactionCount:
       persistedAuthProfileOverrideCompactionCount ?? baseEntry?.authProfileOverrideCompactionCount,
+    cliSessionIds: persistedCliSessionIds ?? baseEntry?.cliSessionIds,
+    cliSessionBindings: persistedCliSessionBindings ?? baseEntry?.cliSessionBindings,
+    claudeCliSessionId: persistedClaudeCliSessionId ?? baseEntry?.claudeCliSessionId,
     label: persistedLabel ?? baseEntry?.label,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,
@@ -575,9 +584,6 @@ export async function initSessionState(params: {
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;
     sessionEntry.contextTokens = undefined;
-    delete sessionEntry.cliSessionIds;
-    delete sessionEntry.cliSessionBindings;
-    delete sessionEntry.claudeCliSessionId;
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
