@@ -717,9 +717,15 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       // can see what is being replied to, not just the event ID.
       // Note: resolve even when threadTarget is set (e.g. threadReplies: "always")
       // because the user may still be quoting a specific message within the thread.
-      const replyContext = replyToEventId
-        ? await resolveReplyContext({ roomId, eventId: replyToEventId })
-        : undefined;
+      const replyContext =
+        replyToEventId && replyToEventId === _threadRootId && threadContext?.summary
+          ? {
+              replyToBody: threadContext.summary,
+              replyToSender: threadContext.senderLabel,
+            }
+          : replyToEventId
+            ? await resolveReplyContext({ roomId, eventId: replyToEventId })
+            : undefined;
 
       if (_configuredBinding) {
         const ensured = await ensureConfiguredAcpBindingReady({

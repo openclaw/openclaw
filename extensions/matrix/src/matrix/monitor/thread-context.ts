@@ -7,6 +7,8 @@ const MAX_THREAD_STARTER_BODY_LENGTH = 500;
 
 type MatrixThreadContext = {
   threadStarterBody?: string;
+  senderLabel?: string;
+  summary?: string;
 };
 
 function truncateThreadStarterBody(value: string): string {
@@ -88,13 +90,17 @@ export function createMatrixThreadContextResolver(params: {
     const senderName =
       senderId &&
       (await params.getMemberDisplayName(input.roomId, senderId).catch(() => undefined));
+    const senderLabel = senderName ?? senderId;
+    const summary = summarizeMatrixThreadStarterEvent(rawEvent);
     return remember(cacheKey, {
       threadStarterBody: formatMatrixThreadStarterBody({
         threadRootId: input.threadRootId,
         senderId,
         senderName,
-        summary: summarizeMatrixThreadStarterEvent(rawEvent),
+        summary,
       }),
+      senderLabel,
+      summary,
     });
   };
 }

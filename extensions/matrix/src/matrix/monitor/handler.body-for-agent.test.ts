@@ -192,4 +192,49 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
       }),
     );
   });
+
+  it("reuses the fetched thread root when reply context points at the same event", async () => {
+    const getEvent = vi.fn(async () =>
+      createMatrixTextMessageEvent({
+        eventId: "$thread-root",
+        sender: "@alice:example.org",
+        body: "Root topic",
+      }),
+    );
+    const getMemberDisplayName = vi.fn(async (_roomId: string, userId: string) =>
+      userId === "@alice:example.org" ? "Alice" : "sender",
+    );
+    const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
+      client: { getEvent },
+      isDirectMessage: false,
+      threadReplies: "always",
+      getMemberDisplayName,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$reply1",
+        body: "@room follow up",
+        relatesTo: {
+          rel_type: "m.thread",
+          event_id: "$thread-root",
+          "m.in_reply_to": { event_id: "$thread-root" },
+        },
+        mentions: { room: true },
+      }),
+    );
+
+    expect(finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        MessageThreadId: "$thread-root",
+        ReplyToId: undefined,
+        ReplyToSender: "Alice",
+        ReplyToBody: "Root topic",
+        ThreadStarterBody: "Matrix thread root $thread-root from Alice:\nRoot topic",
+      }),
+    );
+    expect(getEvent).toHaveBeenCalledTimes(1);
+    expect(getMemberDisplayName).toHaveBeenCalledTimes(2);
+  });
 });

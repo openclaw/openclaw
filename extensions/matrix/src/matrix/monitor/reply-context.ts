@@ -1,9 +1,3 @@
-import {
-  formatPollAsText,
-  isPollStartType,
-  parsePollStartContent,
-  type PollStartContent,
-} from "../poll-types.js";
 import type { MatrixClient } from "../sdk.js";
 import { summarizeMatrixMessageContextEvent, trimMatrixMaybeString } from "./context-summary.js";
 import type { MatrixRawEvent } from "./types.js";
@@ -24,13 +18,6 @@ function truncateReplyBody(value: string): string {
 }
 
 export function summarizeMatrixReplyEvent(event: MatrixRawEvent): string | undefined {
-  if (isPollStartType(event.type)) {
-    const pollSummary = parsePollStartContent(event.content as PollStartContent);
-    if (pollSummary) {
-      return truncateReplyBody(formatPollAsText(pollSummary));
-    }
-  }
-
   const body = summarizeMatrixMessageContextEvent(event);
   return body ? truncateReplyBody(body) : undefined;
 }
