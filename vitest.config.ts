@@ -58,6 +58,7 @@ export default defineConfig({
       "vitest.channel-paths.mjs",
       "vitest.channels.config.ts",
       "vitest.config.ts",
+      "vitest.contracts.config.ts",
       "vitest.e2e.config.ts",
       "vitest.extensions.config.ts",
       "vitest.gateway.config.ts",
