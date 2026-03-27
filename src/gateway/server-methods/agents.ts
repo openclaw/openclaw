@@ -165,6 +165,38 @@ async function resolveWorkspaceRealPath(workspaceDir: string): Promise<string> {
   }
 }
 
+/**
+ * Resolve and validate IDENTITY.md path for writing, blocking symlink traversal.
+ * Returns the safe IO path or throws if symlink escapes workspace boundary.
+ */
+async function resolveIdentityPathForWrite(workspaceDir: string): Promise<string> {
+  const identityResolved = await resolveAgentWorkspaceFilePath({
+    workspaceDir,
+    name: DEFAULT_IDENTITY_FILENAME,
+    allowMissing: true, // Allow missing so we can create it safely
+  });
+
+  if (identityResolved.kind === "invalid") {
+    throw new Error(`symlink_traversal_blocked: ${identityResolved.reason}`);
+  }
+
+  // For missing files, verify the parent directory is safe
+  if (identityResolved.kind === "missing") {
+    // Check that the workspace itself hasn't been symlinked away
+    const workspaceReal = await resolveWorkspaceRealPath(workspaceDir);
+    const resolvedPath = path.resolve(workspaceReal, DEFAULT_IDENTITY_FILENAME);
+    await assertNoPathAliasEscape({
+      absolutePath: resolvedPath,
+      rootPath: workspaceReal,
+      boundaryLabel: "workspace root",
+    });
+    return resolvedPath;
+  }
+
+  // kind === "ready" - already validated by resolveAgentWorkspaceFilePath
+  return identityResolved.ioPath;
+}
+
 async function resolveAgentWorkspaceFilePath(params: {
   workspaceDir: string;
   name: string;
@@ -530,10 +562,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
     await writeConfigFile(nextConfig);
 
     // Always write Name to IDENTITY.md; optionally include emoji/avatar.
+    // Use safe path resolution to block symlink traversal attacks.
     const safeName = sanitizeIdentityLine(rawName);
     const emoji = resolveOptionalStringParam(params.emoji);
     const avatar = resolveOptionalStringParam(params.avatar);
-    const identityPath = path.join(workspaceDir, DEFAULT_IDENTITY_FILENAME);
+    const identityPath = await resolveIdentityPathForWrite(workspaceDir);
     const lines = [
       "",
       `- Name: ${safeName}`,
@@ -585,7 +618,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
     if (avatar) {
       const workspace = workspaceDir ?? resolveAgentWorkspaceDir(nextConfig, agentId);
       await fs.mkdir(workspace, { recursive: true });
-      const identityPath = path.join(workspace, DEFAULT_IDENTITY_FILENAME);
+      // Use safe path resolution to block symlink traversal attacks.
+      const identityPath = await resolveIdentityPathForWrite(workspace);
       await fs.appendFile(identityPath, `\n- Avatar: ${sanitizeIdentityLine(avatar)}\n`, "utf-8");
     }
 
