@@ -123,7 +123,6 @@ describe("plugin-sdk subpath exports", () => {
       "acpx",
       "compat",
       "device-pair",
-      "google",
       "lobster",
       "pairing-access",
       "provider-model-definitions",

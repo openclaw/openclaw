@@ -95,4 +95,4 @@ export { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { createChannelPairingController } from "./channel-pairing.js";
 export { isRequestBodyLimitError, readRequestBodyWithLimit } from "../infra/http-body.js";
-export { isMattermostSenderAllowed } from "../../extensions/mattermost/api.js";
+export { isMattermostSenderAllowed } from "./mattermost-policy.js";

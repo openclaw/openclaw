@@ -84,7 +84,7 @@ export {
 export {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
-} from "../../extensions/matrix/thread-bindings-runtime.js";
+} from "./matrix-thread-bindings.js";
 export { createTypingCallbacks } from "../channels/typing.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
@@ -157,24 +157,24 @@ export {
   findMatrixAccountEntry,
   resolveConfiguredMatrixAccountIds,
   resolveMatrixChannelConfig,
-} from "../../extensions/matrix/helper-api.js";
+} from "./matrix-helper.js";
 export {
   resolveMatrixAccountStorageRoot,
   resolveMatrixCredentialsDir,
   resolveMatrixCredentialsPath,
   resolveMatrixLegacyFlatStoragePaths,
-} from "../../extensions/matrix/helper-api.js";
-export { resolveMatrixAccountStringValues } from "../../extensions/matrix/runtime-api.js";
-export { getMatrixScopedEnvVarNames } from "../../extensions/matrix/helper-api.js";
+} from "./matrix-helper.js";
+export { resolveMatrixAccountStringValues } from "./matrix-runtime-surface.js";
+export { getMatrixScopedEnvVarNames } from "./matrix-helper.js";
 export {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
-} from "../../extensions/matrix/helper-api.js";
+} from "./matrix-helper.js";
 export {
   createMatrixThreadBindingManager,
   resetMatrixThreadBindingsForTests,
-} from "../../extensions/matrix/api.js";
-export { setMatrixRuntime } from "../../extensions/matrix/runtime-api.js";
+} from "./matrix-surface.js";
+export { setMatrixRuntime } from "./matrix-runtime-surface.js";
 
 const matrixSetup = createOptionalChannelSetupSurface({
   channel: "matrix",

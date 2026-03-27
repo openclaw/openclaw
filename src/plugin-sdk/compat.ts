@@ -48,5 +48,5 @@ export { mapAllowlistResolutionInputs } from "./allow-from.js";
 export {
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
-} from "../../extensions/bluebubbles/api.js";
+} from "./bluebubbles-policy.js";
 export { collectBlueBubblesStatusIssues } from "../channels/plugins/status-issues/bluebubbles.js";
