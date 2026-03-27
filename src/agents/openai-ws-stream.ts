@@ -195,6 +195,17 @@ export function hasWsSession(sessionId: string): boolean {
 type AnyMessage = Message & { role: string; content: unknown };
 type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAssistantPhase };
 type ReplayModelInfo = { input?: ReadonlyArray<string> };
+type ReplayableReasoningItem = Extract<InputItem, { type: "reasoning" }>;
+type ReplayableReasoningSignature = {
+  type: "reasoning" | `reasoning.${string}`;
+  id?: string;
+};
+type ToolCallReplayId = { callId: string; itemId?: string };
+type PlannedTurnInput = {
+  inputItems: InputItem[];
+  previousResponseId?: string;
+  mode: "incremental_tool_results" | "full_context_initial" | "full_context_restart";
+};
 
 function toNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -337,7 +348,26 @@ function toReplayableReasoningId(value: unknown): string | null {
   return id && id.startsWith("rs_") ? id : null;
 }
 
-function parseReasoningItem(value: unknown): Extract<InputItem, { type: "reasoning" }> | null {
+function toReasoningSignature(value: unknown): ReplayableReasoningSignature | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as { type?: unknown; id?: unknown };
+  if (!isReplayableReasoningType(record.type)) {
+    return null;
+  }
+  const reasoningId = toReplayableReasoningId(record.id);
+  return {
+    type: record.type,
+    ...(reasoningId ? { id: reasoningId } : {}),
+  };
+}
+
+function encodeThinkingSignature(signature: ReplayableReasoningSignature): string {
+  return JSON.stringify(signature);
+}
+
+function parseReasoningItem(value: unknown): ReplayableReasoningItem | null {
   if (!value || typeof value !== "object") {
     return null;
   }
@@ -363,15 +393,32 @@ function parseReasoningItem(value: unknown): Extract<InputItem, { type: "reasoni
   };
 }
 
-function parseThinkingSignature(value: unknown): Extract<InputItem, { type: "reasoning" }> | null {
+function parseThinkingSignature(value: unknown): ReplayableReasoningItem | null {
   if (typeof value !== "string" || value.trim().length === 0) {
     return null;
   }
   try {
-    return parseReasoningItem(JSON.parse(value));
+    const signature = toReasoningSignature(JSON.parse(value));
+    return signature ? parseReasoningItem(signature) : null;
   } catch {
     return null;
   }
+}
+
+function encodeToolCallReplayId(params: ToolCallReplayId): string {
+  return params.itemId ? `${params.callId}|${params.itemId}` : params.callId;
+}
+
+function decodeToolCallReplayId(value: unknown): ToolCallReplayId | null {
+  const raw = toNonEmptyString(value);
+  if (!raw) {
+    return null;
+  }
+  const [callId, itemId] = raw.split("|", 2);
+  return {
+    callId,
+    ...(itemId ? { itemId } : {}),
+  };
 }
 
 function extractReasoningSummaryText(value: unknown): string {
@@ -407,6 +454,34 @@ function extractResponseReasoningText(item: unknown): string {
     return summaryText;
   }
   return typeof record.content === "string" ? record.content.trim() : "";
+}
+
+function planTurnInput(params: {
+  context: Context;
+  model: ReplayModelInfo;
+  previousResponseId: string | null;
+  lastContextLength: number;
+}): PlannedTurnInput {
+  if (params.previousResponseId && params.lastContextLength > 0) {
+    const newMessages = params.context.messages.slice(params.lastContextLength);
+    const toolResults = newMessages.filter((m) => (m as AnyMessage).role === "toolResult");
+    if (toolResults.length > 0) {
+      return {
+        mode: "incremental_tool_results",
+        previousResponseId: params.previousResponseId,
+        inputItems: convertMessagesToInputItems(toolResults, params.model),
+      };
+    }
+    return {
+      mode: "full_context_restart",
+      inputItems: buildFullInput(params.context, params.model),
+    };
+  }
+
+  return {
+    mode: "full_context_initial",
+    inputItems: buildFullInput(params.context, params.model),
+  };
 }
 
 /** Convert pi-ai tool array to OpenAI FunctionToolDefinition[]. */
@@ -505,16 +580,15 @@ export function convertMessagesToInputItems(
           }
 
           pushAssistantText();
-          const callIdRaw = toNonEmptyString(block.id);
+          const replayId = decodeToolCallReplayId(block.id);
           const toolName = toNonEmptyString(block.name);
-          if (!callIdRaw || !toolName) {
+          if (!replayId || !toolName) {
             continue;
           }
-          const [callId, itemId] = callIdRaw.split("|", 2);
           items.push({
             type: "function_call",
-            ...(itemId ? { id: itemId } : {}),
-            call_id: callId,
+            ...(replayId.itemId ? { id: replayId.itemId } : {}),
+            call_id: replayId.callId,
             name: toolName,
             arguments:
               typeof block.arguments === "string"
@@ -548,13 +622,16 @@ export function convertMessagesToInputItems(
     if (!toolCallId) {
       continue;
     }
-    const [callId] = toolCallId.split("|", 2);
+    const replayId = decodeToolCallReplayId(toolCallId);
+    if (!replayId) {
+      continue;
+    }
     const parts = Array.isArray(m.content) ? contentToOpenAIParts(m.content, modelOverride) : [];
     const textOutput = contentToText(m.content);
     const imageParts = parts.filter((part) => part.type === "input_image");
     items.push({
       type: "function_call_output",
-      call_id: callId,
+      call_id: replayId.callId,
       output: textOutput || (imageParts.length > 0 ? "(see attached image)" : ""),
     });
     if (imageParts.length > 0) {
@@ -610,7 +687,10 @@ export function buildAssistantMessageFromResponse(
       const itemId = toNonEmptyString(item.id);
       content.push({
         type: "toolCall",
-        id: callId ? (itemId ? `${callId}|${itemId}` : callId) : `call_${randomUUID()}`,
+        id: encodeToolCallReplayId({
+          callId: callId ?? `call_${randomUUID()}`,
+          itemId: itemId ?? undefined,
+        }),
         name: toolName,
         arguments: (() => {
           try {
@@ -634,7 +714,7 @@ export function buildAssistantMessageFromResponse(
         thinking: reasoning,
         ...(reasoningId
           ? {
-              thinkingSignature: JSON.stringify({
+              thinkingSignature: encodeThinkingSignature({
                 id: reasoningId,
                 type: item.type,
               }),
@@ -878,34 +958,26 @@ export function createOpenAIWebSocketStreamFn(
       }
 
       // ── 3. Compute incremental vs full input ─────────────────────────────
-      const prevResponseId = session.manager.previousResponseId;
-      let requestPreviousResponseId: string | undefined;
-      let inputItems: InputItem[];
+      const turnInput = planTurnInput({
+        context,
+        model,
+        previousResponseId: session.manager.previousResponseId,
+        lastContextLength: session.lastContextLength,
+      });
 
-      if (prevResponseId && session.lastContextLength > 0) {
-        // Subsequent turn: only send new messages (tool results) since last call
-        const newMessages = context.messages.slice(session.lastContextLength);
-        // Filter to only tool results — the assistant message is already in server context
-        const toolResults = newMessages.filter((m) => (m as AnyMessage).role === "toolResult");
-        if (toolResults.length === 0) {
-          // The WebSocket guide requires a fresh full-context turn here: when we
-          // cannot continue the incremental chain, omit previous_response_id.
-          log.debug(
-            `[ws-stream] session=${sessionId}: no new tool results found; sending full context without previous_response_id`,
-          );
-          inputItems = buildFullInput(context, model);
-        } else {
-          inputItems = convertMessagesToInputItems(toolResults, model);
-          requestPreviousResponseId = prevResponseId;
-        }
+      if (turnInput.mode === "incremental_tool_results") {
         log.debug(
-          `[ws-stream] session=${sessionId}: incremental send (${inputItems.length} tool results) previous_response_id=${prevResponseId}`,
+          `[ws-stream] session=${sessionId}: incremental send (${turnInput.inputItems.length} tool results) previous_response_id=${turnInput.previousResponseId}`,
+        );
+      } else if (turnInput.mode === "full_context_restart") {
+        // The WebSocket guide requires a fresh full-context turn here: when we
+        // cannot continue the incremental chain, omit previous_response_id.
+        log.debug(
+          `[ws-stream] session=${sessionId}: no new tool results found; sending full context without previous_response_id`,
         );
       } else {
-        // First turn: send full context
-        inputItems = buildFullInput(context, model);
         log.debug(
-          `[ws-stream] session=${sessionId}: full context send (${inputItems.length} items)`,
+          `[ws-stream] session=${sessionId}: full context send (${turnInput.inputItems.length} items)`,
         );
       }
 
@@ -955,10 +1027,12 @@ export function createOpenAIWebSocketStreamFn(
         type: "response.create",
         model: model.id,
         ...(supportsStore !== false ? { store: false } : {}),
-        input: inputItems,
+        input: turnInput.inputItems,
         instructions: context.systemPrompt ?? undefined,
         tools: tools.length > 0 ? tools : undefined,
-        ...(requestPreviousResponseId ? { previous_response_id: requestPreviousResponseId } : {}),
+        ...(turnInput.previousResponseId
+          ? { previous_response_id: turnInput.previousResponseId }
+          : {}),
         ...extraParams,
       };
       const nextPayload = options?.onPayload?.(payload, model);
