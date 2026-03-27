@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -9,6 +10,7 @@ import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import {
   loadPluginManifest,
   type PluginManifest,
+  type PluginManifestChannelConfig,
   type PluginManifestContracts,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
@@ -69,8 +71,11 @@ export type PluginManifestRecord = {
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
   contracts?: PluginManifestContracts;
+  channelConfigs?: Record<string, PluginManifestChannelConfig>;
   channelCatalogMeta?: {
     id: string;
+    label?: string;
+    blurb?: string;
     preferOver?: string[];
   };
 };
@@ -167,6 +172,7 @@ function buildRecord(params: {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
 }): PluginManifestRecord {
+  const bundledChannelConfigs = resolveBundledChannelConfigs(params.manifest.id);
   return {
     id: params.manifest.id,
     name: normalizeManifestLabel(params.manifest.name) ?? params.candidate.packageName,
@@ -201,10 +207,17 @@ function buildRecord(params: {
     configSchema: params.configSchema,
     configUiHints: params.manifest.uiHints,
     contracts: params.manifest.contracts,
+    channelConfigs: mergeChannelConfigs(bundledChannelConfigs, params.manifest.channelConfigs),
     ...(params.candidate.packageManifest?.channel?.id
       ? {
           channelCatalogMeta: {
             id: params.candidate.packageManifest.channel.id,
+            ...(typeof params.candidate.packageManifest.channel.label === "string"
+              ? { label: params.candidate.packageManifest.channel.label }
+              : {}),
+            ...(typeof params.candidate.packageManifest.channel.blurb === "string"
+              ? { blurb: params.candidate.packageManifest.channel.blurb }
+              : {}),
             ...(params.candidate.packageManifest.channel.preferOver
               ? { preferOver: params.candidate.packageManifest.channel.preferOver }
               : {}),
@@ -212,6 +225,40 @@ function buildRecord(params: {
         }
       : {}),
   };
+}
+
+function resolveBundledChannelConfigs(
+  pluginId: string,
+): Record<string, PluginManifestChannelConfig> | undefined {
+  const entries = BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.pluginId === pluginId);
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(
+    entries.map((entry) => [
+      entry.channelId,
+      {
+        schema: entry.schema,
+        ...(entry.uiHints ? { uiHints: entry.uiHints } : {}),
+        ...(entry.label ? { label: entry.label } : {}),
+        ...(entry.description ? { description: entry.description } : {}),
+      },
+    ]),
+  );
+}
+
+function mergeChannelConfigs(
+  generated: Record<string, PluginManifestChannelConfig> | undefined,
+  manifest: Record<string, PluginManifestChannelConfig> | undefined,
+): Record<string, PluginManifestChannelConfig> | undefined {
+  if (!generated) {
+    return manifest;
+  }
+  if (!manifest) {
+    return generated;
+  }
+  return { ...generated, ...manifest };
 }
 
 function buildBundleRecord(params: {
@@ -253,6 +300,7 @@ function buildBundleRecord(params: {
     schemaCacheKey: undefined,
     configSchema: undefined,
     configUiHints: undefined,
+    channelConfigs: undefined,
   };
 }
 

@@ -250,9 +250,10 @@ function validatePluginConfig(params: {
     schema,
     cacheKey,
     value: params.value ?? {},
+    applyDefaults: true,
   });
   if (result.ok) {
-    return { ok: true, value: params.value as Record<string, unknown> | undefined };
+    return { ok: true, value: result.value as Record<string, unknown> | undefined };
   }
   return { ok: false, errors: result.errors.map((error) => error.text) };
 }

@@ -23,12 +23,11 @@ import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-h
 import type { ChannelMessageActionName, ChannelPlugin, OpenClawConfig } from "../runtime-api.js";
 import {
   buildProbeChannelStatusSummary,
-  buildChannelConfigSchema,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
-  MSTeamsConfigSchema,
   PAIRING_APPROVED_MESSAGE,
 } from "../runtime-api.js";
+import { MSTeamsChannelConfigSchema } from "./config-schema.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
 import {
@@ -366,7 +365,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         resolveToolPolicy: resolveMSTeamsGroupToolPolicy,
       },
       reload: { configPrefixes: ["channels.msteams"] },
-      configSchema: buildChannelConfigSchema(MSTeamsConfigSchema),
+      configSchema: MSTeamsChannelConfigSchema,
       config: {
         ...msteamsConfigAdapter,
         isConfigured: (_account, cfg) => Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)),

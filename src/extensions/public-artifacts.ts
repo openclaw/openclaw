@@ -37,6 +37,7 @@ const EXTRA_GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES = assertUniqueValues(
     "allow-from.js",
     "api.js",
     "auth-presence.js",
+    "channel-config-api.js",
     "index.js",
     "login-qr-api.js",
     "onboard.js",
