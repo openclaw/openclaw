@@ -26,7 +26,7 @@ metadata:
 
 **Trigger keywords (routing)**: Bilingual trigger terms (Chinese and English) are listed in the YAML `description` above—use that field for discovery and routing.
 
-**Use Text Recognition for**:
+**Use this skill for**:
 
 - Extract text from images (screenshots, photos, scans)
 - Extract text from PDFs or document images when the goal is **line/box-level text**, not recovering table grids, formulas, or full reading-order layout

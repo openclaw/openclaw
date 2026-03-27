@@ -26,7 +26,7 @@ metadata:
 
 **Trigger keywords (routing)**: Bilingual trigger terms (Chinese and English) are listed in the YAML `description` above—use that field for discovery and routing.
 
-**Use Document Parsing for**:
+**Use this skill for**:
 
 - Documents with tables (invoices, financial reports, spreadsheets)
 - Documents with mathematical formulas (academic papers, scientific documents)
@@ -35,7 +35,7 @@ metadata:
 - Complex document structures requiring layout analysis
 - Any document requiring structured understanding
 
-**Use Text Recognition instead for**:
+**Do not use for**:
 
 - Simple text-only extraction
 - Quick OCR tasks where speed is critical
