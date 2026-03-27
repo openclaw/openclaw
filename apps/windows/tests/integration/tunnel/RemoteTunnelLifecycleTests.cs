@@ -1,6 +1,7 @@
 using MediatR;
 using Microsoft.Extensions.Logging.Abstractions;
 using OpenClawWindows.Application.Gateway;
+using OpenClawWindows.Application.Ports;
 using OpenClawWindows.Domain.Settings;
 using OpenClawWindows.Infrastructure.Gateway;
 
@@ -10,8 +11,16 @@ namespace OpenClawWindows.Tests.Integration.Tunnel;
 // Verifies connection mode resolution, tunnel lifecycle, and disconnect-if-needed behavior.
 public sealed class RemoteTunnelLifecycleTests
 {
-    private readonly GatewayConnection _connection = GatewayConnection.Create("openclaw-control-ui");
-    private readonly IGatewayWebSocket _ws = Substitute.For<IGatewayWebSocket>();
+    private readonly GatewayConnection    _connection     = GatewayConnection.Create("openclaw-control-ui");
+    private readonly IGatewayWebSocket    _ws             = Substitute.For<IGatewayWebSocket>();
+    private readonly IGatewayProcessManager _processManager = Substitute.For<IGatewayProcessManager>();
+
+    public RemoteTunnelLifecycleTests()
+    {
+        _processManager
+            .WaitForGatewayReadyAsync(Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+    }
 
     // ── NullRemoteTunnelService contract ──────────────────────────────────────
 
@@ -56,7 +65,7 @@ public sealed class RemoteTunnelLifecycleTests
             .Returns(Task.FromResult<ErrorOr<Success>>(Result.Success));
 
         var handler = new ApplyConnectionModeHandler(
-            mediator, _connection, tunnel,
+            mediator, _connection, tunnel, _processManager,
             NullLogger<ApplyConnectionModeHandler>.Instance);
 
         var settings = AppSettings.WithDefaults(@"C:\AppData\OpenClaw");
@@ -80,7 +89,7 @@ public sealed class RemoteTunnelLifecycleTests
         tunnel.DisconnectAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
 
         var handler = new ApplyConnectionModeHandler(
-            mediator, _connection, tunnel,
+            mediator, _connection, tunnel, _processManager,
             NullLogger<ApplyConnectionModeHandler>.Instance);
 
         var settings = AppSettings.WithDefaults(@"C:\AppData\OpenClaw");
@@ -103,7 +112,7 @@ public sealed class RemoteTunnelLifecycleTests
         tunnel.DisconnectAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
 
         var handler = new ApplyConnectionModeHandler(
-            mediator, _connection, tunnel,
+            mediator, _connection, tunnel, _processManager,
             NullLogger<ApplyConnectionModeHandler>.Instance);
 
         var settings = AppSettings.WithDefaults(@"C:\AppData\OpenClaw");
@@ -131,7 +140,7 @@ public sealed class RemoteTunnelLifecycleTests
             .Returns(Task.FromResult<ErrorOr<Success>>(Result.Success));
 
         var handler = new ApplyConnectionModeHandler(
-            mediator, _connection, tunnel,
+            mediator, _connection, tunnel, _processManager,
             NullLogger<ApplyConnectionModeHandler>.Instance);
 
         var settings = AppSettings.WithDefaults(@"C:\AppData\OpenClaw");
@@ -156,7 +165,7 @@ public sealed class RemoteTunnelLifecycleTests
                 Error.Failure("tunnel.failed", "SSH rejected")));
 
         var handler = new ApplyConnectionModeHandler(
-            mediator, _connection, tunnel,
+            mediator, _connection, tunnel, _processManager,
             NullLogger<ApplyConnectionModeHandler>.Instance);
 
         var settings = AppSettings.WithDefaults(@"C:\AppData\OpenClaw");
@@ -180,7 +189,7 @@ public sealed class RemoteTunnelLifecycleTests
         tunnel.DisconnectAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
 
         var handler = new ApplyConnectionModeHandler(
-            mediator, _connection, tunnel,
+            mediator, _connection, tunnel, _processManager,
             NullLogger<ApplyConnectionModeHandler>.Instance);
 
         var settings = AppSettings.WithDefaults(@"C:\AppData\OpenClaw");

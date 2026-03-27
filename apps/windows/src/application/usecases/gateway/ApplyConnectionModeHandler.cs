@@ -1,4 +1,5 @@
 using OpenClawWindows.Application.Behaviors;
+using OpenClawWindows.Application.Ports;
 using OpenClawWindows.Domain.Gateway;
 using OpenClawWindows.Domain.Settings;
 
@@ -9,24 +10,28 @@ public sealed record ApplyConnectionModeCommand(AppSettings Settings) : IRequest
 
 internal sealed class ApplyConnectionModeHandler : IRequestHandler<ApplyConnectionModeCommand, ErrorOr<Success>>
 {
-    // Local SSH tunnel binds to this port — matches DefaultWsPort in GatewayUriNormalizer
-    private const int LocalTunnelPort = 18789;
+    // Tunables
+    private const int LocalTunnelPort          = 18789;
+    private const int GatewayReadyTimeoutSecs  = 6;
 
-    private readonly IMediator _mediator;
-    private readonly GatewayConnection _connection;
-    private readonly IRemoteTunnelService _tunnel;
+    private readonly IMediator                          _mediator;
+    private readonly GatewayConnection                  _connection;
+    private readonly IRemoteTunnelService               _tunnel;
+    private readonly IGatewayProcessManager             _processManager;
     private readonly ILogger<ApplyConnectionModeHandler> _logger;
 
     public ApplyConnectionModeHandler(
-        IMediator mediator,
-        GatewayConnection connection,
-        IRemoteTunnelService tunnel,
+        IMediator                          mediator,
+        GatewayConnection                  connection,
+        IRemoteTunnelService               tunnel,
+        IGatewayProcessManager             processManager,
         ILogger<ApplyConnectionModeHandler> logger)
     {
-        _mediator   = mediator;
-        _connection = connection;
-        _tunnel     = tunnel;
-        _logger     = logger;
+        _mediator       = mediator;
+        _connection     = connection;
+        _tunnel         = tunnel;
+        _processManager = processManager;
+        _logger         = logger;
     }
 
     public async Task<ErrorOr<Success>> Handle(ApplyConnectionModeCommand cmd, CancellationToken ct)
@@ -39,25 +44,38 @@ internal sealed class ApplyConnectionModeHandler : IRequestHandler<ApplyConnecti
         switch (mode)
         {
             case ConnectionMode.Unconfigured:
-                // No gateway configured — stop tunnel and disconnect
+                // No gateway configured — stop process, tunnel, and socket
+                _processManager.SetActive(false);
                 await _tunnel.DisconnectAsync(ct);
                 await DisconnectIfNeededAsync("mode_unconfigured", ct);
                 break;
 
             case ConnectionMode.Local:
-                // Local gateway — stop any remote tunnel and let reconnect coordinator connect locally
+                // Local gateway — stop remote tunnel, start (or keep) local process, then reconnect
                 await _tunnel.DisconnectAsync(ct);
                 await DisconnectIfNeededAsync("mode_changed_local", ct);
+                if (GatewayAutostartPolicy.ShouldStartGateway(ConnectionMode.Local, settings.IsPaused))
+                {
+                    _processManager.SetActive(true);
+                    await _processManager.WaitForGatewayReadyAsync(
+                        TimeSpan.FromSeconds(GatewayReadyTimeoutSecs), ct);
+                }
+                else
+                {
+                    _processManager.SetActive(false);
+                }
                 break;
 
             case ConnectionMode.Remote when settings.RemoteTransport == RemoteTransport.Direct:
-                // Direct WebSocket to remote URL — no SSH tunnel needed
+                // Direct WebSocket to remote URL — no SSH tunnel, no local gateway process
+                _processManager.SetActive(false);
                 await _tunnel.DisconnectAsync(ct);
                 await DisconnectIfNeededAsync("mode_changed_remote_direct", ct);
                 break;
 
             case ConnectionMode.Remote:
-                // SSH transport — start forwarding tunnel, then reconnect to local port
+                // SSH transport — local gateway not needed; start forwarding tunnel, then reconnect
+                _processManager.SetActive(false);
                 await DisconnectIfNeededAsync("mode_changed_remote_ssh", ct);
                 var target   = settings.RemoteTarget;
                 var identity = settings.RemoteIdentity;

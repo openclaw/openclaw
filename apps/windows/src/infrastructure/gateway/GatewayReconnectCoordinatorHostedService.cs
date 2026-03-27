@@ -141,6 +141,9 @@ internal sealed class GatewayReconnectCoordinatorHostedService : IHostedService
     {
         var settings = await _settings.LoadAsync(ct);
 
+        // Honour persisted pause across restarts — in-memory state starts as Disconnected.
+        if (settings.IsPaused) return null;
+
         // Effective mode precedence:
         var mode = settings.ConnectionMode != ConnectionMode.Unconfigured
             ? settings.ConnectionMode

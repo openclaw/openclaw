@@ -51,6 +51,5 @@ public sealed record GatewayConnectDeepLink(
     }
 
     internal static bool IsLoopbackHost(string host) =>
-        host is "localhost" or "127.0.0.1" or "::1"
-        || host.EndsWith(".local", StringComparison.OrdinalIgnoreCase);
+        host is "localhost" or "127.0.0.1" or "::1";
 }

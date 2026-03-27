@@ -168,13 +168,24 @@ public sealed class DeepLinkParserTests
     [Theory]
     [InlineData("127.0.0.1")]
     [InlineData("::1")]
-    [InlineData("mymachine.local")]
     public void Parse_GatewayNonTlsOtherLoopback_IsAllowed(string host)
     {
         var url    = new Uri($"openclaw://gateway?host={host}&port=18789&tls=false");
         var result = DeepLinkParser.Parse(url);
         result.Should().NotBeNull(
-            because: $"{host} is a loopback/mDNS address — non-TLS is safe");
+            because: $"{host} is a loopback address — non-TLS is safe");
+    }
+
+    [Fact]
+    public void Parse_GatewayNonTlsMdnsHost_IsRejected()
+    {
+        // .local mDNS hosts are not loopback: ws:// would expose credentials on the LAN.
+        // The deep link must be rejected here so the user is never put in a broken state
+        // (GatewayUriNormalizer rejects ws:// to non-loopback hosts downstream anyway).
+        var url    = new Uri("openclaw://gateway?host=mymachine.local&port=18789&tls=false");
+        var result = DeepLinkParser.Parse(url);
+        result.Should().BeNull(
+            because: "mDNS .local hosts are not loopback — non-TLS would expose credentials on the LAN");
     }
 
     [Theory]
@@ -285,8 +296,6 @@ public sealed class DeepLinkParserTests
     [InlineData("localhost")]
     [InlineData("127.0.0.1")]
     [InlineData("::1")]
-    [InlineData("mymachine.local")]
-    [InlineData("MACHINE.LOCAL")]   // case insensitive
     public void IsLoopbackHost_LoopbackAddresses_ReturnsTrue(string host)
     {
         GatewayConnectDeepLink.IsLoopbackHost(host).Should().BeTrue();
@@ -298,6 +307,8 @@ public sealed class DeepLinkParserTests
     [InlineData("10.0.0.1")]
     [InlineData("myserver.example.com")]
     [InlineData("notlocal")]
+    [InlineData("mymachine.local")]   // mDNS — local network, not loopback
+    [InlineData("MACHINE.LOCAL")]
     public void IsLoopbackHost_RemoteAddresses_ReturnsFalse(string host)
     {
         GatewayConnectDeepLink.IsLoopbackHost(host).Should().BeFalse();
