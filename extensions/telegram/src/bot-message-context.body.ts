@@ -219,8 +219,16 @@ export async function resolveTelegramInboundBody(params: {
     } else {
       // Use the type-aware placeholder so documents, videos, etc. are not
       // misidentified as images in the agent-facing body text.
-      const fallback = placeholder || "<media:document>";
-      bodyText = allMedia.length > 1 ? `${fallback} (${allMedia.length} files)` : fallback;
+      // Fall back to generic <media:file> for unrecognized/future media types.
+      const fallback = placeholder || "<media:file>";
+      // Derive a human-friendly suffix from the placeholder when possible;
+      // Telegram albums are single-type, so "images"/"videos" is accurate.
+      const suffix = placeholder?.includes("image")
+        ? "images"
+        : placeholder?.includes("video")
+          ? "videos"
+          : "files";
+      bodyText = allMedia.length > 1 ? `${fallback} (${allMedia.length} ${suffix})` : fallback;
     }
   }
 
