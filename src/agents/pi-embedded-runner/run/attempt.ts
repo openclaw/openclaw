@@ -8,7 +8,6 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
-import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
@@ -54,8 +53,8 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
-import { buildModelAliasLines } from "../../model-alias-lines.js";
 import { wrapStreamFnWithReActFallback } from "../../local/react-fallback-stream.js";
+import { buildModelAliasLines } from "../../model-alias-lines.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveToolCallArgumentsEncoding } from "../../model-compat.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
