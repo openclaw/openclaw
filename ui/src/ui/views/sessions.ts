@@ -559,9 +559,12 @@ function renderRow(
     row.startedAt ? `Started: ${new Date(row.startedAt).toLocaleString()}` : null,
     durationLabel ? `Duration: ${durationLabel}` : null,
     row.endedAt ? `Ended: ${new Date(row.endedAt).toLocaleString()}` : null,
+    row.runtimeMs ? `Runtime: ${row.runtimeMs}ms` : null,
   ]
     .filter(Boolean)
     .join("\n");
+
+  const childCount = Array.isArray(row.childSessions) ? row.childSessions.length : 0;
   const rawThinking = row.thinkingLevel ?? "";
   const isBinaryThinking = isBinaryThinkingProvider(row.modelProvider);
   const thinking = resolveThinkLevelDisplay(rawThinking, isBinaryThinking);
@@ -722,6 +725,11 @@ function renderRow(
                       `
                     : nothing
           }
+          ${
+            childCount > 0
+              ? html`<span class="data-table-badge" style="background:#f3e5f5; color:#6a1b9a; border:1px solid #ce93d8;" title="${childCount} child sessions">👶 ${childCount}</span>`
+              : nothing
+          }
         </div>
       </td>
       <td title=${updatedTitle}>
@@ -746,6 +754,11 @@ function renderRow(
             isRunning && startedAgo
               ? html`<span style="color:#2e7d32; font-weight:500;">● ${startedAgo} active</span>`
               : html`<span class="${isRecent ? "muted" : ""}">${updated}</span>`
+          }
+          ${
+            row.runtimeMs != null
+              ? html`<span class="muted" style="font-size:11px;">${row.runtimeMs}ms</span>`
+              : nothing
           }
         </div>
       </td>
