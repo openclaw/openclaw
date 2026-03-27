@@ -61,7 +61,11 @@ export {
 export { telegramMessageActions } from "./src/channel-actions.js";
 export { monitorTelegramProvider } from "./src/monitor.js";
 export { probeTelegram } from "./src/probe.js";
-export { resolveTelegramTransport, shouldRetryTelegramTransportFallback } from "./src/fetch.js";
+export {
+  resolveTelegramFetch,
+  resolveTelegramTransport,
+  shouldRetryTelegramTransportFallback,
+} from "./src/fetch.js";
 export { makeProxyFetch } from "./src/proxy.js";
 export {
   createForumTopicTelegram,

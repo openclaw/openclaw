@@ -2,23 +2,23 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  applyKilocodeProviderConfig,
-  applyKilocodeConfig,
-  KILOCODE_BASE_URL,
-  KILOCODE_DEFAULT_MODEL_REF,
-} from "../../extensions/kilocode/onboard.js";
-import { resolveApiKeyForProvider, resolveEnvApiKey } from "../agents/model-auth.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { resolveApiKeyForProvider, resolveEnvApiKey } from "../../src/agents/model-auth.js";
+import type { OpenClawConfig } from "../../src/config/config.js";
+import { resolveAgentModelPrimaryValue } from "../../src/config/model-input.js";
 import {
   buildKilocodeModelDefinition,
   KILOCODE_DEFAULT_MODEL_ID,
   KILOCODE_DEFAULT_CONTEXT_WINDOW,
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_DEFAULT_COST,
-} from "../plugin-sdk/provider-models.js";
-import { captureEnv } from "../test-utils/env.js";
+} from "../../src/plugin-sdk/provider-models.js";
+import { captureEnv } from "../../src/test-utils/env.js";
+import {
+  applyKilocodeProviderConfig,
+  applyKilocodeConfig,
+  KILOCODE_BASE_URL,
+  KILOCODE_DEFAULT_MODEL_REF,
+} from "./onboard.js";
 
 const emptyCfg: OpenClawConfig = {};
 const KILOCODE_MODEL_IDS = ["kilo/auto"];
@@ -150,7 +150,7 @@ describe("Kilo Gateway provider config", () => {
   describe("env var resolution", () => {
     it("resolves KILOCODE_API_KEY from env", () => {
       const envSnapshot = captureEnv(["KILOCODE_API_KEY"]);
-      process.env.KILOCODE_API_KEY = "test-kilo-key"; // pragma: allowlist secret
+      process.env.KILOCODE_API_KEY = "test-kilo-key";
 
       try {
         const result = resolveEnvApiKey("kilocode");
@@ -177,7 +177,7 @@ describe("Kilo Gateway provider config", () => {
     it("resolves the kilocode api key via resolveApiKeyForProvider", async () => {
       const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
       const envSnapshot = captureEnv(["KILOCODE_API_KEY"]);
-      process.env.KILOCODE_API_KEY = "kilo-provider-test-key"; // pragma: allowlist secret
+      process.env.KILOCODE_API_KEY = "kilo-provider-test-key";
 
       try {
         const auth = await resolveApiKeyForProvider({

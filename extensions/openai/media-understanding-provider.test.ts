@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { transcribeOpenAiAudio } from "../../extensions/openai/media-understanding-provider.js";
 import {
   createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "./audio.test-helpers.js";
+} from "../../src/media-understanding/audio.test-helpers.js";
+import { transcribeOpenAiAudio } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
 

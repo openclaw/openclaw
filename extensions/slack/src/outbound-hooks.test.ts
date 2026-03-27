@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
 
-vi.mock("../../../../extensions/slack/test-api.js", () => ({
+vi.mock("./send.js", () => ({
   sendMessageSlack: vi.fn().mockResolvedValue({ messageId: "1234.5678", channelId: "C123" }),
 }));
 
@@ -10,8 +10,8 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
-import { sendMessageSlack } from "../../../../extensions/slack/test-api.js";
-import { slackOutbound } from "../../../../test/channel-outbounds.js";
+import { slackOutbound } from "./outbound-adapter.js";
+import { sendMessageSlack } from "./send.js";
 
 type SlackSendTextCtx = {
   to: string;
@@ -118,8 +118,7 @@ describe("slack outbound hook wiring", () => {
       hasHooks: vi.fn().mockReturnValue(true),
       runMessageSending: vi.fn().mockResolvedValue(undefined),
     };
-    // oxlint-disable-next-line typescript/no-explicit-any
-    vi.mocked(getGlobalHookRunner).mockReturnValue(mockRunner as any);
+    vi.mocked(getGlobalHookRunner).mockReturnValue(mockRunner as never);
 
     await sendSlackTextWithDefaults({ text: "hello" });
 
@@ -136,8 +135,7 @@ describe("slack outbound hook wiring", () => {
       hasHooks: vi.fn().mockReturnValue(true),
       runMessageSending: vi.fn().mockResolvedValue({ cancel: true }),
     };
-    // oxlint-disable-next-line typescript/no-explicit-any
-    vi.mocked(getGlobalHookRunner).mockReturnValue(mockRunner as any);
+    vi.mocked(getGlobalHookRunner).mockReturnValue(mockRunner as never);
 
     const result = await sendSlackTextWithDefaults({ text: "hello" });
 
@@ -150,8 +148,7 @@ describe("slack outbound hook wiring", () => {
       hasHooks: vi.fn().mockReturnValue(true),
       runMessageSending: vi.fn().mockResolvedValue({ content: "modified" }),
     };
-    // oxlint-disable-next-line typescript/no-explicit-any
-    vi.mocked(getGlobalHookRunner).mockReturnValue(mockRunner as any);
+    vi.mocked(getGlobalHookRunner).mockReturnValue(mockRunner as never);
 
     await sendSlackTextWithDefaults({ text: "original" });
     expectSlackSendCalledWith("modified");
@@ -162,8 +159,7 @@ describe("slack outbound hook wiring", () => {
       hasHooks: vi.fn().mockReturnValue(false),
       runMessageSending: vi.fn(),
     };
-    // oxlint-disable-next-line typescript/no-explicit-any
-    vi.mocked(getGlobalHookRunner).mockReturnValue(mockRunner as any);
+    vi.mocked(getGlobalHookRunner).mockReturnValue(mockRunner as never);
 
     await sendSlackTextWithDefaults({ text: "hello" });
 

@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseTelegramTarget } from "../../extensions/telegram/api.js";
 import { whatsappOutbound } from "../../test/channel-outbounds.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
@@ -28,6 +27,7 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
+import { telegramMessagingForTest } from "./outbound/targets.test-helpers.js";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
 let previousRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
@@ -78,20 +78,7 @@ beforeAll(async () => {
         return { channel: "telegram", messageId: res.messageId, chatId: res.chatId };
       },
     },
-    messaging: {
-      parseExplicitTarget: ({ raw }) => {
-        const target = parseTelegramTarget(raw);
-        return {
-          to: target.chatId,
-          threadId: target.messageThreadId,
-          chatType: target.chatType === "unknown" ? undefined : target.chatType,
-        };
-      },
-      inferTargetChatType: ({ to }) => {
-        const target = parseTelegramTarget(to);
-        return target.chatType === "unknown" ? undefined : target.chatType;
-      },
-    },
+    messaging: telegramMessagingForTest,
   });
   telegramPlugin.config = {
     ...telegramPlugin.config,
