@@ -160,6 +160,16 @@ describe("version resolution", () => {
     }
   });
 
+  it("keeps explicit env-object overrides for compatibility checks in tests", () => {
+    expect(
+      resolveCompatibilityHostVersion({
+        OPENCLAW_VERSION: "2026.3.99",
+        OPENCLAW_SERVICE_VERSION: "2026.3.98",
+        npm_package_version: "2026.3.97",
+      }),
+    ).toBe("2026.3.99");
+  });
+
   it("normalizes runtime version candidate for fallback handling", () => {
     expect(resolveUsableRuntimeVersion(undefined)).toBeUndefined();
     expect(resolveUsableRuntimeVersion("")).toBeUndefined();
