@@ -37,6 +37,7 @@ import { pickGatewaySelfPresence } from "./status-all/gateway.js";
 import { buildStatusAllReportLines } from "./status-all/report-lines.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
 import { formatUpdateOneLiner } from "./status.update.js";
+import { formatGlobalStatusToolProfileValue } from "./status.tool-profile.js";
 
 export async function statusAllCommand(
   runtime: RuntimeEnv,
@@ -278,6 +279,8 @@ export async function statusAllCommand(
       (a) => a.lastActiveAgeMs != null && a.lastActiveAgeMs <= aliveThresholdMs,
     ).length;
 
+    const toolProfileValue = formatGlobalStatusToolProfileValue(cfg.tools?.profile);
+
     const overviewRows = [
       { Item: "Version", Value: VERSION },
       { Item: "OS", Value: osSummary.label },
@@ -299,6 +302,9 @@ export async function statusAllCommand(
               : `${tailscaleMode} · ${tailscale.backendState ?? "unknown"} · magicdns unknown`,
       },
       { Item: "Channel", Value: channelLabel },
+      ...(toolProfileValue
+        ? [{ Item: "Global tools profile", Value: toolProfileValue }]
+        : []),
       ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
       { Item: "Update", Value: updateLine },
       {

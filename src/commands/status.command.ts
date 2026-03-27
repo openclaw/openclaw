@@ -26,6 +26,7 @@ import { statusAllCommand } from "./status-all.js";
 import { groupChannelIssuesByChannel } from "./status-all/channel-issues.js";
 import { formatGatewayAuthUsed } from "./status-all/format.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
+import { formatGlobalStatusToolProfileValue } from "./status.tool-profile.js";
 import {
   formatDuration,
   formatKTokens,
@@ -423,6 +424,8 @@ export async function statusCommand(
           `${pluginCompatibilitySummary.noticeCount} notice${pluginCompatibilitySummary.noticeCount === 1 ? "" : "s"} · ${pluginCompatibilitySummary.pluginCount} plugin${pluginCompatibilitySummary.pluginCount === 1 ? "" : "s"}`,
         );
 
+  const toolProfileValue = formatGlobalStatusToolProfileValue(cfg.tools?.profile);
+
   const overviewRows = [
     { Item: "Dashboard", Value: dashboard },
     { Item: "OS", Value: `${osSummary.label} · node ${process.versions.node}` },
@@ -436,6 +439,9 @@ export async function statusCommand(
             : warn(`${tailscaleMode} · magicdns unknown`),
     },
     { Item: "Channel", Value: channelLabel },
+    ...(toolProfileValue
+      ? [{ Item: "Global tools profile", Value: toolProfileValue }]
+      : []),
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {
       Item: "Update",
