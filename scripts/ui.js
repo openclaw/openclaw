@@ -76,6 +76,22 @@ export function assertSafeWindowsShellArgs(args, platform = process.platform) {
   );
 }
 
+/**
+ * When shell mode is needed (e.g. .cmd/.bat on Windows), return the bare
+ * command name without the directory path so cmd.exe resolves it via PATH.
+ * This avoids the "C:\Program is not recognized" error that occurs when
+ * `spawn(fullPath, args, { shell: true })` passes an unquoted path
+ * containing spaces to cmd.exe.
+ */
+export function resolveSpawnCommand(cmd, useShell) {
+  if (!useShell) {
+    return cmd;
+  }
+  // Use win32 variant so backslash separators are recognised even when
+  // tests run on non-Windows hosts.
+  return path.win32.basename(cmd);
+}
+
 function createSpawnOptions(cmd, args, envOverride) {
   const useShell = shouldUseShellForCommand(cmd);
   if (useShell) {
@@ -92,7 +108,9 @@ function createSpawnOptions(cmd, args, envOverride) {
 function run(cmd, args) {
   let child;
   try {
-    child = spawn(cmd, args, createSpawnOptions(cmd, args));
+    const opts = createSpawnOptions(cmd, args);
+    const effectiveCmd = resolveSpawnCommand(cmd, opts.shell === true);
+    child = spawn(effectiveCmd, args, opts);
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);
@@ -113,7 +131,9 @@ function run(cmd, args) {
 function runSync(cmd, args, envOverride) {
   let result;
   try {
-    result = spawnSync(cmd, args, createSpawnOptions(cmd, args, envOverride));
+    const opts = createSpawnOptions(cmd, args, envOverride);
+    const effectiveCmd = resolveSpawnCommand(cmd, opts.shell === true);
+    result = spawnSync(effectiveCmd, args, opts);
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);

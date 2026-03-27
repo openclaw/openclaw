@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { assertSafeWindowsShellArgs, shouldUseShellForCommand } from "../../scripts/ui.js";
+import {
+  assertSafeWindowsShellArgs,
+  resolveSpawnCommand,
+  shouldUseShellForCommand,
+} from "../../scripts/ui.js";
 
 describe("scripts/ui windows spawn behavior", () => {
   it("enables shell for Windows command launchers that require cmd.exe", () => {
@@ -31,5 +35,19 @@ describe("scripts/ui windows spawn behavior", () => {
 
   it("does not reject args on non-windows platforms", () => {
     expect(() => assertSafeWindowsShellArgs(["contains&metacharacters"], "linux")).not.toThrow();
+  });
+
+  it("strips directory from command path when shell mode is active", () => {
+    // Path with spaces — the original bug scenario
+    expect(resolveSpawnCommand("C:\\Program Files\\nodejs\\pnpm.cmd", true)).toBe("pnpm.cmd");
+    // Path without spaces — still strips for consistency
+    expect(resolveSpawnCommand("C:\\tools\\pnpm.cmd", true)).toBe("pnpm.cmd");
+  });
+
+  it("preserves full path when shell mode is not needed", () => {
+    expect(resolveSpawnCommand("C:\\Program Files\\nodejs\\node.exe", false)).toBe(
+      "C:\\Program Files\\nodejs\\node.exe",
+    );
+    expect(resolveSpawnCommand("/usr/local/bin/pnpm", false)).toBe("/usr/local/bin/pnpm");
   });
 });
