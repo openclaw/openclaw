@@ -84,6 +84,14 @@ export function normalizeToolParameters(
     return tool;
   }
 
+  // Some schema generators (e.g. TypeBox) emit `required: null` instead of
+  // omitting the field. Providers like Bailian/GLM reject this with
+  // "got null, want array". Strip it early so every downstream path benefits.
+  if (Object.hasOwn(schema, "required") && !Array.isArray(schema.required)) {
+    const { required: _, ...rest } = schema;
+    return normalizeToolParameters({ ...tool, parameters: rest }, options);
+  }
+
   // Provider quirks:
   // - Gemini rejects several JSON Schema keywords, so we scrub those.
   // - OpenAI rejects function tool schemas unless the *top-level* is `type: "object"`.

@@ -345,6 +345,9 @@ function cleanSchemaForGeminiWithDefs(
       cleaned[key] = value.map((variant) =>
         cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
       );
+    } else if (key === "required" && !Array.isArray(value)) {
+      // Drop malformed `required` (e.g. null) so providers don't reject the schema.
+      continue;
     } else {
       cleaned[key] = value;
     }
