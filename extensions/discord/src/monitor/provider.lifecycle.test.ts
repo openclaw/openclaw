@@ -1,8 +1,28 @@
 import { EventEmitter } from "node:events";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayPlugin } from "@buape/carbon/gateway";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 import type { WaitForDiscordGatewayStopParams } from "../monitor.gateway.js";
+import type { MutableDiscordGateway } from "./gateway-handle.js";
 import type { DiscordGatewayEvent } from "./gateway-supervisor.js";
+
+type LifecycleParams = Parameters<
+  typeof import("./provider.lifecycle.js").runDiscordGatewayLifecycle
+>[0];
+type MockGateway = {
+  isConnected: boolean;
+  options: GatewayPlugin["options"];
+  disconnect: Mock<() => void>;
+  connect: Mock<(resume?: boolean) => void>;
+  state?: {
+    sessionId?: string | null;
+    resumeGatewayUrl?: string | null;
+    sequence?: number | null;
+  };
+  sequence?: number | null;
+  emitter: EventEmitter;
+  ws?: EventEmitter & { terminate?: () => void };
+};
 
 const {
   attachDiscordGatewayLoggingMock,
@@ -57,20 +77,7 @@ describe("runDiscordGatewayLifecycle", () => {
     stop?: () => Promise<void>;
     isDisallowedIntentsError?: (err: unknown) => boolean;
     pendingGatewayEvents?: DiscordGatewayEvent[];
-    gateway?: {
-      isConnected?: boolean;
-      options?: Record<string, unknown>;
-      disconnect?: () => void;
-      connect?: (resume?: boolean) => void;
-      state?: {
-        sessionId?: string | null;
-        resumeGatewayUrl?: string | null;
-        sequence?: number | null;
-      };
-      sequence?: number | null;
-      emitter?: EventEmitter;
-      ws?: EventEmitter & { terminate?: () => void };
-    };
+    gateway?: MockGateway;
   }) => {
     const gateway =
       params?.gateway ??
@@ -121,7 +128,7 @@ describe("runDiscordGatewayLifecycle", () => {
       statusSink,
       lifecycleParams: {
         accountId: params?.accountId ?? "default",
-        gateway,
+        gateway: gateway as unknown as MutableDiscordGateway,
         runtime,
         isDisallowedIntentsError: params?.isDisallowedIntentsError ?? (() => false),
         voiceManager: null,
@@ -131,7 +138,7 @@ describe("runDiscordGatewayLifecycle", () => {
         gatewaySupervisor,
         statusSink,
         abortSignal: undefined as AbortSignal | undefined,
-      },
+      } satisfies LifecycleParams,
     };
   };
 
@@ -159,11 +166,11 @@ describe("runDiscordGatewayLifecycle", () => {
     };
     sequence?: number | null;
     ws?: EventEmitter & { terminate?: () => void };
-  }) {
+  }): { emitter: EventEmitter; gateway: MockGateway } {
     const emitter = new EventEmitter();
-    const gateway = {
+    const gateway: MockGateway = {
       isConnected: false,
-      options: {},
+      options: { intents: 0 } as GatewayPlugin["options"],
       disconnect: vi.fn(),
       connect: vi.fn(),
       ...(params?.state ? { state: params.state } : {}),
@@ -522,7 +529,7 @@ describe("runDiscordGatewayLifecycle", () => {
         start,
         stop,
         threadStop,
-        waitCalls: 0,
+        waitCalls: 1,
         gatewaySupervisor,
       });
     } finally {
@@ -806,15 +813,15 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
-  it("suppresses reconnect-exhausted as expected during intentional shutdown", async () => {
+  it("does not suppress reconnect-exhausted already queued before shutdown", async () => {
     const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const pendingGatewayEvents: DiscordGatewayEvent[] = [];
     const abortController = new AbortController();
 
     const emitter = new EventEmitter();
-    const gateway = {
+    const gateway: MockGateway = {
       isConnected: true,
-      options: { reconnect: { maxAttempts: 50 } },
+      options: { intents: 0, reconnect: { maxAttempts: 50 } } as GatewayPlugin["options"],
       disconnect: vi.fn(),
       connect: vi.fn(),
       emitter,
@@ -828,9 +835,9 @@ describe("runDiscordGatewayLifecycle", () => {
     lifecycleParams.abortSignal = abortController.signal;
 
     // Start lifecycle; it yields at execApprovalsHandler.start(). We then
-    // queue a reconnect-exhausted event and abort. The lifecycle resumes,
-    // drains the event (with lifecycleStopping=true), and exits cleanly
-    // without reaching waitForDiscordGatewayStop.
+    // queue a reconnect-exhausted event and abort. The lifecycle resumes and
+    // drains the queued fatal event before shutdown teardown flips
+    // lifecycleStopping, so the event still rejects the run.
     const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
 
     pendingGatewayEvents.push(
@@ -841,22 +848,21 @@ describe("runDiscordGatewayLifecycle", () => {
     );
     abortController.abort();
 
-    await expect(lifecyclePromise).resolves.toBeUndefined();
-
-    expect(runtimeLog).toHaveBeenCalledWith(
+    await expect(lifecyclePromise).rejects.toThrow(
+      "Max reconnect attempts (0) reached after code 1005",
+    );
+    expect(runtimeLog).not.toHaveBeenCalledWith(
       expect.stringContaining("ignoring expected reconnect-exhausted during shutdown"),
     );
-    expect(runtimeError).not.toHaveBeenCalledWith(
-      expect.stringContaining("Max reconnect attempts"),
-    );
+    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("Max reconnect attempts"));
   });
 
   it("does not push connected: true when abortSignal is already aborted", async () => {
     const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const emitter = new EventEmitter();
-    const gateway = {
+    const gateway: MockGateway = {
       isConnected: true,
-      options: { reconnect: { maxAttempts: 3 } },
+      options: { intents: 0, reconnect: { maxAttempts: 3 } } as GatewayPlugin["options"],
       disconnect: vi.fn(),
       connect: vi.fn(),
       emitter,
