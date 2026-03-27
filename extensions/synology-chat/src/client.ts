@@ -11,6 +11,13 @@ import { z } from "zod";
 const MIN_SEND_INTERVAL_MS = 500;
 let lastSendTime = 0;
 
+type SynologyClientDeps = {
+  httpRequest: typeof http.request;
+  httpsRequest: typeof https.request;
+  httpGet: typeof http.get;
+  httpsGet: typeof https.get;
+};
+
 // --- Chat user_id resolution ---
 // Synology Chat uses two different user_id spaces:
 //   - Outgoing webhook user_id: per-integration sequential ID (e.g. 1)
@@ -69,6 +76,25 @@ const ChatUserListResponseSchema = z.object({
 // Cache user lists per bot endpoint to avoid cross-account bleed.
 const chatUserCache = new Map<string, ChatUserCacheEntry>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const synologyClientDeps: SynologyClientDeps = {
+  httpRequest: http.request,
+  httpsRequest: https.request,
+  httpGet: http.get,
+  httpsGet: https.get,
+};
+
+export const __testing = {
+  setDepsForTest(overrides?: Partial<SynologyClientDeps> | null) {
+    synologyClientDeps.httpRequest = overrides?.httpRequest ?? http.request;
+    synologyClientDeps.httpsRequest = overrides?.httpsRequest ?? https.request;
+    synologyClientDeps.httpGet = overrides?.httpGet ?? http.get;
+    synologyClientDeps.httpsGet = overrides?.httpsGet ?? https.get;
+  },
+  resetStateForTest() {
+    lastSendTime = 0;
+    chatUserCache.clear();
+  },
+};
 
 /**
  * Send a text message to Synology Chat via the incoming webhook.
@@ -164,40 +190,39 @@ export async function fetchChatUsers(
       resolve(cached?.users ?? []);
       return;
     }
-    const transport = parsedUrl.protocol === "https:" ? https : http;
+    const get =
+      parsedUrl.protocol === "https:" ? synologyClientDeps.httpsGet : synologyClientDeps.httpGet;
 
-    transport
-      .get(listUrl, { rejectUnauthorized: !allowInsecureSsl } as any, (res) => {
-        let data = "";
-        res.on("data", (c: Buffer) => {
-          data += c.toString();
-        });
-        res.on("end", () => {
-          const result = safeParseJsonWithSchema(ChatUserListResponseSchema, data);
-          if (!result) {
-            log?.warn("fetchChatUsers: failed to parse user_list response");
-            resolve(cached?.users ?? []);
-            return;
-          }
-
-          if (result.success) {
-            const users = result.data?.users ?? [];
-            chatUserCache.set(listUrl, {
-              users,
-              cachedAt: now,
-            });
-            resolve(users);
-            return;
-          }
-
-          log?.warn(`fetchChatUsers: API returned success=${result.success}, using cached data`);
+    get(listUrl, { rejectUnauthorized: !allowInsecureSsl } as any, (res) => {
+      let data = "";
+      res.on("data", (c: Buffer) => {
+        data += c.toString();
+      });
+      res.on("end", () => {
+        const result = safeParseJsonWithSchema(ChatUserListResponseSchema, data);
+        if (!result) {
+          log?.warn("fetchChatUsers: failed to parse user_list response");
           resolve(cached?.users ?? []);
-        });
-      })
-      .on("error", (err) => {
-        log?.warn(`fetchChatUsers: HTTP error — ${err instanceof Error ? err.message : err}`);
+          return;
+        }
+
+        if (result.success) {
+          const users = result.data?.users ?? [];
+          chatUserCache.set(listUrl, {
+            users,
+            cachedAt: now,
+          });
+          resolve(users);
+          return;
+        }
+
+        log?.warn(`fetchChatUsers: API returned success=${result.success}, using cached data`);
         resolve(cached?.users ?? []);
       });
+    }).on("error", (err) => {
+      log?.warn(`fetchChatUsers: HTTP error — ${err instanceof Error ? err.message : err}`);
+      resolve(cached?.users ?? []);
+    });
   });
 }
 
@@ -255,9 +280,12 @@ function doPost(url: string, body: string, allowInsecureSsl = true): Promise<boo
       reject(new Error(`Invalid URL: ${url}`));
       return;
     }
-    const transport = parsedUrl.protocol === "https:" ? https : http;
+    const request =
+      parsedUrl.protocol === "https:"
+        ? synologyClientDeps.httpsRequest
+        : synologyClientDeps.httpRequest;
 
-    const req = transport.request(
+    const req = request(
       url,
       {
         method: "POST",

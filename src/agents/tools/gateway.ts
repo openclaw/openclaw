@@ -1,4 +1,6 @@
-import { loadConfig, resolveGatewayPort } from "../../config/config.js";
+import { loadConfig } from "../../config/io.js";
+import { resolveGatewayPort } from "../../config/paths.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
 import {
@@ -57,7 +59,7 @@ function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: strin
 }
 
 function validateGatewayUrlOverrideForAgentTools(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   urlOverride: string;
 }): { url: string; target: GatewayOverrideTarget } {
   const { cfg } = params;
@@ -100,7 +102,7 @@ function validateGatewayUrlOverrideForAgentTools(params: {
 }
 
 function resolveGatewayOverrideToken(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   target: GatewayOverrideTarget;
   explicitToken?: string;
 }): string | undefined {

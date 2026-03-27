@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { __testing as feishuDocTesting, registerFeishuDocTools } from "./docx.js";
+import { registerFeishuDocTools } from "./docx.js";
+import { setFeishuDocDepsForTest } from "./docx.test-helpers.js";
 import { resolveFeishuToolAccount } from "./tool-account.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
@@ -23,7 +24,7 @@ vi.mock("@larksuiteoapi/node-sdk", () => {
 describe("feishu_doc account selection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    feishuDocTesting.setDepsForTest({
+    setFeishuDocDepsForTest({
       createFeishuToolClient: ({ api, executeParams, defaultAccountId }) =>
         createFeishuToolClientMock(
           resolveFeishuToolAccount({ api, executeParams, defaultAccountId }),
@@ -32,7 +33,7 @@ describe("feishu_doc account selection", () => {
   });
 
   afterEach(() => {
-    feishuDocTesting.setDepsForTest(null);
+    setFeishuDocDepsForTest(null);
   });
 
   function createDocEnabledConfig(): OpenClawPluginApi["config"] {

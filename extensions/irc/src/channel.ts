@@ -51,6 +51,19 @@ import { ircSetupWizard } from "./setup-surface.js";
 import type { CoreConfig, IrcProbe } from "./types.js";
 
 const meta = getChatChannelMeta("irc");
+const ircChannelDeps = {
+  monitorIrcProvider,
+};
+
+export const __testing = {
+  setDepsForTest(
+    overrides: Partial<{
+      monitorIrcProvider: typeof monitorIrcProvider;
+    }> | null,
+  ) {
+    ircChannelDeps.monitorIrcProvider = overrides?.monitorIrcProvider ?? monitorIrcProvider;
+  },
+};
 
 function normalizePairingTarget(raw: string): string {
   const normalized = normalizeIrcAllowEntry(raw);
@@ -301,7 +314,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
         await runStoppablePassiveMonitor({
           abortSignal: ctx.abortSignal,
           start: async () =>
-            await monitorIrcProvider({
+            await ircChannelDeps.monitorIrcProvider({
               accountId: account.accountId,
               config: ctx.cfg as CoreConfig,
               runtime: ctx.runtime,

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardAdapter,
   createTestWizardPrompter,
@@ -12,8 +12,7 @@ import {
   waitForStartedMocks,
 } from "../../../test/helpers/extensions/start-account-lifecycle.js";
 import type { ResolvedIrcAccount } from "./accounts.js";
-import { ircPlugin } from "./channel.js";
-import { setIrcRuntime } from "./runtime.js";
+import { __testing as ircChannelTesting, ircPlugin } from "./channel.js";
 import {
   ircSetupAdapter,
   parsePort,
@@ -49,28 +48,9 @@ function buildAccount(): ResolvedIrcAccount {
   };
 }
 
-function installIrcRuntime() {
-  setIrcRuntime({
-    logging: {
-      shouldLogVerbose: vi.fn(() => false),
-      getChildLogger: vi.fn(() => ({
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      })),
-    },
-    channel: {
-      activity: {
-        record: vi.fn(),
-        get: vi.fn(),
-      },
-    },
-  } as never);
-}
-
 describe("irc setup", () => {
   afterEach(() => {
+    ircChannelTesting.setDepsForTest(null);
     vi.clearAllMocks();
   });
 
@@ -342,16 +322,14 @@ describe("irc setup", () => {
 
   it("keeps startAccount pending until abort, then stops the monitor", async () => {
     const stop = vi.fn();
-    vi.resetModules();
-    vi.doMock("../../../src/generated/bundled-channel-entries.generated.ts", () => ({
-      GENERATED_BUNDLED_CHANNEL_ENTRIES: [],
-    }));
     hoisted.monitorIrcProvider.mockResolvedValue({ stop });
-    installIrcRuntime();
-    const { ircPlugin: runtimeMockedPlugin } = await import("./channel.js");
+    ircChannelTesting.setDepsForTest({
+      monitorIrcProvider:
+        hoisted.monitorIrcProvider as typeof import("./monitor.js").monitorIrcProvider,
+    });
 
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: runtimeMockedPlugin.gateway!.startAccount!,
+      startAccount: ircPlugin.gateway!.startAccount!,
       account: buildAccount(),
     });
 

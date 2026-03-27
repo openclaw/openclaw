@@ -22,10 +22,27 @@ const PREAUTH_BODY_TIMEOUT_MS = 5_000;
 const PREAUTH_MAX_REQUESTS_PER_MINUTE = 10;
 const INVALID_TOKEN_WINDOW_MS = 60_000;
 const INVALID_TOKEN_MAX_TRACKED_KEYS = 5_000;
+const synologyWebhookClientDeps = {
+  sendMessage,
+  resolveLegacyWebhookNameToChatUserId,
+};
 
 type InvalidTokenRateLimitState = {
   count: number;
   windowStartMs: number;
+};
+
+export const __testing = {
+  setDepsForTest(
+    overrides: Partial<{
+      sendMessage: typeof sendMessage;
+      resolveLegacyWebhookNameToChatUserId: typeof resolveLegacyWebhookNameToChatUserId;
+    }> | null,
+  ) {
+    synologyWebhookClientDeps.sendMessage = overrides?.sendMessage ?? sendMessage;
+    synologyWebhookClientDeps.resolveLegacyWebhookNameToChatUserId =
+      overrides?.resolveLegacyWebhookNameToChatUserId ?? resolveLegacyWebhookNameToChatUserId;
+  },
 };
 
 class InvalidTokenRateLimiter {
@@ -481,12 +498,13 @@ async function resolveSynologyReplyDeliveryUserId(params: {
     return params.payload.user_id;
   }
 
-  const resolvedChatApiUserId = await resolveLegacyWebhookNameToChatUserId({
-    incomingUrl: params.account.incomingUrl,
-    mutableWebhookUsername: params.payload.username,
-    allowInsecureSsl: params.account.allowInsecureSsl,
-    log: params.log,
-  });
+  const resolvedChatApiUserId =
+    await synologyWebhookClientDeps.resolveLegacyWebhookNameToChatUserId({
+      incomingUrl: params.account.incomingUrl,
+      mutableWebhookUsername: params.payload.username,
+      allowInsecureSsl: params.account.allowInsecureSsl,
+      log: params.log,
+    });
   if (resolvedChatApiUserId !== undefined) {
     return String(resolvedChatApiUserId);
   }
@@ -529,7 +547,7 @@ async function processAuthorizedSynologyWebhook(params: {
       return;
     }
 
-    await sendMessage(
+    await synologyWebhookClientDeps.sendMessage(
       params.account.incomingUrl,
       reply,
       deliveryUserId,
@@ -544,7 +562,7 @@ async function processAuthorizedSynologyWebhook(params: {
     params.log?.error?.(
       `Failed to process message from ${params.message.payload.username}: ${errMsg}`,
     );
-    await sendMessage(
+    await synologyWebhookClientDeps.sendMessage(
       params.account.incomingUrl,
       "Sorry, an error occurred while processing your message.",
       deliveryUserId,

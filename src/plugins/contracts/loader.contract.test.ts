@@ -1,8 +1,10 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withBundledPluginAllowlistCompat } from "../bundled-compat.js";
 import { resolveBundledWebSearchPluginIds } from "../bundled-web-search.js";
+import { clearPluginLoaderCache } from "../loader.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import { __testing as providerTesting } from "../providers.js";
+import { resetPluginRuntimeStateForTest } from "../runtime.js";
 import { resolveBundledPluginWebSearchProviders } from "../web-search-providers.js";
 import { providerContractCompatPluginIds } from "./registry.js";
 import { uniqueSortedStrings } from "./testkit.js";
@@ -28,6 +30,8 @@ describe("plugin loader contract", () => {
   let webSearchAllowlistCompatConfig: ReturnType<typeof withBundledPluginAllowlistCompat>;
 
   beforeAll(() => {
+    clearPluginLoaderCache();
+    resetPluginRuntimeStateForTest();
     providerPluginIds = uniqueSortedStrings(providerContractCompatPluginIds);
     manifestProviderPluginIds = resolveBundledManifestProviderPluginIds();
     compatPluginIds = providerTesting.resolveBundledProviderCompatPluginIds({
@@ -62,6 +66,11 @@ describe("plugin loader contract", () => {
       },
       pluginIds: webSearchPluginIds,
     });
+  });
+
+  afterAll(() => {
+    clearPluginLoaderCache();
+    resetPluginRuntimeStateForTest();
   });
 
   beforeEach(() => {

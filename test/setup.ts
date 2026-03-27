@@ -65,6 +65,7 @@ import { withIsolatedTestHome } from "./test-env.js";
 
 // Set HOME/state isolation before importing any runtime OpenClaw modules.
 const testEnv = withIsolatedTestHome();
+const skipDefaultPluginRegistry = process.env.OPENCLAW_SKIP_DEFAULT_TEST_PLUGIN_REGISTRY === "1";
 
 installProcessWarningFilter();
 
@@ -319,7 +320,9 @@ function installDefaultPluginRegistry(): void {
 }
 
 beforeAll(() => {
-  installDefaultPluginRegistry();
+  if (!skipDefaultPluginRegistry) {
+    installDefaultPluginRegistry();
+  }
 });
 
 afterEach(async () => {
@@ -327,7 +330,7 @@ afterEach(async () => {
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
   resetSessionWriteLockStateForTest();
-  if (globalRegistryState.registry !== DEFAULT_PLUGIN_REGISTRY) {
+  if (!skipDefaultPluginRegistry && globalRegistryState.registry !== DEFAULT_PLUGIN_REGISTRY) {
     installDefaultPluginRegistry();
     globalRegistryState.key = null;
     globalRegistryState.version += 1;

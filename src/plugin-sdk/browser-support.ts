@@ -1,12 +1,11 @@
-export { loadConfig } from "../config/config.js";
-export {
-  createConfigIO,
-  getRuntimeConfigSnapshot,
-  writeConfigFile,
-  type BrowserConfig,
-  type BrowserProfileConfig,
-} from "../config/config.js";
+type CallGatewayToolArgs = Parameters<
+  (typeof import("../agents/tools/gateway.js"))["callGatewayTool"]
+>;
+
+export { loadConfig } from "../config/io.js";
+export { createConfigIO, getRuntimeConfigSnapshot, writeConfigFile } from "../config/io.js";
 export { resolveGatewayPort } from "../config/paths.js";
+export type { BrowserConfig, BrowserProfileConfig } from "../config/types.browser.js";
 export {
   DEFAULT_BROWSER_CONTROL_PORT,
   deriveDefaultBrowserCdpPortRange,
@@ -33,7 +32,6 @@ export { isLoopbackHost } from "../gateway/net.js";
 export { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export { imageResultFromFile, jsonResult, readStringParam } from "../agents/tools/common.js";
-export { callGatewayTool } from "../agents/tools/gateway.js";
 export type { NodeListNode } from "../agents/tools/nodes-utils.js";
 export {
   listNodes,
@@ -67,7 +65,7 @@ export {
   safeParseJson,
 } from "../gateway/server-methods/nodes.helpers.js";
 export type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
-export type { OpenClawConfig } from "../config/config.js";
+export type { OpenClawConfig } from "../config/types.js";
 export { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 export {
   SafeOpenError,
@@ -90,3 +88,10 @@ export { rawDataToString } from "../infra/ws.js";
 export { runExec } from "../process/exec.js";
 export { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 export type { MockFn } from "../test-utils/vitest-mock-fn.js";
+
+export async function callGatewayTool<T = Record<string, unknown>>(
+  ...args: CallGatewayToolArgs
+): Promise<T> {
+  const mod = await import("../agents/tools/gateway.js");
+  return (await mod.callGatewayTool<T>(...args)) as T;
+}

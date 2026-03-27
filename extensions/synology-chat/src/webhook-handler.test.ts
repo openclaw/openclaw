@@ -1,18 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { resolveLegacyWebhookNameToChatUserId, sendMessage } from "./client.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeFormBody, makeReq, makeRes, makeStalledReq } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import type { WebhookHandlerDeps } from "./webhook-handler.js";
 import {
+  __testing as synologyWebhookHandlerTesting,
   clearSynologyWebhookRateLimiterStateForTest,
   createWebhookHandler,
 } from "./webhook-handler.js";
 
-// Mock sendMessage and resolveLegacyWebhookNameToChatUserId to prevent real HTTP calls
-vi.mock("./client.js", () => ({
-  sendMessage: vi.fn().mockResolvedValue(true),
-  resolveLegacyWebhookNameToChatUserId: vi.fn().mockResolvedValue(undefined),
-}));
+const sendMessageMock = vi.fn();
+const resolveLegacyWebhookNameToChatUserIdMock = vi.fn();
 
 function makeAccount(
   overrides: Partial<ResolvedSynologyChatAccount> = {},
@@ -50,7 +47,7 @@ async function runDangerousNameMatchReply(
     accountIdSuffix: string;
   },
 ) {
-  vi.mocked(resolveLegacyWebhookNameToChatUserId).mockResolvedValueOnce(options.resolvedChatUserId);
+  resolveLegacyWebhookNameToChatUserIdMock.mockResolvedValueOnce(options.resolvedChatUserId);
   const deliver = vi.fn().mockResolvedValue("Bot reply");
   const handler = createWebhookHandler({
     account: makeAccount({
@@ -66,7 +63,7 @@ async function runDangerousNameMatchReply(
   await handler(req, res);
 
   expect(res._status).toBe(204);
-  expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith({
+  expect(resolveLegacyWebhookNameToChatUserIdMock).toHaveBeenCalledWith({
     incomingUrl: "https://nas.example.com/incoming",
     mutableWebhookUsername: "testuser",
     allowInsecureSsl: true,
@@ -81,11 +78,24 @@ describe("createWebhookHandler", () => {
 
   beforeEach(() => {
     clearSynologyWebhookRateLimiterStateForTest();
+    sendMessageMock.mockReset();
+    sendMessageMock.mockResolvedValue(true);
+    resolveLegacyWebhookNameToChatUserIdMock.mockReset();
+    resolveLegacyWebhookNameToChatUserIdMock.mockResolvedValue(undefined);
+    synologyWebhookHandlerTesting.setDepsForTest({
+      sendMessage: sendMessageMock as typeof import("./client.js").sendMessage,
+      resolveLegacyWebhookNameToChatUserId:
+        resolveLegacyWebhookNameToChatUserIdMock as typeof import("./client.js").resolveLegacyWebhookNameToChatUserId,
+    });
     log = {
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
     };
+  });
+
+  afterEach(() => {
+    synologyWebhookHandlerTesting.setDepsForTest(null);
   });
 
   async function expectForbiddenByPolicy(params: {
@@ -496,14 +506,14 @@ describe("createWebhookHandler", () => {
     await handler(req, res);
 
     expect(res._status).toBe(204);
-    expect(resolveLegacyWebhookNameToChatUserId).not.toHaveBeenCalled();
+    expect(resolveLegacyWebhookNameToChatUserIdMock).not.toHaveBeenCalled();
     expect(deliver).toHaveBeenCalledWith(
       expect.objectContaining({
         from: "123",
         chatUserId: "123",
       }),
     );
-    expect(sendMessage).toHaveBeenCalledWith(
+    expect(sendMessageMock).toHaveBeenCalledWith(
       "https://nas.example.com/incoming",
       "Bot reply",
       "123",
@@ -522,7 +532,7 @@ describe("createWebhookHandler", () => {
         chatUserId: "456",
       }),
     );
-    expect(sendMessage).toHaveBeenCalledWith(
+    expect(sendMessageMock).toHaveBeenCalledWith(
       "https://nas.example.com/incoming",
       "Bot reply",
       "456",
@@ -543,7 +553,7 @@ describe("createWebhookHandler", () => {
         chatUserId: "123",
       }),
     );
-    expect(sendMessage).toHaveBeenCalledWith(
+    expect(sendMessageMock).toHaveBeenCalledWith(
       "https://nas.example.com/incoming",
       "Bot reply",
       "123",

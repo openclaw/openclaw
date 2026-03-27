@@ -20,7 +20,8 @@ const permissionMemberCreateMock = vi.hoisted(() => vi.fn());
 const blockPatchMock = vi.hoisted(() => vi.fn());
 const scopeListMock = vi.hoisted(() => vi.fn());
 
-import { __testing as feishuDocTesting, registerFeishuDocTools } from "./docx.js";
+import { registerFeishuDocTools } from "./docx.js";
+import { setFeishuDocDepsForTest } from "./docx.test-helpers.js";
 
 type ToolResultWithDetails = {
   details: Record<string, unknown>;
@@ -77,7 +78,7 @@ describe("feishu_doc image fetch hardening", () => {
         mediaMaxMb: 30,
       },
     });
-    feishuDocTesting.setDepsForTest({
+    setFeishuDocDepsForTest({
       getFeishuRuntime: () =>
         createPluginRuntimeMock({
           channel: {
@@ -137,7 +138,7 @@ describe("feishu_doc image fetch hardening", () => {
   });
 
   afterEach(() => {
-    feishuDocTesting.setDepsForTest(null);
+    setFeishuDocDepsForTest(null);
   });
 
   function resolveFeishuDocTool(context: Record<string, unknown> = {}) {

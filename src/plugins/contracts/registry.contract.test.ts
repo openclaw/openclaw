@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBundledWebSearchPluginIds } from "../bundled-web-search.js";
+import { clearPluginLoaderCache } from "../loader.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
+import { resetPluginRuntimeStateForTest } from "../runtime.js";
 import {
   imageGenerationProviderContractRegistry,
   mediaUnderstandingProviderContractRegistry,
@@ -13,6 +15,16 @@ import {
 const REGISTRY_CONTRACT_TIMEOUT_MS = 300_000;
 
 describe("plugin contract registry", () => {
+  beforeAll(() => {
+    clearPluginLoaderCache();
+    resetPluginRuntimeStateForTest();
+  });
+
+  afterAll(() => {
+    clearPluginLoaderCache();
+    resetPluginRuntimeStateForTest();
+  });
+
   it("loads bundled non-provider capability registries without import-time failure", () => {
     expect(providerContractLoadError).toBeUndefined();
     expect(pluginRegistrationContractRegistry.length).toBeGreaterThan(0);

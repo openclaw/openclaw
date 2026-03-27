@@ -18,38 +18,7 @@ import {
   mergeTableCells,
 } from "./docx-table-ops.js";
 import type { FeishuDocxBlock, FeishuDocxBlockChild } from "./docx-types.js";
-import { getFeishuRuntime } from "./runtime.js";
-import {
-  createFeishuToolClient,
-  resolveAnyEnabledFeishuToolsConfig,
-  resolveFeishuToolAccount,
-} from "./tool-account.js";
-
-const feishuDocDeps = {
-  getFeishuRuntime,
-  createFeishuToolClient,
-  resolveAnyEnabledFeishuToolsConfig,
-  resolveFeishuToolAccount,
-};
-
-export const __testing = {
-  setDepsForTest(
-    overrides: Partial<{
-      getFeishuRuntime: typeof getFeishuRuntime;
-      createFeishuToolClient: typeof createFeishuToolClient;
-      resolveAnyEnabledFeishuToolsConfig: typeof resolveAnyEnabledFeishuToolsConfig;
-      resolveFeishuToolAccount: typeof resolveFeishuToolAccount;
-    }> | null,
-  ) {
-    feishuDocDeps.getFeishuRuntime = overrides?.getFeishuRuntime ?? getFeishuRuntime;
-    feishuDocDeps.createFeishuToolClient =
-      overrides?.createFeishuToolClient ?? createFeishuToolClient;
-    feishuDocDeps.resolveAnyEnabledFeishuToolsConfig =
-      overrides?.resolveAnyEnabledFeishuToolsConfig ?? resolveAnyEnabledFeishuToolsConfig;
-    feishuDocDeps.resolveFeishuToolAccount =
-      overrides?.resolveFeishuToolAccount ?? resolveFeishuToolAccount;
-  },
-};
+import { feishuDocDeps } from "./docx.deps.js";
 
 // ============ Helpers ============
 
