@@ -3,6 +3,9 @@ import type { OpenClawConfig } from "../config/config.js";
 const DEFAULT_AGENT_TIMEOUT_SECONDS = 48 * 60 * 60;
 const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 
+/** No-timeout sentinel for external consumers. */
+export const AGENT_NO_TIMEOUT_MS = MAX_SAFE_TIMEOUT_MS;
+
 const normalizeNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : undefined;
 

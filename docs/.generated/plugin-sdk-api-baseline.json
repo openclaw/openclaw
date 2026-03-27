@@ -442,7 +442,7 @@
           "exportName": "PluginRuntime",
           "kind": "type",
           "source": {
-            "line": 54,
+            "line": 65,
             "path": "src/plugins/runtime/types.ts"
           }
         },
@@ -1395,7 +1395,7 @@
           }
         },
         {
-          "declaration": "export type ReplyPrefixContext = import(\"src/auto-reply/reply/response-prefix-template\").ResponsePrefixContext;",
+          "declaration": "export type ReplyPrefixContext = import(\"../auto-reply/reply/response-prefix-template.ts\").ResponsePrefixContext;",
           "exportName": "ReplyPrefixContext",
           "kind": "type",
           "source": {
@@ -3500,7 +3500,7 @@
           }
         },
         {
-          "declaration": "export type ChannelOutboundSessionRouteParams = {    cfg: OpenClawConfig;    agentId: string;    accountId?: string | null;    target: string;    resolvedTarget?: {        to: string;        kind: import(\"src/channels/plugins/types.core\").ChannelDirectoryEntryKind | \"channel\";        display?: string;        source: \"normalized\" | \"directory\";    };    replyToId?: string | null;    threadId?: string | number | null;};",
+          "declaration": "export type ChannelOutboundSessionRouteParams = {    cfg: OpenClawConfig;    agentId: string;    accountId?: string | null;    target: string;    resolvedTarget?: {        to: string;        kind: import(\"../channels/plugins/types.core.js\").ChannelDirectoryEntryKind | \"channel\";        display?: string;        source: \"normalized\" | \"directory\";    };    replyToId?: string | null;    threadId?: string | number | null;};",
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
@@ -3657,7 +3657,7 @@
           "exportName": "PluginRuntime",
           "kind": "type",
           "source": {
-            "line": 54,
+            "line": 65,
             "path": "src/plugins/runtime/types.ts"
           }
         },
@@ -4871,7 +4871,7 @@
           "exportName": "PluginRuntime",
           "kind": "type",
           "source": {
-            "line": 54,
+            "line": 65,
             "path": "src/plugins/runtime/types.ts"
           }
         }
@@ -5046,7 +5046,7 @@
           "exportName": "PluginRuntime",
           "kind": "type",
           "source": {
-            "line": 54,
+            "line": 65,
             "path": "src/plugins/runtime/types.ts"
           }
         },

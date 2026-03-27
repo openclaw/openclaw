@@ -30,6 +30,7 @@ vi.mock("../channels/plugins/binding-registry.js", async (importOriginal) => {
   return {
     ...actual,
     primeConfiguredBindingRegistry,
+    resolveConfiguredBindingRecord: vi.fn(() => undefined),
   };
 });
 
@@ -188,6 +189,7 @@ beforeEach(() => {
   primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
   handleGatewayRequest.mockReset();
   runtimeModule.clearGatewaySubagentRuntime();
+  runtimeModule.clearGatewayAgentAbort();
   handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
     switch (opts.req.method) {
       case "agent":
@@ -210,6 +212,7 @@ beforeEach(() => {
 
 afterEach(() => {
   runtimeModule.clearGatewaySubagentRuntime();
+  runtimeModule.clearGatewayAgentAbort();
 });
 
 describe("loadGatewayPlugins", () => {
@@ -674,5 +677,79 @@ describe("loadGatewayPlugins", () => {
 
     await runtime.run({ sessionKey: "s-5", message: "prefer resolver" });
     expect(getLastDispatchedContext()).toBe(freshContext);
+  });
+
+  test("runtime.agent.abort aborts active run via abort controller", async () => {
+    const serverPlugins = serverPluginsModule;
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    serverPlugins.loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+    runtimeModule.setGatewayAgentAbort(serverPlugins.createGatewayAgentAbort());
+
+    const controller = new AbortController();
+    const abortControllers = new Map();
+    abortControllers.set("run-42", {
+      controller,
+      sessionKey: "sess-1",
+      sessionId: "sid-1",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    });
+    serverPlugins.setFallbackGatewayContext({
+      chatAbortControllers: abortControllers,
+      chatRunBuffers: new Map(),
+      chatDeltaSentAt: new Map(),
+      chatDeltaLastBroadcastLen: new Map(),
+      chatAbortedRuns: new Map(),
+      agentRunSeq: new Map(),
+      removeChatRun: () => undefined,
+      broadcast: () => {},
+      nodeSendToSession: () => {},
+    } as unknown as GatewayRequestContext);
+
+    const runtime = runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true });
+    const result = await runtime.agent.abort({ runId: "run-42" });
+
+    expect(result).toEqual({ aborted: true });
+    expect(controller.signal.aborted).toBe(true);
+    expect(abortControllers.has("run-42")).toBe(false);
+  });
+
+  test("runtime.agent.abort returns aborted=false for unknown runId", async () => {
+    const serverPlugins = serverPluginsModule;
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    serverPlugins.loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+    runtimeModule.setGatewayAgentAbort(serverPlugins.createGatewayAgentAbort());
+
+    const abortControllers = new Map();
+    serverPlugins.setFallbackGatewayContext({
+      chatAbortControllers: abortControllers,
+      chatRunBuffers: new Map(),
+      chatDeltaSentAt: new Map(),
+      chatDeltaLastBroadcastLen: new Map(),
+      chatAbortedRuns: new Map(),
+      agentRunSeq: new Map(),
+      removeChatRun: () => undefined,
+      broadcast: () => {},
+      nodeSendToSession: () => {},
+    } as unknown as GatewayRequestContext);
+
+    const runtime = runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true });
+    const result = await runtime.agent.abort({ runId: "run-gone" });
+
+    expect(result).toEqual({ aborted: false });
   });
 });
