@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const { normalizeRoute, resolveRoute, runDocsLinkAuditCli } =
@@ -55,14 +56,11 @@ describe("docs-link-audit", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(invocation).toEqual({
-      command: "mint",
-      args: ["broken-links", "--check-anchors"],
-      options: {
-        cwd: expect.stringMatching(/\/docs$/),
-        stdio: "inherit",
-      },
-    });
+    expect(invocation).toBeDefined();
+    expect(invocation?.command).toBe("mint");
+    expect(invocation?.args).toEqual(["broken-links", "--check-anchors"]);
+    expect(invocation?.options.stdio).toBe("inherit");
+    expect(path.basename(invocation?.options.cwd ?? "")).toBe("docs");
   });
 
   it("falls back to pnpm dlx when mint is not on PATH", () => {
@@ -84,23 +82,18 @@ describe("docs-link-audit", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(invocations).toEqual([
-      {
-        command: "mint",
-        args: ["broken-links", "--check-anchors"],
-        options: {
-          cwd: expect.stringMatching(/\/docs$/),
-          stdio: "inherit",
-        },
-      },
-      {
-        command: "pnpm",
-        args: ["dlx", "mint", "broken-links", "--check-anchors"],
-        options: {
-          cwd: expect.stringMatching(/\/docs$/),
-          stdio: "inherit",
-        },
-      },
-    ]);
+    expect(invocations).toHaveLength(2);
+    expect(invocations[0]).toMatchObject({
+      command: "mint",
+      args: ["broken-links", "--check-anchors"],
+      options: { stdio: "inherit" },
+    });
+    expect(invocations[1]).toMatchObject({
+      command: "pnpm",
+      args: ["dlx", "mint", "broken-links", "--check-anchors"],
+      options: { stdio: "inherit" },
+    });
+    expect(path.basename(invocations[0]?.options.cwd ?? "")).toBe("docs");
+    expect(path.basename(invocations[1]?.options.cwd ?? "")).toBe("docs");
   });
 });
