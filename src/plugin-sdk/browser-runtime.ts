@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser-runtime.js";
+export * from "../../extensions/browser/browser-runtime-api.js";

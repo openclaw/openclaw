@@ -121,6 +121,10 @@ type ChatSendDeliveryEntry = {
     accountId?: string;
     threadId?: string | number;
   };
+  origin?: {
+    provider?: string;
+    accountId?: string;
+  };
   lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
@@ -162,11 +166,16 @@ function resolveChatSendOriginatingRoute(params: {
   }
 
   const routeChannelCandidate = normalizeMessageChannel(
-    params.entry?.deliveryContext?.channel ?? params.entry?.lastChannel,
+    params.entry?.deliveryContext?.channel ??
+      params.entry?.lastChannel ??
+      params.entry?.origin?.provider,
   );
   const routeToCandidate = params.entry?.deliveryContext?.to ?? params.entry?.lastTo;
   const routeAccountIdCandidate =
-    params.entry?.deliveryContext?.accountId ?? params.entry?.lastAccountId ?? undefined;
+    params.entry?.deliveryContext?.accountId ??
+    params.entry?.lastAccountId ??
+    params.entry?.origin?.accountId ??
+    undefined;
   const routeThreadIdCandidate =
     params.entry?.deliveryContext?.threadId ?? params.entry?.lastThreadId;
   if (params.sessionKey.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {
@@ -288,6 +297,11 @@ function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]): bool
     info?.displayName === "ACP" &&
     info?.version === "acp"
   );
+}
+
+function canInjectSystemProvenance(client: GatewayRequestHandlerOptions["client"]): boolean {
+  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  return scopes.includes(ADMIN_SCOPE);
 }
 
 async function persistChatSendImages(params: {
@@ -1256,14 +1270,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       systemProvenanceReceipt?: string;
       idempotencyKey: string;
     };
-    if ((p.systemInputProvenance || p.systemProvenanceReceipt) && !isAcpBridgeClient(client)) {
+    if (
+      (p.systemInputProvenance || p.systemProvenanceReceipt) &&
+      !canInjectSystemProvenance(client)
+    ) {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "system provenance fields are reserved for the ACP bridge",
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, "system provenance fields require admin scope"),
       );
       return;
     }

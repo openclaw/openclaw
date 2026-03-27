@@ -59,7 +59,8 @@ export function createCapturedPluginRegistration(): CapturedPluginRegistration {
       registerTool(tool: AnyAgentTool) {
         tools.push(tool);
       },
-    } as OpenClawPluginApi,
+      registerMemoryEmbeddingProvider() {},
+    } as unknown as OpenClawPluginApi,
   };
 }
 

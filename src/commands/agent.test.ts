@@ -590,6 +590,32 @@ describe("agentCommand", () => {
     });
   });
 
+  it("uses origin.provider for channel-specific session reset overrides", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        main: {
+          sessionId: "origin-provider-reset",
+          updatedAt: Date.now() - 30 * 60_000,
+          origin: { provider: "discord" },
+        },
+      });
+      const cfg = mockConfig(home, store);
+      cfg.session = {
+        ...cfg.session,
+        reset: { mode: "idle", idleMinutes: 10 },
+        resetByChannel: {
+          discord: { mode: "idle", idleMinutes: 120 },
+        },
+      };
+
+      const resolution = resolveSession({ cfg, sessionKey: "main" });
+
+      expect(resolution.sessionId).toBe("origin-provider-reset");
+      expect(resolution.isNewSession).toBe(false);
+    });
+  });
+
   it("forwards resolved outbound session context when resuming by sessionId", async () => {
     await withCrossAgentResumeFixture(async ({ sessionId, sessionKey, cfg }) => {
       const resolution = resolveSession({ cfg, sessionId });

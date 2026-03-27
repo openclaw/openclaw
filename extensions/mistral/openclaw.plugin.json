@@ -1,7 +1,6 @@
 {
   "id": "mistral",
   "providers": ["mistral"],
-  "mediaUnderstandingProviders": ["mistral"],
   "providerAuthEnvVars": {
     "mistral": ["MISTRAL_API_KEY"]
   },
@@ -20,6 +19,9 @@
       "cliDescription": "Mistral API key"
     }
   ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["mistral"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

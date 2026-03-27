@@ -47,7 +47,7 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "../identity.js";
-import { normalizeSignalMessagingTarget } from "../runtime-api.js";
+import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {

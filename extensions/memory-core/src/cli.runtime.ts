@@ -7,13 +7,7 @@ import {
   defaultRuntime,
   formatErrorMessage,
   isRich,
-  listMemoryFiles,
-  loadConfig,
-  normalizeExtraMemoryPaths,
   resolveCommandSecretRefsViaGateway,
-  resolveDefaultAgentId,
-  resolveSessionTranscriptsDirForAgent,
-  resolveStateDir,
   setVerbose,
   shortenHomeInString,
   shortenHomePath,
@@ -21,10 +15,20 @@ import {
   withManager,
   withProgress,
   withProgressTotals,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import {
+  loadConfig,
+  resolveDefaultAgentId,
+  resolveSessionTranscriptsDirForAgent,
+  resolveStateDir,
   type OpenClawConfig,
-} from "./api.js";
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  listMemoryFiles,
+  normalizeExtraMemoryPaths,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import type { MemoryCommandOptions, MemorySearchCommandOptions } from "./cli.types.js";
-import { getMemorySearchManager } from "./runtime-api.js";
+import { getMemorySearchManager } from "./memory/index.js";
 
 type MemoryManager = NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];

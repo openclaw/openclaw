@@ -107,6 +107,54 @@ const getShardLabel = (args) => {
   return typeof args[shardIndex + 1] === "string" ? args[shardIndex + 1] : "";
 };
 
+const normalizeEnvFlag = (value) => value?.trim().toLowerCase();
+
+const isEnvFlagEnabled = (value) => {
+  const normalized = normalizeEnvFlag(value);
+  return normalized === "1" || normalized === "true";
+};
+
+const isEnvFlagDisabled = (value) => {
+  const normalized = normalizeEnvFlag(value);
+  return normalized === "0" || normalized === "false";
+};
+
+const isWindowsEnv = (env, platform = process.platform) => {
+  if (platform === "win32") {
+    return true;
+  }
+  return normalizeEnvFlag(env.RUNNER_OS) === "windows";
+};
+
+const isFsModuleCacheEnabled = (env, platform = process.platform) => {
+  if (isWindowsEnv(env, platform)) {
+    return isEnvFlagEnabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE);
+  }
+  return !isEnvFlagDisabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE);
+};
+
+export const resolveVitestFsModuleCachePath = ({
+  cwd = process.cwd(),
+  env = process.env,
+  platform = process.platform,
+  unitId = "",
+} = {}) => {
+  const explicitPath = env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.trim();
+  if (!isFsModuleCacheEnabled(env, platform)) {
+    return undefined;
+  }
+  if (explicitPath) {
+    return explicitPath;
+  }
+  const pathImpl = isWindowsEnv(env, platform) ? path.win32 : path.posix;
+  return pathImpl.join(
+    cwd,
+    "node_modules",
+    ".experimental-vitest-cache",
+    sanitizeArtifactName(unitId || "default"),
+  );
+};
+
 export function formatPlanOutput(plan) {
   return [
     `runtime=${plan.runtimeCapabilities.runtimeProfileName} mode=${plan.runtimeCapabilities.mode} intent=${plan.runtimeCapabilities.intentProfile} memoryBand=${plan.runtimeCapabilities.memoryBand} loadBand=${plan.runtimeCapabilities.loadBand} vitestMaxWorkers=${String(plan.executionBudget.vitestMaxWorkers ?? "default")} topLevelParallel=${plan.topLevelParallelEnabled ? String(plan.topLevelParallelLimit) : "off"}`,
@@ -232,6 +280,7 @@ export async function executePlan(plan, options = {}) {
   const heapSnapshotEnabled =
     process.platform !== "win32" && heapSnapshotIntervalMs >= heapSnapshotMinIntervalMs;
   const heapSnapshotSignal = env.OPENCLAW_TEST_HEAPSNAPSHOT_SIGNAL?.trim() || "SIGUSR2";
+  const closeGraceMs = Math.max(100, parseEnvNumber("OPENCLAW_TEST_CLOSE_GRACE_MS", 2000));
   const heapSnapshotBaseDir = heapSnapshotEnabled
     ? path.resolve(
         env.OPENCLAW_TEST_HEAPSNAPSHOT_DIR?.trim() ||
@@ -334,11 +383,14 @@ export async function executePlan(plan, options = {}) {
       let pendingLine = "";
       let memoryPollTimer = null;
       let heapSnapshotTimer = null;
+      let closeFallbackTimer = null;
       const memoryFileRecords = [];
       let initialTreeSample = null;
       let latestTreeSample = null;
       let peakTreeSample = null;
       let heapSnapshotSequence = 0;
+      let childExitState = null;
+      let settled = false;
       const updatePeakTreeSample = (sample, reason) => {
         if (!sample) {
           return;
@@ -457,15 +509,91 @@ export async function executePlan(plan, options = {}) {
           } top=${topGrowthFiles.length > 0 ? topGrowthFiles.join(", ") : "none"}`,
         );
       };
+      const clearChildTimers = () => {
+        if (memoryPollTimer) {
+          clearInterval(memoryPollTimer);
+          memoryPollTimer = null;
+        }
+        if (heapSnapshotTimer) {
+          clearInterval(heapSnapshotTimer);
+          heapSnapshotTimer = null;
+        }
+        if (closeFallbackTimer) {
+          clearTimeout(closeFallbackTimer);
+          closeFallbackTimer = null;
+        }
+      };
+      const finalizeRun = (code, signal, source = "close") => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearChildTimers();
+        children.delete(child);
+        const resolvedCode = resolveTestRunExitCode({
+          code,
+          signal,
+          output,
+          fatalSeen,
+          childError,
+        });
+        const elapsedMs = Date.now() - startedAt;
+        logMemoryTraceSummary();
+        if (resolvedCode !== 0) {
+          const failureTail = formatCapturedOutputTail(output);
+          const failureArtifactPath = artifacts.writeTempJsonArtifact(`${artifactStem}-failure`, {
+            entry: unit.id,
+            command: [pnpmInvocation.command, ...spawnArgs],
+            elapsedMs,
+            error: childError ? String(childError) : null,
+            exitCode: resolvedCode,
+            fatalSeen,
+            logPath: laneLogPath,
+            outputTail: failureTail,
+            signal: signal ?? null,
+          });
+          if (failureTail) {
+            console.error(`[test-parallel] failure tail ${unit.id}\n${failureTail}`);
+          }
+          console.error(
+            `[test-parallel] failure artifacts ${unit.id} log=${laneLogPath} meta=${failureArtifactPath}`,
+          );
+        }
+        if (source !== "close") {
+          laneLogStream.write(
+            `\n[test-parallel] finalize source=${source} after child exit without close\n`,
+          );
+        }
+        laneLogStream.write(
+          `\n[test-parallel] done ${unit.id} code=${String(resolvedCode)} signal=${
+            signal ?? "none"
+          } elapsed=${formatElapsedMs(elapsedMs)}\n`,
+        );
+        laneLogStream.end();
+        console.log(
+          `[test-parallel] done ${unit.id} code=${String(resolvedCode)} elapsed=${formatElapsedMs(elapsedMs)}`,
+        );
+        resolve(resolvedCode);
+      };
       try {
+        const childEnv = {
+          ...env,
+          ...unit.env,
+          VITEST_GROUP: unit.id,
+          NODE_OPTIONS: resolvedNodeOptions,
+        };
+        const vitestFsModuleCachePath = resolveVitestFsModuleCachePath({
+          env: childEnv,
+          platform: process.platform,
+          unitId: unit.id,
+        });
+        if (vitestFsModuleCachePath) {
+          childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH = vitestFsModuleCachePath;
+          laneLogStream.write(`[test-parallel] fsModuleCachePath=${vitestFsModuleCachePath}\n`);
+        }
         child = spawn(pnpmInvocation.command, spawnArgs, {
           stdio: ["inherit", "pipe", "pipe"],
-          env: {
-            ...env,
-            ...unit.env,
-            VITEST_GROUP: unit.id,
-            NODE_OPTIONS: resolvedNodeOptions,
-          },
+          env: childEnv,
           shell: false,
         });
         captureTreeSample("spawn");
@@ -507,53 +635,19 @@ export async function executePlan(plan, options = {}) {
         laneLogStream.write(`\n[test-parallel] child error: ${String(err)}\n`);
         console.error(`[test-parallel] child error: ${String(err)}`);
       });
+      child.on("exit", (code, signal) => {
+        childExitState = { code, signal };
+        if (settled || closeFallbackTimer) {
+          return;
+        }
+        closeFallbackTimer = setTimeout(() => {
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          finalizeRun(code, signal, "exit-timeout");
+        }, closeGraceMs);
+      });
       child.on("close", (code, signal) => {
-        if (memoryPollTimer) {
-          clearInterval(memoryPollTimer);
-        }
-        if (heapSnapshotTimer) {
-          clearInterval(heapSnapshotTimer);
-        }
-        children.delete(child);
-        const resolvedCode = resolveTestRunExitCode({
-          code,
-          signal,
-          output,
-          fatalSeen,
-          childError,
-        });
-        const elapsedMs = Date.now() - startedAt;
-        logMemoryTraceSummary();
-        if (resolvedCode !== 0) {
-          const failureTail = formatCapturedOutputTail(output);
-          const failureArtifactPath = artifacts.writeTempJsonArtifact(`${artifactStem}-failure`, {
-            entry: unit.id,
-            command: [pnpmInvocation.command, ...spawnArgs],
-            elapsedMs,
-            error: childError ? String(childError) : null,
-            exitCode: resolvedCode,
-            fatalSeen,
-            logPath: laneLogPath,
-            outputTail: failureTail,
-            signal: signal ?? null,
-          });
-          if (failureTail) {
-            console.error(`[test-parallel] failure tail ${unit.id}\n${failureTail}`);
-          }
-          console.error(
-            `[test-parallel] failure artifacts ${unit.id} log=${laneLogPath} meta=${failureArtifactPath}`,
-          );
-        }
-        laneLogStream.write(
-          `\n[test-parallel] done ${unit.id} code=${String(resolvedCode)} signal=${
-            signal ?? "none"
-          } elapsed=${formatElapsedMs(elapsedMs)}\n`,
-        );
-        laneLogStream.end();
-        console.log(
-          `[test-parallel] done ${unit.id} code=${String(resolvedCode)} elapsed=${formatElapsedMs(elapsedMs)}`,
-        );
-        resolve(resolvedCode);
+        finalizeRun(childExitState?.code ?? code, childExitState?.signal ?? signal, "close");
       });
     });
 

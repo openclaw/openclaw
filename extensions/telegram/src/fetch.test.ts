@@ -2,6 +2,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
+const loggerInfo = vi.hoisted(() => vi.fn());
+const loggerDebug = vi.hoisted(() => vi.fn());
 
 const undiciFetch = vi.hoisted(() => vi.fn());
 const setGlobalDispatcher = vi.hoisted(() => vi.fn());
@@ -54,6 +56,21 @@ vi.mock("undici", () => ({
   setGlobalDispatcher,
 }));
 
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => ({
+    info: loggerInfo,
+    debug: loggerDebug,
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: () => ({
+      info: loggerInfo,
+      debug: loggerDebug,
+      warn: vi.fn(),
+      error: vi.fn(),
+    }),
+  }),
+}));
+
 let resolveFetch: typeof import("../../../src/infra/fetch.js").resolveFetch;
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
@@ -66,6 +83,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.unstubAllEnvs();
+  loggerInfo.mockReset();
+  loggerDebug.mockReset();
 });
 
 function resolveTelegramFetchOrThrow(
@@ -270,6 +289,15 @@ describe("resolveTelegramFetch", () => {
       }),
     );
     expect(typeof dispatcher?.options?.connect?.lookup).toBe("function");
+  });
+
+  it("emits default transport decisions at debug level", () => {
+    resolveTelegramFetchOrThrow();
+
+    expect(loggerInfo).not.toHaveBeenCalledWith("autoSelectFamily=true (default-node22)");
+    expect(loggerInfo).not.toHaveBeenCalledWith("dnsResultOrder=ipv4first (default-node22)");
+    expect(loggerDebug).toHaveBeenCalledWith("autoSelectFamily=true (default-node22)");
+    expect(loggerDebug).toHaveBeenCalledWith("dnsResultOrder=ipv4first (default-node22)");
   });
 
   it("uses EnvHttpProxyAgent dispatcher when proxy env is configured", async () => {

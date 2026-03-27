@@ -1,31 +1,32 @@
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
 import {
-  createEmbeddingProvider,
-  type EmbeddingProvider,
-  type EmbeddingProviderRequest,
-  type EmbeddingProviderResult,
-  type GeminiEmbeddingClient,
-  type MistralEmbeddingClient,
-  type OllamaEmbeddingClient,
-  type OpenAiEmbeddingClient,
-  type VoyageEmbeddingClient,
-  extractKeywords,
-  readMemoryFile,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
   resolveMemorySearchConfig,
+  createSubsystemLogger,
+  type OpenClawConfig,
+  type ResolvedMemorySearchConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import {
+  readMemoryFile,
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
   type MemorySearchManager,
   type MemorySearchResult,
   type MemorySource,
   type MemorySyncProgressUpdate,
-  type OpenClawConfig,
-  type ResolvedMemorySearchConfig,
-  createSubsystemLogger,
-} from "../api.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  createEmbeddingProvider,
+  type EmbeddingProvider,
+  type EmbeddingProviderId,
+  type EmbeddingProviderRequest,
+  type EmbeddingProviderResult,
+  type EmbeddingProviderRuntime,
+} from "./embeddings.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
@@ -83,14 +84,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonly requestedProvider: EmbeddingProviderRequest;
   private providerInitPromise: Promise<void> | null = null;
   private providerInitialized = false;
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+  protected fallbackFrom?: EmbeddingProviderId;
   protected fallbackReason?: string;
   private providerUnavailableReason?: string;
-  protected openAi?: OpenAiEmbeddingClient;
-  protected gemini?: GeminiEmbeddingClient;
-  protected voyage?: VoyageEmbeddingClient;
-  protected mistral?: MistralEmbeddingClient;
-  protected ollama?: OllamaEmbeddingClient;
+  protected providerRuntime?: EmbeddingProviderRuntime;
   protected batch: {
     enabled: boolean;
     wait: boolean;
@@ -270,11 +267,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.fallbackFrom = providerResult.fallbackFrom;
     this.fallbackReason = providerResult.fallbackReason;
     this.providerUnavailableReason = providerResult.providerUnavailableReason;
-    this.openAi = providerResult.openAi;
-    this.gemini = providerResult.gemini;
-    this.voyage = providerResult.voyage;
-    this.mistral = providerResult.mistral;
-    this.ollama = providerResult.ollama;
+    this.providerRuntime = providerResult.runtime;
     this.providerInitialized = true;
   }
 
