@@ -89,19 +89,26 @@ const parseRetryAfterHeaderValue = (value: string): number | undefined => {
 };
 
 const extractRetryAfterMsFromError = (err: unknown): number | undefined => {
+  const retryAfterMsCandidate = (err as { retryAfterMs?: unknown } | null | undefined)
+    ?.retryAfterMs;
+  const directRetryAfterMs = asFiniteNumber(retryAfterMsCandidate);
+  if (directRetryAfterMs !== undefined) {
+    return Math.max(0, Math.round(directRetryAfterMs));
+  }
+
+  const retryAfterCandidate = (err as { retryAfter?: unknown } | null | undefined)?.retryAfter;
+  const directRetryAfterSeconds = asFiniteNumber(retryAfterCandidate);
+  if (directRetryAfterSeconds !== undefined) {
+    return Math.max(0, Math.round(directRetryAfterSeconds * 1000));
+  }
+
   const candidates = [
-    (err as { retryAfterMs?: unknown } | null | undefined)?.retryAfterMs,
-    (err as { retryAfter?: unknown } | null | undefined)?.retryAfter,
     (err as { response?: { headers?: Headers | Record<string, unknown> } } | null | undefined)
       ?.response?.headers,
     (err as { headers?: Headers | Record<string, unknown> } | null | undefined)?.headers,
   ];
 
   for (const candidate of candidates) {
-    const direct = asFiniteNumber(candidate);
-    if (direct !== undefined) {
-      return Math.max(0, Math.round(direct));
-    }
     if (typeof candidate === "string") {
       const parsed = parseRetryAfterHeaderValue(candidate);
       if (parsed !== undefined) {
@@ -118,8 +125,7 @@ const extractRetryAfterMsFromError = (err: unknown): number | undefined => {
     }
     const headerValue =
       typeof candidate === "object" && candidate !== null
-        ? ((candidate as Record<string, unknown>)["retry-after"] ??
-          (candidate as Record<string, unknown>)["Retry-After"])
+        ? (candidate["retry-after"] ?? candidate["Retry-After"])
         : undefined;
     if (typeof headerValue === "string") {
       const parsed = parseRetryAfterHeaderValue(headerValue);

@@ -219,6 +219,24 @@ describe("retryAsync", () => {
     }
   });
 
+  it("treats numeric err.retryAfter as seconds", async () => {
+    const err = Object.assign(new Error("429 Too Many Requests"), {
+      status: 429,
+      retryAfter: 2,
+    });
+    const delays = await runRetryAfterCase({ minDelayMs: 0, maxDelayMs: 5000, error: err });
+    expect(delays[0]).toBe(2000);
+  });
+
+  it("keeps numeric err.retryAfterMs in milliseconds", async () => {
+    const err = Object.assign(new Error("429 Too Many Requests"), {
+      status: 429,
+      retryAfterMs: 250,
+    });
+    const delays = await runRetryAfterCase({ minDelayMs: 0, maxDelayMs: 5000, error: err });
+    expect(delays[0]).toBe(250);
+  });
+
   it("honors retry-after from 429 errors even without retryAfterMs option", async () => {
     const err = Object.assign(new Error("429 Too Many Requests"), {
       status: 429,
