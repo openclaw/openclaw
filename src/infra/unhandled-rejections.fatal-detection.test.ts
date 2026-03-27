@@ -1,6 +1,9 @@
 import process from "node:process";
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
-import { installUnhandledRejectionHandler } from "./unhandled-rejections.js";
+import {
+  installUnhandledRejectionHandler,
+  installUncaughtExceptionHandler,
+} from "./unhandled-rejections.js";
 
 describe("installUnhandledRejectionHandler - fatal detection", () => {
   let exitCalls: Array<string | number | null> = [];
@@ -11,6 +14,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
   beforeAll(() => {
     originalExit = process.exit.bind(process);
     installUnhandledRejectionHandler();
+    installUncaughtExceptionHandler();
   });
 
   beforeEach(() => {
@@ -41,9 +45,19 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
     process.emit("unhandledRejection", reason, Promise.resolve());
   }
 
+  function emitUncaught(error: unknown): void {
+    process.emit("uncaughtException", error);
+  }
+
   function expectExitCodeFromUnhandled(reason: unknown, expected: number[]): void {
     exitCalls = [];
     emitUnhandled(reason);
+    expect(exitCalls).toEqual(expected);
+  }
+
+  function expectExitCodeFromUncaught(error: unknown, expected: number[]): void {
+    exitCalls = [];
+    emitUncaught(error);
     expect(exitCalls).toEqual(expected);
   }
 
@@ -118,10 +132,15 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
       for (const transientErr of transientCases) {
         expectExitCodeFromUnhandled(transientErr, []);
+        expectExitCodeFromUncaught(transientErr, []);
       }
 
       expect(consoleWarnSpy).toHaveBeenCalledWith(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
+        expect.stringContaining("fetch failed"),
+      );
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal uncaught exception (continuing):",
         expect.stringContaining("fetch failed"),
       );
     });
@@ -133,6 +152,16 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         "[openclaw] Unhandled promise rejection:",
         expect.stringContaining("Something went wrong"),
+      );
+    });
+
+    it("exits on generic uncaught exceptions", () => {
+      const genericErr = new Error("Boom");
+
+      expectExitCodeFromUncaught(genericErr, [1]);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        "[openclaw] Uncaught exception:",
+        expect.stringContaining("Boom"),
       );
     });
 

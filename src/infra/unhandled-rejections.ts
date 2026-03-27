@@ -255,3 +255,23 @@ export function installUnhandledRejectionHandler(): void {
     process.exit(1);
   });
 }
+
+export function installUncaughtExceptionHandler(): void {
+  process.on("uncaughtException", (error) => {
+    if (isAbortError(error)) {
+      console.warn("[openclaw] Suppressed AbortError:", formatUncaughtError(error));
+      return;
+    }
+
+    if (isTransientNetworkError(error)) {
+      console.warn(
+        "[openclaw] Non-fatal uncaught exception (continuing):",
+        formatUncaughtError(error),
+      );
+      return;
+    }
+
+    console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+    process.exit(1);
+  });
+}
