@@ -6,7 +6,9 @@ export {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "./src/account-selection.js";
-export * from "./helper-api.js";
+export * from "./src/account-selection.js";
+export * from "./src/env-vars.js";
+export * from "./src/storage-paths.js";
 export {
   assertHttpUrlTargetsPrivateNetwork,
   closeDispatcher,
@@ -19,7 +21,7 @@ export {
 export {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
-} from "./thread-bindings-runtime.js";
+} from "./src/matrix/thread-bindings-shared.js";
 export { setMatrixRuntime } from "./src/runtime.js";
 export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 export type {

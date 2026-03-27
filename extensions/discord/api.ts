@@ -12,6 +12,10 @@ export * from "./src/probe.js";
 export * from "./src/session-key-normalization.js";
 export * from "./src/status-issues.js";
 export * from "./src/targets.js";
+export {
+  DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
+  DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
+} from "./src/monitor/timeouts.js";
 export type { DiscordSendComponents, DiscordSendEmbeds } from "./src/send.shared.js";
 export type { DiscordSendResult } from "./src/send.types.js";
 export type { DiscordTokenResolution } from "./src/token.js";

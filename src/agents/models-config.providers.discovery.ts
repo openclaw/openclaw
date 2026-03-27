@@ -3,13 +3,13 @@ import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveOllamaApiBase } from "../plugin-sdk/provider-models.js";
 import { isReasoningModelHeuristic } from "../plugin-sdk/provider-reasoning.js";
+import { SGLANG_DEFAULT_BASE_URL, SGLANG_PROVIDER_LABEL } from "../plugin-sdk/sglang.js";
+import { VLLM_DEFAULT_BASE_URL, VLLM_PROVIDER_LABEL } from "../plugin-sdk/vllm.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "./self-hosted-provider-defaults.js";
-import { SGLANG_DEFAULT_BASE_URL, SGLANG_PROVIDER_LABEL } from "./sglang-defaults.js";
-import { VLLM_DEFAULT_BASE_URL, VLLM_PROVIDER_LABEL } from "./vllm-defaults.js";
 export {
   buildHuggingfaceProvider,
   buildKilocodeProviderWithDiscovery,

@@ -150,4 +150,4 @@ export {
   MODELSTUDIO_DEFAULT_MODEL_ID,
   MODELSTUDIO_DEFAULT_MODEL_REF,
   MODELSTUDIO_GLOBAL_BASE_URL,
-} from "./modelstudio-definitions.js";
+} from "./modelstudio.js";
