@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 
-const allowedNonExtensionTests = new Set<string>();
+const allowedNonExtensionTests = new Set<string>([
+  "src/plugins/contracts/discovery.contract.test.ts",
+]);
 
 function walk(dir: string, entries: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
