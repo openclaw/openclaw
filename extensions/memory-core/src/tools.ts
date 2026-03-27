@@ -334,7 +334,7 @@ export function createMemoryGetTool(options: {
       "Safe exact excerpt read from MEMORY.md or memory/*.md. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements.",
     parameters: MemoryGetSchema,
     execute:
-      ({ cfg, agentId }) =>
+      ({ cfg, agentId, userId }) =>
       async (_toolCallId, params) => {
         const relPath = readStringParam(params, "path", { required: true });
         const from = readNumberParam(params, "from", { integer: true });
@@ -369,6 +369,7 @@ export function createMemoryGetTool(options: {
               await readAgentMemoryFile({
                 cfg,
                 agentId,
+                userId,
                 relPath,
                 from: from ?? undefined,
                 lines: lines ?? undefined,
@@ -383,6 +384,7 @@ export function createMemoryGetTool(options: {
         const memory = await getMemoryManagerContextWithPurpose({
           cfg,
           agentId,
+          userId,
           purpose: "status",
         });
         if ("error" in memory) {
