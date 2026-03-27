@@ -3,7 +3,9 @@ import type {
   ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
 import {
+  buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
+  type SsrFPolicy,
   ssrfPolicyFromAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth";
@@ -32,11 +34,80 @@ type FalImageGenerationResponse = {
 };
 
 type FalImageSize = string | { width: number; height: number };
+type FalNetworkPolicy = {
+  apiPolicy?: SsrFPolicy;
+  trustedDownloadHostSuffix?: string;
+  trustedDownloadPolicy?: SsrFPolicy;
+};
 
 let falFetchGuard = fetchWithSsrFGuard;
 
 export function _setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
   falFetchGuard = impl ?? fetchWithSsrFGuard;
+}
+
+function mergeSsrFPolicies(...policies: Array<SsrFPolicy | undefined>): SsrFPolicy | undefined {
+  const merged: SsrFPolicy = {};
+  for (const policy of policies) {
+    if (!policy) {
+      continue;
+    }
+    if (policy.allowPrivateNetwork) {
+      merged.allowPrivateNetwork = true;
+    }
+    if (policy.dangerouslyAllowPrivateNetwork) {
+      merged.dangerouslyAllowPrivateNetwork = true;
+    }
+    if (policy.allowRfc2544BenchmarkRange) {
+      merged.allowRfc2544BenchmarkRange = true;
+    }
+    if (policy.allowedHostnames?.length) {
+      merged.allowedHostnames = Array.from(
+        new Set([...(merged.allowedHostnames ?? []), ...policy.allowedHostnames]),
+      );
+    }
+    if (policy.hostnameAllowlist?.length) {
+      merged.hostnameAllowlist = Array.from(
+        new Set([...(merged.hostnameAllowlist ?? []), ...policy.hostnameAllowlist]),
+      );
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): boolean {
+  const normalizedHost = hostname.trim().toLowerCase();
+  const normalizedSuffix = trustedSuffix.trim().toLowerCase();
+  return normalizedHost === normalizedSuffix || normalizedHost.endsWith(`.${normalizedSuffix}`);
+}
+
+function resolveFalNetworkPolicy(
+  cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
+): FalNetworkPolicy {
+  const baseUrl = resolveFalBaseUrl(cfg);
+  const explicitBaseUrl = cfg?.models?.providers?.fal?.baseUrl?.trim();
+  let parsedBaseUrl: URL;
+  try {
+    parsedBaseUrl = new URL(baseUrl);
+  } catch {
+    return {};
+  }
+
+  const hostSuffix = parsedBaseUrl.hostname.trim().toLowerCase();
+  if (!hostSuffix) {
+    return {};
+  }
+
+  const hostPolicy = buildHostnameAllowlistPolicyFromSuffixAllowlist([hostSuffix]);
+  const privateNetworkPolicy = explicitBaseUrl
+    ? ssrfPolicyFromAllowPrivateNetwork(true)
+    : undefined;
+  const trustedHostPolicy = mergeSsrFPolicies(hostPolicy, privateNetworkPolicy);
+  return {
+    apiPolicy: trustedHostPolicy,
+    trustedDownloadHostSuffix: explicitBaseUrl ? hostSuffix : undefined,
+    trustedDownloadPolicy: explicitBaseUrl ? trustedHostPolicy : undefined,
+  };
 }
 
 function resolveFalBaseUrl(cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"]): string {
@@ -184,10 +255,26 @@ function fileExtensionForMimeType(mimeType: string | undefined): string {
   return slashIndex >= 0 ? normalized.slice(slashIndex + 1) || "png" : "png";
 }
 
-async function fetchImageBuffer(url: string): Promise<{ buffer: Buffer; mimeType: string }> {
+async function fetchImageBuffer(
+  url: string,
+  networkPolicy?: FalNetworkPolicy,
+): Promise<{ buffer: Buffer; mimeType: string }> {
+  const downloadPolicy = (() => {
+    const trustedSuffix = networkPolicy?.trustedDownloadHostSuffix;
+    const trustedPolicy = networkPolicy?.trustedDownloadPolicy;
+    if (!trustedSuffix || !trustedPolicy) {
+      return undefined;
+    }
+    try {
+      const parsed = new URL(url);
+      return matchesTrustedHostSuffix(parsed.hostname, trustedSuffix) ? trustedPolicy : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
   const { response, release } = await falFetchGuard({
     url,
-    policy: ssrfPolicyFromAllowPrivateNetwork(false),
+    policy: downloadPolicy,
     auditContext: "fal-image-download",
   });
   try {
@@ -254,6 +341,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         hasInputImages,
       });
       const model = ensureFalModelPath(req.model, hasInputImages);
+      const networkPolicy = resolveFalNetworkPolicy(req.cfg);
       const requestBody: Record<string, unknown> = {
         prompt: req.prompt,
         num_images: req.count ?? 1,
@@ -281,7 +369,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           },
           body: JSON.stringify(requestBody),
         },
-        policy: ssrfPolicyFromAllowPrivateNetwork(false),
+        policy: networkPolicy.apiPolicy,
         auditContext: "fal-image-generate",
       });
       try {
@@ -300,7 +388,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           if (!url) {
             continue;
           }
-          const downloaded = await fetchImageBuffer(url);
+          const downloaded = await fetchImageBuffer(url, networkPolicy);
           imageIndex += 1;
           images.push({
             buffer: downloaded.buffer,

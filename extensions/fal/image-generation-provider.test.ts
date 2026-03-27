@@ -102,6 +102,7 @@ describe("fal image-generation provider", () => {
       expect.objectContaining({
         url: "https://v3.fal.media/files/example/generated.png",
         auditContext: "fal-image-download",
+        policy: undefined,
       }),
     );
     expect(releaseRequest).toHaveBeenCalledTimes(1);
@@ -355,6 +356,74 @@ describe("fal image-generation provider", () => {
       expect.objectContaining({
         url: "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
         auditContext: "fal-image-download",
+        policy: undefined,
+      }),
+    );
+  });
+
+  it("allows trusted private relay hosts derived from configured baseUrl", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    const relayPolicy = {
+      allowPrivateNetwork: true,
+      hostnameAllowlist: ["relay.internal", "*.relay.internal"],
+    };
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "http://media.relay.internal/files/generated.png" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("png-data"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildFalImageGenerationProvider();
+    await provider.generateImage({
+      provider: "fal",
+      model: "fal-ai/flux/dev",
+      prompt: "draw a cat",
+      cfg: {
+        models: {
+          providers: {
+            fal: {
+              baseUrl: "http://relay.internal:8080",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        url: "http://relay.internal:8080/fal-ai/flux/dev",
+        auditContext: "fal-image-generate",
+        policy: relayPolicy,
+      }),
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: "http://media.relay.internal/files/generated.png",
+        auditContext: "fal-image-download",
+        policy: relayPolicy,
       }),
     );
   });
