@@ -806,8 +806,10 @@ export function attachGatewayWsMessageHandler(params: {
               return replacementPending?.requestId;
             };
             if (pairing.request.silent === true) {
-              approved = await approveDevicePairing(pairing.request.requestId);
-              if (approved) {
+              approved = await approveDevicePairing(pairing.request.requestId, {
+                callerScopes: scopes,
+              });
+              if (approved?.status === "approved") {
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
                 );
