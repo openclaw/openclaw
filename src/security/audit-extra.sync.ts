@@ -389,7 +389,7 @@ function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
   return out;
 }
 
-/** List all config paths where dmPolicy="open" is set. */
+/** List all config paths where dmPolicy="open" (or legacy dm.policy="open") is set. */
 function listDmPolicyOpen(cfg: OpenClawConfig): string[] {
   const out: string[] = [];
   const channels = cfg.channels as Record<string, unknown> | undefined;
@@ -404,6 +404,14 @@ function listDmPolicyOpen(cfg: OpenClawConfig): string[] {
     if (section.dmPolicy === "open") {
       out.push(`channels.${channelId}.dmPolicy`);
     }
+    // Legacy dot-notation key: channels.<id>.dm.policy
+    const dm = section.dm;
+    if (dm && typeof dm === "object") {
+      const dmSection = dm as Record<string, unknown>;
+      if (dmSection.policy === "open") {
+        out.push(`channels.${channelId}.dm.policy`);
+      }
+    }
     const accounts = section.accounts;
     if (accounts && typeof accounts === "object") {
       for (const [accountId, accountVal] of Object.entries(accounts)) {
@@ -413,6 +421,14 @@ function listDmPolicyOpen(cfg: OpenClawConfig): string[] {
         const acc = accountVal as Record<string, unknown>;
         if (acc.dmPolicy === "open") {
           out.push(`channels.${channelId}.accounts.${accountId}.dmPolicy`);
+        }
+        // Legacy dot-notation at account level
+        const accDm = acc.dm;
+        if (accDm && typeof accDm === "object") {
+          const accDmSection = accDm as Record<string, unknown>;
+          if (accDmSection.policy === "open") {
+            out.push(`channels.${channelId}.accounts.${accountId}.dm.policy`);
+          }
         }
       }
     }
@@ -1335,6 +1351,8 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
   const elevatedEnabled = cfg.tools?.elevated?.enabled !== false;
   if (elevatedEnabled) {
     findings.push({
+      // checkId keeps "open_groups" naming for backward compatibility;
+      // it now covers both groupPolicy="open" and dmPolicy="open" (including legacy dm.policy).
       checkId: "security.exposure.open_groups_with_elevated",
       severity: "critical",
       title: "Open groupPolicy/dmPolicy with elevated tools enabled",
@@ -1350,6 +1368,7 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
 
   if (riskyContexts.length > 0) {
     findings.push({
+      // checkId keeps "open_groups" naming for backward compatibility (see above).
       checkId: "security.exposure.open_groups_with_runtime_or_fs",
       severity: hasRuntimeRisk ? "critical" : "warn",
       title: "Open groupPolicy/dmPolicy with runtime/filesystem tools exposed",

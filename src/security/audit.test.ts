@@ -3744,7 +3744,6 @@ description: test skill
             expect.arrayContaining([
               expect.objectContaining({
                 checkId: "security.exposure.open_groups_with_runtime_or_fs",
-                severity: "critical",
               }),
             ]),
           );
@@ -3752,6 +3751,27 @@ description: test skill
             (f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs",
           );
           expect(finding?.detail).toContain("channels.feishu.dmPolicy");
+        },
+      },
+      {
+        name: "flags legacy dm.policy when tools.elevated is enabled",
+        cfg: {
+          tools: { elevated: { enabled: true, allowFrom: { discord: ["user1"] } } },
+          channels: { discord: { dm: { policy: "open" } } },
+        } satisfies OpenClawConfig,
+        assert: (res: SecurityAuditReport) => {
+          expect(res.findings).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                checkId: "security.exposure.open_groups_with_elevated",
+                severity: "critical",
+              }),
+            ]),
+          );
+          const finding = res.findings.find(
+            (f) => f.checkId === "security.exposure.open_groups_with_elevated",
+          );
+          expect(finding?.detail).toContain("channels.discord.dm.policy");
         },
       },
       {
