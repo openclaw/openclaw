@@ -375,6 +375,36 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.getLastToolError()).toBeUndefined();
   });
 
+  it("clears unresolved failure when the same tool call later succeeds", () => {
+    const { emit, subscription } = createToolErrorHarness("run-tools-2b");
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "browser",
+      toolCallId: "b1",
+      args: { action: "open", url: "https://example.com" },
+    });
+    emit({
+      type: "tool_execution_end",
+      toolName: "browser",
+      toolCallId: "b1",
+      isError: true,
+      result: { error: "connection timeout" },
+    });
+
+    expect(subscription.getLastToolError()?.toolName).toBe("browser");
+
+    emit({
+      type: "tool_execution_end",
+      toolName: "browser",
+      toolCallId: "b1",
+      isError: false,
+      result: { ok: true },
+    });
+
+    expect(subscription.getLastToolError()).toBeUndefined();
+  });
+
   it("keeps unresolved mutating failure when same tool succeeds on a different target", () => {
     const { emit, subscription } = createToolErrorHarness("run-tools-3");
 

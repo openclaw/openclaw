@@ -19,6 +19,7 @@ export type EmbeddedSubscribeLogger = {
 
 export type ToolErrorSummary = {
   toolName: string;
+  toolCallId?: string;
   meta?: string;
   error?: string;
   mutatingAction?: boolean;

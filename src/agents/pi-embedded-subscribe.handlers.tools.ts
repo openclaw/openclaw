@@ -478,14 +478,18 @@ export async function handleToolExecutionEnd(
     const errorMessage = extractToolErrorMessage(sanitizedResult);
     ctx.state.lastToolError = {
       toolName,
+      toolCallId,
       meta,
       error: errorMessage,
       mutatingAction: callSummary?.mutatingAction,
       actionFingerprint: callSummary?.actionFingerprint,
     };
   } else if (ctx.state.lastToolError) {
+    if (ctx.state.lastToolError.toolCallId === toolCallId) {
+      ctx.state.lastToolError = undefined;
+    }
     // Keep unresolved mutating failures until the same action succeeds.
-    if (ctx.state.lastToolError.mutatingAction) {
+    else if (ctx.state.lastToolError.mutatingAction) {
       if (
         isSameToolMutationAction(ctx.state.lastToolError, {
           toolName,

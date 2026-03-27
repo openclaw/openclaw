@@ -236,6 +236,49 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
 
     expect(ctx.state.lastToolError).toBeUndefined();
   });
+
+  it("clears failure when the same tool call later succeeds", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "browser",
+        toolCallId: "tool-browser-1",
+        args: {
+          action: "open",
+          url: "https://example.com",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "browser",
+        toolCallId: "tool-browser-1",
+        isError: true,
+        result: { error: "connection timeout" },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError?.toolCallId).toBe("tool-browser-1");
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "browser",
+        toolCallId: "tool-browser-1",
+        isError: false,
+        result: { ok: true },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+  });
 });
 
 describe("handleToolExecutionEnd exec approval prompts", () => {
