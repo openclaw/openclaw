@@ -534,6 +534,26 @@ export class VoiceCallWebhookServer {
         return { statusCode: 401, body: "Unauthorized" };
       }
 
+      // Realtime mode: return TwiML <Connect><Stream> for calls that need bridging.
+      // Status callbacks (CallStatus=completed etc.) must fall through to the normal
+      // webhook pipeline so call state is updated correctly.
+      // Replayed requests are intentionally excluded — a replayed ringing/in-progress
+      // callback must not mint a new stream token or start a second realtime session.
+      if (this.realtimeHandler && this.provider.name === "twilio" && !verification.isReplay) {
+        const params = new URLSearchParams(ctx.rawBody);
+        const callStatus = params.get("CallStatus");
+        const direction = params.get("Direction");
+        const isInboundRinging =
+          callStatus === "ringing" && (!direction || direction === "inbound");
+        // outbound-api calls fire the webhook during ringing; TwiML executes on answer
+        const isOutboundActive =
+          direction === "outbound-api" &&
+          (callStatus === "ringing" || callStatus === "in-progress");
+        if (isInboundRinging || isOutboundActive) {
+          return this.realtimeHandler.buildTwiMLPayload(req, params);
+        }
+      }
+
       const parsed = this.provider.parseWebhookEvent(ctx, {
         verifiedRequestKey: verification.verifiedRequestKey,
       });

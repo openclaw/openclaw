@@ -335,6 +335,10 @@ export class RealtimeCallHandler {
 
     bridge.connect().catch((err: Error) => {
       console.error("[voice-call] Failed to connect realtime bridge:", err);
+      // Close the bridge explicitly so intentionallyClosed=true suppresses
+      // attemptReconnect() — without this the bridge retries after the call
+      // is already torn down, causing orphan background reconnect loops.
+      bridge?.close();
       emitCallEnd();
       ws.close(1011, "Failed to connect");
     });
