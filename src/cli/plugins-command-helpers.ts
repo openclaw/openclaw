@@ -165,6 +165,7 @@ export function decidePreferredClawHubFallback(params: {
   code?: string;
 }): PreferredClawHubFallbackDecision {
   if (
+    params.code === CLAWHUB_INSTALL_ERROR_CODE.REQUEST_FAILED ||
     params.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
     params.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND
   ) {

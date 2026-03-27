@@ -346,6 +346,52 @@ describe("plugins cli install", () => {
     );
   });
 
+  it("falls back to npm when ClawHub request resolution fails before install", async () => {
+    const cfg = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledCfg = createEnabledPluginConfig("demo");
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromClawHub.mockResolvedValue({
+      ok: false,
+      error: "fetch failed",
+      code: "request_failed",
+    });
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: "/tmp/openclaw-state/extensions/demo",
+      version: "1.2.3",
+      npmResolution: {
+        packageName: "demo",
+        resolvedVersion: "1.2.3",
+        tarballUrl: "https://registry.npmjs.org/demo/-/demo-1.2.3.tgz",
+      },
+    });
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "demo"]);
+
+    expect(installPluginFromClawHub).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:demo",
+      }),
+    );
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "demo",
+      }),
+    );
+  });
+
   it("does not fall back to npm when ClawHub rejects a real package", async () => {
     installPluginFromClawHub.mockResolvedValue({
       ok: false,

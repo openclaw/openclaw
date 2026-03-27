@@ -197,4 +197,15 @@ describe("installPluginFromClawHub", () => {
       error: "Version not found on ClawHub: demo@9.9.9.",
     });
   });
+
+  it("returns typed request failures for package resolution errors", async () => {
+    expect(CLAWHUB_INSTALL_ERROR_CODE.REQUEST_FAILED).toBe("request_failed");
+    fetchClawHubPackageDetailMock.mockRejectedValueOnce(new Error("fetch failed"));
+
+    await expect(installPluginFromClawHub({ spec: "clawhub:demo" })).resolves.toMatchObject({
+      ok: false,
+      code: CLAWHUB_INSTALL_ERROR_CODE.REQUEST_FAILED,
+      error: "fetch failed",
+    });
+  });
 });

@@ -21,6 +21,7 @@ export const CLAWHUB_INSTALL_ERROR_CODE = {
   INVALID_SPEC: "invalid_spec",
   PACKAGE_NOT_FOUND: "package_not_found",
   VERSION_NOT_FOUND: "version_not_found",
+  REQUEST_FAILED: "request_failed",
   NO_INSTALLABLE_VERSION: "no_installable_version",
   SKILL_PACKAGE: "skill_package",
   UNSUPPORTED_FAMILY: "unsupported_family",
@@ -82,7 +83,10 @@ function mapClawHubRequestError(
       CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND,
     );
   }
-  return buildClawHubInstallFailure(error instanceof Error ? error.message : String(error));
+  return buildClawHubInstallFailure(
+    error instanceof Error ? error.message : String(error),
+    CLAWHUB_INSTALL_ERROR_CODE.REQUEST_FAILED,
+  );
 }
 
 function resolveRequestedVersion(params: {
