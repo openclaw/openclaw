@@ -58,9 +58,16 @@ function wrapToolWithExecuteContext(
 ): AnyAgentTool {
   const original = tool.execute;
   if (!original) return tool;
+  // We intentionally pass `execCtx` as the third argument instead of an AbortSignal.
+  // Plugin tools that declare a third parameter receive identity context; plugins
+  // that don't declare it simply ignore the extra argument. The cast is necessary
+  // because the core AgentTool type declares execute's third arg as AbortSignal,
+  // but the plugin dispatch convention extends that slot for context injection.
+  // oxlint-disable-next-line typescript/no-explicit-any
+  const originalAsAny = original as (...args: any[]) => unknown;
   return Object.create(tool, {
     execute: {
-      value: (callId: string, params: unknown) => original.call(tool, callId, params, execCtx),
+      value: (callId: string, params: unknown) => originalAsAny.call(tool, callId, params, execCtx),
       writable: true,
       configurable: true,
     },
