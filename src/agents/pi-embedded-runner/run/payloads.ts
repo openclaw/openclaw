@@ -49,6 +49,12 @@ function isRecoverableToolError(error: string | undefined): boolean {
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
 }
 
+/** Response-layer timeout — the tool action likely succeeded but the ack never arrived. */
+function isToolResponseTimeoutError(error: string | undefined): boolean {
+  const msg = (error ?? "").toLowerCase();
+  return msg.includes("timed out") || msg.includes("timeout");
+}
+
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
   return level === "on" || level === "full";
 }
@@ -77,6 +83,11 @@ function resolveToolErrorWarningPolicy(params: {
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
+    // Suppress warnings for response timeouts on mutating tools — the operation
+    // likely succeeded even though the ack timed out (#55424).
+    if (isToolResponseTimeoutError(params.lastToolError.error)) {
+      return { showWarning: false, includeDetails };
+    }
     return { showWarning: true, includeDetails };
   }
   if (params.suppressToolErrors) {

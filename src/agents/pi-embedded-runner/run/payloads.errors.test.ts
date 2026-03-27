@@ -287,11 +287,11 @@ describe("buildEmbeddedRunPayloads", () => {
     {
       name: "still shows mutating tool errors when messages.suppressToolErrors is enabled",
       payload: {
-        lastToolError: { toolName: "write", error: "connection timeout" },
+        lastToolError: { toolName: "write", error: "permission denied" },
         config: { messages: { suppressToolErrors: true } },
       },
       title: "Write",
-      absentDetail: "connection timeout",
+      absentDetail: "permission denied",
     },
     {
       name: "shows recoverable tool errors for mutating tools",
@@ -364,6 +364,27 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, { text: warningText ?? "" });
+  });
+
+  it.each([
+    { toolName: "write", error: "invoke timed out", label: "write invoke timed out" },
+    { toolName: "edit", error: "Response timeout", label: "edit response timeout" },
+    {
+      toolName: "write",
+      error: "connection timed out waiting for response",
+      label: "write connection timed out",
+    },
+  ])("suppresses mutating tool warning for response timeout: $label", ({ toolName, error }) => {
+    expectNoPayloads({
+      lastToolError: { toolName, error },
+    });
+  });
+
+  it("still shows mutating tool warning for non-timeout errors", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "write", error: "disk full" },
+    });
+    expectSingleToolErrorPayload(payloads, { title: "Write", absentDetail: "disk full" });
   });
 
   it("includes non-recoverable tool error details when verbose mode is on", () => {
