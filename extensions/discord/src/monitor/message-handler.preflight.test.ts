@@ -1,12 +1,10 @@
 import { ChannelType } from "@buape/carbon";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as pluralkitModule from "../pluralkit.js";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
-const fetchPluralKitMessageInfoMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../pluralkit.js", () => ({
-  fetchPluralKitMessageInfo: (...args: unknown[]) => fetchPluralKitMessageInfoMock(...args),
-}));
+vi.spyOn(pluralkitModule, "fetchPluralKitMessageInfo");
 
 vi.mock("./preflight-audio.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
@@ -42,7 +40,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  fetchPluralKitMessageInfoMock.mockReset();
+  vi.mocked(pluralkitModule.fetchPluralKitMessageInfo).mockReset();
 });
 
 function createThreadBinding(
@@ -275,7 +273,7 @@ describe("preflightDiscordMessage", () => {
   });
 
   it("looks up PluralKit info for webhook-authored messages and preserves canonical original id", async () => {
-    fetchPluralKitMessageInfoMock.mockResolvedValue({
+    vi.mocked(pluralkitModule.fetchPluralKitMessageInfo).mockResolvedValue({
       id: "proxy-456",
       original: "orig-123",
       member: { id: "member-1", name: "Echo" },
