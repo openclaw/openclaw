@@ -84,6 +84,18 @@ and files.
 openclaw plugins install @sliverp/qqbot
 ```
 
+
+### Statocyst
+
+OpenClaw plugin for realtime Statocyst skill request/result messaging.
+
+- **npm:** `@moltenbot/openclaw-plugin-statocyst`
+- **repo:** [github.com/Molten-Bot/statocyst](https://github.com/Molten-Bot/statocyst)
+
+```bash
+openclaw plugins install @moltenbot/openclaw-plugin-statocyst
+```
+
 ### wecom
 
 OpenClaw Enterprise WeCom Channel Plugin.
