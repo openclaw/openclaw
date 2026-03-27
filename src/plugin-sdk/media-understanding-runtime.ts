@@ -6,4 +6,6 @@ export {
   describeVideoFile,
   runMediaUnderstandingFile,
   transcribeAudioFile,
-} from "../media-understanding/runtime.js";
+  type RunMediaUnderstandingFileParams,
+  type RunMediaUnderstandingFileResult,
+} from "../../extensions/media-understanding-core/runtime-api.js";

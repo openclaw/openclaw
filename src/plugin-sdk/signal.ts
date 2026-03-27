@@ -4,7 +4,7 @@
 export type { ChannelMessageActionAdapter } from "../channels/plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { SignalAccountConfig } from "../config/types.js";
-export type { ResolvedSignalAccount } from "../../extensions/signal/src/accounts.js";
+export type { ResolvedSignalAccount } from "../../extensions/signal/api.js";
 export type {
   ChannelMessageActionContext,
   ChannelPlugin,
@@ -54,13 +54,12 @@ export {
   listEnabledSignalAccounts,
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
-} from "../../extensions/signal/src/accounts.js";
-export { monitorSignalProvider } from "../../extensions/signal/src/monitor.js";
-export { probeSignal } from "../../extensions/signal/src/probe.js";
-export { resolveSignalReactionLevel } from "../../extensions/signal/src/reaction-level.js";
-export {
-  removeReactionSignal,
-  sendReactionSignal,
-} from "../../extensions/signal/src/send-reactions.js";
-export { sendMessageSignal } from "../../extensions/signal/src/send.js";
-export { signalMessageActions } from "../../extensions/signal/src/message-actions.js";
+} from "../../extensions/signal/api.js";
+export { isSignalSenderAllowed } from "../../extensions/signal/api.js";
+export type { SignalSender } from "../../extensions/signal/api.js";
+export { monitorSignalProvider } from "../../extensions/signal/api.js";
+export { probeSignal } from "../../extensions/signal/api.js";
+export { resolveSignalReactionLevel } from "../../extensions/signal/api.js";
+export { removeReactionSignal, sendReactionSignal } from "../../extensions/signal/api.js";
+export { sendMessageSignal } from "../../extensions/signal/api.js";
+export { signalMessageActions } from "../../extensions/signal/api.js";

@@ -1,4 +1,5 @@
 import { createJiti } from "jiti";
+import type { MatrixRuntimeBoundaryModule } from "./runtime-matrix-surface.js";
 import {
   loadPluginBoundaryModuleWithJiti,
   resolvePluginRuntimeModulePath,
@@ -7,15 +8,13 @@ import {
 
 const MATRIX_PLUGIN_ID = "matrix";
 
-type MatrixModule = typeof import("../../../extensions/matrix/runtime-api.js");
-
 type MatrixPluginRecord = {
   rootDir?: string;
   source: string;
 };
 
 let cachedModulePath: string | null = null;
-let cachedModule: MatrixModule | null = null;
+let cachedModule: MatrixRuntimeBoundaryModule | null = null;
 
 const jitiLoaders = new Map<boolean, ReturnType<typeof createJiti>>();
 
@@ -27,7 +26,7 @@ function resolveMatrixRuntimeModulePath(record: MatrixPluginRecord): string | nu
   return resolvePluginRuntimeModulePath(record, "runtime-api");
 }
 
-function loadMatrixModule(): MatrixModule | null {
+function loadMatrixModule(): MatrixRuntimeBoundaryModule | null {
   const record = resolveMatrixPluginRecord();
   if (!record) {
     return null;
@@ -39,15 +38,18 @@ function loadMatrixModule(): MatrixModule | null {
   if (cachedModule && cachedModulePath === modulePath) {
     return cachedModule;
   }
-  const loaded = loadPluginBoundaryModuleWithJiti<MatrixModule>(modulePath, jitiLoaders);
+  const loaded = loadPluginBoundaryModuleWithJiti<MatrixRuntimeBoundaryModule>(
+    modulePath,
+    jitiLoaders,
+  );
   cachedModulePath = modulePath;
   cachedModule = loaded;
   return loaded;
 }
 
 export function setMatrixThreadBindingIdleTimeoutBySessionKey(
-  ...args: Parameters<MatrixModule["setMatrixThreadBindingIdleTimeoutBySessionKey"]>
-): ReturnType<MatrixModule["setMatrixThreadBindingIdleTimeoutBySessionKey"]> {
+  ...args: Parameters<MatrixRuntimeBoundaryModule["setMatrixThreadBindingIdleTimeoutBySessionKey"]>
+): ReturnType<MatrixRuntimeBoundaryModule["setMatrixThreadBindingIdleTimeoutBySessionKey"]> {
   const fn = loadMatrixModule()?.setMatrixThreadBindingIdleTimeoutBySessionKey;
   if (typeof fn !== "function") {
     return [];
@@ -56,8 +58,8 @@ export function setMatrixThreadBindingIdleTimeoutBySessionKey(
 }
 
 export function setMatrixThreadBindingMaxAgeBySessionKey(
-  ...args: Parameters<MatrixModule["setMatrixThreadBindingMaxAgeBySessionKey"]>
-): ReturnType<MatrixModule["setMatrixThreadBindingMaxAgeBySessionKey"]> {
+  ...args: Parameters<MatrixRuntimeBoundaryModule["setMatrixThreadBindingMaxAgeBySessionKey"]>
+): ReturnType<MatrixRuntimeBoundaryModule["setMatrixThreadBindingMaxAgeBySessionKey"]> {
   const fn = loadMatrixModule()?.setMatrixThreadBindingMaxAgeBySessionKey;
   if (typeof fn !== "function") {
     return [];
