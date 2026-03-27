@@ -570,7 +570,9 @@ internal sealed class GatewayEndpointStore : IGatewayEndpointStore, IDisposable
         if (_remoteEnsure is not null) return; // already in flight
 
         var token       = Guid.NewGuid();
-        var sshEndpoint = settings.RemoteTarget?.Trim() ?? "";
+        var target      = settings.RemoteTarget?.Trim() ?? "";
+        var identity    = settings.RemoteIdentity?.Trim();
+        var sshEndpoint = !string.IsNullOrEmpty(identity) ? $"{identity}@{target}" : target;
         var desiredPort = GatewayEnvironment.GatewayPort();
         var remotePort  = ResolveRemoteGatewayPort(root, settings);
         var task        = _tunnel.EnsureControlTunnelAsync(sshEndpoint, desiredPort, remotePort, CancellationToken.None);

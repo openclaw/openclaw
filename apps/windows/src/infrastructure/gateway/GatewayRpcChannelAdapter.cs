@@ -737,7 +737,7 @@ internal sealed class GatewayRpcChannelAdapter : IGatewayRpcChannel, IGatewayMes
         string decision,
         CancellationToken ct = default)
         => RequestRawAsync("exec.approval.resolve",
-            new Dictionary<string, object?> { ["requestId"] = requestId, ["decision"] = decision },
+            new Dictionary<string, object?> { ["id"] = requestId, ["decision"] = decision },
             null, ct);
 
     // ── Onboarding wizard ──────────────────────────────────────────────────────
