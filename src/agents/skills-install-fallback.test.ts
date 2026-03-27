@@ -376,6 +376,26 @@ describe("skills-install fallback edge cases", () => {
       getuidSpy.mockRestore();
     });
 
+    it("skips apt fallback for tap-qualified brew formulas", async () => {
+      setPlatform("linux");
+      mockAvailableBinaries(["apt-get"]);
+
+      await writeSkillWithInstaller(workspaceDir, "brew-tap-qualified", "brew", {
+        formula: "homebrew/cask/ffmpeg",
+      });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "brew-tap-qualified",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("brew not installed");
+      // No apt-get commands should have been attempted
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    });
+
     it("does not attempt apt fallback on macOS", async () => {
       setPlatform("darwin");
       mockAvailableBinaries(["apt-get"]); // hypothetical, but should not be used

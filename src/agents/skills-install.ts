@@ -348,8 +348,14 @@ async function installViaApt(
 async function installBrewFormulaViaApt(
   formula: string,
   timeoutMs: number,
-): Promise<SkillInstallResult | undefined> {
+): Promise<SkillInstallResult | null | undefined> {
   const trimmed = formula.trim();
+
+  // Tap-qualified brew formulas (e.g. "homebrew/cask/ffmpeg") have no apt equivalent
+  if (trimmed.includes("/")) {
+    return null;
+  }
+
   return installViaApt(
     trimmed,
     {
@@ -547,10 +553,14 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     if (process.platform === "linux" && hasBinary("apt-get")) {
       // formula is guaranteed non-empty here: buildInstallCommand already validated it.
       const aptResult = await installBrewFormulaViaApt(spec.formula!, timeoutMs);
-      if (!aptResult) {
+      // null → tap-qualified formula, skip apt and fall through to brew-missing error
+      if (aptResult === null) {
+        /* fall through */
+      } else if (!aptResult) {
         return withWarnings(createInstallSuccess({ code: 0, stdout: "", stderr: "" }), warnings);
+      } else {
+        return withWarnings(aptResult, warnings);
       }
-      return withWarnings(aptResult, warnings);
     }
     return withWarnings(resolveBrewMissingFailure(spec), warnings);
   }
