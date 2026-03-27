@@ -103,4 +103,92 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(sessionEntry.authProfileOverride).toBe("openai:main");
     });
   });
+
+  it("persists auth profile when image model is on same provider as default", async () => {
+    await withStateDirEnv("openclaw-auth-", async ({ stateDir }) => {
+      const agentDir = path.join(stateDir, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await writeAuthStoreMultiProvider(agentDir);
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        authProfileOverride: "openai:main",
+        authProfileOverrideSource: "user",
+      };
+      const sessionStore = { "agent:main:main": sessionEntry };
+
+      // When image model provider matches default provider, changes should persist
+      const resolved = await resolveSessionAuthProfileOverride({
+        cfg: {} as OpenClawConfig,
+        provider: "anthropic", // Current provider (image model)
+        agentDir,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "agent:main:main",
+        storePath: undefined,
+        isNewSession: false,
+        hasAppliedImageModelOverride: true,
+        defaultProvider: "anthropic", // Same as current provider - should persist
+      });
+
+      expect(resolved.authProfileId).toBe("anthropic:main");
+      expect(resolved.authProfileIdSource).toBe("auto");
+      // Same provider - should persist the change
+      expect(sessionEntry.authProfileOverride).toBe("anthropic:main");
+      expect(sessionEntry.authProfileOverrideSource).toBe("auto");
+    });
+  });
+
+  it("clears auth profile normally when no image model override", async () => {
+    await withStateDirEnv("openclaw-auth-", async ({ stateDir }) => {
+      const agentDir = path.join(stateDir, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await writeAuthStoreMultiProvider(agentDir);
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        authProfileOverride: "openai:main",
+        authProfileOverrideSource: "user",
+      };
+      const sessionStore = { "agent:main:main": sessionEntry };
+
+      // Without hasAppliedImageModelOverride, should clear mismatched profile
+      const resolved = await resolveSessionAuthProfileOverride({
+        cfg: {} as OpenClawConfig,
+        provider: "anthropic", // Different from stored profile's provider
+        agentDir,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "agent:main:main",
+        storePath: undefined,
+        isNewSession: false,
+        // No hasAppliedImageModelOverride - should clear normally
+      });
+
+      expect(resolved.authProfileId).toBe("anthropic:main");
+      // Session should be cleared and updated
+      expect(sessionEntry.authProfileOverride).toBe("anthropic:main");
+      expect(sessionEntry.authProfileOverrideSource).toBe("auto");
+    });
+  });
+
+  it("returns undefined when no session entry provided", async () => {
+    const resolved = await resolveSessionAuthProfileOverride({
+      cfg: {} as OpenClawConfig,
+      provider: "openai",
+      agentDir: "/tmp",
+      sessionEntry: undefined,
+      sessionStore: {},
+      sessionKey: "test",
+      storePath: undefined,
+      isNewSession: true,
+      hasAppliedImageModelOverride: true,
+      defaultProvider: "openai",
+    });
+
+    expect(resolved.authProfileId).toBeUndefined();
+    expect(resolved.authProfileIdSource).toBeUndefined();
+  });
 });
