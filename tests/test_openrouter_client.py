@@ -1,4 +1,4 @@
-"""Unit tests for OpenRouter client — circuit breaker, retries, rate limits."""
+"""Unit tests for OpenRouter client — per-model circuit breaker, retries, rate limits."""
 import asyncio
 import sys
 import os
@@ -7,62 +7,76 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.openrouter_client import (
-    _circuit_breaker,
+    _model_circuit_breakers,
     _rate_limit_state,
     _is_circuit_open,
     _record_failure,
     _record_success,
     _update_rate_limits,
     get_rate_limit_info,
+    reset_circuit_breakers,
 )
 import time as _time
 
+_TEST_MODEL = "test/model:free"
+
 
 # ---------------------------------------------------------------------------
-# Circuit Breaker
+# Circuit Breaker (per-model)
 # ---------------------------------------------------------------------------
 def test_circuit_initially_closed():
-    # Reset state
-    _circuit_breaker["failures"] = 0
-    _circuit_breaker["last_failure"] = 0.0
-    _circuit_breaker["open_until"] = 0.0
-    assert not _is_circuit_open()
+    reset_circuit_breakers()
+    assert not _is_circuit_open(_TEST_MODEL)
     print("[PASS] circuit breaker initially closed")
 
 
 def test_circuit_opens_after_threshold():
-    _circuit_breaker["failures"] = 0
-    _circuit_breaker["last_failure"] = 0.0
-    _circuit_breaker["open_until"] = 0.0
+    reset_circuit_breakers()
 
     # Record failures up to threshold (5)
     for _ in range(5):
-        _record_failure()
+        _record_failure(_TEST_MODEL)
 
-    assert _circuit_breaker["failures"] >= 5
-    assert _circuit_breaker["open_until"] > _time.time()
-    assert _is_circuit_open()
+    cb = _model_circuit_breakers[_TEST_MODEL]
+    assert cb["failures"] >= 5
+    assert cb["open_until"] > _time.time()
+    assert _is_circuit_open(_TEST_MODEL)
     print("[PASS] circuit opens after threshold")
 
 
 def test_circuit_recovers_after_cooldown():
-    _circuit_breaker["failures"] = 5
-    # Set open_until far in the past (beyond cooldown)
-    _circuit_breaker["open_until"] = _time.time() - 10
-    _circuit_breaker["last_failure"] = _time.time() - 200
+    reset_circuit_breakers()
+    _record_failure(_TEST_MODEL)  # init the entry
+    cb = _model_circuit_breakers[_TEST_MODEL]
+    cb["failures"] = 5
+    cb["open_until"] = _time.time() - 10
+    cb["last_failure"] = _time.time() - 200
     # Circuit should auto-close because open_until is in the past
-    assert not _is_circuit_open()
-    # _is_circuit_open resets failures when cooldown expired
-    assert _circuit_breaker["failures"] == 0
+    assert not _is_circuit_open(_TEST_MODEL)
+    assert cb["failures"] == 0
     print("[PASS] circuit recovers after cooldown")
 
 
 def test_record_success_resets():
-    _circuit_breaker["failures"] = 3
-    _circuit_breaker["open_until"] = 0.0
-    _record_success()
-    assert _circuit_breaker["failures"] == 0
+    reset_circuit_breakers()
+    for _ in range(3):
+        _record_failure(_TEST_MODEL)
+    _record_success(_TEST_MODEL)
+    cb = _model_circuit_breakers[_TEST_MODEL]
+    assert cb["failures"] == 0
     print("[PASS] record_success resets failures")
+
+
+def test_per_model_isolation():
+    """Failures on model A should not affect model B."""
+    reset_circuit_breakers()
+    model_a = "vendor/model-a:free"
+    model_b = "vendor/model-b:free"
+    for _ in range(5):
+        _record_failure(model_a)
+    assert _is_circuit_open(model_a)
+    assert not _is_circuit_open(model_b)
+    print("[PASS] per-model isolation")
 
 
 # ---------------------------------------------------------------------------
@@ -82,12 +96,12 @@ def test_update_rate_limits():
 def test_rate_limit_info():
     _rate_limit_state["requests_remaining"] = 50
     _rate_limit_state["tokens_remaining"] = 10000
-    _circuit_breaker["failures"] = 0
-    _circuit_breaker["open_until"] = 0.0
+    reset_circuit_breakers()
     info = get_rate_limit_info()
     assert info["requests_remaining"] == 50
     assert info["tokens_remaining"] == 10000
-    assert info["circuit_open"] is False
+    assert info["circuit_open_models"] == []
+    assert info["model_failures"] == {}
     print("[PASS] get_rate_limit_info")
 
 
@@ -108,6 +122,7 @@ if __name__ == "__main__":
     test_circuit_opens_after_threshold()
     test_circuit_recovers_after_cooldown()
     test_record_success_resets()
+    test_per_model_isolation()
     test_update_rate_limits()
     test_rate_limit_info()
     test_update_rate_limits_missing_headers()

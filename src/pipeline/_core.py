@@ -52,7 +52,7 @@ from src.vllm_inference import (
     force_unload,
     vram_protection,
 )
-from src.openrouter_client import call_openrouter
+from src.openrouter_client import call_openrouter, reset_circuit_breakers
 from src.ai.agents.react import ReActReasoner
 from src.ai.agents.constitutional import ConstitutionalChecker
 from src.tools.dynamic_sandbox import DynamicSandbox
@@ -215,6 +215,10 @@ class PipelineExecutor:
             }
 
         logger.info(f"Pipeline START: brigade={brigade}, chain={' → '.join(chain)}")
+
+        # Reset per-model circuit breakers at the start of each pipeline run
+        # so stale failures from previous runs don't poison fresh queries.
+        reset_circuit_breakers()
 
         budget = self.token_budget.estimate_budget(prompt, task_type or "general")
         logger.info("Token budget estimated", max_tokens=budget.max_tokens, reason=budget.budget_reason)
@@ -610,30 +614,6 @@ class PipelineExecutor:
                 preserve_think=preserve_think,
                 json_schema=json_schema,
             )
-
-            # Auditor fallback: if primary model returned error/empty, retry with gemma
-            if is_auditor and (not result or result.startswith("[ERROR]")):
-                auditor_fallback = "google/gemma-3-12b-it:free"
-                logger.warning(
-                    "Auditor primary model failed — retrying with fallback",
-                    primary=or_model,
-                    fallback=auditor_fallback,
-                )
-                result = await call_openrouter(
-                    openrouter_config=self.openrouter_config,
-                    vllm_url=self.vllm_url,
-                    model=auditor_fallback,
-                    fallback_model=fallback,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    role_name=role_name,
-                    role_config=role_config,
-                    mcp_client=mcp_client,
-                    config=self.config,
-                    vllm_manager=self.vllm_manager,
-                    preserve_think=preserve_think,
-                    json_schema=json_schema,
-                )
         else:
             result = await call_vllm(
                 vllm_url=self.vllm_url,

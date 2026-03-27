@@ -469,7 +469,7 @@ async def _call_openrouter(
     base_url = _openrouter_config.get("base_url", "https://openrouter.ai/api/v1").rstrip("/")
     endpoint = f"{base_url}/chat/completions"
 
-    if not api_key or _is_circuit_open():
+    if not api_key or _is_circuit_open(model):
         return ""
 
     # Free-tier enforcement: reject models without :free suffix to prevent 402
@@ -497,7 +497,7 @@ async def _call_openrouter(
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(endpoint, json=payload, headers=headers) as resp:
                     if resp.status == 200:
-                        _record_success()
+                        _record_success(model)
                         data = await resp.json()
                         content = (
                             data.get("choices", [{}])[0]
@@ -528,14 +528,14 @@ async def _call_openrouter(
                         await asyncio.sleep(wait)
                         continue
 
-                    _record_failure()
+                    _record_failure(model)
                     if attempt < retries - 1:
                         await asyncio.sleep(2 ** attempt)
                         continue
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            _record_failure()
+            _record_failure(model)
             _last_api_error.update({
                 "status": 0,
                 "model": model,

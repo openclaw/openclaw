@@ -25,14 +25,10 @@ logger = structlog.get_logger(__name__)
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-# Circuit breaker state
-_circuit_breaker = {
-    "failures": 0,
-    "last_failure": 0.0,
-    "open_until": 0.0,
-    "threshold": 5,       # consecutive failures before opening circuit
-    "cooldown_sec": 120,  # how long to wait before retrying after circuit opens
-}
+# Per-model circuit breaker state (isolates failures by model)
+_model_circuit_breakers: Dict[str, Dict[str, Any]] = {}
+_CB_THRESHOLD = 5        # consecutive failures before opening circuit for a model
+_CB_COOLDOWN_SEC = 60    # shorter cooldown — free models recover fast
 
 # Rate limit state (updated from response headers)
 _rate_limit_state = {
@@ -40,6 +36,17 @@ _rate_limit_state = {
     "tokens_remaining": 999_999,
     "reset_at": 0.0,
 }
+
+
+def _get_cb(model: str) -> Dict[str, Any]:
+    """Get or create per-model circuit breaker."""
+    if model not in _model_circuit_breakers:
+        _model_circuit_breakers[model] = {
+            "failures": 0,
+            "last_failure": 0.0,
+            "open_until": 0.0,
+        }
+    return _model_circuit_breakers[model]
 
 
 def _update_rate_limits(headers: Dict[str, str]) -> None:
@@ -53,40 +60,50 @@ def _update_rate_limits(headers: Dict[str, str]) -> None:
         pass
 
 
-def _is_circuit_open() -> bool:
-    """Check if circuit breaker is open (too many failures)."""
-    if _circuit_breaker["failures"] >= _circuit_breaker["threshold"]:
-        if time.time() < _circuit_breaker["open_until"]:
+def _is_circuit_open(model: str) -> bool:
+    """Check if circuit breaker is open for a specific model."""
+    cb = _get_cb(model)
+    if cb["failures"] >= _CB_THRESHOLD:
+        if time.time() < cb["open_until"]:
             return True
         # Cooldown expired — allow a probe
-        _circuit_breaker["failures"] = 0
+        cb["failures"] = 0
     return False
 
 
-def _record_failure() -> None:
-    """Record a failure for circuit breaker."""
-    _circuit_breaker["failures"] += 1
-    _circuit_breaker["last_failure"] = time.time()
-    if _circuit_breaker["failures"] >= _circuit_breaker["threshold"]:
-        _circuit_breaker["open_until"] = time.time() + _circuit_breaker["cooldown_sec"]
+def _record_failure(model: str) -> None:
+    """Record a failure for a specific model's circuit breaker."""
+    cb = _get_cb(model)
+    cb["failures"] += 1
+    cb["last_failure"] = time.time()
+    if cb["failures"] >= _CB_THRESHOLD:
+        cb["open_until"] = time.time() + _CB_COOLDOWN_SEC
         logger.warning(
-            "Circuit breaker OPEN — backing off OpenRouter",
-            cooldown_sec=_circuit_breaker["cooldown_sec"],
+            "Circuit breaker OPEN for model",
+            model=model,
+            cooldown_sec=_CB_COOLDOWN_SEC,
         )
 
 
-def _record_success() -> None:
-    """Record a success — reset circuit breaker."""
-    _circuit_breaker["failures"] = 0
+def _record_success(model: str) -> None:
+    """Record a success — reset circuit breaker for this model."""
+    cb = _get_cb(model)
+    cb["failures"] = 0
+
+
+def reset_circuit_breakers() -> None:
+    """Reset all circuit breakers (call at pipeline start)."""
+    _model_circuit_breakers.clear()
 
 
 def get_rate_limit_info() -> Dict[str, Any]:
     """Get current rate-limit and circuit breaker state."""
+    open_models = [m for m in _model_circuit_breakers if _is_circuit_open(m)]
     return {
         "requests_remaining": _rate_limit_state["requests_remaining"],
         "tokens_remaining": _rate_limit_state["tokens_remaining"],
-        "circuit_open": _is_circuit_open(),
-        "consecutive_failures": _circuit_breaker["failures"],
+        "circuit_open_models": open_models,
+        "model_failures": {m: cb["failures"] for m, cb in _model_circuit_breakers.items()},
     }
 
 
@@ -107,14 +124,11 @@ async def call_openrouter(
     tools: Optional[List[Dict]] = None,
 ) -> str:
     """
-    Try OpenRouter first, fall back to local vLLM on error.
+    Try OpenRouter with per-model circuit breaker + automatic fallback chain.
 
-    Args:
-        openrouter_config: {"api_key": ..., "base_url": ...}
-        vllm_url: Local vLLM server URL (fallback)
-        model: OpenRouter model ID (e.g. "nvidia/nemotron-3-super-120b-a12b:free")
-        fallback_model: Local vLLM model ID (e.g. "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ")
-        Other params: same as call_vllm
+    Fallback order: primary model → fallback_model → LAST_RESORT_MODEL.
+    Each model has an independent circuit breaker so one flaky model
+    doesn't poison the rest of the pipeline.
     """
     from src.pipeline_schemas import ROLE_TOKEN_BUDGET
 
@@ -123,21 +137,20 @@ async def call_openrouter(
 
     max_tokens = role_config.get("max_tokens", ROLE_TOKEN_BUDGET.get(role_name, 2048))
     temperature = role_config.get("temperature", 0.3)
+    timeout_sec = role_config.get("timeout_sec", config.get("system", {}).get("timeout_sec", 120))
+    max_retries = role_config.get("max_retries", 3)
+
+    # Build fallback chain (deduplicated, preserve order)
+    _LAST_RESORT = "google/gemma-3-12b-it:free"
+    models_to_try: List[str] = []
+    for m in [model, fallback_model, _LAST_RESORT]:
+        if m and m not in models_to_try:
+            models_to_try.append(m)
 
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
-
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "stream": False,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-    if tools:
-        payload["tools"] = tools
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -146,11 +159,27 @@ async def call_openrouter(
         "X-Title": "OpenClaw_Autonomous_Agent",
     }
 
-    timeout_sec = role_config.get("timeout_sec", config.get("system", {}).get("timeout_sec", 120))
-    max_retries = role_config.get("max_retries", 3)
+    last_error = ""
 
-    # --- Try OpenRouter (with retry + circuit breaker) ---
-    if api_key and not _is_circuit_open():
+    # --- Try each model in the fallback chain ---
+    for model_idx, current_model in enumerate(models_to_try):
+        if not api_key:
+            break
+
+        if _is_circuit_open(current_model):
+            logger.info(f"Circuit open for {current_model}, trying next fallback", role=role_name)
+            continue
+
+        payload: Dict[str, Any] = {
+            "model": current_model,
+            "messages": list(messages),  # fresh copy
+            "stream": False,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if tools:
+            payload["tools"] = tools
+
         timeout = aiohttp.ClientTimeout(total=timeout_sec)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             for attempt in range(max_retries):
@@ -160,11 +189,10 @@ async def call_openrouter(
                         json=payload,
                         headers=headers,
                     ) as resp:
-                        # Track rate limits from headers
                         _update_rate_limits(dict(resp.headers))
 
                         if resp.status == 200:
-                            _record_success()
+                            _record_success(current_model)
                             data = await resp.json()
                             choice = data.get("choices", [{}])[0]
                             msg = choice.get("message", {})
@@ -174,9 +202,10 @@ async def call_openrouter(
                                 tool_results = await _execute_tool_calls(
                                     msg["tool_calls"], mcp_client
                                 )
-                                messages.append(msg)
-                                messages.extend(tool_results)
-                                payload["messages"] = messages
+                                tc_messages = list(messages)
+                                tc_messages.append(msg)
+                                tc_messages.extend(tool_results)
+                                payload["messages"] = tc_messages
 
                                 async with session.post(
                                     f"{base_url}/chat/completions",
@@ -191,72 +220,86 @@ async def call_openrouter(
                                         if not preserve_think:
                                             text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
                                         if not text:
-                                            raise ValueError("OpenRouter returned empty content after tool call")
-                                        logger.info(f"OpenRouter OK for {role_name}", model=model)
+                                            raise ValueError("Empty content after tool call")
+                                        if model_idx > 0:
+                                            logger.info(f"OpenRouter OK for {role_name} (fallback #{model_idx})", model=current_model)
+                                        else:
+                                            logger.info(f"OpenRouter OK for {role_name}", model=current_model)
                                         return text
 
                             text = (msg.get("content") or "").strip()
                             if not preserve_think:
                                 text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
                             if not text:
-                                # Empty/null content — treat as retryable error
                                 raise ValueError("OpenRouter returned empty content")
-                            logger.info(f"OpenRouter OK for {role_name}", model=model)
+                            if model_idx > 0:
+                                logger.info(f"OpenRouter OK for {role_name} (fallback #{model_idx})", model=current_model)
+                            else:
+                                logger.info(f"OpenRouter OK for {role_name}", model=current_model)
                             return text
 
-                        # Rate limited: retry with backoff
+                        # Rate limited or upstream error: retry with backoff
                         if resp.status == 429:
-                            _record_failure()
-                            wait = min(2 ** attempt * 2, 30)
+                            _record_failure(current_model)
+                            wait = min(2 ** attempt * 2, 15)
                             logger.warning(
-                                f"OpenRouter rate-limited for {role_name}, retry {attempt + 1}/{max_retries} in {wait}s"
+                                f"Rate-limited ({current_model}) for {role_name}, "
+                                f"retry {attempt + 1}/{max_retries} in {wait}s"
                             )
                             await asyncio.sleep(wait)
                             continue
 
-                        # Non-200: capture full error for Telegram debug
+                        # Other HTTP errors
                         error_body = await resp.text()
-                        from src.llm_gateway import _last_api_error
-                        _last_api_error.update({
-                            "status": resp.status,
-                            "model": model,
-                            "endpoint": f"{base_url}/chat/completions",
-                            "body": error_body[:1000],
-                            "role": role_name,
-                            "attempt": attempt + 1,
-                        })
+                        last_error = f"HTTP {resp.status}: {error_body[:300]}"
+                        try:
+                            from src.llm_gateway import _last_api_error
+                            _last_api_error.update({
+                                "status": resp.status,
+                                "model": current_model,
+                                "endpoint": f"{base_url}/chat/completions",
+                                "body": error_body[:1000],
+                                "role": role_name,
+                                "attempt": attempt + 1,
+                            })
+                        except ImportError:
+                            pass
                         logger.warning(
-                            "OpenRouter HTTP error (pipeline)",
+                            "OpenRouter HTTP error",
                             status=resp.status,
                             role=role_name,
-                            model=model,
+                            model=current_model,
                             attempt=f"{attempt + 1}/{max_retries}",
-                            body=error_body[:300],
+                            body=error_body[:200],
                         )
+                        _record_failure(current_model)
                         if attempt < max_retries - 1:
-                            await asyncio.sleep(2 ** attempt)
+                            await asyncio.sleep(min(2 ** attempt, 8))
                             continue
-                        _record_failure()
+                        # All retries exhausted for this model — move to next in chain
+                        break
 
                 except asyncio.TimeoutError:
+                    _record_failure(current_model)
                     logger.warning(
-                        f"OpenRouter timeout for {role_name} ({timeout_sec}s), attempt {attempt + 1}/{max_retries}"
+                        f"Timeout ({current_model}) for {role_name} ({timeout_sec}s), "
+                        f"attempt {attempt + 1}/{max_retries}"
                     )
-                    _record_failure()
                     if attempt < max_retries - 1:
-                        await asyncio.sleep(2 ** attempt)
+                        await asyncio.sleep(min(2 ** attempt, 8))
                         continue
+                    break
 
                 except Exception as e:
-                    logger.warning(f"OpenRouter error for {role_name}: {e}, attempt {attempt + 1}/{max_retries}")
-                    _record_failure()
+                    _record_failure(current_model)
+                    last_error = str(e)
+                    logger.warning(f"Error ({current_model}) for {role_name}: {e}, attempt {attempt + 1}/{max_retries}")
                     if attempt < max_retries - 1:
-                        await asyncio.sleep(2 ** attempt)
+                        await asyncio.sleep(min(2 ** attempt, 8))
                         continue
-    elif _is_circuit_open():
-        logger.info(f"Circuit breaker open — skipping OpenRouter for {role_name}")
+                    break
 
-    # --- Fallback: local vLLM (only if explicitly allowed) ---
+    # --- All models in chain failed. Try local vLLM if allowed ---
     force_cloud = openrouter_config.get("force_cloud", False)
     use_local_models = openrouter_config.get("use_local_models", True)
     allow_fallback = (
@@ -266,16 +309,16 @@ async def call_openrouter(
     )
 
     if not allow_fallback:
+        tried = ", ".join(models_to_try)
         logger.error(
-            f"OpenRouter failed for {role_name} — local models DISABLED "
-            f"(force_cloud={force_cloud}, use_local_models={use_local_models}). "
-            "Returning error to user."
+            f"All OpenRouter models failed for {role_name} — local models DISABLED. "
+            f"Models tried: {tried}. Last error: {last_error[:200]}"
         )
         return (
             f"[ERROR] API недоступно для роли {role_name}. "
-            f"Все {_circuit_breaker['threshold']} попыток исчерпаны. "
+            f"Все модели ({tried}) недоступны. "
             "Локальные модели отключены (use_local_models=false). "
-            "Проверьте API-ключ OpenRouter или включите локальные модели в конфиге."
+            "Проверьте API-ключ OpenRouter или включите локальные модели."
         )
 
     logger.info(f"Using vLLM fallback for {role_name}", model=fallback_model)
