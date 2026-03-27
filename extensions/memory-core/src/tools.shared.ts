@@ -172,7 +172,7 @@ export function buildMemorySearchUnavailableResult(error: string | undefined) {
     : "Memory search is unavailable due to an embedding/provider error.";
   const hint = resolveEmbeddingErrorHint(reason);
   const action =
-    hint ??
+    hint ||
     (isQuotaError
       ? "Top up or switch embedding provider, then retry memory_search."
       : "Check embedding provider configuration and retry memory_search.");
