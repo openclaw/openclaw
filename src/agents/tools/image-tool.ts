@@ -117,14 +117,14 @@ export function resolveImageModelConfigForTool(params: {
   } else if (primary.provider === "zai" && providerOk) {
     preferred = "zai/glm-4.6v";
   } else if (primary.provider === "openai" && openaiOk) {
-    preferred = "openai/gpt-5-mini";
+    preferred = "openai/gpt-4.1";
   } else if (primary.provider === "anthropic" && anthropicOk) {
     preferred = ANTHROPIC_IMAGE_PRIMARY;
   }
 
   if (preferred?.trim()) {
     if (openaiOk) {
-      addFallback("openai/gpt-5-mini");
+      addFallback("openai/gpt-4.1");
     }
     if (anthropicOk) {
       addFallback(ANTHROPIC_IMAGE_FALLBACK);
@@ -143,7 +143,7 @@ export function resolveImageModelConfigForTool(params: {
       addFallback(ANTHROPIC_IMAGE_FALLBACK);
     }
     return {
-      primary: "openai/gpt-5-mini",
+      primary: "openai/gpt-4.1",
       ...(fallbacks.length ? { fallbacks } : {}),
     };
   }

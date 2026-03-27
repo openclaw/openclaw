@@ -90,7 +90,7 @@ Fallback details:
     defaults: {
       pdfModel: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["openai/gpt-5-mini"],
+        fallbacks: ["openai/gpt-4.1"],
       },
       pdfMaxBytesMb: 10,
       pdfMaxPages: 20,
@@ -150,7 +150,7 @@ Page-filtered fallback model:
 {
   "pdf": "https://example.com/report.pdf",
   "pages": "1-3,7",
-  "model": "openai/gpt-5-mini",
+  "model": "openai/gpt-4.1",
   "prompt": "Extract only customer-impacting incidents"
 }
 ```

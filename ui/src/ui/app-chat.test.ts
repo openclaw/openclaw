@@ -99,7 +99,7 @@ describe("handleSendChat", () => {
       }
       if (method === "models.list") {
         return {
-          models: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
+          models: [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }],
         };
       }
       throw new Error(`Unexpected request: ${method}`);
@@ -107,15 +107,15 @@ describe("handleSendChat", () => {
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       sessionKey: "main",
-      chatMessage: "/model gpt-5-mini",
+      chatMessage: "/model gpt-4.1",
     });
 
     await handleSendChat(host);
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
-      model: "gpt-5-mini",
+      model: "gpt-4.1",
     });
-    expect(host.chatModelOverrides.main).toBe("gpt-5-mini");
+    expect(host.chatModelOverrides.main).toBe("gpt-4.1");
   });
 });

@@ -1561,11 +1561,11 @@ describe("applyExtraParamsToAgent", () => {
   it("forces store=true for azure-openai provider with openai-responses API (#42800)", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "azure-openai",
-      applyModelId: "gpt-5-mini",
+      applyModelId: "gpt-4.1",
       model: {
         api: "openai-responses",
         provider: "azure-openai",
-        id: "gpt-5-mini",
+        id: "gpt-4.1",
         baseUrl: "https://myresource.openai.azure.com/openai/v1",
       } as unknown as Model<"openai-responses">,
     });

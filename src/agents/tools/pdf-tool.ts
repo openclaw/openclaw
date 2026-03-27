@@ -107,7 +107,7 @@ export function resolvePdfModelConfigForTool(params: {
   } else if (googleOk) {
     preferred = "google/gemini-2.5-pro";
   } else if (openaiOk) {
-    preferred = "openai/gpt-5-mini";
+    preferred = "openai/gpt-4.1";
   }
 
   if (preferred?.trim()) {
@@ -118,7 +118,7 @@ export function resolvePdfModelConfigForTool(params: {
       addFallback(ANTHROPIC_PDF_FALLBACK);
     }
     if (openaiOk) {
-      addFallback("openai/gpt-5-mini");
+      addFallback("openai/gpt-4.1");
     }
     const pruned = fallbacks.filter((ref) => ref !== preferred);
     return { primary: preferred, ...(pruned.length > 0 ? { fallbacks: pruned } : {}) };

@@ -25,6 +25,7 @@ export type NormalizedPluginsConfig = {
 
 export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "device-pair",
+  "jarvis",
   "ollama",
   "phone-control",
   "sglang",

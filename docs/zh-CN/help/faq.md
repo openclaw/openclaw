@@ -1947,7 +1947,7 @@ Model "provider/model" is not allowed. Use /model to list available models.
 - `opus` → `anthropic/claude-opus-4-5`
 - `sonnet` → `anthropic/claude-sonnet-4-5`
 - `gpt` → `openai/gpt-5.2`
-- `gpt-mini` → `openai/gpt-5-mini`
+- `gpt-mini` → `openai/gpt-4.1`
 - `gemini` → `google/gemini-3-pro-preview`
 - `gemini-flash` → `google/gemini-3-flash-preview`
 

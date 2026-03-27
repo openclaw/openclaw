@@ -94,7 +94,7 @@ describe("createOpenClawCodingTools", () => {
     const denied = createOpenClawCodingTools({
       config: allowModelsConfig,
       modelProvider: "openai",
-      modelId: "gpt-5-mini",
+      modelId: "gpt-4.1",
     });
     expect(denied.some((tool) => tool.name === "apply_patch")).toBe(false);
 

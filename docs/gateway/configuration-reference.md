@@ -877,7 +877,7 @@ Time format in system prompt. Default: `auto` (OS preference).
       },
       pdfModel: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["openai/gpt-5-mini"],
+        fallbacks: ["openai/gpt-4.1"],
       },
       pdfMaxBytesMb: 10,
       pdfMaxPages: 20,
@@ -917,7 +917,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 | `opus`              | `anthropic/claude-opus-4-6`            |
 | `sonnet`            | `anthropic/claude-sonnet-4-6`          |
 | `gpt`               | `openai/gpt-5.4`                       |
-| `gpt-mini`          | `openai/gpt-5-mini`                    |
+| `gpt-mini`          | `openai/gpt-4.1`                       |
 | `gemini`            | `google/gemini-3.1-pro-preview`        |
 | `gemini-flash`      | `google/gemini-3-flash-preview`        |
 | `gemini-flash-lite` | `google/gemini-3.1-flash-lite-preview` |

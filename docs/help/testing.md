@@ -289,7 +289,7 @@ Run gateway smoke with tools + image:
 
 Pick at least one per provider family:
 
-- OpenAI: `openai/gpt-5.2` (or `openai/gpt-5-mini`)
+- OpenAI: `openai/gpt-5.2` (or `openai/gpt-4.1`)
 - Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-5`)
 - Google: `google/gemini-3-flash-preview` (or `google/gemini-3.1-pro-preview`)
 - Z.AI (GLM): `zai/glm-4.7`

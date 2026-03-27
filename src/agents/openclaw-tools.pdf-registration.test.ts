@@ -21,7 +21,7 @@ describe("createOpenClawTools PDF registration", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            pdfModel: { primary: "openai/gpt-5-mini" },
+            pdfModel: { primary: "openai/gpt-4.1" },
           },
         },
       };

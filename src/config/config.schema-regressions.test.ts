@@ -122,7 +122,7 @@ describe("config schema regressions", () => {
         defaults: {
           pdfModel: {
             primary: "anthropic/claude-opus-4-6",
-            fallbacks: ["openai/gpt-5-mini"],
+            fallbacks: ["openai/gpt-4.1"],
           },
           pdfMaxBytesMb: 12,
           pdfMaxPages: 25,
@@ -137,7 +137,7 @@ describe("config schema regressions", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
-          pdfModel: { primary: "openai/gpt-5-mini" },
+          pdfModel: { primary: "openai/gpt-4.1" },
           pdfMaxBytesMb: 0,
           pdfMaxPages: 0,
         },

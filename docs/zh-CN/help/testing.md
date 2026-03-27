@@ -268,7 +268,7 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 
 每个提供商系列至少选择一个：
 
-- OpenAI：`openai/gpt-5.2`（或 `openai/gpt-5-mini`）
+- OpenAI：`openai/gpt-5.2`（或 `openai/gpt-4.1`）
 - Anthropic：`anthropic/claude-opus-4-5`（或 `anthropic/claude-sonnet-4-5`）
 - Google：`google/gemini-3-flash-preview`（或 `google/gemini-3-pro-preview`）
 - Z.AI（GLM）：`zai/glm-4.7`

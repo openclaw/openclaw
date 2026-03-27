@@ -22,7 +22,7 @@ describe("resolveEffectiveModelFallbacks", () => {
 
   it("prefers entry fallbacks over defaults", () => {
     const entryModel = {
-      primary: "openai/gpt-5-mini",
+      primary: "openai/gpt-4.1",
       fallbacks: ["openai/gpt-5-nano"],
     };
     const defaultModel = {
@@ -35,7 +35,7 @@ describe("resolveEffectiveModelFallbacks", () => {
 
   it("keeps explicit empty entry fallback lists", () => {
     const entryModel = {
-      primary: "openai/gpt-5-mini",
+      primary: "openai/gpt-4.1",
       fallbacks: [],
     };
     const defaultModel = {

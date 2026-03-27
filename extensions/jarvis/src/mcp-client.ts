@@ -204,34 +204,24 @@ export class JarvisMcpClient extends EventEmitter {
 
   private writeMessage(msg: unknown): void {
     const body = JSON.stringify(msg);
-    const header = `Content-Length: ${Buffer.byteLength(body, "utf-8")}\r\n\r\n`;
-    this.child?.stdin?.write(header + body);
+    // FastMCP 3.x stdio transport uses newline-delimited JSON (no Content-Length framing).
+    this.child?.stdin?.write(body + "\n");
   }
 
   private onData(chunk: string): void {
     this.buffer += chunk;
-    // Parse MCP stdio protocol: Content-Length header followed by JSON body.
+    // FastMCP 3.x uses newline-delimited JSON on stdout.
     while (true) {
-      const headerEnd = this.buffer.indexOf("\r\n\r\n");
-      if (headerEnd === -1) break;
+      const newlineIdx = this.buffer.indexOf("\n");
+      if (newlineIdx === -1) break;
 
-      const headerBlock = this.buffer.slice(0, headerEnd);
-      const clMatch = headerBlock.match(/Content-Length:\s*(\d+)/i);
-      if (!clMatch) {
-        // Skip malformed header
-        this.buffer = this.buffer.slice(headerEnd + 4);
-        continue;
-      }
+      const line = this.buffer.slice(0, newlineIdx).trim();
+      this.buffer = this.buffer.slice(newlineIdx + 1);
 
-      const contentLength = Number(clMatch[1]);
-      const bodyStart = headerEnd + 4;
-      if (this.buffer.length < bodyStart + contentLength) break;
-
-      const bodyStr = this.buffer.slice(bodyStart, bodyStart + contentLength);
-      this.buffer = this.buffer.slice(bodyStart + contentLength);
+      if (!line) continue;
 
       try {
-        const msg = JSON.parse(bodyStr) as {
+        const msg = JSON.parse(line) as {
           jsonrpc: string;
           id?: number;
           method?: string;
@@ -246,7 +236,7 @@ export class JarvisMcpClient extends EventEmitter {
         }
         // Notifications from server (no id) are ignored for now.
       } catch {
-        this.opts.logger?.warn(`[jarvis-mcp] Failed to parse message: ${bodyStr.slice(0, 200)}`);
+        // Skip non-JSON lines (e.g., FastMCP banner or log output on stdout).
       }
     }
   }
