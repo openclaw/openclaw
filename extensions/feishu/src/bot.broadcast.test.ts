@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
@@ -73,7 +74,7 @@ describe("broadcast dispatch", () => {
           },
         },
       },
-    } as unknown as ClawdbotConfig;
+    };
   }
 
   function createBroadcastEvent(options: {
@@ -122,38 +123,40 @@ describe("broadcast dispatch", () => {
         },
       },
     });
-    setFeishuRuntime({
-      system: {
-        enqueueSystemEvent: vi.fn(),
-      },
-      channel: {
-        routing: {
-          resolveAgentRoute: mockResolveAgentRoute,
+    setFeishuRuntime(
+      createPluginRuntimeMock({
+        system: {
+          enqueueSystemEvent: vi.fn(),
         },
-        reply: {
-          resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
-          formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-          finalizeInboundContext: mockFinalizeInboundContext,
-          dispatchReplyFromConfig: mockDispatchReplyFromConfig,
-          withReplyDispatcher: mockWithReplyDispatcher,
-        },
-        commands: {
-          shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
-          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+        channel: {
+          routing: {
+            resolveAgentRoute: (params) => mockResolveAgentRoute(params),
+          },
+          reply: {
+            resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
+            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+            finalizeInboundContext: mockFinalizeInboundContext,
+            dispatchReplyFromConfig: mockDispatchReplyFromConfig,
+            withReplyDispatcher: mockWithReplyDispatcher,
+          },
+          commands: {
+            shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
+            resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+          },
+          media: {
+            saveMediaBuffer: mockSaveMediaBuffer,
+          },
+          pairing: {
+            readAllowFromStore: vi.fn().mockResolvedValue([]),
+            upsertPairingRequest: vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false }),
+            buildPairingReply: vi.fn(() => "Pairing response"),
+          },
         },
         media: {
-          saveMediaBuffer: mockSaveMediaBuffer,
+          detectMime: vi.fn(async () => "application/octet-stream"),
         },
-        pairing: {
-          readAllowFromStore: vi.fn().mockResolvedValue([]),
-          upsertPairingRequest: vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false }),
-          buildPairingReply: vi.fn(() => "Pairing response"),
-        },
-      },
-      media: {
-        detectMime: vi.fn(async () => "application/octet-stream"),
-      },
-    } as unknown as PluginRuntime);
+      }),
+    );
   });
 
   it("dispatches to all broadcast agents when bot is mentioned", async () => {
@@ -229,7 +232,7 @@ describe("broadcast dispatch", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    };
 
     const event: FeishuMessageEvent = {
       sender: { sender_id: { open_id: "ou-sender" } },
@@ -270,7 +273,7 @@ describe("broadcast dispatch", () => {
           },
         },
       },
-    } as unknown as ClawdbotConfig;
+    };
 
     const event: FeishuMessageEvent = {
       sender: { sender_id: { open_id: "ou-sender" } },
@@ -316,7 +319,7 @@ describe("broadcast dispatch", () => {
           },
         },
       },
-    } as unknown as ClawdbotConfig;
+    };
 
     const event: FeishuMessageEvent = {
       sender: { sender_id: { open_id: "ou-sender" } },

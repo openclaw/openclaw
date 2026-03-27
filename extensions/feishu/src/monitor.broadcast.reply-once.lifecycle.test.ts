@@ -13,7 +13,7 @@ import {
 import { createNonExitingRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
-import type { ResolvedFeishuAccount } from "./types.js";
+import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
 
 const {
   createEventDispatcherMock,
@@ -88,6 +88,18 @@ function createLifecycleConfig(): ClawdbotConfig {
 }
 
 function createLifecycleAccount(accountId: "account-A" | "account-B"): ResolvedFeishuAccount {
+  const config: FeishuConfig = {
+    enabled: true,
+    connectionMode: "websocket",
+    groupPolicy: "open",
+    requireMention: false,
+    resolveSenderNames: false,
+    groups: {
+      oc_broadcast_group: {
+        requireMention: false,
+      },
+    },
+  };
   return {
     accountId,
     selectionSource: "explicit",
@@ -96,19 +108,8 @@ function createLifecycleAccount(accountId: "account-A" | "account-B"): ResolvedF
     appId: accountId === "account-A" ? "cli_a" : "cli_b",
     appSecret: accountId === "account-A" ? "secret_a" : "secret_b", // pragma: allowlist secret
     domain: "feishu",
-    config: {
-      enabled: true,
-      connectionMode: "websocket",
-      groupPolicy: "open",
-      requireMention: false,
-      resolveSenderNames: false,
-      groups: {
-        oc_broadcast_group: {
-          requireMention: false,
-        },
-      },
-    },
-  } as unknown as ResolvedFeishuAccount;
+    config,
+  };
 }
 
 async function setupLifecycleMonitor(accountId: "account-A" | "account-B") {
