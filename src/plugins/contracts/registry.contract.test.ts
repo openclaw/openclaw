@@ -166,20 +166,6 @@ describe("plugin contract registry", () => {
     ).toEqual(bundledImagePluginIds);
   });
 
-  it("keeps bundled legacy capability fields aligned with manifest contracts", () => {
-    for (const plugin of loadPluginManifestRegistry({}).plugins.filter(
-      (candidate) => candidate.origin === "bundled",
-    )) {
-      expect(plugin.speechProviders).toEqual(plugin.contracts?.speechProviders ?? []);
-      expect(plugin.mediaUnderstandingProviders).toEqual(
-        plugin.contracts?.mediaUnderstandingProviders ?? [],
-      );
-      expect(plugin.imageGenerationProviders).toEqual(
-        plugin.contracts?.imageGenerationProviders ?? [],
-      );
-    }
-  });
-
   it("covers every bundled web search plugin from the shared resolver", () => {
     const bundledWebSearchPluginIds = resolveBundledWebSearchPluginIds({});
 

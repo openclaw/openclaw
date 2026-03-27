@@ -1,6 +1,5 @@
 {
   "id": "deepgram",
-  "mediaUnderstandingProviders": ["deepgram"],
   "contracts": {
     "mediaUnderstandingProviders": ["deepgram"]
   },

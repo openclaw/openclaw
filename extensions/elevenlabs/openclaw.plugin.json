@@ -1,6 +1,5 @@
 {
   "id": "elevenlabs",
-  "speechProviders": ["elevenlabs"],
   "contracts": {
     "speechProviders": ["elevenlabs"]
   },

@@ -1,6 +1,5 @@
 {
   "id": "groq",
-  "mediaUnderstandingProviders": ["groq"],
   "contracts": {
     "mediaUnderstandingProviders": ["groq"]
   },
