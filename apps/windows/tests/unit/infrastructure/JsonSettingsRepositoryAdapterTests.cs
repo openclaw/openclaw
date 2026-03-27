@@ -16,8 +16,15 @@ public sealed class JsonSettingsRepositoryAdapterTests : IDisposable
         _tempDir = Path.Combine(Path.GetTempPath(), "ocw-tests-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
 
-        // Connection is Disconnected by default → adapter falls back to local JSON (no gateway call)
+        // Connection is Disconnected by default → adapter falls back to local JSON (no gateway call).
+        // ConfigGetAsync is stubbed so that tests which incidentally hit the Remote path
+        // (e.g. when the real settings.json has ConnectionMode=Remote) do not throw.
         var rpc = Substitute.For<IGatewayRpcChannel>();
+        var emptyConfig = """{"hash":"","config":{}}"""u8.ToArray();
+        rpc.ConfigGetAsync(Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(emptyConfig);
+        rpc.RequestRawAsync(Arg.Any<string>(), Arg.Any<Dictionary<string, object?>>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+           .Returns(Array.Empty<byte>());
+
         var connection = GatewayConnection.Create("openclaw-control-ui");
         _adapter = new JsonSettingsRepositoryAdapter(rpc, connection, NullLogger<JsonSettingsRepositoryAdapter>.Instance);
     }

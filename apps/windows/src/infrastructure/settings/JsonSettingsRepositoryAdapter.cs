@@ -152,31 +152,24 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
         // would overwrite openclaw.json with mostly-default gateway config, corrupting live
         // settings. Instead, round-trip the current gateway config document unchanged so
         // the baseHash stays fresh. Windows-only fields are already saved locally by SaveLocalAsync.
-        try
-        {
-            var rawBytes = await _gateway.ConfigGetAsync(ConfigGetTimeoutMs, ct);
-            using var doc = JsonDocument.Parse(rawBytes);
+        var rawBytes = await _gateway.ConfigGetAsync(ConfigGetTimeoutMs, ct);
+        using var doc = JsonDocument.Parse(rawBytes);
 
-            if (doc.RootElement.TryGetProperty("hash", out var hashEl))
-                _lastHash = hashEl.GetString();
+        if (doc.RootElement.TryGetProperty("hash", out var hashEl))
+            _lastHash = hashEl.GetString();
 
-            if (!doc.RootElement.TryGetProperty("config", out var configEl))
-                return;
+        if (!doc.RootElement.TryGetProperty("config", out var configEl))
+            return;
 
-            var rawConfig = configEl.GetRawText();
-            var parameters = new Dictionary<string, object?> { ["raw"] = rawConfig };
-            if (_lastHash is not null)
-                parameters["baseHash"] = _lastHash;
+        var rawConfig = configEl.GetRawText();
+        var parameters = new Dictionary<string, object?> { ["raw"] = rawConfig };
+        if (_lastHash is not null)
+            parameters["baseHash"] = _lastHash;
 
-            await _gateway.RequestRawAsync("config.set", parameters, ConfigSetTimeoutMs, ct);
+        await _gateway.RequestRawAsync("config.set", parameters, ConfigSetTimeoutMs, ct);
 
-            // Reload to refresh the cached hash
-            _ = await TryLoadFromGatewayAsync(ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Gateway config round-trip failed during settings save");
-        }
+        // Reload to refresh the cached hash — failure here is non-critical
+        _ = await TryLoadFromGatewayAsync(ct);
     }
 
     private async Task<AppSettings> LoadLocalAsync(CancellationToken ct)

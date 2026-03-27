@@ -201,7 +201,8 @@ internal sealed class GatewayReconnectCoordinatorHostedService : IHostedService
     private static int ComputeBackoffMs(int attempt)
     {
         // Exponential: 2s → 4s → 8s → 16s → 32s → 60s (capped)
-        var expo   = Math.Min(BaseDelayMs * (1 << attempt), MaxDelayMs);
+        // Use long to avoid int overflow when attempt is large (unbounded counter).
+        var expo   = (int)Math.Min((long)BaseDelayMs * (1L << Math.Min(attempt, 30)), (long)MaxDelayMs);
         var jitter = (Random.Shared.NextDouble() * 2.0 - 1.0) * JitterRatio * expo;
         // Floor at 500ms so a large negative jitter never produces an instant retry
         return Math.Max(500, (int)(expo + jitter));
