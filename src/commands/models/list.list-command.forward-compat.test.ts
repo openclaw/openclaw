@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const OPENAI_CODEX_MODEL = {
   provider: "openai-codex",
@@ -113,54 +113,74 @@ async function runAllOpenAiCodexCommand() {
   expect(mocks.printModelTable).toHaveBeenCalled();
 }
 
-vi.mock("../../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
-  getRuntimeConfigSnapshot: vi.fn().mockReturnValue(null),
-  getRuntimeConfigSourceSnapshot: vi.fn().mockReturnValue(null),
-}));
+let modelsListCommand: typeof import("./list.list-command.js").modelsListCommand;
 
-vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/auth-profiles.js")>();
-  return {
-    ...actual,
+function installModelsListCommandForwardCompatMocks() {
+  vi.doMock("../../config/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../config/config.js")>();
+    return {
+      ...actual,
+      loadConfig: mocks.loadConfig,
+      getRuntimeConfigSnapshot: vi.fn().mockReturnValue(null),
+      getRuntimeConfigSourceSnapshot: vi.fn().mockReturnValue(null),
+    };
+  });
+
+  vi.doMock("../../agents/auth-profiles.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../agents/auth-profiles.js")>();
+    return {
+      ...actual,
+      ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+      listProfilesForProvider: mocks.listProfilesForProvider,
+    };
+  });
+  vi.doMock("../../agents/auth-profiles.runtime.js", () => ({
     ensureAuthProfileStore: mocks.ensureAuthProfileStore,
-    listProfilesForProvider: mocks.listProfilesForProvider,
-  };
+  }));
+
+  vi.doMock("../../agents/models-config.js", () => ({
+    ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
+  }));
+
+  vi.doMock("../../agents/model-catalog.js", () => ({
+    loadModelCatalog: mocks.loadModelCatalog,
+  }));
+
+  vi.doMock("./list.registry.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./list.registry.js")>();
+    return {
+      ...actual,
+      loadModelRegistry: mocks.loadModelRegistry,
+    };
+  });
+
+  vi.doMock("./load-config.js", () => ({
+    loadModelsConfigWithSource: mocks.loadModelsConfigWithSource,
+  }));
+
+  vi.doMock("./list.configured.js", () => ({
+    resolveConfiguredEntries: mocks.resolveConfiguredEntries,
+  }));
+
+  vi.doMock("./list.table.js", () => ({
+    printModelTable: mocks.printModelTable,
+  }));
+
+  vi.doMock("../../agents/pi-embedded-runner/model.js", async (importOriginal) => {
+    const actual =
+      await importOriginal<typeof import("../../agents/pi-embedded-runner/model.js")>();
+    return {
+      ...actual,
+      resolveModelWithRegistry: mocks.resolveModelWithRegistry,
+    };
+  });
+}
+
+beforeAll(async () => {
+  vi.resetModules();
+  installModelsListCommandForwardCompatMocks();
+  ({ modelsListCommand } = await import("./list.list-command.js"));
 });
-
-vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: mocks.loadModelCatalog,
-}));
-
-vi.mock("./list.registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./list.registry.js")>();
-  return {
-    ...actual,
-    loadModelRegistry: mocks.loadModelRegistry,
-  };
-});
-
-vi.mock("./load-config.js", () => ({
-  loadModelsConfigWithSource: mocks.loadModelsConfigWithSource,
-}));
-
-vi.mock("./list.configured.js", () => ({
-  resolveConfiguredEntries: mocks.resolveConfiguredEntries,
-}));
-
-vi.mock("./list.table.js", () => ({
-  printModelTable: mocks.printModelTable,
-}));
-
-vi.mock("../../agents/pi-embedded-runner/model.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/pi-embedded-runner/model.js")>();
-  return {
-    ...actual,
-    resolveModelWithRegistry: mocks.resolveModelWithRegistry,
-  };
-});
-
-import { modelsListCommand } from "./list.list-command.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -287,13 +307,6 @@ describe("modelsListCommand forward-compat", () => {
           input: ["text"],
           contextWindow: 272000,
         },
-        {
-          provider: "openai-codex",
-          id: "gpt-5.4",
-          name: "GPT-5.4",
-          input: ["text"],
-          contextWindow: 272000,
-        },
       ]);
       mocks.listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
         provider === "openai-codex"
@@ -308,17 +321,11 @@ describe("modelsListCommand forward-compat", () => {
           if (modelId === "gpt-5.4") {
             return { ...OPENAI_CODEX_53_MODEL };
           }
-          if (modelId === "gpt-5.4") {
-            return { ...OPENAI_CODEX_MODEL };
-          }
           return undefined;
         },
       );
       await runAllOpenAiCodexCommand();
       expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
-        expect.objectContaining({
-          key: "openai-codex/gpt-5.4",
-        }),
         expect.objectContaining({
           key: "openai-codex/gpt-5.4",
           available: true,

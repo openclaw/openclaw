@@ -5,28 +5,30 @@ import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vites
 import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
-} from "../../../extensions/discord/src/directory-config.js";
-import type { DiscordProbe } from "../../../extensions/discord/src/probe.js";
-import type { DiscordTokenResolution } from "../../../extensions/discord/src/token.js";
-import type { IMessageProbe } from "../../../extensions/imessage/src/probe.js";
-import type { SignalProbe } from "../../../extensions/signal/src/probe.js";
+  type DiscordProbe,
+  type DiscordTokenResolution,
+} from "../../../extensions/discord/api.js";
+import type { IMessageProbe } from "../../../extensions/imessage/api.js";
+import type { SignalProbe } from "../../../extensions/signal/api.js";
 import {
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,
-} from "../../../extensions/slack/src/directory-config.js";
-import type { SlackProbe } from "../../../extensions/slack/src/probe.js";
+  type SlackProbe,
+} from "../../../extensions/slack/api.js";
 import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
-} from "../../../extensions/telegram/src/directory-config.js";
-import type { TelegramProbe } from "../../../extensions/telegram/src/probe.js";
-import type { TelegramTokenResolution } from "../../../extensions/telegram/src/token.js";
+  type TelegramProbe,
+  type TelegramTokenResolution,
+} from "../../../extensions/telegram/api.js";
 import {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
-} from "../../../extensions/whatsapp/src/directory-config.js";
+} from "../../../extensions/whatsapp/api.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { LineProbeResult } from "../../plugin-sdk/line.js";
+import { clearPluginDiscoveryCache } from "../../plugins/discovery.js";
+import { clearPluginManifestRegistryCache } from "../../plugins/manifest-registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -76,6 +78,8 @@ describe("channel plugin registry", () => {
 
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
+    clearPluginDiscoveryCache();
+    clearPluginManifestRegistryCache();
   });
 
   it("sorts channel plugins by configured order", () => {
@@ -616,6 +620,8 @@ describe("channel plugin loader", () => {
 
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
+    clearPluginDiscoveryCache();
+    clearPluginManifestRegistryCache();
   });
 
   it("loads channel plugins from the active registry", async () => {

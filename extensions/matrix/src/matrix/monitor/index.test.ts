@@ -1,4 +1,6 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadRuntimeApiExportTypesViaJiti } from "../../../../../test/helpers/extensions/jiti-runtime-api.ts";
 
 const hoisted = vi.hoisted(() => {
   const callOrder: string[] = [];
@@ -31,6 +33,7 @@ const hoisted = vi.hoisted(() => {
   const stopThreadBindingManager = vi.fn();
   const releaseSharedClientInstance = vi.fn(async () => true);
   const setActiveMatrixClient = vi.fn();
+  const setMatrixRuntime = vi.fn();
   return {
     callOrder,
     client,
@@ -41,29 +44,34 @@ const hoisted = vi.hoisted(() => {
     releaseSharedClientInstance,
     resolveTextChunkLimit,
     setActiveMatrixClient,
+    setMatrixRuntime,
     state,
     stopThreadBindingManager,
   };
 });
 
-vi.mock("../../runtime-api.js", () => ({
-  GROUP_POLICY_BLOCKED_LABEL: {
-    room: "room",
-  },
-  mergeAllowlist: ({ existing, additions }: { existing: string[]; additions: string[] }) => [
-    ...existing,
-    ...additions,
-  ],
-  resolveThreadBindingIdleTimeoutMsForChannel: () => 24 * 60 * 60 * 1000,
-  resolveThreadBindingMaxAgeMsForChannel: () => 0,
-  resolveAllowlistProviderRuntimeGroupPolicy: () => ({
-    groupPolicy: "allowlist",
-    providerMissingFallbackApplied: false,
-  }),
-  resolveDefaultGroupPolicy: () => "allowlist",
-  summarizeMapping: vi.fn(),
-  warnMissingProviderGroupPolicyFallbackOnce: vi.fn(),
-}));
+vi.mock("../../runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../runtime-api.js")>();
+  return {
+    ...actual,
+    GROUP_POLICY_BLOCKED_LABEL: {
+      room: "room",
+    },
+    mergeAllowlist: ({ existing, additions }: { existing: string[]; additions: string[] }) => [
+      ...existing,
+      ...additions,
+    ],
+    resolveThreadBindingIdleTimeoutMsForChannel: () => 24 * 60 * 60 * 1000,
+    resolveThreadBindingMaxAgeMsForChannel: () => 0,
+    resolveAllowlistProviderRuntimeGroupPolicy: () => ({
+      groupPolicy: "allowlist",
+      providerMissingFallbackApplied: false,
+    }),
+    resolveDefaultGroupPolicy: () => "allowlist",
+    summarizeMapping: vi.fn(),
+    warnMissingProviderGroupPolicyFallbackOnce: vi.fn(),
+  };
+});
 
 vi.mock("../../resolve-targets.js", () => ({
   resolveMatrixTargets: vi.fn(async () => []),
@@ -99,17 +107,22 @@ vi.mock("../../runtime.js", () => ({
       loadWebMedia: vi.fn(),
     },
   }),
+  setMatrixRuntime: hoisted.setMatrixRuntime,
 }));
 
-vi.mock("../accounts.js", () => ({
-  resolveConfiguredMatrixBotUserIds: vi.fn(() => new Set<string>()),
-  resolveMatrixAccount: () => ({
-    accountId: "default",
-    config: {
-      dm: {},
-    },
-  }),
-}));
+vi.mock("../accounts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../accounts.js")>();
+  return {
+    ...actual,
+    resolveConfiguredMatrixBotUserIds: vi.fn(() => new Set<string>()),
+    resolveMatrixAccount: () => ({
+      accountId: "default",
+      config: {
+        dm: {},
+      },
+    }),
+  };
+});
 
 vi.mock("../active-client.js", () => ({
   setActiveMatrixClient: hoisted.setActiveMatrixClient,
@@ -376,5 +389,66 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.callOrder.indexOf("stop-deduper")).toBeLessThan(
       hoisted.callOrder.indexOf("release-client"),
     );
+  });
+});
+
+describe("matrix plugin registration", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("loads the matrix runtime api through Jiti", () => {
+    const runtimeApiPath = path.join(process.cwd(), "extensions", "matrix", "runtime-api.ts");
+    expect(
+      loadRuntimeApiExportTypesViaJiti({
+        modulePath: runtimeApiPath,
+        exportNames: [
+          "requiresExplicitMatrixDefaultAccount",
+          "resolveMatrixDefaultOrOnlyAccountId",
+        ],
+        realPluginSdkSpecifiers: [],
+      }),
+    ).toEqual({
+      requiresExplicitMatrixDefaultAccount: "function",
+      resolveMatrixDefaultOrOnlyAccountId: "function",
+    });
+  }, 240_000);
+
+  it("loads the matrix src runtime api through Jiti without duplicate export errors", () => {
+    const runtimeApiPath = path.join(
+      process.cwd(),
+      "extensions",
+      "matrix",
+      "src",
+      "runtime-api.ts",
+    );
+    expect(
+      loadRuntimeApiExportTypesViaJiti({
+        modulePath: runtimeApiPath,
+        exportNames: ["resolveMatrixAccountStringValues"],
+        realPluginSdkSpecifiers: ["openclaw/plugin-sdk/matrix"],
+      }),
+    ).toEqual({
+      resolveMatrixAccountStringValues: "function",
+    });
+  }, 240_000);
+
+  it("registers the channel without bootstrapping crypto runtime", async () => {
+    const { default: matrixPlugin } = await import("../../../index.js");
+    const runtime = {} as never;
+    const registerChannel = vi.fn();
+    matrixPlugin.register({
+      runtime,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+      registerChannel,
+    } as never);
+
+    expect(hoisted.setMatrixRuntime).toHaveBeenCalledWith(runtime);
+    expect(registerChannel).toHaveBeenCalledWith({ plugin: expect.any(Object) });
   });
 });

@@ -118,6 +118,16 @@ name: test
 Hello from user`;
     expect(stripInboundMetadata(input)).toBe(input);
   });
+
+  it("ignores metadata blocks whose json decodes to a non-object", () => {
+    const input = `Sender (untrusted metadata):
+\`\`\`json
+["not","an","object"]
+\`\`\`
+Hello from user`;
+    expect(stripInboundMetadata(input)).toBe("Hello from user");
+    expect(extractInboundSenderLabel(input)).toBeNull();
+  });
 });
 
 describe("timestamp prefix stripping", () => {
@@ -143,6 +153,16 @@ describe("timestamp prefix stripping", () => {
 
 Hello`;
     expect(stripInboundMetadata(input)).toBe("Hello");
+  });
+
+  it("strips a timestamp prefix that remains after removing metadata blocks", () => {
+    const input = `Sender (untrusted metadata):
+\`\`\`json
+{"label":"OpenClaw UI"}
+\`\`\`
+
+[Thu 2026-03-12 07:00 UTC] what time is it?`;
+    expect(stripInboundMetadata(input)).toBe("what time is it?");
   });
 });
 

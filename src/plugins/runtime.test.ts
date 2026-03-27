@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
+  getActivePluginHttpRouteRegistryVersion,
+  getActivePluginRegistryVersion,
+  getActivePluginRegistry,
   pinActivePluginHttpRouteRegistry,
   releasePinnedPluginHttpRouteRegistry,
   resetPluginRuntimeStateForTest,
@@ -14,6 +17,12 @@ describe("plugin runtime route registry", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  it("stays empty until a caller explicitly installs or requires a registry", () => {
+    resetPluginRuntimeStateForTest();
+
+    expect(getActivePluginRegistry()).toBeNull();
+  });
+
   it("keeps the pinned route registry when the active plugin registry changes", () => {
     const startupRegistry = createEmptyPluginRegistry();
     const laterRegistry = createEmptyPluginRegistry();
@@ -23,6 +32,23 @@ describe("plugin runtime route registry", () => {
     setActivePluginRegistry(laterRegistry);
 
     expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(startupRegistry);
+  });
+
+  it("tracks route registry repins separately from the active registry version", () => {
+    const startupRegistry = createEmptyPluginRegistry();
+    const laterRegistry = createEmptyPluginRegistry();
+    const repinnedRegistry = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginHttpRouteRegistry(laterRegistry);
+
+    const activeVersionBeforeRepin = getActivePluginRegistryVersion();
+    const routeVersionBeforeRepin = getActivePluginHttpRouteRegistryVersion();
+
+    pinActivePluginHttpRouteRegistry(repinnedRegistry);
+
+    expect(getActivePluginRegistryVersion()).toBe(activeVersionBeforeRepin);
+    expect(getActivePluginHttpRouteRegistryVersion()).toBe(routeVersionBeforeRepin + 1);
   });
 
   it("falls back to the provided registry when the pinned route registry has no routes", () => {

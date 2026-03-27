@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const reactionQueueMock = vi.hoisted(() => vi.fn());
 let registerSlackReactionEvents: typeof import("./reactions.js").registerSlackReactionEvents;
@@ -71,11 +71,14 @@ async function executeReactionCase(input: ReactionRunInput = {}) {
 }
 
 describe("registerSlackReactionEvents", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
-    reactionQueueMock.mockClear();
     ({ registerSlackReactionEvents } = await import("./reactions.js"));
     ({ createSlackSystemEventTestHarness } = await import("./system-event-test-harness.js"));
+  });
+
+  beforeEach(() => {
+    reactionQueueMock.mockClear();
   });
 
   const cases: Array<{ name: string; input: ReactionRunInput; expectedCalls: number }> = [

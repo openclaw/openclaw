@@ -28,45 +28,46 @@ import { definePluginEntry } from "./plugin-entry.js";
 export type {
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,
+  OpenClawPluginApi,
+  OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
-  ProviderDiscoveryContext,
-  ProviderCatalogContext,
-  ProviderCatalogResult,
-  ProviderAugmentModelCatalogContext,
-  ProviderBuiltInModelSuppressionContext,
-  ProviderBuiltInModelSuppressionResult,
-  ProviderBuildMissingAuthMessageContext,
-  ProviderCacheTtlEligibilityContext,
-  ProviderDefaultThinkingPolicyContext,
-  ProviderFetchUsageSnapshotContext,
-  ProviderModernModelPolicyContext,
-  ProviderPreparedRuntimeAuth,
-  ProviderResolvedUsageAuth,
-  ProviderPrepareExtraParamsContext,
-  ProviderPrepareDynamicModelContext,
-  ProviderPrepareRuntimeAuthContext,
-  ProviderResolveUsageAuthContext,
-  ProviderResolveDynamicModelContext,
-  ProviderNormalizeResolvedModelContext,
-  ProviderRuntimeModel,
-  SpeechProviderPlugin,
-  ProviderThinkingPolicyContext,
-  ProviderWrapStreamFnContext,
+  OpenClawPluginDefinition,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
+  PluginCommandContext,
+  PluginInteractiveTelegramHandlerContext,
+  PluginLogger,
   ProviderAuthContext,
   ProviderAuthDoctorHintContext,
-  ProviderAuthMethodNonInteractiveContext,
   ProviderAuthMethod,
+  ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,
-  OpenClawPluginToolContext,
-  OpenClawPluginToolFactory,
-  OpenClawPluginCommandDefinition,
-  OpenClawPluginDefinition,
-  PluginCommandContext,
-  PluginLogger,
-  PluginInteractiveTelegramHandlerContext,
-} from "../plugins/types.js";
+  ProviderAugmentModelCatalogContext,
+  ProviderBuildMissingAuthMessageContext,
+  ProviderBuildUnknownModelHintContext,
+  ProviderBuiltInModelSuppressionContext,
+  ProviderBuiltInModelSuppressionResult,
+  ProviderCacheTtlEligibilityContext,
+  ProviderCatalogContext,
+  ProviderCatalogResult,
+  ProviderDefaultThinkingPolicyContext,
+  ProviderDiscoveryContext,
+  ProviderFetchUsageSnapshotContext,
+  ProviderModernModelPolicyContext,
+  ProviderNormalizeResolvedModelContext,
+  ProviderPrepareDynamicModelContext,
+  ProviderPrepareExtraParamsContext,
+  ProviderPrepareRuntimeAuthContext,
+  ProviderPreparedRuntimeAuth,
+  ProviderResolveDynamicModelContext,
+  ProviderResolvedUsageAuth,
+  ProviderResolveUsageAuthContext,
+  ProviderRuntimeModel,
+  ProviderThinkingPolicyContext,
+  ProviderWrapStreamFnContext,
+  SpeechProviderPlugin,
+} from "./plugin-entry.js";
+export type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isSecretRef } from "../config/types.secrets.js";
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
@@ -80,12 +81,11 @@ export type {
   UsageWindow,
 } from "../infra/provider-usage.types.js";
 export type { ChannelMessageActionContext } from "../channels/plugins/types.js";
-export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export type { OpenClawPluginApi } from "../plugins/types.js";
+export type { ChannelConfigUiHint, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 
-export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { definePluginEntry } from "./plugin-entry.js";
+export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { KeyedAsyncQueue, enqueueKeyedTask } from "./keyed-async-queue.js";
 export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
@@ -120,6 +120,7 @@ export type { SecretFileReadOptions, SecretFileReadResult } from "../infra/secre
 
 export { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 export type { GatewayBindUrlResult } from "../shared/gateway-bind-url.js";
+export { resolveGatewayPort } from "../config/paths.js";
 export { normalizeAtHashSlug, normalizeHyphenSlug } from "../shared/string-normalization.js";
 
 export { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
@@ -199,6 +200,11 @@ type DefineChannelPluginEntryOptions<TPlugin = ChannelPlugin> = {
   registerFull?: (api: OpenClawPluginApi) => void;
 };
 
+type DefinedChannelPluginEntry<TPlugin> = ReturnType<typeof definePluginEntry> & {
+  channelPlugin: TPlugin;
+  setChannelRuntime?: (runtime: PluginRuntime) => void;
+};
+
 type CreateChannelPluginBaseOptions<TResolvedAccount> = {
   id: ChannelPlugin<TResolvedAccount>["id"];
   meta?: Partial<NonNullable<ChannelPlugin<TResolvedAccount>["meta"]>>;
@@ -250,8 +256,8 @@ export function defineChannelPluginEntry<TPlugin>({
   configSchema = emptyPluginConfigSchema,
   setRuntime,
   registerFull,
-}: DefineChannelPluginEntryOptions<TPlugin>) {
-  return definePluginEntry({
+}: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin> {
+  const entry = definePluginEntry({
     id,
     name,
     description,
@@ -265,6 +271,11 @@ export function defineChannelPluginEntry<TPlugin>({
       registerFull?.(api);
     },
   });
+  return {
+    ...entry,
+    channelPlugin: plugin,
+    ...(setRuntime ? { setChannelRuntime: setRuntime } : {}),
+  };
 }
 
 /**

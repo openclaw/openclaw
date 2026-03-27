@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   CHANNEL_MESSAGE_ACTION_NAMES,
   type ChannelMessageActionName,
@@ -58,6 +59,7 @@ export async function messageCommand(
       action,
       params: opts,
       deps: outboundDeps,
+      agentId: resolveDefaultAgentId(cfg),
       gateway: {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,

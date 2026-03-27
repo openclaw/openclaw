@@ -5,7 +5,7 @@ const fetchClawHubPackageDetailMock = vi.fn();
 const fetchClawHubPackageVersionMock = vi.fn();
 const downloadClawHubPackageArchiveMock = vi.fn();
 const resolveLatestVersionFromPackageMock = vi.fn();
-const resolveRuntimeServiceVersionMock = vi.fn();
+const resolveCompatibilityHostVersionMock = vi.fn();
 const installPluginFromArchiveMock = vi.fn();
 
 vi.mock("../infra/clawhub.js", async () => {
@@ -23,7 +23,8 @@ vi.mock("../infra/clawhub.js", async () => {
 });
 
 vi.mock("../version.js", () => ({
-  resolveRuntimeServiceVersion: (...args: unknown[]) => resolveRuntimeServiceVersionMock(...args),
+  resolveCompatibilityHostVersion: (...args: unknown[]) =>
+    resolveCompatibilityHostVersionMock(...args),
 }));
 
 vi.mock("./install.js", () => ({
@@ -41,7 +42,7 @@ describe("installPluginFromClawHub", () => {
     fetchClawHubPackageVersionMock.mockReset();
     downloadClawHubPackageArchiveMock.mockReset();
     resolveLatestVersionFromPackageMock.mockReset();
-    resolveRuntimeServiceVersionMock.mockReset();
+    resolveCompatibilityHostVersionMock.mockReset();
     installPluginFromArchiveMock.mockReset();
 
     parseClawHubPluginSpecMock.mockReturnValue({ name: "demo" });
@@ -76,7 +77,7 @@ describe("installPluginFromClawHub", () => {
       archivePath: "/tmp/clawhub-demo/archive.zip",
       integrity: "sha256-demo",
     });
-    resolveRuntimeServiceVersionMock.mockReturnValue("2026.3.22");
+    resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.22");
     installPluginFromArchiveMock.mockResolvedValue({
       ok: true,
       pluginId: "demo",
@@ -134,7 +135,7 @@ describe("installPluginFromClawHub", () => {
   });
 
   it("rejects packages whose plugin API range exceeds the runtime version", async () => {
-    resolveRuntimeServiceVersionMock.mockReturnValueOnce("2026.3.21");
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.3.21");
 
     await expect(installPluginFromClawHub({ spec: "clawhub:demo" })).resolves.toMatchObject({
       ok: false,

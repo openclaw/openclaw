@@ -11,6 +11,7 @@ import {
 import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.js";
+import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 
 /** Dependencies injected once when creating the message processor. */
@@ -131,7 +132,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         await bot.api.sendMessage(
           context.chatId,
           "Something went wrong while processing your request. Please try again.",
-          context.threadSpec?.id != null ? { message_thread_id: context.threadSpec.id } : undefined,
+          buildTelegramThreadParams(context.threadSpec),
         );
       } catch {
         // Best-effort fallback; delivery may fail if the bot was blocked or the chat is invalid.

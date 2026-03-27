@@ -161,6 +161,8 @@ export async function sendSlackMessage(
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];
     threadTs?: string;
+    uploadFileName?: string;
+    uploadTitle?: string;
     blocks?: (Block | KnownBlock)[];
   } = {},
 ) {
@@ -171,6 +173,8 @@ export async function sendSlackMessage(
     mediaLocalRoots: opts.mediaLocalRoots,
     client: opts.client,
     threadTs: opts.threadTs,
+    ...(opts.uploadFileName ? { uploadFileName: opts.uploadFileName } : {}),
+    ...(opts.uploadTitle ? { uploadTitle: opts.uploadTitle } : {}),
     blocks: opts.blocks,
   });
 }

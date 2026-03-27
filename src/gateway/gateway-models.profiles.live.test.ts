@@ -18,8 +18,8 @@ import {
   isAnthropicRateLimitError,
 } from "../agents/live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
-import { isModernModelRef } from "../agents/live-model-filter.js";
-import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import { isHighSignalLiveModelRef } from "../agents/live-model-filter.js";
+import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { normalizeGoogleModelId } from "../agents/model-id-normalization.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
@@ -44,7 +44,7 @@ import { startGatewayServer } from "./server.js";
 import { loadSessionEntry, readSessionMessages } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
-const REQUIRE_PROFILE_KEYS = isTruthyEnvValue(process.env.OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS);
+const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
 const PROVIDERS = parseFilter(process.env.OPENCLAW_LIVE_GATEWAY_PROVIDERS);
 const THINKING_LEVEL = "high";
 const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
@@ -285,10 +285,17 @@ function shouldStripAssistantScaffoldingForLiveModel(modelKey?: string): boolean
     return true;
   }
   const [provider, ...rest] = modelKey.split("/");
+  const modelId = rest.join("/");
+  if (provider === "minimax" || provider === "minimax-portal") {
+    // MiniMax transcript persistence can mirror our <final> wrapper style even
+    // though user-visible surfaces already strip it. Keep the live reader
+    // aligned with the runtime-facing sanitizers for the whole provider family.
+    return true;
+  }
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  const normalizedKey = `${provider}/${normalizeGoogleModelId(modelId)}`;
   return GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -331,6 +338,24 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
         "google/gemini-2.5-flash",
       ),
     ).toBe("<think>hidden</think>Visible");
+  });
+
+  it("strips scaffolding for MiniMax transcript wrappers", () => {
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<final>Visible</final>",
+        "minimax/MiniMax-M2.5-highspeed",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<final>Visible</final>",
+        "minimax-portal/MiniMax-M2.7-highspeed",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "minimax/MiniMax-M2.7"),
+    ).toBe("Visible");
   });
 });
 
@@ -1503,7 +1528,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       const maxModels = GATEWAY_LIVE_MAX_MODELS;
       const wanted = filter
         ? all.filter((m) => filter.has(`${m.provider}/${m.id}`))
-        : all.filter((m) => isModernModelRef({ provider: m.provider, id: m.id }));
+        : all.filter((m) => isHighSignalLiveModelRef({ provider: m.provider, id: m.id }));
 
       const candidates: Array<Model<Api>> = [];
       const skipped: Array<{ model: string; error: string }> = [];
@@ -1544,7 +1569,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         maxModels > 0 ? maxModels : candidates.length,
         (model) => model.provider,
       );
-      logProgress(`[all-models] selection=${useExplicit ? "explicit" : "modern"}`);
+      logProgress(`[all-models] selection=${useExplicit ? "explicit" : "high-signal"}`);
       if (selectedCandidates.length < candidates.length) {
         logProgress(
           `[all-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_GATEWAY_MAX_MODELS=${maxModels}`,

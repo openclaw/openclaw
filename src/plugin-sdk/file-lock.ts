@@ -32,11 +32,19 @@ const CLEANUP_REGISTERED_KEY = Symbol.for("openclaw.fileLockCleanupRegistered");
 
 function releaseAllLocksSync(): void {
   for (const [normalizedFile, held] of HELD_LOCKS) {
-    // Let the OS close live descriptors on process exit. On Linux/macOS this
-    // avoids Node's unmanaged-fd warnings while still unlinking the stale
-    // lock path before the process is fully gone.
+    // Kick off best-effort async closes before dropping references so tests
+    // don't leave FileHandle objects for GC to close later.
+    void held.handle.close().catch(() => undefined);
     rmLockPathSync(held.lockPath);
     HELD_LOCKS.delete(normalizedFile);
+  }
+}
+
+async function drainAllLocks(): Promise<void> {
+  for (const [normalizedFile, held] of Array.from(HELD_LOCKS.entries())) {
+    HELD_LOCKS.delete(normalizedFile);
+    await held.handle.close().catch(() => undefined);
+    await fs.rm(held.lockPath, { force: true }).catch(() => undefined);
   }
 }
 
@@ -131,6 +139,10 @@ async function releaseHeldLock(normalizedFile: string): Promise<void> {
 
 export function resetFileLockStateForTest(): void {
   releaseAllLocksSync();
+}
+
+export async function drainFileLockStateForTest(): Promise<void> {
+  await drainAllLocks();
 }
 
 /** Acquire a re-entrant process-local file lock backed by a `.lock` sidecar file. */

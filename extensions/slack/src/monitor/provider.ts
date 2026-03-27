@@ -114,10 +114,17 @@ function resolveSlackBoltInterop(params: {
   throw new TypeError("Unable to resolve @slack/bolt App/HTTPReceiver exports");
 }
 
-const { App, HTTPReceiver } = resolveSlackBoltInterop({
-  defaultImport: SlackBolt,
-  namespaceImport: SlackBoltNamespace,
-});
+let slackBoltInterop: SlackBoltResolvedExports | undefined;
+
+function getSlackBoltInterop(): SlackBoltResolvedExports {
+  if (!slackBoltInterop) {
+    slackBoltInterop = resolveSlackBoltInterop({
+      defaultImport: SlackBolt,
+      namespaceImport: SlackBoltNamespace,
+    });
+  }
+  return slackBoltInterop;
+}
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -250,6 +257,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
+  const { App, HTTPReceiver } = getSlackBoltInterop();
 
   const receiver =
     slackMode === "http"

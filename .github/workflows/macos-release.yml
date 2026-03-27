@@ -81,6 +81,6 @@ jobs:
             echo "Next step:"
             echo "- Run \`openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml\` with tag \`${RELEASE_TAG}\`."
             echo "- Use \`preflight_only=true\` there for the full private mac preflight."
-            echo "- For the real publish path, the private run uploads \`macos-release-${RELEASE_TAG}\` as a workflow artifact. Download it and upload the packaged assets to the existing GitHub release in \`openclaw/openclaw\`."
+            echo "- For the real publish path, the private run uploads the packaged \`.zip\`, \`.dmg\`, and \`.dSYM.zip\` files to the existing GitHub release in \`openclaw/openclaw\` automatically."
             echo "- For stable releases, also download \`macos-appcast-${RELEASE_TAG}\` from the successful private run and commit \`appcast.xml\` back to \`main\` in \`openclaw/openclaw\`."
           } >> "$GITHUB_STEP_SUMMARY"

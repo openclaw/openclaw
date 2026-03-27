@@ -42,6 +42,44 @@ openclaw browser --browser-profile openclaw snapshot
 If you get “Browser disabled”, enable it in config (see below) and restart the
 Gateway.
 
+## Plugin control
+
+The default `browser` tool is now a bundled plugin that ships enabled by
+default. That means you can disable or replace it without removing the rest of
+OpenClaw's plugin system:
+
+```json5
+{
+  plugins: {
+    entries: {
+      browser: {
+        enabled: false,
+      },
+    },
+  },
+}
+```
+
+Disable the bundled plugin before installing another plugin that provides the
+same `browser` tool name. The default browser experience needs both:
+
+- `plugins.entries.browser.enabled` not disabled
+- `browser.enabled=true`
+
+If you turn off only the plugin, the bundled browser CLI (`openclaw browser`),
+gateway method (`browser.request`), agent tool, and default browser control
+service all disappear together. Your `browser.*` config stays intact for a
+replacement plugin to reuse.
+
+The bundled browser plugin also owns the browser runtime implementation now.
+Core keeps only shared Plugin SDK helpers plus compatibility re-exports for
+older internal import paths. In practice, removing or replacing
+`extensions/browser` removes the browser feature set instead of leaving a
+second core-owned runtime behind.
+
+Browser config changes still require a Gateway restart so the bundled plugin
+can re-register its browser service with the new settings.
+
 ## Profiles: `openclaw` vs `user`
 
 - `openclaw`: managed, isolated browser (no extension required).

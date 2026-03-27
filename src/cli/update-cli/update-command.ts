@@ -12,6 +12,7 @@ import {
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
@@ -20,14 +21,17 @@ import {
 } from "../../infra/update-channels.js";
 import {
   compareSemverStrings,
+  fetchNpmPackageTargetStatus,
   resolveNpmChannelTag,
   checkUpdateStatus,
 } from "../../infra/update-check.js";
 import {
+  collectInstalledGlobalPackageErrors,
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   cleanupGlobalRenameDirs,
   globalInstallArgs,
+  resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallSpec,
   resolveGlobalPackageRoot,
 } from "../../infra/update-global.js";
@@ -129,6 +133,38 @@ function tryResolveInvocationCwd(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+async function resolvePackageRuntimePreflightError(params: {
+  tag: string;
+  timeoutMs?: number;
+}): Promise<string | null> {
+  if (!canResolveRegistryVersionForPackageTarget(params.tag)) {
+    return null;
+  }
+  const target = params.tag.trim();
+  if (!target) {
+    return null;
+  }
+  const status = await fetchNpmPackageTargetStatus({
+    target,
+    timeoutMs: params.timeoutMs,
+  });
+  if (status.error) {
+    return null;
+  }
+  const satisfies = nodeVersionSatisfiesEngine(process.versions.node ?? null, status.nodeEngine);
+  if (satisfies !== false) {
+    return null;
+  }
+  const targetLabel = status.version ?? target;
+  return [
+    `Node ${process.versions.node ?? "unknown"} is too old for openclaw@${targetLabel}.`,
+    `The requested package requires ${status.nodeEngine}.`,
+    "Upgrade Node to 22.14+ or Node 24, then rerun `openclaw update`.",
+    "Bare `npm i -g openclaw` can silently install an older compatible release.",
+    "After upgrading Node, use `npm i -g openclaw@latest`.",
+  ].join("\n");
 }
 
 function resolveServiceRefreshEnv(
@@ -343,9 +379,27 @@ async function runPackageInstallUpdate(params: {
   const steps = [updateStep];
   let afterVersion = beforeVersion;
 
-  if (pkgRoot) {
-    afterVersion = await readPackageVersion(pkgRoot);
-    const entryPath = path.join(pkgRoot, "dist", "entry.js");
+  const verifiedPackageRoot =
+    (await resolveGlobalPackageRoot(manager, runCommand, params.timeoutMs)) ?? pkgRoot;
+  if (verifiedPackageRoot) {
+    afterVersion = await readPackageVersion(verifiedPackageRoot);
+    const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, installSpec);
+    const verificationErrors = await collectInstalledGlobalPackageErrors({
+      packageRoot: verifiedPackageRoot,
+      expectedVersion,
+    });
+    if (verificationErrors.length > 0) {
+      steps.push({
+        name: "global install verify",
+        command: `verify ${verifiedPackageRoot}`,
+        cwd: verifiedPackageRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: verificationErrors.join("\n"),
+        stdoutTail: null,
+      });
+    }
+    const entryPath = path.join(verifiedPackageRoot, "dist", "entry.js");
     if (await pathExists(entryPath)) {
       const doctorStep = await runUpdateStep({
         name: `${CLI_NAME} doctor`,
@@ -361,7 +415,7 @@ async function runPackageInstallUpdate(params: {
   return {
     status: failedStep ? "error" : "ok",
     mode: manager,
-    root: pkgRoot ?? params.root,
+    root: verifiedPackageRoot ?? params.root,
     reason: failedStep ? failedStep.name : undefined,
     before: { version: beforeVersion },
     after: { version: afterVersion },
@@ -859,6 +913,18 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     defaultRuntime.log(
       theme.muted("Note: --tag applies to npm installs only; git updates ignore it."),
     );
+  }
+
+  if (updateInstallKind === "package") {
+    const runtimePreflightError = await resolvePackageRuntimePreflightError({
+      tag,
+      timeoutMs,
+    });
+    if (runtimePreflightError) {
+      defaultRuntime.error(runtimePreflightError);
+      defaultRuntime.exit(1);
+      return;
+    }
   }
 
   const showProgress = !opts.json && process.stdout.isTTY;

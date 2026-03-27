@@ -1,35 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
 import {
+  buildEmbeddedRunnerAssistant,
   cleanupEmbeddedPiRunnerTestWorkspace,
+  createMockUsage,
   createEmbeddedPiRunnerOpenAiConfig,
+  createResolvedEmbeddedRunnerModel,
   createEmbeddedPiRunnerTestWorkspace,
   type EmbeddedPiRunnerTestWorkspace,
   immediateEnqueue,
+  makeEmbeddedRunnerAttempt,
 } from "./test-helpers/pi-embedded-runner-e2e-fixtures.js";
 
-const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
-
-function createMockUsage(input: number, output: number) {
-  return {
-    input,
-    output,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: input + output,
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      total: 0,
-    },
-  };
-}
+const runEmbeddedAttemptMock = vi.fn();
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
@@ -113,25 +98,8 @@ const installRunEmbeddedMocks = () => {
     const actual = await importOriginal<typeof import("./pi-embedded-runner/model.js")>();
     return {
       ...actual,
-      resolveModelAsync: async (provider: string, modelId: string) => ({
-        model: {
-          id: modelId,
-          name: modelId,
-          api: "openai-responses",
-          provider,
-          baseUrl: `https://example.com/${provider}`,
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 16_000,
-          maxTokens: 2048,
-        },
-        error: undefined,
-        authStorage: {
-          setRuntimeApiKey: vi.fn(),
-        },
-        modelRegistry: {},
-      }),
+      resolveModelAsync: async (provider: string, modelId: string) =>
+        createResolvedEmbeddedRunnerModel(provider, modelId),
     };
   });
   vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
@@ -188,46 +156,6 @@ const nextSessionFile = () => {
 const nextRunId = (prefix = "run-embedded-test") => `${prefix}-${++runCounter}`;
 const nextSessionKey = () => `agent:test:embedded:${nextRunId("session-key")}`;
 
-const baseUsage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
-const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage => ({
-  role: "assistant",
-  content: [],
-  api: "openai-responses",
-  provider: "openai",
-  model: "mock-1",
-  usage: baseUsage,
-  stopReason: "stop",
-  timestamp: Date.now(),
-  ...overrides,
-});
-
-const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => ({
-  aborted: false,
-  timedOut: false,
-  timedOutDuringCompaction: false,
-  promptError: null,
-  sessionIdUsed: "session:test",
-  systemPromptReport: undefined,
-  messagesSnapshot: [],
-  assistantTexts: [],
-  toolMetas: [],
-  lastAssistant: undefined,
-  didSendViaMessagingTool: false,
-  messagingToolSentTexts: [],
-  messagingToolSentMediaUrls: [],
-  messagingToolSentTargets: [],
-  cloudCodeAssistFormatError: false,
-  ...overrides,
-});
-
 const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string) => {
   const sessionFile = nextSessionFile();
   const sessionManager = SessionManager.open(sessionFile);
@@ -238,9 +166,9 @@ const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string
   });
 
   runEmbeddedAttemptMock.mockResolvedValueOnce(
-    makeAttempt({
+    makeEmbeddedRunnerAttempt({
       assistantTexts: ["ok"],
-      lastAssistant: buildAssistant({
+      lastAssistant: buildEmbeddedRunnerAssistant({
         content: [{ type: "text", text: "ok" }],
       }),
     }),
@@ -293,9 +221,9 @@ const readSessionMessages = async (sessionFile: string) => {
 const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessionKey: string) => {
   const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-error"]);
   runEmbeddedAttemptMock.mockResolvedValueOnce(
-    makeAttempt({
+    makeEmbeddedRunnerAttempt({
       assistantTexts: ["ok"],
-      lastAssistant: buildAssistant({
+      lastAssistant: buildEmbeddedRunnerAssistant({
         content: [{ type: "text", text: "ok" }],
       }),
     }),
@@ -322,7 +250,7 @@ describe("runEmbeddedPiAgent", () => {
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-error"]);
     const sessionKey = nextSessionKey();
     runEmbeddedAttemptMock.mockResolvedValueOnce(
-      makeAttempt({
+      makeEmbeddedRunnerAttempt({
         promptError: new Error("boom"),
       }),
     );

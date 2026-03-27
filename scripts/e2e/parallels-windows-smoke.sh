@@ -103,6 +103,9 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --)
+      shift
+      ;;
     --vm)
       VM_NAME="$2"
       shift 2
@@ -312,6 +315,35 @@ guest_exec() {
   prlctl exec "$VM_NAME" --current-user "$@"
 }
 
+host_timeout_exec() {
+  local timeout_s="$1"
+  shift
+  HOST_TIMEOUT_S="$timeout_s" python3 - "$@" <<'PY'
+import os
+import subprocess
+import sys
+
+timeout = int(os.environ["HOST_TIMEOUT_S"])
+args = sys.argv[1:]
+
+try:
+    completed = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+except subprocess.TimeoutExpired as exc:
+    if exc.stdout:
+        sys.stdout.buffer.write(exc.stdout)
+    if exc.stderr:
+        sys.stderr.buffer.write(exc.stderr)
+    sys.stderr.write(f"host timeout after {timeout}s\n")
+    raise SystemExit(124)
+
+if completed.stdout:
+    sys.stdout.buffer.write(completed.stdout)
+if completed.stderr:
+    sys.stderr.buffer.write(completed.stderr)
+raise SystemExit(completed.returncode)
+PY
+}
+
 guest_powershell() {
   local script="$1"
   local encoded
@@ -326,6 +358,23 @@ print(base64.b64encode(payload).decode("ascii"))
 PY
   )"
   guest_exec powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded"
+}
+
+guest_powershell_poll() {
+  local timeout_s="$1"
+  local script="$2"
+  local encoded
+  encoded="$(
+    SCRIPT_CONTENT="$script" python3 - <<'PY'
+import base64
+import os
+
+script = "$ProgressPreference = 'SilentlyContinue'\n" + os.environ["SCRIPT_CONTENT"]
+payload = script.encode("utf-16le")
+print(base64.b64encode(payload).decode("ascii"))
+PY
+  )"
+  host_timeout_exec "$timeout_s" prlctl exec "$VM_NAME" --current-user powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded"
 }
 
 guest_run_openclaw() {
@@ -776,11 +825,15 @@ verify_version_contains() {
 }
 
 run_ref_onboard() {
-  local openai_key_q runner_name log_name done_name done_status
+  local openai_key_q runner_name log_name done_name done_status launcher_state
+  local poll_rc state_rc log_rc start_seconds poll_deadline startup_checked
   openai_key_q="$(ps_single_quote "$OPENAI_API_KEY_VALUE")"
   runner_name="openclaw-onboard-$RANDOM-$RANDOM.ps1"
   log_name="openclaw-onboard-$RANDOM-$RANDOM.log"
   done_name="openclaw-onboard-$RANDOM-$RANDOM.done"
+  start_seconds="$SECONDS"
+  poll_deadline=$((SECONDS + TIMEOUT_ONBOARD_S + 60))
+  startup_checked=0
 
   guest_powershell "$(cat <<EOF
 \$runner = Join-Path \$env:TEMP '$runner_name'
@@ -812,14 +865,57 @@ EOF
 )"
 
   while :; do
+    set +e
     done_status="$(
-      guest_powershell "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
+      guest_powershell_poll 20 "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
     )"
+    poll_rc=$?
+    set -e
     done_status="${done_status//$'\r'/}"
+    if [[ $poll_rc -ne 0 ]]; then
+      warn "windows onboard helper poll failed; retrying"
+      if (( SECONDS >= poll_deadline )); then
+        warn "windows onboard helper timed out while polling done file"
+        return 1
+      fi
+      sleep 2
+      continue
+    fi
     if [[ -n "$done_status" ]]; then
-      guest_powershell "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      set +e
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      log_rc=$?
+      set -e
+      if [[ $log_rc -ne 0 ]]; then
+        warn "windows onboard helper log drain failed after completion"
+      fi
       [[ "$done_status" == "0" ]]
       return $?
+    fi
+    if [[ "$startup_checked" -eq 0 && $((SECONDS - start_seconds)) -ge 20 ]]; then
+      set +e
+      launcher_state="$(
+        guest_powershell_poll 20 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; 'runner=' + (Test-Path \$runner) + ' log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done)"
+      )"
+      state_rc=$?
+      set -e
+      launcher_state="${launcher_state//$'\r'/}"
+      startup_checked=1
+      if [[ $state_rc -eq 0 && "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
+        warn "windows onboard helper failed to materialize guest files"
+        return 1
+      fi
+    fi
+    if (( SECONDS >= poll_deadline )); then
+      set +e
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      log_rc=$?
+      set -e
+      if [[ $log_rc -ne 0 ]]; then
+        warn "windows onboard helper log drain failed after timeout"
+      fi
+      warn "windows onboard helper timed out waiting for done file"
+      return 1
     fi
     sleep 2
   done

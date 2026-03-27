@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChannelMessageActionAdapter,
   ChannelOutboundAdapter,
@@ -38,16 +38,24 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 const webAuthExists = vi.hoisted(() => vi.fn(async () => false));
-vi.mock("../../extensions/whatsapp/src/session.js", () => ({
-  webAuthExists,
-}));
+vi.mock("../../extensions/whatsapp/runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../extensions/whatsapp/runtime-api.js")>();
+  return {
+    ...actual,
+    webAuthExists,
+  };
+});
 
 const handleDiscordAction = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } })),
 );
-vi.mock("../../extensions/discord/src/actions/runtime.js", () => ({
-  handleDiscordAction,
-}));
+vi.mock("../../extensions/discord/runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../extensions/discord/runtime-api.js")>();
+  return {
+    ...actual,
+    handleDiscordAction,
+  };
+});
 
 const handleSlackAction = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } })),
@@ -59,21 +67,34 @@ vi.mock("../../extensions/slack/runtime-api.js", () => ({
 const handleTelegramAction = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } })),
 );
-vi.mock("../../extensions/telegram/src/action-runtime.js", () => ({
-  handleTelegramAction,
-}));
+vi.mock("../../extensions/telegram/test-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../extensions/telegram/test-api.js")>();
+  return {
+    ...actual,
+    handleTelegramAction,
+  };
+});
 
 const handleWhatsAppAction = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } })),
 );
-vi.mock("../../extensions/whatsapp/runtime-api.js", () => ({
-  handleWhatsAppAction,
-}));
+vi.mock("../../extensions/whatsapp/runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../extensions/whatsapp/runtime-api.js")>();
+  return {
+    ...actual,
+    handleWhatsAppAction,
+  };
+});
 
-import { messageCommand } from "./message.js";
+let messageCommand: typeof import("./message.js").messageCommand;
 
 let envSnapshot: ReturnType<typeof captureEnv>;
 const EMPTY_TEST_REGISTRY = createTestRegistry([]);
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({ messageCommand } = await import("./message.js"));
+});
 
 beforeEach(() => {
   envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN"]);

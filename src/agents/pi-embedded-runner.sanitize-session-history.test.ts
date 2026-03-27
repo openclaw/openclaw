@@ -24,6 +24,21 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
   sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
 }));
 
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderCapabilitiesWithPlugin: ({ provider }: { provider?: string }) =>
+    provider === "openrouter"
+      ? {
+          openAiCompatTurnValidation: false,
+          geminiThoughtSignatureSanitization: true,
+          geminiThoughtSignatureModelHints: ["gemini"],
+        }
+      : provider === "github-copilot"
+        ? {
+            dropThinkingBlockModelHints: ["claude"],
+          }
+        : undefined,
+}));
+
 let sanitizeSessionHistory: SanitizeSessionHistoryFn;
 let mockedHelpers: SanitizeSessionHistoryHarness["mockedHelpers"];
 let testTimestamp = 1;
@@ -33,7 +48,7 @@ const nextTimestamp = () => testTimestamp++;
 // We rely on the real implementation which should pass through our simple messages.
 
 describe("sanitizeSessionHistory", () => {
-  const mockSessionManager = makeMockSessionManager();
+  let mockSessionManager: ReturnType<typeof makeMockSessionManager>;
   const mockMessages = makeSimpleUserMessages();
   const setNonGoogleModelApi = () => {
     vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
@@ -191,6 +206,7 @@ describe("sanitizeSessionHistory", () => {
     const harness = await loadSanitizeSessionHistoryWithCleanMocks();
     sanitizeSessionHistory = harness.sanitizeSessionHistory;
     mockedHelpers = harness.mockedHelpers;
+    mockSessionManager = makeMockSessionManager();
   });
 
   it("passes simple user-only history through for Google model APIs", async () => {

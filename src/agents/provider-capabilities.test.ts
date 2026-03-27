@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: string }) => {
   switch (params.provider) {
@@ -32,6 +32,7 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: str
       };
     case "kimi":
       return {
+        openAiPayloadNormalizationMode: "moonshot-thinking",
         preserveAnthropicThinkingSignatures: false,
       };
     default:
@@ -44,19 +45,37 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     resolveProviderCapabilitiesWithPluginMock(params),
 }));
 
-import {
-  isAnthropicProviderFamily,
-  isOpenAiProviderFamily,
-  requiresOpenAiCompatibleAnthropicToolPayload,
-  resolveProviderCapabilities,
-  resolveTranscriptToolCallIdMode,
-  shouldDropThinkingBlocksForModel,
-  shouldSanitizeGeminiThoughtSignaturesForModel,
-  supportsOpenAiCompatTurnValidation,
-  usesMoonshotThinkingPayloadCompat,
-} from "./provider-capabilities.js";
+let isAnthropicProviderFamily: typeof import("./provider-capabilities.js").isAnthropicProviderFamily;
+let isOpenAiProviderFamily: typeof import("./provider-capabilities.js").isOpenAiProviderFamily;
+let requiresOpenAiCompatibleAnthropicToolPayload: typeof import("./provider-capabilities.js").requiresOpenAiCompatibleAnthropicToolPayload;
+let resolveProviderCapabilities: typeof import("./provider-capabilities.js").resolveProviderCapabilities;
+let resolveTranscriptToolCallIdMode: typeof import("./provider-capabilities.js").resolveTranscriptToolCallIdMode;
+let shouldDropThinkingBlocksForModel: typeof import("./provider-capabilities.js").shouldDropThinkingBlocksForModel;
+let shouldSanitizeGeminiThoughtSignaturesForModel: typeof import("./provider-capabilities.js").shouldSanitizeGeminiThoughtSignaturesForModel;
+let supportsOpenAiCompatTurnValidation: typeof import("./provider-capabilities.js").supportsOpenAiCompatTurnValidation;
+let usesMoonshotThinkingPayloadCompat: typeof import("./provider-capabilities.js").usesMoonshotThinkingPayloadCompat;
+
+async function loadFreshProviderCapabilitiesModuleForTest() {
+  vi.resetModules();
+  ({
+    isAnthropicProviderFamily,
+    isOpenAiProviderFamily,
+    requiresOpenAiCompatibleAnthropicToolPayload,
+    resolveProviderCapabilities,
+    resolveTranscriptToolCallIdMode,
+    shouldDropThinkingBlocksForModel,
+    shouldSanitizeGeminiThoughtSignaturesForModel,
+    supportsOpenAiCompatTurnValidation,
+    usesMoonshotThinkingPayloadCompat,
+  } = await import("./provider-capabilities.js"));
+}
 
 describe("resolveProviderCapabilities", () => {
+  beforeEach(async () => {
+    await loadFreshProviderCapabilitiesModuleForTest();
+    resolveProviderCapabilitiesWithPluginMock.mockClear();
+  });
+
   it("returns provider-owned anthropic defaults for ordinary providers", () => {
     expect(resolveProviderCapabilities("anthropic")).toEqual({
       anthropicToolSchemaMode: "native",
@@ -104,7 +123,7 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveProviderCapabilities("kimi-code")).toEqual({
       anthropicToolSchemaMode: "native",
       anthropicToolChoiceMode: "native",
-      openAiPayloadNormalizationMode: "default",
+      openAiPayloadNormalizationMode: "moonshot-thinking",
       providerFamily: "default",
       preserveAnthropicThinkingSignatures: false,
       openAiCompatTurnValidation: true,
@@ -125,7 +144,13 @@ describe("resolveProviderCapabilities", () => {
 
   it("routes moonshot payload compatibility through the capability registry", () => {
     expect(usesMoonshotThinkingPayloadCompat("moonshot")).toBe(true);
+    expect(usesMoonshotThinkingPayloadCompat("kimi-coding")).toBe(true);
     expect(usesMoonshotThinkingPayloadCompat("openai")).toBe(false);
+  });
+
+  it("keeps the normalized kimi fallback aligned when plugin capabilities are unavailable", () => {
+    resolveProviderCapabilitiesWithPluginMock.mockImplementationOnce(() => undefined);
+    expect(usesMoonshotThinkingPayloadCompat("kimi-coding")).toBe(true);
   });
 
   it("resolves transcript thought-signature and tool-call quirks through the registry", () => {

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildAnthropicVertexProvider,
   buildKimiCodingProvider,
@@ -19,6 +20,10 @@ import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js
 import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
+import {
+  normalizeGoogleGenerativeAiBaseUrl,
+  shouldNormalizeGoogleGenerativeAiProviderConfig,
+} from "./google-generative-ai.js";
 import { normalizeGoogleModelId, normalizeXaiModelId } from "./model-id-normalization.js";
 import { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
 export {
@@ -68,8 +73,40 @@ const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
   "https://dashscope.aliyuncs.com/compatible-mode/v1",
   "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
 ]);
+const log = createSubsystemLogger("agents/model-providers");
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+
+function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
+  const live =
+    env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
+  if (!live) {
+    return null;
+  }
+  const raw = env.OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS?.trim();
+  if (!raw) {
+    return 15_000;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+}
+
+function resolveLiveProviderDiscoveryFilter(env: NodeJS.ProcessEnv): string[] | undefined {
+  const live =
+    env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
+  if (!live) {
+    return undefined;
+  }
+  const raw = env.OPENCLAW_LIVE_PROVIDERS?.trim();
+  if (!raw || raw === "all") {
+    return undefined;
+  }
+  const ids = raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return ids.length > 0 ? [...new Set(ids)] : undefined;
+}
 
 function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();
@@ -298,7 +335,12 @@ function normalizeProviderModels(
 }
 
 function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
-  return normalizeProviderModels(provider, normalizeGoogleModelId);
+  const modelNormalized = normalizeProviderModels(provider, normalizeGoogleModelId);
+  const normalizedBaseUrl = normalizeGoogleGenerativeAiBaseUrl(modelNormalized.baseUrl);
+  if (normalizedBaseUrl !== modelNormalized.baseUrl) {
+    return { ...modelNormalized, baseUrl: normalizedBaseUrl ?? modelNormalized.baseUrl };
+  }
+  return modelNormalized;
 }
 
 function normalizeAntigravityProvider(provider: ProviderConfig): ProviderConfig {
@@ -575,7 +617,7 @@ export function normalizeProviders(params: {
       }
     }
 
-    if (normalizedKey === "google" || normalizedKey === "google-vertex") {
+    if (shouldNormalizeGoogleGenerativeAiProviderConfig(normalizedKey, normalizedProvider)) {
       const googleNormalized = normalizeGoogleProvider(normalizedProvider);
       if (googleNormalized !== normalizedProvider) {
         mutated = true;
@@ -662,10 +704,12 @@ async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
   order: import("../plugins/types.js").ProviderDiscoveryOrder,
 ): Promise<Record<string, ProviderConfig> | undefined> {
+  const onlyPluginIds = resolveLiveProviderDiscoveryFilter(ctx.env);
   const providers = resolvePluginDiscoveryProviders({
     config: ctx.config,
     workspaceDir: ctx.workspaceDir,
     env: ctx.env,
+    onlyPluginIds,
   });
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
@@ -683,7 +727,7 @@ async function resolvePluginImplicitProviders(
         }
       : (ctx.config ?? {});
   for (const provider of byOrder[order]) {
-    const result = await runProviderCatalog({
+    const catalogRun = runProviderCatalog({
       provider,
       config: catalogConfig,
       agentDir: ctx.agentDir,
@@ -694,6 +738,35 @@ async function resolvePluginImplicitProviders(
       resolveProviderAuth: (providerId, options) =>
         ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
     });
+    const timeoutMs = resolveLiveProviderCatalogTimeoutMs(ctx.env);
+    let result: Awaited<ReturnType<typeof runProviderCatalog>>;
+    if (!timeoutMs) {
+      result = await catalogRun;
+    } else {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        result = await Promise.race([
+          catalogRun,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              reject(new Error(`provider catalog timed out after ${timeoutMs}ms: ${provider.id}`));
+            }, timeoutMs);
+            timer.unref?.();
+          }),
+        ]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("provider catalog timed out after")) {
+          log.warn(`${message}; skipping provider discovery`);
+          continue;
+        }
+        throw error;
+      } finally {
+        if (timer) {
+          clearTimeout(timer);
+        }
+      }
+    }
     mergeImplicitProviderSet(
       discovered,
       normalizePluginDiscoveryResult({

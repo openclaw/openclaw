@@ -5,6 +5,7 @@ describe("isUnitConfigTestFile", () => {
   it("accepts unit-config src, test, and whitelisted ui tests", () => {
     expect(isUnitConfigTestFile("src/infra/git-commit.test.ts")).toBe(true);
     expect(isUnitConfigTestFile("test/format-error.test.ts")).toBe(true);
+    expect(isUnitConfigTestFile("ui/src/ui/views/channels.test.ts")).toBe(true);
     expect(isUnitConfigTestFile("ui/src/ui/views/chat.test.ts")).toBe(true);
   });
 

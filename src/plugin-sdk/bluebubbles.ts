@@ -28,7 +28,7 @@ export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export {
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
-} from "../../extensions/bluebubbles/runtime-api.js";
+} from "../../extensions/bluebubbles/src/group-policy.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export {
@@ -87,10 +87,13 @@ export {
 } from "./status-helpers.js";
 export { extractToolSend } from "./tool-send.js";
 export {
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+  createFixedWindowRateLimiter,
   createWebhookInFlightLimiter,
   normalizeWebhookPath,
   readWebhookBodyOrReject,
   registerWebhookTargetWithPluginRoute,
+  resolveRequestClientIp,
   resolveWebhookTargets,
   resolveWebhookTargetWithAuthOrRejectSync,
   withResolvedWebhookRequestPipeline,

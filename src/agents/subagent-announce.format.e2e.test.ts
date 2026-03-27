@@ -94,6 +94,9 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
     countActiveDescendantRuns: vi.fn((_sessionKey: string) => 0),
     countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
     countPendingDescendantRunsExcludingRun: vi.fn((_sessionKey: string, _runId: string) => 0),
+    getLatestSubagentRunByChildSessionKey: vi.fn(
+      (_childSessionKey: string): MockSubagentRun | undefined => undefined,
+    ),
     listSubagentRunsForRequester: vi.fn(
       (_sessionKey: string, _scope?: { requesterRunId?: string }): MockSubagentRun[] => [],
     ),
@@ -187,7 +190,7 @@ vi.mock("./subagent-registry-runtime.js", () => subagentRegistryMock);
 describe("subagent announce formatting", () => {
   let previousFastTestEnv: string | undefined;
   let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
-  let matrixPlugin: (typeof import("../../extensions/matrix/src/channel.js"))["matrixPlugin"];
+  let matrixPlugin: (typeof import("../../extensions/matrix/index.js"))["matrixPlugin"];
 
   beforeAll(async () => {
     // Set FAST_TEST_MODE before importing the module to ensure the module-level
@@ -196,7 +199,7 @@ describe("subagent announce formatting", () => {
     // See: https://github.com/openclaw/openclaw/issues/31298
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
-    ({ matrixPlugin } = await import("../../extensions/matrix/src/channel.js"));
+    ({ matrixPlugin } = await import("../../extensions/matrix/index.js"));
     ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
   });
 
@@ -290,6 +293,9 @@ describe("subagent announce formatting", () => {
       .mockImplementation((sessionKey: string, _runId: string) =>
         subagentRegistryMock.countPendingDescendantRuns(sessionKey),
       );
+    subagentRegistryMock.getLatestSubagentRunByChildSessionKey
+      .mockClear()
+      .mockReturnValue(undefined);
     subagentRegistryMock.listSubagentRunsForRequester.mockClear().mockReturnValue([]);
     subagentRegistryMock.replaceSubagentRunAfterSteer.mockClear().mockReturnValue(true);
     subagentRegistryMock.resolveRequesterForChildSession.mockClear().mockReturnValue(null);
@@ -1469,6 +1475,60 @@ describe("subagent announce formatting", () => {
     expect(agentSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("does not report queued delivery when active announce queue drops a new item", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-drop-new",
+        lastChannel: "telegram",
+        lastTo: "123",
+        queueMode: "followup",
+        queueDebounceMs: 0,
+        queueCap: 1,
+        queueDrop: "new",
+      },
+    };
+
+    let resolveFirstSend = () => {};
+    const firstSendPending = new Promise<void>((resolve) => {
+      resolveFirstSend = resolve;
+    });
+    agentSpy.mockImplementation(async (_req: AgentCallRequest) => {
+      await firstSendPending;
+      return { runId: "run-main", status: "ok" };
+    });
+
+    const firstDidAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-queued-first",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      announceType: "subagent task",
+      ...defaultOutcomeAnnounce,
+    });
+
+    await vi.waitFor(() => {
+      expect(agentSpy).toHaveBeenCalledTimes(1);
+    });
+
+    const secondDidAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-queued-dropped",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      announceType: "subagent task",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(firstDidAnnounce).toBe(true);
+    expect(secondDidAnnounce).toBe(false);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+
+    resolveFirstSend();
+    await Promise.resolve();
+  });
+
   it("keeps queued idempotency unique for same-ms distinct child runs", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
@@ -2189,6 +2249,151 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("result from child b");
     expect(msg).not.toContain("stale result that should be filtered");
     expect(msg).not.toContain("placeholder waiting text that should be ignored");
+  });
+
+  it("dedupes stale direct-child rows before building child completion findings", async () => {
+    subagentRegistryMock.countPendingDescendantRuns.mockReturnValue(0);
+    subagentRegistryMock.listSubagentRunsForRequester.mockImplementation(
+      (sessionKey: string, scope?: { requesterRunId?: string }) => {
+        if (sessionKey !== "agent:main:subagent:parent") {
+          return [];
+        }
+        if (scope?.requesterRunId !== "run-parent-dedupe") {
+          return [];
+        }
+        return [
+          {
+            runId: "run-child-stale",
+            childSessionKey: "agent:main:subagent:parent:subagent:a",
+            requesterSessionKey: "agent:main:subagent:parent",
+            requesterDisplayKey: "parent",
+            task: "child task a",
+            label: "child-a",
+            cleanup: "keep",
+            createdAt: 10,
+            endedAt: 20,
+            cleanupCompletedAt: 21,
+            frozenResultText: "stale result from child a",
+            outcome: { status: "ok" },
+          },
+          {
+            runId: "run-child-current",
+            childSessionKey: "agent:main:subagent:parent:subagent:a",
+            requesterSessionKey: "agent:main:subagent:parent",
+            requesterDisplayKey: "parent",
+            task: "child task a",
+            label: "child-a",
+            cleanup: "keep",
+            createdAt: 11,
+            endedAt: 22,
+            cleanupCompletedAt: 23,
+            frozenResultText: "current result from child a",
+            outcome: { status: "ok" },
+          },
+          {
+            runId: "run-child-b",
+            childSessionKey: "agent:main:subagent:parent:subagent:b",
+            requesterSessionKey: "agent:main:subagent:parent",
+            requesterDisplayKey: "parent",
+            task: "child task b",
+            label: "child-b",
+            cleanup: "keep",
+            createdAt: 12,
+            endedAt: 24,
+            cleanupCompletedAt: 25,
+            frozenResultText: "result from child b",
+            outcome: { status: "ok" },
+          },
+        ];
+      },
+    );
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:parent",
+      childRunId: "run-parent-dedupe",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: "placeholder waiting text that should be ignored",
+    });
+
+    expect(didAnnounce).toBe(true);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message ?? "";
+    expect(msg).toContain("current result from child a");
+    expect(msg).toContain("result from child b");
+    expect(msg).not.toContain("stale result from child a");
+    expect(msg.match(/1\. child-a/g)?.length ?? 0).toBe(1);
+  });
+
+  it("does not announce a direct child that moved to a newer parent", async () => {
+    subagentRegistryMock.countPendingDescendantRuns.mockReturnValue(0);
+    subagentRegistryMock.listSubagentRunsForRequester.mockImplementation(
+      (sessionKey: string, scope?: { requesterRunId?: string }) => {
+        if (sessionKey !== "agent:main:subagent:old-parent") {
+          return [];
+        }
+        if (scope?.requesterRunId !== "run-old-parent-settled") {
+          return [];
+        }
+        return [
+          {
+            runId: "run-child-old-parent",
+            childSessionKey: "agent:main:subagent:shared-child",
+            requesterSessionKey: "agent:main:subagent:old-parent",
+            requesterDisplayKey: "old-parent",
+            task: "shared child task",
+            label: "shared-child",
+            cleanup: "keep",
+            createdAt: 10,
+            endedAt: 20,
+            cleanupCompletedAt: 21,
+            frozenResultText: "stale old parent result",
+            outcome: { status: "ok" },
+          },
+        ];
+      },
+    );
+    subagentRegistryMock.getLatestSubagentRunByChildSessionKey.mockImplementation(
+      (childSessionKey: string) => {
+        if (childSessionKey !== "agent:main:subagent:shared-child") {
+          return undefined;
+        }
+        return {
+          runId: "run-child-new-parent",
+          childSessionKey,
+          requesterSessionKey: "agent:main:subagent:new-parent",
+          requesterDisplayKey: "new-parent",
+          task: "shared child task",
+          label: "shared-child",
+          cleanup: "keep",
+          createdAt: 11,
+          endedAt: 22,
+          cleanupCompletedAt: 23,
+          frozenResultText: "current new parent result",
+          outcome: { status: "ok" },
+        };
+      },
+    );
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:old-parent",
+      childRunId: "run-old-parent-settled",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: "old parent fallback reply",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message ?? "";
+    expect(msg).not.toContain("Child completion results:");
+    expect(msg).not.toContain("stale old parent result");
+    expect(msg).toContain("old parent fallback reply");
   });
 
   it("wakes an ended orchestrator run with settled child results before any upward announce", async () => {

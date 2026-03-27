@@ -17,6 +17,8 @@ import {
   detectPluginInstallPathIssue,
   formatPluginInstallPathIssue,
 } from "../../../infra/plugin-install-path-warnings.js";
+import { removePluginFromConfig } from "../../../plugins/uninstall.js";
+import type { DoctorConfigMutationResult } from "../shared/config-mutation-state.js";
 
 export function formatMatrixLegacyStatePreview(
   detection: Exclude<ReturnType<typeof detectLegacyMatrixState>, null | { warning: string }>,
@@ -66,6 +68,48 @@ export async function collectMatrixInstallPathWarnings(cfg: OpenClawConfig): Pro
     repoInstallCommand: "openclaw plugins install ./extensions/matrix",
     formatCommand: formatCliCommand,
   }).map((entry) => `- ${entry}`);
+}
+
+/**
+ * Produces a config mutation that removes stale Matrix plugin install/load-path
+ * references left behind by the old bundled-plugin layout.  When the install
+ * record points to a path that no longer exists on disk the config entry blocks
+ * validation, so removing it lets reinstall proceed cleanly.
+ */
+export async function cleanStaleMatrixPluginConfig(
+  cfg: OpenClawConfig,
+): Promise<DoctorConfigMutationResult> {
+  const issue = await detectPluginInstallPathIssue({
+    pluginId: "matrix",
+    install: cfg.plugins?.installs?.matrix,
+  });
+  if (!issue || issue.kind !== "missing-path") {
+    return { config: cfg, changes: [] };
+  }
+  const { config, actions } = removePluginFromConfig(cfg, "matrix");
+  const removed: string[] = [];
+  if (actions.install) {
+    removed.push("install record");
+  }
+  if (actions.loadPath) {
+    removed.push("load path");
+  }
+  if (actions.entry) {
+    removed.push("plugin entry");
+  }
+  if (actions.allowlist) {
+    removed.push("allowlist entry");
+  }
+  if (removed.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+  return {
+    config,
+    changes: [
+      `Removed stale Matrix plugin references (${removed.join(", ")}). ` +
+        `The previous install path no longer exists: ${issue.path}`,
+    ],
+  };
 }
 
 export async function applyMatrixDoctorRepair(params: {

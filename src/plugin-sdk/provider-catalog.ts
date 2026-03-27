@@ -15,6 +15,7 @@ export {
   buildBytePlusCodingProvider,
   buildBytePlusProvider,
 } from "../../extensions/byteplus/provider-catalog.js";
+export { buildDeepSeekProvider } from "../../extensions/deepseek/provider-catalog.js";
 export { buildHuggingfaceProvider } from "../../extensions/huggingface/provider-catalog.js";
 export { buildKimiCodingProvider } from "../../extensions/kimi-coding/provider-catalog.js";
 export {
@@ -39,7 +40,6 @@ export {
   QIANFAN_DEFAULT_MODEL_ID,
   buildQianfanProvider,
 } from "../../extensions/qianfan/provider-catalog.js";
-export { buildQwenPortalProvider } from "../../extensions/qwen-portal-auth/provider-catalog.js";
 export { buildSyntheticProvider } from "../../extensions/synthetic/provider-catalog.js";
 export { buildTogetherProvider } from "../../extensions/together/provider-catalog.js";
 export { buildVeniceProvider } from "../../extensions/venice/provider-catalog.js";

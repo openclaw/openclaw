@@ -109,10 +109,7 @@ export function parseAt(input: string, tz?: string): string | null {
   // If a timezone is provided and the input looks like an offset-less ISO datetime,
   // resolve it in the given IANA timezone so users get the time they expect.
   if (tz && isOffsetlessIsoDateTime(raw)) {
-    const resolved = parseOffsetlessIsoDateTimeInTimeZone(raw, tz);
-    if (resolved) {
-      return resolved;
-    }
+    return parseOffsetlessIsoDateTimeInTimeZone(raw, tz);
   }
 
   const absolute = parseAbsoluteTimeMs(raw);

@@ -44,6 +44,7 @@ const service = vi.hoisted(() => ({
   loadedText: "loaded",
   notLoadedText: "not loaded",
   isLoaded: vi.fn(async () => false),
+  stage: vi.fn(async () => {}),
   install: vi.fn(async () => {}),
   uninstall: vi.fn(async () => {}),
   restart: vi.fn(async () => {}),
@@ -167,6 +168,7 @@ describe("runDaemonInstall", () => {
     isGatewayDaemonRuntimeMock.mockReset();
     installDaemonServiceAndEmitMock.mockReset();
     service.isLoaded.mockReset();
+    service.stage.mockReset();
     resetRuntimeCapture();
     actionState.warnings.length = 0;
     actionState.emitted.length = 0;
@@ -194,6 +196,7 @@ describe("runDaemonInstall", () => {
     isGatewayDaemonRuntimeMock.mockReturnValue(true);
     installDaemonServiceAndEmitMock.mockResolvedValue(undefined);
     service.isLoaded.mockResolvedValue(false);
+    service.stage.mockResolvedValue(undefined);
     service.readCommand.mockResolvedValue(null);
     resolveNodeStartupTlsEnvironmentMock.mockReturnValue({
       NODE_EXTRA_CA_CERTS: undefined,

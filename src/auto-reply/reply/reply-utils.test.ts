@@ -193,6 +193,81 @@ describe("normalizeReplyPayload", () => {
       ],
     });
   });
+
+  it("compiles simple trailing Options lines into Slack buttons when interactive replies are enabled", () => {
+    const result = normalizeReplyPayload(
+      {
+        text: "Current verbose level: off.\nOptions: on, full, off.",
+      },
+      { enableSlackInteractiveReplies: true },
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("Current verbose level: off.");
+    expect(result!.interactive).toEqual({
+      blocks: [
+        {
+          type: "text",
+          text: "Current verbose level: off.",
+        },
+        {
+          type: "buttons",
+          buttons: [
+            { label: "on", value: "on" },
+            { label: "full", value: "full" },
+            { label: "off", value: "off" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("uses a Slack select when simple Options lines exceed the button row size", () => {
+    const result = normalizeReplyPayload(
+      {
+        text: "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
+      },
+      { enableSlackInteractiveReplies: true },
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("Choose a reasoning level.");
+    expect(result!.interactive).toEqual({
+      blocks: [
+        {
+          type: "text",
+          text: "Choose a reasoning level.",
+        },
+        {
+          type: "select",
+          placeholder: "Choose an option",
+          options: [
+            { label: "off", value: "off" },
+            { label: "minimal", value: "minimal" },
+            { label: "low", value: "low" },
+            { label: "medium", value: "medium" },
+            { label: "high", value: "high" },
+            { label: "adaptive", value: "adaptive" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("leaves complex Options lines as plain text", () => {
+    const result = normalizeReplyPayload(
+      {
+        text: "ACP runtime choices.\nOptions: host=sandbox|gateway|node, security=deny|allowlist|full.",
+      },
+      { enableSlackInteractiveReplies: true },
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe(
+      "ACP runtime choices.\nOptions: host=sandbox|gateway|node, security=deny|allowlist|full.",
+    );
+    expect(result!.interactive).toBeUndefined();
+  });
 });
 
 describe("typing controller", () => {
@@ -557,6 +632,20 @@ describe("createTypingSignaler", () => {
     await signaler.signalTextDelta("hi");
     expect(typing.startTypingLoop).toHaveBeenCalled();
     expect(typing.refreshTypingTtl).toHaveBeenCalled();
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+  });
+
+  it("does not start typing for media-only deltas", async () => {
+    const typing = createMockTypingController();
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "message",
+      isHeartbeat: false,
+    });
+
+    await signaler.signalTextDelta(undefined);
+
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
 

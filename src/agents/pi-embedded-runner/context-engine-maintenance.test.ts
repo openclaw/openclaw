@@ -10,6 +10,8 @@ const rewriteTranscriptEntriesInSessionFileMock = vi.fn(async (_params?: unknown
   bytesFreed: 123,
   rewrittenEntries: 2,
 }));
+let buildContextEngineMaintenanceRuntimeContext: typeof import("./context-engine-maintenance.js").buildContextEngineMaintenanceRuntimeContext;
+let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js").runContextEngineMaintenance;
 
 vi.mock("./transcript-rewrite.js", () => ({
   rewriteTranscriptEntriesInSessionManager: (params: unknown) =>
@@ -18,15 +20,17 @@ vi.mock("./transcript-rewrite.js", () => ({
     rewriteTranscriptEntriesInSessionFileMock(params),
 }));
 
-import {
-  buildContextEngineMaintenanceRuntimeContext,
-  runContextEngineMaintenance,
-} from "./context-engine-maintenance.js";
+async function loadFreshContextEngineMaintenanceModuleForTest() {
+  vi.resetModules();
+  ({ buildContextEngineMaintenanceRuntimeContext, runContextEngineMaintenance } =
+    await import("./context-engine-maintenance.js"));
+}
 
 describe("buildContextEngineMaintenanceRuntimeContext", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     rewriteTranscriptEntriesInSessionManagerMock.mockClear();
     rewriteTranscriptEntriesInSessionFileMock.mockClear();
+    await loadFreshContextEngineMaintenanceModuleForTest();
   });
 
   it("adds a transcript rewrite helper that targets the current session file", async () => {
@@ -96,9 +100,10 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
 });
 
 describe("runContextEngineMaintenance", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     rewriteTranscriptEntriesInSessionManagerMock.mockClear();
     rewriteTranscriptEntriesInSessionFileMock.mockClear();
+    await loadFreshContextEngineMaintenanceModuleForTest();
   });
 
   it("passes a rewrite-capable runtime context into maintain()", async () => {

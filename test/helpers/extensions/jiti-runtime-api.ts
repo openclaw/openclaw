@@ -127,11 +127,13 @@ function collectSourceModuleRefs(filePath: string): SourceModuleRef[] {
 function collectPluginSdkAliases(params: {
   modulePath: string;
   root: string;
+  realPluginSdkSpecifiers?: readonly string[];
 }): Record<string, string> {
   const realSpecifiers = new Set<string>();
   const stubSpecifiers = new Set<string>();
   const visitedFiles = new Set<string>();
   const stubPath = path.join(params.root, "test", "helpers", "extensions", "plugin-sdk-stub.cjs");
+  const explicitRealSpecifiers = new Set(params.realPluginSdkSpecifiers ?? []);
 
   function visitModule(filePath: string, rootModule: boolean): void {
     if (visitedFiles.has(filePath)) {
@@ -141,7 +143,11 @@ function collectPluginSdkAliases(params: {
 
     for (const ref of collectSourceModuleRefs(filePath)) {
       if (ref.specifier.startsWith(PLUGIN_SDK_SPECIFIER_PREFIX)) {
-        if (rootModule && !ref.typeOnly) {
+        const shouldKeepReal =
+          rootModule &&
+          !ref.typeOnly &&
+          (explicitRealSpecifiers.size === 0 || explicitRealSpecifiers.has(ref.specifier));
+        if (shouldKeepReal) {
           realSpecifiers.add(ref.specifier);
           const subpath = ref.specifier.slice(PLUGIN_SDK_SPECIFIER_PREFIX.length);
           const target = resolvePluginSdkAliasTarget(params.root, subpath);
@@ -188,10 +194,15 @@ export function loadRuntimeApiExportTypesViaJiti(params: {
   modulePath: string;
   exportNames: readonly string[];
   additionalAliases?: Record<string, string>;
+  realPluginSdkSpecifiers?: readonly string[];
 }): Record<string, string> {
   const root = process.cwd();
   const alias = {
-    ...collectPluginSdkAliases({ modulePath: params.modulePath, root }),
+    ...collectPluginSdkAliases({
+      modulePath: params.modulePath,
+      root,
+      realPluginSdkSpecifiers: params.realPluginSdkSpecifiers,
+    }),
     ...params.additionalAliases,
   };
 

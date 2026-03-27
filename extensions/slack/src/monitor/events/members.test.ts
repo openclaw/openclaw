@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const memberMocks = vi.hoisted(() => ({
   enqueue: vi.fn(),
@@ -65,12 +65,14 @@ async function runMemberCase(args: MemberCaseArgs = {}): Promise<void> {
 }
 
 describe("registerSlackMemberEvents", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    memberMocks.enqueue.mockClear();
+  beforeAll(async () => {
     ({ registerSlackMemberEvents } = await import("./members.js"));
     ({ createSlackSystemEventTestHarness: initSlackHarness } =
       await import("./system-event-test-harness.js"));
+  });
+
+  beforeEach(() => {
+    memberMocks.enqueue.mockClear();
   });
 
   const cases: Array<{ name: string; args: MemberCaseArgs; calls: number }> = [
