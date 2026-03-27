@@ -14,6 +14,10 @@ import {
 } from "./directive-handling.model.js";
 import { persistInlineDirectives } from "./directive-handling.persist.js";
 
+const liveModelSwitchMocks = vi.hoisted(() => ({
+  requestLiveSessionModelSwitch: vi.fn(),
+}));
+
 // Mock dependencies for directive handling persistence.
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: vi.fn(() => ({})),
@@ -31,6 +35,11 @@ vi.mock("../../config/sessions.js", () => ({
 
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
+}));
+
+vi.mock("../../agents/live-model-switch.js", () => ({
+  requestLiveSessionModelSwitch: (...args: unknown[]) =>
+    liveModelSwitchMocks.requestLiveSessionModelSwitch(...args),
 }));
 
 const TEST_AGENT_DIR = "/tmp/agent";
@@ -65,6 +74,7 @@ beforeEach(() => {
       store: { version: 1, profiles: {} },
     },
   ]);
+  liveModelSwitchMocks.requestLiveSessionModelSwitch.mockReset().mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -495,6 +505,28 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text).toContain("Model set to");
     expect(result?.text).toContain("openai/gpt-4o");
     expect(result?.text).not.toContain("failed");
+  });
+
+  it("requests a live restart when /model mutates an active session", async () => {
+    const directives = parseInlineDirectives("/model openai/gpt-4o");
+    const sessionEntry = createSessionEntry();
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+      }),
+    );
+
+    expect(liveModelSwitchMocks.requestLiveSessionModelSwitch).toHaveBeenCalledWith({
+      sessionEntry,
+      selection: {
+        provider: "openai",
+        model: "gpt-4o",
+        authProfileId: undefined,
+        authProfileIdSource: undefined,
+      },
+    });
   });
 
   it("shows no model message when no /model directive", async () => {

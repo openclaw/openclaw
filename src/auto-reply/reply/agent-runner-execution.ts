@@ -7,6 +7,7 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
@@ -604,6 +605,17 @@ export async function runAgentTurnWithFallback(params: {
 
       break;
     } catch (err) {
+      if (err instanceof LiveSessionModelSwitchError) {
+        params.followupRun.run.provider = err.provider;
+        params.followupRun.run.model = err.model;
+        params.followupRun.run.authProfileId = err.authProfileId;
+        params.followupRun.run.authProfileIdSource = err.authProfileId
+          ? err.authProfileIdSource
+          : undefined;
+        fallbackProvider = err.provider;
+        fallbackModel = err.model;
+        continue;
+      }
       const message = err instanceof Error ? err.message : String(err);
       const isBilling = isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
