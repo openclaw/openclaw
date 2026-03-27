@@ -45,6 +45,7 @@
   "lazy-runtime",
   "testing",
   "temp-path",
+  "logging-core",
   "account-helpers",
   "account-core",
   "account-id",

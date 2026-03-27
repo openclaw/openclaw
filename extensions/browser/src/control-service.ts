@@ -1,8 +1,9 @@
-import { createSubsystemLogger, loadConfig } from "openclaw/plugin-sdk/browser-support";
 import { resolveBrowserConfig } from "./browser/config.js";
 import { ensureBrowserControlAuth } from "./browser/control-auth.js";
 import { createBrowserRuntimeState, stopBrowserRuntime } from "./browser/runtime-lifecycle.js";
 import { type BrowserServerState, createBrowserRouteContext } from "./browser/server-context.js";
+import { loadConfig } from "./config/config.js";
+import { createSubsystemLogger } from "./logging/subsystem.js";
 import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
 
 let state: BrowserServerState | null = null;
