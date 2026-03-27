@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/memory-core-host";
+export * from "openclaw/plugin-sdk/memory-core-host-runtime";

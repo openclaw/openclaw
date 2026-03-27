@@ -424,6 +424,14 @@
       "types": "./dist/plugin-sdk/memory-core-host.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host.js"
     },
+    "./plugin-sdk/memory-core-host-engine": {
+      "types": "./dist/plugin-sdk/memory-core-host-engine.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-engine.js"
+    },
+    "./plugin-sdk/memory-core-host-runtime": {
+      "types": "./dist/plugin-sdk/memory-core-host-runtime.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-runtime.js"
+    },
     "./plugin-sdk/memory-lancedb": {
       "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
       "default": "./dist/plugin-sdk/memory-lancedb.js"
