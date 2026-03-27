@@ -646,7 +646,11 @@ export const dispatchTelegramMessage = async ({
       },
     }));
   } finally {
-    // Must stop() first to flush debounced content before clear() wipes state.
+    // stop() flushes debounced content (for finalized previews that need a last edit).
+    // clear() abandons pending content without flushing, then deletes any sent preview.
+    // When shouldClear is true (no final content delivered), skip stop() to avoid
+    // flushing partial control signal text (e.g. "NO" from NO_REPLY) that would
+    // briefly appear in Telegram before clear() deletes it (PRODUCT-2674).
     const streamCleanupStates = new Map<
       NonNullable<DraftLaneState["stream"]>,
       { shouldClear: boolean }
@@ -669,9 +673,10 @@ export const dispatchTelegramMessage = async ({
       existing.shouldClear = existing.shouldClear && shouldClear;
     }
     for (const [stream, cleanupState] of streamCleanupStates) {
-      await stream.stop();
       if (cleanupState.shouldClear) {
         await stream.clear();
+      } else {
+        await stream.stop();
       }
     }
     for (const archivedPreview of archivedAnswerPreviews) {
