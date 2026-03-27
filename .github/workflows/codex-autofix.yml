@@ -43,15 +43,18 @@ jobs:
       - name: Capture CI failure logs
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          gh run view "${{ github.event.workflow_run.id }}" \
+          gh run view "$RUN_ID" \
             --log-failed 2>&1 | tail -300 > /tmp/ci-failure-logs.txt
 
           echo "" >> /tmp/ci-failure-logs.txt
           echo "=== Failure Metadata ===" >> /tmp/ci-failure-logs.txt
-          echo "Run ID:  ${{ github.event.workflow_run.id }}" >> /tmp/ci-failure-logs.txt
-          echo "Branch:  ${{ github.event.workflow_run.head_branch }}" >> /tmp/ci-failure-logs.txt
-          echo "SHA:     ${{ github.event.workflow_run.head_sha }}" >> /tmp/ci-failure-logs.txt
+          echo "Run ID:  $RUN_ID" >> /tmp/ci-failure-logs.txt
+          echo "Branch:  $HEAD_BRANCH" >> /tmp/ci-failure-logs.txt
+          echo "SHA:     $HEAD_SHA" >> /tmp/ci-failure-logs.txt
 
       - name: Run Codex autofix
         uses: openai/codex-action@v1
@@ -77,6 +80,10 @@ jobs:
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           if [ -n "$(git status --porcelain)" ] && [ ! -f "AUTOFIX_SKIPPED.md" ]; then
             BRANCH="codex/autofix-$(date +%Y%m%d-%H%M%S)"
@@ -84,13 +91,13 @@ jobs:
             git config user.name "codex[bot]"
             git config user.email "codex[bot]@users.noreply.github.com"
             git add -A
-            git commit -m "fix: auto-fix CI failure from run #${{ github.event.workflow_run.id }}"
+            git commit -m "fix: auto-fix CI failure from run #$RUN_ID"
             git push origin "$BRANCH"
             gh pr create \
-              --base "${{ github.event.workflow_run.head_branch }}" \
+              --base "$HEAD_BRANCH" \
               --head "$BRANCH" \
-              --title "fix: Codex autofix for CI failure on ${{ github.event.workflow_run.head_branch }}" \
-              --body "Automated fix for failed CI run [#${{ github.event.workflow_run.id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}).
+              --title "fix: Codex autofix for CI failure on $HEAD_BRANCH" \
+              --body "Automated fix for failed CI run [#$RUN_ID]($SERVER_URL/$REPOSITORY/actions/runs/$RUN_ID).
 
             **Always review carefully before merging.**"
           fi

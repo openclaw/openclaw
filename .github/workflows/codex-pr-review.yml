@@ -63,7 +63,7 @@ jobs:
             Skip style nits already covered by oxlint/oxfmt (formatting, naming conventions).
 
       - name: Post review comment
-        if: ${{ steps.codex.outputs.final-message != '' }}
+        if: steps.codex.outputs.final-message != ''
         uses: actions/github-script@v7
         env:
           REVIEW: ${{ steps.codex.outputs.final-message }}
