@@ -1,6 +1,18 @@
-import { describe, expect, it } from "vitest";
-import { providerContractLoadError, providerContractRegistry } from "./registry.js";
-import { installProviderPluginContractSuite } from "./suites.js";
+import { afterAll, describe, expect, it } from "vitest";
+
+const previousPreferDistPluginSdk = process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST;
+process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST = "1";
+
+const { providerContractLoadError, providerContractRegistry } = await import("./registry.js");
+const { installProviderPluginContractSuite } = await import("./suites.js");
+
+afterAll(() => {
+  if (previousPreferDistPluginSdk === undefined) {
+    delete process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST;
+  } else {
+    process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST = previousPreferDistPluginSdk;
+  }
+});
 
 describe("provider contract registry load", () => {
   it("loads bundled providers without import-time registry failure", () => {
