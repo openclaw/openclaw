@@ -8,15 +8,11 @@ import {
 } from "../agents/doubao-models.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
+import { KIMI_MODEL_CATALOG } from "../agents/kimi-models.js";
 import {
   normalizePluginsConfig,
   resolveEnableState,
 } from "./config-state.js";
-import {
-  KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
-  KIMI_CODING_DEFAULT_MODEL_ID,
-  KIMI_CODING_LEGACY_MODEL_ID,
-} from "../../extensions/kimi-coding/provider-catalog.js";
 import type {
   ProviderAugmentModelCatalogContext,
   ProviderBuiltInModelSuppressionContext,
@@ -136,24 +132,14 @@ export function augmentBundledProviderCatalog(
     input: [...entry.input],
   }));
 
-  const kimiModels: ModelCatalogEntry[] = [
-    {
-      id: KIMI_CODING_DEFAULT_MODEL_ID,
-      name: "Kimi Code",
-      provider: "kimi",
-      contextWindow: KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
-      reasoning: true,
-      input: ["text", "image"] as const,
-    },
-    {
-      id: KIMI_CODING_LEGACY_MODEL_ID,
-      name: "Kimi Code (legacy model id)",
-      provider: "kimi",
-      contextWindow: KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
-      reasoning: true,
-      input: ["text", "image"] as const,
-    },
-  ];
+  const kimiModels: ModelCatalogEntry[] = KIMI_MODEL_CATALOG.map((entry) => ({
+    id: entry.id,
+    name: entry.name,
+    provider: "kimi",
+    contextWindow: entry.contextWindow,
+    reasoning: entry.reasoning,
+    input: [...entry.input],
+  }));
 
   return [
     openAiGpt54Template
