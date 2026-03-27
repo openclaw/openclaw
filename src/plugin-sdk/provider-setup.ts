@@ -17,10 +17,7 @@ export {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../plugins/provider-self-hosted-setup.js";
-export {
-  OLLAMA_DEFAULT_BASE_URL,
-  OLLAMA_DEFAULT_MODEL,
-} from "../../extensions/ollama/api.js";
+export { OLLAMA_DEFAULT_BASE_URL, OLLAMA_DEFAULT_MODEL } from "../../extensions/ollama/api.js";
 export {
   buildOllamaProvider,
   configureOllamaNonInteractive,
