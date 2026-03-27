@@ -14,3 +14,4 @@ export {
   normalizeWhatsAppTarget,
 } from "./src/normalize-target.js";
 export { resolveWhatsAppGroupIntroHint } from "./src/runtime-api.js";
+export { __testing as whatsappAccessControlTesting } from "./src/inbound/access-control.js";
