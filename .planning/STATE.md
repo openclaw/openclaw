@@ -40,8 +40,8 @@ Plan: 2 of 2
 | Phase 01 P01           | 183s  | 1 tasks | 4 files |
 | Phase 01 P03           | 161s  | 2 tasks | 3 files |
 | Phase 01 P02           | 198   | 1 tasks | 2 files |
-| Phase 02 P01 | 132 | 1 tasks | 4 files |
-| Phase 02 P02 | 277 | 2 tasks | 3 files |
+| Phase 02 P01           | 132   | 1 tasks | 4 files |
+| Phase 02 P02           | 277   | 2 tasks | 3 files |
 
 ## Accumulated Context
 

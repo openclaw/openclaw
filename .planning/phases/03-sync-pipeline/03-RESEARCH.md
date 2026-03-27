@@ -11,6 +11,7 @@ Phase 3 implements a file watcher + index generation pipeline. The codebase alre
 ## Validation Architecture
 
 ### Testable Surfaces
+
 1. **Index generation** — parse markdown → produce JSON (pure function, unit-testable)
 2. **Atomic writes** — temp file → rename (filesystem test with temp dirs)
 3. **Debounce logic** — rapid changes → single update (timer-based test)
@@ -18,6 +19,7 @@ Phase 3 implements a file watcher + index generation pipeline. The codebase alre
 5. **Watcher lifecycle** — start/stop/cleanup (integration test)
 
 ### Validation Strategy
+
 - Unit tests for index generators (given parsed frontmatter, produce correct JSON)
 - Integration tests with temp directories for atomic write + reindex
 - Timer-based tests for debounce (fake timers via vitest)
@@ -54,11 +56,13 @@ Key pattern: `awaitWriteFinish` handles partial writes (SYNC-02), `ignoreInitial
 **Option B: Simple temp+rename** — `fs.writeFile(temp) → fs.rename(temp, target)`. Sufficient for .index/ JSON files which are small (<100KB) and disposable.
 
 **Recommendation:** Use Option B (simple temp+rename). The pinned-write helper is overkill for disposable .index/ files. Keep it simple:
+
 ```typescript
-const tmp = target + '.tmp';
+const tmp = target + ".tmp";
 await fs.writeFile(tmp, data);
 await fs.rename(tmp, target);
 ```
+
 This satisfies SYNC-05 (atomic writes) without the complexity of the Python subprocess path.
 
 ### 3. Service Lifecycle Pattern
@@ -95,11 +99,11 @@ Services follow `start(context) → stop()` pattern with reverse-order shutdown.
 
 ### 5. Incremental Update Mapping
 
-| Source file changed | .index/ files regenerated |
-|---|---|
-| PROJECT.md | project.json |
-| queue.md | queue.json |
-| tasks/TASK-NNN.md | tasks/TASK-NNN.json + board.json |
+| Source file changed       | .index/ files regenerated                |
+| ------------------------- | ---------------------------------------- |
+| PROJECT.md                | project.json                             |
+| queue.md                  | queue.json                               |
+| tasks/TASK-NNN.md         | tasks/TASK-NNN.json + board.json         |
 | tasks/TASK-NNN.md deleted | tasks/TASK-NNN.json deleted + board.json |
 
 Board.json must always be regenerated when any task changes because column assignments depend on task status.
@@ -108,11 +112,11 @@ Board.json must always be regenerated when any task changes because column assig
 
 ```typescript
 type SyncEvent =
-  | { type: 'project:changed'; project: string }
-  | { type: 'task:changed'; project: string; taskId: string }
-  | { type: 'task:deleted'; project: string; taskId: string }
-  | { type: 'queue:changed'; project: string }
-  | { type: 'reindex:complete'; project: string };
+  | { type: "project:changed"; project: string }
+  | { type: "task:changed"; project: string; taskId: string }
+  | { type: "task:deleted"; project: string; taskId: string }
+  | { type: "queue:changed"; project: string }
+  | { type: "reindex:complete"; project: string };
 ```
 
 ### 7. Error Handling
@@ -132,16 +136,17 @@ ProjectSyncService needs to discover all projects at startup for full reindex. S
 
 ## Risks & Mitigations
 
-| Risk | Mitigation |
-|---|---|
-| Chokidar event storms on large projects | Per-project debounce (D-06) + awaitWriteFinish |
-| Race between watcher startup and full reindex | Run full reindex first, then start watcher |
-| .index/ left in broken state on crash | Full reindex on startup (D-08) recovers |
-| Sub-project changes not detected | Watch recursively under projects root |
+| Risk                                          | Mitigation                                     |
+| --------------------------------------------- | ---------------------------------------------- |
+| Chokidar event storms on large projects       | Per-project debounce (D-06) + awaitWriteFinish |
+| Race between watcher startup and full reindex | Run full reindex first, then start watcher     |
+| .index/ left in broken state on crash         | Full reindex on startup (D-08) recovers        |
+| Sub-project changes not detected              | Watch recursively under projects root          |
 
 ## Architecture Recommendation
 
 Split into 3 modules:
+
 1. **`src/projects/index-generator.ts`** — Pure functions: given parsed frontmatter, produce JSON. Unit-testable.
 2. **`src/projects/sync-service.ts`** — ProjectSyncService class with chokidar watcher, debounce, EventEmitter. Integration-testable.
 3. Tests: `index-generator.test.ts` + `sync-service.test.ts`
@@ -150,4 +155,4 @@ This keeps index generation logic separate from watcher plumbing, making both in
 
 ---
 
-*Research completed: 2026-03-27*
+_Research completed: 2026-03-27_

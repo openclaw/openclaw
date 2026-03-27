@@ -49,7 +49,7 @@ export class ProjectManager {
       await fs.mkdir(projectDir);
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new Error(`Project already exists at ${projectDir}`);
+        throw new Error(`Project already exists at ${projectDir}`, { cause: err });
       }
       throw err;
     }
@@ -90,7 +90,7 @@ export class ProjectManager {
       await fs.mkdir(subDir);
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new Error(`Sub-project already exists at ${subDir}`);
+        throw new Error(`Sub-project already exists at ${subDir}`, { cause: err });
       }
       throw err;
     }
@@ -131,7 +131,9 @@ export class ProjectManager {
       const match = pattern.exec(entry);
       if (match) {
         const num = parseInt(match[1], 10);
-        if (num > maxId) maxId = num;
+        if (num > maxId) {
+          maxId = num;
+        }
       }
     }
 

@@ -69,8 +69,12 @@
 3. Partial file writes (slow save, large file) do not produce corrupt .index/ JSON
 4. Deleting the entire .index/ directory and restarting the gateway regenerates all JSON from markdown with no data loss
 5. .index/ JSON files are never in a half-written state (atomic write-then-rename)
-   **Plans**: TBD
-   **Estimated complexity**: M
+   **Plans:** 2 plans
+   Plans:
+
+- [ ] 03-01-PLAN.md — Sync event types, index shape types, and pure index generation functions
+- [ ] 03-02-PLAN.md — ProjectSyncService with chokidar watcher, debounce, lifecycle, and barrel exports
+      **Estimated complexity**: M
 
 ### Phase 4: Concurrency
 
@@ -262,20 +266,20 @@ Phase 1 (Types & Schemas)
 
 ## Progress
 
-| Phase                               | Plans Complete | Status            | Completed  |
-| ----------------------------------- | -------------- | ----------------- | ---------- |
-| 1. Types & Schemas                  | 3/3            | Complete          | 2026-03-26 |
-| 2. File Structure & Scaffolding     | 1/2 | In Progress|  |
-| 3. Sync Pipeline                    | 0/?            | Not started       | -          |
-| 4. Concurrency                      | 0/?            | Not started       | -          |
-| 5. Context Injection                | 0/?            | Not started       | -          |
-| 6. Queue & Heartbeat                | 0/?            | Not started       | -          |
-| 7. Gateway Service                  | 0/?            | Not started       | -          |
-| 8. CLI Commands                     | 0/?            | Not started       | -          |
-| 9. Project Views & Dashboard        | 0/?            | Not started       | -          |
-| 10. Kanban Board & Agent Indicators | 0/?            | Not started       | -          |
+| Phase                               | Plans Complete | Status      | Completed  |
+| ----------------------------------- | -------------- | ----------- | ---------- |
+| 1. Types & Schemas                  | 3/3            | Complete    | 2026-03-26 |
+| 2. File Structure & Scaffolding     | 1/2            | In Progress |            |
+| 3. Sync Pipeline                    | 0/2            | Planned     | -          |
+| 4. Concurrency                      | 0/?            | Not started | -          |
+| 5. Context Injection                | 0/?            | Not started | -          |
+| 6. Queue & Heartbeat                | 0/?            | Not started | -          |
+| 7. Gateway Service                  | 0/?            | Not started | -          |
+| 8. CLI Commands                     | 0/?            | Not started | -          |
+| 9. Project Views & Dashboard        | 0/?            | Not started | -          |
+| 10. Kanban Board & Agent Indicators | 0/?            | Not started | -          |
 
 ---
 
 _Created: 2026-03-26_
-_Last updated: 2026-03-26_
+_Last updated: 2026-03-27_

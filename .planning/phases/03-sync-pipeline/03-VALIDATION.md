@@ -15,13 +15,13 @@ created: 2026-03-27
 
 ## Test Infrastructure
 
-| Property | Value |
-|----------|-------|
-| **Framework** | vitest |
-| **Config file** | vitest.config.ts (existing) |
-| **Quick run command** | `pnpm test -- src/projects/` |
+| Property               | Value                        |
+| ---------------------- | ---------------------------- |
+| **Framework**          | vitest                       |
+| **Config file**        | vitest.config.ts (existing)  |
+| **Quick run command**  | `pnpm test -- src/projects/` |
 | **Full suite command** | `pnpm test -- src/projects/` |
-| **Estimated runtime** | ~20 seconds |
+| **Estimated runtime**  | ~20 seconds                  |
 
 ---
 
@@ -36,12 +36,12 @@ created: 2026-03-27
 
 ## Per-Task Verification Map
 
-| Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 03-01-01 | 01 | 1 | SYNC-04, SYNC-05 | unit | `pnpm test -- src/projects/index-generator` | ❌ W0 | ⬜ pending |
-| 03-02-01 | 02 | 1 | SYNC-01, SYNC-02, SYNC-03, SYNC-06, SYNC-07 | integration | `pnpm test -- src/projects/sync-service` | ❌ W0 | ⬜ pending |
+| Task ID  | Plan | Wave | Requirement                                 | Test Type   | Automated Command                           | File Exists | Status     |
+| -------- | ---- | ---- | ------------------------------------------- | ----------- | ------------------------------------------- | ----------- | ---------- |
+| 03-01-01 | 01   | 1    | SYNC-04, SYNC-05                            | unit        | `pnpm test -- src/projects/index-generator` | ❌ W0       | ⬜ pending |
+| 03-02-01 | 02   | 1    | SYNC-01, SYNC-02, SYNC-03, SYNC-06, SYNC-07 | integration | `pnpm test -- src/projects/sync-service`    | ❌ W0       | ⬜ pending |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+_Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
 ---
 
@@ -50,15 +50,15 @@ created: 2026-03-27
 - [ ] `src/projects/index-generator.test.ts` — stubs for SYNC-04, SYNC-05
 - [ ] `src/projects/sync-service.test.ts` — stubs for SYNC-01, SYNC-02, SYNC-03, SYNC-06, SYNC-07
 
-*Existing test infrastructure (vitest, temp-home, tracked-temp-dirs) covers framework needs.*
+_Existing test infrastructure (vitest, temp-home, tracked-temp-dirs) covers framework needs._
 
 ---
 
 ## Manual-Only Verifications
 
-| Behavior | Requirement | Why Manual | Test Instructions |
-|----------|-------------|------------|-------------------|
-| ~500ms latency from save to .index/ update | SYNC-01 | Timing sensitive, may be flaky in CI | Save a file, measure time to .index/ update |
+| Behavior                                   | Requirement | Why Manual                           | Test Instructions                           |
+| ------------------------------------------ | ----------- | ------------------------------------ | ------------------------------------------- |
+| ~500ms latency from save to .index/ update | SYNC-01     | Timing sensitive, may be flaky in CI | Save a file, measure time to .index/ update |
 
 ---
 

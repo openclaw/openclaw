@@ -198,7 +198,7 @@ describe("ProjectManager", () => {
         "sub-projects",
       );
       const entries = await fs.readdir(subProjectsDir);
-      expect(entries.sort()).toEqual(["alpha", "beta"]);
+      expect(entries.toSorted()).toEqual(["alpha", "beta"]);
     });
   });
 

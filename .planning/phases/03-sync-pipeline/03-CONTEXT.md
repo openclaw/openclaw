@@ -44,42 +44,52 @@ Detect changes to project markdown files under `~/.openclaw/projects/` and regen
 </decisions>
 
 <canonical_refs>
+
 ## Canonical References
 
 **Downstream agents MUST read these before planning or implementing.**
 
 ### Existing file watcher pattern
+
 - `src/memory/manager-sync-ops.ts` — Chokidar setup with `awaitWriteFinish`, debounce scheduling, watch lifecycle. Primary pattern to follow.
 
 ### Atomic write utilities
+
 - `src/infra/fs-pinned-write-helper.ts` — Write-then-rename atomic file writes with fsync. Available for .index/ file writes.
 
 ### Service lifecycle pattern
+
 - `src/plugins/services.ts` — `PluginServicesHandle` with `start()`/`stop()`. Pattern for ProjectSyncService lifecycle.
 - `src/gateway/server-startup.ts` — Gateway startup sequence showing where services are initialized.
 
 ### Home directory resolution
+
 - `src/infra/home-dir.ts` — `resolveEffectiveHomeDir()` for `~/.openclaw/` path resolution. All project paths must use this.
 
 ### Phase 1 deliverables (parsing layer)
+
 - `src/projects/schemas.ts` — Zod schemas for frontmatter validation
 - `src/projects/frontmatter.ts` — `parseProjectFrontmatter()`, `parseTaskFrontmatter()`, `parseQueueFrontmatter()`
 - `src/projects/queue-parser.ts` — Queue section parser
 - `src/projects/index.ts` — Public barrel export
 
 ### Phase 2 deliverables (scaffolding)
+
 - `src/projects/scaffold.ts` — `ProjectManager` class with `create()`, `createSubProject()`, `nextTaskId()`
 - `src/projects/templates.ts` — Template generation functions
 
 ### Design spec
+
 - `docs/superpowers/specs/2026-03-26-project-management-design.md` — Original design spec
 
 </canonical_refs>
 
 <code_context>
+
 ## Existing Code Insights
 
 ### Reusable Assets
+
 - `chokidar` — already a dependency, used in memory manager for file watching
 - `src/infra/fs-pinned-write-helper.ts` — atomic write-then-rename with fsync
 - `src/memory/manager-sync-ops.ts` — proven watcher pattern with `awaitWriteFinish` and debounce scheduling
@@ -87,12 +97,14 @@ Detect changes to project markdown files under `~/.openclaw/projects/` and regen
 - `src/infra/home-dir.ts` — `resolveEffectiveHomeDir()` for project root resolution
 
 ### Established Patterns
+
 - Chokidar watchers use `awaitWriteFinish` with `stabilityThreshold` and `pollInterval: 100` (memory manager)
 - Services follow `start()`/`stop()` lifecycle with reverse-order shutdown (plugin services)
 - Gateway starts services in sequence during `server-startup.ts`
 - Detached sync pattern: fire-and-forget with error logging (memory manager)
 
 ### Integration Points
+
 - `src/gateway/server-startup.ts` — ProjectSyncService starts here alongside other services
 - `src/projects/index.ts` — new sync exports added here
 - EventEmitter events consumed by Gateway (Phase 7) for WebSocket broadcasting
@@ -118,5 +130,5 @@ None — discussion stayed within phase scope
 
 ---
 
-*Phase: 03-sync-pipeline*
-*Context gathered: 2026-03-27*
+_Phase: 03-sync-pipeline_
+_Context gathered: 2026-03-27_
