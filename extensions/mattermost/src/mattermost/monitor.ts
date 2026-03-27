@@ -1856,7 +1856,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             const orphanId = streamMessageId;
             streamMessageId = null;
             if (orphanId) {
-              await deleteMattermostPost(client, orphanId).catch(() => {
+              void deleteMattermostPost(client, orphanId).catch(() => {
                 // Best-effort — the run is already complete.
               });
             }
