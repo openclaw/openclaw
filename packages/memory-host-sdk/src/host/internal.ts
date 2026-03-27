@@ -72,10 +72,28 @@ export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: str
   return Array.from(new Set(resolved));
 }
 
-export function isMemoryPath(relPath: string): boolean {
+function sanitizeUserId(userId: string): string {
+  const clean = Array.from(userId)
+    .filter((ch) => ch.charCodeAt(0) !== 0)
+    .join("");
+  return clean.replace(/[/\\:*?"<>|]/g, "_").replace(/\.{2,}/g, "_");
+}
+
+export function isMemoryPath(relPath: string, userId?: string): boolean {
   const normalized = normalizeRelPath(relPath);
   if (!normalized) {
     return false;
+  }
+  if (userId) {
+    const safeUser = sanitizeUserId(userId);
+    const userPrefix = `memory/users/${safeUser}/`;
+    if (normalized.startsWith(userPrefix)) {
+      return true;
+    }
+    // Block access to other user directories
+    if (normalized.startsWith("memory/users/")) {
+      return false;
+    }
   }
   if (normalized === "MEMORY.md" || normalized === "memory.md" || normalized === "dreams.md") {
     return true;
@@ -95,7 +113,7 @@ function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodal
 async function walkDir(dir: string, files: string[], multimodal?: MemoryMultimodalSettings) {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
-    const full = path.join(dir, entry.name);
+    const full = path.join(dir, entry.name).replace(/\\/g, "/");
     if (entry.isSymbolicLink()) {
       continue;
     }
@@ -134,24 +152,24 @@ async function resolveDefaultMemoryRootFile(workspaceDir: string): Promise<strin
   }
 }
 
-export async function listMemoryFiles(
+async function walkRootFiles(
   workspaceDir: string,
-  extraPaths?: string[],
+  result: string[],
   multimodal?: MemoryMultimodalSettings,
-): Promise<string[]> {
-  const result: string[] = [];
+): Promise<void> {
   const memoryDir = path.join(workspaceDir, "memory");
 
   const addMarkdownFile = async (absPath: string) => {
     try {
-      const stat = await fs.lstat(absPath);
+      const normalized = absPath.replace(/\\/g, "/");
+      const stat = await fs.lstat(normalized);
       if (stat.isSymbolicLink() || !stat.isFile()) {
         return;
       }
-      if (!absPath.endsWith(".md")) {
+      if (!normalized.endsWith(".md")) {
         return;
       }
-      result.push(absPath);
+      result.push(normalized);
     } catch {}
   };
 
@@ -162,9 +180,33 @@ export async function listMemoryFiles(
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
-      await walkDir(memoryDir, result);
+      await walkDir(memoryDir, result, multimodal);
     }
   } catch {}
+}
+
+export async function listMemoryFiles(
+  workspaceDir: string,
+  extraPaths?: string[],
+  multimodal?: MemoryMultimodalSettings,
+  userId?: string,
+): Promise<string[]> {
+  const result: string[] = [];
+
+  if (userId) {
+    const safeUser = sanitizeUserId(userId);
+    const userMemoryDir = path.join(workspaceDir, "memory", "users", safeUser);
+    try {
+      const dirStat = await fs.lstat(userMemoryDir);
+      if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
+        await walkDir(userMemoryDir, result, multimodal);
+      }
+    } catch {}
+    // Also include shared root files
+    await walkRootFiles(workspaceDir, result, multimodal);
+  } else {
+    await walkRootFiles(workspaceDir, result, multimodal);
+  }
 
   const normalizedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
   if (normalizedExtraPaths.length > 0) {

@@ -180,6 +180,7 @@ async function executeMemoryReadResult<T>(params: {
 export function createMemorySearchTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
+  senderId?: string;
 }) {
   return createMemoryTool({
     options,
@@ -189,7 +190,7 @@ export function createMemorySearchTool(options: {
       "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
     parameters: MemorySearchSchema,
     execute:
-      ({ cfg, agentId }) =>
+      ({ cfg, agentId, userId }) =>
       async (_toolCallId, params) => {
         const query = readStringParam(params, "query", { required: true });
         const maxResults = readNumberParam(params, "maxResults");
@@ -202,7 +203,9 @@ export function createMemorySearchTool(options: {
         const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
         const shouldQueryMemory = requestedCorpus !== "wiki";
         const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
-        const memory = shouldQueryMemory ? await getMemoryManagerContext({ cfg, agentId }) : null;
+        const memory = shouldQueryMemory
+          ? await getMemoryManagerContext({ cfg, agentId, userId })
+          : null;
         if (shouldQueryMemory && memory && "error" in memory && !shouldQuerySupplements) {
           return jsonResult(buildMemorySearchUnavailableResult(memory.error));
         }
@@ -321,6 +324,7 @@ export function createMemorySearchTool(options: {
 export function createMemoryGetTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
+  senderId?: string;
 }) {
   return createMemoryTool({
     options,

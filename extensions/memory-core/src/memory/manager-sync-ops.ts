@@ -126,6 +126,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly agentId: string;
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
+  protected abstract readonly userId: string | undefined;
   protected provider: EmbeddingProvider | null = null;
   protected fallbackFrom?: EmbeddingProviderId;
   protected providerRuntime?: EmbeddingProviderRuntime;
@@ -684,6 +685,7 @@ export abstract class MemoryManagerSyncOps {
       this.workspaceDir,
       this.settings.extraPaths,
       this.settings.multimodal,
+      this.settings.isolation.enabled ? this.userId : undefined,
     );
     const fileEntries = (
       await runWithConcurrency(

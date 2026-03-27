@@ -89,6 +89,9 @@ export type ResolvedMemorySearchConfig = {
     enabled: boolean;
     maxEntries?: number;
   };
+  isolation: {
+    enabled: boolean;
+  };
 };
 
 export type ResolvedMemorySearchSyncConfig = ResolvedMemorySearchConfig["sync"];
@@ -342,6 +345,9 @@ function mergeConfig(
           ? Math.max(1, Math.floor(cache.maxEntries))
           : undefined,
     },
+    isolation: {
+      enabled: true,
+    },
   };
 }
 
@@ -382,6 +388,9 @@ export function resolveMemorySearchConfig(
   const defaults = cfg.agents?.defaults?.memorySearch;
   const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
   const resolved = mergeConfig(defaults, overrides, agentId);
+  if (cfg.memory?.isolation?.enabled !== undefined) {
+    resolved.isolation.enabled = cfg.memory.isolation.enabled;
+  }
   if (!resolved.enabled) {
     return null;
   }

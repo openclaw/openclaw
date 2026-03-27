@@ -161,3 +161,22 @@ export function resolveThreadParentSessionKey(
   }
   return parent;
 }
+
+/**
+ * Extract user ID from session key for direct message sessions.
+ */
+export function extractUserIdFromSessionKey(sessionKey: string | undefined | null): string | null {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed?.rest) {
+    return null;
+  }
+  const tokens = parsed.rest.split(":").filter(Boolean);
+  const directIdx = tokens.indexOf("direct");
+  if (directIdx !== -1 && directIdx + 1 < tokens.length) {
+    const userId = tokens[directIdx + 1];
+    if (userId && !["group", "channel", "dm", "cron", "subagent", "acp"].includes(userId)) {
+      return userId;
+    }
+  }
+  return null;
+}

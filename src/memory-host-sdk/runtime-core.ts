@@ -17,6 +17,7 @@ export {
   listActiveMemoryPublicArtifacts,
 } from "../plugins/memory-state.js";
 export { parseAgentSessionKey } from "../routing/session-key.js";
+export { extractUserIdFromSessionKey } from "../sessions/session-key-utils.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { MemoryCitationsMode } from "../config/types.memory.js";
 export type {

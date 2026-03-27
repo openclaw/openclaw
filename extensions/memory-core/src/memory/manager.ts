@@ -31,11 +31,7 @@ import {
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
-import {
-  closeManagedCacheEntries,
-  getOrCreateManagedCacheEntry,
-  resolveSingletonManagedCache,
-} from "./manager-cache.js";
+import { closeManagedCacheEntries, resolveSingletonManagedCache } from "./manager-cache.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import {
   resolveMemoryPrimaryProviderRequest,
@@ -81,6 +77,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected readonly agentId: string;
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
+  protected readonly userId: string | undefined;
   protected provider: EmbeddingProvider | null;
   private readonly requestedProvider: EmbeddingProviderRequest;
   private providerInitPromise: Promise<void> | null = null;
@@ -155,6 +152,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   static async get(params: {
     cfg: OpenClawConfig;
     agentId: string;
+    userId?: string;
     purpose?: "default" | "status";
   }): Promise<MemoryIndexManager | null> {
     const { cfg, agentId } = params;
@@ -164,29 +162,60 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const purpose = params.purpose === "status" ? "status" : "default";
-    const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}:${purpose}`;
+    const userIdKey = settings.isolation.enabled ? (params.userId ?? "") : "";
+    const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}:${purpose}:${userIdKey}`;
     const statusOnly = params.purpose === "status";
-    return await getOrCreateManagedCacheEntry({
-      cache: INDEX_CACHE,
-      pending: INDEX_CACHE_PENDING,
-      key,
-      bypassCache: statusOnly,
-      create: async () =>
-        new MemoryIndexManager({
-          cacheKey: key,
-          cfg,
-          agentId,
-          workspaceDir,
-          settings,
-          purpose: params.purpose,
-        }),
-    });
+    if (statusOnly) {
+      return new MemoryIndexManager({
+        cacheKey: key,
+        cfg,
+        agentId,
+        userId: settings.isolation.enabled ? params.userId : undefined,
+        workspaceDir,
+        settings,
+        purpose: params.purpose,
+      });
+    }
+    const existing = INDEX_CACHE.get(key);
+    if (existing) {
+      return existing;
+    }
+    const pending = INDEX_CACHE_PENDING.get(key);
+    if (pending) {
+      return pending;
+    }
+    const createPromise = (async () => {
+      const refreshed = INDEX_CACHE.get(key);
+      if (refreshed) {
+        return refreshed;
+      }
+      const manager = new MemoryIndexManager({
+        cacheKey: key,
+        cfg,
+        agentId,
+        userId: settings.isolation.enabled ? params.userId : undefined,
+        workspaceDir,
+        settings,
+        purpose: params.purpose,
+      });
+      INDEX_CACHE.set(key, manager);
+      return manager;
+    })();
+    INDEX_CACHE_PENDING.set(key, createPromise);
+    try {
+      return await createPromise;
+    } finally {
+      if (INDEX_CACHE_PENDING.get(key) === createPromise) {
+        INDEX_CACHE_PENDING.delete(key);
+      }
+    }
   }
 
   private constructor(params: {
     cacheKey: string;
     cfg: OpenClawConfig;
     agentId: string;
+    userId?: string;
     workspaceDir: string;
     settings: ResolvedMemorySearchConfig;
     providerResult?: EmbeddingProviderResult;
@@ -196,6 +225,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.cacheKey = params.cacheKey;
     this.cfg = params.cfg;
     this.agentId = params.agentId;
+    this.userId = params.userId;
     this.workspaceDir = params.workspaceDir;
     this.settings = params.settings;
     this.provider = null;
@@ -686,6 +716,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       relPath: params.relPath,
       from: params.from,
       lines: params.lines,
+      userId: this.settings.isolation.enabled ? this.userId : undefined,
     });
   }
 
