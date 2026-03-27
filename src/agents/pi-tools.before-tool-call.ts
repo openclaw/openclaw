@@ -9,6 +9,7 @@ import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { callGatewayTool } from "./tools/gateway.js";
 
 export type HookContext = {
   agentId?: string;
@@ -223,7 +224,6 @@ export async function runBeforeToolCallHook(args: {
         }
       };
       try {
-        const { callGatewayTool } = await import("./tools/gateway.js");
         const requestResult = await callGatewayTool<{
           id?: string;
           status?: string;

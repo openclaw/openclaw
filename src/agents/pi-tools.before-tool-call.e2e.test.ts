@@ -6,10 +6,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import {
-  runBeforeToolCallHook,
-  wrapToolWithBeforeToolCallHook,
-} from "./pi-tools.before-tool-call.js";
+import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -333,23 +330,28 @@ describe("before_tool_call loop detection behavior", () => {
 });
 
 describe("before_tool_call requireApproval handling", () => {
+  let runBeforeToolCallHook: (typeof import("./pi-tools.before-tool-call.js"))["runBeforeToolCallHook"];
   let hookRunner: {
     hasHooks: ReturnType<typeof vi.fn>;
     runBeforeToolCall: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
+    vi.resetModules();
+    ({ runBeforeToolCallHook } = await import("./pi-tools.before-tool-call.js"));
+
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
     hookRunner = {
       hasHooks: vi.fn().mockReturnValue(true),
       runBeforeToolCall: vi.fn(),
     };
+    const { getGlobalHookRunner: currentGetGlobalHookRunner } =
+      await import("../plugins/hook-runner-global.js");
     // oxlint-disable-next-line typescript/no-explicit-any
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
-    // The vi.mock for hook-runner-global doesn't propagate to pi-tools.before-tool-call.ts
-    // because the setup file transitively loads the module before the mock is applied (CJS cache).
-    // Bypass by directly setting the global singleton that getGlobalHookRunner() reads from.
+    vi.mocked(currentGetGlobalHookRunner).mockReturnValue(hookRunner as any);
+    // Keep the global singleton aligned as a fallback in case another setup path
+    // preloads hook-runner-global before this test's module reset/mocks take effect.
     const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
     const hookRunnerGlobalState = globalThis as Record<
       symbol,
