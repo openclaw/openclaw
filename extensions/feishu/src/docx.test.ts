@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createToolFactoryHarness, type ToolLike } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
@@ -115,26 +116,19 @@ describe("feishu_doc image fetch hardening", () => {
   });
 
   function resolveFeishuDocTool(context: Record<string, unknown> = {}) {
-    const registerTool = vi.fn();
-    registerFeishuDocTools({
-      config: {
-        channels: {
-          feishu: {
-            appId: "app_id",
-            appSecret: "app_secret",
-          },
+    const harness = createToolFactoryHarness({
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: "app_id",
+          appSecret: "app_secret",
         },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
-    } as any);
-
-    const tool = registerTool.mock.calls
-      .map((call) => call[0])
-      .map((candidate) => (typeof candidate === "function" ? candidate(context) : candidate))
-      .find((candidate) => candidate.name === "feishu_doc");
+      },
+    });
+    registerFeishuDocTools(harness.api);
+    const tool = harness.resolveTool("feishu_doc", context);
     expect(tool).toBeDefined();
-    return tool as { execute: (callId: string, params: Record<string, unknown>) => Promise<any> };
+    return tool as ToolLike;
   }
 
   it("inserts blocks sequentially to preserve document order", async () => {

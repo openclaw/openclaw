@@ -37,10 +37,10 @@ stub = new Proxy(
       }
       return stub;
     },
-    ownKeys() {
-      return [];
+    ownKeys(target) {
+      return [...new Set([...Reflect.ownKeys(target), "__esModule", "default"])];
     },
-    getOwnPropertyDescriptor(_target, prop) {
+    getOwnPropertyDescriptor(target, prop) {
       if (prop === "__esModule") {
         return {
           configurable: true,
@@ -57,7 +57,7 @@ stub = new Proxy(
           writable: false,
         };
       }
-      return undefined;
+      return Reflect.getOwnPropertyDescriptor(target, prop);
     },
   },
 );

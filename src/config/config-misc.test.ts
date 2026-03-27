@@ -473,7 +473,7 @@ describe("config strict validation", () => {
     }
   });
 
-  it("flags legacy config entries without auto-migrating", async () => {
+  it("rejects removed legacy config entries without auto-migrating", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         memorySearch: { provider: "local", fallback: "none" },
@@ -482,7 +482,7 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues).not.toHaveLength(0);
+      expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
     });
   });
 
