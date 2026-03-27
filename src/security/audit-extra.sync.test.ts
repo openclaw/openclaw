@@ -23,9 +23,16 @@ describe("collectAttackSurfaceSummaryFindings", () => {
       expectedDetail: ["hooks.webhooks: enabled", "hooks.internal: enabled"],
     },
     {
-      name: "reports both hook systems as disabled when neither is configured",
+      name: "reports internal hooks as enabled by default and webhooks as disabled when neither is configured",
       cfg: {} satisfies OpenClawConfig,
-      expectedDetail: ["hooks.webhooks: disabled", "hooks.internal: disabled"],
+      expectedDetail: ["hooks.webhooks: disabled", "hooks.internal: enabled"],
+    },
+    {
+      name: "reports internal hooks as disabled when explicitly set to false",
+      cfg: {
+        hooks: { internal: { enabled: false } },
+      } satisfies OpenClawConfig,
+      expectedDetail: ["hooks.internal: disabled"],
     },
   ])("$name", ({ cfg, expectedDetail }) => {
     const [finding] = collectAttackSurfaceSummaryFindings(cfg);
