@@ -24,6 +24,7 @@ import {
 import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
+import { buildMinimaxSpeechProvider } from "./speech-provider.js";
 
 const API_PROVIDER_ID = "minimax";
 const PORTAL_PROVIDER_ID = "minimax-portal";
@@ -279,5 +280,6 @@ export default definePluginEntry({
     });
     api.registerImageGenerationProvider(buildMinimaxImageGenerationProvider());
     api.registerImageGenerationProvider(buildMinimaxPortalImageGenerationProvider());
+    api.registerSpeechProvider(buildMinimaxSpeechProvider());
   },
 });
