@@ -95,9 +95,13 @@ function readDirectStatusCode(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
+  const responseCandidate = (err as { response?: { status?: unknown; statusCode?: unknown } })
+    .response;
   const candidate =
     (err as { status?: unknown; statusCode?: unknown }).status ??
-    (err as { statusCode?: unknown }).statusCode;
+    (err as { statusCode?: unknown }).statusCode ??
+    responseCandidate?.status ??
+    responseCandidate?.statusCode;
   if (typeof candidate === "number") {
     return candidate;
   }

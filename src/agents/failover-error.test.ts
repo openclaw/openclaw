@@ -82,6 +82,24 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
   });
 
+  it("reads nested HTTP response status for transient server errors", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        response: { status: 500 },
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        response: { status: 502 },
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        response: { status: 504 },
+      }),
+    ).toBe("timeout");
+  });
+
   it("classifies documented provider error shapes at the error boundary", () => {
     expect(
       resolveFailoverReasonFromError({
