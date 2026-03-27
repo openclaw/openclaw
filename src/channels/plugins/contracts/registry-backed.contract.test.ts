@@ -1,4 +1,4 @@
-import { beforeEach, describe, vi } from "vitest";
+import { beforeEach, describe } from "vitest";
 import { __testing as discordThreadBindingTesting } from "../../../../extensions/discord/runtime-api.js";
 import { feishuThreadBindingTesting } from "../../../../extensions/feishu/api.js";
 import { resetMatrixThreadBindingsForTests } from "../../../../extensions/matrix/api.js";
@@ -24,21 +24,6 @@ import {
   installChannelThreadingContractSuite,
   installSessionBindingContractSuite,
 } from "./suites.js";
-
-vi.mock("../../../../extensions/matrix/src/matrix/send.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../../../extensions/matrix/src/matrix/send.js")
-  >("../../../../extensions/matrix/src/matrix/send.js");
-  return {
-    ...actual,
-    sendMessageMatrix: vi.fn(
-      async (_to: string, _message: string, opts?: { threadId?: string }) => ({
-        messageId: opts?.threadId ? "$reply" : "$root",
-        roomId: "!room:example",
-      }),
-    ),
-  };
-});
 
 for (const entry of pluginContractRegistry) {
   describe(`${entry.id} plugin contract`, () => {
