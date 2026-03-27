@@ -47,6 +47,11 @@ export function isOperatorUiClient(client?: GatewayClientInfoLike | null): boole
   return clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI || clientId === GATEWAY_CLIENT_NAMES.TUI;
 }
 
+export function isBrowserOperatorUiClient(client?: GatewayClientInfoLike | null): boolean {
+  const clientId = normalizeGatewayClientName(client?.id);
+  return clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI;
+}
+
 export function isInternalMessageChannel(raw?: string | null): raw is InternalMessageChannel {
   return normalizeMessageChannel(raw) === INTERNAL_MESSAGE_CHANNEL;
 }
