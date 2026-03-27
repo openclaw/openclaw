@@ -54,6 +54,8 @@ function mkdirSafe(dir: string) {
 const fixtureRoot = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-"));
 let tempDirIndex = 0;
 const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const prevPreferDistPluginSdk = process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST;
+process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST = "1";
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
 let cachedBundledTelegramDir = "";
 let cachedBundledMemoryDir = "";
@@ -721,6 +723,11 @@ afterAll(() => {
   } finally {
     cachedBundledTelegramDir = "";
     cachedBundledMemoryDir = "";
+    if (prevPreferDistPluginSdk === undefined) {
+      delete process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST;
+    } else {
+      process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST = prevPreferDistPluginSdk;
+    }
   }
 });
 

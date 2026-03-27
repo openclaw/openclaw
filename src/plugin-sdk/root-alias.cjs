@@ -7,7 +7,12 @@ let monolithicSdk = null;
 let diagnosticEventsModule = null;
 const jitiLoaders = new Map();
 const pluginSdkSubpathsCache = new Map();
-const shouldPreferSourceInTests = Boolean(process.env.VITEST) || process.env.NODE_ENV === "test";
+const shouldPreferSourceInTests =
+  process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST === "1"
+    ? false
+    : Boolean(process.env.VITEST) ||
+      process.env.NODE_ENV === "test" ||
+      process.env.OPENCLAW_PLUGIN_SDK_SOURCE_IN_TESTS === "1";
 
 function emptyPluginConfigSchema() {
   function error(message) {
