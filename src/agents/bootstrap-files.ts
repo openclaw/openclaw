@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
@@ -11,6 +14,7 @@ import {
   filterBootstrapFilesForSession,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
+  type WorkspaceBootstrapFileName,
 } from "./workspace.js";
 
 export type BootstrapContextMode = "full" | "lightweight";
@@ -61,6 +65,39 @@ function applyContextModeFilter(params: {
   return [];
 }
 
+/**
+ * Walk up from workspaceDir looking for PROJECT.md.
+ * Stops at ~/.openclaw/projects/ root or filesystem root.
+ * Returns the file as a WorkspaceBootstrapFile or null if not found.
+ */
+function findProjectMdFromCwd(workspaceDir: string): WorkspaceBootstrapFile | null {
+  const projectsRoot = path.join(os.homedir(), ".openclaw", "projects");
+  let current = path.resolve(workspaceDir);
+  const root = path.parse(current).root;
+
+  while (current !== root) {
+    const candidate = path.join(current, "PROJECT.md");
+    try {
+      const content = fs.readFileSync(candidate, "utf-8");
+      return {
+        name: "PROJECT.md" as WorkspaceBootstrapFileName,
+        path: candidate,
+        content,
+        missing: false,
+      };
+    } catch {
+      // PROJECT.md not in this directory, continue walk-up
+    }
+
+    // Stop at projects root — don't walk above it (per D-01)
+    if (current === projectsRoot) break;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return null;
+}
+
 export async function resolveBootstrapFilesForRun(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -83,6 +120,17 @@ export async function resolveBootstrapFilesForRun(params: {
     contextMode: params.contextMode,
     runKind: params.runKind,
   });
+
+  // CWD-based PROJECT.md pickup (AGNT-01, D-01, D-04)
+  // Skip for heartbeat runs — heartbeat reads project files directly (D-12)
+  const effectiveRunKind = params.runKind ?? "default";
+  const effectiveContextMode = params.contextMode ?? "full";
+  if (effectiveContextMode !== "lightweight" && effectiveRunKind !== "heartbeat") {
+    const projectFile = findProjectMdFromCwd(params.workspaceDir);
+    if (projectFile) {
+      bootstrapFiles.push(projectFile);
+    }
+  }
 
   const updated = await applyBootstrapHookOverrides({
     files: bootstrapFiles,
