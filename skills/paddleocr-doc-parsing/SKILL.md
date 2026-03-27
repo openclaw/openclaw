@@ -49,7 +49,7 @@ Install Python dependencies before using this skill. From the skill directory (`
 pip install -r requirements.txt
 ```
 
-**Optional** — for document optimization and `split_pdf.py` (page extraction):
+**Optional** — for image optimization and PDF page extraction:
 
 ```bash
 pip install -r requirements-optimize.txt
@@ -121,7 +121,6 @@ pip install -r requirements-optimize.txt
 Common next steps once you have the structured output:
 
 - **Save as Markdown**: Write the `text` field to a `.md` file — tables, headings, and formulas are preserved
-- **Convert to Word**: Save the markdown first, then use pandoc if available: `pandoc output.md -o output.docx`
 - **Extract specific tables**: Navigate `result.layoutParsingResults[n].prunedResult` to access individual layout elements with position and confidence data
 - **Feed to RAG / search pipeline**: The `text` field is structured markdown, ready for chunking and indexing
 - **Poor results**: See "Tips for Better Results" below before retrying
