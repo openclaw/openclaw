@@ -266,8 +266,9 @@ Available actions:
 - **addParticipant**: Add someone to a group (`chatGuid`, `address`)
 - **removeParticipant**: Remove someone from a group (`chatGuid`, `address`)
 - **leaveGroup**: Leave a group chat (`chatGuid`)
-- **sendAttachment**: Send media/files (`to`, `buffer`, `filename`, `asVoice`)
+- **upload-file**: Send media/files (`to`, `buffer`, `filename`, `asVoice`)
   - Voice memos: set `asVoice: true` with **MP3** or **CAF** audio to send as an iMessage voice message. BlueBubbles converts MP3 → CAF when sending voice memos.
+- Legacy alias: `sendAttachment` still works, but `upload-file` is the canonical action name.
 
 ### Message IDs (short vs full)
 

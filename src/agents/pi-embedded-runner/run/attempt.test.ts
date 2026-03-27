@@ -2,8 +2,14 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  isOllamaCompatProvider,
+  resolveOllamaBaseUrlForRun,
+  resolveOllamaCompatNumCtxEnabled,
+  shouldInjectOllamaCompatNumCtx,
+  wrapOllamaCompatNumCtx,
+} from "../../../plugin-sdk/ollama.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
-import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 import {
@@ -12,19 +18,15 @@ import {
   composeSystemPromptWithHookContext,
   mergeRecoveredPromptImages,
   persistSessionsYieldContextMessage,
-  isOllamaCompatProvider,
   prependSystemPromptAddition,
   queueSessionsYieldInterruptMessage,
   recoverOrphanedUserMessagesForPrompt,
   resolveAttemptFsWorkspaceOnly,
-  resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   stripSessionsYieldArtifacts,
   shouldInjectHeartbeatPrompt,
-  shouldInjectOllamaCompatNumCtx,
   decodeHtmlEntitiesInObject,
-  wrapOllamaCompatNumCtx,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,

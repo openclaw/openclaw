@@ -11,6 +11,8 @@ import {
 
 const loadConfigMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
+const resolveBundledProviderCompatPluginIdsMock = vi.fn();
+const withBundledPluginAllowlistCompatMock = vi.fn();
 let buildPluginStatusReport: typeof import("./status.js").buildPluginStatusReport;
 let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectReport;
 let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginInspectReports;
@@ -25,6 +27,16 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
+}));
+
+vi.mock("./providers.js", () => ({
+  resolveBundledProviderCompatPluginIds: (...args: unknown[]) =>
+    resolveBundledProviderCompatPluginIdsMock(...args),
+}));
+
+vi.mock("./bundled-compat.js", () => ({
+  withBundledPluginAllowlistCompat: (...args: unknown[]) =>
+    withBundledPluginAllowlistCompatMock(...args),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -50,7 +62,13 @@ describe("buildPluginStatusReport", () => {
     vi.resetModules();
     loadConfigMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
+    resolveBundledProviderCompatPluginIdsMock.mockReset();
+    withBundledPluginAllowlistCompatMock.mockReset();
     loadConfigMock.mockReturnValue({});
+    resolveBundledProviderCompatPluginIdsMock.mockReturnValue([]);
+    withBundledPluginAllowlistCompatMock.mockImplementation(
+      (params: { config: unknown }) => params.config,
+    );
     setPluginLoadResult({ plugins: [] });
     ({
       buildAllPluginInspectReports,
@@ -78,6 +96,24 @@ describe("buildPluginStatusReport", () => {
         workspaceDir: "/workspace",
         env,
       }),
+    );
+  });
+
+  it("applies bundled provider allowlist compat before loading plugins", () => {
+    const config = { plugins: { allow: ["telegram"] } };
+    loadConfigMock.mockReturnValue(config);
+    resolveBundledProviderCompatPluginIdsMock.mockReturnValue(["anthropic", "openai"]);
+    const compatConfig = { plugins: { allow: ["telegram", "anthropic", "openai"] } };
+    withBundledPluginAllowlistCompatMock.mockReturnValue(compatConfig);
+
+    buildPluginStatusReport({ config });
+
+    expect(withBundledPluginAllowlistCompatMock).toHaveBeenCalledWith({
+      config,
+      pluginIds: ["anthropic", "openai"],
+    });
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ config: compatConfig }),
     );
   });
 

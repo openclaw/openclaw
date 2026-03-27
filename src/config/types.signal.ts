@@ -60,3 +60,9 @@ export type SignalConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & SignalAccountConfig;
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    signal?: SignalConfig;
+  }
+}

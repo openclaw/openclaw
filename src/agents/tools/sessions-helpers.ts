@@ -44,6 +44,7 @@ export type SessionListDeliveryContext = {
   channel?: string;
   to?: string;
   accountId?: string;
+  threadId?: string;
 };
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
@@ -52,6 +53,9 @@ export type SessionListRow = {
   key: string;
   kind: SessionKind;
   channel: string;
+  origin?: {
+    provider?: string;
+  };
   spawnedBy?: string;
   label?: string;
   displayName?: string;
@@ -69,7 +73,11 @@ export type SessionListRow = {
   runtimeMs?: number;
   childSessions?: string[];
   thinkingLevel?: string;
+  fastMode?: boolean;
   verboseLevel?: string;
+  reasoningLevel?: string;
+  elevatedLevel?: string;
+  responseUsage?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   sendPolicy?: string;

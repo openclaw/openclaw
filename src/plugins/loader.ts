@@ -23,6 +23,11 @@ import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { clearPluginInteractiveHandlers } from "./interactive.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import {
+  clearMemoryEmbeddingProviders,
+  listRegisteredMemoryEmbeddingProviders,
+  restoreRegisteredMemoryEmbeddingProviders,
+} from "./memory-embedding-providers.js";
+import {
   clearMemoryPluginState,
   getMemoryFlushPlanResolver,
   getMemoryPromptSectionBuilder,
@@ -41,6 +46,7 @@ import {
   buildPluginLoaderJitiOptions,
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
+  type PluginSdkResolutionPreference,
   resolveExtensionApiAlias,
   resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
@@ -68,6 +74,7 @@ export type PluginLoadOptions = {
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   runtimeOptions?: CreatePluginRuntimeOptions;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
   cache?: boolean;
   mode?: "full" | "validate";
   onlyPluginIds?: string[];
@@ -99,6 +106,7 @@ export class PluginLoadFailureError extends Error {
 
 type CachedPluginState = {
   registry: PluginRegistry;
+  memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
   memoryFlushPlanResolver: ReturnType<typeof getMemoryFlushPlanResolver>;
   memoryPromptBuilder: ReturnType<typeof getMemoryPromptSectionBuilder>;
   memoryRuntime: ReturnType<typeof getMemoryRuntime>;
@@ -127,6 +135,7 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
 export function clearPluginLoaderCache(): void {
   registryCache.clear();
   openAllowlistWarningCache.clear();
+  clearMemoryEmbeddingProviders();
   clearMemoryPluginState();
 }
 
@@ -188,6 +197,7 @@ function buildCacheKey(params: {
   includeSetupOnlyChannelPlugins?: boolean;
   preferSetupRuntimeForChannelPlugins?: boolean;
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
+  pluginSdkResolution?: PluginSdkResolutionPreference;
 }): string {
   const { roots, loadPaths } = resolvePluginCacheInputs({
     workspaceDir: params.workspaceDir,
@@ -218,7 +228,7 @@ function buildCacheKey(params: {
     ...params.plugins,
     installs,
     loadPaths,
-  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${params.runtimeSubagentMode ?? "default"}`;
+  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${params.runtimeSubagentMode ?? "default"}::${params.pluginSdkResolution ?? "auto"}`;
 }
 
 function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
@@ -243,9 +253,10 @@ function validatePluginConfig(params: {
     schema,
     cacheKey,
     value: params.value ?? {},
+    applyDefaults: true,
   });
   if (result.ok) {
-    return { ok: true, value: params.value as Record<string, unknown> | undefined };
+    return { ok: true, value: result.value as Record<string, unknown> | undefined };
   }
   return { ok: false, errors: result.errors.map((error) => error.text) };
 }
@@ -706,11 +717,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         : options.runtimeOptions?.subagent
           ? "explicit"
           : "default",
+    pluginSdkResolution: options.pluginSdkResolution,
   });
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
+      restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
       restoreMemoryPluginState({
         promptBuilder: cached.memoryPromptBuilder,
         flushPlanResolver: cached.memoryFlushPlanResolver,
@@ -737,7 +750,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const tryNative = shouldPreferNativeJiti(modulePath);
     // Pass loader's moduleUrl so the openclaw root can always be resolved even when
     // loading external plugins from outside the installation directory (e.g. ~/.openclaw/extensions/).
-    const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
+    const aliasMap = buildPluginLoaderAliasMap(
+      modulePath,
+      process.argv[1],
+      import.meta.url,
+      options.pluginSdkResolution,
+    );
     const cacheKey = JSON.stringify({
       tryNative,
       aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
@@ -766,7 +784,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (createPluginRuntimeFactory) {
       return createPluginRuntimeFactory;
     }
-    const runtimeModulePath = resolvePluginRuntimeModulePath();
+    const runtimeModulePath = resolvePluginRuntimeModulePath({
+      pluginSdkResolution: options.pluginSdkResolution,
+    });
     if (!runtimeModulePath) {
       throw new Error("Unable to resolve plugin runtime module");
     }
@@ -1226,6 +1246,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       hookPolicy: entry?.hooks,
       registrationMode,
     });
+    const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
     const previousMemoryFlushPlanResolver = getMemoryFlushPlanResolver();
     const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
     const previousMemoryRuntime = getMemoryRuntime();
@@ -1242,6 +1263,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
       // Snapshot loads should not replace process-global runtime prompt state.
       if (!shouldActivate) {
+        restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
         restoreMemoryPluginState({
           promptBuilder: previousMemoryPromptBuilder,
           flushPlanResolver: previousMemoryFlushPlanResolver,
@@ -1251,6 +1273,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
     } catch (err) {
+      restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
       restoreMemoryPluginState({
         promptBuilder: previousMemoryPromptBuilder,
         flushPlanResolver: previousMemoryFlushPlanResolver,
@@ -1291,6 +1314,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     setCachedPluginRegistry(cacheKey, {
       registry,
+      memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
       memoryFlushPlanResolver: getMemoryFlushPlanResolver(),
       memoryPromptBuilder: getMemoryPromptSectionBuilder(),
       memoryRuntime: getMemoryRuntime(),

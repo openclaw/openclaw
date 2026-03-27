@@ -23,12 +23,11 @@ import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-h
 import type { ChannelMessageActionName, ChannelPlugin, OpenClawConfig } from "../runtime-api.js";
 import {
   buildProbeChannelStatusSummary,
-  buildChannelConfigSchema,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
-  MSTeamsConfigSchema,
   PAIRING_APPROVED_MESSAGE,
 } from "../runtime-api.js";
+import { MSTeamsChannelConfigSchema } from "./config-schema.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
 import {
@@ -198,6 +197,25 @@ function resolveActionContent(params: Record<string, unknown>): string {
         : "";
 }
 
+function readOptionalTrimmedString(
+  params: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  return typeof params[key] === "string" ? params[key].trim() || undefined : undefined;
+}
+
+function resolveActionUploadFilePath(params: Record<string, unknown>): string | undefined {
+  for (const key of ["filePath", "path", "media"] as const) {
+    if (typeof params[key] === "string") {
+      const value = params[key];
+      if (value.trim()) {
+        return value;
+      }
+    }
+  }
+  return undefined;
+}
+
 function resolveRequiredActionTarget(params: {
   actionLabel: string;
   toolParams: Record<string, unknown>;
@@ -298,6 +316,7 @@ function describeMSTeamsMessageTool({
   return {
     actions: enabled
       ? ([
+          "upload-file",
           "poll",
           "edit",
           "delete",
@@ -346,7 +365,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         resolveToolPolicy: resolveMSTeamsGroupToolPolicy,
       },
       reload: { configPrefixes: ["channels.msteams"] },
-      configSchema: buildChannelConfigSchema(MSTeamsConfigSchema),
+      configSchema: MSTeamsChannelConfigSchema,
       config: {
         ...msteamsConfigAdapter,
         isConfigured: (_account, cfg) => Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)),
@@ -575,6 +594,46 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                     conversationId: result.conversationId,
                   },
                   { ok: true, channel: "msteams", messageId: result.messageId },
+                );
+              },
+            });
+          }
+          if (ctx.action === "upload-file") {
+            const mediaUrl = resolveActionUploadFilePath(ctx.params);
+            if (!mediaUrl) {
+              return actionError("Upload-file requires media, filePath, or path.");
+            }
+            return await runWithRequiredActionTarget({
+              actionLabel: "Upload-file",
+              toolParams: ctx.params,
+              currentChannelId: ctx.toolContext?.currentChannelId,
+              run: async (to) => {
+                const { sendMessageMSTeams } = await loadMSTeamsChannelRuntime();
+                const result = await sendMessageMSTeams({
+                  cfg: ctx.cfg,
+                  to,
+                  text: resolveActionContent(ctx.params),
+                  mediaUrl,
+                  filename:
+                    readOptionalTrimmedString(ctx.params, "filename") ??
+                    readOptionalTrimmedString(ctx.params, "title"),
+                  mediaLocalRoots: ctx.mediaLocalRoots,
+                });
+                return jsonActionResultWithDetails(
+                  {
+                    ok: true,
+                    channel: "msteams",
+                    action: "upload-file",
+                    messageId: result.messageId,
+                    conversationId: result.conversationId,
+                    ...(result.pendingUploadId ? { pendingUploadId: result.pendingUploadId } : {}),
+                  },
+                  {
+                    ok: true,
+                    channel: "msteams",
+                    messageId: result.messageId,
+                    ...(result.pendingUploadId ? { pendingUploadId: result.pendingUploadId } : {}),
+                  },
                 );
               },
             });

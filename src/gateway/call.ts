@@ -6,6 +6,11 @@ import {
   resolveGatewayPort,
   resolveStateDir,
 } from "../config/config.js";
+import {
+  resolveConfigPath as resolveConfigPathFromPaths,
+  resolveGatewayPort as resolveGatewayPortFromPaths,
+  resolveStateDir as resolveStateDirFromPaths,
+} from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
@@ -85,6 +90,7 @@ const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayCl
 const defaultGatewayCallDeps = {
   createGatewayClient: defaultCreateGatewayClient,
   loadConfig,
+  loadOrCreateDeviceIdentity,
   resolveGatewayPort,
   resolveConfigPath,
   resolveStateDir,
@@ -94,11 +100,37 @@ const gatewayCallDeps = {
   ...defaultGatewayCallDeps,
 };
 
+function resolveGatewayStateDir(env: NodeJS.ProcessEnv): string {
+  const resolveStateDirFn =
+    typeof gatewayCallDeps.resolveStateDir === "function"
+      ? gatewayCallDeps.resolveStateDir
+      : resolveStateDirFromPaths;
+  return resolveStateDirFn(env);
+}
+
+function resolveGatewayConfigPath(env: NodeJS.ProcessEnv): string {
+  const resolveConfigPathFn =
+    typeof gatewayCallDeps.resolveConfigPath === "function"
+      ? gatewayCallDeps.resolveConfigPath
+      : resolveConfigPathFromPaths;
+  return resolveConfigPathFn(env, resolveGatewayStateDir(env));
+}
+
+function resolveGatewayPortValue(config?: OpenClawConfig, env?: NodeJS.ProcessEnv): number {
+  const resolveGatewayPortFn =
+    typeof gatewayCallDeps.resolveGatewayPort === "function"
+      ? gatewayCallDeps.resolveGatewayPort
+      : resolveGatewayPortFromPaths;
+  return resolveGatewayPortFn(config, env);
+}
+
 export const __testing = {
   setDepsForTests(deps: Partial<typeof defaultGatewayCallDeps> | undefined): void {
     gatewayCallDeps.createGatewayClient =
       deps?.createGatewayClient ?? defaultGatewayCallDeps.createGatewayClient;
     gatewayCallDeps.loadConfig = deps?.loadConfig ?? defaultGatewayCallDeps.loadConfig;
+    gatewayCallDeps.loadOrCreateDeviceIdentity =
+      deps?.loadOrCreateDeviceIdentity ?? defaultGatewayCallDeps.loadOrCreateDeviceIdentity;
     gatewayCallDeps.resolveGatewayPort =
       deps?.resolveGatewayPort ?? defaultGatewayCallDeps.resolveGatewayPort;
     gatewayCallDeps.resolveConfigPath =
@@ -115,6 +147,7 @@ export const __testing = {
   resetDepsForTests(): void {
     gatewayCallDeps.createGatewayClient = defaultGatewayCallDeps.createGatewayClient;
     gatewayCallDeps.loadConfig = defaultGatewayCallDeps.loadConfig;
+    gatewayCallDeps.loadOrCreateDeviceIdentity = defaultGatewayCallDeps.loadOrCreateDeviceIdentity;
     gatewayCallDeps.resolveGatewayPort = defaultGatewayCallDeps.resolveGatewayPort;
     gatewayCallDeps.resolveConfigPath = defaultGatewayCallDeps.resolveConfigPath;
     gatewayCallDeps.resolveStateDir = defaultGatewayCallDeps.resolveStateDir;
@@ -122,17 +155,19 @@ export const __testing = {
   },
 };
 
-function shouldAttachDeviceIdentityForGatewayCall(params: {
-  url: string;
-  token?: string;
-  password?: string;
-}): boolean {
-  void params;
-  // Shared-auth local calls used to skip device identity as an optimization, but
-  // device-less operator connects now have their self-declared scopes stripped.
-  // Keep identity enabled so local authenticated calls stay device-bound and
-  // retain their least-privilege scopes.
-  return true;
+function resolveDeviceIdentityForGatewayCall(): ReturnType<
+  typeof loadOrCreateDeviceIdentity
+> | null {
+  // Shared-auth local calls should still stay device-bound so operator scopes
+  // remain available for detail RPCs such as status / system-presence /
+  // last-heartbeat.
+  try {
+    return gatewayCallDeps.loadOrCreateDeviceIdentity();
+  } catch {
+    // Read-only or restricted environments should still be able to call the
+    // gateway with token/password auth without crashing before the RPC.
+    return null;
+  }
 }
 
 export type ExplicitGatewayAuth = {
@@ -197,13 +232,11 @@ export function buildGatewayConnectionDetails(
   } = {},
 ): GatewayConnectionDetails {
   const config = options.config ?? gatewayCallDeps.loadConfig();
-  const configPath =
-    options.configPath ??
-    gatewayCallDeps.resolveConfigPath(process.env, gatewayCallDeps.resolveStateDir(process.env));
+  const configPath = options.configPath ?? resolveGatewayConfigPath(process.env);
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const tlsEnabled = config.gateway?.tls?.enabled === true;
-  const localPort = gatewayCallDeps.resolveGatewayPort(config);
+  const localPort = resolveGatewayPortValue(config);
   const bindMode = config.gateway?.bind ?? "loopback";
   const scheme = tlsEnabled ? "wss" : "ws";
   // Self-connections should always target loopback; bind mode only controls listener exposure.
@@ -316,9 +349,7 @@ function resolveGatewayCallTimeout(timeoutValue: unknown): {
 
 function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewayCallContext {
   const config = opts.config ?? gatewayCallDeps.loadConfig();
-  const configPath =
-    opts.configPath ??
-    gatewayCallDeps.resolveConfigPath(process.env, gatewayCallDeps.resolveStateDir(process.env));
+  const configPath = opts.configPath ?? resolveGatewayConfigPath(process.env);
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode
     ? (config.gateway?.remote as GatewayRemoteSettings | undefined)
@@ -726,10 +757,7 @@ export async function resolveGatewayCredentialsWithSecretInputs(params: {
       : undefined;
   const context: ResolvedGatewayCallContext = {
     config: params.config,
-    configPath: gatewayCallDeps.resolveConfigPath(
-      process.env,
-      gatewayCallDeps.resolveStateDir(process.env),
-    ),
+    configPath: resolveGatewayConfigPath(process.env),
     isRemoteMode,
     remote: remoteFromOverride ?? remoteFromConfig,
     urlOverride: trimToUndefined(params.urlOverride),
@@ -868,9 +896,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
       scopes,
-      deviceIdentity: shouldAttachDeviceIdentityForGatewayCall({ url, token, password })
-        ? loadOrCreateDeviceIdentity()
-        : undefined,
+      deviceIdentity: resolveDeviceIdentityForGatewayCall(),
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async (hello) => {

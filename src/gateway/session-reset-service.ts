@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
@@ -11,6 +14,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
+import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-runtime.js";
@@ -306,8 +310,18 @@ export async function performGatewaySessionReset(params: {
     oldSessionId = currentEntry?.sessionId;
     oldSessionFile = currentEntry?.sessionFile;
     const now = Date.now();
+    const nextSessionId = randomUUID();
+    const sessionFile = resolveSessionFilePath(
+      nextSessionId,
+      currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
+      resolveSessionFilePathOptions({
+        storePath,
+        agentId: sessionAgentId,
+      }),
+    );
     const nextEntry: SessionEntry = {
-      sessionId: randomUUID(),
+      sessionId: nextSessionId,
+      sessionFile,
       updatedAt: now,
       systemSent: false,
       abortedLastRun: false,
@@ -376,6 +390,20 @@ export async function performGatewaySessionReset(params: {
     agentId: target.agentId,
     reason: "reset",
   });
+  fs.mkdirSync(path.dirname(next.sessionFile as string), { recursive: true });
+  if (!fs.existsSync(next.sessionFile as string)) {
+    const header = {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: next.sessionId,
+      timestamp: new Date().toISOString(),
+      cwd: process.cwd(),
+    };
+    fs.writeFileSync(next.sessionFile as string, `${JSON.stringify(header)}\n`, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+  }
   if (hadExistingEntry) {
     await emitSessionUnboundLifecycleEvent({
       targetSessionKey: target.canonicalKey ?? params.key,
