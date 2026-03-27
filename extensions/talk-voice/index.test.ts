@@ -249,12 +249,12 @@ describe("talk-voice plugin", () => {
     expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("rejects /voice set from non-gateway channels without operator.admin", async () => {
+  it("allows /voice set from non-gateway channels without operator.admin", async () => {
     const { runtime, run } = createElevenlabsVoiceSetHarness("telegram");
     const result = await run();
 
-    expect(result.text).toContain("requires operator.admin");
-    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+    expect(runtime.config.writeConfigFile).toHaveBeenCalled();
+    expect(result.text).toContain("voice-a");
   });
 
   it("allows /voice set when operator.admin is present on a non-webchat channel", async () => {
