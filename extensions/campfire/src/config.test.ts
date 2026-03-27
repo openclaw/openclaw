@@ -159,6 +159,6 @@ describe("campfire config resolution", () => {
 
     const ids = listCampfireAccountIds(cfg);
 
-    expect(ids).toEqual(["alerts", "default", "support"]);
+    expect(ids).toEqual(["alerts", "support"]);
   });
 });
