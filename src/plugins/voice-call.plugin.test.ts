@@ -212,7 +212,6 @@ describe("voice-call plugin", () => {
       });
 
       const printed = stdout.output();
-      const printed = stdout.output();
       expect(printed).toContain('"recordsScanned": 2');
       expect(printed).toContain('"p50Ms": 100');
       expect(printed).toContain('"p95Ms": 200');
