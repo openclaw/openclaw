@@ -343,4 +343,21 @@ describe("calculateAuthProfileCooldownMs", () => {
     expect(calculateAuthProfileCooldownMs(4)).toBe(5 * 60_000); // 5 minutes (cap)
     expect(calculateAuthProfileCooldownMs(5)).toBe(5 * 60_000); // 5 minutes (cap)
   });
+
+  it("respects custom transientFailureThreshold", () => {
+    const config = { transientFailureThreshold: 5 };
+    expect(calculateAuthProfileCooldownMs(1, config)).toBe(30_000); // always 30s
+    expect(calculateAuthProfileCooldownMs(2, config)).toBe(60_000); // below threshold
+    expect(calculateAuthProfileCooldownMs(4, config)).toBe(60_000); // still below 5
+    expect(calculateAuthProfileCooldownMs(5, config)).toBe(5 * 60_000); // at threshold
+    expect(calculateAuthProfileCooldownMs(6, config)).toBe(5 * 60_000); // above threshold
+  });
+
+  it("respects custom transientCooldownMinutes", () => {
+    const config = { transientCooldownMinutes: 30 };
+    expect(calculateAuthProfileCooldownMs(1, config)).toBe(30_000); // always 30s
+    expect(calculateAuthProfileCooldownMs(2, config)).toBe(60_000); // 1 min
+    expect(calculateAuthProfileCooldownMs(3, config)).toBe(30 * 60_000); // 30 min at threshold
+    expect(calculateAuthProfileCooldownMs(10, config)).toBe(30 * 60_000); // stays at 30 min
+  });
 });

@@ -789,6 +789,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: "number",
                 exclusiveMinimum: 0,
               },
+              transientFailureThreshold: {
+                type: "integer",
+                minimum: 1,
+              },
+              transientCooldownMinutes: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
             },
             additionalProperties: false,
           },
@@ -13656,6 +13664,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Failover Window (hours)",
       help: "Failure window (hours) for backoff counters (default: 24).",
       tags: ["auth", "access"],
+    },
+    "auth.cooldowns.transientFailureThreshold": {
+      label: "Transient Failure Threshold",
+      help: "Consecutive transient failures before applying max cooldown (default: 3).",
+      tags: ["auth", "access", "performance"],
+    },
+    "auth.cooldowns.transientCooldownMinutes": {
+      label: "Transient Cooldown (minutes)",
+      help: "Max cooldown duration in minutes once failure threshold is reached (default: 5).",
+      tags: ["auth", "access", "performance"],
     },
     "agents.defaults.models": {
       label: "Models",

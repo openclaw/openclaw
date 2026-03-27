@@ -1328,6 +1328,33 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
   return findings;
 }
 
+export function collectDmScopeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const dmScope = cfg.session?.dmScope ?? "main";
+  if (dmScope !== "main") {
+    return findings;
+  }
+  // Only warn when multi-user DM ingress is plausible.
+  const signals = listPotentialMultiUserSignals(cfg);
+  if (signals.length === 0) {
+    return findings;
+  }
+  findings.push({
+    checkId: "session.dm_scope_main",
+    severity: "warn",
+    title: 'DM sessions share the main context (dmScope="main")',
+    detail:
+      'session.dmScope is set to "main" (the default). When multi-user DM channels ' +
+      "are enabled, different DM senders share the same conversation context, which can " +
+      "leak private data across users and enable cross-user prompt injection.",
+    remediation:
+      'Set session.dmScope to "per-channel-peer" or "per-account-channel-peer" to ' +
+      "isolate DM sessions per sender. Run: " +
+      formatCliCommand('openclaw config set session.dmScope "per-channel-peer"'),
+  });
+  return findings;
+}
+
 export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const signals = listPotentialMultiUserSignals(cfg);

@@ -4,6 +4,7 @@ export {
   collectGatewayHttpNoAuthFindings,
   collectGatewayHttpSessionKeyOverrideFindings,
   collectHooksHardeningFindings,
+  collectDmScopeFindings,
   collectLikelyMultiUserSetupFindings,
   collectMinimalProfileOverrideFindings,
   collectModelHygieneFindings,

@@ -1399,6 +1399,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...auditNonDeep.collectSmallModelRiskFindings({ cfg, env }));
   findings.push(...auditNonDeep.collectExposureMatrixFindings(cfg));
   findings.push(...auditNonDeep.collectLikelyMultiUserSetupFindings(cfg));
+  findings.push(...auditNonDeep.collectDmScopeFindings(cfg));
 
   if (context.includeFilesystem) {
     findings.push(
