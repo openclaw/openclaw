@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { discordMonitorTesting } from "../../../../extensions/discord/runtime-api.js";
-import { imessageMonitorTesting } from "../../../../extensions/imessage/runtime-api.js";
-import { slackMonitorTesting } from "../../../../extensions/slack/runtime-api.js";
+import { __testing as discordMonitorTesting } from "../../../../extensions/discord/src/monitor/provider.js";
+import { __testing as imessageMonitorTesting } from "../../../../extensions/imessage/src/monitor/monitor-provider.js";
+import { __testing as slackMonitorTesting } from "../../../../extensions/slack/src/monitor/provider.js";
 import { resolveTelegramRuntimeGroupPolicy } from "../../../../extensions/telegram/runtime-api.js";
 import { whatsappAccessControlTesting } from "../../../../extensions/whatsapp/api.js";
 import {
