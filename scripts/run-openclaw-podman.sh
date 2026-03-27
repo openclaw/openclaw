@@ -172,7 +172,7 @@ raw = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore")
 
 
 def strip_comments(text: str) -> str:
-    out: list[str] = []
+    out = []
     i = 0
     in_string = False
     quote = ""
