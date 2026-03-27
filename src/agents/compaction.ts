@@ -69,19 +69,6 @@ export function buildCompactionSummarizationInstructions(
   return `${identifierPreservation}\n\nAdditional focus:\n${custom}`;
 }
 
-type GenerateSummaryCompat = (
-  currentMessages: AgentMessage[],
-  model: NonNullable<ExtensionContext["model"]>,
-  reserveTokens: number,
-  apiKey: string,
-  headers?: Record<string, string>,
-  signal?: AbortSignal,
-  customInstructions?: string,
-  previousSummary?: string,
-) => Promise<string>;
-
-const generateSummaryCompat = generateSummary as unknown as GenerateSummaryCompat;
-
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.
   const safe = stripToolResultDetails(messages);
@@ -265,12 +252,12 @@ async function summarizeChunks(params: {
   for (const chunk of chunks) {
     summary = await retryAsync(
       () =>
-        generateSummaryCompat(
+        generateSummary(
           chunk,
           model,
           params.reserveTokens,
           params.apiKey,
-          params.headers,
+          model.headers,
           params.signal,
           effectiveInstructions,
           summary,
