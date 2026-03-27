@@ -320,6 +320,9 @@ function describeMSTeamsMessageTool({
     cfg.channels?.msteams?.enabled !== false &&
     Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams));
   return {
+    // "react" and "reactions" are omitted: setReaction/unsetReaction require Delegated permissions,
+    // but the bot authenticates with Application credentials (client_credentials flow).
+    // Re-enable "react"/"reactions" here once delegated-auth support is available.
     actions: enabled
       ? ([
           "upload-file",
@@ -330,8 +333,6 @@ function describeMSTeamsMessageTool({
           "unpin",
           "list-pins",
           "read",
-          "react",
-          "reactions",
           "search",
           "member-info",
           "channel-list",
