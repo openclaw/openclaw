@@ -686,17 +686,6 @@ async function agentCommandInternal(
         throw new Error(`Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`);
       }
       resolvedThinkLevel = "high";
-      if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
-        const entry = sessionEntry;
-        entry.thinkingLevel = "high";
-        entry.updatedAt = Date.now();
-        await persistSessionEntry({
-          sessionStore,
-          sessionKey,
-          storePath,
-          entry,
-        });
-      }
     }
     let sessionFile: string | undefined;
     if (sessionStore && sessionKey) {

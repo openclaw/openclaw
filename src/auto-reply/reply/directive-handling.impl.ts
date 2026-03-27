@@ -351,7 +351,10 @@ export async function handleDirectiveOnly(
       sessionEntry.fastMode = directives.fastMode;
     }
     if (shouldDowngradeXHigh) {
-      sessionEntry.thinkingLevel = "high";
+      // Keep sessionEntry.thinkingLevel as "xhigh" so it is preserved when
+      // the user switches back to a model that supports it.  The runtime
+      // resolvedThinkLevel is already downgraded to "high" for the current
+      // request without persisting the change.
     }
     if (
       directives.hasVerboseDirective &&
@@ -532,7 +535,7 @@ export async function handleDirectiveOnly(
   }
   if (shouldDowngradeXHigh) {
     parts.push(
-      `Thinking level set to high (xhigh not supported for ${resolvedProvider}/${resolvedModel}).`,
+      `Using high thinking for this reply (xhigh not supported for ${resolvedProvider}/${resolvedModel}).`,
     );
   }
   if (modelSelection) {
