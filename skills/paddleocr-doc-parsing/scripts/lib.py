@@ -173,6 +173,11 @@ def _make_api_request(api_url: str, token: str, params: dict) -> dict:
     except Exception:
         raise RuntimeError(f"Invalid JSON response: {resp.text[:200]}")
 
+    if not isinstance(result, dict):
+        raise RuntimeError(
+            f"Unexpected JSON shape (expected object): {resp.text[:200]}"
+        )
+
     if result.get("errorCode", 0) != 0:
         raise RuntimeError(f"API error: {result.get('errorMsg', 'Unknown error')}")
 
