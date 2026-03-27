@@ -219,6 +219,30 @@ const MESSAGES_TTS_EDGE_RULE: LegacyConfigRule = {
     "messages.tts.edge was moved; use messages.tts.providers.microsoft instead (auto-migrated on load).",
 };
 
+const DISCORD_VOICE_TTS_OPENAI_RULE: LegacyConfigRule = {
+  path: ["channels", "discord", "voice", "tts", "openai"],
+  message:
+    "channels.discord.voice.tts.openai was moved; use channels.discord.voice.tts.providers.openai instead (auto-migrated on load).",
+};
+
+const DISCORD_VOICE_TTS_ELEVENLABS_RULE: LegacyConfigRule = {
+  path: ["channels", "discord", "voice", "tts", "elevenlabs"],
+  message:
+    "channels.discord.voice.tts.elevenlabs was moved; use channels.discord.voice.tts.providers.elevenlabs instead (auto-migrated on load).",
+};
+
+const DISCORD_VOICE_TTS_MICROSOFT_RULE: LegacyConfigRule = {
+  path: ["channels", "discord", "voice", "tts", "microsoft"],
+  message:
+    "channels.discord.voice.tts.microsoft was moved; use channels.discord.voice.tts.providers.microsoft instead (auto-migrated on load).",
+};
+
+const DISCORD_VOICE_TTS_EDGE_RULE: LegacyConfigRule = {
+  path: ["channels", "discord", "voice", "tts", "edge"],
+  message:
+    "channels.discord.voice.tts.edge was moved; use channels.discord.voice.tts.providers.microsoft instead (auto-migrated on load).",
+};
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     // v2026.2.26 added a startup guard requiring gateway.controlUi.allowedOrigins (or the
@@ -336,6 +360,10 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
       MESSAGES_TTS_ELEVENLABS_RULE,
       MESSAGES_TTS_MICROSOFT_RULE,
       MESSAGES_TTS_EDGE_RULE,
+      DISCORD_VOICE_TTS_OPENAI_RULE,
+      DISCORD_VOICE_TTS_ELEVENLABS_RULE,
+      DISCORD_VOICE_TTS_MICROSOFT_RULE,
+      DISCORD_VOICE_TTS_EDGE_RULE,
     ],
     apply: (raw, changes) => {
       const messages = getRecord(raw.messages);

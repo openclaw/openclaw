@@ -466,4 +466,149 @@ describe("legacy migrate TTS config", () => {
     expect(res.config).toBeNull();
     expect(res.changes).toHaveLength(0);
   });
+
+  it("moves channels.discord.voice.tts.microsoft into channels.discord.voice.tts.providers.microsoft", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          voice: {
+            tts: {
+              microsoft: {
+                enabled: true,
+                voice: "en-US-AriaNeural",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.discord.voice.tts.microsoft → channels.discord.voice.tts.providers.microsoft.",
+    );
+    expect(res.config?.channels?.discord?.voice?.tts?.providers?.microsoft).toEqual({
+      enabled: true,
+      voice: "en-US-AriaNeural",
+    });
+    expect(
+      (res.config?.channels?.discord?.voice?.tts as { microsoft?: unknown } | null)?.microsoft,
+    ).toBeUndefined();
+  });
+
+  it("moves channels.discord.voice.tts.edge into channels.discord.voice.tts.providers.microsoft", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          voice: {
+            tts: {
+              edge: {
+                enabled: true,
+                voice: "en-US-JennyNeural",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.discord.voice.tts.edge → channels.discord.voice.tts.providers.microsoft.",
+    );
+    expect(res.config?.channels?.discord?.voice?.tts?.providers?.microsoft).toEqual({
+      enabled: true,
+      voice: "en-US-JennyNeural",
+    });
+    expect(
+      (res.config?.channels?.discord?.voice?.tts as { edge?: unknown } | null)?.edge,
+    ).toBeUndefined();
+  });
+
+  it("moves channels.discord.voice.tts.openai into channels.discord.voice.tts.providers.openai", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          voice: {
+            tts: {
+              openai: {
+                apiKey: "sk-test",
+                voice: "alloy",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.discord.voice.tts.openai → channels.discord.voice.tts.providers.openai.",
+    );
+    expect(res.config?.channels?.discord?.voice?.tts?.providers?.openai).toEqual({
+      apiKey: "sk-test",
+      voice: "alloy",
+    });
+    expect(
+      (res.config?.channels?.discord?.voice?.tts as { openai?: unknown } | null)?.openai,
+    ).toBeUndefined();
+  });
+
+  it("moves channels.discord.voice.tts.elevenlabs into channels.discord.voice.tts.providers.elevenlabs", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          voice: {
+            tts: {
+              elevenlabs: {
+                apiKey: "xi-test",
+                voiceId: "voice-123",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.discord.voice.tts.elevenlabs → channels.discord.voice.tts.providers.elevenlabs.",
+    );
+    expect(res.config?.channels?.discord?.voice?.tts?.providers?.elevenlabs).toEqual({
+      apiKey: "xi-test",
+      voiceId: "voice-123",
+    });
+    expect(
+      (res.config?.channels?.discord?.voice?.tts as { elevenlabs?: unknown } | null)?.elevenlabs,
+    ).toBeUndefined();
+  });
+
+  it("merges legacy Discord voice TTS config with existing providers", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          voice: {
+            tts: {
+              providers: {
+                microsoft: {
+                  voice: "existing-voice",
+                },
+              },
+              microsoft: {
+                enabled: true,
+                voice: "legacy-voice",
+                lang: "en-US",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.discord.voice.tts.microsoft → channels.discord.voice.tts.providers.microsoft.",
+    );
+    // Existing config should be authoritative; legacy fills gaps
+    expect(res.config?.channels?.discord?.voice?.tts?.providers?.microsoft).toEqual({
+      voice: "existing-voice", // Kept from existing
+      enabled: true, // Filled from legacy
+      lang: "en-US", // Filled from legacy
+    });
+  });
 });
