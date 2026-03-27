@@ -7,38 +7,38 @@ import {
   listDiscordDirectoryPeersFromConfig,
   type DiscordProbe,
   type DiscordTokenResolution,
-} from "../../../extensions/discord/api.js";
-import type { IMessageProbe } from "../../../extensions/imessage/api.js";
-import type { SignalProbe } from "../../../extensions/signal/api.js";
+} from "../../../../extensions/discord/api.js";
+import type { IMessageProbe } from "../../../../extensions/imessage/api.js";
+import type { SignalProbe } from "../../../../extensions/signal/api.js";
 import {
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,
   type SlackProbe,
-} from "../../../extensions/slack/api.js";
+} from "../../../../extensions/slack/api.js";
 import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
   type TelegramProbe,
   type TelegramTokenResolution,
-} from "../../../extensions/telegram/api.js";
+} from "../../../../extensions/telegram/api.js";
 import {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
-} from "../../../extensions/whatsapp/api.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { LineProbeResult } from "../../plugin-sdk/line.js";
-import { clearPluginDiscoveryCache } from "../../plugins/discovery.js";
-import { clearPluginManifestRegistryCache } from "../../plugins/manifest-registry.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+} from "../../../../extensions/whatsapp/api.js";
+import type { OpenClawConfig } from "../../../config/config.js";
+import type { LineProbeResult } from "../../../plugin-sdk/line.js";
+import { clearPluginDiscoveryCache } from "../../../plugins/discovery.js";
+import { clearPluginManifestRegistryCache } from "../../../plugins/manifest-registry.js";
+import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createMSTeamsTestPluginBase,
   createOutboundTestPlugin,
   createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
-import { withEnvAsync } from "../../test-utils/env.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { getChannelPluginCatalogEntry, listChannelPluginCatalogEntries } from "./catalog.js";
+} from "../../../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
+import { getChannelPluginCatalogEntry, listChannelPluginCatalogEntries } from "../catalog.js";
 import {
   authorizeConfigWrite,
   canBypassConfigWritePolicy,
@@ -46,12 +46,12 @@ import {
   resolveExplicitConfigWriteTarget,
   resolveChannelConfigWrites,
   resolveConfigWriteTargetFromPath,
-} from "./config-writes.js";
-import { listChannelPlugins } from "./index.js";
-import { loadChannelPlugin } from "./load.js";
-import { loadChannelOutboundAdapter } from "./outbound/load.js";
-import type { ChannelDirectoryEntry, ChannelOutboundAdapter, ChannelPlugin } from "./types.js";
-import type { BaseProbeResult, BaseTokenResolution } from "./types.js";
+} from "../config-writes.js";
+import { listChannelPlugins } from "../index.js";
+import { loadChannelPlugin } from "../load.js";
+import { loadChannelOutboundAdapter } from "../outbound/load.js";
+import type { ChannelDirectoryEntry, ChannelOutboundAdapter, ChannelPlugin } from "../types.js";
+import type { BaseProbeResult, BaseTokenResolution } from "../types.js";
 
 describe("channel plugin registry", () => {
   const emptyRegistry = createTestRegistry([]);
