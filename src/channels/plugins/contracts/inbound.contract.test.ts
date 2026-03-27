@@ -54,7 +54,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../../extensions/signal/src/send.js", () => ({
+vi.mock("../../../../extensions/signal/api.js", () => ({
   sendMessageSignal: vi.fn(),
   sendTypingSignal: vi.fn(async () => true),
   sendReadReceiptSignal: vi.fn(async () => true),
@@ -65,19 +65,21 @@ vi.mock("../../../pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest: vi.fn(),
 }));
 
-vi.mock("../../../../extensions/whatsapp/src/auto-reply/monitor/last-route.js", () => ({
-  trackBackgroundTask: (tasks: Set<Promise<unknown>>, task: Promise<unknown>) => {
-    tasks.add(task);
-    void task.finally(() => {
-      tasks.delete(task);
-    });
-  },
-  updateLastRouteInBackground: vi.fn(),
-}));
-
-vi.mock("../../../../extensions/whatsapp/src/auto-reply/deliver-reply.js", () => ({
-  deliverWebReply: vi.fn(async () => {}),
-}));
+vi.mock("../../../../extensions/whatsapp/test-api.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../extensions/whatsapp/test-api.js")>();
+  return {
+    ...actual,
+    trackBackgroundTask: (tasks: Set<Promise<unknown>>, task: Promise<unknown>) => {
+      tasks.add(task);
+      void task.finally(() => {
+        tasks.delete(task);
+      });
+    },
+    updateLastRouteInBackground: vi.fn(),
+    deliverWebReply: vi.fn(async () => {}),
+  };
+});
 
 const { finalizeInboundContext } = await import("../../../auto-reply/reply/inbound-context.js");
 

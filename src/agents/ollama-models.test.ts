@@ -3,7 +3,7 @@ import {
   enrichOllamaModelsWithContext,
   resolveOllamaApiBase,
   type OllamaTagModel,
-} from "../../extensions/ollama/src/provider-models.js";
+} from "../../extensions/ollama/api.js";
 import { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 
 describe("ollama-models", () => {
