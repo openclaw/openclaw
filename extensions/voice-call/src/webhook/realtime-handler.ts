@@ -330,6 +330,17 @@ export class RealtimeCallHandler {
 
       onClose: () => {
         emitCallEnd();
+        // Bridge gave up reconnecting — actively terminate the live call transport
+        // so the caller is not left connected in silence while billing continues.
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close(1011, "Bridge disconnected");
+        }
+        void this.provider
+          .hangupCall({ callId, providerCallId: callSid, reason: "error" })
+          .catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[voice-call] Failed to hang up call ${callSid} after bridge close:`, msg);
+          });
       },
     });
 
