@@ -1,11 +1,18 @@
 import net from "node:net";
 import tls from "node:tls";
+import fs from "node:fs";
 import {
   parseIrcLine,
   parseIrcPrefix,
   sanitizeIrcOutboundText,
   sanitizeIrcTarget,
 } from "./protocol.js";
+
+const DEBUG_LOG = "/tmp/crayfish-openclaw-irc.debug.log";
+function debugLog(msg: string) {
+  const ts = new Date().toISOString();
+  fs.appendFileSync(DEBUG_LOG, "[" + ts + "] " + msg + "\n");
+}
 
 const IRC_ERROR_CODES = new Set(["432", "464", "465"]);
 const IRC_NICK_COLLISION_CODES = new Set(["433", "436"]);
@@ -116,7 +123,7 @@ export function buildIrcNickServCommands(options?: IrcNickServOptions): string[]
 export async function connectIrcClient(options: IrcClientOptions): Promise<IrcClient> {
   const timeoutMs = options.connectTimeoutMs != null ? options.connectTimeoutMs : 15000;
   const messageChunkMaxChars =
-    options.messageChunkMaxChars != null ? options.messageChunkMaxChars : 16384;
+    options.messageChunkMaxChars != null ? options.messageChunkMaxChars : 350;
 
   if (!options.host.trim()) {
     throw new Error("IRC host is required");
@@ -131,6 +138,22 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   let closed = false;
   let nickServRecoverAttempted = false;
   let fallbackNickAttempted = false;
+
+  // Incoming batch state: batchId -> messages
+  const incomingBatches = new Map<string, Array<{
+    senderNick: string;
+    senderUser?: string;
+    senderHost?: string;
+    target: string;
+    text: string;
+  }>>();
+  let multilineCap = false;
+  let batchCounter = 0;
+  let capNegotiationComplete = false;
+  let resolveCapComplete: (() => void) | null = null;
+  const capCompletePromise = new Promise<void>((resolve) => {
+    resolveCapComplete = resolve;
+  });
 
   const socket = options.tls
     ? tls.connect({
@@ -209,26 +232,30 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   };
 
   const sendPrivmsg = (target: string, text: string) => {
+    debugLog("sendPrivmsg RAW: len=" + text.length + " hasNewlines=" + text.includes("\n"));
     const normalizedTarget = sanitizeIrcTarget(target);
     const cleaned = sanitizeIrcOutboundText(text);
     if (!cleaned) {
       return;
     }
-    let remaining = cleaned;
-    while (remaining.length > 0) {
-      let chunk = remaining;
-      if (chunk.length > messageChunkMaxChars) {
-        let splitAt = chunk.lastIndexOf(" ", messageChunkMaxChars);
-        if (splitAt < Math.floor(messageChunkMaxChars / 2)) {
-          splitAt = messageChunkMaxChars;
-        }
-        chunk = chunk.slice(0, splitAt).trim();
+
+    const hasNewlines = cleaned.includes("\n");
+
+    if (multilineCap && hasNewlines) {
+      // Use BATCH for multiline messages
+      debugLog("Using BATCH for multiline: multilineCap=" + multilineCap + " lines=" + cleaned.split(/\n/).length);
+      const lines = cleaned.split(/\n/);
+      batchCounter++;
+      const batchId = `m${batchCounter}`;
+      sendRaw(`BATCH +${batchId} draft/multiline ${normalizedTarget}`);
+      for (const line of lines) {
+        socket.write(`@batch=${batchId} PRIVMSG ${normalizedTarget} :${line}\r\n`);
       }
-      if (!chunk) {
-        break;
-      }
-      sendRaw(`PRIVMSG ${normalizedTarget} :${chunk}`);
-      remaining = remaining.slice(chunk.length).trimStart();
+      sendRaw(`BATCH -${batchId}`);
+    } else {
+      // Single line or no multiline support - flatten newlines
+      if (hasNewlines) debugLog("FLATTENING newlines (multilineCap=" + multilineCap + ")");
+      socket.write(`PRIVMSG ${normalizedTarget} :${cleaned.replace(/\n/g, " ")}\r\n`);
     }
   };
 
@@ -283,6 +310,45 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
         const payload =
           line.trailing != null ? line.trailing : line.params[0] != null ? line.params[0] : "";
         sendRaw(`PONG :${payload}`);
+        continue;
+      }
+
+      // CAP negotiation for draft/multiline
+      if (line.command === "CAP" && line.params[1] === "LS") {
+        const caps = (line.trailing ?? "").toLowerCase();
+        debugLog("CAP LS received: caps=" + caps);
+        if (caps.includes("draft/multiline")) {
+          debugLog("CAP REQ draft/multiline - server supports it");
+          sendRaw(`CAP REQ draft/multiline`);
+        } else {
+          debugLog("CAP END (no multiline support)");
+          capNegotiationComplete = true;
+          resolveCapComplete?.();
+          sendRaw(`CAP END`);
+        }
+        continue;
+      }
+
+      if (line.command === "CAP" && line.params[1] === "ACK") {
+        // Capability can be in trailing OR in params[2] depending on server
+        const acked = ((line.trailing ?? line.params[2] ?? "") as string).toLowerCase();
+        if (acked.includes("draft/multiline")) {
+          multilineCap = true;
+          debugLog("multilineCap set to TRUE");
+        }
+        debugLog("CAP END (after ACK)");
+        capNegotiationComplete = true;
+        resolveCapComplete?.();
+        sendRaw(`CAP END`);
+        continue;
+      }
+
+      if (line.command === "CAP" && line.params[1] === "NAK") {
+        // Server rejected our CAP request, end negotiation
+        debugLog("CAP END (after NAK)");
+        capNegotiationComplete = true;
+        resolveCapComplete?.();
+        sendRaw(`CAP END`);
         continue;
       }
 
@@ -359,6 +425,45 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
         continue;
       }
 
+      // Handle BATCH commands for draft/multiline
+      if (line.command === "BATCH") {
+        const batchParam = line.params[0] || line.trailing;
+        debugLog("BATCH CMD: param=" + batchParam);
+        if (!batchParam) continue;
+
+        if (batchParam.startsWith("+")) {
+          // Start of batch - just initialize the buffer
+          const batchId = batchParam.slice(1);
+          incomingBatches.set(batchId, []);
+          debugLog("BATCH START: " + batchId);
+        } else if (batchParam.startsWith("-")) {
+          // End of batch - combine and emit
+          const batchId = batchParam.slice(1);
+          const messages = incomingBatches.get(batchId);
+          incomingBatches.delete(batchId);
+
+          if (messages && messages.length > 0 && options.onPrivmsg) {
+            // Combine all messages in the batch
+            const first = messages[0];
+            const combinedText = messages.map(m => m.text).join("\n");
+            debugLog("BATCH END: " + batchId + " msgs=" + messages.length + " text=" + combinedText);
+            void Promise.resolve(
+              options.onPrivmsg({
+                senderNick: first.senderNick,
+                senderUser: first.senderUser,
+                senderHost: first.senderHost,
+                target: first.target,
+                text: combinedText,
+                rawLine: `[BATCH ${batchId}]`, // Indicate this was a batch
+              }),
+            ).catch((error) => {
+              fail(error);
+            });
+          }
+        }
+        continue;
+      }
+
       if (line.command === "PRIVMSG") {
         const targetParam = line.params[0];
         const target = targetParam ? targetParam.trim() : "";
@@ -368,6 +473,25 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
         if (!target || !senderNick || !text.trim()) {
           continue;
         }
+
+        // Check if this message is part of a batch
+        const batchTag = line.tags?.get("batch");
+        if (batchTag) {
+          // Buffer the message for later
+          const batch = incomingBatches.get(batchTag);
+          if (batch) {
+            debugLog("BATCH MSG: batchTag=" + batchTag + " text=" + text);
+            batch.push({
+              senderNick,
+              senderUser: prefix.user ? prefix.user.trim() : undefined,
+              senderHost: prefix.host ? prefix.host.trim() : undefined,
+              target,
+              text,
+            });
+          }
+          continue; // Don't emit yet - wait for BATCH -<id>
+        }
+
         if (options.onPrivmsg) {
           void Promise.resolve(
             options.onPrivmsg({
@@ -388,6 +512,8 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
   socket.once("connect", () => {
     try {
+      // Start CAP negotiation for draft/multiline support
+      sendRaw(`CAP LS 302`);
       if (options.password && options.password.trim()) {
         sendRaw(`PASS ${options.password.trim()}`);
       }
@@ -424,6 +550,10 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   }
 
   await withTimeout(readyPromise, timeoutMs, "IRC connect");
+  // Also wait for CAP negotiation to complete (multiline support)
+  await withTimeout(capCompletePromise, 5000, "IRC CAP negotiation");
+
+  debugLog("Connection ready: multilineCap=" + multilineCap);
 
   return {
     get nick() {
