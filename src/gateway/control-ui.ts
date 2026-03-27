@@ -79,7 +79,7 @@ function contentTypeForExt(ext: string): string {
 }
 
 /**
- * Extensions recognised as static assets.  Missing files with these extensions
+ * Extensions recognized as static assets.  Missing files with these extensions
  * return 404 instead of the SPA index.html fallback.  `.html` is intentionally
  * excluded — actual HTML files on disk are served earlier, and missing `.html`
  * paths should fall through to the SPA router (client-side routers may use

@@ -62,7 +62,7 @@ export function formatDuplicateTelegramTokenReason(params: {
  * block channel-level fallthrough for the given accountId.  This mirrors the
  * guard in `token.ts` so that status-check functions (`isConfigured`,
  * `unconfiguredReason`, `describeAccount`) stay consistent with the gateway
- * runtime behaviour.
+ * runtime behavior.
  *
  * The guard fires when:
  *   1. The accountId is not the default account, AND
