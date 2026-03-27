@@ -537,6 +537,20 @@ export async function prepareSlackMessage(params: {
       reason: "other user/bot mentioned (ignoreOtherMentions)",
       target: senderId,
     });
+    const pendingText = (message.text ?? "").trim();
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: ctx.channelHistories,
+      historyKey,
+      limit: ctx.historyLimit,
+      entry: pendingText
+        ? {
+            sender: await resolveSenderName(),
+            body: pendingText,
+            timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
+            messageId: message.ts,
+          }
+        : null,
+    });
     return null;
   }
 

@@ -700,6 +700,89 @@ describe("prepareSlackMessage sender prefix", () => {
     expect(body).toContain("Alice (U1): <@BOT> hello");
   });
 
+  it("drops channel message mentioning another user when ignoreOtherMentions is true", async () => {
+    const ctx = createInboundSlackTestContext({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+      channelsConfig: { C123: { ignoreOtherMentions: true } },
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    ctx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    const message = {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "<@U_OTHER> do something",
+      ts: "1.000",
+    } as SlackMessageEvent;
+
+    const result = await prepareSlackMessage({
+      ctx,
+      account: createSlackTestAccount(),
+      message,
+      opts: { source: "message" },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not drop channel message when bot is also mentioned with ignoreOtherMentions", async () => {
+    const ctx = createInboundSlackTestContext({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+      channelsConfig: { C123: { ignoreOtherMentions: true } },
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    ctx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    const message = {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "<@B1> <@U_OTHER> do something",
+      ts: "1.000",
+    } as SlackMessageEvent;
+
+    const result = await prepareSlackMessage({
+      ctx,
+      account: createSlackTestAccount(),
+      message,
+      opts: { source: "message" },
+    });
+
+    expect(result).not.toBeNull();
+  });
+
+  it("does not apply ignoreOtherMentions in DMs", async () => {
+    const ctx = createInboundSlackTestContext({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      channelsConfig: { D123: { ignoreOtherMentions: true } },
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    ctx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    const message = {
+      channel: "D123",
+      channel_type: "im",
+      user: "U1",
+      text: "<@U_OTHER> hello",
+      ts: "1.000",
+    } as SlackMessageEvent;
+
+    const result = await prepareSlackMessage({
+      ctx,
+      account: createSlackTestAccount(),
+      message,
+      opts: { source: "message" },
+    });
+
+    expect(result).not.toBeNull();
+  });
+
   it("detects /new as control command when prefixed with Slack mention", async () => {
     const ctx = createSenderPrefixCtx({
       channels: { dm: { enabled: true, policy: "open", allowFrom: ["*"] } },
