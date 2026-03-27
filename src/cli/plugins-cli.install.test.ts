@@ -346,6 +346,60 @@ describe("plugins cli install", () => {
     );
   });
 
+  it("falls back to npm when ClawHub resolution fails for a valid npm package spec", async () => {
+    const cfg = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledCfg = {
+      plugins: {
+        entries: {
+          "@openclaw/voice-call": {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromClawHub.mockResolvedValue({
+      ok: false,
+      error: "fetch failed",
+      code: "request_failed",
+    });
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "@openclaw/voice-call",
+      targetDir: "/tmp/openclaw-state/extensions/voice-call",
+      version: "1.2.3",
+      npmResolution: {
+        packageName: "@openclaw/voice-call",
+        resolvedVersion: "1.2.3",
+        tarballUrl: "https://registry.npmjs.org/@openclaw/voice-call/-/voice-call-1.2.3.tgz",
+      },
+    });
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "@openclaw/voice-call@beta"]);
+
+    expect(installPluginFromClawHub).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:@openclaw/voice-call@beta",
+      }),
+    );
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/voice-call@beta",
+      }),
+    );
+  });
+
   it("does not fall back to npm when ClawHub rejects a real package", async () => {
     installPluginFromClawHub.mockResolvedValue({
       ok: false,

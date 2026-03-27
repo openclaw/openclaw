@@ -166,7 +166,8 @@ export function decidePreferredClawHubFallback(params: {
 }): PreferredClawHubFallbackDecision {
   if (
     params.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
-    params.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND
+    params.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND ||
+    params.code === CLAWHUB_INSTALL_ERROR_CODE.REQUEST_FAILED
   ) {
     return PREFERRED_CLAWHUB_FALLBACK_DECISION.FALLBACK_TO_NPM;
   }
