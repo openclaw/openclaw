@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/irc",
-  "version": "2026.3.22",
+  "version": "2026.3.26",
   "description": "OpenClaw IRC channel plugin",
   "type": "module",
   "dependencies": {
@@ -11,7 +11,7 @@
       "./index.ts"
     ],
     "install": {
-      "minHostVersion": ">=2026.3.22"
+      "minHostVersion": ">=2026.3.26"
     },
     "setupEntry": "./setup-entry.ts",
     "channel": {

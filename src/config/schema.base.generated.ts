@@ -15256,6 +15256,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["security", "auth"],
     },
   },
-  version: "2026.3.25",
+  version: "2026.3.26",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;
