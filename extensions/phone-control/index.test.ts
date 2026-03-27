@@ -155,6 +155,18 @@ describe("phone-control plugin", () => {
     });
   });
 
+  it("blocks external channel callers without operator.admin from disarming phone control", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const res = await command.handler({
+        ...createCommandContext("disarm"),
+        channel: "telegram",
+      });
+
+      expect(String(res?.text ?? "")).toContain("requires operator.admin");
+      expect(writeConfigFile).not.toHaveBeenCalled();
+    });
+  });
+
   it("allows internal operator.admin callers to mutate phone control", async () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
       const res = await command.handler({
@@ -165,6 +177,25 @@ describe("phone-control plugin", () => {
 
       expect(String(res?.text ?? "")).toContain("sms.send");
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("allows external channel callers with operator.admin to disarm phone control", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      await command.handler({
+        ...createCommandContext("arm writes 30s"),
+        channel: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      });
+
+      const res = await command.handler({
+        ...createCommandContext("disarm"),
+        channel: "telegram",
+        gatewayClientScopes: ["operator.admin"],
+      });
+
+      expect(String(res?.text ?? "")).toContain("disarmed");
+      expect(writeConfigFile).toHaveBeenCalledTimes(2);
     });
   });
 });
