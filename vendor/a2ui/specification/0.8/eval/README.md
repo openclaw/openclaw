@@ -38,10 +38,10 @@ pnpm run eval -- --model='<model_name>' --prompt=<prompt_name>
 
 ### Example
 
-To run the test with the `gpt-5-mini (reasoning: minimal)` model and the `generateDogUIs` prompt, use the following command:
+To run the test with the `gpt-4.1 (reasoning: minimal)` model and the `generateDogUIs` prompt, use the following command:
 
 ```bash
-pnpm run eval -- --model='gpt-5-mini (reasoning: minimal)' --prompt=generateDogUIs
+pnpm run eval -- --model='gpt-4.1 (reasoning: minimal)' --prompt=generateDogUIs
 ```
 
 ## Controlling Output

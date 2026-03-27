@@ -35,8 +35,8 @@ export const modelsToTest: ModelConfiguration[] = [
     tokensPerMinute: 30000,
   },
   {
-    model: openAI.model("gpt-5-mini"),
-    name: "gpt-5-mini",
+    model: openAI.model("gpt-4.1"),
+    name: "gpt-4.1",
     config: { reasoning_effort: "minimal" },
     requestsPerMinute: 500,
     tokensPerMinute: 500000,

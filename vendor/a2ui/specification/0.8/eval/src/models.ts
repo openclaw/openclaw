@@ -31,8 +31,8 @@ export const modelsToTest: ModelConfiguration[] = [
     config: { reasoning_effort: "minimal" },
   },
   {
-    model: openAI.model("gpt-5-mini"),
-    name: "gpt-5-mini",
+    model: openAI.model("gpt-4.1"),
+    name: "gpt-4.1",
     config: { reasoning_effort: "minimal" },
   },
   {
