@@ -1,8 +1,8 @@
 import {
   OPENAI_BATCH_ENDPOINT,
   runOpenAiEmbeddingBatches,
-  type MemoryChunk,
-} from "../engine-host-api.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { MemoryChunk } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 export function createOpenAIEmbeddingProviderMock(params: {
   embedQuery: (input: string) => Promise<number[]>;

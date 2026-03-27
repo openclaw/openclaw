@@ -1,1 +1,1 @@
-export { requireNodeSqlite } from "../engine-host-api.js";
+export { requireNodeSqlite } from "openclaw/plugin-sdk/memory-core-host-engine-storage";

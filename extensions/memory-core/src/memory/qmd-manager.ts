@@ -3,20 +3,28 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import {
-  buildSessionEntry,
   createSubsystemLogger,
+  resolveAgentWorkspaceDir,
+  resolveGlobalSingleton,
+  resolveStateDir,
+  writeFileWithinRoot,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import {
+  buildSessionEntry,
   deriveQmdScopeChannel,
   deriveQmdScopeChatType,
   extractKeywords,
-  isFileMissingError,
   isQmdScopeAllowed,
   listSessionFilesForAgent,
   parseQmdQueryJson,
-  resolveAgentWorkspaceDir,
   resolveCliSpawnInvocation,
-  resolveGlobalSingleton,
-  resolveStateDir,
   runCliCommand,
+  type QmdQueryResult,
+  type SessionFileEntry,
+} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import {
+  isFileMissingError,
   statRegularFile,
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
@@ -24,14 +32,10 @@ import {
   type MemorySearchResult,
   type MemorySource,
   type MemorySyncProgressUpdate,
-  type OpenClawConfig,
-  type QmdQueryResult,
   type ResolvedMemoryBackendConfig,
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
-  type SessionFileEntry,
-  writeFileWithinRoot,
-} from "../engine-host-api.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { requireNodeSqlite } from "./sqlite.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
