@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/browser-support";
+export { withFetchPreconnect } from "openclaw/plugin-sdk/browser-support";
