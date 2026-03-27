@@ -16,12 +16,12 @@ import { resolveGatewayStartupPluginIds } from "./channel-plugin-ids.js";
 
 describe("resolveGatewayStartupPluginIds", () => {
   beforeEach(() => {
-    listPotentialConfiguredChannelIds.mockReset().mockReturnValue(["discord"]);
+    listPotentialConfiguredChannelIds.mockReset().mockReturnValue(["demo-channel"]);
     loadPluginManifestRegistry.mockReset().mockReturnValue({
       plugins: [
         {
-          id: "discord",
-          channels: ["discord"],
+          id: "demo-channel",
+          channels: ["demo-channel"],
           origin: "bundled",
           enabledByDefault: undefined,
           providers: [],
@@ -36,12 +36,12 @@ describe("resolveGatewayStartupPluginIds", () => {
           cliBackends: [],
         },
         {
-          id: "anthropic",
+          id: "demo-provider-plugin",
           channels: [],
           origin: "bundled",
           enabledByDefault: undefined,
-          providers: ["anthropic"],
-          cliBackends: ["claude-cli"],
+          providers: ["demo-provider"],
+          cliBackends: ["demo-cli"],
         },
         {
           id: "diagnostics-otel",
@@ -73,9 +73,9 @@ describe("resolveGatewayStartupPluginIds", () => {
       },
       agents: {
         defaults: {
-          model: { primary: "claude-cli/claude-sonnet-4-6" },
+          model: { primary: "demo-cli/demo-model" },
           models: {
-            "claude-cli/claude-sonnet-4-6": {},
+            "demo-cli/demo-model": {},
           },
         },
       },
@@ -87,7 +87,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         workspaceDir: "/tmp",
         env: process.env,
       }),
-    ).toEqual(["discord", "anthropic", "diagnostics-otel", "custom-sidecar"]);
+    ).toEqual(["demo-channel", "demo-provider-plugin", "diagnostics-otel", "custom-sidecar"]);
   });
 
   it("does not pull default-on bundled non-channel plugins into startup", () => {
@@ -99,14 +99,14 @@ describe("resolveGatewayStartupPluginIds", () => {
         workspaceDir: "/tmp",
         env: process.env,
       }),
-    ).toEqual(["discord", "custom-sidecar"]);
+    ).toEqual(["demo-channel", "custom-sidecar"]);
   });
 
   it("auto-loads bundled plugins referenced by configured provider ids", () => {
     const config = {
       models: {
         providers: {
-          anthropic: {
+          "demo-provider": {
             baseUrl: "https://example.com",
             models: [],
           },
@@ -120,6 +120,6 @@ describe("resolveGatewayStartupPluginIds", () => {
         workspaceDir: "/tmp",
         env: process.env,
       }),
-    ).toEqual(["discord", "anthropic", "custom-sidecar"]);
+    ).toEqual(["demo-channel", "demo-provider-plugin", "custom-sidecar"]);
   });
 });

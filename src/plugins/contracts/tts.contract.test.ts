@@ -1,11 +1,9 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildElevenLabsSpeechProvider } from "../../../extensions/elevenlabs/test-api.js";
-import { buildMicrosoftSpeechProvider } from "../../../extensions/microsoft/test-api.js";
-import { buildOpenAISpeechProvider } from "../../../extensions/openai/test-api.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { SpeechProviderPlugin } from "../../plugins/types.js";
 import { withEnv } from "../../test-utils/env.js";
 import * as tts from "../../tts/tts.js";
 
@@ -124,6 +122,185 @@ function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawC
   };
 }
 
+function createAudioBuffer(length = 2): Buffer {
+  return Buffer.from(new Uint8Array(length).fill(1));
+}
+
+function resolveBaseUrl(rawValue: unknown, fallback: string): string {
+  return typeof rawValue === "string" && rawValue.trim() ? rawValue.replace(/\/+$/u, "") : fallback;
+}
+
+function buildTestOpenAISpeechProvider(): SpeechProviderPlugin {
+  return {
+    id: "openai",
+    label: "OpenAI",
+    autoSelectOrder: 10,
+    resolveConfig: ({ rawConfig }) => {
+      const config = (rawConfig.openai ?? {}) as Record<string, unknown>;
+      return {
+        ...config,
+        baseUrl: resolveBaseUrl(
+          config.baseUrl ?? process.env.OPENAI_TTS_BASE_URL,
+          "https://api.openai.com/v1",
+        ),
+      };
+    },
+    parseDirectiveToken: ({ key, value, providerConfig }) => {
+      if (key === "voice") {
+        const baseUrl = resolveBaseUrl(
+          (providerConfig as Record<string, unknown> | undefined)?.baseUrl,
+          "https://api.openai.com/v1",
+        );
+        const isDefaultEndpoint = baseUrl === "https://api.openai.com/v1";
+        const allowedVoices = new Set([
+          "alloy",
+          "ash",
+          "ballad",
+          "coral",
+          "echo",
+          "sage",
+          "shimmer",
+          "verse",
+        ]);
+        if (isDefaultEndpoint && !allowedVoices.has(value)) {
+          return { handled: true, warnings: [`invalid OpenAI voice "${value}"`] };
+        }
+        return { handled: true, overrides: { voice: value } };
+      }
+      if (key === "model") {
+        const baseUrl = resolveBaseUrl(
+          (providerConfig as Record<string, unknown> | undefined)?.baseUrl,
+          "https://api.openai.com/v1",
+        );
+        const isDefaultEndpoint = baseUrl === "https://api.openai.com/v1";
+        const allowedModels = new Set(["tts-1", "tts-1-hd", "gpt-4o-mini-tts"]);
+        if (isDefaultEndpoint && !allowedModels.has(value)) {
+          return { handled: true, warnings: [`invalid OpenAI model "${value}"`] };
+        }
+        return { handled: true, overrides: { model: value } };
+      }
+      return { handled: false };
+    },
+    isConfigured: ({ providerConfig }) =>
+      typeof (providerConfig as Record<string, unknown> | undefined)?.apiKey === "string" ||
+      typeof process.env.OPENAI_API_KEY === "string",
+    synthesize: async ({ text, providerConfig, providerOverrides }) => {
+      const config = providerConfig as Record<string, unknown> | undefined;
+      await fetch(`${resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1")}/audio/speech`, {
+        method: "POST",
+        body: JSON.stringify({
+          input: text,
+          model: providerOverrides?.model ?? config?.model ?? "gpt-4o-mini-tts",
+          voice: providerOverrides?.voice ?? config?.voice ?? "alloy",
+        }),
+      });
+      return {
+        audioBuffer: createAudioBuffer(1),
+        outputFormat: "mp3",
+        fileExtension: ".mp3",
+        voiceCompatible: true,
+      };
+    },
+    synthesizeTelephony: async ({ text, providerConfig }) => {
+      const config = providerConfig as Record<string, unknown> | undefined;
+      const configuredModel = typeof config?.model === "string" ? config.model : undefined;
+      const model = configuredModel ?? "tts-1";
+      const configuredInstructions =
+        typeof config?.instructions === "string" ? config.instructions : undefined;
+      const instructions =
+        model === "gpt-4o-mini-tts" ? configuredInstructions || undefined : undefined;
+      await fetch(`${resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1")}/audio/speech`, {
+        method: "POST",
+        body: JSON.stringify({
+          input: text,
+          model,
+          voice: config?.voice ?? "alloy",
+          instructions,
+        }),
+      });
+      return {
+        audioBuffer: createAudioBuffer(2),
+        outputFormat: "mp3",
+        sampleRate: 24000,
+      };
+    },
+    listVoices: async () => [{ id: "alloy", label: "Alloy" }],
+  };
+}
+
+function buildTestMicrosoftSpeechProvider(): SpeechProviderPlugin {
+  return {
+    id: "microsoft",
+    label: "Microsoft",
+    aliases: ["edge"],
+    autoSelectOrder: 30,
+    resolveConfig: ({ rawConfig }) => {
+      const edgeConfig = (rawConfig.edge ?? rawConfig.microsoft ?? {}) as Record<string, unknown>;
+      return {
+        ...edgeConfig,
+        outputFormat: edgeConfig.outputFormat ?? "audio-24khz-48kbitrate-mono-mp3",
+      };
+    },
+    isConfigured: () => true,
+    synthesize: async () => ({
+      audioBuffer: createAudioBuffer(),
+      outputFormat: "mp3",
+      fileExtension: ".mp3",
+      voiceCompatible: true,
+    }),
+    listVoices: async () => [{ id: "edge", label: "Edge" }],
+  };
+}
+
+function buildTestElevenLabsSpeechProvider(): SpeechProviderPlugin {
+  return {
+    id: "elevenlabs",
+    label: "ElevenLabs",
+    autoSelectOrder: 20,
+    parseDirectiveToken: ({ key, value, currentOverrides }) => {
+      if (key === "voiceid") {
+        return { handled: true, overrides: { voiceId: value } };
+      }
+      if (key === "stability") {
+        return {
+          handled: true,
+          overrides: {
+            voiceSettings: {
+              ...(currentOverrides as { voiceSettings?: Record<string, unknown> } | undefined)
+                ?.voiceSettings,
+              stability: Number(value),
+            },
+          },
+        };
+      }
+      if (key === "speed") {
+        return {
+          handled: true,
+          overrides: {
+            voiceSettings: {
+              ...(currentOverrides as { voiceSettings?: Record<string, unknown> } | undefined)
+                ?.voiceSettings,
+              speed: Number(value),
+            },
+          },
+        };
+      }
+      return { handled: false };
+    },
+    isConfigured: ({ providerConfig }) =>
+      typeof (providerConfig as Record<string, unknown> | undefined)?.apiKey === "string" ||
+      typeof process.env.ELEVENLABS_API_KEY === "string" ||
+      typeof process.env.XI_API_KEY === "string",
+    synthesize: async () => ({
+      audioBuffer: createAudioBuffer(),
+      outputFormat: "mp3",
+      fileExtension: ".mp3",
+      voiceCompatible: true,
+    }),
+    listVoices: async () => [{ id: "eleven", label: "Eleven" }],
+  };
+}
+
 describe("tts", () => {
   beforeEach(async () => {
     ({ completeSimple } = await import("@mariozechner/pi-ai"));
@@ -136,9 +313,9 @@ describe("tts", () => {
     prepareModelForSimpleCompletionMock = vi.fn(({ model }) => model);
     const registry = createEmptyPluginRegistry();
     registry.speechProviders = [
-      { pluginId: "openai", provider: buildOpenAISpeechProvider(), source: "test" },
-      { pluginId: "microsoft", provider: buildMicrosoftSpeechProvider(), source: "test" },
-      { pluginId: "elevenlabs", provider: buildElevenLabsSpeechProvider(), source: "test" },
+      { pluginId: "openai", provider: buildTestOpenAISpeechProvider(), source: "test" },
+      { pluginId: "microsoft", provider: buildTestMicrosoftSpeechProvider(), source: "test" },
+      { pluginId: "elevenlabs", provider: buildTestElevenLabsSpeechProvider(), source: "test" },
     ];
     setActivePluginRegistry(registry, "tts-test");
     vi.clearAllMocks();
