@@ -56,7 +56,7 @@ describe("delivery-queue policy", () => {
       const result = isEntryEligibleForRecoveryRetry(
         {
           id: "entry-1",
-          channel: "whatsapp",
+          channel: "demo-channel",
           to: "+1",
           payloads: [{ text: "a" }],
           enqueuedAt: now,
@@ -72,7 +72,7 @@ describe("delivery-queue policy", () => {
       const result = isEntryEligibleForRecoveryRetry(
         {
           id: "entry-2",
-          channel: "whatsapp",
+          channel: "demo-channel",
           to: "+1",
           payloads: [{ text: "a" }],
           enqueuedAt: now - 30_000,
