@@ -50,6 +50,26 @@ function normalizeStringList(values) {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeManifestContracts(raw) {
+  const contracts = normalizeObject(raw);
+  if (!contracts) {
+    return undefined;
+  }
+  const speechProviders = normalizeStringList(contracts.speechProviders);
+  const mediaUnderstandingProviders = normalizeStringList(contracts.mediaUnderstandingProviders);
+  const imageGenerationProviders = normalizeStringList(contracts.imageGenerationProviders);
+  const webSearchProviders = normalizeStringList(contracts.webSearchProviders);
+  const tools = normalizeStringList(contracts.tools);
+  const normalized = {
+    ...(speechProviders?.length ? { speechProviders } : {}),
+    ...(mediaUnderstandingProviders?.length ? { mediaUnderstandingProviders } : {}),
+    ...(imageGenerationProviders?.length ? { imageGenerationProviders } : {}),
+    ...(webSearchProviders?.length ? { webSearchProviders } : {}),
+    ...(tools?.length ? { tools } : {}),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function normalizeObject(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -100,14 +120,8 @@ function normalizePluginManifest(raw) {
     ...(normalizeStringList(raw.providers)
       ? { providers: normalizeStringList(raw.providers) }
       : {}),
-    ...(normalizeStringList(raw.speechProviders)
-      ? { speechProviders: normalizeStringList(raw.speechProviders) }
-      : {}),
-    ...(normalizeStringList(raw.mediaUnderstandingProviders)
-      ? { mediaUnderstandingProviders: normalizeStringList(raw.mediaUnderstandingProviders) }
-      : {}),
-    ...(normalizeStringList(raw.imageGenerationProviders)
-      ? { imageGenerationProviders: normalizeStringList(raw.imageGenerationProviders) }
+    ...(normalizeStringList(raw.cliBackends)
+      ? { cliBackends: normalizeStringList(raw.cliBackends) }
       : {}),
     ...(normalizeObject(raw.providerAuthEnvVars)
       ? { providerAuthEnvVars: raw.providerAuthEnvVars }
@@ -120,6 +134,9 @@ function normalizePluginManifest(raw) {
     ...(typeof raw.description === "string" ? { description: raw.description.trim() } : {}),
     ...(typeof raw.version === "string" ? { version: raw.version.trim() } : {}),
     ...(normalizeObject(raw.uiHints) ? { uiHints: raw.uiHints } : {}),
+    ...(normalizeManifestContracts(raw.contracts)
+      ? { contracts: normalizeManifestContracts(raw.contracts) }
+      : {}),
   };
 }
 

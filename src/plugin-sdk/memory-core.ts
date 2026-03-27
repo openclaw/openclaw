@@ -14,10 +14,7 @@ export { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 export { loadConfig } from "../config/config.js";
 export { resolveStateDir } from "../config/paths.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
-export {
-  getMemorySearchManager,
-  MemoryIndexManager,
-} from "../../extensions/memory-core/src/memory/index.js";
+export { getMemorySearchManager, MemoryIndexManager } from "./memory-core-engine-runtime.js";
 export {
   listMemoryFiles,
   normalizeExtraMemoryPaths,

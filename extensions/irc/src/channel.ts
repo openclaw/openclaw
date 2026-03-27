@@ -26,7 +26,7 @@ import {
   resolveIrcAccount,
   type ResolvedIrcAccount,
 } from "./accounts.js";
-import { IrcConfigSchema } from "./config-schema.js";
+import { IrcChannelConfigSchema } from "./config-schema.js";
 import { monitorIrcProvider } from "./monitor.js";
 import {
   normalizeIrcMessagingTarget,
@@ -38,7 +38,6 @@ import { resolveIrcGroupMatch, resolveIrcRequireMention } from "./policy.js";
 import { probeIrc } from "./probe.js";
 import {
   buildBaseChannelStatusSummary,
-  buildChannelConfigSchema,
   createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   getChatChannelMeta,
@@ -169,7 +168,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       blockStreaming: true,
     },
     reload: { configPrefixes: ["channels.irc"] },
-    configSchema: buildChannelConfigSchema(IrcConfigSchema),
+    configSchema: IrcChannelConfigSchema,
     config: {
       ...ircConfigAdapter,
       isConfigured: (account) => account.configured,

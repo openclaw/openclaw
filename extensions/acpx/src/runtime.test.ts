@@ -551,6 +551,31 @@ describe("AcpxRuntime", () => {
     }
   });
 
+  it("does not pass unknown agent ids through acpx --agent when MCP servers are configured", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture({
+      mcpServers: {
+        canva: {
+          command: "npx",
+          args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
+          env: {
+            CANVA_TOKEN: "secret", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:sh:acp:mcp",
+      agent: "sh -c whoami",
+      mode: "persistent",
+    });
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+    expect(ensureArgs).not.toContain("--agent");
+    expect(ensureArgs).toContain("sh -c whoami");
+  });
+
   it("skips prompt execution when runTurn starts with an already-aborted signal", async () => {
     const { runtime, logPath } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
