@@ -37,11 +37,11 @@ Requirements for Phase 1 release. Each maps to roadmap phases.
 
 ### Concurrency
 
-- [ ] **CONC-01**: File-level `.lock` via `mkdir` (atomic on POSIX) prevents concurrent queue.md writes
-- [ ] **CONC-02**: Lock is held only during queue read-modify-write cycle (<100ms)
-- [ ] **CONC-03**: Lock file contains PID and timestamp for diagnostics
-- [ ] **CONC-04**: Stale locks older than 60 seconds are force-cleared
-- [ ] **CONC-05**: Validate after write: re-read queue.md to confirm claim persisted
+- [x] **CONC-01**: File-level `.lock` via `mkdir` (atomic on POSIX) prevents concurrent queue.md writes
+- [x] **CONC-02**: Lock is held only during queue read-modify-write cycle (<100ms)
+- [x] **CONC-03**: Lock file contains PID and timestamp for diagnostics
+- [x] **CONC-04**: Stale locks older than 60 seconds are force-cleared
+- [x] **CONC-05**: Validate after write: re-read queue.md to confirm claim persisted
 
 ### Agent Integration
 
@@ -151,11 +151,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SYNC-05     | Phase 3  | Complete |
 | SYNC-06     | Phase 3  | Complete |
 | SYNC-07     | Phase 3  | Complete |
-| CONC-01     | Phase 4  | Pending  |
-| CONC-02     | Phase 4  | Pending  |
-| CONC-03     | Phase 4  | Pending  |
-| CONC-04     | Phase 4  | Pending  |
-| CONC-05     | Phase 4  | Pending  |
+| CONC-01     | Phase 4  | Complete |
+| CONC-02     | Phase 4  | Complete |
+| CONC-03     | Phase 4  | Complete |
+| CONC-04     | Phase 4  | Complete |
+| CONC-05     | Phase 4  | Complete |
 | AGNT-01     | Phase 5  | Pending  |
 | AGNT-02     | Phase 5  | Pending  |
 | AGNT-03     | Phase 5  | Pending  |
