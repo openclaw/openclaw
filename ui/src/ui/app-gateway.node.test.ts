@@ -492,6 +492,62 @@ describe("connectGateway", () => {
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
+  it("routes plugin.approval.requested into execApprovalQueue with kind plugin", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "plugin.approval.requested",
+      payload: {
+        id: "plugin-approval-1",
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 120_000,
+        request: {
+          title: "Dangerous command detected",
+          description: "chmod 777 script.sh",
+          severity: "high",
+          pluginId: "sage",
+          agentId: "agent-1",
+          sessionKey: "main",
+        },
+      },
+    });
+
+    expect(host.execApprovalQueue).toHaveLength(1);
+    expect(host.execApprovalQueue[0]?.id).toBe("plugin-approval-1");
+    expect((host.execApprovalQueue[0] as { kind: string }).kind).toBe("plugin");
+  });
+
+  it("routes plugin.approval.resolved to remove from execApprovalQueue", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    // Add a plugin approval first
+    client.emitEvent({
+      event: "plugin.approval.requested",
+      payload: {
+        id: "plugin-approval-2",
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 120_000,
+        request: { title: "Alert" },
+      },
+    });
+    expect(host.execApprovalQueue).toHaveLength(1);
+
+    // Resolve it
+    client.emitEvent({
+      event: "plugin.approval.resolved",
+      payload: { id: "plugin-approval-2", decision: "allow-once" },
+    });
+    expect(host.execApprovalQueue).toHaveLength(0);
+  });
+
   it("reloads chat history once after the final chat event when tool output was used", () => {
     const { client } = connectHostGateway();
     emitToolResultEvent(client);
