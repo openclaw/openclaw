@@ -1,4 +1,5 @@
 @echo off
+set "PATH=%PATH%;C:\Program Files\Git\bin"
 setlocal EnableExtensions DisableDelayedExpansion
 chcp 65001 >nul
 
@@ -37,6 +38,7 @@ if "%~1"=="0" goto done
 
 rem Keyword argument mode
 if /I "%~1"=="compile" goto do_compile_once
+if /I "%~1"=="build-docker" goto do_build_docker_once
 if /I "%~1"=="publish" goto do_publish_once
 if /I "%~1"=="restart" goto do_restart_once
 if /I "%~1"=="all" goto do_all_once
@@ -57,10 +59,11 @@ echo   Source : %SOURCE_DIR%
 echo   Deploy : %DEPLOY_DIR%
 echo   Port   : %PORT%
 echo ==============================================================
-echo [1] Compile project (install + ui:build + build:docker)
+echo [1] Compile project (install + ui:build)
+echo [B] Build docker (build:docker)
 echo [2] Publish and update deploy directory (keep memory/skills/MCP data)
 echo [3] Restart service and verify access
-echo [4] Run full flow (1 + 2 + 3)
+echo [4] Run full flow (1 + B + 2 + 3)
 echo [5] Search/Install/Update skills (ClawHub)
 echo [6] Show running OpenClaw services and status
 echo [7] Start OpenClaw service from a specified directory
@@ -71,10 +74,11 @@ echo [R] Publish + Restart + Verify (recommended)
 echo [K] Kill node process
 echo [0] Exit
 set "CHOICE="
-set /p "CHOICE=Select [0-9, V, R, K]: " || goto done
+set /p "CHOICE=Select [0-9, B, V, R, K]: " || goto done
 if not defined CHOICE goto done
 
 if "%CHOICE%"=="1" goto do_compile
+if /I "%CHOICE%"=="B" goto do_build_docker
 if "%CHOICE%"=="2" goto do_publish
 if "%CHOICE%"=="3" goto do_restart
 if "%CHOICE%"=="4" goto do_all
@@ -89,7 +93,7 @@ if /I "%CHOICE%"=="K" goto do_kill_node
 if "%CHOICE%"=="0" goto done
 
 echo.
-echo [WARN] Invalid input. Please enter 0-9, V, or R.
+echo [WARN] Invalid input. Please enter 0-9, B, V, R, or K.
 pause
 goto menu
 
@@ -130,6 +134,18 @@ call :compile_project
 if errorlevel 1 exit /b 1
 exit /b 0
 
+:do_build_docker
+call :banner "Build docker"
+call :build_docker_project
+call :show_result
+goto menu
+
+:do_build_docker_once
+call :banner "Build docker"
+call :build_docker_project
+if errorlevel 1 exit /b 1
+exit /b 0
+
 :do_publish
 call :banner "Publish and update deploy directory"
 call :publish_update
@@ -158,6 +174,8 @@ exit /b 0
 call :banner "Run full flow"
 call :compile_project
 if errorlevel 1 goto show_result
+call :build_docker_project
+if errorlevel 1 goto show_result
 call :publish_update
 if errorlevel 1 goto show_result
 call :restart_service
@@ -167,6 +185,8 @@ goto menu
 :do_all_once
 call :banner "Run full flow"
 call :compile_project
+if errorlevel 1 exit /b 1
+call :build_docker_project
 if errorlevel 1 exit /b 1
 call :publish_update
 if errorlevel 1 exit /b 1
@@ -263,7 +283,7 @@ exit /b 0
 
 :compile_project
 call :step "Switch to source directory"
-cd /d "%SOURCE_DIR%" || (echo [ERROR] Cannot enter source directory: %SOURCE_DIR% & exit /b 1)
+pushd "%SOURCE_DIR%" || (echo [ERROR] Cannot enter source directory: %SOURCE_DIR% & exit /b 1)
 
 call :step "Install dependencies: pnpm install"
 call pnpm install
@@ -273,11 +293,18 @@ call :step "Build UI: pnpm ui:build"
 call pnpm ui:build
 if errorlevel 1 (echo [ERROR] pnpm ui:build failed. & exit /b 1)
 
+echo [OK] Compile completed.
+exit /b 0
+
+:build_docker_project
+call :step "Switch to source directory"
+pushd "%SOURCE_DIR%" || (echo [ERROR] Cannot enter source directory: %SOURCE_DIR% & exit /b 1)
+
 call :step "Build runtime: pnpm build:docker"
 call pnpm build:docker
 if errorlevel 1 (echo [ERROR] pnpm build:docker failed. & exit /b 1)
 
-echo [OK] Compile completed.
+echo [OK] Docker build completed.
 exit /b 0
 
 :publish_update
@@ -287,16 +314,16 @@ if errorlevel 1 (echo [ERROR] Cannot create deploy directory: %DEPLOY_DIR% & exi
 
 call :step "Stop existing service and release port"
 if exist "%PACKAGE_DIR%\openclaw.mjs" (
-  cd /d "%PACKAGE_DIR%"
-  call node openclaw.mjs gateway stop >nul 2>nul
-)
-cd /d "%SOURCE_DIR%"
+    pushd "%PACKAGE_DIR%"
+    call node openclaw.mjs gateway stop >nul 2>nul
+    popd
+  )
 call :stop_gateway_processes
 set "PID="
 for /f "delims=" %%P in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-NetTCPConnection -LocalPort %PORT% -State Listen -ErrorAction SilentlyContinue ^| Select-Object -First 1 -ExpandProperty OwningProcess)"') do set "PID=%%P"
 if defined PID (
   powershell -NoProfile -ExecutionPolicy Bypass -Command "Stop-Process -Id %PID% -Force" >nul 2>nul
-  timeout /t 1 >nul
+  ping 127.0.0.1 -n 2 >nul
 )
 call :wait_runtime_release
 if errorlevel 1 (
@@ -305,9 +332,10 @@ if errorlevel 1 (
 )
 
 call :step "Create tgz package in deploy directory"
-cd /d "%SOURCE_DIR%" || (echo [ERROR] Cannot enter source directory: %SOURCE_DIR% & exit /b 1)
-call pnpm pack --pack-destination "%DEPLOY_DIR%" --config.ignore-scripts=true
-if errorlevel 1 (echo [ERROR] Package creation failed. & exit /b 1)
+  pushd "%SOURCE_DIR%"
+  call pnpm pack --pack-destination "%DEPLOY_DIR%" --config.ignore-scripts=true
+  popd
+  if errorlevel 1 (echo [ERROR] Package creation failed. & exit /b 1)
 
 set "TGZ_FILE="
 for /f "delims=" %%F in ('dir /b /a-d /o-d "%DEPLOY_DIR%\openclaw-*.tgz" 2^>nul') do if not defined TGZ_FILE set "TGZ_FILE=%%F"
@@ -359,7 +387,7 @@ if exist "%RUNTIME_DIR%" (
 )
 if exist "%RUNTIME_DIR%" (
   call :step "Retry cleanup runtime directory"
-  timeout /t 1 >nul
+  ping 127.0.0.1 -n 2 >nul
   call :stop_runtime_lockers
   rmdir /s /q "%RUNTIME_DIR%"
 )
@@ -379,9 +407,10 @@ if not exist "%PACKAGE_DIR%\openclaw.mjs" (
 )
 
 call :step "Install runtime dependencies: pnpm install --prod"
-cd /d "%PACKAGE_DIR%" || (echo [ERROR] Runtime package directory not found: %PACKAGE_DIR% & exit /b 1)
-call pnpm install --prod
-if errorlevel 1 (echo [ERROR] Runtime dependency install failed. & exit /b 1)
+  pushd "%PACKAGE_DIR%" || (echo [ERROR] Runtime package directory not found: %PACKAGE_DIR% & exit /b 1)
+  call pnpm install --prod
+  popd
+  if errorlevel 1 (echo [ERROR] Runtime dependency install failed. & exit /b 1)
 
 call :step "Sync built runtime dist"
 if not exist "%SOURCE_DIR%\dist\entry.mjs" if not exist "%SOURCE_DIR%\dist\entry.js" (
@@ -431,13 +460,13 @@ if not exist "%PACKAGE_DIR%\openclaw.mjs" (
   echo [ERROR] Runtime package is missing. Run publish first.
   exit /b 1
 )
-
 call :step "Try graceful gateway stop"
-cd /d "%PACKAGE_DIR%"
+pushd "%PACKAGE_DIR%"
 call :stop_gateway_processes
+popd
 call :step "Stop scheduled gateway supervisor if present"
 schtasks /End /TN "OpenClaw Gateway" >nul 2>nul
-timeout /t 1 >nul
+ping 127.0.0.1 -n 2 >nul
 call :step "Release port %PORT% if occupied"
 for /f "delims=" %%P in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-NetTCPConnection -LocalPort %PORT% -State Listen -ErrorAction SilentlyContinue ^| Select-Object -ExpandProperty OwningProcess -Unique)"') do (
   powershell -NoProfile -ExecutionPolicy Bypass -Command "Stop-Process -Id %%P -Force" >nul 2>nul
@@ -452,7 +481,7 @@ call :step "Release bridge port %BRIDGE_PORT% if occupied"
 for /f "delims=" %%P in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-NetTCPConnection -LocalPort %BRIDGE_PORT% -State Listen -ErrorAction SilentlyContinue ^| Select-Object -ExpandProperty OwningProcess -Unique)"') do (
   powershell -NoProfile -ExecutionPolicy Bypass -Command "Stop-Process -Id %%P -Force" >nul 2>nul
 )
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$procs = Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" ^| Where-Object { $_.CommandLine -match 'ws-bridge\.ts' -or $_.CommandLine -match 'mock_virtual_bridge\.mjs' }; foreach($p in $procs){ try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch {} }" >nul 2>nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$procs = Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'ws-bridge\.ts' -or $_.CommandLine -match 'mock_virtual_bridge\.mjs' }; foreach($p in $procs){ try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch {} }" >nul 2>nul
 call :wait_port_free %BRIDGE_PORT%
 if errorlevel 1 (
   echo [WARN] Bridge port %BRIDGE_PORT% is still occupied. Gateway may fail if ABB bridge plugin auto-starts.
@@ -584,11 +613,12 @@ if not exist "%TARGET_DIR%\openclaw.mjs" (
 )
 
 call :step "Graceful stop"
-cd /d "%TARGET_DIR%"
-call node openclaw.mjs gateway stop >nul 2>nul
+  pushd "%TARGET_DIR%"
+  call node openclaw.mjs gateway stop >nul 2>nul
+  popd
 
 call :step "Force-stop remaining gateway processes for target directory"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$target=[regex]::Escape('%TARGET_DIR%'); $procs = Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" ^| Where-Object { $_.CommandLine -match 'openclaw\.mjs\s+gateway' -and $_.CommandLine -match $target }; foreach($p in $procs){ try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch {} }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$target=[regex]::Escape('%TARGET_DIR%'); $procs = Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'openclaw\.mjs\s+gateway' -and $_.CommandLine -match $target }; foreach($p in $procs){ try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch {} }"
 
 echo [OK] Stop command executed for: %TARGET_DIR%
 exit /b 0
@@ -626,8 +656,8 @@ if exist "%BACKUP_DIR%\%REL%" (
 exit /b 0
 
 :stop_gateway_processes
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$procs = Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" ^| Where-Object { $_.CommandLine -match 'openclaw\.mjs\s+gateway' -or $_.CommandLine -match 'dist\\index\.js\s+gateway' -or $_.CommandLine -match 'openclaw-runtime-next\\package\\openclaw\.mjs' -or $_.CommandLine -match 'openclaw-runtime-live\\package\\openclaw\.mjs' -or $_.CommandLine -match 'openclaw-runtime\\package\\openclaw\.mjs' }; foreach($p in $procs){ try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch {} }" >nul 2>nul
-timeout /t 1 >nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$procs = Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'openclaw\.mjs\s+gateway' -or $_.CommandLine -match 'dist\\index\.js\s+gateway' -or $_.CommandLine -match 'openclaw-runtime-next\\package\\openclaw\.mjs' -or $_.CommandLine -match 'openclaw-runtime-live\\package\\openclaw\.mjs' -or $_.CommandLine -match 'openclaw-runtime\\package\\openclaw\.mjs' }; foreach($p in $procs){ try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch {} }" >nul 2>nul
+ping 127.0.0.1 -n 2 >nul
 exit /b 0
 
 :wait_runtime_release
@@ -648,13 +678,13 @@ set "WG_PORT=%~1"
 set "WG_SECS=%~2"
 if "%WG_PORT%"=="" set "WG_PORT=%PORT%"
 if "%WG_SECS%"=="" set "WG_SECS=60"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$port=%WG_PORT%; $secs=%WG_SECS%; if($secs -le 0){ $secs=60 }; $startupDeadline=(Get-Date).AddSeconds(25); $started=$false; while((Get-Date)-lt $startupDeadline){ try { $r=Invoke-WebRequest -Uri ('http://127.0.0.1:{0}' -f $port) -UseBasicParsing -TimeoutSec 6; if($r.StatusCode -eq 200){ $started=$true; break } } catch {}; Start-Sleep -Seconds 2 }; if(-not $started){ exit 1 }; $stableDeadline=(Get-Date).AddSeconds($secs); while((Get-Date)-lt $stableDeadline){ $proc=Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" ^| Where-Object { $_.CommandLine -match 'openclaw\.mjs\s+gateway\s+run' -or $_.CommandLine -match 'dist\\index\.js\s+gateway' }; if(-not $proc){ exit 1 }; try { $r=Invoke-WebRequest -Uri ('http://127.0.0.1:{0}' -f $port) -UseBasicParsing -TimeoutSec 6; if($r.StatusCode -ne 200){ exit 1 } } catch { exit 1 }; Start-Sleep -Seconds 5 }; exit 0" >nul 2>nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$port=%WG_PORT%; $secs=%WG_SECS%; if($secs -le 0){ $secs=60 }; $startupDeadline=(Get-Date).AddSeconds(25); $started=$false; while((Get-Date)-lt $startupDeadline){ try { $r=Invoke-WebRequest -Uri ('http://127.0.0.1:{0}' -f $port) -UseBasicParsing -TimeoutSec 6; if($r.StatusCode -eq 200){ $started=$true; break } } catch {}; Start-Sleep -Seconds 2 }; if(-not $started){ exit 1 }; $stableDeadline=(Get-Date).AddSeconds($secs); while((Get-Date)-lt $stableDeadline){ $proc=Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'openclaw\.mjs\s+gateway\s+run' -or $_.CommandLine -match 'dist\\index\.js\s+gateway' }; if(-not $proc){ exit 1 }; try { $r=Invoke-WebRequest -Uri ('http://127.0.0.1:{0}' -f $port) -UseBasicParsing -TimeoutSec 6; if($r.StatusCode -ne 200){ exit 1 } } catch { exit 1 }; Start-Sleep -Seconds 5 }; exit 0" >nul 2>nul 
 if errorlevel 1 exit /b 1
 exit /b 0
 
 :stop_runtime_lockers
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$target=[regex]::Escape('%RUNTIME_DIR%'); $procs=Get-CimInstance Win32_Process ^| Where-Object { $_.Name -in @('node.exe','cmd.exe','npm.exe','pnpm.exe') -and $_.CommandLine -match $target }; foreach($p in $procs){ try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch {} }" >nul 2>nul
-timeout /t 1 >nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$target=[regex]::Escape('%RUNTIME_DIR%'); $procs=Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('node.exe','cmd.exe','npm.exe','pnpm.exe') -and $_.CommandLine -match $target }; foreach($p in $procs){ try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch {} }" >nul 2>nul
+ping 127.0.0.1 -n 2 >nul
 exit /b 0
 
 :assert_runtime_writable
@@ -716,8 +746,9 @@ if not exist "%PACKAGE_DIR%\openclaw.mjs" (
   echo [INFO] Runtime package not ready. Skip skills auto-update.
   exit /b 0
 )
-cd /d "%PACKAGE_DIR%"
-call clawhub update --all >nul 2>nul
+  pushd "%PACKAGE_DIR%"
+  call clawhub update --all >nul 2>nul
+  popd
 if errorlevel 1 (
   echo [WARN] clawhub update failed. Continue deploy.
   exit /b 0

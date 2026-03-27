@@ -115,7 +115,7 @@ export function createABBRobotTool(pluginConfig: Record<string, unknown>): AnyAg
         preset: { type: "string", description: "Named preset key" },
         sequence: { type: "string", description: "Named sequence key" },
         // RAPID
-        rapid_code: { type: "string", description: "RAPID program source code" },
+        code: { type: "string", description: "RAPID program source code (same as rapid_code)" }, rapid_code: { type: "string", description: "RAPID program source code" },
         module_name: { type: "string", description: "RAPID module name (default: OpenClawMotionMod)" },
         allow_real_execution: { type: "boolean", description: "Permit execution on real (non-virtual) controllers" },
         // movj_rapid

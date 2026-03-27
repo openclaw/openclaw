@@ -327,7 +327,7 @@ export async function handleAction(
 
   if (action === "set_joints") {
     if (!controller?.isConnected()) return errorResult("Not connected. Use 'connect' first.");
-    const rawJ = params["joints"];
+    let rawJ = params["joints"]; if (typeof rawJ === "string") try { rawJ = JSON.parse(rawJ); } catch {}
     if (!Array.isArray(rawJ)) return errorResult("joints array is required");
     const nums = (rawJ as unknown[]).map(Number);
     if (nums.some(isNaN)) return errorResult("joints must all be numeric");
@@ -346,7 +346,7 @@ export async function handleAction(
 
   if (action === "movj") {
     if (!controller?.isConnected()) return errorResult("Not connected. Use 'connect' first.");
-    const rawTarget = params["joints"];
+    let rawTarget = params["joints"]; if (typeof rawTarget === "string") try { rawTarget = JSON.parse(rawTarget); } catch {}
     if (!Array.isArray(rawTarget)) return errorResult("joints array is required");
     const targetNums = (rawTarget as unknown[]).map(Number);
     if (targetNums.some(isNaN)) return errorResult("joints must all be numeric");
@@ -360,7 +360,7 @@ export async function handleAction(
       const interpolation: InterpolationMode =
         iRaw === "linear" || iRaw === "smoothstep" || iRaw === "cosine" ? iRaw : "cosine";
       const moduleName = String(params["module_name"] ?? "MoveJSegment");
-      const rawStart = params["start_joints"];
+      let rawStart = params["start_joints"]; if (typeof rawStart === "string") try { rawStart = JSON.parse(rawStart); } catch {}
       let start: number[]; let sViol: string[] = [];
       if (Array.isArray(rawStart)) {
         const sNums = (rawStart as unknown[]).map(Number);
@@ -387,7 +387,7 @@ export async function handleAction(
 
   if (action === "movj_rapid") {
     if (!controller?.isConnected()) return errorResult("Not connected. Use 'connect' first.");
-    const rawJ = params["joints"];
+    let rawJ = params["joints"]; if (typeof rawJ === "string") try { rawJ = JSON.parse(rawJ); } catch {}
     if (!Array.isArray(rawJ)) return errorResult("joints array is required");
     const nums = (rawJ as unknown[]).map(Number);
     if (nums.some(isNaN)) return errorResult("joints must all be numeric");
@@ -472,8 +472,8 @@ export async function handleAction(
 
   if (action === "execute_rapid") {
     if (!controller?.isConnected()) return errorResult("Not connected. Use 'connect' first.");
-    const code = String(params["rapid_code"] ?? "");
-    if (!code) return errorResult("rapid_code parameter is required");
+    const code = String(params["rapid_code"] ?? params["code"] ?? "");
+    if (!code) return errorResult("rapid_code or code parameter is required");
     const moduleName = String(params["module_name"] ?? "OpenClawMotionMod");
     const allowReal = params["allow_real_execution"] !== false;
     try {
@@ -484,8 +484,8 @@ export async function handleAction(
 
   if (action === "load_rapid") {
     if (!controller?.isConnected()) return errorResult("Not connected. Use 'connect' first.");
-    const code = String(params["rapid_code"] ?? "");
-    if (!code) return errorResult("rapid_code parameter is required");
+    const code = String(params["rapid_code"] ?? params["code"] ?? "");
+    if (!code) return errorResult("rapid_code or code parameter is required");
     const allowReal = Boolean(params["allow_real_execution"] ?? false);
     try {
       await controller.loadRapidProgram(code, allowReal);

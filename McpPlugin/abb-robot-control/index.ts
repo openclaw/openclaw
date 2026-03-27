@@ -44,7 +44,7 @@ const plugin = {
     },
   },
 
-  register(api: OpenClawPluginApi, config: Record<string, unknown>) {
+  register(api: OpenClawPluginApi, config?: Record<string, unknown>) { config = config || {};
     const tool = createABBRobotTool(config);
     api.registerTool(tool);
     

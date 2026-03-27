@@ -53,7 +53,7 @@ function Copy-Dir([string]$src, [string]$dst) {
     return $false
   }
   New-Item -ItemType Directory -Path $dst -Force | Out-Null
-  robocopy $src $dst /E /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
+  robocopy $src $dst /E /XJ /XD node_modules src test /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
   return ($LASTEXITCODE -le 7)
 }
 
@@ -140,7 +140,7 @@ function Ensure-RequiredSkills([string]$packageDir, [array]$requiredSkillSlugs, 
 
       Write-Info "Copying required skill from local source: $slug ($srcRoot)"
       New-Item -ItemType Directory -Path $target -Force | Out-Null
-      robocopy $srcSkill $target /E /NFL /NDL /NJH /NJS /NC /NS > $null
+      robocopy $srcSkill $target /E /XJ /XD node_modules /NFL /NDL /NJH /NJS /NC /NS > $null
       $copied = (Test-Path $target)
       if ($copied) { break }
     }
@@ -187,7 +187,8 @@ function Ensure-PluginRuntimeDependencies([string]$extensionsDir, [string]$plugi
   Write-Info "Installing runtime dependencies for plugin: $pluginId"
   Push-Location $pluginDir
   try {
-    cmd /c npm install --omit=dev --no-audit --no-fund | Out-Null
+    if (Test-Path package.json) { (Get-Content package.json) -replace '"workspace:\*"', '"*"' | Set-Content package.json }
+      cmd /c npm install --omit=dev --no-audit --no-fund | Out-Null
     if ($LASTEXITCODE -ne 0) {
       throw "Strong validation failed: npm install failed for plugin '$pluginId' (exit code $LASTEXITCODE)"
     }
@@ -450,3 +451,5 @@ Ensure-RequiredSkills -packageDir $packageDir -requiredSkillSlugs $requiredSkill
 Write-Info 'Required common skills are installed and validated.'
 
 exit 0
+
+

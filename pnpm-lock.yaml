@@ -241,16 +241,34 @@ importers:
 
   extensions/abb-robot-control:
     dependencies:
+      cors:
+        specifier: ^2.8.6
+        version: 2.8.6
+      edge-js:
+        specifier: ^25.0.1
+        version: 25.0.1
+      express:
+        specifier: ^5.2.1
+        version: 5.2.1
       ws:
         specifier: ^8.17.1
         version: 8.19.0
     devDependencies:
+      '@types/cors':
+        specifier: ^2.8.19
+        version: 2.8.19
+      '@types/express':
+        specifier: ^5.0.6
+        version: 5.0.6
       '@types/node':
         specifier: ^20.0.0
-        version: 20.19.37
+        version: 20.19.33
       openclaw:
         specifier: '*'
-        version: 2026.3.13(@discordjs/opus@0.10.0)(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(node-llama-cpp@3.16.2(typescript@5.9.3))
+        version: 2026.3.24(@napi-rs/canvas@0.1.97)(node-llama-cpp@3.18.1(typescript@5.9.3))
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.4.0
         version: 5.9.3
@@ -785,6 +803,10 @@ packages:
     resolution: {integrity: sha512-1ad+Sc/0sCtZGHthxxvgEUo5Wsbw16I+aF+YwdiLnPwkZG8KAGUEAPK6LM6Pf69lCyJPt1Aomk1d+8oE3C4ZEw==}
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
+
+  '@agracio/edge-cs@1.3.7':
+    resolution: {integrity: sha512-sFwGCGmoa9JdODegeDFJL4IH6N8IgDobxbS31BiXaiOdf8bC7EyHigFp0WYRKhIgK72E9nLnNwiRJRMO/AYGdg==}
+    engines: {node: '>= 0.8'}
 
   '@anthropic-ai/sdk@0.73.0':
     resolution: {integrity: sha512-URURVzhxXGJDGUGFunIOtBlSl7KWvZiAAKY/ttTkZAkXT9bTPqdk2eK0b8qqSxXpikh3QKPnPYpiyX98zf5ebw==}
@@ -3486,6 +3508,9 @@ packages:
   '@types/connect@3.4.38':
     resolution: {integrity: sha512-K6uROf1LD88uDQqJCktA4yzL1YYAK6NgfsI0v/mTgyPKWsX1CnJ0XPSDhViejru1GcRkLWb8RlzFYJRqGUbaug==}
 
+  '@types/cors@2.8.19':
+    resolution: {integrity: sha512-mFNylyeyqN93lfe/9CSxOGREz8cpzAhH+E93xJ4xWQf62V8sQ/24reV2nyzUWM6H6Xji+GGHpkbLe7pVoUEskg==}
+
   '@types/deep-eql@4.0.2':
     resolution: {integrity: sha512-c9h9dVVMigMPc4bwTvC5dxqtqJZwQPePsWjPlpSOnojbor6pGqdk541lfA7AqFQr5pB1BRdq0juY9db81BwyFw==}
 
@@ -4340,6 +4365,10 @@ packages:
 
   ecdsa-sig-formatter@1.0.11:
     resolution: {integrity: sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ==}
+
+  edge-js@25.0.1:
+    resolution: {integrity: sha512-aadCQs2kbYi2FGT8B10WkitOF65T6/RyeZdR8YkXR9f0HtfUiQV8xy4wk936N1rjQgg3LAickY15Pt/Tr6K3sg==}
+    engines: {node: '>=16.0.0', npm: '>=8.0.0'}
 
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
@@ -5408,6 +5437,9 @@ packages:
   mz@2.7.0:
     resolution: {integrity: sha512-z81GNO7nnYMEhrGh9LeymoE4+Yr0Wn5McHIZMK5cfQCl+NDX08sCZgUc9/6MHni9IWuFLm1Z3HTCXu2z9fN62Q==}
 
+  nan@2.26.2:
+    resolution: {integrity: sha512-0tTvBTYkt3tdGw22nrAy50x7gpbGCCFH3AFcyS5WiUu7Eu4vWlri1woE6qHBSfy11vksDqkiwjOnlR7WV8G1Hw==}
+
   nanoid@3.3.11:
     resolution: {integrity: sha512-N8SpfPUnUp1bK+PMYW8qSWdl9U+wwNWI4QKxOYDy9JAro3WMX7p2OeVRF9v+347pnakNevPmiHhNmZ2HbFA76w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
@@ -5575,6 +5607,17 @@ packages:
       ws:
         optional: true
       zod:
+        optional: true
+
+  openclaw@2026.3.24:
+    resolution: {integrity: sha512-Bjk1+AiTsjbBaAl4NI0pQjtmG0Y2BFVcQg7veOJ15T7+orBN8RYBK/9cdqejIENDV5Mm7IPgls2WImYsd5aJOQ==}
+    engines: {node: '>=22.14.0'}
+    hasBin: true
+    peerDependencies:
+      '@napi-rs/canvas': ^0.1.89
+      node-llama-cpp: 3.18.1
+    peerDependenciesMeta:
+      node-llama-cpp:
         optional: true
 
   openshell@0.1.0:
@@ -6892,6 +6935,8 @@ snapshots:
   '@agentclientprotocol/sdk@0.16.1(zod@4.3.6)':
     dependencies:
       zod: 4.3.6
+
+  '@agracio/edge-cs@1.3.7': {}
 
   '@anthropic-ai/sdk@0.73.0(zod@4.3.6)':
     dependencies:
@@ -8720,7 +8765,6 @@ snapshots:
       '@napi-rs/canvas-linux-x64-musl': 0.1.97
       '@napi-rs/canvas-win32-arm64-msvc': 0.1.97
       '@napi-rs/canvas-win32-x64-msvc': 0.1.97
-    optional: true
 
   '@napi-rs/wasm-runtime@1.1.1':
     dependencies:
@@ -9997,6 +10041,10 @@ snapshots:
     dependencies:
       '@types/node': 25.5.0
 
+  '@types/cors@2.8.19':
+    dependencies:
+      '@types/node': 25.5.0
+
   '@types/deep-eql@4.0.2': {}
 
   '@types/estree@1.0.8': {}
@@ -10872,6 +10920,11 @@ snapshots:
   ecdsa-sig-formatter@1.0.11:
     dependencies:
       safe-buffer: 5.2.1
+
+  edge-js@25.0.1:
+    dependencies:
+      edge-cs: '@agracio/edge-cs@1.3.7'
+      nan: 2.26.2
 
   ee-first@1.1.1: {}
 
@@ -12134,6 +12187,8 @@ snapshots:
       object-assign: 4.1.1
       thenify-all: 1.6.0
 
+  nan@2.26.2: {}
+
   nanoid@3.3.11: {}
 
   nanoid@5.1.6: {}
@@ -12319,6 +12374,68 @@ snapshots:
     optionalDependencies:
       ws: 8.20.0
       zod: 4.3.6
+
+  openclaw@2026.3.24(@napi-rs/canvas@0.1.97)(node-llama-cpp@3.18.1(typescript@5.9.3)):
+    dependencies:
+      '@agentclientprotocol/sdk': 0.16.1(zod@4.3.6)
+      '@anthropic-ai/vertex-sdk': 0.14.4(zod@4.3.6)
+      '@aws-sdk/client-bedrock': 3.1014.0
+      '@clack/prompts': 1.1.0
+      '@homebridge/ciao': 1.3.5
+      '@line/bot-sdk': 10.6.0
+      '@lydell/node-pty': 1.2.0-beta.3
+      '@mariozechner/pi-agent-core': 0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-coding-agent': 0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-tui': 0.61.1
+      '@modelcontextprotocol/sdk': 1.27.1(zod@4.3.6)
+      '@mozilla/readability': 0.6.0
+      '@napi-rs/canvas': 0.1.97
+      '@sinclair/typebox': 0.34.48
+      ajv: 8.18.0
+      chalk: 5.6.2
+      chokidar: 5.0.0
+      cli-highlight: 2.1.11
+      commander: 14.0.3
+      croner: 10.0.1
+      dotenv: 17.3.1
+      express: 5.2.1
+      file-type: 21.3.4
+      gaxios: 7.1.4
+      hono: 4.12.8
+      ipaddr.js: 2.3.0
+      jiti: 2.6.1
+      json5: 2.2.3
+      jszip: 3.10.1
+      linkedom: 0.18.12
+      long: 5.3.2
+      markdown-it: 14.1.1
+      node-edge-tts: 1.2.10
+      osc-progress: 0.3.0
+      pdfjs-dist: 5.5.207
+      playwright-core: 1.58.2
+      qrcode-terminal: 0.12.0
+      sharp: 0.34.5
+      sqlite-vec: 0.1.7
+      tar: 7.5.12
+      tslog: 4.10.2
+      undici: 7.24.5
+      uuid: 13.0.0
+      ws: 8.20.0
+      yaml: 2.8.3
+      zod: 4.3.6
+    optionalDependencies:
+      node-llama-cpp: 3.18.1(typescript@5.9.3)
+      openshell: 0.1.0
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - aws-crt
+      - bufferutil
+      - canvas
+      - debug
+      - encoding
+      - supports-color
+      - utf-8-validate
 
   openshell@0.1.0:
     dependencies:
