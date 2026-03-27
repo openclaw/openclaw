@@ -161,7 +161,10 @@ export function resolvePluginSdkAliasCandidateOrder(params: {
 }): PluginSdkAliasCandidateKind[] {
   const normalizedModulePath = params.modulePath.replace(/\\/g, "/");
   const isDistRuntime = normalizedModulePath.includes("/dist/");
-  return isDistRuntime || params.isProduction ? ["dist", "src"] : ["src", "dist"];
+  const preferDistInTests = process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST === "1";
+  return isDistRuntime || params.isProduction || preferDistInTests
+    ? ["dist", "src"]
+    : ["src", "dist"];
 }
 
 export function listPluginSdkAliasCandidates(params: {
