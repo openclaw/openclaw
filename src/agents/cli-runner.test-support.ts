@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import { beforeEach, vi } from "vitest";
-import { buildAnthropicCliBackend } from "../../extensions/anthropic/cli-backend.js";
-import { buildGoogleGeminiCliBackend } from "../../extensions/google/cli-backend.js";
-import { buildOpenAICodexCliBackend } from "../../extensions/openai/cli-backend.js";
+import { buildAnthropicCliBackend } from "../../extensions/anthropic/test-api.js";
+import { buildGoogleGeminiCliBackend } from "../../extensions/google/test-api.js";
+import { buildOpenAICodexCliBackend } from "../../extensions/openai/test-api.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";

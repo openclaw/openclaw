@@ -228,6 +228,10 @@
       "types": "./dist/plugin-sdk/account-resolution.d.ts",
       "default": "./dist/plugin-sdk/account-resolution.js"
     },
+    "./plugin-sdk/agent-config-primitives": {
+      "types": "./dist/plugin-sdk/agent-config-primitives.d.ts",
+      "default": "./dist/plugin-sdk/agent-config-primitives.js"
+    },
     "./plugin-sdk/allow-from": {
       "types": "./dist/plugin-sdk/allow-from.d.ts",
       "default": "./dist/plugin-sdk/allow-from.js"
@@ -291,6 +295,10 @@
     "./plugin-sdk/channel-config-schema": {
       "types": "./dist/plugin-sdk/channel-config-schema.d.ts",
       "default": "./dist/plugin-sdk/channel-config-schema.js"
+    },
+    "./plugin-sdk/channel-config-primitives": {
+      "types": "./dist/plugin-sdk/channel-config-primitives.d.ts",
+      "default": "./dist/plugin-sdk/channel-config-primitives.js"
     },
     "./plugin-sdk/channel-actions": {
       "types": "./dist/plugin-sdk/channel-actions.d.ts",
@@ -790,8 +798,8 @@
     "test:changed:max": "node scripts/test-parallel.mjs --profile max --changed origin/main",
     "test:channels": "node scripts/test-parallel.mjs --surface channels",
     "test:contracts": "pnpm test:contracts:channels && pnpm test:contracts:plugins",
-    "test:contracts:channels": "OPENCLAW_TEST_PROFILE=serial pnpm test -- src/channels/plugins/contracts",
-    "test:contracts:plugins": "OPENCLAW_TEST_PROFILE=serial pnpm test -- src/plugins/contracts",
+    "test:contracts:channels": "OPENCLAW_TEST_PROFILE=serial pnpm exec vitest run --config vitest.contracts.config.ts src/channels/plugins/contracts",
+    "test:contracts:plugins": "OPENCLAW_TEST_PROFILE=serial pnpm exec vitest run --config vitest.contracts.config.ts src/plugins/contracts",
     "test:coverage": "vitest run --config vitest.unit.config.ts --coverage",
     "test:coverage:changed": "vitest run --config vitest.unit.config.ts --coverage --changed origin/main",
     "test:docker:all": "pnpm test:docker:live-models && pnpm test:docker:live-gateway && pnpm test:docker:openwebui && pnpm test:docker:onboard && pnpm test:docker:gateway-network && pnpm test:docker:qr && pnpm test:docker:doctor-switch && pnpm test:docker:plugins && pnpm test:docker:cleanup",
