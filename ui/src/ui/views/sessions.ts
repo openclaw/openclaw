@@ -216,9 +216,11 @@ export function renderSessions(props: SessionsProps) {
         <div>
           <div class="card-title">Sessions</div>
           <div class="card-sub">
-            ${props.result
-              ? `Store: ${props.result.path}`
-              : "Active session keys and per-session overrides."}
+            ${
+              props.result
+                ? `Store: ${props.result.path}`
+                : "Active session keys and per-session overrides."
+            }
           </div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
@@ -286,9 +288,11 @@ export function renderSessions(props: SessionsProps) {
         </label>
       </div>
 
-      ${props.error
-        ? html`<div class="callout danger" style="margin-bottom: 12px;">${props.error}</div>`
-        : nothing}
+      ${
+        props.error
+          ? html`<div class="callout danger" style="margin-bottom: 12px;">${props.error}</div>`
+          : nothing
+      }
 
       <div class="data-table-wrapper">
         <div class="data-table-toolbar">
@@ -302,8 +306,9 @@ export function renderSessions(props: SessionsProps) {
           </div>
         </div>
 
-        ${props.selectedKeys.size > 0
-          ? html`
+        ${
+          props.selectedKeys.size > 0
+            ? html`
               <div class="data-table-bulk-bar">
                 <span>${props.selectedKeys.size} selected</span>
                 <button class="btn btn--sm" @click=${props.onDeselectAll}>Unselect</button>
@@ -316,20 +321,26 @@ export function renderSessions(props: SessionsProps) {
                 </button>
               </div>
             `
-          : nothing}
+            : nothing
+        }
 
         <div class="data-table-container">
           <table class="data-table">
             <thead>
               <tr>
                 <th class="data-table-checkbox-col">
-                  ${paginated.length > 0
-                    ? html`<input
+                  ${
+                    paginated.length > 0
+                      ? html`<input
                         type="checkbox"
-                        .checked=${paginated.length > 0 &&
-                        paginated.every((r) => props.selectedKeys.has(r.key))}
-                        .indeterminate=${paginated.some((r) => props.selectedKeys.has(r.key)) &&
-                        !paginated.every((r) => props.selectedKeys.has(r.key))}
+                        .checked=${
+                          paginated.length > 0 &&
+                          paginated.every((r) => props.selectedKeys.has(r.key))
+                        }
+                        .indeterminate=${
+                          paginated.some((r) => props.selectedKeys.has(r.key)) &&
+                          !paginated.every((r) => props.selectedKeys.has(r.key))
+                        }
                         @change=${() => {
                           const allSelected = paginated.every((r) => props.selectedKeys.has(r.key));
                           if (allSelected) {
@@ -340,7 +351,8 @@ export function renderSessions(props: SessionsProps) {
                         }}
                         aria-label="Select all on page"
                       />`
-                    : nothing}
+                      : nothing
+                  }
                 </th>
                 ${sortHeader("key", "Key", "data-table-key-col")}
                 <th>Label</th>
@@ -353,34 +365,34 @@ export function renderSessions(props: SessionsProps) {
               </tr>
             </thead>
             <tbody>
-              ${paginated.length === 0
-                ? html`
-                    <tr>
-                      <td
-                        colspan="10"
-                        style="text-align: center; padding: 48px 16px; color: var(--muted)"
-                      >
-                        No sessions found.
-                      </td>
-                    </tr>
-                  `
-                : paginated.map((row) =>
-                    renderRow(
-                      row,
-                      props.basePath,
-                      props.onPatch,
-                      props.selectedKeys.has(row.key),
-                      props.onToggleSelect,
-                      props.loading,
-                      props.onNavigateToChat,
-                    ),
-                  )}
+              ${
+                paginated.length === 0
+                  ? html`
+                      <tr>
+                        <td colspan="10" style="text-align: center; padding: 48px 16px; color: var(--muted)">
+                          No sessions found.
+                        </td>
+                      </tr>
+                    `
+                  : paginated.map((row) =>
+                      renderRow(
+                        row,
+                        props.basePath,
+                        props.onPatch,
+                        props.selectedKeys.has(row.key),
+                        props.onToggleSelect,
+                        props.loading,
+                        props.onNavigateToChat,
+                      ),
+                    )
+              }
             </tbody>
           </table>
         </div>
 
-        ${totalRows > 0
-          ? html`
+        ${
+          totalRows > 0
+            ? html`
               <div class="data-table-pagination">
                 <div class="data-table-pagination__info">
                   ${page * props.pageSize + 1}-${Math.min((page + 1) * props.pageSize, totalRows)}
@@ -407,7 +419,8 @@ export function renderSessions(props: SessionsProps) {
                 </div>
               </div>
             `
-          : nothing}
+            : nothing
+        }
       </div>
     </section>
   `;
@@ -467,8 +480,9 @@ function renderRow(
       </td>
       <td class="data-table-key-col">
         <div class="mono session-key-cell">
-          ${canLink
-            ? html`<a
+          ${
+            canLink
+              ? html`<a
                 href=${chatUrl}
                 class="session-link"
                 @click=${(e: MouseEvent) => {
@@ -489,10 +503,13 @@ function renderRow(
                 }}
                 >${row.key}</a
               >`
-            : row.key}
-          ${showDisplayName
-            ? html`<span class="muted session-key-display-name">${displayName}</span>`
-            : nothing}
+              : row.key
+          }
+          ${
+            showDisplayName
+              ? html`<span class="muted session-key-display-name">${displayName}</span>`
+              : nothing
+          }
         </div>
       </td>
       <td>
