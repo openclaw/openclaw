@@ -31,6 +31,7 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
+<<<<<<< HEAD
 vi.mock("../../../extensions/openai/openai-codex-provider.runtime.js", () => ({
   refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
 }));
@@ -118,7 +119,7 @@ function requireProviderContractProvider(providerId: string): ProviderPlugin {
   return provider;
 }
 
-describe("provider runtime contract", () => {
+describe("provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
   beforeAll(async () => {
     providerRuntimeContractProviders.clear();
     const registeredFixtures = await Promise.all(
@@ -143,11 +144,9 @@ describe("provider runtime contract", () => {
       }
     }
   }, CONTRACT_SETUP_TIMEOUT_MS);
-
   beforeEach(() => {
     refreshOpenAICodexTokenMock.mockReset();
     getOAuthProvidersMock.mockClear();
-    refreshOpenAICodexTokenMock.mockReset();
   }, CONTRACT_SETUP_TIMEOUT_MS);
 
   describe("anthropic", () => {
@@ -618,6 +617,7 @@ describe("provider runtime contract", () => {
   describe("openai-codex", () => {
     it(
       "owns refresh fallback for accountId extraction failures",
+      { timeout: CONTRACT_SETUP_TIMEOUT_MS },
       async () => {
         const provider = requireProviderContractProvider("openai-codex");
         const credential = {
@@ -628,27 +628,12 @@ describe("provider runtime contract", () => {
           expires: Date.now() - 60_000,
         };
 
-        const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString(
-          "base64url",
+        refreshOpenAICodexTokenMock.mockRejectedValueOnce(
+          new Error("Failed to extract accountId from token"),
         );
-        const payload = Buffer.from(JSON.stringify({})).toString("base64url");
-        const accessTokenWithoutAccountId = `${header}.${payload}.sig`;
-        const originalFetch = globalThis.fetch;
-        globalThis.fetch = vi.fn(async () =>
-          makeResponse(200, {
-            access_token: accessTokenWithoutAccountId,
-            refresh_token: "refreshed-refresh-token",
-            expires_in: 3600,
-          }),
-        ) as typeof fetch;
 
-        try {
-          await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
-        } finally {
-          globalThis.fetch = originalFetch;
-        }
+        await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
       },
-      CONTRACT_SETUP_TIMEOUT_MS,
     );
 
     it("owns forward-compat codex models", () => {
