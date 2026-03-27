@@ -1,0 +1,10 @@
+{
+  "id": "workflows",
+  "name": "Workflows (LangGraph)",
+  "description": "Native agent tool for invoking LangGraph workflows via mcporter",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
