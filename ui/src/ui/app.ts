@@ -682,20 +682,24 @@ export class OpenClawApp extends LitElement {
     handleNostrProfileToggleAdvancedInternal(this);
   }
 
-  async handleExecApprovalDecision(decision: "allow-once" | "allow-always" | "deny") {
-    const active = this.execApprovalQueue[0];
-    if (!active || !this.client || this.execApprovalBusy) {
+  async handleExecApprovalDecision(
+    decision: "allow-once" | "allow-always" | "deny",
+    approvalId?: string,
+  ) {
+    const id = approvalId ?? this.execApprovalQueue[0]?.id;
+    if (!id || !this.client || this.execApprovalBusy) {
       return;
     }
     this.execApprovalBusy = true;
     this.execApprovalError = null;
     try {
-      const method = active.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
+      const active = this.execApprovalQueue.find((entry) => entry.id === id);
+      const method = active?.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
       await this.client.request(method, {
-        id: active.id,
+        id,
         decision,
       });
-      this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== active.id);
+      this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== id);
     } catch (err) {
       this.execApprovalError = `Approval failed: ${String(err)}`;
     } finally {
