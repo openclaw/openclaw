@@ -72,7 +72,7 @@
    **Plans:** 2 plans
    Plans:
 
-- [ ] 03-01-PLAN.md — Sync event types, index shape types, and pure index generation functions
+- [x] 03-01-PLAN.md — Sync event types, index shape types, and pure index generation functions
 - [ ] 03-02-PLAN.md — ProjectSyncService with chokidar watcher, debounce, lifecycle, and barrel exports
       **Estimated complexity**: M
 
