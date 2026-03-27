@@ -1,7 +1,6 @@
 {
   "id": "fal",
   "providers": ["fal"],
-  "imageGenerationProviders": ["fal"],
   "providerAuthEnvVars": {
     "fal": ["FAL_KEY"]
   },
