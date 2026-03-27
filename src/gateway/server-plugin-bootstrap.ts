@@ -103,7 +103,7 @@ function logPluginLoadSummary(params: {
     } else {
       errored++;
       params.log.warn(
-        `[plugins] load: ${plugin.id} status=error error=${plugin.error ?? "unknown"}`,
+        `[plugins] load: ${plugin.id} status=error error="${plugin.error ?? "unknown"}"`,
       );
     }
   }
@@ -133,7 +133,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     });
   }
   // Per-plugin load status and consolidated summary (see #55803).
-  if (loaded.pluginRegistry.plugins.length > 0) {
+  if ((params.logDiagnostics ?? true) && loaded.pluginRegistry.plugins.length > 0) {
     logPluginLoadSummary({
       plugins: loaded.pluginRegistry.plugins,
       log: params.log,
