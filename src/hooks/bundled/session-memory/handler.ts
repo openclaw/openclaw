@@ -1,8 +1,9 @@
 /**
  * Session memory hook handler
  *
- * Saves session context to memory when /new or /reset command is triggered
- * Creates a new dated memory file with LLM-generated slug
+ * Saves session context to memory when /new or /reset command is triggered.
+ * Also saves memory when a subagent session ends (subagent_ended event).
+ * Creates a new dated memory file with LLM-generated slug.
  */
 
 import fs from "node:fs/promises";
@@ -48,17 +49,37 @@ function resolveDisplaySessionKey(params: {
 }
 
 /**
- * Save session context to memory when /new or /reset command is triggered
+ * Derive workspace directory for a subagent from its session key.
+ * Falls back to context.workspaceDir if available.
+ */
+function deriveSubagentWorkspace(
+  targetSessionKey: string,
+  context: Record<string, unknown>,
+): string | undefined {
+  if (context.workspaceDir) {
+    return context.workspaceDir as string;
+  }
+  return undefined;
+}
+
+/**
+ * Save session context to memory when /new or /reset command is triggered.
+ * Also saves memory when a subagent session ends (subagent_ended event).
  */
 const saveSessionToMemory: HookHandler = async (event) => {
-  // Only trigger on reset/new commands
+  // Check event type
   const isResetCommand = event.action === "new" || event.action === "reset";
-  if (event.type !== "command" || !isResetCommand) {
+  const isSubagentEnded = event.type === "subagent_ended";
+
+  if (event.type !== "command" && !isSubagentEnded) {
+    return;
+  }
+  if (event.type === "command" && !isResetCommand) {
     return;
   }
 
   try {
-    log.debug("Hook triggered for reset/new command", { action: event.action });
+    log.debug("Hook triggered", { type: event.type, action: event.action });
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
@@ -66,63 +87,110 @@ const saveSessionToMemory: HookHandler = async (event) => {
       typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
         ? context.workspaceDir
         : undefined;
-    const agentId = resolveAgentIdFromSessionKey(event.sessionKey);
-    const workspaceDir =
-      contextWorkspaceDir ||
-      (cfg
-        ? resolveAgentWorkspaceDir(cfg, agentId)
-        : path.join(resolveStateDir(process.env, os.homedir), "workspace"));
-    const displaySessionKey = resolveDisplaySessionKey({
-      cfg,
-      workspaceDir: contextWorkspaceDir,
-      sessionKey: event.sessionKey,
-    });
+
+    // For subagent_ended events, resolve workspace and session file differently
+    let workspaceDir: string;
+    let displaySessionKey: string;
+    let sessionFile: string | undefined;
+    let currentSessionId: string;
+
+    if (isSubagentEnded) {
+      // subagent_ended: use targetSessionKey and resolve workspace from session key pattern
+      const targetSessionKey = (event as { targetSessionKey?: string }).targetSessionKey || event.sessionKey;
+      log.debug("Processing subagent_ended event", { targetSessionKey });
+
+      // Find session transcript file from main sessions directory
+      const sessionsDir = path.join(resolveStateDir(process.env, os.homedir()), "agents/main/sessions");
+      const sessionIdMatch = targetSessionKey.match(/^agent:main:subagent:(.+)$/);
+      currentSessionId = sessionIdMatch ? sessionIdMatch[1] : targetSessionKey;
+
+      // Try to find session file
+      const sessionFilePath = path.join(sessionsDir, `${currentSessionId}.jsonl`);
+      try {
+        await fs.access(sessionFilePath);
+        sessionFile = sessionFilePath;
+      } catch {
+        // Try topic variant
+        const files = await fs.readdir(sessionsDir).catch(() => []);
+        const match = files.find((f) => f.startsWith(currentSessionId) && f.endsWith(".jsonl"));
+        if (match) {
+          sessionFile = path.join(sessionsDir, match);
+        }
+      }
+
+      // Derive workspace from subagent context or key pattern
+      const subagentWorkspaceDir =
+        (context.workspaceDir as string) || deriveSubagentWorkspace(targetSessionKey, context);
+      workspaceDir =
+        subagentWorkspaceDir ||
+        path.join(resolveStateDir(process.env, os.homedir()), "workspace");
+      displaySessionKey = targetSessionKey;
+    } else {
+      // command event (new/reset)
+      const agentId = resolveAgentIdFromSessionKey(event.sessionKey);
+      workspaceDir =
+        contextWorkspaceDir ||
+        (cfg
+          ? resolveAgentWorkspaceDir(cfg, agentId)
+          : path.join(resolveStateDir(process.env, os.homedir()), "workspace"));
+      displaySessionKey = resolveDisplaySessionKey({
+        cfg,
+        workspaceDir: contextWorkspaceDir,
+        sessionKey: event.sessionKey,
+      });
+
+      const sessionEntry = (context.previousSessionEntry ||
+        context.sessionEntry ||
+        {}) as Record<string, unknown>;
+      currentSessionId = sessionEntry.sessionId as string;
+      sessionFile = undefined;
+    }
+
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
-    // Get today's date for filename
+    // Get today's date for filename - use local date, not UTC
     const now = new Date(event.timestamp);
-    const dateStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
+    const dateStr = now.toLocaleDateString("en-CA"); // YYYY-MM-DD in local timezone
 
-    // Generate descriptive slug from session using LLM
-    // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
-    const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
-      string,
-      unknown
-    >;
-    const currentSessionId = sessionEntry.sessionId as string;
-    let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
+    // For command events, find session file from session entry
+    if (!isSubagentEnded) {
+      const sessionEntry = (context.previousSessionEntry ||
+        context.sessionEntry ||
+        {}) as Record<string, unknown>;
+      let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
 
-    // If sessionFile is empty or looks like a new/reset file, try to find the previous session file.
-    if (!currentSessionFile || currentSessionFile.includes(".reset.")) {
-      const sessionsDirs = new Set<string>();
-      if (currentSessionFile) {
-        sessionsDirs.add(path.dirname(currentSessionFile));
-      }
-      sessionsDirs.add(path.join(workspaceDir, "sessions"));
-
-      for (const sessionsDir of sessionsDirs) {
-        const recoveredSessionFile = await findPreviousSessionFile({
-          sessionsDir,
-          currentSessionFile,
-          sessionId: currentSessionId,
-        });
-        if (!recoveredSessionFile) {
-          continue;
+      if (!currentSessionFile || currentSessionFile.includes(".reset.")) {
+        const sessionsDirs = new Set<string>();
+        if (currentSessionFile) {
+          sessionsDirs.add(path.dirname(currentSessionFile));
         }
-        currentSessionFile = recoveredSessionFile;
-        log.debug("Found previous session file", { file: currentSessionFile });
-        break;
+        sessionsDirs.add(path.join(workspaceDir, "sessions"));
+
+        for (const sessionsDir of sessionsDirs) {
+          const recoveredSessionFile = await findPreviousSessionFile({
+            sessionsDir,
+            currentSessionFile,
+            sessionId: currentSessionId,
+          });
+          if (!recoveredSessionFile) {
+            continue;
+          }
+          currentSessionFile = recoveredSessionFile;
+          log.debug("Found previous session file", { file: currentSessionFile });
+          break;
+        }
+        sessionFile = currentSessionFile || undefined;
+      } else {
+        sessionFile = currentSessionFile;
       }
     }
 
     log.debug("Session context resolved", {
       sessionId: currentSessionId,
-      sessionFile: currentSessionFile,
+      sessionFile,
       hasCfg: Boolean(cfg),
     });
-
-    const sessionFile = currentSessionFile || undefined;
 
     // Read message count from hook config (default: 15)
     const hookConfig = resolveHookConfig(cfg, "session-memory");
@@ -142,17 +210,17 @@ const saveSessionToMemory: HookHandler = async (event) => {
         messageCount,
       });
 
-      // Avoid calling the model provider in unit tests; keep hooks fast and deterministic.
+      // Only generate LLM slug when cfg is available (main agent)
+      // subagent sessions don't have cfg context, so skip LLM slug for them
       const isTestEnv =
         process.env.OPENCLAW_TEST_FAST === "1" ||
         process.env.VITEST === "true" ||
         process.env.VITEST === "1" ||
         process.env.NODE_ENV === "test";
-      const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug !== false;
+      const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug !== false && cfg;
 
       if (sessionContent && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
-        // Use LLM to generate a descriptive slug
         slug = await generateSlugViaLLM({ sessionContent, cfg });
         log.debug("Generated slug", { slug });
       }
@@ -177,8 +245,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const timeStr = now.toISOString().split("T")[1].split(".")[0];
 
     // Extract context details
-    const sessionId = (sessionEntry.sessionId as string) || "unknown";
-    const source = (context.commandSource as string) || "unknown";
+    const sessionId = currentSessionId || "unknown";
+    const source = isSubagentEnded ? "subagent_ended" : ((context.commandSource as string) || "unknown");
 
     // Build Markdown entry
     const entryParts = [
@@ -206,7 +274,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     });
     log.debug("Memory file written successfully");
 
-    // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
+    // Log completion
     const relPath = memoryFilePath.replace(os.homedir(), "~");
     log.info(`Session context saved to ${relPath}`);
   } catch (err) {
