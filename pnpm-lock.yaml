@@ -399,6 +399,8 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/litellm: {}
+
   extensions/llm-task:
     dependencies:
       '@sinclair/typebox':
