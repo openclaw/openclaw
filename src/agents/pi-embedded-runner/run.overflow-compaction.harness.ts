@@ -138,6 +138,16 @@ export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
 export const mockedPickFallbackThinkingLevel = vi.fn<(params?: unknown) => ThinkLevel | null>(
   () => null,
 );
+export const mockedEvaluateContextWindowGuard = vi.fn(() => ({
+  shouldWarn: false,
+  shouldBlock: false,
+  tokens: 200000,
+  source: "model",
+}));
+export const mockedResolveContextWindowInfo = vi.fn(() => ({
+  tokens: 200000,
+  source: "model",
+}));
 export const mockedGetApiKeyForModel = vi.fn(
   async ({ profileId }: { profileId?: string } = {}) => ({
     apiKey: "test-key",
@@ -236,6 +246,18 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   });
   mockedPickFallbackThinkingLevel.mockReset();
   mockedPickFallbackThinkingLevel.mockReturnValue(null);
+  mockedEvaluateContextWindowGuard.mockReset();
+  mockedEvaluateContextWindowGuard.mockReturnValue({
+    shouldWarn: false,
+    shouldBlock: false,
+    tokens: 200000,
+    source: "model",
+  });
+  mockedResolveContextWindowInfo.mockReset();
+  mockedResolveContextWindowInfo.mockReturnValue({
+    tokens: 200000,
+    source: "model",
+  });
   mockedGetApiKeyForModel.mockReset();
   mockedGetApiKeyForModel.mockImplementation(
     async ({ profileId }: { profileId?: string } = {}) => ({
@@ -363,16 +385,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../context-window-guard.js", () => ({
     CONTEXT_WINDOW_HARD_MIN_TOKENS: 1000,
     CONTEXT_WINDOW_WARN_BELOW_TOKENS: 5000,
-    evaluateContextWindowGuard: vi.fn(() => ({
-      shouldWarn: false,
-      shouldBlock: false,
-      tokens: 200000,
-      source: "model",
-    })),
-    resolveContextWindowInfo: vi.fn(() => ({
-      tokens: 200000,
-      source: "model",
-    })),
+    evaluateContextWindowGuard: mockedEvaluateContextWindowGuard,
+    resolveContextWindowInfo: mockedResolveContextWindowInfo,
   }));
 
   vi.doMock("../../process/command-queue.js", () => ({
