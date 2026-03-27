@@ -1,3 +1,5 @@
+/* @vitest-environment jsdom */
+
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import { renderAgents, type AgentsProps } from "./agents.ts";
@@ -93,6 +95,7 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     },
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: false,
+    modelCatalogLoading: false,
     modelCatalog: [],
     onRefresh: () => undefined,
     onSelectAgent: () => undefined,

@@ -1,4 +1,6 @@
 import { html, nothing } from "lit";
+import { live } from "lit/directives/live.js";
+import { ref } from "lit/directives/ref.js";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -28,6 +30,7 @@ export function renderAgentOverview(params: {
   configLoading: boolean;
   configSaving: boolean;
   configDirty: boolean;
+  modelCatalogLoading: boolean;
   modelCatalog: ModelCatalogEntry[];
   onConfigReload: () => void;
   onConfigSave: () => void;
@@ -61,12 +64,16 @@ export function renderAgentOverview(params: {
   const defaultPrimary =
     resolveModelPrimary(config.defaults?.model) ||
     (defaultModel !== "-" ? normalizeModelValue(defaultModel) : null);
-  const effectivePrimary = entryPrimary ?? defaultPrimary ?? null;
+  const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
+  const catalogHydrating = params.modelCatalogLoading && params.modelCatalog.length === 0;
+  const optionCurrent = isDefault
+    ? (entryPrimary ?? defaultPrimary ?? undefined)
+    : (entryPrimary ?? undefined);
+  const selectValue = isDefault ? (entryPrimary ?? defaultPrimary ?? "") : (entryPrimary ?? "");
   const modelFallbacks = resolveModelFallbacks(config.entry?.model);
   const fallbackChips = modelFallbacks ?? [];
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
-  const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
   const disabled = !configForm || configLoading || configSaving;
 
   const removeChip = (index: number) => {
@@ -129,8 +136,21 @@ export function renderAgentOverview(params: {
           <label class="field">
             <span>Primary model${isDefault ? " (default)" : ""}</span>
             <select
-              .value=${isDefault ? (effectivePrimary ?? "") : (entryPrimary ?? "")}
-              ?disabled=${disabled}
+              .value=${live(selectValue)}
+              ${ref((element) => {
+                if (!(element instanceof HTMLSelectElement)) {
+                  return;
+                }
+                queueMicrotask(() => {
+                  const hasDomMatch = Array.from(element.options).some(
+                    (option) => option.value === selectValue,
+                  );
+                  if (element.value !== selectValue && hasDomMatch) {
+                    element.value = selectValue;
+                  }
+                });
+              })}
+              ?disabled=${disabled || catalogHydrating}
               @change=${(e: Event) =>
                 onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
             >
@@ -145,7 +165,18 @@ export function renderAgentOverview(params: {
                     </option>
                   `
               }
-              ${buildModelOptions(configForm, effectivePrimary ?? undefined, params.modelCatalog)}
+              ${
+                catalogHydrating
+                  ? html`
+                      ${
+                        selectValue
+                          ? html`<option value=${selectValue}>Current (${selectValue})</option>`
+                          : nothing
+                      }
+                      <option disabled value="__loading_models__">Loading models...</option>
+                    `
+                  : buildModelOptions(configForm, optionCurrent, params.modelCatalog)
+              }
             </select>
           </label>
           <div class="field">
