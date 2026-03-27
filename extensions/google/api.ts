@@ -1,32 +1,18 @@
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
 import {
   applyAgentDefaultModelPrimary,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
-import {
-  createGoogleThinkingPayloadWrapper,
-  sanitizeGoogleThinkingPayload,
-} from "openclaw/plugin-sdk/provider-stream";
+import { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
+export { normalizeAntigravityModelId, normalizeGoogleModelId };
 
-export { createGoogleThinkingPayloadWrapper, sanitizeGoogleThinkingPayload };
+type GoogleApiCarrier = {
+  api?: string | null;
+};
 
-export function normalizeGoogleModelId(id: string): string {
-  if (id === "gemini-3-pro") {
-    return "gemini-3-pro-preview";
-  }
-  if (id === "gemini-3-flash") {
-    return "gemini-3-flash-preview";
-  }
-  if (id === "gemini-3.1-pro") {
-    return "gemini-3.1-pro-preview";
-  }
-  if (id === "gemini-3.1-flash-lite") {
-    return "gemini-3.1-flash-lite-preview";
-  }
-  if (id === "gemini-3.1-flash" || id === "gemini-3.1-flash-preview") {
-    return "gemini-3-flash-preview";
-  }
-  return id;
-}
+type GoogleProviderConfigLike = GoogleApiCarrier & {
+  models?: ReadonlyArray<GoogleApiCarrier | null | undefined> | null;
+};
 
 const DEFAULT_GOOGLE_API_HOST = "generativelanguage.googleapis.com";
 
@@ -55,6 +41,97 @@ export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
     }
     return raw;
   }
+}
+
+export function isGoogleGenerativeAiApi(api?: string | null): boolean {
+  return api === "google-generative-ai";
+}
+
+export function normalizeGoogleGenerativeAiBaseUrl(baseUrl?: string): string | undefined {
+  return baseUrl ? normalizeGoogleApiBaseUrl(baseUrl) : baseUrl;
+}
+
+export function resolveGoogleGenerativeAiTransport<TApi extends string | null | undefined>(params: {
+  api: TApi;
+  baseUrl?: string;
+}): { api: TApi; baseUrl?: string } {
+  return {
+    api: params.api,
+    baseUrl: isGoogleGenerativeAiApi(params.api)
+      ? normalizeGoogleGenerativeAiBaseUrl(params.baseUrl)
+      : params.baseUrl,
+  };
+}
+
+export function resolveGoogleGenerativeAiApiOrigin(baseUrl?: string): string {
+  return normalizeGoogleApiBaseUrl(baseUrl).replace(/\/v1beta$/i, "");
+}
+
+export function shouldNormalizeGoogleGenerativeAiProviderConfig(
+  providerKey: string,
+  provider: GoogleProviderConfigLike,
+): boolean {
+  if (providerKey === "google" || providerKey === "google-vertex") {
+    return true;
+  }
+  if (isGoogleGenerativeAiApi(provider.api)) {
+    return true;
+  }
+  return provider.models?.some((model) => isGoogleGenerativeAiApi(model?.api)) ?? false;
+}
+
+export function shouldNormalizeGoogleProviderConfig(
+  providerKey: string,
+  provider: GoogleProviderConfigLike,
+): boolean {
+  return (
+    providerKey === "google-antigravity" ||
+    shouldNormalizeGoogleGenerativeAiProviderConfig(providerKey, provider)
+  );
+}
+
+function normalizeProviderModels(
+  provider: ModelProviderConfig,
+  normalizeId: (id: string) => string,
+): ModelProviderConfig {
+  const models = provider.models;
+  if (!Array.isArray(models) || models.length === 0) {
+    return provider;
+  }
+
+  let mutated = false;
+  const nextModels = models.map((model) => {
+    const nextId = normalizeId(model.id);
+    if (nextId === model.id) {
+      return model;
+    }
+    mutated = true;
+    return { ...model, id: nextId };
+  });
+
+  return mutated ? { ...provider, models: nextModels } : provider;
+}
+
+export function normalizeGoogleProviderConfig(
+  providerKey: string,
+  provider: ModelProviderConfig,
+): ModelProviderConfig {
+  let nextProvider = provider;
+
+  if (shouldNormalizeGoogleGenerativeAiProviderConfig(providerKey, nextProvider)) {
+    const modelNormalized = normalizeProviderModels(nextProvider, normalizeGoogleModelId);
+    const normalizedBaseUrl = normalizeGoogleGenerativeAiBaseUrl(modelNormalized.baseUrl);
+    nextProvider =
+      normalizedBaseUrl !== modelNormalized.baseUrl
+        ? { ...modelNormalized, baseUrl: normalizedBaseUrl ?? modelNormalized.baseUrl }
+        : modelNormalized;
+  }
+
+  if (providerKey === "google-antigravity") {
+    nextProvider = normalizeProviderModels(nextProvider, normalizeAntigravityModelId);
+  }
+
+  return nextProvider;
 }
 
 export function parseGeminiAuth(apiKey: string): { headers: Record<string, string> } {

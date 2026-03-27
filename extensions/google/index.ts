@@ -8,11 +8,8 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-models";
-import {
-  GOOGLE_GEMINI_DEFAULT_MODEL,
-  applyGoogleGeminiModelDefault,
-  createGoogleThinkingPayloadWrapper,
-} from "./api.js";
+import { createGoogleThinkingPayloadWrapper } from "openclaw/plugin-sdk/provider-stream";
+import { GOOGLE_GEMINI_DEFAULT_MODEL, applyGoogleGeminiModelDefault } from "./api.js";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";

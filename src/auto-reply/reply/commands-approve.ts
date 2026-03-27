@@ -1,10 +1,10 @@
-import {
-  isDiscordExecApprovalApprover,
-  isDiscordExecApprovalClientEnabled,
-} from "../../../extensions/discord/api.js";
 import { callGateway } from "../../gateway/call.js";
 import { ErrorCodes } from "../../gateway/protocol/index.js";
 import { logVerbose } from "../../globals.js";
+import {
+  isDiscordExecApprovalApprover,
+  isDiscordExecApprovalClientEnabled,
+} from "../../plugin-sdk/discord-surface.js";
 import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,

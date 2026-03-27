@@ -12,4 +12,8 @@ export {
   sendReactionSignal,
   signalMessageActions,
 } from "../../extensions/signal/api.js";
-export type { ResolvedSignalAccount, SignalSender } from "../../extensions/signal/api.js";
+export type {
+  ResolvedSignalAccount,
+  SignalProbe,
+  SignalSender,
+} from "../../extensions/signal/api.js";

@@ -1,7 +1,0 @@
-// Deprecated compat shim. Prefer openclaw/plugin-sdk/sglang.
-export {
-  SGLANG_DEFAULT_API_KEY_ENV_VAR,
-  SGLANG_DEFAULT_BASE_URL,
-  SGLANG_MODEL_PLACEHOLDER,
-  SGLANG_PROVIDER_LABEL,
-} from "../plugin-sdk/sglang.js";
