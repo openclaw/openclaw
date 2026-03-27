@@ -269,6 +269,64 @@ function resolveBrewMissingFailure(spec: SkillInstallSpec): SkillInstallResult {
   return createInstallFailure({ message: `brew not installed — ${hint}` });
 }
 
+/**
+ * Attempt to install a brew formula via apt-get on Linux when Homebrew is not
+ * available. Many brew formula names match their apt package counterpart, so
+ * this is a best-effort convenience for Docker / headless Linux environments.
+ *
+ * Returns `undefined` on success (package installed), or a failure result.
+ */
+async function installBrewFormulaViaApt(
+  formula: string,
+  timeoutMs: number,
+): Promise<SkillInstallResult | undefined> {
+  const aptInstallArgv = ["apt-get", "install", "-y", formula];
+  const aptUpdateArgv = ["apt-get", "update", "-qq"];
+  const aptFailureMessage = `brew not installed — automatic install of "${formula}" via apt failed. Install Homebrew from https://brew.sh or install "${formula}" manually using your system package manager.`;
+
+  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+  if (isRoot) {
+    await runBestEffortCommand(aptUpdateArgv, { timeoutMs });
+    const aptResult = await runCommandSafely(aptInstallArgv, { timeoutMs });
+    if (aptResult.code === 0) {
+      return undefined;
+    }
+    return createInstallFailure({
+      message: aptFailureMessage,
+      ...aptResult,
+    });
+  }
+
+  if (!hasBinary("sudo")) {
+    return createInstallFailure({
+      message: `brew not installed — apt-get is available but sudo is not installed. Install Homebrew from https://brew.sh or install "${formula}" manually.`,
+    });
+  }
+
+  const sudoCheck = await runCommandSafely(["sudo", "-n", "true"], {
+    timeoutMs: 5_000,
+  });
+  if (sudoCheck.code !== 0) {
+    return createInstallFailure({
+      message: `brew not installed — apt-get is available but sudo requires a password. Install Homebrew from https://brew.sh or install "${formula}" manually.`,
+      ...sudoCheck,
+    });
+  }
+
+  await runBestEffortCommand(["sudo", ...aptUpdateArgv], { timeoutMs });
+  const aptResult = await runCommandSafely(["sudo", ...aptInstallArgv], {
+    timeoutMs,
+  });
+  if (aptResult.code === 0) {
+    return undefined;
+  }
+
+  return createInstallFailure({
+    message: aptFailureMessage,
+    ...aptResult,
+  });
+}
+
 async function ensureUvInstalled(params: {
   spec: SkillInstallSpec;
   brewExe?: string;
@@ -489,6 +547,14 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
 
   const brewExe = hasBinary("brew") ? "brew" : resolveBrewExecutable();
   if (spec.kind === "brew" && !brewExe) {
+    // On Linux, attempt to install the formula via apt-get before giving up.
+    if (process.platform === "linux" && hasBinary("apt-get") && spec.formula) {
+      const aptResult = await installBrewFormulaViaApt(spec.formula, timeoutMs);
+      if (!aptResult) {
+        return withWarnings(createInstallSuccess({ code: 0, stdout: "", stderr: "" }), warnings);
+      }
+      return withWarnings(aptResult, warnings);
+    }
     return withWarnings(resolveBrewMissingFailure(spec), warnings);
   }
 
