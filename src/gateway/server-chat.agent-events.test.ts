@@ -19,6 +19,7 @@ import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createToolEventRecipientRegistry,
+  LATEST_SESSION_RUN_MAX_ENTRIES,
 } from "./server-chat.js";
 
 vi.mock("../config/config.js", () => ({
@@ -178,6 +179,20 @@ describe("agent event handler", () => {
       data?: Record<string, unknown>;
     };
   }
+
+  it("bounds latest session run tracking", () => {
+    const chatRunState = createChatRunState();
+
+    for (let i = 0; i <= LATEST_SESSION_RUN_MAX_ENTRIES; i += 1) {
+      chatRunState.markLatestSessionRun(`session-${i}`, `client-${i}`);
+    }
+
+    expect(chatRunState.latestSessionRuns.size).toBe(LATEST_SESSION_RUN_MAX_ENTRIES);
+    expect(chatRunState.getLatestSessionRun("session-0")).toBeUndefined();
+    expect(chatRunState.getLatestSessionRun(`session-${LATEST_SESSION_RUN_MAX_ENTRIES}`)).toBe(
+      `client-${LATEST_SESSION_RUN_MAX_ENTRIES}`,
+    );
+  });
 
   function expectSingleFinalChatPayload(broadcast: ReturnType<typeof vi.fn>) {
     const chatCalls = chatBroadcastCalls(broadcast);
@@ -573,7 +588,7 @@ describe("agent event handler", () => {
       data: { phase: "start", startedAt: 1_000 },
     });
     emitLifecycleError(handler, "run-old-quiet", "temporary fallback", 2);
-    chatRunState.latestSessionRuns.set("session-quiet", "client-new-quiet");
+    chatRunState.markLatestSessionRun("session-quiet", "client-new-quiet");
 
     broadcastToConnIds.mockClear();
     persistGatewaySessionLifecycleEventMock.mockClear();

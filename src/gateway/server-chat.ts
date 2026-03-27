@@ -20,6 +20,13 @@ import { formatForLog } from "./ws-log.js";
  * websocket chat events and agent.wait observe the same terminal semantics.
  */
 const CHAT_LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
+const LATEST_SESSION_RUN_TTL_MS = 30 * 60 * 1000;
+export const LATEST_SESSION_RUN_MAX_ENTRIES = 4096;
+
+type LatestSessionRunEntry = {
+  clientRunId: string;
+  updatedAt: number;
+};
 
 function resolveHeartbeatAckMaxChars(): number {
   try {
@@ -216,7 +223,9 @@ export type ChatRunState = {
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
   abortedRuns: Map<string, number>;
-  latestSessionRuns: Map<string, string>;
+  latestSessionRuns: Map<string, LatestSessionRunEntry>;
+  markLatestSessionRun: (sessionKey: string, clientRunId: string) => void;
+  getLatestSessionRun: (sessionKey: string) => string | undefined;
   clear: () => void;
 };
 
@@ -226,7 +235,53 @@ export function createChatRunState(): ChatRunState {
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
-  const latestSessionRuns = new Map<string, string>();
+  const latestSessionRuns = new Map<string, LatestSessionRunEntry>();
+
+  const pruneLatestSessionRuns = (now: number) => {
+    for (const [sessionKey, entry] of latestSessionRuns) {
+      if (now - entry.updatedAt >= LATEST_SESSION_RUN_TTL_MS) {
+        latestSessionRuns.delete(sessionKey);
+      }
+    }
+    const overflow = latestSessionRuns.size - LATEST_SESSION_RUN_MAX_ENTRIES;
+    if (overflow <= 0) {
+      return;
+    }
+    const keys = latestSessionRuns.keys();
+    for (let i = 0; i < overflow; i += 1) {
+      const next = keys.next();
+      if (next.done) {
+        break;
+      }
+      latestSessionRuns.delete(next.value);
+    }
+  };
+
+  const markLatestSessionRun = (sessionKey: string, clientRunId: string) => {
+    if (!sessionKey || !clientRunId) {
+      return;
+    }
+    const now = Date.now();
+    latestSessionRuns.delete(sessionKey);
+    latestSessionRuns.set(sessionKey, { clientRunId, updatedAt: now });
+    pruneLatestSessionRuns(now);
+  };
+
+  const getLatestSessionRun = (sessionKey: string) => {
+    if (!sessionKey) {
+      return undefined;
+    }
+    const entry = latestSessionRuns.get(sessionKey);
+    if (!entry) {
+      return undefined;
+    }
+    const now = Date.now();
+    if (now - entry.updatedAt >= LATEST_SESSION_RUN_TTL_MS) {
+      latestSessionRuns.delete(sessionKey);
+      return undefined;
+    }
+    return entry.clientRunId;
+  };
 
   const clear = () => {
     registry.clear();
@@ -244,6 +299,8 @@ export function createChatRunState(): ChatRunState {
     deltaLastBroadcastLen,
     abortedRuns,
     latestSessionRuns,
+    markLatestSessionRun,
+    getLatestSessionRun,
     clear,
   };
 }
@@ -786,7 +843,7 @@ export function createAgentEventHandler({
       }
       pendingLifecycleErrors.delete(params.evt.runId);
       const latestSessionRunId = pending.sessionKey
-        ? chatRunState.latestSessionRuns.get(pending.sessionKey)
+        ? chatRunState.getLatestSessionRun(pending.sessionKey)
         : undefined;
       if (latestSessionRunId && latestSessionRunId !== pending.clientRunId) {
         cleanupLifecycleTerminalState({
@@ -849,7 +906,7 @@ export function createAgentEventHandler({
     const hasSeenRun = agentRunSeq.has(evt.runId);
     const last = agentRunSeq.get(evt.runId) ?? 0;
     if (sessionKey && (lifecyclePhase === "start" || !hasSeenRun)) {
-      chatRunState.latestSessionRuns.set(sessionKey, clientRunId);
+      chatRunState.markLatestSessionRun(sessionKey, clientRunId);
     }
     if (lifecyclePhase !== "error" && evt.seq > last) {
       clearPendingLifecycleError(evt.runId);

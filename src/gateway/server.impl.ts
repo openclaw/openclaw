@@ -1169,7 +1169,7 @@ export async function startGatewayServer(
       chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
       addChatRun,
       markLatestSessionRun: (sessionKey: string, runId: string) => {
-        chatRunState.latestSessionRuns.set(sessionKey, runId);
+        chatRunState.markLatestSessionRun(sessionKey, runId);
       },
       removeChatRun,
       subscribeSessionEvents: sessionEventSubscribers.subscribe,
