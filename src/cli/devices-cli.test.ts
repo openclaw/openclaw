@@ -280,7 +280,9 @@ describe("devices cli local fallback", () => {
 
     await runDevicesApprove(["--latest"]);
 
-    expect(approveDevicePairing).toHaveBeenCalledWith("req-latest");
+    expect(approveDevicePairing).toHaveBeenCalledWith("req-latest", {
+      callerScopes: ["operator.admin"],
+    });
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
   });

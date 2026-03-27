@@ -85,11 +85,6 @@ export type ApproveDevicePairingResult =
   | { status: "forbidden"; missingScope: string }
   | null;
 
-type ApprovedDevicePairingResult = Extract<
-  NonNullable<ApproveDevicePairingResult>,
-  { status: "approved" }
->;
-
 type DevicePairingStateFile = {
   pendingById: Record<string, DevicePairingPendingRequest>;
   pairedByDeviceId: Record<string, PairedDevice>;
@@ -445,7 +440,7 @@ export async function requestDevicePairing(
 export async function approveDevicePairing(
   requestId: string,
   baseDir?: string,
-): Promise<ApprovedDevicePairingResult | null>;
+): Promise<ApproveDevicePairingResult>;
 export async function approveDevicePairing(
   requestId: string,
   options: { callerScopes?: readonly string[] },
@@ -468,10 +463,16 @@ export async function approveDevicePairing(
       return null;
     }
     const approvalRole = resolvePendingApprovalRole(pending);
-    if (approvalRole && options?.callerScopes) {
+    if (approvalRole) {
       const requestedOperatorScopes = normalizeDeviceAuthScopes(pending.scopes).filter((scope) =>
         scope.startsWith(OPERATOR_SCOPE_PREFIX),
       );
+      if (!options?.callerScopes) {
+        return {
+          status: "forbidden",
+          missingScope: requestedOperatorScopes[0] ?? "callerScopes-required",
+        };
+      }
       const missingScope = resolveMissingRequestedScope({
         role: approvalRole,
         requestedScopes: requestedOperatorScopes,
