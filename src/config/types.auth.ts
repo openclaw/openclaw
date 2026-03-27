@@ -18,11 +18,11 @@ export type AuthProfileConfig = {
  * emitted by the runtime classifier (e.g. "rate_limit", "auth_failure").
  */
 export type FailoverRetriesConfig = {
-  /** Default retry count for rate_limit and overloaded errors. Default: 1. */
+  /** Default retry count for rate_limit and overloaded errors. Default: 0. */
   default?: number;
-  /** Retry count for rate_limit errors. Default: 1. */
+  /** Retry count for rate_limit errors. Defaults to `default` (or 0 when unset). */
   rate_limit?: number;
-  /** Retry count for overloaded errors. Default: 1. */
+  /** Retry count for overloaded errors. Defaults to `default` (or 0 when unset). */
   overloaded?: number;
   /** Retry count for auth failures. Default: 0 (no retry). */
   auth_failure?: number;
