@@ -56,7 +56,7 @@ describe("compaction retry integration", () => {
   } as unknown as NonNullable<ExtensionContext["model"]>;
 
   const invokeGenerateSummary = (signal = new AbortController().signal) =>
-    mockGenerateSummary(testMessages, testModel, 1000, "test-api-key", signal);
+    mockGenerateSummary(testMessages, testModel, 1000, "test-api-key", signal, undefined);
 
   const runSummaryRetry = (options: Parameters<typeof retryAsync>[1]) =>
     retryAsync(() => invokeGenerateSummary(), options);
