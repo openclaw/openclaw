@@ -2,5 +2,13 @@
 export {
   ANTHROPIC_VERTEX_DEFAULT_MODEL_ID,
   buildAnthropicVertexProvider,
+  hasAnthropicVertexAvailableAuth,
+  hasAnthropicVertexCredentials,
+  mergeImplicitAnthropicVertexProvider,
+  resolveAnthropicVertexClientRegion,
+  resolveAnthropicVertexConfigApiKey,
+  resolveImplicitAnthropicVertexProvider,
+  resolveAnthropicVertexProjectId,
   resolveAnthropicVertexRegion,
+  resolveAnthropicVertexRegionFromBaseUrl,
 } from "../../extensions/anthropic-vertex/api.js";

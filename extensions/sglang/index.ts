@@ -8,6 +8,7 @@ import {
   SGLANG_DEFAULT_BASE_URL,
   SGLANG_MODEL_PLACEHOLDER,
   SGLANG_PROVIDER_LABEL,
+  buildSglangProvider,
 } from "./api.js";
 
 const PROVIDER_ID = "sglang";
@@ -64,7 +65,7 @@ export default definePluginEntry({
           return await providerSetup.discoverOpenAICompatibleSelfHostedProvider({
             ctx,
             providerId: PROVIDER_ID,
-            buildProvider: providerSetup.buildSglangProvider,
+            buildProvider: buildSglangProvider,
           });
         },
       },

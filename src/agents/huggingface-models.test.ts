@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildHuggingfaceModelDefinition,
   discoverHuggingfaceModels,
   HUGGINGFACE_MODEL_CATALOG,
-  buildHuggingfaceModelDefinition,
   isHuggingfacePolicyLocked,
-} from "./huggingface-models.js";
+} from "../plugin-sdk/huggingface.js";
 
 describe("huggingface-models", () => {
   it("buildHuggingfaceModelDefinition returns config with required fields", () => {

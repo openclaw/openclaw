@@ -9,6 +9,7 @@ export {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
   resolveWhatsAppOutboundTarget,
+  whatsappAccessControlTesting,
 } from "../../extensions/whatsapp/api.js";
 export type {
   WebChannelStatus,

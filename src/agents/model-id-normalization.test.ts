@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeXaiModelId } from "./model-id-normalization.js";
+import { normalizeXaiModelId } from "../plugin-sdk/xai.js";
 
 describe("normalizeXaiModelId", () => {
   it("maps deprecated grok 4.20 beta ids to GA ids", () => {

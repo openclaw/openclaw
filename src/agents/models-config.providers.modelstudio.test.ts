@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  applyNativeStreamingUsageCompat,
-  buildModelStudioProvider,
-} from "./models-config.providers.js";
+import { buildModelStudioProvider } from "../plugin-sdk/modelstudio.js";
+import { applyNativeStreamingUsageCompat } from "./models-config.providers.js";
 
 describe("Model Studio implicit provider", () => {
   it("should opt native Model Studio baseUrls into streaming usage", () => {

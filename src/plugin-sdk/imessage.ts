@@ -1,4 +1,5 @@
 export type { IMessageAccountConfig } from "../config/types.js";
+export type { IMessageProbe } from "./imessage-runtime.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type {
   ChannelMessageActionContext,

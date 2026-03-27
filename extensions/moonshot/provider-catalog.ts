@@ -1,6 +1,7 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
 
 export const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
+export const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
 export const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
 const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 262144;
 const MOONSHOT_DEFAULT_MAX_TOKENS = 262144;
@@ -49,6 +50,55 @@ const MOONSHOT_MODEL_CATALOG = [
     maxTokens: 16384,
   },
 ] as const;
+
+function normalizeMoonshotBaseUrl(baseUrl: string | undefined): string {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return "";
+  }
+  try {
+    const url = new URL(trimmed);
+    url.hash = "";
+    url.search = "";
+    return url.toString().replace(/\/+$/, "").toLowerCase();
+  } catch {
+    return trimmed.replace(/\/+$/, "").toLowerCase();
+  }
+}
+
+export function isNativeMoonshotBaseUrl(baseUrl: string | undefined): boolean {
+  const normalized = normalizeMoonshotBaseUrl(baseUrl);
+  return normalized === MOONSHOT_BASE_URL || normalized === MOONSHOT_CN_BASE_URL;
+}
+
+function withStreamingUsageCompat(provider: ModelProviderConfig): ModelProviderConfig {
+  if (!Array.isArray(provider.models) || provider.models.length === 0) {
+    return provider;
+  }
+
+  let changed = false;
+  const models = provider.models.map((model) => {
+    if (model.compat?.supportsUsageInStreaming !== undefined) {
+      return model;
+    }
+    changed = true;
+    return {
+      ...model,
+      compat: {
+        ...model.compat,
+        supportsUsageInStreaming: true,
+      },
+    };
+  });
+
+  return changed ? { ...provider, models } : provider;
+}
+
+export function applyMoonshotNativeStreamingUsageCompat(
+  provider: ModelProviderConfig,
+): ModelProviderConfig {
+  return isNativeMoonshotBaseUrl(provider.baseUrl) ? withStreamingUsageCompat(provider) : provider;
+}
 
 export function buildMoonshotProvider(): ModelProviderConfig {
   return {

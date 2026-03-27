@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveProviderCapabilitiesWithPlugin as resolveProviderCapabilitiesWithPluginRuntime } from "../plugins/provider-runtime.js";
-import { normalizeProviderId } from "./model-selection.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 export type ProviderCapabilities = {
   anthropicToolSchemaMode: "native" | "openai-functions";

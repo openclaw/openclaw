@@ -85,6 +85,7 @@ export {
 export {
   createTelegramThreadBindingManager,
   getTelegramThreadBindingManager,
+  resetTelegramThreadBindingsForTests,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "./src/thread-bindings.js";

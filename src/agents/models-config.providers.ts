@@ -2,43 +2,55 @@ import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  buildAnthropicVertexProvider,
-  buildKimiCodingProvider,
-  buildKilocodeProvider,
+  mergeImplicitBedrockProvider,
+  resolveBedrockConfigApiKey,
+  resolveImplicitBedrockProvider,
+} from "../plugin-sdk/amazon-bedrock.js";
+import {
+  mergeImplicitAnthropicVertexProvider,
+  resolveImplicitAnthropicVertexProvider,
+  resolveAnthropicVertexConfigApiKey,
+} from "../plugin-sdk/anthropic-vertex.js";
+import {
+  normalizeGoogleModelId,
+  normalizeGoogleProviderConfig,
+  shouldNormalizeGoogleProviderConfig,
+} from "../plugin-sdk/google.js";
+import { buildKilocodeProvider } from "../plugin-sdk/kilocode.js";
+import { buildKimiCodingProvider } from "../plugin-sdk/kimi-coding.js";
+import {
+  MODELSTUDIO_BASE_URL,
+  MODELSTUDIO_DEFAULT_MODEL_ID,
+  applyModelStudioNativeStreamingUsageCompat,
   buildModelStudioProvider,
-  buildNvidiaProvider,
+} from "../plugin-sdk/modelstudio.js";
+import { applyMoonshotNativeStreamingUsageCompat } from "../plugin-sdk/moonshot.js";
+import { buildNvidiaProvider } from "../plugin-sdk/nvidia.js";
+import { resolveOllamaApiBase } from "../plugin-sdk/ollama-surface.js";
+import {
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
   buildQianfanProvider,
-  MODELSTUDIO_BASE_URL,
-  MODELSTUDIO_DEFAULT_MODEL_ID,
-  XIAOMI_DEFAULT_MODEL_ID,
-  buildXiaomiProvider,
-} from "../plugin-sdk/provider-catalog.js";
+} from "../plugin-sdk/qianfan.js";
+import { normalizeXaiModelId } from "../plugin-sdk/xai.js";
+import { XIAOMI_DEFAULT_MODEL_ID, buildXiaomiProvider } from "../plugin-sdk/xiaomi.js";
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
-import { discoverBedrockModels } from "./bedrock-discovery.js";
-import {
-  normalizeGoogleGenerativeAiBaseUrl,
-  shouldNormalizeGoogleGenerativeAiProviderConfig,
-} from "./google-generative-ai.js";
-import { normalizeGoogleModelId, normalizeXaiModelId } from "./model-id-normalization.js";
-import { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
+export { buildKilocodeProvider } from "../plugin-sdk/kilocode.js";
+export { buildKimiCodingProvider } from "../plugin-sdk/kimi-coding.js";
 export {
-  buildKimiCodingProvider,
-  buildKilocodeProvider,
   MODELSTUDIO_BASE_URL,
   MODELSTUDIO_DEFAULT_MODEL_ID,
   buildModelStudioProvider,
-  buildNvidiaProvider,
+} from "../plugin-sdk/modelstudio.js";
+export { buildNvidiaProvider } from "../plugin-sdk/nvidia.js";
+export {
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
   buildQianfanProvider,
-  XIAOMI_DEFAULT_MODEL_ID,
-  buildXiaomiProvider,
-} from "../plugin-sdk/provider-catalog.js";
+} from "../plugin-sdk/qianfan.js";
+export { XIAOMI_DEFAULT_MODEL_ID, buildXiaomiProvider } from "../plugin-sdk/xiaomi.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -52,8 +64,9 @@ import {
   resolveEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
-export { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
-export { normalizeGoogleModelId, normalizeXaiModelId };
+export { resolveOllamaApiBase } from "../plugin-sdk/ollama-surface.js";
+export { normalizeGoogleModelId } from "../plugin-sdk/google.js";
+export { normalizeXaiModelId } from "../plugin-sdk/xai.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -63,19 +76,50 @@ type SecretDefaults = {
   exec?: string;
 };
 
-const MOONSHOT_NATIVE_BASE_URLS = new Set([
-  "https://api.moonshot.ai/v1",
-  "https://api.moonshot.cn/v1",
-]);
-const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
-  "https://coding-intl.dashscope.aliyuncs.com/v1",
-  "https://coding.dashscope.aliyuncs.com/v1",
-  "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-]);
 const log = createSubsystemLogger("agents/model-providers");
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+
+const NATIVE_STREAMING_USAGE_COMPAT: Record<string, (provider: ProviderConfig) => ProviderConfig> =
+  {
+    moonshot: applyMoonshotNativeStreamingUsageCompat,
+    modelstudio: applyModelStudioNativeStreamingUsageCompat,
+  };
+
+const PROVIDER_CONFIG_API_KEY_RESOLVERS: Partial<
+  Record<string, (env: NodeJS.ProcessEnv) => string | undefined>
+> = {
+  "amazon-bedrock": resolveBedrockConfigApiKey,
+  "anthropic-vertex": resolveAnthropicVertexConfigApiKey,
+};
+
+const PROVIDER_IMPLICIT_MERGERS: Partial<
+  Record<
+    string,
+    (params: { existing: ProviderConfig | undefined; implicit: ProviderConfig }) => ProviderConfig
+  >
+> = {
+  "amazon-bedrock": mergeImplicitBedrockProvider,
+  "anthropic-vertex": mergeImplicitAnthropicVertexProvider,
+};
+
+const CORE_IMPLICIT_PROVIDER_RESOLVERS = [
+  {
+    id: "amazon-bedrock",
+    resolve: (params: { config?: OpenClawConfig; env: NodeJS.ProcessEnv }) =>
+      resolveImplicitBedrockProvider({
+        config: params.config,
+        env: params.env,
+      }),
+  },
+  {
+    id: "anthropic-vertex",
+    resolve: (params: { config?: OpenClawConfig; env: NodeJS.ProcessEnv }) =>
+      resolveImplicitAnthropicVertexProvider({
+        env: params.env,
+      }),
+  },
+] as const;
 
 function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
   const live =
@@ -114,44 +158,6 @@ function normalizeApiKeyConfig(value: string): string {
   return match?.[1] ?? trimmed;
 }
 
-function normalizeProviderBaseUrl(baseUrl: string | undefined): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return "";
-  }
-  try {
-    const url = new URL(trimmed);
-    url.hash = "";
-    url.search = "";
-    return url.toString().replace(/\/+$/, "").toLowerCase();
-  } catch {
-    return trimmed.replace(/\/+$/, "").toLowerCase();
-  }
-}
-
-function withStreamingUsageCompat(provider: ProviderConfig): ProviderConfig {
-  if (!Array.isArray(provider.models) || provider.models.length === 0) {
-    return provider;
-  }
-
-  let changed = false;
-  const models = provider.models.map((model) => {
-    if (model.compat?.supportsUsageInStreaming !== undefined) {
-      return model;
-    }
-    changed = true;
-    return {
-      ...model,
-      compat: {
-        ...model.compat,
-        supportsUsageInStreaming: true,
-      },
-    };
-  });
-
-  return changed ? { ...provider, models } : provider;
-}
-
 export function applyNativeStreamingUsageCompat(
   providers: Record<string, ProviderConfig>,
 ): Record<string, ProviderConfig> {
@@ -159,13 +165,7 @@ export function applyNativeStreamingUsageCompat(
   const nextProviders: Record<string, ProviderConfig> = {};
 
   for (const [providerKey, provider] of Object.entries(providers)) {
-    const normalizedBaseUrl = normalizeProviderBaseUrl(provider.baseUrl);
-    const isNativeMoonshot =
-      providerKey === "moonshot" && MOONSHOT_NATIVE_BASE_URLS.has(normalizedBaseUrl);
-    const isNativeModelStudio =
-      providerKey === "modelstudio" && MODELSTUDIO_NATIVE_BASE_URLS.has(normalizedBaseUrl);
-    const nextProvider =
-      isNativeMoonshot || isNativeModelStudio ? withStreamingUsageCompat(provider) : provider;
+    const nextProvider = NATIVE_STREAMING_USAGE_COMPAT[providerKey]?.(provider) ?? provider;
     nextProviders[providerKey] = nextProvider;
     changed ||= nextProvider !== provider;
   }
@@ -307,44 +307,6 @@ function resolveApiKeyFromProfiles(params: {
     }
   }
   return undefined;
-}
-
-const ANTIGRAVITY_BARE_PRO_IDS = new Set(["gemini-3-pro", "gemini-3.1-pro", "gemini-3-1-pro"]);
-
-export function normalizeAntigravityModelId(id: string): string {
-  if (ANTIGRAVITY_BARE_PRO_IDS.has(id)) {
-    return `${id}-low`;
-  }
-  return id;
-}
-
-function normalizeProviderModels(
-  provider: ProviderConfig,
-  normalizeId: (id: string) => string,
-): ProviderConfig {
-  let mutated = false;
-  const models = provider.models.map((model) => {
-    const nextId = normalizeId(model.id);
-    if (nextId === model.id) {
-      return model;
-    }
-    mutated = true;
-    return { ...model, id: nextId };
-  });
-  return mutated ? { ...provider, models } : provider;
-}
-
-function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
-  const modelNormalized = normalizeProviderModels(provider, normalizeGoogleModelId);
-  const normalizedBaseUrl = normalizeGoogleGenerativeAiBaseUrl(modelNormalized.baseUrl);
-  if (normalizedBaseUrl !== modelNormalized.baseUrl) {
-    return { ...modelNormalized, baseUrl: normalizedBaseUrl ?? modelNormalized.baseUrl };
-  }
-  return modelNormalized;
-}
-
-function normalizeAntigravityProvider(provider: ProviderConfig): ProviderConfig {
-  return normalizeProviderModels(provider, normalizeAntigravityModelId);
 }
 
 function normalizeSourceProviderLookup(
@@ -595,17 +557,18 @@ export function normalizeProviders(params: {
     const normalizedApiKey = normalizeOptionalSecretInput(normalizedProvider.apiKey);
     const hasConfiguredApiKey = Boolean(normalizedApiKey || normalizedProvider.apiKey);
     if (hasModels && !hasConfiguredApiKey) {
-      const authMode =
-        normalizedProvider.auth ?? (normalizedKey === "amazon-bedrock" ? "aws-sdk" : undefined);
-      if (authMode === "aws-sdk") {
+      const authMode = normalizedProvider.auth;
+      const providerApiKeyResolver = PROVIDER_CONFIG_API_KEY_RESOLVERS[normalizedKey];
+      if (providerApiKeyResolver && (!authMode || authMode === "aws-sdk")) {
+        const apiKey = providerApiKeyResolver(env);
+        mutated = true;
+        normalizedProvider = { ...normalizedProvider, apiKey };
+      } else if (authMode === "aws-sdk") {
         const apiKey = resolveAwsSdkApiKeyVarName(env);
         mutated = true;
         normalizedProvider = { ...normalizedProvider, apiKey };
       } else {
-        const fromEnv =
-          normalizedKey === "anthropic-vertex"
-            ? resolveEnvApiKey(normalizedKey, env)?.apiKey
-            : resolveEnvApiKeyVarName(normalizedKey, env);
+        const fromEnv = resolveEnvApiKeyVarName(normalizedKey, env);
         const apiKey = fromEnv ?? profileApiKey?.apiKey;
         if (apiKey?.trim()) {
           if (profileApiKey && profileApiKey.source !== "plaintext") {
@@ -617,20 +580,12 @@ export function normalizeProviders(params: {
       }
     }
 
-    if (shouldNormalizeGoogleGenerativeAiProviderConfig(normalizedKey, normalizedProvider)) {
-      const googleNormalized = normalizeGoogleProvider(normalizedProvider);
+    if (shouldNormalizeGoogleProviderConfig(normalizedKey, normalizedProvider)) {
+      const googleNormalized = normalizeGoogleProviderConfig(normalizedKey, normalizedProvider);
       if (googleNormalized !== normalizedProvider) {
         mutated = true;
+        normalizedProvider = googleNormalized;
       }
-      normalizedProvider = googleNormalized;
-    }
-
-    if (normalizedKey === "google-antigravity") {
-      const antigravityNormalized = normalizeAntigravityProvider(normalizedProvider);
-      if (antigravityNormalized !== normalizedProvider) {
-        mutated = true;
-      }
-      normalizedProvider = antigravityNormalized;
     }
 
     const existing = next[normalizedKey];
@@ -877,82 +832,21 @@ export async function resolveImplicitProviders(
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "paired"));
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "late"));
 
-  const implicitBedrock = await resolveImplicitBedrockProvider({
-    agentDir: params.agentDir,
-    config: params.config,
-    env,
-  });
-  if (implicitBedrock) {
-    const existing = providers["amazon-bedrock"];
-    providers["amazon-bedrock"] = existing
-      ? {
-          ...implicitBedrock,
-          ...existing,
-          models:
-            Array.isArray(existing.models) && existing.models.length > 0
-              ? existing.models
-              : implicitBedrock.models,
-        }
-      : implicitBedrock;
-  }
-
-  const implicitAnthropicVertex = resolveImplicitAnthropicVertexProvider({ env });
-  if (implicitAnthropicVertex) {
-    const existing = providers["anthropic-vertex"];
-    providers["anthropic-vertex"] = existing
-      ? {
-          ...implicitAnthropicVertex,
-          ...existing,
-          models:
-            Array.isArray(existing.models) && existing.models.length > 0
-              ? existing.models
-              : implicitAnthropicVertex.models,
-        }
-      : implicitAnthropicVertex;
+  for (const provider of CORE_IMPLICIT_PROVIDER_RESOLVERS) {
+    const implicit = await provider.resolve({ config: params.config, env });
+    if (!implicit) {
+      continue;
+    }
+    const merge = PROVIDER_IMPLICIT_MERGERS[provider.id];
+    if (!merge) {
+      providers[provider.id] = implicit;
+      continue;
+    }
+    providers[provider.id] = merge({
+      existing: providers[provider.id],
+      implicit,
+    });
   }
 
   return providers;
-}
-
-export function resolveImplicitAnthropicVertexProvider(params: {
-  env?: NodeJS.ProcessEnv;
-}): ProviderConfig | null {
-  const env = params.env ?? process.env;
-  if (!hasAnthropicVertexAvailableAuth(env)) {
-    return null;
-  }
-
-  return buildAnthropicVertexProvider({ env });
-}
-export async function resolveImplicitBedrockProvider(params: {
-  agentDir: string;
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): Promise<ProviderConfig | null> {
-  const env = params.env ?? process.env;
-  const discoveryConfig = params.config?.models?.bedrockDiscovery;
-  const enabled = discoveryConfig?.enabled;
-  const hasAwsCreds = resolveAwsSdkEnvVarName(env) !== undefined;
-  if (enabled === false) {
-    return null;
-  }
-  if (enabled !== true && !hasAwsCreds) {
-    return null;
-  }
-
-  const region = discoveryConfig?.region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
-  const models = await discoverBedrockModels({
-    region,
-    config: discoveryConfig,
-  });
-  if (models.length === 0) {
-    return null;
-  }
-
-  return {
-    baseUrl: `https://bedrock-runtime.${region}.amazonaws.com`,
-    api: "bedrock-converse-stream",
-    auth: "aws-sdk",
-    models,
-  } satisfies ProviderConfig;
 }

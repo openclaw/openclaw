@@ -14,6 +14,8 @@ export {
   probeTelegram,
   reactMessageTelegram,
   renameForumTopicTelegram,
+  resetTelegramThreadBindingsForTests,
+  resolveTelegramRuntimeGroupPolicy,
   resolveTelegramToken,
   sendMessageTelegram,
   sendPollTelegram,

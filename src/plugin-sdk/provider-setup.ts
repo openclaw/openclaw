@@ -10,6 +10,7 @@ export type {
 export {
   applyProviderDefaultModel,
   configureOpenAICompatibleSelfHostedProviderNonInteractive,
+  discoverOpenAICompatibleLocalModels,
   discoverOpenAICompatibleSelfHostedProvider,
   promptAndConfigureOpenAICompatibleSelfHostedProvider,
   promptAndConfigureOpenAICompatibleSelfHostedProviderAuth,
@@ -31,7 +32,5 @@ export {
   VLLM_DEFAULT_MAX_TOKENS,
   promptAndConfigureVllm,
 } from "../plugins/provider-vllm-setup.js";
-export {
-  buildSglangProvider,
-  buildVllmProvider,
-} from "../agents/models-config.providers.discovery.js";
+export { buildVllmProvider } from "./vllm.js";
+export { buildSglangProvider } from "./sglang.js";

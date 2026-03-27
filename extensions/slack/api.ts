@@ -16,3 +16,4 @@ export * from "./src/probe.js";
 export * from "./src/sent-thread-cache.js";
 export * from "./src/targets.js";
 export * from "./src/threading-tool-context.js";
+export { resolveSlackRuntimeGroupPolicy } from "./src/monitor/provider.js";

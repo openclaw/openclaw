@@ -5,6 +5,8 @@ export {
   createDiscordActionGate,
   handleDiscordMessageAction,
   inspectDiscordAccount,
+  isDiscordExecApprovalApprover,
+  isDiscordExecApprovalClientEnabled,
   listDiscordAccountIds,
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
@@ -15,14 +17,17 @@ export {
   resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
   resolveDiscordChannelId,
+  resolveDiscordRuntimeGroupPolicy,
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
 } from "../../extensions/discord/api.js";
 export type {
   DiscordComponentMessageSpec,
+  DiscordProbe,
   DiscordSendComponents,
   DiscordSendEmbeds,
   DiscordSendResult,
+  DiscordTokenResolution,
   InspectedDiscordAccount,
   ResolvedDiscordAccount,
 } from "../../extensions/discord/api.js";
