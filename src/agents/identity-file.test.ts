@@ -33,4 +33,42 @@ describe("parseIdentityMarkdown", () => {
       avatar: "avatars/openclaw.png",
     });
   });
+
+  describe("capabilities parsing", () => {
+    it("parses comma-separated capabilities", () => {
+      const content = "- name: TestBot\n- capabilities: code, testing, ui";
+      const parsed = parseIdentityMarkdown(content);
+      expect(parsed.capabilities).toEqual(["code", "testing", "ui"]);
+    });
+
+    it("parses single capability", () => {
+      const content = "- capabilities: code";
+      const parsed = parseIdentityMarkdown(content);
+      expect(parsed.capabilities).toEqual(["code"]);
+    });
+
+    it("returns undefined capabilities when no capabilities line present", () => {
+      const content = "- name: TestBot";
+      const parsed = parseIdentityMarkdown(content);
+      expect(parsed.capabilities).toBeUndefined();
+    });
+
+    it("returns undefined capabilities when capabilities value is empty", () => {
+      const content = "- capabilities: ";
+      const parsed = parseIdentityMarkdown(content);
+      expect(parsed.capabilities).toBeUndefined();
+    });
+
+    it("parses capabilities alongside other fields", () => {
+      const content = `- name: TestBot
+- emoji: :robot:
+- capabilities: code, testing
+- vibe: chill`;
+      const parsed = parseIdentityMarkdown(content);
+      expect(parsed.name).toBe("TestBot");
+      expect(parsed.emoji).toBe(":robot:");
+      expect(parsed.capabilities).toEqual(["code", "testing"]);
+      expect(parsed.vibe).toBe("chill");
+    });
+  });
 });

@@ -59,3 +59,6 @@ export {
   QUEUE_LOCK_OPTIONS,
 } from "./queue-manager.js";
 export type { QueueSection } from "./queue-manager.js";
+
+// Capability matching
+export { matchCapabilities } from "./capability-matcher.js";
