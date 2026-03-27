@@ -239,23 +239,26 @@ export async function getReplyFromConfig(
   } = sessionState;
 
   // Auto model routing based on message complexity
-  // Apply routing after session state is initialized but before other overrides
-  const hasSessionModelOverride = Boolean(
-    sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
-  );
-  const triggerMessage = finalized.Body || triggerBodyNormalized || "";
-  const autoModelResult = await getAutoModelForMessage(triggerMessage, cfg);
-  if (autoModelResult && !hasResolvedHeartbeatModelOverride && !hasSessionModelOverride) {
-    const resolved = resolveModelRefFromString({
-      raw: autoModelResult.model,
-      defaultProvider,
-      aliasIndex,
-    });
-    if (resolved) {
-      provider = resolved.ref.provider;
-      model = resolved.ref.model;
-      // Use defaultRuntime.log instead of direct call
-      defaultRuntime.log(`[auto-model-router] Selected model: ${provider}/${model}`);
+  // Skip routing if higher-priority overrides are already resolved (heartbeat/session)
+  // to avoid unnecessary router process execution and latency
+  // Note: Recalculate hasSessionModelOverride at each use site to handle reset mutations
+  const hasSessionModelOverride = () =>
+    Boolean(sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim());
+  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride()) {
+    const triggerMessage = finalized.Body || triggerBodyNormalized || "";
+    const autoModelResult = await getAutoModelForMessage(triggerMessage, cfg);
+    if (autoModelResult) {
+      const resolved = resolveModelRefFromString({
+        raw: autoModelResult.model,
+        defaultProvider,
+        aliasIndex,
+      });
+      if (resolved) {
+        provider = resolved.ref.provider;
+        model = resolved.ref.model;
+        // Use defaultRuntime.log instead of direct call
+        defaultRuntime.log(`[auto-model-router] Selected model: ${provider}/${model}`);
+      }
     }
   }
 
@@ -293,7 +296,7 @@ export async function getReplyFromConfig(
     groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
     parentSessionKey: sessionCtx.ParentSessionKey,
   });
-  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
+  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride() && channelModelOverride) {
     const resolved = resolveModelRefFromString({
       raw: channelModelOverride.model,
       defaultProvider,
