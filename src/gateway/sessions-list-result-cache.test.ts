@@ -11,6 +11,7 @@ import {
 } from "../config/config.js";
 import { buildSessionsListParamsKey } from "../shared/session-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import type { SessionsListResult } from "./session-utils.types.js";
 import {
   clearSessionsListResultCacheForTest,
   isSessionsListResultCacheEligible,
@@ -35,6 +36,76 @@ describe("isSessionsListResultCacheEligible", () => {
 
   it("opts out when activeMinutes is set", () => {
     expect(isSessionsListResultCacheEligible({ activeMinutes: 30 })).toBe(false);
+  });
+});
+
+describe("sessions list result cache immutability", () => {
+  it("does not expose cached references that can be mutated by callers", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-result-cache-"));
+    const sessionsPath = path.join(tmpDir, "sessions.json");
+
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_SESSIONS_LIST_RESULT_CACHE_TTL_MS: "1000",
+        },
+        async () => {
+          const listParams = { includeGlobal: true, includeUnknown: true };
+          const cfg = loadConfig();
+          const originalSessions = [
+            { sessionId: "sess-1", path: sessionsPath },
+          ] as unknown as SessionsListResult["sessions"];
+
+          writeSessionsListResultCache({
+            cfg,
+            listParams,
+            hash: "hash-1",
+            result: {
+              ts: 1_690_000_000_000,
+              path: sessionsPath,
+              count: 1,
+              defaults: {
+                modelProvider: null,
+                model: null,
+                contextTokens: 1234,
+              },
+              sessions: originalSessions,
+            },
+          });
+
+          const first = tryReadSessionsListResultCache({ cfg, listParams });
+          expect(first).not.toBeNull();
+          if (!first) {
+            return;
+          }
+
+          first.defaults.model = "mutated-model";
+          const firstSessions = first.sessions as Array<{ [k: string]: unknown }>;
+          firstSessions[0].title = "mutated-session";
+          firstSessions.push({ sessionId: "sess-2", title: "poisoned" });
+
+          const second = tryReadSessionsListResultCache({ cfg, listParams });
+          expect(second).not.toBeNull();
+          expect(second).toMatchObject({
+            hash: "hash-1",
+            path: sessionsPath,
+            count: 1,
+            defaults: {
+              modelProvider: null,
+              model: null,
+              contextTokens: 1234,
+            },
+          });
+
+          const secondSessions = second!.sessions as Array<{ [k: string]: unknown }>;
+          expect(secondSessions).toHaveLength(1);
+          expect(secondSessions[0]).toMatchObject({ sessionId: "sess-1" });
+          expect(secondSessions[0]).not.toHaveProperty("title");
+        },
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 

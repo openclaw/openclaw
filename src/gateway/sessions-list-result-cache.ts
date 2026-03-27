@@ -55,6 +55,13 @@ const SESSIONS_LIST_RESULT_CACHE = createExpiringMapCache<string, CachedListPayl
   maxEntries: getSessionsListResultCacheMaxEntries,
 });
 
+function cloneCachedListPayload(payload: CachedListPayload): CachedListPayload {
+  if (typeof globalThis.structuredClone === "function") {
+    return globalThis.structuredClone(payload);
+  }
+  return JSON.parse(JSON.stringify(payload)) as CachedListPayload;
+}
+
 export function isSessionsListResultCacheEnabled(): boolean {
   return isCacheEnabled(getSessionsListResultCacheTtlMs());
 }
@@ -126,7 +133,8 @@ export function tryReadSessionsListResultCache(params: {
     return null;
   }
   const key = buildSessionsListResultCacheKey(params);
-  return SESSIONS_LIST_RESULT_CACHE.get(key) ?? null;
+  const cached = SESSIONS_LIST_RESULT_CACHE.get(key);
+  return cached ? cloneCachedListPayload(cached) : null;
 }
 
 export function writeSessionsListResultCache(params: {
@@ -139,11 +147,12 @@ export function writeSessionsListResultCache(params: {
     return;
   }
   const key = buildSessionsListResultCacheKey(params);
-  SESSIONS_LIST_RESULT_CACHE.set(key, {
+  const payload: CachedListPayload = {
     hash: params.hash,
     path: params.result.path,
     count: params.result.count,
     defaults: params.result.defaults,
     sessions: params.result.sessions,
-  });
+  };
+  SESSIONS_LIST_RESULT_CACHE.set(key, cloneCachedListPayload(payload));
 }

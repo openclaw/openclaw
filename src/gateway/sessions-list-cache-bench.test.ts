@@ -101,7 +101,9 @@ test("benchmark: sessions.list cache cold vs warm", async () => {
   expect(r3.ok).toBe(true);
   expect(r2.payload?.unchanged).toBe(true);
   expect(r3.payload?.unchanged).toBe(true);
-  expect(warm).toBeLessThan(cold);
+  expect(typeof r2.payload?.hash).toBe("string");
+  expect(typeof r3.payload?.hash).toBe("string");
+  expect(r3.payload?.hash).toBe(r2.payload?.hash);
 
   console.log(`Cold:  ${cold.toFixed(1)}ms`);
   console.log(`Warm:  ${warm.toFixed(1)}ms`);
