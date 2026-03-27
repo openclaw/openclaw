@@ -145,7 +145,13 @@ function shouldEnableOpenAIResponsesServerCompaction(
   if (configured === true) {
     return true;
   }
-  return model.provider === "openai";
+  // supportsStore opt-in should NOT implicitly enable compaction defaults.
+  // Proxies that accept store may not support context_management fields.
+  // Only default to compaction for direct OpenAI URLs.
+  if (model.provider === "openai" && isDirectOpenAIBaseUrl(model.baseUrl)) {
+    return true;
+  }
+  return false;
 }
 
 function shouldStripResponsesStore(
