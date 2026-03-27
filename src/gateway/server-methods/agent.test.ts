@@ -747,6 +747,7 @@ describe("gateway agent handler", () => {
       return true;
     });
     mocks.agentCommand.mockClear();
+    mocks.registerAgentRunContext.mockClear();
     const respond = vi.fn();
     const registerToolEventRecipient = context.registerToolEventRecipient as unknown as ReturnType<
       typeof vi.fn
@@ -770,17 +771,73 @@ describe("gateway agent handler", () => {
     );
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mocks.registerAgentRunContext).not.toHaveBeenCalled();
     expect(registerToolEventRecipient).not.toHaveBeenCalled();
     expect(context.chatAbortControllers.get(runId)).toBe(collisionEntry);
-    expect(context.dedupe.get(`agent:${runId}`)).toEqual(
+    expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+    expect(respond).toHaveBeenNthCalledWith(
+      1,
+      true,
       expect.objectContaining({
-        ok: true,
-        payload: expect.objectContaining({
-          runId,
-          status: "accepted",
-        }),
+        runId,
+        status: "accepted",
       }),
+      undefined,
+      { runId },
     );
+    expect(respond).toHaveBeenNthCalledWith(
+      2,
+      false,
+      expect.objectContaining({
+        runId,
+        status: "error",
+      }),
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: `idempotencyKey "${runId}" already belongs to an active run; use a unique key.`,
+      }),
+      { runId },
+    );
+  });
+
+  it("clears main-session pre-ack state on late runId collisions", async () => {
+    const runId = "run-main-late-collision";
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    mocks.registerAgentRunContext.mockClear();
+    const context = makeContext();
+    const collisionEntry = createActiveRun(runId, {
+      sessionId: "collision-session",
+      sessionKey: "agent:other:main",
+    });
+    mocks.updateSessionStore.mockImplementationOnce(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry(),
+      };
+      const updated = await updater(store);
+      context.chatAbortControllers.set(runId, collisionEntry);
+      return updated;
+    });
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "test main late collision",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      {
+        reqId: runId,
+        respond,
+        context,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mocks.registerAgentRunContext).not.toHaveBeenCalled();
+    expect(context.chatAbortControllers.get(runId)).toBe(collisionEntry);
+    expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
     expect(respond).toHaveBeenNthCalledWith(
       1,
       true,

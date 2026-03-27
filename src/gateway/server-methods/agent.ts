@@ -178,6 +178,7 @@ function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
   runId: string;
   idempotencyKey: string;
+  acceptedPayload?: { runId: string; status: "accepted"; acceptedAt: number };
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
   sessionKey?: string;
@@ -188,6 +189,15 @@ function dispatchAgentRunFromGateway(params: {
 }) {
   const controller = new AbortController();
   const registeredAbortController = Boolean(params.sessionKey);
+  const clearAcceptedDedupeIfOwned = () => {
+    if (!params.acceptedPayload) {
+      return;
+    }
+    const current = params.context.dedupe.get(`agent:${params.idempotencyKey}`);
+    if (current?.payload === params.acceptedPayload) {
+      params.context.dedupe.delete(`agent:${params.idempotencyKey}`);
+    }
+  };
   const clearAbortControllerIfOwned = () => {
     if (!registeredAbortController) {
       return;
@@ -198,6 +208,7 @@ function dispatchAgentRunFromGateway(params: {
   };
   if (registeredAbortController) {
     if (params.context.chatAbortControllers.has(params.runId)) {
+      clearAcceptedDedupeIfOwned();
       const error = errorShape(
         ErrorCodes.INVALID_REQUEST,
         `idempotencyKey "${params.idempotencyKey}" already belongs to an active run; use a unique key.`,
@@ -481,6 +492,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     let resolvedSessionKey = requestedSessionKey;
     let isNewSession = false;
     let skipTimestampInjection = false;
+    let onRunDispatchReady: (() => void) | undefined;
     const runId = idem;
 
     // chat.send and agent share the same active-run namespace. Same-agent retries
@@ -616,6 +628,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       resolvedSessionKey = canonicalSessionKey;
       const agentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
       const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
+      const linkRunToChat =
+        canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global";
       if (storePath) {
         const persisted = await updateSessionStore(storePath, (store) => {
           const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
@@ -629,16 +643,18 @@ export const agentHandlers: GatewayRequestHandlers = {
         });
         sessionEntry = persisted;
       }
-      if (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") {
-        context.addChatRun(idem, {
-          sessionKey: canonicalSessionKey,
-          clientRunId: idem,
-        });
-        if (requestedBestEffortDeliver === undefined) {
-          bestEffortDeliver = true;
-        }
+      if (linkRunToChat && requestedBestEffortDeliver === undefined) {
+        bestEffortDeliver = true;
       }
-      registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
+      onRunDispatchReady = () => {
+        if (linkRunToChat) {
+          context.addChatRun(idem, {
+            sessionKey: canonicalSessionKey,
+            clientRunId: idem,
+          });
+        }
+        registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
+      };
     }
 
     const connId = typeof client?.connId === "string" ? client.connId : undefined;
@@ -837,6 +853,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       },
       runId,
       idempotencyKey: idem,
+      acceptedPayload: accepted,
       respond,
       context,
       sessionKey: resolvedSessionKey,
@@ -845,9 +862,12 @@ export const agentHandlers: GatewayRequestHandlers = {
         typeof client?.connect?.device?.id === "string" ? client.connect.device.id : undefined,
       cfg: cfgForAgent ?? cfg,
       onDispatchReady:
-        connId && wantsToolEvents
+        onRunDispatchReady || (connId && wantsToolEvents)
           ? () => {
-              context.registerToolEventRecipient(runId, connId);
+              onRunDispatchReady?.();
+              if (connId && wantsToolEvents) {
+                context.registerToolEventRecipient(runId, connId);
+              }
             }
           : undefined,
     });
