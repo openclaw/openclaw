@@ -6,33 +6,71 @@ describe("plugin contract registry partial failures", () => {
   });
 
   afterEach(() => {
-    vi.doUnmock("../../../extensions/xai/index.js");
+    vi.doUnmock("../bundled-capability-runtime.js");
+    vi.doUnmock("../providers.runtime.js");
     vi.resetModules();
   });
 
   it("keeps surviving contract registries loaded when one plugin importer fails", async () => {
-    vi.doMock("../../../extensions/xai/index.js", () => {
+    vi.doMock("../providers.runtime.js", () => {
       return {
-        get default() {
-          throw new Error("xai import failed for test");
+        resolvePluginProviders: (params: { onlyPluginIds?: string[] }) => {
+          const pluginId = params.onlyPluginIds?.[0];
+          if (pluginId === "xai") {
+            throw new Error("xai import failed for test");
+          }
+          if (pluginId === "openai") {
+            return [{ id: "openai", pluginId: "openai" }];
+          }
+          if (!pluginId) {
+            return [];
+          }
+          return [{ id: `${pluginId}-provider`, pluginId }];
         },
       };
     });
 
-    const {
-      providerContractLoadError,
-      providerContractRegistry,
-      webSearchProviderContractRegistry,
-    } = await import("./registry.js");
+    vi.doMock("../bundled-capability-runtime.js", () => {
+      return {
+        loadBundledCapabilityRuntimeRegistry: (params: { pluginIds: string[] }) => {
+          if (params.pluginIds.includes("xai")) {
+            throw new Error("xai import failed for test");
+          }
+          return {
+            webSearchProviders: params.pluginIds.includes("brave")
+              ? [
+                  {
+                    pluginId: "brave",
+                    provider: {
+                      id: "brave",
+                      requiresCredential: true,
+                      envVars: ["BRAVE_API_KEY"],
+                    },
+                  },
+                ]
+              : [],
+          };
+        },
+      };
+    });
 
-    expect(providerContractLoadError).toBeInstanceOf(Error);
-    expect(providerContractLoadError?.message).toContain("xai");
-    expect(providerContractLoadError?.message).toContain("xai import failed for test");
-    expect(providerContractRegistry.length).toBeGreaterThan(0);
-    expect(providerContractRegistry.some((entry) => entry.pluginId === "xai")).toBe(false);
-    expect(providerContractRegistry.some((entry) => entry.pluginId === "openai")).toBe(true);
-    expect(webSearchProviderContractRegistry.some((entry) => entry.pluginId === "brave")).toBe(
+    const registry = await import("./registry.js");
+
+    expect(registry.providerContractRegistry.length).toBeGreaterThan(0);
+    expect(registry.providerContractRegistry.some((entry) => entry.pluginId === "xai")).toBe(
+      false,
+    );
+    expect(registry.providerContractRegistry.some((entry) => entry.pluginId === "openai")).toBe(
       true,
     );
+    expect(
+      registry.webSearchProviderContractRegistry.some((entry) => entry.pluginId === "xai"),
+    ).toBe(false);
+    expect(
+      registry.webSearchProviderContractRegistry.some((entry) => entry.pluginId === "brave"),
+    ).toBe(true);
+    expect(registry.providerContractLoadError).toBeInstanceOf(Error);
+    expect(registry.providerContractLoadError?.message).toContain("xai");
+    expect(registry.providerContractLoadError?.message).toContain("xai import failed for test");
   });
 });

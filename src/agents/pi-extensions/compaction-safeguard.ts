@@ -614,13 +614,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    const fallbackHeaders =
+    const headers =
       model.headers && typeof model.headers === "object" && !Array.isArray(model.headers)
         ? model.headers
         : undefined;
-    const requestAuth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    const apiKey = requestAuth.ok ? (requestAuth.apiKey ?? "") : "";
-    const headers = requestAuth.ok ? (requestAuth.headers ?? fallbackHeaders) : fallbackHeaders;
+    const apiKey = (await ctx.modelRegistry.getApiKey(model)) ?? "";
     if (!apiKey && !headers) {
       log.warn(
         "Compaction safeguard: no request auth available; cancelling compaction to preserve history.",

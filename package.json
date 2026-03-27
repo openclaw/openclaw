@@ -424,14 +424,6 @@
       "types": "./dist/plugin-sdk/memory-core-engine-runtime.d.ts",
       "default": "./dist/plugin-sdk/memory-core-engine-runtime.js"
     },
-    "./plugin-sdk/memory-core-host": {
-      "types": "./dist/plugin-sdk/memory-core-host.d.ts",
-      "default": "./dist/plugin-sdk/memory-core-host.js"
-    },
-    "./plugin-sdk/memory-core-host-engine": {
-      "types": "./dist/plugin-sdk/memory-core-host-engine.d.ts",
-      "default": "./dist/plugin-sdk/memory-core-host-engine.js"
-    },
     "./plugin-sdk/memory-core-host-engine-embeddings": {
       "types": "./dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-embeddings.js"
@@ -448,9 +440,21 @@
       "types": "./dist/plugin-sdk/memory-core-host-engine-storage.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-storage.js"
     },
-    "./plugin-sdk/memory-core-host-runtime": {
-      "types": "./dist/plugin-sdk/memory-core-host-runtime.d.ts",
-      "default": "./dist/plugin-sdk/memory-core-host-runtime.js"
+    "./plugin-sdk/memory-core-host-multimodal": {
+      "types": "./dist/plugin-sdk/memory-core-host-multimodal.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-multimodal.js"
+    },
+    "./plugin-sdk/memory-core-host-query": {
+      "types": "./dist/plugin-sdk/memory-core-host-query.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-query.js"
+    },
+    "./plugin-sdk/memory-core-host-secret": {
+      "types": "./dist/plugin-sdk/memory-core-host-secret.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-secret.js"
+    },
+    "./plugin-sdk/memory-core-host-status": {
+      "types": "./dist/plugin-sdk/memory-core-host-status.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-status.js"
     },
     "./plugin-sdk/memory-core-host-runtime-cli": {
       "types": "./dist/plugin-sdk/memory-core-host-runtime-cli.d.ts",
@@ -648,6 +652,10 @@
       "types": "./dist/plugin-sdk/zalouser.d.ts",
       "default": "./dist/plugin-sdk/zalouser.js"
     },
+    "./plugin-sdk/zod": {
+      "types": "./dist/plugin-sdk/zod.d.ts",
+      "default": "./dist/plugin-sdk/zod.js"
+    },
     "./extension-api": "./dist/extensionAPI.js",
     "./cli-entry": "./openclaw.mjs"
   },
@@ -674,17 +682,17 @@
     "canon:check:json": "node scripts/canon.mjs check --json",
     "canon:enforce": "node scripts/canon.mjs enforce --json",
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
-    "check": "pnpm check:no-conflict-markers && pnpm check:host-env-policy:swift && pnpm check:base-config-schema && pnpm check:bundled-plugin-metadata && pnpm check:bundled-provider-auth-env-vars && pnpm format:check && pnpm tsgo && pnpm plugin-sdk:check-exports && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:agent:ingress-owner && pnpm lint:plugins:no-register-http-handler && pnpm lint:plugins:no-monolithic-plugin-sdk-entry-imports && pnpm lint:plugins:no-extension-src-imports && pnpm lint:plugins:no-extension-test-core-imports && pnpm lint:plugins:no-extension-imports && pnpm lint:plugins:plugin-sdk-subpaths-exported && pnpm lint:extensions:no-src-outside-plugin-sdk && pnpm lint:extensions:no-plugin-sdk-internal && pnpm lint:extensions:no-relative-outside-package && pnpm lint:web-search-provider-boundaries && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
+    "check": "pnpm check:no-conflict-markers && pnpm check:host-env-policy:swift && pnpm check:bundled-channel-config-metadata && pnpm check:base-config-schema && pnpm check:bundled-plugin-metadata && pnpm check:bundled-provider-auth-env-vars && pnpm format:check && pnpm tsgo && pnpm plugin-sdk:check-exports && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:agent:ingress-owner && pnpm lint:plugins:no-register-http-handler && pnpm lint:plugins:no-monolithic-plugin-sdk-entry-imports && pnpm lint:plugins:no-extension-src-imports && pnpm lint:plugins:no-extension-test-core-imports && pnpm lint:plugins:no-extension-imports && pnpm lint:plugins:plugin-sdk-subpaths-exported && pnpm lint:extensions:no-src-outside-plugin-sdk && pnpm lint:extensions:no-plugin-sdk-internal && pnpm lint:extensions:no-relative-outside-package && pnpm lint:web-search-provider-boundaries && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
     "check:base-config-schema": "node --import tsx scripts/generate-base-config-schema.ts --check",
-    "check:bundled-channel-config-metadata": "node scripts/generate-bundled-plugin-metadata.mjs --check",
+    "check:bundled-channel-config-metadata": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "check:bundled-plugin-metadata": "node scripts/generate-bundled-plugin-metadata.mjs --check",
     "check:bundled-provider-auth-env-vars": "node scripts/generate-bundled-provider-auth-env-vars.mjs --check",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-i18n-glossary && pnpm docs:check-links",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500",
     "check:no-conflict-markers": "node scripts/check-no-conflict-markers.mjs",
-    "config:channels:check": "node scripts/generate-bundled-plugin-metadata.mjs --check",
-    "config:channels:gen": "node scripts/generate-bundled-plugin-metadata.mjs",
+    "config:channels:check": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
+    "config:channels:gen": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --write",
     "config:docs:check": "node --import tsx scripts/generate-config-doc-baseline.ts --check",
     "config:docs:gen": "node --import tsx scripts/generate-config-doc-baseline.ts --write",
     "config:schema:check": "node --import tsx scripts/generate-base-config-schema.ts --check",
