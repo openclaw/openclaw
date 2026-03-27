@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { formatApiKeyPreview } from "../plugins/provider-auth-input.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { listProfilesForProvider } from "./auth-profiles/profiles.js";
@@ -45,6 +47,22 @@ export type ProviderAuthResolver = (
 };
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+const log = createSubsystemLogger("agents/model-providers");
+
+function shouldTraceProviderAuth(provider: string): boolean {
+  return provider.trim().toLowerCase() === "xai";
+}
+
+function summarizeProviderAuthKey(apiKey: string | undefined): string {
+  const trimmed = apiKey?.trim() ?? "";
+  if (!trimmed) {
+    return "missing";
+  }
+  if (isNonSecretApiKeyMarker(trimmed)) {
+    return `marker:${trimmed}`;
+  }
+  return formatApiKeyPreview(trimmed);
+}
 
 export function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();
@@ -431,7 +449,15 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
   });
   const apiKey = synthetic?.apiKey?.trim();
   if (!apiKey) {
+    if (shouldTraceProviderAuth(params.provider)) {
+      log.info("[xai-auth] bootstrap config fallback: no config-backed key found");
+    }
     return undefined;
+  }
+  if (shouldTraceProviderAuth(params.provider)) {
+    log.info(
+      `[xai-auth] bootstrap config fallback: key=${summarizeProviderAuthKey(apiKey)} marker=${isNonSecretApiKeyMarker(apiKey) ? "kept" : "secretref-managed"} source=config`,
+    );
   }
   return isNonSecretApiKeyMarker(apiKey)
     ? {
