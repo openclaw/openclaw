@@ -5,6 +5,7 @@ export * from "./src/actions/runtime.shared.js";
 export * from "./src/channel-actions.js";
 export * from "./src/directory-live.js";
 export * from "./src/monitor.js";
+export { __testing as discordMonitorTesting } from "./src/monitor/provider.js";
 export * from "./src/monitor/gateway-plugin.js";
 export * from "./src/monitor/gateway-registry.js";
 export * from "./src/monitor/presence-cache.js";
