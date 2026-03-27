@@ -91,4 +91,35 @@ describe("local media roots", () => {
       normalizeHostPath("/Users/peter/Pictures"),
     );
   });
+
+  it("does not widen media roots for messaging-profile agents without filesystem tools", () => {
+    const stateDir = path.join("/tmp", "openclaw-messaging-media-roots-state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const roots = getAgentScopedMediaLocalRootsForSources({
+      cfg: { tools: { profile: "messaging" } },
+      agentId: "ops",
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
+
+    expect(roots.map(normalizeHostPath)).not.toContain(normalizeHostPath("/Users/peter/Pictures"));
+  });
+
+  it("widens media roots again when messaging-profile agents explicitly enable filesystem tools", () => {
+    const stateDir = path.join("/tmp", "openclaw-messaging-fs-media-roots-state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const roots = getAgentScopedMediaLocalRootsForSources({
+      cfg: {
+        tools: {
+          profile: "messaging",
+          fs: { workspaceOnly: false },
+        },
+      },
+      agentId: "ops",
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
+
+    expect(roots.map(normalizeHostPath)).toContain(normalizeHostPath("/Users/peter/Pictures"));
+  });
 });
