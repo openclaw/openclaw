@@ -5,6 +5,7 @@ import {
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
 import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
+import { listChatChannels } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
@@ -235,6 +236,12 @@ function collectConfiguredActivationIds(config: OpenClawConfig): Set<string> {
   return activationIds;
 }
 
+function listBundledChannelPluginIds(): string[] {
+  return listChatChannels()
+    .map((channel) => channel.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+}
+
 export function resolveChannelPluginIds(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
@@ -260,7 +267,22 @@ export function resolveConfiguredChannelPluginIds(params: {
   if (configuredChannelIds.size === 0) {
     return [];
   }
-  return resolveChannelPluginIds(params).filter((pluginId) => configuredChannelIds.has(pluginId));
+  const pluginIds = new Set<string>();
+  for (const pluginId of listBundledChannelPluginIds()) {
+    if (configuredChannelIds.has(pluginId)) {
+      pluginIds.add(pluginId);
+    }
+  }
+  for (const plugin of loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  }).plugins) {
+    if (plugin.channels.some((channelId) => configuredChannelIds.has(channelId))) {
+      pluginIds.add(plugin.id);
+    }
+  }
+  return [...pluginIds];
 }
 
 export function resolveConfiguredDeferredChannelPluginIds(params: {
@@ -302,42 +324,42 @@ export function resolveGatewayStartupPluginIds(params: {
     env: params.env,
   });
   const configuredActivationIds = collectConfiguredActivationIds(params.config);
-  return manifestRegistry.plugins
-    .filter((plugin) => {
-      if (plugin.channels.some((channelId) => configuredChannelIds.has(channelId))) {
-        return true;
-      }
-      if (plugin.channels.length > 0) {
-        return false;
-      }
-      const enabled = resolveEffectiveEnableState({
-        id: plugin.id,
-        origin: plugin.origin,
-        config: pluginsConfig,
-        rootConfig: params.config,
-        enabledByDefault: plugin.enabledByDefault,
-      }).enabled;
-      if (!enabled) {
-        return false;
-      }
-      if (plugin.origin !== "bundled") {
-        return true;
-      }
-      if (
-        plugin.providers.some((providerId) =>
-          configuredActivationIds.has(normalizeProviderId(providerId)),
-        ) ||
-        plugin.cliBackends.some((backendId) =>
-          configuredActivationIds.has(normalizeProviderId(backendId)),
-        )
-      ) {
-        return true;
-      }
-      return (
-        pluginsConfig.allow.includes(plugin.id) ||
-        pluginsConfig.entries[plugin.id]?.enabled === true ||
-        pluginsConfig.slots.memory === plugin.id
-      );
-    })
-    .map((plugin) => plugin.id);
+  const pluginIds = new Set(resolveConfiguredChannelPluginIds(params));
+  for (const plugin of manifestRegistry.plugins) {
+    if (plugin.channels.some((channelId) => configuredChannelIds.has(channelId))) {
+      pluginIds.add(plugin.id);
+      continue;
+    }
+    if (plugin.channels.length > 0) {
+      continue;
+    }
+    const enabled = resolveEffectiveEnableState({
+      id: plugin.id,
+      origin: plugin.origin,
+      config: pluginsConfig,
+      rootConfig: params.config,
+      enabledByDefault: plugin.enabledByDefault,
+    }).enabled;
+    if (!enabled) {
+      continue;
+    }
+    if (plugin.origin !== "bundled") {
+      pluginIds.add(plugin.id);
+      continue;
+    }
+    if (
+      plugin.providers.some((providerId) =>
+        configuredActivationIds.has(normalizeProviderId(providerId)),
+      ) ||
+      plugin.cliBackends.some((backendId) =>
+        configuredActivationIds.has(normalizeProviderId(backendId)),
+      ) ||
+      pluginsConfig.allow.includes(plugin.id) ||
+      pluginsConfig.entries[plugin.id]?.enabled === true ||
+      pluginsConfig.slots.memory === plugin.id
+    ) {
+      pluginIds.add(plugin.id);
+    }
+  }
+  return [...pluginIds];
 }

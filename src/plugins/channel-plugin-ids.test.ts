@@ -2,21 +2,30 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
+const listChatChannels = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 
 vi.mock("../channels/config-presence.js", () => ({
   listPotentialConfiguredChannelIds,
 }));
 
+vi.mock("../channels/registry.js", () => ({
+  listChatChannels,
+}));
+
 vi.mock("./manifest-registry.js", () => ({
   loadPluginManifestRegistry,
 }));
 
-import { resolveGatewayStartupPluginIds } from "./channel-plugin-ids.js";
+import {
+  resolveConfiguredChannelPluginIds,
+  resolveGatewayStartupPluginIds,
+} from "./channel-plugin-ids.js";
 
 describe("resolveGatewayStartupPluginIds", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockReturnValue(["discord"]);
+    listChatChannels.mockReset().mockReturnValue([{ id: "slack" }, { id: "discord" }]);
     loadPluginManifestRegistry.mockReset().mockReturnValue({
       plugins: [
         {
@@ -88,6 +97,50 @@ describe("resolveGatewayStartupPluginIds", () => {
         env: process.env,
       }),
     ).toEqual(["discord", "anthropic", "diagnostics-otel", "custom-sidecar"]);
+  });
+
+  it("keeps bundled configured channels available when the manifest registry is narrowed by plugins.allow", () => {
+    listPotentialConfiguredChannelIds.mockReturnValue(["slack"]);
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "custom-sidecar",
+          channels: [],
+          origin: "global",
+          enabledByDefault: undefined,
+          providers: [],
+          cliBackends: [],
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const config = {
+      channels: {
+        slack: {
+          enabled: true,
+        },
+      },
+      plugins: {
+        allow: ["ouroboros"],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveConfiguredChannelPluginIds({
+        config,
+        workspaceDir: "/tmp",
+        env: process.env,
+      }),
+    ).toEqual(["slack"]);
+
+    expect(
+      resolveGatewayStartupPluginIds({
+        config,
+        workspaceDir: "/tmp",
+        env: process.env,
+      }),
+    ).toEqual(["slack"]);
   });
 
   it("does not pull default-on bundled non-channel plugins into startup", () => {
