@@ -57,9 +57,9 @@ Requirements for Phase 1 release. Each maps to roadmap phases.
 
 ### Gateway
 
-- [ ] **GATE-01**: ProjectService starts/stops with gateway lifecycle
-- [ ] **GATE-02**: WebSocket RPC methods: `projects.list`, `projects.get`, `projects.board.get`, `projects.queue.get`
-- [ ] **GATE-03**: WebSocket events: `projects.changed`, `projects.board.changed`, `projects.queue.changed`
+- [x] **GATE-01**: ProjectService starts/stops with gateway lifecycle
+- [x] **GATE-02**: WebSocket RPC methods: `projects.list`, `projects.get`, `projects.board.get`, `projects.queue.get`
+- [x] **GATE-03**: WebSocket events: `projects.changed`, `projects.board.changed`, `projects.queue.changed`
 - [ ] **GATE-04**: Gateway methods registered in `server-methods-list.ts` following existing patterns
 
 ### UI
@@ -165,9 +165,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AGNT-07     | Phase 6  | Complete |
 | AGNT-08     | Phase 6  | Complete |
 | AGNT-09     | Phase 6  | Complete |
-| GATE-01     | Phase 7  | Pending  |
-| GATE-02     | Phase 7  | Pending  |
-| GATE-03     | Phase 7  | Pending  |
+| GATE-01     | Phase 7  | Complete |
+| GATE-02     | Phase 7  | Complete |
+| GATE-03     | Phase 7  | Complete |
 | GATE-04     | Phase 7  | Pending  |
 | CLI-01      | Phase 8  | Pending  |
 | CLI-02      | Phase 8  | Pending  |
