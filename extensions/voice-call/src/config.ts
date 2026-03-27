@@ -531,8 +531,10 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
 
   // Realtime voice — resolve env var fallbacks
   resolved.realtime = { ...resolved.realtime };
-  // REALTIME_VOICE_ENABLED=true auto-enables realtime mode (backward compat)
-  if (!resolved.realtime.enabled && process.env.REALTIME_VOICE_ENABLED === "true") {
+  // REALTIME_VOICE_ENABLED=true auto-enables realtime mode (backward compat),
+  // but only when realtime.enabled was not explicitly set in config — an
+  // explicit false must not be overridden by the env var.
+  if (config.realtime?.enabled === undefined && process.env.REALTIME_VOICE_ENABLED === "true") {
     resolved.realtime.enabled = true;
   }
   resolved.realtime.model = resolved.realtime.model ?? process.env.REALTIME_VOICE_MODEL;

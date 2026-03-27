@@ -284,9 +284,12 @@ describe("resolveVoiceCallConfig — realtime env vars", () => {
     process.env = { ...originalEnv };
   });
 
-  it("auto-enables realtime from REALTIME_VOICE_ENABLED=true", () => {
+  it("auto-enables realtime from REALTIME_VOICE_ENABLED=true when realtime.enabled is unset", () => {
     process.env.REALTIME_VOICE_ENABLED = "true";
-    const resolved = resolveVoiceCallConfig(createVoiceCallBaseConfig());
+    const base = createVoiceCallBaseConfig();
+    // Omit realtime.enabled so the env var can take effect
+    const { enabled: _enabled, ...realtimeWithoutEnabled } = base.realtime;
+    const resolved = resolveVoiceCallConfig({ ...base, realtime: realtimeWithoutEnabled });
     expect(resolved.realtime.enabled).toBe(true);
   });
 
@@ -296,6 +299,15 @@ describe("resolveVoiceCallConfig — realtime env vars", () => {
 
     process.env.REALTIME_VOICE_ENABLED = "false";
     expect(resolveVoiceCallConfig(createVoiceCallBaseConfig()).realtime.enabled).toBe(false);
+  });
+
+  it("does not override explicit realtime.enabled=false with REALTIME_VOICE_ENABLED=true", () => {
+    process.env.REALTIME_VOICE_ENABLED = "true";
+    const resolved = resolveVoiceCallConfig({
+      ...createVoiceCallBaseConfig(),
+      realtime: { enabled: false },
+    });
+    expect(resolved.realtime.enabled).toBe(false);
   });
 
   it("resolves model, voice, instructions, temperature from env vars", () => {
