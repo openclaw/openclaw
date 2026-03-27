@@ -19,7 +19,7 @@
 </p>
 
 **OpenClaw** is a _personal AI assistant_ you run on your own devices.
-It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WebChat). It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WeChat). It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
@@ -92,6 +92,8 @@ Details: [Development channels](https://docs.openclaw.ai/install/development-cha
 ## From source (development)
 
 Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
+
+Developer tip: if you don’t have `pnpm` yet, enable Node’s Corepack (`corepack enable`) and then run `corepack prepare pnpm@latest --activate`.
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
