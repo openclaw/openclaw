@@ -31,8 +31,6 @@ import type {
   Context,
   Message,
   StopReason,
-  TextContent,
-  ToolCall,
 } from "@mariozechner/pi-ai";
 import {
   OpenAIWebSocketManager,
@@ -330,21 +328,33 @@ function contentToOpenAIParts(content: unknown, modelOverride?: ReplayModelInfo)
   return parts;
 }
 
+function isReplayableReasoningType(value: unknown): value is "reasoning" | `reasoning.${string}` {
+  return typeof value === "string" && (value === "reasoning" || value.startsWith("reasoning."));
+}
+
+function toReplayableReasoningId(value: unknown): string | null {
+  const id = toNonEmptyString(value);
+  return id && id.startsWith("rs_") ? id : null;
+}
+
 function parseReasoningItem(value: unknown): Extract<InputItem, { type: "reasoning" }> | null {
   if (!value || typeof value !== "object") {
     return null;
   }
   const record = value as {
     type?: unknown;
+    id?: unknown;
     content?: unknown;
     encrypted_content?: unknown;
     summary?: unknown;
   };
-  if (record.type !== "reasoning") {
+  if (!isReplayableReasoningType(record.type)) {
     return null;
   }
+  const reasoningId = toReplayableReasoningId(record.id);
   return {
     type: "reasoning",
+    ...(reasoningId ? { id: reasoningId } : {}),
     ...(typeof record.content === "string" ? { content: record.content } : {}),
     ...(typeof record.encrypted_content === "string"
       ? { encrypted_content: record.encrypted_content }
@@ -362,6 +372,41 @@ function parseThinkingSignature(value: unknown): Extract<InputItem, { type: "rea
   } catch {
     return null;
   }
+}
+
+function extractReasoningSummaryText(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return value
+    .map((item) => {
+      if (typeof item === "string") {
+        return item.trim();
+      }
+      if (!item || typeof item !== "object") {
+        return "";
+      }
+      const record = item as { text?: unknown };
+      return typeof record.text === "string" ? record.text.trim() : "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function extractResponseReasoningText(item: unknown): string {
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+  const record = item as { summary?: unknown; content?: unknown };
+  const summaryText = extractReasoningSummaryText(record.summary);
+  if (summaryText) {
+    return summaryText;
+  }
+  return typeof record.content === "string" ? record.content.trim() : "";
 }
 
 /** Convert pi-ai tool array to OpenAI FunctionToolDefinition[]. */
@@ -535,7 +580,7 @@ export function buildAssistantMessageFromResponse(
   response: ResponseObject,
   modelInfo: { api: string; provider: string; id: string },
 ): AssistantMessage {
-  const content: (TextContent | ToolCall)[] = [];
+  const content: AssistantMessage["content"] = [];
   let assistantPhase: OpenAIResponsesAssistantPhase | undefined;
 
   for (const item of response.output ?? []) {
@@ -561,9 +606,11 @@ export function buildAssistantMessageFromResponse(
       if (!toolName) {
         continue;
       }
+      const callId = toNonEmptyString(item.call_id);
+      const itemId = toNonEmptyString(item.id);
       content.push({
         type: "toolCall",
-        id: toNonEmptyString(item.call_id) ?? `call_${randomUUID()}`,
+        id: callId ? (itemId ? `${callId}|${itemId}` : callId) : `call_${randomUUID()}`,
         name: toolName,
         arguments: (() => {
           try {
@@ -573,8 +620,28 @@ export function buildAssistantMessageFromResponse(
           }
         })(),
       });
+    } else {
+      if (!isReplayableReasoningType(item.type)) {
+        continue;
+      }
+      const reasoning = extractResponseReasoningText(item);
+      if (!reasoning) {
+        continue;
+      }
+      const reasoningId = toReplayableReasoningId(item.id);
+      content.push({
+        type: "thinking",
+        thinking: reasoning,
+        ...(reasoningId
+          ? {
+              thinkingSignature: JSON.stringify({
+                id: reasoningId,
+                type: item.type,
+              }),
+            }
+          : {}),
+      } as AssistantMessage["content"][number]);
     }
-    // "reasoning" items are informational only; skip.
   }
 
   const hasToolCalls = content.some((c) => c.type === "toolCall");

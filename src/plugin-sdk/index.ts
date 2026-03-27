@@ -39,6 +39,7 @@ export type {
 } from "../channels/plugins/setup-wizard.js";
 export type {
   AnyAgentTool,
+  CliBackendPlugin,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginConfigSchema,
@@ -57,6 +58,7 @@ export type {
 export type { OpenClawConfig } from "../config/config.js";
 /** @deprecated Use OpenClawConfig instead */
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
+export type { CliBackendConfig } from "../config/types.js";
 export * from "./image-generation.js";
 export type { SecretInput, SecretRef } from "../config/types.secrets.js";
 export type { RuntimeEnv } from "../runtime.js";

@@ -36,15 +36,16 @@ function parseCopilotTokenResponse(value: unknown): {
   }
 
   // GitHub returns a unix timestamp (seconds), but we defensively accept ms too.
+  // Use a 1e11 threshold so large seconds-epoch values are not misread as ms.
   let expiresAtMs: number;
   if (typeof expiresAt === "number" && Number.isFinite(expiresAt)) {
-    expiresAtMs = expiresAt > 10_000_000_000 ? expiresAt : expiresAt * 1000;
+    expiresAtMs = expiresAt < 100_000_000_000 ? expiresAt * 1000 : expiresAt;
   } else if (typeof expiresAt === "string" && expiresAt.trim().length > 0) {
     const parsed = Number.parseInt(expiresAt, 10);
     if (!Number.isFinite(parsed)) {
       throw new Error("Copilot token response has invalid expires_at");
     }
-    expiresAtMs = parsed > 10_000_000_000 ? parsed : parsed * 1000;
+    expiresAtMs = parsed < 100_000_000_000 ? parsed * 1000 : parsed;
   } else {
     throw new Error("Copilot token response missing expires_at");
   }

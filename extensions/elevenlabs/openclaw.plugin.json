@@ -1,5 +1,6 @@
 {
   "id": "elevenlabs",
+  "speechProviders": ["elevenlabs"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

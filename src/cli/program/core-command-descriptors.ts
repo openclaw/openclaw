@@ -57,11 +57,6 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
     hasSubcommands: true,
   },
   {
-    name: "memory",
-    description: "Search and reindex memory files",
-    hasSubcommands: true,
-  },
-  {
     name: "agent",
     description: "Run one agent turn via the Gateway",
     hasSubcommands: false,
@@ -84,11 +79,6 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
   {
     name: "sessions",
     description: "List stored conversation sessions",
-    hasSubcommands: true,
-  },
-  {
-    name: "browser",
-    description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
     hasSubcommands: true,
   },
 ] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>;
