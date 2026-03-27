@@ -22,7 +22,5 @@ export {
 
 export { monitorIMessageProvider } from "./src/monitor.js";
 export type { MonitorIMessageOpts } from "./src/monitor.js";
-export { __testing as imessageMonitorTesting } from "./src/monitor/monitor-provider.js";
-export { imessageOutbound } from "./src/outbound-adapter.js";
 export { probeIMessage } from "./src/probe.js";
 export { sendMessageIMessage } from "./src/send.js";

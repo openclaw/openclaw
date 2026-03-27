@@ -14,6 +14,7 @@ type TelegramApiLoggingParams<T> = {
 };
 
 const fallbackLogger = createSubsystemLogger("telegram/api");
+const formatDanger = typeof danger === "function" ? danger : (message: string) => message;
 
 function resolveTelegramApiLogger(runtime?: RuntimeEnv, logger?: TelegramApiLogger) {
   if (logger) {
@@ -38,7 +39,7 @@ export async function withTelegramApiErrorLogging<T>({
     if (!shouldLog || shouldLog(err)) {
       const errText = formatErrorMessage(err);
       const log = resolveTelegramApiLogger(runtime, logger);
-      log(danger(`telegram ${operation} failed: ${errText}`));
+      log(formatDanger(`telegram ${operation} failed: ${errText}`));
     }
     throw err;
   }
