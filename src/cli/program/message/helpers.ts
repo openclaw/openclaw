@@ -101,6 +101,15 @@ async function trySendViaGateway(opts: Record<string, unknown>): Promise<
     : undefined;
   const threadId = typeof opts.threadId === "string" ? opts.threadId : undefined;
   const gifPlayback = typeof opts.gifPlayback === "boolean" ? opts.gifPlayback : undefined;
+  // Forward all remaining send-only CLI options so the gateway path is
+  // feature-equivalent to the local plugin path.
+  const interactive = typeof opts.interactive === "string" ? opts.interactive : undefined;
+  const buttons = typeof opts.buttons === "string" ? opts.buttons : undefined;
+  const components = typeof opts.components === "string" ? opts.components : undefined;
+  const card = typeof opts.card === "string" ? opts.card : undefined;
+  const replyTo = typeof opts.replyTo === "string" ? opts.replyTo : undefined;
+  const forceDocument = typeof opts.forceDocument === "boolean" ? opts.forceDocument : undefined;
+  const silent = typeof opts.silent === "boolean" ? opts.silent : undefined;
 
   if (!target || (!message && !mediaUrl)) return { ok: false, reason: "unreachable" };
 
@@ -117,6 +126,13 @@ async function trySendViaGateway(opts: Record<string, unknown>): Promise<
         mediaUrl,
         threadId,
         gifPlayback,
+        interactive,
+        buttons,
+        components,
+        card,
+        replyTo,
+        forceDocument,
+        silent,
         idempotencyKey: randomIdempotencyKey(),
       },
       expectFinal: false,
