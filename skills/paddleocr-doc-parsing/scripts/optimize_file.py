@@ -5,17 +5,24 @@ Compresses and optimizes large files to meet size requirements.
 Supports image files only.
 
 Usage:
-    python scripts/optimize_file.py input.png output.png --quality 85
+    python scripts/optimize_file.py input.png output.png
+    python scripts/optimize_file.py input.png output.jpg --quality 70
 """
 
 import argparse
 import sys
 from pathlib import Path
 
+DEFAULT_QUALITY = 85
+DEFAULT_TARGET_SIZE_MB = 20
+
 
 def optimize_image(
-    input_path: Path, output_path: Path, quality: int = 85, max_size_mb: float = 20
-):
+    input_path: Path,
+    output_path: Path,
+    quality: int = DEFAULT_QUALITY,
+    max_size_mb: float = DEFAULT_TARGET_SIZE_MB,
+) -> None:
     """Optimize image file by reducing quality and/or resolution."""
     try:
         from PIL import Image
@@ -76,13 +83,13 @@ def optimize_image(
         print("  - Use a smaller or resized image")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Optimize files for PaddleOCR document parsing",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Optimize image with default quality (85)
+  # Optimize image with default quality
   python scripts/optimize_file.py input.png output.png
 
   # Optimize with specific quality
@@ -96,13 +103,16 @@ Supported formats:
     parser.add_argument("input", help="Input file path")
     parser.add_argument("output", help="Output file path")
     parser.add_argument(
-        "--quality", type=int, default=85, help="JPEG/WebP quality (1-100, default: 85)"
+        "--quality",
+        type=int,
+        default=DEFAULT_QUALITY,
+        help="JPEG/WebP quality (1-100, default: %(default)s)",
     )
     parser.add_argument(
         "--target-size",
         type=float,
-        default=20,
-        help="Target maximum size in MB (default: 20)",
+        default=DEFAULT_TARGET_SIZE_MB,
+        help="Target maximum size in MB (default: %(default)s)",
     )
 
     args = parser.parse_args()

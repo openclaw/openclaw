@@ -51,7 +51,7 @@ def parse_pages(pages_spec: str, total_pages: int) -> list[int]:
     return selected_pages
 
 
-def split_pdf(input_path: Path, output_path: Path, pages_spec: str):
+def split_pdf(input_path: Path, output_path: Path, pages_spec: str) -> tuple[int, int]:
     """Create a new PDF containing selected pages from the input PDF."""
     try:
         import pypdfium2 as pdfium

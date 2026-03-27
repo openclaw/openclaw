@@ -16,11 +16,13 @@ from pathlib import Path
 # Add scripts dir to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
+from lib import DEFAULT_TIMEOUT
 
-def print_config_guide():
+
+def print_config_guide() -> None:
     """Print friendly configuration guide."""
     print(
-        """
+        f"""
 ============================================================
 HOW TO GET YOUR API CREDENTIALS
 ============================================================
@@ -34,14 +36,14 @@ HOW TO GET YOUR API CREDENTIALS
 Set environment variables:
   export PADDLEOCR_DOC_PARSING_API_URL=https://your-api-url.paddleocr.com/layout-parsing
   export PADDLEOCR_ACCESS_TOKEN=your_token_here
-  export PADDLEOCR_DOC_PARSING_TIMEOUT=600  # optional
+  export PADDLEOCR_DOC_PARSING_TIMEOUT={DEFAULT_TIMEOUT}  # optional
 
 ============================================================
 """
     )
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="PaddleOCR Document Parsing smoke test"
     )

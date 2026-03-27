@@ -17,6 +17,7 @@ import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 # Fix Windows console encoding
 if sys.platform == "win32":
@@ -29,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib import parse_document
 
 
-def get_default_output_path():
+def get_default_output_path() -> Path:
     """Build a unique result path under the OS temp directory."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     short_id = uuid.uuid4().hex[:8]
@@ -42,13 +43,13 @@ def get_default_output_path():
     )
 
 
-def resolve_output_path(output_arg):
+def resolve_output_path(output_arg: Optional[str]) -> Path:
     if output_arg:
         return Path(output_arg).expanduser().resolve()
     return get_default_output_path().resolve()
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="PaddleOCR Document Parsing - with layout analysis",
         formatter_class=argparse.RawDescriptionHelpFormatter,

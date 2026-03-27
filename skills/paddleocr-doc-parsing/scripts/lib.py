@@ -105,7 +105,9 @@ def _load_file_as_base64(file_path: str) -> str:
 # =============================================================================
 
 
-def _make_api_request(api_url: str, token: str, params: dict) -> dict:
+def _make_api_request(
+    api_url: str, token: str, params: dict[str, Any]
+) -> dict[str, Any]:
     """
     Make PaddleOCR document parsing API request.
 
@@ -193,7 +195,7 @@ def parse_document(
     file_path: Optional[str] = None,
     file_url: Optional[str] = None,
     file_type: Optional[int] = None,
-    **options,
+    **options: Any,
 ) -> dict[str, Any]:
     """
     Parse document with PaddleOCR.
@@ -279,7 +281,7 @@ def parse_document(
     }
 
 
-def _extract_text(result) -> str:
+def _extract_text(result: dict[str, Any]) -> str:
     """Extract text from document parsing result."""
     if not isinstance(result, dict):
         raise ValueError("Invalid API response: top-level response must be an object")
@@ -317,7 +319,7 @@ def _extract_text(result) -> str:
     return "\n\n".join(texts)
 
 
-def _error(code: str, message: str) -> dict:
+def _error(code: str, message: str) -> dict[str, Any]:
     """Create error response."""
     return {
         "ok": False,

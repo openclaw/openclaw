@@ -223,17 +223,17 @@ By default the script writes JSON to a temp file and prints the path to stderr. 
 
 **Configuration workflow**:
 
-1. **Show the exact error message** to the user (including the URL).
+1. **Show the exact error message** to the user.
 
-2. **Guide the user to configure securely**: Visit the [PaddleOCR website](https://www.paddleocr.com), click **API**, select the model, then copy the `API_URL` and `Token` — these map to `PADDLEOCR_DOC_PARSING_API_URL` and `PADDLEOCR_ACCESS_TOKEN`. Supported models: `PP-StructureV3`, `PaddleOCR-VL`, `PaddleOCR-VL-1.5`. Optionally configure request timeout via `PADDLEOCR_DOC_PARSING_TIMEOUT`.
+2. **Guide the user to obtain credentials**: Visit the [PaddleOCR website](https://www.paddleocr.com), click **API**, select a model (`PP-StructureV3`, `PaddleOCR-VL`, or `PaddleOCR-VL-1.5`), then copy the `API_URL` and `Token`. They map to these environment variables:
+   - `PADDLEOCR_DOC_PARSING_API_URL` — full endpoint URL ending with `/layout-parsing`
+   - `PADDLEOCR_ACCESS_TOKEN` — 40-character alphanumeric string
 
-   Recommend using the host application's configuration UI (e.g., in OpenClaw: `~/.openclaw/openclaw.json`) rather than pasting credentials in chat.
+   Optionally configure `PADDLEOCR_DOC_PARSING_TIMEOUT` for request timeout. Recommend using the host application's standard configuration method rather than pasting credentials in chat.
 
-3. **If the user pastes credentials in chat**: Warn that they may be stored in conversation history. Then extract and validate:
-   - `PADDLEOCR_DOC_PARSING_API_URL` — should be a full endpoint ending with `/layout-parsing`
-   - `PADDLEOCR_ACCESS_TOKEN` — long alphanumeric string (usually 40+ chars)
-
-4. **Ask the user to confirm the environment is configured**, then retry the original task.
+3. **Apply credentials** — one of:
+   - **User configured via the host UI**: ask the user to confirm, then retry.
+   - **User pastes credentials in chat**: warn that they may be stored in conversation history, help the user persist them using the host's standard configuration method, then retry.
 
 ### Handling Large Files
 
