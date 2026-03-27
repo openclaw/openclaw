@@ -42,6 +42,11 @@ export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
+const TOOL_CALL_MISMATCH_RE =
+  /tool_use.*without.*tool_result|tool_result.*without.*tool_use|tool_use.*ids?.*tool_result.*immediately after/i;
+const TOOL_CALL_MISMATCH_USER_MESSAGE =
+  "Session history has a tool call mismatch - please try again. " +
+  "If this persists, use /new to start a fresh session.";
 
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   if (isRateLimitErrorMessage(raw)) {
@@ -51,6 +56,10 @@ function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
     return OVERLOADED_ERROR_USER_MESSAGE;
   }
   return undefined;
+}
+
+function formatToolCallMismatchErrorCopy(raw: string): string | undefined {
+  return TOOL_CALL_MISMATCH_RE.test(raw) ? TOOL_CALL_MISMATCH_USER_MESSAGE : undefined;
 }
 
 function isReasoningConstraintErrorMessage(raw: string): boolean {
@@ -732,15 +741,9 @@ export function formatAssistantErrorText(
     );
   }
 
-  if (
-    /tool_use.*without.*tool_result|tool_result.*without.*tool_use|tool_use.*ids?.*tool_result.*immediately after/i.test(
-      raw,
-    )
-  ) {
-    return (
-      "Session history has a tool call mismatch - please try again. " +
-      "If this persists, use /new to start a fresh session."
-    );
+  const toolCallMismatchCopy = formatToolCallMismatchErrorCopy(raw);
+  if (toolCallMismatchCopy) {
+    return toolCallMismatchCopy;
   }
 
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
@@ -802,6 +805,11 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
 
     if (isBillingErrorMessage(trimmed)) {
       return BILLING_ERROR_USER_MESSAGE;
+    }
+
+    const toolCallMismatchCopy = formatToolCallMismatchErrorCopy(trimmed);
+    if (toolCallMismatchCopy) {
+      return toolCallMismatchCopy;
     }
 
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {

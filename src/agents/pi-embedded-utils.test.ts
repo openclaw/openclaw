@@ -116,6 +116,24 @@ describe("extractAssistantText", () => {
     expect(result).toBe("HTTP 500: Internal Server Error");
   });
 
+  it("sanitizes JSON-wrapped tool mismatch text on assistant error messages", () => {
+    const raw =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27: `tool_use` ids were found without `tool_result` blocks immediately after: exec17734030655683."}}';
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: raw,
+      content: [{ type: "text", text: raw }],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toContain("tool call mismatch");
+    expect(result).toContain("/new");
+    expect(result).not.toContain("messages.27");
+    expect(result).not.toContain("LLM request rejected");
+  });
+
   it("does not rewrite normal text that references billing plans", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
