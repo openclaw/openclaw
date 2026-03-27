@@ -614,17 +614,29 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    const apiKey = await ctx.modelRegistry.getApiKey(model);
-    if (!apiKey) {
+    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (!auth.ok) {
       log.warn(
-        "Compaction safeguard: no API key available; cancelling compaction to preserve history.",
+        `Compaction safeguard: failed to resolve auth; cancelling compaction to preserve history. ${auth.error}`,
       );
       setCompactionSafeguardCancelReason(
         ctx.sessionManager,
-        `Compaction safeguard could not resolve an API key for ${model.provider}/${model.id}.`,
+        `Compaction safeguard could not resolve request auth for ${model.provider}/${model.id}: ${auth.error}`,
       );
       return { cancel: true };
     }
+    if (!auth.apiKey && !auth.headers) {
+      log.warn(
+        "Compaction safeguard: no request auth available; cancelling compaction to preserve history.",
+      );
+      setCompactionSafeguardCancelReason(
+        ctx.sessionManager,
+        `Compaction safeguard could not resolve request auth for ${model.provider}/${model.id}.`,
+      );
+      return { cancel: true };
+    }
+    const apiKey = auth.apiKey ?? "";
+    const headers = auth.headers;
 
     try {
       const modelContextWindow = resolveContextWindowTokens(model);
@@ -688,6 +700,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   messages: pruned.droppedMessagesList,
                   model,
                   apiKey,
+                  headers,
                   signal,
                   reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
                   maxChunkTokens: droppedMaxChunkTokens,
@@ -759,6 +772,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   messages: messagesToSummarize,
                   model,
                   apiKey,
+                  headers,
                   signal,
                   reserveTokens,
                   maxChunkTokens,
@@ -775,6 +789,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               messages: turnPrefixMessages,
               model,
               apiKey,
+              headers,
               signal,
               reserveTokens,
               maxChunkTokens,

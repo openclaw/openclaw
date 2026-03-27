@@ -36,15 +36,13 @@ export function renderSlackCard(params: {
     lastError: slack?.lastError,
     secondaryCallout: slack?.probe
       ? html`<div class="callout" style="margin-top: 12px;">
-          Probe ${slack.probe.ok ? "ok" : "failed"} ·
-          ${slack.probe.status ?? ""} ${slack.probe.error ?? ""}
+          Probe ${slack.probe.ok ? "ok" : "failed"} · ${slack.probe.status ?? ""}
+          ${slack.probe.error ?? ""}
         </div>`
       : nothing,
     configSection: renderChannelConfigSection({ channelId: "slack", props }),
     footer: html`<div class="row" style="margin-top: 12px;">
-      <button class="btn" @click=${() => props.onRefresh(true)}>
-        Probe
-      </button>
+      <button class="btn" @click=${() => props.onRefresh(true)}>Probe</button>
     </div>`,
   });
 }
