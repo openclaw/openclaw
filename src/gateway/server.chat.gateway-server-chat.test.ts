@@ -684,6 +684,43 @@ describe("gateway server chat", () => {
     ]);
   });
 
+  test("chat.send does not persist verboseLevel for operator.write callers", async () => {
+    await withMainSessionStore(async () => {
+      let scopedWs: WebSocket | undefined;
+
+      try {
+        scopedWs = new WebSocket(`ws://127.0.0.1:${port}`, {
+          headers: { origin: `http://127.0.0.1:${port}` },
+        });
+        trackConnectChallengeNonce(scopedWs);
+        await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+        await connectOk(scopedWs, {
+          scopes: ["operator.write"],
+        });
+
+        const sendRes = await rpcReq(scopedWs, "chat.send", {
+          sessionKey: "main",
+          message: "/verbose full",
+          idempotencyKey: "idem-write-scope-verbose-no-persist",
+        });
+        expect(sendRes.ok).toBe(true);
+
+        await vi.waitFor(async () => {
+          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
+          const stored = JSON.parse(raw) as {
+            "agent:main:main"?: {
+              verboseLevel?: string;
+            };
+          };
+
+          expect(stored["agent:main:main"]?.verboseLevel).toBeUndefined();
+        });
+      } finally {
+        scopedWs?.close();
+      }
+    });
+  });
+
   test("agent.wait resolves chat.send runs that finish without lifecycle events", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-1";
