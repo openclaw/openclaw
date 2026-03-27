@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { FsRoot } from "../config/types.tools.js";
+import { resolvePathViaExistingAncestor } from "../infra/boundary-path.js";
 import { assertNoPathAliasEscape, PATH_ALIAS_POLICIES } from "../infra/path-alias-guards.js";
 import { isPathInside, normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { normalizeToolParams } from "./pi-tools.params.js";
@@ -64,10 +65,56 @@ export function validatePathAgainstRoots(
   }
 
   if (operation === "write" && match.access === "ro") {
-    const label = match.kind === "file" ? "file root" : "root";
+    throwReadOnlyRootError(resolvedPath, match);
+  }
+}
+
+function throwReadOnlyRootError(resolvedPath: string, match: FsRootResolved): never {
+  const label = match.kind === "file" ? "file root" : "root";
+  throw new Error(
+    `Access denied: path '${resolvedPath}' is inside read-only ${label} '${match.path}'`,
+  );
+}
+
+function sortRootsForMatching(roots: FsRootResolved[]): FsRootResolved[] {
+  return [...roots].toSorted((left, right) => {
+    if (left.kind !== right.kind) {
+      return left.kind === "file" ? -1 : 1;
+    }
+    if (left.resolvedPath.length !== right.resolvedPath.length) {
+      return right.resolvedPath.length - left.resolvedPath.length;
+    }
+    if (left.access !== right.access) {
+      return left.access === "ro" ? -1 : 1;
+    }
+    return left.resolvedPath.localeCompare(right.resolvedPath);
+  });
+}
+
+async function validateCanonicalTargetAgainstRoots(
+  resolvedPath: string,
+  operation: "read" | "write",
+  roots: FsRootResolved[],
+): Promise<void> {
+  const canonicalPath = path.resolve(await resolvePathViaExistingAncestor(resolvedPath));
+  const canonicalRoots = sortRootsForMatching(
+    await Promise.all(
+      roots.map(async (root) => ({
+        ...root,
+        resolvedPath: path.resolve(await resolvePathViaExistingAncestor(root.resolvedPath)),
+      })),
+    ),
+  );
+
+  const match = findMatchingRoot(canonicalPath, canonicalRoots);
+  if (!match) {
     throw new Error(
-      `Access denied: path '${resolvedPath}' is inside read-only ${label} '${match.path}'`,
+      `Access denied: canonical target for '${resolvedPath}' is outside allowed filesystem roots`,
     );
+  }
+
+  if (operation === "write" && match.access === "ro") {
+    throwReadOnlyRootError(resolvedPath, match);
   }
 }
 
@@ -78,7 +125,11 @@ export function validatePathAgainstRoots(
 export async function assertAliasSafe(
   resolvedPath: string,
   roots: FsRootResolved[],
-  options?: { allowFinalSymlinkForUnlink?: boolean; allowFinalHardlinkForUnlink?: boolean },
+  options?: {
+    allowFinalSymlinkForUnlink?: boolean;
+    allowFinalHardlinkForUnlink?: boolean;
+    operation?: "read" | "write";
+  },
 ): Promise<void> {
   const candidate = path.resolve(resolvedPath);
   const match = findMatchingRoot(candidate, roots);
@@ -100,6 +151,12 @@ export async function assertAliasSafe(
     boundaryLabel: `fs root '${match.path}'`,
     policy,
   });
+
+  if (options?.allowFinalSymlinkForUnlink || options?.allowFinalHardlinkForUnlink) {
+    return;
+  }
+
+  await validateCanonicalTargetAgainstRoots(resolvedPath, options?.operation ?? "read", roots);
 }
 
 export function wrapToolMultiRootGuard(
@@ -133,7 +190,7 @@ export function wrapToolMultiRootGuard(
         // Step 1: lexical root matching + access mode check
         validatePathAgainstRoots(resolved, operation, roots);
         // Step 2: alias-safe check (symlinks, hardlinks)
-        await assertAliasSafe(resolved, roots);
+        await assertAliasSafe(resolved, roots, { operation });
       }
 
       return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);

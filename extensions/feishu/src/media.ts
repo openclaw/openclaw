@@ -613,7 +613,7 @@ export async function sendMediaFeishu(params: {
     const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
       maxBytes: mediaMaxBytes,
       optimizeImages: false,
-      localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
+      localRoots: mediaLocalRoots === undefined ? undefined : mediaLocalRoots,
     });
     buffer = loaded.buffer;
     name = fileName ?? loaded.fileName ?? "file";

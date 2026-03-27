@@ -1,6 +1,9 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, it, expect } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
+  assertAliasSafe,
   validatePathAgainstRoots,
   findMatchingRoot,
   type FsRootResolved,
@@ -152,4 +155,138 @@ describe("findMatchingRoot", () => {
     expect(match?.path).toBe("/data/context.md");
     expect(match?.kind).toBe("file");
   });
+});
+
+describe("assertAliasSafe", () => {
+  it.runIf(process.platform !== "win32")(
+    "rejects writes through a symlink alias to a read-only file root",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-fs-roots-", parentDir: process.cwd() },
+        async (root) => {
+          const dataDir = path.join(root, "data");
+          await fs.mkdir(dataDir, { recursive: true });
+          const secretFile = path.join(dataDir, "secret.txt");
+          const aliasFile = path.join(dataDir, "alias.txt");
+          await fs.writeFile(secretFile, "secret");
+          await fs.symlink(secretFile, aliasFile);
+
+          const roots = makeRoots(
+            { path: dataDir, kind: "dir", access: "rw" },
+            { path: secretFile, kind: "file", access: "ro" },
+          );
+
+          expect(() => validatePathAgainstRoots(aliasFile, "write", roots)).not.toThrow();
+          await expect(assertAliasSafe(aliasFile, roots, { operation: "write" })).rejects.toThrow(
+            /read-only file root/,
+          );
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves unlink semantics for final symlink aliases inside allowed dir roots",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-fs-roots-", parentDir: process.cwd() },
+        async (root) => {
+          const dataDir = path.join(root, "data");
+          await fs.mkdir(dataDir, { recursive: true });
+          const secretFile = path.join(dataDir, "secret.txt");
+          const aliasFile = path.join(dataDir, "alias.txt");
+          await fs.writeFile(secretFile, "secret");
+          await fs.symlink(secretFile, aliasFile);
+
+          const roots = makeRoots(
+            { path: dataDir, kind: "dir", access: "rw" },
+            { path: secretFile, kind: "file", access: "ro" },
+          );
+
+          expect(() => validatePathAgainstRoots(aliasFile, "write", roots)).not.toThrow();
+          await expect(
+            assertAliasSafe(aliasFile, roots, {
+              operation: "write",
+              allowFinalSymlinkForUnlink: true,
+            }),
+          ).resolves.toBeUndefined();
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "allows canonical target checks when a configured root includes a symlink segment",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-fs-roots-", parentDir: process.cwd() },
+        async (root) => {
+          const realDir = path.join(root, "real-data");
+          const linkedDir = path.join(root, "data-link");
+          await fs.mkdir(realDir, { recursive: true });
+          await fs.symlink(realDir, linkedDir);
+
+          const linkedFile = path.join(linkedDir, "note.txt");
+          await fs.writeFile(path.join(realDir, "note.txt"), "hello");
+
+          const roots = makeRoots({ path: linkedDir, kind: "dir", access: "rw" });
+
+          expect(() => validatePathAgainstRoots(linkedFile, "write", roots)).not.toThrow();
+          await expect(assertAliasSafe(linkedFile, roots, { operation: "write" })).resolves.toBe(
+            undefined,
+          );
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects missing write targets when a rw alias root canonicalizes inside a ro root",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-fs-roots-", parentDir: process.cwd() },
+        async (root) => {
+          const realDir = path.join(root, "real-data");
+          const linkedDir = path.join(root, "data-link");
+          await fs.mkdir(realDir, { recursive: true });
+          await fs.symlink(realDir, linkedDir);
+
+          const newFile = path.join(linkedDir, "new.txt");
+          const roots = makeRoots(
+            { path: linkedDir, kind: "dir", access: "rw" },
+            { path: realDir, kind: "dir", access: "ro" },
+          );
+
+          expect(() => validatePathAgainstRoots(newFile, "write", roots)).not.toThrow();
+          await expect(assertAliasSafe(newFile, roots, { operation: "write" })).rejects.toThrow(
+            /read-only root/,
+          );
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "allows missing roots that canonicalize through a symlinked ancestor",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-fs-roots-", parentDir: process.cwd() },
+        async (root) => {
+          const realDir = path.join(root, "real-data");
+          const linkedDir = path.join(root, "data-link");
+          await fs.mkdir(realDir, { recursive: true });
+          await fs.symlink(realDir, linkedDir);
+
+          const missingRoot = path.join(linkedDir, "newdir");
+          const newFile = path.join(missingRoot, "note.txt");
+          const roots = makeRoots({ path: missingRoot, kind: "dir", access: "rw" });
+
+          expect(() => validatePathAgainstRoots(newFile, "write", roots)).not.toThrow();
+          await expect(assertAliasSafe(newFile, roots, { operation: "write" })).resolves.toBe(
+            undefined,
+          );
+        },
+      );
+    },
+  );
 });

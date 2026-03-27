@@ -2,10 +2,10 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   resolveEffectiveToolFsRootExpansionAllowed,
-  resolveEffectiveToolFsWorkspaceOnly,
+  resolveToolFsConfig,
 } from "../agents/tool-fs-policy.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStateDir } from "../config/paths.js";
-import type { OpenClawConfig } from "../config/types.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -14,6 +14,10 @@ import { isPassThroughRemoteMediaSource } from "./media-source-url.js";
 
 type BuildMediaLocalRootsOptions = {
   preferredTmpDir?: string;
+};
+
+type AgentScopedMediaRootsOptions = {
+  ignoreConfiguredRoots?: boolean;
 };
 
 let cachedPreferredTmpDir: string | undefined;
@@ -51,10 +55,15 @@ export function getDefaultMediaLocalRoots(): readonly string[] {
   return buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
 }
 
-export function getAgentScopedMediaLocalRoots(
+function getAgentScopedMediaLocalRootsInternal(
   cfg: OpenClawConfig,
   agentId?: string,
+  options?: AgentScopedMediaRootsOptions,
 ): readonly string[] {
+  const fsConfig = resolveToolFsConfig({ cfg, agentId });
+  if (!options?.ignoreConfiguredRoots && fsConfig.roots !== undefined) {
+    return fsConfig.roots.map((root) => path.resolve(root.path));
+  }
   const roots = buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
   const normalizedAgentId = normalizeOptionalString(agentId);
   if (!normalizedAgentId) {
@@ -69,6 +78,13 @@ export function getAgentScopedMediaLocalRoots(
     roots.push(normalizedWorkspaceDir);
   }
   return roots;
+}
+
+export function getAgentScopedMediaLocalRoots(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): readonly string[] {
+  return getAgentScopedMediaLocalRootsInternal(cfg, agentId);
 }
 
 function resolveLocalMediaPath(source: string): string | undefined {
@@ -86,7 +102,7 @@ function resolveLocalMediaPath(source: string): string | undefined {
   if (trimmed.startsWith("~")) {
     return resolveUserPath(trimmed);
   }
-  if (path.isAbsolute(trimmed) || WINDOWS_DRIVE_RE.test(trimmed)) {
+  if (path.isAbsolute(trimmed) || (process.platform === "win32" && WINDOWS_DRIVE_RE.test(trimmed))) {
     return path.resolve(trimmed);
   }
   return undefined;
@@ -118,13 +134,21 @@ export function getAgentScopedMediaLocalRootsForSources(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   mediaSources?: readonly string[];
+  ignoreConfiguredRoots?: boolean;
 }): readonly string[] {
-  const roots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
-  if (resolveEffectiveToolFsWorkspaceOnly({ cfg: params.cfg, agentId: params.agentId })) {
+  const fsConfig = resolveToolFsConfig({ cfg: params.cfg, agentId: params.agentId });
+  const roots = getAgentScopedMediaLocalRootsInternal(params.cfg, params.agentId, {
+    ignoreConfiguredRoots: params.ignoreConfiguredRoots,
+  });
+  if (fsConfig.roots !== undefined && !params.ignoreConfiguredRoots) {
     return roots;
+  }
+  const fallbackRoots = [...roots];
+  if (fsConfig.workspaceOnly) {
+    return fallbackRoots;
   }
   if (!resolveEffectiveToolFsRootExpansionAllowed({ cfg: params.cfg, agentId: params.agentId })) {
-    return roots;
+    return fallbackRoots;
   }
-  return appendLocalMediaParentRoots(roots, params.mediaSources);
+  return appendLocalMediaParentRoots(fallbackRoots, params.mediaSources);
 }

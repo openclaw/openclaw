@@ -358,6 +358,31 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
+  it("preserves explicit empty mediaLocalRoots for local paths", async () => {
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("local-file"),
+      fileName: "doc.pdf",
+      kind: "document",
+      contentType: "application/pdf",
+    });
+
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaUrl: "/allowed/workspace/file.pdf",
+      mediaLocalRoots: [],
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "/allowed/workspace/file.pdf",
+      expect.objectContaining({
+        maxBytes: expect.any(Number),
+        optimizeImages: false,
+        localRoots: [],
+      }),
+    );
+  });
+
   it("fails closed when media URL fetch is blocked", async () => {
     loadWebMediaMock.mockRejectedValueOnce(
       new Error("Blocked: resolves to private/internal IP address"),
