@@ -156,7 +156,7 @@ async function expectTransientGetFileRetrySuccess() {
       url: `https://api.telegram.org/file/bot${BOT_TOKEN}/voice/file_0.oga`,
       ssrfPolicy: {
         allowRfc2544BenchmarkRange: false,
-        allowedHostnames: ["api.telegram.org"],
+        hostnameAllowlist: ["api.telegram.org"],
       },
     }),
   );

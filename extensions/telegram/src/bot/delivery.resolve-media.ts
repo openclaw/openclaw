@@ -31,9 +31,9 @@ function buildTelegramMediaSsrfPolicy(apiRoot?: string) {
     }
   }
   return {
-    // Telegram file downloads should trust the API hostname even when DNS/proxy
-    // resolution maps to private/internal ranges in restricted networks.
-    allowedHostnames: hostnames,
+    // Restrict media downloads to the configured Telegram API hosts while still
+    // enforcing SSRF checks on the resolved and redirected targets.
+    hostnameAllowlist: hostnames,
     allowRfc2544BenchmarkRange: false,
   };
 }
