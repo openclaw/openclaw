@@ -73,7 +73,7 @@ describe("stageBundledPluginRuntime", () => {
     );
     expect(fs.existsSync(path.join(repoRoot, "dist-runtime", "chunk-abc.js"))).toBe(false);
 
-    const runtimeModule = await import(${pathToFileURL(runtimeEntryPath).href}?t=${Date.now()});
+    const runtimeModule = await import(`${pathToFileURL(runtimeEntryPath).href}?t=${Date.now()}`);
     expect(runtimeModule.value).toBe(1);
   });
 
@@ -118,7 +118,7 @@ describe("stageBundledPluginRuntime", () => {
       [
         "const registry = globalThis.__openclawTestPluginCommands ??= new Map();",
         "export function registerPluginCommand(pluginId, command) {",
-        "  registry.set(/${command.name.toLowerCase()}, { ...command, pluginId });",
+        "  registry.set(`/${command.name.toLowerCase()}`, { ...command, pluginId });",
         "}",
         "export function clearPluginCommands() {",
         "  registry.clear();",
@@ -155,7 +155,7 @@ describe("stageBundledPluginRuntime", () => {
         "    description: 'Pair a device',",
         "    acceptsArgs: true,",
         "    nativeNames: { telegram: 'pair', discord: 'pair' },",
-        "    handler: async ({ args }) => ({ text: paired:${args ?? ''} }),",
+        "    handler: async ({ args }) => ({ text: `paired:${args ?? ''}` }),",
         "  });",
         "}",
         "",
@@ -172,9 +172,9 @@ describe("stageBundledPluginRuntime", () => {
       false,
     );
 
-    const runtimeModule = await import(${pathToFileURL(runtimeEntryPath).href}?t=${Date.now()});
+    const runtimeModule = await import(`${pathToFileURL(runtimeEntryPath).href}?t=${Date.now()}`);
     const commandsModule = (await import(
-      ${pathToFileURL(canonicalCommandsPath).href}?t=${Date.now()}
+      `${pathToFileURL(canonicalCommandsPath).href}?t=${Date.now()}`
     )) as {
       clearPluginCommands: () => void;
       getPluginCommandSpecs: (provider?: string) => Array<{
