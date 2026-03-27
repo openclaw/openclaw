@@ -133,7 +133,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
       Status: formatSkillStatus(skill),
       Skill: formatSkillName(skill),
       Description: theme.muted(skill.description),
-      Source: skill.source ?? "",
+      Source: skill.source,
       Missing: missing ? theme.warn(missing) : "",
     };
   });

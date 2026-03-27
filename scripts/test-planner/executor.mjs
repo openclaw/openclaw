@@ -107,6 +107,53 @@ const getShardLabel = (args) => {
   return typeof args[shardIndex + 1] === "string" ? args[shardIndex + 1] : "";
 };
 
+const normalizeEnvFlag = (value) => value?.trim().toLowerCase();
+
+const isEnvFlagEnabled = (value) => {
+  const normalized = normalizeEnvFlag(value);
+  return normalized === "1" || normalized === "true";
+};
+
+const isEnvFlagDisabled = (value) => {
+  const normalized = normalizeEnvFlag(value);
+  return normalized === "0" || normalized === "false";
+};
+
+const isWindowsEnv = (env, platform = process.platform) => {
+  if (platform === "win32") {
+    return true;
+  }
+  return normalizeEnvFlag(env.RUNNER_OS) === "windows";
+};
+
+const isFsModuleCacheEnabled = (env, platform = process.platform) => {
+  if (isWindowsEnv(env, platform)) {
+    return isEnvFlagEnabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE);
+  }
+  return !isEnvFlagDisabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE);
+};
+
+export const resolveVitestFsModuleCachePath = ({
+  cwd = process.cwd(),
+  env = process.env,
+  platform = process.platform,
+  unitId = "",
+} = {}) => {
+  const explicitPath = env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.trim();
+  if (!isFsModuleCacheEnabled(env, platform)) {
+    return undefined;
+  }
+  if (explicitPath) {
+    return explicitPath;
+  }
+  return path.join(
+    cwd,
+    "node_modules",
+    ".experimental-vitest-cache",
+    sanitizeArtifactName(unitId || "default"),
+  );
+};
+
 export function formatPlanOutput(plan) {
   return [
     `runtime=${plan.runtimeCapabilities.runtimeProfileName} mode=${plan.runtimeCapabilities.mode} intent=${plan.runtimeCapabilities.intentProfile} memoryBand=${plan.runtimeCapabilities.memoryBand} loadBand=${plan.runtimeCapabilities.loadBand} vitestMaxWorkers=${String(plan.executionBudget.vitestMaxWorkers ?? "default")} topLevelParallel=${plan.topLevelParallelEnabled ? String(plan.topLevelParallelLimit) : "off"}`,
@@ -458,14 +505,24 @@ export async function executePlan(plan, options = {}) {
         );
       };
       try {
+        const childEnv = {
+          ...env,
+          ...unit.env,
+          VITEST_GROUP: unit.id,
+          NODE_OPTIONS: resolvedNodeOptions,
+        };
+        const vitestFsModuleCachePath = resolveVitestFsModuleCachePath({
+          env: childEnv,
+          platform: process.platform,
+          unitId: unit.id,
+        });
+        if (vitestFsModuleCachePath) {
+          childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH = vitestFsModuleCachePath;
+          laneLogStream.write(`[test-parallel] fsModuleCachePath=${vitestFsModuleCachePath}\n`);
+        }
         child = spawn(pnpmInvocation.command, spawnArgs, {
           stdio: ["inherit", "pipe", "pipe"],
-          env: {
-            ...env,
-            ...unit.env,
-            VITEST_GROUP: unit.id,
-            NODE_OPTIONS: resolvedNodeOptions,
-          },
+          env: childEnv,
           shell: false,
         });
         captureTreeSample("spawn");

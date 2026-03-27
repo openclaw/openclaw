@@ -36,15 +36,13 @@ export function renderDiscordCard(params: {
     lastError: discord?.lastError,
     secondaryCallout: discord?.probe
       ? html`<div class="callout" style="margin-top: 12px;">
-          Probe ${discord.probe.ok ? "ok" : "failed"} ·
-          ${discord.probe.status ?? ""} ${discord.probe.error ?? ""}
+          Probe ${discord.probe.ok ? "ok" : "failed"} · ${discord.probe.status ?? ""}
+          ${discord.probe.error ?? ""}
         </div>`
       : nothing,
     configSection: renderChannelConfigSection({ channelId: "discord", props }),
     footer: html`<div class="row" style="margin-top: 12px;">
-      <button class="btn" @click=${() => props.onRefresh(true)}>
-        Probe
-      </button>
+      <button class="btn" @click=${() => props.onRefresh(true)}>Probe</button>
     </div>`,
   });
 }
