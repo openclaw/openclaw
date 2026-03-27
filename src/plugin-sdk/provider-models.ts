@@ -159,7 +159,7 @@ export {
   MODELSTUDIO_DEFAULT_MODEL_ID,
   MODELSTUDIO_DEFAULT_MODEL_REF,
   MODELSTUDIO_GLOBAL_BASE_URL,
-} from "../plugins/provider-model-definitions.js";
+} from "../../extensions/modelstudio/model-definitions.js";
 
 export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
   return {

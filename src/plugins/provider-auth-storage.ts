@@ -1,3 +1,10 @@
+import { HUGGINGFACE_DEFAULT_MODEL_REF } from "../../extensions/huggingface/api.js";
+import { LITELLM_DEFAULT_MODEL_REF } from "../../extensions/litellm/api.js";
+import { OPENROUTER_DEFAULT_MODEL_REF } from "../../extensions/openrouter/api.js";
+import { TOGETHER_DEFAULT_MODEL_REF } from "../../extensions/together/api.js";
+import { VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF } from "../../extensions/vercel-ai-gateway/api.js";
+import { XIAOMI_DEFAULT_MODEL_REF } from "../../extensions/xiaomi/api.js";
+import { ZAI_DEFAULT_MODEL_REF } from "../../extensions/zai/api.js";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import type { SecretInput } from "../config/types.secrets.js";
@@ -7,15 +14,6 @@ import {
   writeOAuthCredentials,
   type WriteOAuthCredentialsOptions,
 } from "./provider-auth-helpers.js";
-import { HUGGINGFACE_DEFAULT_MODEL_REF } from "../../extensions/huggingface/api.js";
-import { LITELLM_DEFAULT_MODEL_REF } from "../../extensions/litellm/api.js";
-import { OPENROUTER_DEFAULT_MODEL_REF } from "../../extensions/openrouter/api.js";
-import { TOGETHER_DEFAULT_MODEL_REF } from "../../extensions/together/api.js";
-import {
-  VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
-} from "../../extensions/vercel-ai-gateway/api.js";
-import { XIAOMI_DEFAULT_MODEL_REF } from "../../extensions/xiaomi/api.js";
-import { ZAI_DEFAULT_MODEL_REF } from "../../extensions/zai/api.js";
 import { KILOCODE_DEFAULT_MODEL_REF } from "./provider-model-kilocode.js";
 
 const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();

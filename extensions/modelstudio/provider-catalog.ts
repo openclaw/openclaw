@@ -5,14 +5,14 @@ import type {
 
 export const MODELSTUDIO_BASE_URL = "https://coding-intl.dashscope.aliyuncs.com/v1";
 export const MODELSTUDIO_DEFAULT_MODEL_ID = "qwen3.5-plus";
-const MODELSTUDIO_DEFAULT_COST = {
+export const MODELSTUDIO_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
   cacheWrite: 0,
 };
 
-const MODELSTUDIO_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
+export const MODELSTUDIO_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
   {
     id: "qwen3.5-plus",
     name: "qwen3.5-plus",

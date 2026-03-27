@@ -4,7 +4,7 @@ import {
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
   ZAI_GLOBAL_BASE_URL,
-} from "./provider-model-definitions.js";
+} from "../../extensions/zai/api.js";
 
 export type ZaiEndpointId = "global" | "cn" | "coding-global" | "coding-cn";
 
