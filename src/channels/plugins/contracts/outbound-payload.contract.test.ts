@@ -1,9 +1,11 @@
 import { describe, vi } from "vitest";
-import { discordOutbound } from "../../../../extensions/discord/src/outbound-adapter.js";
-import { whatsappOutbound } from "../../../../extensions/whatsapp/src/outbound-adapter.js";
-import { sendMessageZalo } from "../../../../extensions/zalo/src/send.js";
-import { sendMessageZalouser } from "../../../../extensions/zalouser/src/send.js";
-import { parseZalouserOutboundTarget } from "../../../../extensions/zalouser/src/session-route.js";
+import { discordOutbound } from "../../../../extensions/discord/test-api.js";
+import { whatsappOutbound } from "../../../../extensions/whatsapp/test-api.js";
+import { sendMessageZalo } from "../../../../extensions/zalo/test-api.js";
+import {
+  sendMessageZalouser,
+  parseZalouserOutboundTarget,
+} from "../../../../extensions/zalouser/test-api.js";
 import {
   chunkTextForOutbound as chunkZaloTextForOutbound,
   sendPayloadWithChunkedTextAndMedia as sendZaloPayloadWithChunkedTextAndMedia,
