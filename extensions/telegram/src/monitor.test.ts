@@ -288,10 +288,18 @@ vi.mock("@grammyjs/runner", () => ({
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  const logger = {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    child: () => logger,
+  };
   return {
     ...actual,
     computeBackoff,
     sleepWithAbort,
+    createSubsystemLogger: () => logger,
     registerUnhandledRejectionHandler: registerUnhandledRejectionHandlerMock,
   };
 });

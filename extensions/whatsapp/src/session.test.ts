@@ -5,6 +5,41 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
+vi.mock("openclaw/plugin-sdk/runtime-env", () => {
+  const logger = {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    child: () => logger,
+  };
+  return {
+    createSubsystemLogger: () => logger,
+    createSubsystemRuntime: () => ({ log: () => {}, error: () => {}, exit: () => {} }),
+    createNonExitingRuntime: () => ({ log: () => {}, error: () => {} }),
+    defaultRuntime: { log: () => {}, error: () => {}, exit: () => {} },
+    danger: (value: unknown) => String(value),
+    info: (value: unknown) => String(value),
+    success: (value: unknown) => String(value),
+    warn: () => {},
+    logVerbose: () => {},
+    logVerboseConsole: () => {},
+    shouldLogVerbose: () => false,
+    isVerbose: () => false,
+    setVerbose: () => {},
+    isYes: () => false,
+    setYes: () => {},
+    getChildLogger: () => logger,
+    getLogger: () => logger,
+    resetLogger: () => {},
+    setLoggerOverride: () => {},
+    toPinoLikeLogger: (_base: unknown, level = "silent") => ({ ...logger, level, trace: () => {} }),
+    runtimeForLogger: () => ({ log: () => {}, error: () => {} }),
+    waitForAbortSignal: async () => {},
+    registerUnhandledRejectionHandler: () => {},
+  };
+});
+
 const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
 
 let createWaSocket: typeof import("./session.js").createWaSocket;

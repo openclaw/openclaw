@@ -22,10 +22,17 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", () => {
+  const logger = {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    child: () => logger,
+  };
   return {
-    ...actual,
+    createSubsystemLogger: () => logger,
+    createNonExitingRuntime: () => ({ log: () => {}, error: () => {} }),
     danger: (value: unknown) => String(value),
     logVerbose: vi.fn(),
     waitForAbortSignal: vi.fn(),

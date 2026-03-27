@@ -46,6 +46,41 @@ const {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/runtime-env", () => {
+  const logger = {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    child: () => logger,
+  };
+  return {
+    createSubsystemLogger: () => logger,
+    createSubsystemRuntime: () => ({ log: () => {}, error: () => {}, exit: () => {} }),
+    createNonExitingRuntime: () => ({ log: () => {}, error: () => {} }),
+    defaultRuntime: { log: () => {}, error: () => {}, exit: () => {} },
+    danger: (value: unknown) => String(value),
+    info: () => {},
+    success: () => {},
+    warn: () => {},
+    logVerbose: () => {},
+    logVerboseConsole: () => {},
+    shouldLogVerbose: () => false,
+    isVerbose: () => false,
+    setVerbose: () => {},
+    isYes: () => false,
+    setYes: () => {},
+    getChildLogger: () => logger,
+    getLogger: () => logger,
+    resetLogger: () => {},
+    setLoggerOverride: () => {},
+    toPinoLikeLogger: () => logger,
+    runtimeForLogger: () => ({ log: () => {}, error: () => {} }),
+    waitForAbortSignal: async () => {},
+    registerUnhandledRejectionHandler: () => {},
+  };
+});
+
 vi.mock("../gateway-logging.js", () => ({
   attachDiscordGatewayLogging: attachDiscordGatewayLoggingMock,
 }));

@@ -63,10 +63,17 @@ vi.mock("openclaw/plugin-sdk/channel-runtime", () => ({
   recordChannelActivity: recordChannelActivityMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", () => {
+  const logger = {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    child: () => logger,
+  };
   return {
-    ...actual,
+    createSubsystemLogger: () => logger,
+    danger: (value: unknown) => String(value),
     logVerbose: logVerboseMock,
   };
 });
