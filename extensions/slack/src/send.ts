@@ -393,7 +393,7 @@ export async function sendMessageSlack(
     tableMode === "block" && tableAttachments?.length
       ? chunks.length
         ? chunks
-        : [tableFallbackText(allTables)]
+        : [tableFallbackText(allTables).slice(0, chunkLimit)]
       : resolveTextChunksWithFallback(trimmedMessage, chunks);
   const mediaMaxBytes =
     typeof account.config.mediaMaxMb === "number"
@@ -435,7 +435,7 @@ export async function sendMessageSlack(
         // Slack requires non-empty text; provide a meaningful fallback
         // for notifications/accessibility when all content is in table
         // attachments.
-        text: tableFallbackText(allTables),
+        text: tableFallbackText(allTables).slice(0, chunkLimit),
         threadTs: opts.threadTs,
         identity: opts.identity,
         attachments: tableAttachments,
