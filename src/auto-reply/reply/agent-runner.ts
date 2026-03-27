@@ -818,6 +818,7 @@ function refreshSessionEntryFromStore(params: {
 export async function runReplyAgent(params: {
   commandBody: string;
   transcriptCommandBody?: string;
+  rawBody?: string;
   followupRun: FollowupRun;
   queueKey: string;
   resolvedQueue: QueueSettings;
@@ -855,6 +856,7 @@ export async function runReplyAgent(params: {
   const {
     commandBody,
     transcriptCommandBody,
+    rawBody,
     followupRun,
     queueKey,
     resolvedQueue,
@@ -1157,6 +1159,7 @@ export async function runReplyAgent(params: {
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       transcriptCommandBody,
+      rawBody,
       followupRun,
       sessionCtx,
       replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,

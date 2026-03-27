@@ -23,6 +23,16 @@ export type PluginHookBeforePromptBuildEvent = {
   prompt: string;
   /** Session messages prepared for this run. */
   messages: unknown[];
+  /**
+   * The user's original input text before channel structural context
+   * (sender labels, message annotations), buildInboundUserContextPrefix()
+   * metadata, and before_prompt_build hook injections.
+   *
+   * Undefined when the run originates from CLI, heartbeat, cron, or
+   * other non-channel sources. Plugins should fall back to extracting
+   * from messages content when absent.
+   */
+  rawBody?: string;
 };
 
 export type PluginHookBeforePromptBuildResult = {
@@ -64,6 +74,16 @@ export type PluginHookBeforeAgentStartEvent = {
   runId?: string;
   /** Optional because legacy hook can run in pre-session phase. */
   messages?: unknown[];
+  /**
+   * The user's original input text before channel structural context
+   * (sender labels, message annotations), buildInboundUserContextPrefix()
+   * metadata, and before_prompt_build hook injections.
+   *
+   * Undefined when the run originates from CLI, heartbeat, cron, or
+   * other non-channel sources. Plugins should fall back to extracting
+   * from messages content when absent.
+   */
+  rawBody?: string;
 };
 
 export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult &

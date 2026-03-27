@@ -639,6 +639,7 @@ function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean 
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   transcriptCommandBody?: string;
+  rawBody?: string;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
   replyThreading?: TemplateContext["ReplyThreading"];
@@ -1181,6 +1182,7 @@ export async function runAgentTurnWithFallback(params: {
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 transcriptPrompt: params.transcriptCommandBody,
+                rawBody: params.rawBody ?? params.followupRun.rawBody,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                 toolResultFormat: (() => {

@@ -89,6 +89,11 @@ export type RunEmbeddedPiAgentParams = {
   prompt: string;
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
+  /**
+   * The user's original input text before channel structural context,
+   * inbound metadata prefix, and hook injections. Threaded to plugin hooks.
+   */
+  rawBody?: string;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
