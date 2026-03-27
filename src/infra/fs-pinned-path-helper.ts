@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { once } from "node:events";
 import fsSync from "node:fs";
 
 const LOCAL_PINNED_PATH_PYTHON = [
@@ -86,6 +85,8 @@ const LOCAL_PINNED_PATH_PYTHON = [
 ].join("\n");
 
 const PINNED_PATH_PYTHON_CANDIDATES = [
+  process.env.OPENCLAW_PINNED_PYTHON,
+  // Keep the write-specific alias for backwards compatibility.
   process.env.OPENCLAW_PINNED_WRITE_PYTHON,
   "/usr/bin/python3",
   "/opt/homebrew/bin/python3",
@@ -142,7 +143,12 @@ export async function runPinnedPathHelper(params: {
     stderr += chunk;
   });
 
-  const [code, signal] = (await once(child, "close")) as [number | null, NodeJS.Signals | null];
+  const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>(
+    (resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (exitCode, exitSignal) => resolve([exitCode, exitSignal]));
+    },
+  );
   if (code !== 0) {
     throw buildPinnedPathError(stderr, code, signal);
   }

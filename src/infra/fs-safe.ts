@@ -6,11 +6,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { logWarn } from "../logger.js";
+import { resolveBoundaryPath } from "./boundary-path.js";
 import { sameFileIdentity } from "./file-identity.js";
 import { runPinnedPathHelper } from "./fs-pinned-path-helper.js";
 import { runPinnedWriteHelper } from "./fs-pinned-write-helper.js";
 import { expandHomePrefix } from "./home-dir.js";
-import { assertNoPathAliasEscape } from "./path-alias-guards.js";
+import { assertNoPathAliasEscape, PATH_ALIAS_POLICIES } from "./path-alias-guards.js";
 import {
   hasNodeErrorCode,
   isNotFoundPathError,
@@ -771,20 +772,14 @@ async function resolvePinnedPathWithinRoot(params: {
   relativePath: string;
   allowRoot?: boolean;
 }): Promise<{ rootReal: string; resolved: string; relativePosix: string }> {
-  const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot(params);
-  try {
-    await assertNoPathAliasEscape({
-      absolutePath: resolved,
-      rootPath: rootReal,
-      boundaryLabel: "root",
-    });
-  } catch (err) {
-    throw new SafeOpenError("invalid-path", "path alias escape blocked", { cause: err });
-  }
-
-  const relativeResolved = path.relative(rootReal, resolved);
+  const resolved = await resolvePinnedBoundaryPathWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+    policy: PATH_ALIAS_POLICIES.strict,
+  });
+  const relativeResolved = path.relative(resolved.rootReal, resolved.canonicalPath);
   if ((relativeResolved === "" || relativeResolved === ".") && params.allowRoot === true) {
-    return { rootReal, resolved, relativePosix: "" };
+    return { rootReal: resolved.rootReal, resolved: resolved.canonicalPath, relativePosix: "" };
   }
   if (
     relativeResolved === "" ||
@@ -796,19 +791,23 @@ async function resolvePinnedPathWithinRoot(params: {
   }
 
   const relativePosix = relativeResolved.split(path.sep).join(path.posix.sep);
-  if (!isPathInside(rootWithSep, resolved)) {
+  if (!isPathInside(resolved.rootWithSep, resolved.canonicalPath)) {
     throw new SafeOpenError("outside-workspace", "file is outside workspace root");
   }
 
-  return { rootReal, resolved, relativePosix };
+  return { rootReal: resolved.rootReal, resolved: resolved.canonicalPath, relativePosix };
 }
 
 async function resolvePinnedRemovePathWithinRoot(params: {
   rootDir: string;
   relativePath: string;
 }): Promise<{ rootReal: string; resolved: string; relativePosix: string }> {
-  const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot(params);
-  const relativeResolved = path.relative(rootReal, resolved);
+  const resolved = await resolvePinnedBoundaryPathWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+    policy: PATH_ALIAS_POLICIES.unlinkTarget,
+  });
+  const relativeResolved = path.relative(resolved.rootReal, resolved.canonicalPath);
   if (
     relativeResolved === "" ||
     relativeResolved === "." ||
@@ -818,28 +817,44 @@ async function resolvePinnedRemovePathWithinRoot(params: {
     throw new SafeOpenError("outside-workspace", "file is outside workspace root");
   }
   const relativePosix = relativeResolved.split(path.sep).join(path.posix.sep);
-  if (!isPathInside(rootWithSep, resolved)) {
+  if (!isPathInside(resolved.rootWithSep, resolved.canonicalPath)) {
     throw new SafeOpenError("outside-workspace", "file is outside workspace root");
   }
 
   const parentRelative = path.posix.dirname(relativePosix);
   if (parentRelative === "." || parentRelative === "") {
-    return { rootReal, resolved, relativePosix };
+    return { rootReal: resolved.rootReal, resolved: resolved.canonicalPath, relativePosix };
   }
-  const { resolved: parentResolved } = await resolvePathWithinRoot({
+  return { rootReal: resolved.rootReal, resolved: resolved.canonicalPath, relativePosix };
+}
+
+async function resolvePinnedBoundaryPathWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  policy: (typeof PATH_ALIAS_POLICIES)[keyof typeof PATH_ALIAS_POLICIES];
+}): Promise<{ rootReal: string; rootWithSep: string; canonicalPath: string }> {
+  const { rootReal } = await resolvePathWithinRoot({
     rootDir: params.rootDir,
-    relativePath: parentRelative.split(path.posix.sep).join(path.sep),
+    relativePath: ".",
   });
+  let resolved;
   try {
-    await assertNoPathAliasEscape({
-      absolutePath: parentResolved,
+    resolved = await resolveBoundaryPath({
+      absolutePath: path.resolve(rootReal, await expandRelativePathWithHome(params.relativePath)),
       rootPath: rootReal,
+      rootCanonicalPath: rootReal,
       boundaryLabel: "root",
+      policy: params.policy,
     });
   } catch (err) {
     throw new SafeOpenError("invalid-path", "path alias escape blocked", { cause: err });
   }
-  return { rootReal, resolved, relativePosix };
+  const rootWithSep = ensureTrailingSep(resolved.rootCanonicalPath);
+  return {
+    rootReal: resolved.rootCanonicalPath,
+    rootWithSep,
+    canonicalPath: resolved.canonicalPath,
+  };
 }
 
 function normalizePinnedWriteError(error: unknown): Error {

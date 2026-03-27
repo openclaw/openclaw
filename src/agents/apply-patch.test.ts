@@ -385,13 +385,13 @@ describe("applyPatch", () => {
 
         try {
           await withRealpathSymlinkRebindRace({
-            shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot", "target.txt")),
+            shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot")),
             symlinkPath: slot,
             symlinkTarget: outside,
             timing: "before-realpath",
             run: async () => {
               await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
-                /under root|not found/i,
+                /symlink escapes sandbox root|under root|not found/i,
               );
             },
           });

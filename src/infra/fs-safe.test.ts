@@ -305,6 +305,47 @@ describe("fs-safe", () => {
     expect(stat.isDirectory()).toBe(true);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "creates directories through in-root symlink parents",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const realDir = path.join(root, "real");
+      const aliasDir = path.join(root, "alias");
+      await fs.mkdir(realDir, { recursive: true });
+      await fs.symlink(realDir, aliasDir);
+
+      await mkdirPathWithinRoot({
+        rootDir: root,
+        relativePath: path.join("alias", "nested", "deeper"),
+      });
+
+      await expect(fs.stat(path.join(realDir, "nested", "deeper"))).resolves.toMatchObject({
+        isDirectory: expect.any(Function),
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "removes files through in-root symlink parents",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const realDir = path.join(root, "real");
+      const aliasDir = path.join(root, "alias");
+      await fs.mkdir(realDir, { recursive: true });
+      await fs.symlink(realDir, aliasDir);
+      await fs.writeFile(path.join(realDir, "target.txt"), "hello");
+
+      await removePathWithinRoot({
+        rootDir: root,
+        relativePath: path.join("alias", "target.txt"),
+      });
+
+      await expect(fs.stat(path.join(realDir, "target.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
   it("enforces maxBytes when copying into root", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const sourceDir = await tempDirs.make("openclaw-fs-safe-source-");
@@ -435,7 +476,7 @@ describe("fs-safe", () => {
       });
 
       await withRealpathSymlinkRebindRace({
-        shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot", "target.txt")),
+        shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot")),
         symlinkPath: slot,
         symlinkTarget: outside,
         timing: "before-realpath",
@@ -469,7 +510,7 @@ describe("fs-safe", () => {
       });
 
       await withRealpathSymlinkRebindRace({
-        shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot", "nested", "deep")),
+        shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot")),
         symlinkPath: slot,
         symlinkTarget: outside,
         timing: "before-realpath",
