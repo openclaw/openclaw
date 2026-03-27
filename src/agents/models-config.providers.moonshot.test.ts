@@ -2,13 +2,14 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  MOONSHOT_BASE_URL as MOONSHOT_AI_BASE_URL,
+  MOONSHOT_CN_BASE_URL,
+  buildMoonshotProvider,
+} from "../plugin-sdk/moonshot.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 import { applyNativeStreamingUsageCompat } from "./models-config.providers.js";
-import { buildMoonshotProvider } from "./models-config.providers.static.js";
-
-const MOONSHOT_AI_BASE_URL = "https://api.moonshot.ai/v1";
-const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
 
 describe("moonshot implicit provider (#33637)", () => {
   it("uses explicit CN baseUrl when provided", async () => {

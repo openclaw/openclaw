@@ -350,12 +350,14 @@ export function createScopedAccountConfigAccessors<
   "resolveAllowFrom" | "formatAllowFrom" | "resolveDefaultTo"
 > {
   const base = {
-    resolveAllowFrom: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
-      mapAllowFromEntries(
+    resolveAllowFrom({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) {
+      return mapAllowFromEntries(
         params.resolveAllowFrom(params.resolveAccount({ cfg: cfg as Config, accountId })),
-      ),
-    formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-      params.formatAllowFrom(allowFrom),
+      );
+    },
+    formatAllowFrom({ allowFrom }: { allowFrom: Array<string | number> }) {
+      return params.formatAllowFrom(allowFrom);
+    },
   };
 
   if (!params.resolveDefaultTo) {
@@ -364,10 +366,11 @@ export function createScopedAccountConfigAccessors<
 
   return {
     ...base,
-    resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveOptionalConfigString(
+    resolveDefaultTo({ cfg, accountId }) {
+      return resolveOptionalConfigString(
         params.resolveDefaultTo?.(params.resolveAccount({ cfg: cfg as Config, accountId })),
-      ),
+      );
+    },
   };
 }
 
@@ -387,23 +390,31 @@ function createNamedAccountConfigBase<
   deleteAccount: (params: { cfg: OpenClawConfig; accountId: string }) => OpenClawConfig;
 }): ChannelCrudConfigAdapter<ResolvedAccount> {
   return {
-    listAccountIds: (cfg) => params.listAccountIds(cfg as Config),
-    resolveAccount: (cfg, accountId) => params.resolveAccount(cfg as Config, accountId),
+    listAccountIds(cfg) {
+      return params.listAccountIds(cfg as Config);
+    },
+    resolveAccount(cfg, accountId) {
+      return params.resolveAccount(cfg as Config, accountId);
+    },
     inspectAccount: params.inspectAccount
       ? (cfg, accountId) => params.inspectAccount?.(cfg as Config, accountId)
       : undefined,
-    defaultAccountId: (cfg) => params.defaultAccountId(cfg as Config),
-    setAccountEnabled: ({ cfg, accountId, enabled }) =>
-      params.setAccountEnabled({
+    defaultAccountId(cfg) {
+      return params.defaultAccountId(cfg as Config);
+    },
+    setAccountEnabled({ cfg, accountId, enabled }) {
+      return params.setAccountEnabled({
         cfg,
         accountId: normalizeAccountId(accountId),
         enabled,
-      }) as Config,
-    deleteAccount: ({ cfg, accountId }) =>
-      params.deleteAccount({
+      }) as Config;
+    },
+    deleteAccount({ cfg, accountId }) {
+      return params.deleteAccount({
         cfg,
         accountId: normalizeAccountId(accountId),
-      }) as Config,
+      }) as Config;
+    },
   };
 }
 
@@ -493,21 +504,23 @@ export function createScopedChannelConfigBase<
     resolveAccount: params.resolveAccount,
     inspectAccount: params.inspectAccount,
     defaultAccountId: params.defaultAccountId,
-    setAccountEnabled: ({ cfg, accountId, enabled }) =>
-      setAccountEnabledInConfigSectionInSection({
+    setAccountEnabled({ cfg, accountId, enabled }) {
+      return setAccountEnabledInConfigSectionInSection({
         cfg,
         sectionKey: params.sectionKey,
         accountId,
         enabled,
         allowTopLevel: params.allowTopLevel ?? true,
-      }),
-    deleteAccount: ({ cfg, accountId }) =>
-      deleteAccountFromConfigSectionInSection({
+      });
+    },
+    deleteAccount({ cfg, accountId }) {
+      return deleteAccountFromConfigSectionInSection({
         cfg,
         sectionKey: params.sectionKey,
         accountId,
         clearBaseFields: params.clearBaseFields,
-      }),
+      });
+    },
   });
 }
 
@@ -532,8 +545,9 @@ export function createScopedChannelConfigAdapter<
       allowTopLevel: params.allowTopLevel,
     }),
     resolveAccessorAccount: params.resolveAccessorAccount,
-    resolveAccountForAccessors: ({ cfg, accountId }) =>
-      params.resolveAccount(cfg, accountId) as unknown as AccessorAccount,
+    resolveAccountForAccessors({ cfg, accountId }) {
+      return params.resolveAccount(cfg, accountId) as unknown as AccessorAccount;
+    },
     resolveAllowFrom: params.resolveAllowFrom,
     formatAllowFrom: params.formatAllowFrom,
     resolveDefaultTo: params.resolveDefaultTo,
@@ -617,20 +631,27 @@ export function createTopLevelChannelConfigBase<
   | "deleteAccount"
 > {
   return {
-    listAccountIds: (cfg) => params.listAccountIds?.(cfg as Config) ?? [DEFAULT_ACCOUNT_ID],
-    resolveAccount: (cfg) => params.resolveAccount(cfg as Config),
+    listAccountIds(cfg) {
+      return params.listAccountIds?.(cfg as Config) ?? [DEFAULT_ACCOUNT_ID];
+    },
+    resolveAccount(cfg) {
+      return params.resolveAccount(cfg as Config);
+    },
     inspectAccount: params.inspectAccount
       ? (cfg) => params.inspectAccount?.(cfg as Config)
       : undefined,
-    defaultAccountId: (cfg) => params.defaultAccountId?.(cfg as Config) ?? DEFAULT_ACCOUNT_ID,
-    setAccountEnabled: ({ cfg, enabled }) =>
-      setTopLevelChannelEnabledInConfigSection({
+    defaultAccountId(cfg) {
+      return params.defaultAccountId?.(cfg as Config) ?? DEFAULT_ACCOUNT_ID;
+    },
+    setAccountEnabled({ cfg, enabled }) {
+      return setTopLevelChannelEnabledInConfigSection({
         cfg: cfg as Config,
         sectionKey: params.sectionKey,
         enabled,
-      }),
-    deleteAccount: ({ cfg }) =>
-      params.deleteMode === "clear-fields"
+      });
+    },
+    deleteAccount({ cfg }) {
+      return params.deleteMode === "clear-fields"
         ? clearTopLevelChannelConfigFields({
             cfg: cfg as Config,
             sectionKey: params.sectionKey,
@@ -639,7 +660,8 @@ export function createTopLevelChannelConfigBase<
         : removeTopLevelChannelConfigSection({
             cfg: cfg as Config,
             sectionKey: params.sectionKey,
-          }),
+          });
+    },
   };
 }
 
@@ -672,8 +694,9 @@ export function createTopLevelChannelConfigAdapter<
       clearBaseFields: params.clearBaseFields,
     }),
     resolveAccessorAccount: params.resolveAccessorAccount,
-    resolveAccountForAccessors: ({ cfg }) =>
-      params.resolveAccount(cfg) as unknown as AccessorAccount,
+    resolveAccountForAccessors({ cfg }) {
+      return params.resolveAccount(cfg) as unknown as AccessorAccount;
+    },
     resolveAllowFrom: params.resolveAllowFrom,
     formatAllowFrom: params.formatAllowFrom,
     resolveDefaultTo: params.resolveDefaultTo,
@@ -706,7 +729,7 @@ export function createHybridChannelConfigBase<
     resolveAccount: params.resolveAccount,
     inspectAccount: params.inspectAccount,
     defaultAccountId: params.defaultAccountId,
-    setAccountEnabled: ({ cfg, accountId, enabled }) => {
+    setAccountEnabled({ cfg, accountId, enabled }) {
       if (normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID) {
         return setTopLevelChannelEnabledInConfigSection({
           cfg,
@@ -721,7 +744,7 @@ export function createHybridChannelConfigBase<
         enabled,
       });
     },
-    deleteAccount: ({ cfg, accountId }) => {
+    deleteAccount({ cfg, accountId }) {
       if (normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID) {
         if (params.preserveSectionOnDefaultDelete) {
           return clearTopLevelChannelConfigFields({
@@ -768,8 +791,9 @@ export function createHybridChannelConfigAdapter<
       preserveSectionOnDefaultDelete: params.preserveSectionOnDefaultDelete,
     }),
     resolveAccessorAccount: params.resolveAccessorAccount,
-    resolveAccountForAccessors: ({ cfg, accountId }) =>
-      params.resolveAccount(cfg, accountId) as unknown as AccessorAccount,
+    resolveAccountForAccessors({ cfg, accountId }) {
+      return params.resolveAccount(cfg, accountId) as unknown as AccessorAccount;
+    },
     resolveAllowFrom: params.resolveAllowFrom,
     formatAllowFrom: params.formatAllowFrom,
     resolveDefaultTo: params.resolveDefaultTo,
