@@ -47,13 +47,15 @@ import {
   resolveTextChunksWithFallback,
 } from "openclaw/plugin-sdk/reply-payload";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import {
+  normalizeNonTelegramGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { normalizeNonTelegramGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
@@ -483,11 +485,13 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
     return false;
   }
   if (useAccessGroups && interaction.guild) {
-    const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+    const { groupPolicy: rawGroupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.discord !== undefined,
       groupPolicy: discordConfig?.groupPolicy,
       defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
     });
+    // Normalize "members" to "open": Discord has no Bot API member-check equivalent.
+    const groupPolicy = normalizeNonTelegramGroupPolicy(rawGroupPolicy);
     const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
       groupPolicy,
       guildInfo,

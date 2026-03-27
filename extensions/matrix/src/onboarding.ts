@@ -200,7 +200,7 @@ async function promptMatrixAllowFrom(params: {
 
 function setMatrixGroupPolicy(
   cfg: CoreConfig,
-  groupPolicy: "open" | "allowlist" | "disabled",
+  groupPolicy: "open" | "allowlist" | "disabled" | "members",
   accountId?: string,
 ) {
   return updateMatrixAccountConfig(cfg, resolveMatrixOnboardingAccountId(cfg, accountId), {

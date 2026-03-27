@@ -7,10 +7,8 @@ import {
   createLegacyCompatChannelDmPolicy,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
-  type GroupPolicy,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
-  setAccountGroupPolicyForChannel,
   setSetupChannelEnabled,
   type ChannelSetupAdapter,
   type ChannelSetupDmPolicy,
@@ -245,21 +243,6 @@ export function createSlackSetupWizardBase(handlers: {
           .map(([key]) => key),
       updatePrompt: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
         Boolean(resolveSlackAccount({ cfg, accountId }).config.channels),
-      setPolicy: ({
-        cfg,
-        accountId,
-        policy,
-      }: {
-        cfg: OpenClawConfig;
-        accountId: string;
-        policy: GroupPolicy;
-      }) =>
-        setAccountGroupPolicyForChannel({
-          cfg,
-          channel,
-          accountId,
-          groupPolicy: policy,
-        }),
       resolveAllowlist: handlers.resolveGroupAllowlist,
       fallbackResolved: (entries) => entries,
       applyAllowlist: ({
