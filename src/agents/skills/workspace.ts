@@ -289,6 +289,8 @@ function loadSkillEntries(
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
+    /** Override the personal agents skills directory (default: ~/.agents/skills). Used in tests. */
+    personalAgentsSkillsDir?: string;
   },
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config);
@@ -474,7 +476,8 @@ function loadSkillEntries(
     dir: managedSkillsDir,
     source: "openclaw-managed",
   });
-  const personalAgentsSkillsDir = path.resolve(os.homedir(), ".agents", "skills");
+  const personalAgentsSkillsDir =
+    opts?.personalAgentsSkillsDir ?? path.resolve(os.homedir(), ".agents", "skills");
   const personalAgentsSkills = loadSkills({
     dir: personalAgentsSkillsDir,
     source: "agents-skills-personal",
@@ -718,6 +721,8 @@ export function loadWorkspaceSkillEntries(
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
+    /** Override the personal agents skills directory (default: ~/.agents/skills). Used in tests. */
+    personalAgentsSkillsDir?: string;
   },
 ): SkillEntry[] {
   return loadSkillEntries(workspaceDir, opts);

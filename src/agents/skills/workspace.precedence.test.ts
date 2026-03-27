@@ -1,6 +1,6 @@
 /**
  * Regression tests for skill precedence order:
- *   extra < bundled < managed(global) < agents-personal < agents-project < workspace
+ *   extra < bundled < managed(global) < agents-skills-personal < agents-skills-project < workspace
  *
  * The workspace (local project) skills must always win over the global (~/.openclaw/skills)
  * managed skills when both define a skill with the same name.
@@ -18,15 +18,20 @@ describe("skill loading precedence", () => {
   let workspaceDir: string;
   let managedSkillsDir: string;
   let bundledSkillsDir: string;
+  let personalAgentsSkillsDir: string;
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-precedence-"));
     workspaceDir = path.join(tmpDir, "workspace");
     managedSkillsDir = path.join(tmpDir, "managed");
     bundledSkillsDir = path.join(tmpDir, "bundled");
+    // Use a temp dir instead of the real ~/.agents/skills so tests are hermetic
+    // even on developer machines that have personal agent skills installed.
+    personalAgentsSkillsDir = path.join(tmpDir, "personal-agents");
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.mkdir(managedSkillsDir, { recursive: true });
     await fs.mkdir(bundledSkillsDir, { recursive: true });
+    await fs.mkdir(personalAgentsSkillsDir, { recursive: true });
   });
 
   afterEach(async () => {
@@ -51,6 +56,7 @@ describe("skill loading precedence", () => {
     const entries = loadWorkspaceSkillEntries(workspaceDir, {
       managedSkillsDir,
       bundledSkillsDir,
+      personalAgentsSkillsDir,
     });
 
     const match = entries.find((e) => e.skill.name === skillName);
@@ -71,6 +77,7 @@ describe("skill loading precedence", () => {
     const entries = loadWorkspaceSkillEntries(workspaceDir, {
       managedSkillsDir,
       bundledSkillsDir,
+      personalAgentsSkillsDir,
     });
 
     const match = entries.find((e) => e.skill.name === skillName);
@@ -96,6 +103,7 @@ describe("skill loading precedence", () => {
     const entries = loadWorkspaceSkillEntries(workspaceDir, {
       managedSkillsDir,
       bundledSkillsDir,
+      personalAgentsSkillsDir,
     });
 
     const match = entries.find((e) => e.skill.name === skillName);
@@ -121,6 +129,7 @@ describe("skill loading precedence", () => {
     const entries = loadWorkspaceSkillEntries(workspaceDir, {
       managedSkillsDir,
       bundledSkillsDir,
+      personalAgentsSkillsDir,
     });
 
     const match = entries.find((e) => e.skill.name === skillName);
