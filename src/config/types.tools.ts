@@ -262,6 +262,19 @@ export type ExecToolConfig = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
+  /**
+   * Max command length (characters) before obfuscation detection flags the
+   * command as "too long". Commands exceeding this threshold are blocked before
+   * any regex pattern scanning runs.
+   *
+   * Useful for automated workflows on chat surfaces (Discord, Telegram) where
+   * legitimate generated commands may exceed the default 10,000-character limit
+   * and no approval UI is available.
+   *
+   * Set to 0 to disable the length check entirely (regex pattern scanning
+   * still applies). Default: 10000.
+   */
+  maxCommandChars?: number;
   /** apply_patch subtool configuration. */
   applyPatch?: {
     /** Enable apply_patch for OpenAI models (default: true; set false to disable). */

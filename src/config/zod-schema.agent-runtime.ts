@@ -446,6 +446,7 @@ const ToolExecBaseShape = {
   cleanupMs: z.number().int().positive().optional(),
   notifyOnExit: z.boolean().optional(),
   notifyOnExitEmptySuccess: z.boolean().optional(),
+  maxCommandChars: z.number().int().nonnegative().optional(),
   applyPatch: ToolExecApplyPatchSchema,
 } as const;
 

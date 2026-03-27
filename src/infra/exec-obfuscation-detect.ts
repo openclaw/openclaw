@@ -17,7 +17,15 @@ type ObfuscationPattern = {
   regex: RegExp;
 };
 
-const MAX_COMMAND_CHARS = 10_000;
+/**
+ * Default character limit for commands before they are flagged as potentially
+ * obfuscated. Operators can override this via `tools.exec.maxCommandChars` in
+ * openclaw.json — useful for automated workflows on chat surfaces (Discord,
+ * Telegram) that lack exec approval UIs.
+ *
+ * Set to 0 to disable the length check entirely.
+ */
+const DEFAULT_MAX_COMMAND_CHARS = 10_000;
 
 const INVISIBLE_UNICODE_CODE_POINTS = new Set<number>([
   0x00ad,
@@ -214,11 +222,26 @@ function shouldSuppressCurlPipeShell(command: string): boolean {
   );
 }
 
-export function detectCommandObfuscation(command: string): ObfuscationDetection {
+export type ObfuscationDetectOptions = {
+  /**
+   * Override the maximum command length threshold.
+   * Commands longer than this are flagged as potentially obfuscated before any
+   * regex pattern scanning runs. Set to 0 to disable the length check.
+   *
+   * Default: 10,000 characters.
+   */
+  maxCommandChars?: number;
+};
+
+export function detectCommandObfuscation(
+  command: string,
+  options?: ObfuscationDetectOptions,
+): ObfuscationDetection {
   if (!command || !command.trim()) {
     return { detected: false, reasons: [], matchedPatterns: [] };
   }
-  if (command.length > MAX_COMMAND_CHARS) {
+  const maxChars = options?.maxCommandChars ?? DEFAULT_MAX_COMMAND_CHARS;
+  if (maxChars > 0 && command.length > maxChars) {
     return {
       detected: true,
       reasons: ["Command too long; potential obfuscation"],

@@ -67,6 +67,8 @@ export type ProcessGatewayAllowlistParams = {
   maxOutput: number;
   pendingMaxOutput: number;
   trustedSafeBinDirs?: ReadonlySet<string>;
+  /** Max command length before obfuscation detection triggers. 0 disables. */
+  maxCommandChars?: number;
 };
 
 export type ProcessGatewayAllowlistResult = {
@@ -124,7 +126,9 @@ export async function processGatewayAllowlist(
     }
     enforcedCommand = enforced.command;
   }
-  const obfuscation = detectCommandObfuscation(params.command);
+  const obfuscation = detectCommandObfuscation(params.command, {
+    maxCommandChars: params.maxCommandChars,
+  });
   if (obfuscation.detected) {
     logInfo(`exec: obfuscation detected (gateway): ${obfuscation.reasons.join(", ")}`);
     params.warnings.push(`⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`);
