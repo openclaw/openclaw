@@ -137,4 +137,17 @@ describe("markdownToIR tableMode code - style overlap", () => {
 
     expect(ir.text).toBe(["| I | L |", "| --- | --- |", "| © | x |", "| A | y |", ""].join("\n"));
   });
+
+  it("does not widen partial emoji selector sequences in code tables", () => {
+    const md = `
+| I | L |
+|---|---|
+| 1️ | x |
+| A | y |
+`.trim();
+
+    const ir = markdownToIR(md, { tableMode: "code" });
+
+    expect(ir.text).toBe(["| I | L |", "| --- | --- |", "| 1️ | x |", "| A | y |", ""].join("\n"));
+  });
 });
