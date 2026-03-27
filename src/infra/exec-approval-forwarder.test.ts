@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isDiscordExecApprovalClientEnabled } from "../../extensions/discord/api.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -27,6 +26,21 @@ afterEach(() => {
 });
 
 const emptyRegistry = createTestRegistry([]);
+
+function isDiscordExecApprovalClientEnabledForTest(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): boolean {
+  const accountId = params.accountId?.trim();
+  const rootConfig = params.cfg.channels?.discord?.execApprovals;
+  const accountConfig =
+    accountId && accountId !== "default"
+      ? params.cfg.channels?.discordAccounts?.[accountId]?.execApprovals
+      : undefined;
+  const config = accountConfig ?? rootConfig;
+  return Boolean(config?.enabled && (config.approvers?.length ?? 0) > 0);
+}
+
 const telegramApprovalPlugin: Pick<
   ChannelPlugin,
   "id" | "meta" | "capabilities" | "config" | "execApprovals"
@@ -47,7 +61,7 @@ const discordApprovalPlugin: Pick<
   execApprovals: {
     shouldSuppressForwardingFallback: ({ cfg, target }) =>
       target.channel === "discord" &&
-      isDiscordExecApprovalClientEnabled({ cfg, accountId: target.accountId }),
+      isDiscordExecApprovalClientEnabledForTest({ cfg, accountId: target.accountId }),
   },
 };
 const defaultRegistry = createTestRegistry([
