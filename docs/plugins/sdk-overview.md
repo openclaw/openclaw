@@ -159,6 +159,22 @@ AI CLI backend such as `claude-cli` or `codex-cli`.
 | `api.registerContextEngine(id, factory)`   | Context engine (one active at a time) |
 | `api.registerMemoryPromptSection(builder)` | Memory prompt section builder         |
 | `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver            |
+| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                |
+
+### Memory embedding adapters
+
+| Method                                         | What it registers                              |
+| ---------------------------------------------- | ---------------------------------------------- |
+| `api.registerMemoryEmbeddingProvider(adapter)` | Memory embedding adapter for the active plugin |
+
+- `registerMemoryPromptSection`, `registerMemoryFlushPlan`, and
+  `registerMemoryRuntime` are exclusive to memory plugins.
+- `registerMemoryEmbeddingProvider` lets the active memory plugin register one
+  or more embedding adapter ids (for example `openai`, `gemini`, or a custom
+  plugin-defined id).
+- User config such as `agents.defaults.memorySearch.provider` and
+  `agents.defaults.memorySearch.fallback` resolves against those registered
+  adapter ids.
 
 ### Events and lifecycle
 
