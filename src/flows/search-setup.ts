@@ -47,18 +47,14 @@ function resolveSearchProviderCredentialLabel(
   return entry.credentialLabel?.trim() || `${entry.label} API key`;
 }
 
-const DEFAULT_ONBOARD_SEARCH_PROVIDER_IDS = new Set<SearchProvider>([
-  "brave",
-  "firecrawl",
-  "gemini",
-  "grok",
-  "kimi",
-  "perplexity",
-  "tavily",
-]);
-
 export const SEARCH_PROVIDER_OPTIONS: readonly PluginWebSearchProviderEntry[] =
   resolveSearchProviderSetupContributions().map((contribution) => contribution.provider);
+
+function showsSearchProviderInSetup(
+  entry: Pick<PluginWebSearchProviderEntry, "onboardingScopes">,
+): boolean {
+  return entry.onboardingScopes?.includes("text-inference") ?? false;
+}
 
 function canRepairBundledProviderSelection(
   config: OpenClawConfig,
@@ -107,7 +103,7 @@ export function resolveSearchProviderSetupContributions(
   if (!config) {
     return sortFlowContributionsByLabel(
       sortWebSearchProviders(listBundledWebSearchProviders())
-        .filter((entry) => DEFAULT_ONBOARD_SEARCH_PROVIDER_IDS.has(entry.id))
+        .filter(showsSearchProviderInSetup)
         .map((provider) => buildSearchProviderSetupContribution({ provider, source: "bundled" })),
     );
   }

@@ -322,8 +322,8 @@ importers:
   extensions/discord:
     dependencies:
       '@buape/carbon':
-        specifier: 0.0.0-beta-20260317045421
-        version: 0.0.0-beta-20260317045421(@discordjs/opus@0.10.0)(hono@4.12.9)(opusscript@0.1.1)
+        specifier: 0.0.0-beta-20260327000044
+        version: 0.0.0-beta-20260327000044(@discordjs/opus@0.10.0)(hono@4.12.9)(opusscript@0.1.1)
       '@discordjs/voice':
         specifier: ^0.19.2
         version: 0.19.2(@discordjs/opus@0.10.0)(opusscript@0.1.1)
@@ -385,6 +385,8 @@ importers:
 
   extensions/huggingface: {}
 
+  extensions/image-generation-core: {}
+
   extensions/imessage: {}
 
   extensions/irc: {}
@@ -398,6 +400,8 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+
+  extensions/litellm: {}
 
   extensions/llm-task:
     dependencies:
@@ -448,6 +452,8 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+
+  extensions/media-understanding-core: {}
 
   extensions/memory-core:
     devDependencies:
@@ -547,6 +553,8 @@ importers:
       '@slack/web-api':
         specifier: ^7.15.0
         version: 7.15.0
+
+  extensions/speech-core: {}
 
   extensions/synology-chat: {}
 
@@ -1011,8 +1019,8 @@ packages:
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
     hasBin: true
 
-  '@buape/carbon@0.0.0-beta-20260317045421':
-    resolution: {integrity: sha512-yM+r5iSxA/iG8CZ2VhK+EkcBQV+y45WLgF7kuczt2Ul1yixjXSCCcM80GppsklfUv7pqM4Dui+7w1WB3f5p7Kg==}
+  '@buape/carbon@0.0.0-beta-20260327000044':
+    resolution: {integrity: sha512-jaGrh83aOFuCaRlN6bgYZqiY/srOwP28XBPBcaonW2qjzQl/Or5KWCkqE36AWpzPdy26PDhIeBdmHMAGc7xLzg==}
 
   '@cacheable/memory@2.0.7':
     resolution: {integrity: sha512-RbxnxAMf89Tp1dLhXMS7ceft/PGsDl1Ip7T20z5nZ+pwIAsQ1p2izPjVG69oCLv/jfQ7HDPHTWK0c9rcAWXN3A==}
@@ -7425,7 +7433,7 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@buape/carbon@0.0.0-beta-20260317045421(@discordjs/opus@0.10.0)(hono@4.12.9)(opusscript@0.1.1)':
+  '@buape/carbon@0.0.0-beta-20260327000044(@discordjs/opus@0.10.0)(hono@4.12.9)(opusscript@0.1.1)':
     dependencies:
       '@types/node': 25.5.0
       discord-api-types: 0.38.37

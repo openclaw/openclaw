@@ -8,7 +8,7 @@
  */
 
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import type { FeishuDocxBlock } from "./docx-types.js";
+import type { FeishuBlockTable, FeishuDocxBlock } from "./docx-types.js";
 
 // ============ Table Utilities ============
 
@@ -39,6 +39,26 @@ function normalizeChildBlockIds(children: string[] | string | undefined): string
     return children;
   }
   return typeof children === "string" ? [children] : [];
+}
+
+function omitParentId(block: FeishuDocxBlock): FeishuDocxBlock {
+  const cleanBlock = { ...block };
+  delete cleanBlock.parent_id;
+  return cleanBlock;
+}
+
+function createDescendantTable(
+  table: FeishuBlockTable,
+  adaptiveWidths: number[] | undefined,
+): FeishuBlockTable {
+  const { row_size, column_size } = table.property || {};
+  return {
+    property: {
+      row_size,
+      column_size,
+      ...(adaptiveWidths?.length ? { column_width: adaptiveWidths } : {}),
+    },
+  };
 }
 
 export function calculateAdaptiveColumnWidths(
@@ -178,8 +198,7 @@ export function cleanBlocksForDescendant(blocks: FeishuDocxBlock[]): FeishuDocxB
   }
 
   return blocks.map((block) => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { parent_id: _parentId, ...cleanBlock } = block;
+    const cleanBlock = omitParentId(block);
 
     // Fix: Convert API sometimes returns children as string for TableCell
     if (cleanBlock.block_type === 32 && typeof cleanBlock.children === "string") {
@@ -188,18 +207,8 @@ export function cleanBlocksForDescendant(blocks: FeishuDocxBlock[]): FeishuDocxB
 
     // Clean table blocks
     if (cleanBlock.block_type === 31 && cleanBlock.table) {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { cells: _cells, ...tableWithoutCells } = cleanBlock.table;
-      const { row_size, column_size } = tableWithoutCells.property || {};
       const adaptiveWidths = block.block_id ? tableWidths.get(block.block_id) : undefined;
-
-      cleanBlock.table = {
-        property: {
-          row_size,
-          column_size,
-          ...(adaptiveWidths?.length && { column_width: adaptiveWidths }),
-        },
-      };
+      cleanBlock.table = createDescendantTable(cleanBlock.table, adaptiveWidths);
     }
 
     return cleanBlock;

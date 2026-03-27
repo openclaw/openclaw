@@ -19,7 +19,7 @@ function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/S
       path: filePath,
       source: "workspace",
       scope: "project",
-      origin: "top-level",
+      origin: "package",
       baseDir: `/skills/${name}`,
     },
     disableModelInvocation: false,

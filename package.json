@@ -176,6 +176,10 @@
       "types": "./dist/plugin-sdk/gateway-runtime.d.ts",
       "default": "./dist/plugin-sdk/gateway-runtime.js"
     },
+    "./plugin-sdk/github-copilot-login": {
+      "types": "./dist/plugin-sdk/github-copilot-login.d.ts",
+      "default": "./dist/plugin-sdk/github-copilot-login.js"
+    },
     "./plugin-sdk/github-copilot-token": {
       "types": "./dist/plugin-sdk/github-copilot-token.d.ts",
       "default": "./dist/plugin-sdk/github-copilot-token.js"
@@ -228,6 +232,10 @@
       "types": "./dist/plugin-sdk/account-resolution.d.ts",
       "default": "./dist/plugin-sdk/account-resolution.js"
     },
+    "./plugin-sdk/agent-config-primitives": {
+      "types": "./dist/plugin-sdk/agent-config-primitives.d.ts",
+      "default": "./dist/plugin-sdk/agent-config-primitives.js"
+    },
     "./plugin-sdk/allow-from": {
       "types": "./dist/plugin-sdk/allow-from.d.ts",
       "default": "./dist/plugin-sdk/allow-from.js"
@@ -236,9 +244,17 @@
       "types": "./dist/plugin-sdk/allowlist-config-edit.d.ts",
       "default": "./dist/plugin-sdk/allowlist-config-edit.js"
     },
+    "./plugin-sdk/anthropic-vertex": {
+      "types": "./dist/plugin-sdk/anthropic-vertex.d.ts",
+      "default": "./dist/plugin-sdk/anthropic-vertex.js"
+    },
     "./plugin-sdk/bluebubbles": {
       "types": "./dist/plugin-sdk/bluebubbles.d.ts",
       "default": "./dist/plugin-sdk/bluebubbles.js"
+    },
+    "./plugin-sdk/bluebubbles-policy": {
+      "types": "./dist/plugin-sdk/bluebubbles-policy.d.ts",
+      "default": "./dist/plugin-sdk/bluebubbles-policy.js"
     },
     "./plugin-sdk/browser": {
       "types": "./dist/plugin-sdk/browser.d.ts",
@@ -256,9 +272,25 @@
       "types": "./dist/plugin-sdk/boolean-param.d.ts",
       "default": "./dist/plugin-sdk/boolean-param.js"
     },
+    "./plugin-sdk/cloudflare-ai-gateway": {
+      "types": "./dist/plugin-sdk/cloudflare-ai-gateway.d.ts",
+      "default": "./dist/plugin-sdk/cloudflare-ai-gateway.js"
+    },
+    "./plugin-sdk/byteplus": {
+      "types": "./dist/plugin-sdk/byteplus.d.ts",
+      "default": "./dist/plugin-sdk/byteplus.js"
+    },
+    "./plugin-sdk/chutes": {
+      "types": "./dist/plugin-sdk/chutes.d.ts",
+      "default": "./dist/plugin-sdk/chutes.js"
+    },
     "./plugin-sdk/command-auth": {
       "types": "./dist/plugin-sdk/command-auth.d.ts",
       "default": "./dist/plugin-sdk/command-auth.js"
+    },
+    "./plugin-sdk/deepseek": {
+      "types": "./dist/plugin-sdk/deepseek.d.ts",
+      "default": "./dist/plugin-sdk/deepseek.js"
     },
     "./plugin-sdk/device-bootstrap": {
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
@@ -276,9 +308,33 @@
       "types": "./dist/plugin-sdk/discord.d.ts",
       "default": "./dist/plugin-sdk/discord.js"
     },
+    "./plugin-sdk/discord-account": {
+      "types": "./dist/plugin-sdk/discord-account.d.ts",
+      "default": "./dist/plugin-sdk/discord-account.js"
+    },
     "./plugin-sdk/discord-core": {
       "types": "./dist/plugin-sdk/discord-core.d.ts",
       "default": "./dist/plugin-sdk/discord-core.js"
+    },
+    "./plugin-sdk/discord-runtime-surface": {
+      "types": "./dist/plugin-sdk/discord-runtime-surface.d.ts",
+      "default": "./dist/plugin-sdk/discord-runtime-surface.js"
+    },
+    "./plugin-sdk/discord-session-key": {
+      "types": "./dist/plugin-sdk/discord-session-key.d.ts",
+      "default": "./dist/plugin-sdk/discord-session-key.js"
+    },
+    "./plugin-sdk/discord-surface": {
+      "types": "./dist/plugin-sdk/discord-surface.d.ts",
+      "default": "./dist/plugin-sdk/discord-surface.js"
+    },
+    "./plugin-sdk/discord-thread-bindings": {
+      "types": "./dist/plugin-sdk/discord-thread-bindings.d.ts",
+      "default": "./dist/plugin-sdk/discord-thread-bindings.js"
+    },
+    "./plugin-sdk/discord-timeouts": {
+      "types": "./dist/plugin-sdk/discord-timeouts.d.ts",
+      "default": "./dist/plugin-sdk/discord-timeouts.js"
     },
     "./plugin-sdk/extension-shared": {
       "types": "./dist/plugin-sdk/extension-shared.d.ts",
@@ -287,6 +343,10 @@
     "./plugin-sdk/channel-config-helpers": {
       "types": "./dist/plugin-sdk/channel-config-helpers.d.ts",
       "default": "./dist/plugin-sdk/channel-config-helpers.js"
+    },
+    "./plugin-sdk/channel-config-primitives": {
+      "types": "./dist/plugin-sdk/channel-config-primitives.d.ts",
+      "default": "./dist/plugin-sdk/channel-config-primitives.js"
     },
     "./plugin-sdk/channel-config-schema": {
       "types": "./dist/plugin-sdk/channel-config-schema.d.ts",
@@ -332,9 +392,21 @@
       "types": "./dist/plugin-sdk/feishu.d.ts",
       "default": "./dist/plugin-sdk/feishu.js"
     },
+    "./plugin-sdk/feishu-conversation": {
+      "types": "./dist/plugin-sdk/feishu-conversation.d.ts",
+      "default": "./dist/plugin-sdk/feishu-conversation.js"
+    },
+    "./plugin-sdk/feishu-setup": {
+      "types": "./dist/plugin-sdk/feishu-setup.d.ts",
+      "default": "./dist/plugin-sdk/feishu-setup.js"
+    },
     "./plugin-sdk/group-access": {
       "types": "./dist/plugin-sdk/group-access.d.ts",
       "default": "./dist/plugin-sdk/group-access.js"
+    },
+    "./plugin-sdk/google": {
+      "types": "./dist/plugin-sdk/google.d.ts",
+      "default": "./dist/plugin-sdk/google.js"
     },
     "./plugin-sdk/directory-runtime": {
       "types": "./dist/plugin-sdk/directory-runtime.d.ts",
@@ -360,9 +432,33 @@
       "types": "./dist/plugin-sdk/imessage-core.d.ts",
       "default": "./dist/plugin-sdk/imessage-core.js"
     },
+    "./plugin-sdk/imessage-policy": {
+      "types": "./dist/plugin-sdk/imessage-policy.d.ts",
+      "default": "./dist/plugin-sdk/imessage-policy.js"
+    },
+    "./plugin-sdk/imessage-runtime": {
+      "types": "./dist/plugin-sdk/imessage-runtime.d.ts",
+      "default": "./dist/plugin-sdk/imessage-runtime.js"
+    },
+    "./plugin-sdk/imessage-targets": {
+      "types": "./dist/plugin-sdk/imessage-targets.d.ts",
+      "default": "./dist/plugin-sdk/imessage-targets.js"
+    },
     "./plugin-sdk/irc": {
       "types": "./dist/plugin-sdk/irc.d.ts",
       "default": "./dist/plugin-sdk/irc.js"
+    },
+    "./plugin-sdk/irc-surface": {
+      "types": "./dist/plugin-sdk/irc-surface.d.ts",
+      "default": "./dist/plugin-sdk/irc-surface.js"
+    },
+    "./plugin-sdk/kimi-coding": {
+      "types": "./dist/plugin-sdk/kimi-coding.d.ts",
+      "default": "./dist/plugin-sdk/kimi-coding.js"
+    },
+    "./plugin-sdk/kilocode": {
+      "types": "./dist/plugin-sdk/kilocode.d.ts",
+      "default": "./dist/plugin-sdk/kilocode.js"
     },
     "./plugin-sdk/reply-history": {
       "types": "./dist/plugin-sdk/reply-history.d.ts",
@@ -400,6 +496,10 @@
       "types": "./dist/plugin-sdk/line-runtime.d.ts",
       "default": "./dist/plugin-sdk/line-runtime.js"
     },
+    "./plugin-sdk/line-surface": {
+      "types": "./dist/plugin-sdk/line-surface.d.ts",
+      "default": "./dist/plugin-sdk/line-surface.js"
+    },
     "./plugin-sdk/llm-task": {
       "types": "./dist/plugin-sdk/llm-task.d.ts",
       "default": "./dist/plugin-sdk/llm-task.js"
@@ -408,9 +508,29 @@
       "types": "./dist/plugin-sdk/matrix.d.ts",
       "default": "./dist/plugin-sdk/matrix.js"
     },
+    "./plugin-sdk/matrix-helper": {
+      "types": "./dist/plugin-sdk/matrix-helper.d.ts",
+      "default": "./dist/plugin-sdk/matrix-helper.js"
+    },
+    "./plugin-sdk/matrix-runtime-surface": {
+      "types": "./dist/plugin-sdk/matrix-runtime-surface.d.ts",
+      "default": "./dist/plugin-sdk/matrix-runtime-surface.js"
+    },
+    "./plugin-sdk/matrix-surface": {
+      "types": "./dist/plugin-sdk/matrix-surface.d.ts",
+      "default": "./dist/plugin-sdk/matrix-surface.js"
+    },
+    "./plugin-sdk/matrix-thread-bindings": {
+      "types": "./dist/plugin-sdk/matrix-thread-bindings.d.ts",
+      "default": "./dist/plugin-sdk/matrix-thread-bindings.js"
+    },
     "./plugin-sdk/mattermost": {
       "types": "./dist/plugin-sdk/mattermost.d.ts",
       "default": "./dist/plugin-sdk/mattermost.js"
+    },
+    "./plugin-sdk/mattermost-policy": {
+      "types": "./dist/plugin-sdk/mattermost-policy.d.ts",
+      "default": "./dist/plugin-sdk/mattermost-policy.js"
     },
     "./plugin-sdk/memory-core": {
       "types": "./dist/plugin-sdk/memory-core.d.ts",
@@ -468,6 +588,22 @@
       "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
       "default": "./dist/plugin-sdk/memory-lancedb.js"
     },
+    "./plugin-sdk/minimax": {
+      "types": "./dist/plugin-sdk/minimax.d.ts",
+      "default": "./dist/plugin-sdk/minimax.js"
+    },
+    "./plugin-sdk/modelstudio": {
+      "types": "./dist/plugin-sdk/modelstudio.d.ts",
+      "default": "./dist/plugin-sdk/modelstudio.js"
+    },
+    "./plugin-sdk/modelstudio-definitions": {
+      "types": "./dist/plugin-sdk/modelstudio-definitions.d.ts",
+      "default": "./dist/plugin-sdk/modelstudio-definitions.js"
+    },
+    "./plugin-sdk/moonshot": {
+      "types": "./dist/plugin-sdk/moonshot.d.ts",
+      "default": "./dist/plugin-sdk/moonshot.js"
+    },
     "./plugin-sdk/msteams": {
       "types": "./dist/plugin-sdk/msteams.d.ts",
       "default": "./dist/plugin-sdk/msteams.js"
@@ -476,6 +612,10 @@
       "types": "./dist/plugin-sdk/nextcloud-talk.d.ts",
       "default": "./dist/plugin-sdk/nextcloud-talk.js"
     },
+    "./plugin-sdk/nvidia": {
+      "types": "./dist/plugin-sdk/nvidia.d.ts",
+      "default": "./dist/plugin-sdk/nvidia.js"
+    },
     "./plugin-sdk/nostr": {
       "types": "./dist/plugin-sdk/nostr.d.ts",
       "default": "./dist/plugin-sdk/nostr.js"
@@ -483,6 +623,26 @@
     "./plugin-sdk/ollama": {
       "types": "./dist/plugin-sdk/ollama.d.ts",
       "default": "./dist/plugin-sdk/ollama.js"
+    },
+    "./plugin-sdk/ollama-surface": {
+      "types": "./dist/plugin-sdk/ollama-surface.d.ts",
+      "default": "./dist/plugin-sdk/ollama-surface.js"
+    },
+    "./plugin-sdk/openai": {
+      "types": "./dist/plugin-sdk/openai.d.ts",
+      "default": "./dist/plugin-sdk/openai.js"
+    },
+    "./plugin-sdk/opencode": {
+      "types": "./dist/plugin-sdk/opencode.d.ts",
+      "default": "./dist/plugin-sdk/opencode.js"
+    },
+    "./plugin-sdk/opencode-go": {
+      "types": "./dist/plugin-sdk/opencode-go.d.ts",
+      "default": "./dist/plugin-sdk/opencode-go.js"
+    },
+    "./plugin-sdk/qianfan": {
+      "types": "./dist/plugin-sdk/qianfan.d.ts",
+      "default": "./dist/plugin-sdk/qianfan.js"
     },
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
@@ -564,6 +724,14 @@
       "types": "./dist/plugin-sdk/signal.d.ts",
       "default": "./dist/plugin-sdk/signal.js"
     },
+    "./plugin-sdk/signal-account": {
+      "types": "./dist/plugin-sdk/signal-account.d.ts",
+      "default": "./dist/plugin-sdk/signal-account.js"
+    },
+    "./plugin-sdk/signal-surface": {
+      "types": "./dist/plugin-sdk/signal-surface.d.ts",
+      "default": "./dist/plugin-sdk/signal-surface.js"
+    },
     "./plugin-sdk/channel-status": {
       "types": "./dist/plugin-sdk/channel-status.d.ts",
       "default": "./dist/plugin-sdk/channel-status.js"
@@ -572,9 +740,25 @@
       "types": "./dist/plugin-sdk/slack.d.ts",
       "default": "./dist/plugin-sdk/slack.js"
     },
+    "./plugin-sdk/slack-account": {
+      "types": "./dist/plugin-sdk/slack-account.d.ts",
+      "default": "./dist/plugin-sdk/slack-account.js"
+    },
     "./plugin-sdk/slack-core": {
       "types": "./dist/plugin-sdk/slack-core.d.ts",
       "default": "./dist/plugin-sdk/slack-core.js"
+    },
+    "./plugin-sdk/slack-runtime-surface": {
+      "types": "./dist/plugin-sdk/slack-runtime-surface.d.ts",
+      "default": "./dist/plugin-sdk/slack-runtime-surface.js"
+    },
+    "./plugin-sdk/slack-surface": {
+      "types": "./dist/plugin-sdk/slack-surface.d.ts",
+      "default": "./dist/plugin-sdk/slack-surface.js"
+    },
+    "./plugin-sdk/slack-target-parser": {
+      "types": "./dist/plugin-sdk/slack-target-parser.d.ts",
+      "default": "./dist/plugin-sdk/slack-target-parser.js"
     },
     "./plugin-sdk/slack-targets": {
       "types": "./dist/plugin-sdk/slack-targets.d.ts",
@@ -588,13 +772,29 @@
       "types": "./dist/plugin-sdk/speech.d.ts",
       "default": "./dist/plugin-sdk/speech.js"
     },
+    "./plugin-sdk/sglang": {
+      "types": "./dist/plugin-sdk/sglang.d.ts",
+      "default": "./dist/plugin-sdk/sglang.js"
+    },
     "./plugin-sdk/state-paths": {
       "types": "./dist/plugin-sdk/state-paths.d.ts",
       "default": "./dist/plugin-sdk/state-paths.js"
     },
+    "./plugin-sdk/synthetic": {
+      "types": "./dist/plugin-sdk/synthetic.d.ts",
+      "default": "./dist/plugin-sdk/synthetic.js"
+    },
     "./plugin-sdk/telegram": {
       "types": "./dist/plugin-sdk/telegram.d.ts",
       "default": "./dist/plugin-sdk/telegram.js"
+    },
+    "./plugin-sdk/telegram-account": {
+      "types": "./dist/plugin-sdk/telegram-account.d.ts",
+      "default": "./dist/plugin-sdk/telegram-account.js"
+    },
+    "./plugin-sdk/telegram-allow-from": {
+      "types": "./dist/plugin-sdk/telegram-allow-from.d.ts",
+      "default": "./dist/plugin-sdk/telegram-allow-from.js"
     },
     "./plugin-sdk/telegram-core": {
       "types": "./dist/plugin-sdk/telegram-core.d.ts",
@@ -603,6 +803,14 @@
     "./plugin-sdk/telegram-runtime": {
       "types": "./dist/plugin-sdk/telegram-runtime.d.ts",
       "default": "./dist/plugin-sdk/telegram-runtime.js"
+    },
+    "./plugin-sdk/telegram-runtime-surface": {
+      "types": "./dist/plugin-sdk/telegram-runtime-surface.d.ts",
+      "default": "./dist/plugin-sdk/telegram-runtime-surface.js"
+    },
+    "./plugin-sdk/telegram-surface": {
+      "types": "./dist/plugin-sdk/telegram-surface.d.ts",
+      "default": "./dist/plugin-sdk/telegram-surface.js"
     },
     "./plugin-sdk/thread-ownership": {
       "types": "./dist/plugin-sdk/thread-ownership.d.ts",
@@ -620,6 +828,18 @@
       "types": "./dist/plugin-sdk/twitch.d.ts",
       "default": "./dist/plugin-sdk/twitch.js"
     },
+    "./plugin-sdk/venice": {
+      "types": "./dist/plugin-sdk/venice.d.ts",
+      "default": "./dist/plugin-sdk/venice.js"
+    },
+    "./plugin-sdk/vllm": {
+      "types": "./dist/plugin-sdk/vllm.d.ts",
+      "default": "./dist/plugin-sdk/vllm.js"
+    },
+    "./plugin-sdk/xai": {
+      "types": "./dist/plugin-sdk/xai.d.ts",
+      "default": "./dist/plugin-sdk/xai.js"
+    },
     "./plugin-sdk/webhook-ingress": {
       "types": "./dist/plugin-sdk/webhook-ingress.d.ts",
       "default": "./dist/plugin-sdk/webhook-ingress.js"
@@ -636,6 +856,10 @@
       "types": "./dist/plugin-sdk/voice-call.d.ts",
       "default": "./dist/plugin-sdk/voice-call.js"
     },
+    "./plugin-sdk/volcengine": {
+      "types": "./dist/plugin-sdk/volcengine.d.ts",
+      "default": "./dist/plugin-sdk/volcengine.js"
+    },
     "./plugin-sdk/whatsapp-core": {
       "types": "./dist/plugin-sdk/whatsapp-core.d.ts",
       "default": "./dist/plugin-sdk/whatsapp-core.js"
@@ -644,9 +868,21 @@
       "types": "./dist/plugin-sdk/whatsapp-shared.d.ts",
       "default": "./dist/plugin-sdk/whatsapp-shared.js"
     },
+    "./plugin-sdk/whatsapp-surface": {
+      "types": "./dist/plugin-sdk/whatsapp-surface.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-surface.js"
+    },
+    "./plugin-sdk/whatsapp-targets": {
+      "types": "./dist/plugin-sdk/whatsapp-targets.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-targets.js"
+    },
     "./plugin-sdk/zalo": {
       "types": "./dist/plugin-sdk/zalo.d.ts",
       "default": "./dist/plugin-sdk/zalo.js"
+    },
+    "./plugin-sdk/zalo-setup": {
+      "types": "./dist/plugin-sdk/zalo-setup.d.ts",
+      "default": "./dist/plugin-sdk/zalo-setup.js"
     },
     "./plugin-sdk/zalouser": {
       "types": "./dist/plugin-sdk/zalouser.d.ts",
@@ -709,6 +945,7 @@
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:check-i18n-glossary": "node scripts/check-docs-i18n-glossary.mjs",
     "docs:check-links": "node scripts/docs-link-audit.mjs",
+    "docs:check-links:anchors": "node scripts/docs-link-audit.mjs --anchors",
     "docs:dev": "cd docs && mint dev",
     "docs:list": "node scripts/docs-list.js",
     "docs:spellcheck": "bash scripts/docs-spellcheck.sh",
@@ -768,6 +1005,8 @@
     "plugin-sdk:api:check": "node --import tsx scripts/generate-plugin-sdk-api-baseline.ts --check",
     "plugin-sdk:api:gen": "node --import tsx scripts/generate-plugin-sdk-api-baseline.ts --write",
     "plugin-sdk:check-exports": "node scripts/sync-plugin-sdk-exports.mjs --check",
+    "plugin-sdk:facades:check": "node scripts/generate-plugin-sdk-facades.mjs --check",
+    "plugin-sdk:facades:gen": "node scripts/generate-plugin-sdk-facades.mjs --write",
     "plugin-sdk:sync-exports": "node scripts/sync-plugin-sdk-exports.mjs",
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",
     "prepack": "pnpm build && pnpm ui:build",
@@ -775,7 +1014,7 @@
     "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/OpenClawProtocol/GatewayModels.swift apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
     "protocol:gen": "node --import tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
-    "release:check": "pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm check:bundled-plugin-metadata && pnpm check:bundled-provider-auth-env-vars && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:api:check && node scripts/stage-bundled-plugin-runtime-deps.mjs && pnpm ui:build && node --import tsx scripts/release-check.ts",
+    "release:check": "pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm check:bundled-plugin-metadata && pnpm check:bundled-provider-auth-env-vars && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:facades:check && pnpm plugin-sdk:api:check && node scripts/stage-bundled-plugin-runtime-deps.mjs && pnpm ui:build && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",
     "release:plugins:npm:check": "node --import tsx scripts/plugin-npm-release-check.ts",
@@ -790,8 +1029,8 @@
     "test:changed:max": "node scripts/test-parallel.mjs --profile max --changed origin/main",
     "test:channels": "node scripts/test-parallel.mjs --surface channels",
     "test:contracts": "pnpm test:contracts:channels && pnpm test:contracts:plugins",
-    "test:contracts:channels": "OPENCLAW_TEST_PROFILE=serial pnpm test -- src/channels/plugins/contracts",
-    "test:contracts:plugins": "OPENCLAW_TEST_PROFILE=serial pnpm test -- src/plugins/contracts",
+    "test:contracts:channels": "OPENCLAW_TEST_PROFILE=serial pnpm exec vitest run --config vitest.contracts.config.ts src/channels/plugins/contracts",
+    "test:contracts:plugins": "OPENCLAW_TEST_PROFILE=serial pnpm exec vitest run --config vitest.contracts.config.ts src/plugins/contracts",
     "test:coverage": "vitest run --config vitest.unit.config.ts --coverage",
     "test:coverage:changed": "vitest run --config vitest.unit.config.ts --coverage --changed origin/main",
     "test:docker:all": "pnpm test:docker:live-models && pnpm test:docker:live-gateway && pnpm test:docker:openwebui && pnpm test:docker:onboard && pnpm test:docker:gateway-network && pnpm test:docker:qr && pnpm test:docker:doctor-switch && pnpm test:docker:plugins && pnpm test:docker:cleanup",

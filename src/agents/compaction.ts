@@ -257,7 +257,7 @@ async function summarizeChunks(params: {
           model,
           params.reserveTokens,
           params.apiKey,
-          model.headers,
+          undefined,
           params.signal,
           effectiveInstructions,
           summary,

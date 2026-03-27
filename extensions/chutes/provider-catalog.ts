@@ -1,10 +1,10 @@
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
 import {
   CHUTES_BASE_URL,
   CHUTES_MODEL_CATALOG,
   buildChutesModelDefinition,
   discoverChutesModels,
-  type ModelProviderConfig,
-} from "openclaw/plugin-sdk/provider-models";
+} from "./api.js";
 
 /**
  * Build the Chutes provider with dynamic model discovery.

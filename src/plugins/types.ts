@@ -169,6 +169,7 @@ export type ProviderAuthResult = {
 /** Interactive auth context passed to provider login/setup methods. */
 export type ProviderAuthContext = {
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   agentDir?: string;
   workspaceDir?: string;
   prompter: WizardPrompter;
@@ -733,6 +734,21 @@ export type ProviderPluginWizard = {
   modelPicker?: ProviderPluginWizardModelPicker;
 };
 
+export type ProviderOAuthProfileIdRepair = {
+  /**
+   * Legacy OAuth profile id to migrate away from.
+   *
+   * When omitted, OpenClaw falls back to `<provider>:default`.
+   */
+  legacyProfileId?: string;
+  /**
+   * Optional custom doctor prompt label.
+   *
+   * Defaults to the provider label when omitted.
+   */
+  promptLabel?: string;
+};
+
 export type ProviderModelSelectedContext = {
   config: OpenClawConfig;
   model: string;
@@ -990,6 +1006,14 @@ export type ProviderPlugin = {
    */
   deprecatedProfileIds?: string[];
   /**
+   * Legacy OAuth profile-id migrations that `openclaw doctor` should offer.
+   *
+   * Use this when a provider moved from a legacy default OAuth profile id to a
+   * newer identity-based id and wants doctor to own the config rewrite without
+   * another core-specific migration branch.
+   */
+  oauthProfileIdRepairs?: ProviderOAuthProfileIdRepair[];
+  /**
    * Provider-owned OAuth refresh.
    *
    * OpenClaw calls this before falling back to the shared `pi-ai` OAuth
@@ -1052,6 +1076,15 @@ export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
+  /**
+   * Interactive onboarding surfaces where this search provider should appear
+   * when OpenClaw has no config-aware runtime context yet.
+   *
+   * Unlike provider auth, search setup historically exposed only a curated
+   * quickstart subset. Keep this plugin-owned so core does not hardcode the
+   * default bundled provider list.
+   */
+  onboardingScopes?: Array<"text-inference">;
   requiresCredential?: boolean;
   credentialLabel?: string;
   envVars: string[];
