@@ -21,16 +21,20 @@ describe("createFixedWindowRateLimiter", () => {
     expect(limiter.isRateLimited("k", 1_003)).toBe(true);
   });
 
-  it("resets counters after the window elapses", () => {
+  it.each([
+    {
+      name: "resets counters after the window elapses",
+      calls: [100, 101, 111],
+      expected: [false, true, false],
+    },
+  ])("$name", ({ calls, expected }) => {
     const limiter = createFixedWindowRateLimiter({
       windowMs: 10,
       maxRequests: 1,
       maxTrackedKeys: 100,
     });
 
-    expect(limiter.isRateLimited("k", 100)).toBe(false);
-    expect(limiter.isRateLimited("k", 101)).toBe(true);
-    expect(limiter.isRateLimited("k", 111)).toBe(false);
+    expect(calls.map((nowMs) => limiter.isRateLimited("k", nowMs))).toEqual(expected);
   });
 
   it("caps tracked keys", () => {
@@ -69,9 +73,7 @@ describe("createBoundedCounter", () => {
   it("increments and returns per-key counts", () => {
     const counter = createBoundedCounter({ maxTrackedKeys: 100 });
 
-    expect(counter.increment("k", 1_000)).toBe(1);
-    expect(counter.increment("k", 1_001)).toBe(2);
-    expect(counter.increment("k", 1_002)).toBe(3);
+    expect([1_000, 1_001, 1_002].map((nowMs) => counter.increment("k", nowMs))).toEqual([1, 2, 3]);
   });
 
   it("caps tracked keys", () => {
@@ -121,33 +123,29 @@ describe("createWebhookAnomalyTracker", () => {
       logEvery: 2,
     });
 
-    expect(
-      tracker.record({
-        key: "k",
+    const counts = [
+      {
         statusCode: 415,
-        message: (count) => `ignored:${count}`,
-        log: (msg) => logs.push(msg),
-      }),
-    ).toBe(0);
-
-    expect(
+        message: (count: number) => `ignored:${count}`,
+      },
+      {
+        statusCode: 401,
+        message: (count: number) => `hit:${count}`,
+      },
+      {
+        statusCode: 401,
+        message: (count: number) => `hit:${count}`,
+      },
+    ].map(({ statusCode, message }) =>
       tracker.record({
         key: "k",
-        statusCode: 401,
-        message: (count) => `hit:${count}`,
+        statusCode,
+        message,
         log: (msg) => logs.push(msg),
       }),
-    ).toBe(1);
+    );
 
-    expect(
-      tracker.record({
-        key: "k",
-        statusCode: 401,
-        message: (count) => `hit:${count}`,
-        log: (msg) => logs.push(msg),
-      }),
-    ).toBe(2);
-
+    expect(counts).toEqual([0, 1, 2]);
     expect(logs).toEqual(["hit:1", "hit:2"]);
   });
 });
