@@ -5,7 +5,7 @@ const KIMI_CODING_USER_AGENT = "claude-code/0.1.0";
 export const KIMI_DEFAULT_MODEL_ID = "kimi-code";
 export const KIMI_UPSTREAM_MODEL_ID = "kimi-for-coding";
 export const KIMI_LEGACY_MODEL_ID = "k2p5";
-const KIMI_CODING_DEFAULT_CONTEXT_WINDOW = 262144;
+export const KIMI_CODING_DEFAULT_CONTEXT_WINDOW = 262144;
 const KIMI_CODING_DEFAULT_MAX_TOKENS = 32768;
 const KIMI_CODING_DEFAULT_COST = {
   input: 0,

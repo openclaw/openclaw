@@ -8,6 +8,11 @@ import {
 } from "../agents/doubao-models.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
+import {
+  KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
+  KIMI_CODING_DEFAULT_MODEL_ID,
+  KIMI_CODING_LEGACY_MODEL_ID,
+} from "../../extensions/kimi-coding/provider-catalog.js";
 import type {
   ProviderAugmentModelCatalogContext,
   ProviderBuiltInModelSuppressionContext,
@@ -121,18 +126,18 @@ export function augmentBundledProviderCatalog(
 
   const kimiModels: ModelCatalogEntry[] = [
     {
-      id: "kimi-code",
+      id: KIMI_CODING_DEFAULT_MODEL_ID,
       name: "Kimi Code",
       provider: "kimi",
-      contextWindow: 262144,
+      contextWindow: KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
       reasoning: true,
       input: ["text", "image"] as const,
     },
     {
-      id: "k2p5",
+      id: KIMI_CODING_LEGACY_MODEL_ID,
       name: "Kimi Code (legacy model id)",
       provider: "kimi",
-      contextWindow: 262144,
+      contextWindow: KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
       reasoning: true,
       input: ["text", "image"] as const,
     },
