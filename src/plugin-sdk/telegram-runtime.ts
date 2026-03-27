@@ -46,6 +46,7 @@ export {
   auditTelegramGroupMembership,
   buildTelegramExecApprovalPendingPayload,
   collectTelegramUnmentionedGroupIds,
+  createTelegramThreadBindingManager,
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,

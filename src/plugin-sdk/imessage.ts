@@ -36,6 +36,7 @@ export {
   resolveDefaultGroupPolicy,
 } from "../config/runtime-group-policy.js";
 export {
+  normalizeIMessageHandle,
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
 } from "../../extensions/imessage/api.js";

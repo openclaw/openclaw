@@ -2,13 +2,19 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { expandHomePrefix } from "../infra/home-dir.js";
-import { CONFIG_DIR } from "../utils.js";
+import { resolveConfigDir } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import type { CronStoreFile } from "./types.js";
 
-export const DEFAULT_CRON_DIR = path.join(CONFIG_DIR, "cron");
-export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
 const serializedStoreCache = new Map<string, string>();
+
+function resolveDefaultCronDir(): string {
+  return path.join(resolveConfigDir(), "cron");
+}
+
+function resolveDefaultCronStorePath(): string {
+  return path.join(resolveDefaultCronDir(), "jobs.json");
+}
 
 function stripRuntimeOnlyCronFields(store: CronStoreFile): unknown {
   return {
@@ -65,7 +71,7 @@ export function resolveCronStorePath(storePath?: string) {
     }
     return path.resolve(raw);
   }
-  return DEFAULT_CRON_STORE_PATH;
+  return resolveDefaultCronStorePath();
 }
 
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {

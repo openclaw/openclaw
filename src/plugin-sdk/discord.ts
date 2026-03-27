@@ -10,6 +10,7 @@ export type { InspectedDiscordAccount } from "../../extensions/discord/api.js";
 export type { ResolvedDiscordAccount } from "../../extensions/discord/api.js";
 export type { DiscordSendComponents, DiscordSendEmbeds } from "../../extensions/discord/api.js";
 export type { DiscordComponentMessageSpec } from "../../extensions/discord/api.js";
+export type { DiscordSendResult } from "../../extensions/discord/api.js";
 export type {
   ThreadBindingManager,
   ThreadBindingRecord,
@@ -96,6 +97,10 @@ export {
   setThreadBindingMaxAgeBySessionKey,
   unbindThreadBindingsBySessionKey,
 } from "../../extensions/discord/runtime-api.js";
+export {
+  __testing as discordThreadBindingTesting,
+  createThreadBindingManager as createDiscordThreadBindingManager,
+} from "../../extensions/discord/src/monitor/thread-bindings.manager.js";
 export { getGateway } from "../../extensions/discord/runtime-api.js";
 export { getPresence } from "../../extensions/discord/runtime-api.js";
 export { readDiscordComponentSpec } from "../../extensions/discord/api.js";

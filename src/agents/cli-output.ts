@@ -1,5 +1,5 @@
-import { isClaudeCliProvider } from "../../extensions/anthropic/cli-shared.js";
 import type { CliBackendConfig } from "../config/types.js";
+import { isClaudeCliProvider } from "../plugin-sdk/anthropic-cli.js";
 import { isRecord } from "../utils.js";
 
 type CliUsage = {

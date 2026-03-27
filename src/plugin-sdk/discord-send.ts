@@ -1,5 +1,5 @@
-import type { DiscordSendResult } from "../../extensions/discord/api.js";
 import { attachChannelToResult } from "./channel-send-result.js";
+import type { DiscordSendResult } from "./discord.js";
 
 type DiscordSendOptionInput = {
   replyToId?: string | null;
