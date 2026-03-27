@@ -11,13 +11,8 @@ import {
   resolveSignalAccount,
   type ResolvedSignalAccount,
 } from "./accounts.js";
-import {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
-  normalizeE164,
-  SignalConfigSchema,
-  type ChannelPlugin,
-} from "./runtime-api.js";
+import { SignalChannelConfigSchema } from "./config-schema.js";
+import { getChatChannelMeta, normalizeE164, type ChannelPlugin } from "./runtime-api.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
 
 export const SIGNAL_CHANNEL = "signal" as const;
@@ -91,7 +86,7 @@ export function createSignalPluginBase(params: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     reload: { configPrefixes: ["channels.signal"] },
-    configSchema: buildChannelConfigSchema(SignalConfigSchema),
+    configSchema: SignalChannelConfigSchema,
     config: {
       ...signalConfigAdapter,
       isConfigured: (account) => account.configured,

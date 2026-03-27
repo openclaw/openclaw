@@ -8,6 +8,13 @@ import type { PluginConfigUiHint, PluginKind } from "./types.js";
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 
+export type PluginManifestChannelConfig = {
+  schema: Record<string, unknown>;
+  uiHints?: Record<string, PluginConfigUiHint>;
+  label?: string;
+  description?: string;
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: Record<string, unknown>;
@@ -37,6 +44,7 @@ export type PluginManifest = {
    * compat wiring, and contract coverage without importing plugin runtime.
    */
   contracts?: PluginManifestContracts;
+  channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
 
 export type PluginManifestContracts = {
@@ -179,6 +187,37 @@ function normalizeProviderAuthChoices(
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeChannelConfigs(
+  value: unknown,
+): Record<string, PluginManifestChannelConfig> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginManifestChannelConfig> = {};
+  for (const [key, rawEntry] of Object.entries(value)) {
+    const channelId = typeof key === "string" ? key.trim() : "";
+    if (!channelId || !isRecord(rawEntry)) {
+      continue;
+    }
+    const schema = isRecord(rawEntry.schema) ? rawEntry.schema : null;
+    if (!schema) {
+      continue;
+    }
+    const uiHints = isRecord(rawEntry.uiHints)
+      ? (rawEntry.uiHints as Record<string, PluginConfigUiHint>)
+      : undefined;
+    const label = typeof rawEntry.label === "string" ? rawEntry.label.trim() : "";
+    const description = typeof rawEntry.description === "string" ? rawEntry.description.trim() : "";
+    normalized[channelId] = {
+      schema,
+      ...(uiHints ? { uiHints } : {}),
+      ...(label ? { label } : {}),
+      ...(description ? { description } : {}),
+    };
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 export function resolvePluginManifestPath(rootDir: string): string {
   for (const filename of PLUGIN_MANIFEST_FILENAMES) {
     const candidate = path.join(rootDir, filename);
@@ -253,6 +292,7 @@ export function loadPluginManifest(
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const skills = normalizeStringList(raw.skills);
   const contracts = normalizeManifestContracts(raw.contracts);
+  const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 
   let uiHints: Record<string, PluginConfigUiHint> | undefined;
   if (isRecord(raw.uiHints)) {
@@ -280,6 +320,7 @@ export function loadPluginManifest(
       version,
       uiHints,
       contracts,
+      channelConfigs,
     },
     manifestPath,
   };

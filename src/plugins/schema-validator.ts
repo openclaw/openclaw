@@ -7,23 +7,26 @@ const require = createRequire(import.meta.url);
 type AjvLike = {
   compile: (schema: Record<string, unknown>) => ValidateFunction;
 };
-let ajvSingleton: AjvLike | null = null;
+const ajvSingletons = new Map<"default" | "defaults", AjvLike>();
 
-function getAjv(): AjvLike {
-  if (ajvSingleton) {
-    return ajvSingleton;
+function getAjv(mode: "default" | "defaults"): AjvLike {
+  const cached = ajvSingletons.get(mode);
+  if (cached) {
+    return cached;
   }
   const ajvModule = require("ajv") as { default?: new (opts?: object) => AjvLike };
   const AjvCtor =
     typeof ajvModule.default === "function"
       ? ajvModule.default
       : (ajvModule as unknown as new (opts?: object) => AjvLike);
-  ajvSingleton = new AjvCtor({
+  const instance = new AjvCtor({
     allErrors: true,
     strict: false,
     removeAdditional: false,
+    ...(mode === "defaults" ? { useDefaults: true } : {}),
   });
-  return ajvSingleton;
+  ajvSingletons.set(mode, instance);
+  return instance;
 }
 
 type CachedValidator = {
@@ -32,6 +35,13 @@ type CachedValidator = {
 };
 
 const schemaCache = new Map<string, CachedValidator>();
+
+function cloneValidationValue<T>(value: T): T {
+  if (value === undefined || value === null) {
+    return value;
+  }
+  return structuredClone(value);
+}
 
 export type JsonSchemaValidationError = {
   path: string;
@@ -134,17 +144,20 @@ export function validateJsonSchemaValue(params: {
   schema: Record<string, unknown>;
   cacheKey: string;
   value: unknown;
-}): { ok: true } | { ok: false; errors: JsonSchemaValidationError[] } {
-  let cached = schemaCache.get(params.cacheKey);
+  applyDefaults?: boolean;
+}): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
+  const cacheKey = params.applyDefaults ? `${params.cacheKey}::defaults` : params.cacheKey;
+  let cached = schemaCache.get(cacheKey);
   if (!cached || cached.schema !== params.schema) {
-    const validate = getAjv().compile(params.schema);
+    const validate = getAjv(params.applyDefaults ? "defaults" : "default").compile(params.schema);
     cached = { validate, schema: params.schema };
-    schemaCache.set(params.cacheKey, cached);
+    schemaCache.set(cacheKey, cached);
   }
 
-  const ok = cached.validate(params.value);
+  const value = params.applyDefaults ? cloneValidationValue(params.value) : params.value;
+  const ok = cached.validate(value);
   if (ok) {
-    return { ok: true };
+    return { ok: true, value };
   }
   return { ok: false, errors: formatAjvErrors(cached.validate.errors) };
 }

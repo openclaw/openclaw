@@ -8773,13 +8773,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -9325,13 +9320,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -11140,13 +11130,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -11408,13 +11393,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -11783,14 +11763,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "media",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -14450,14 +14424,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "media",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -17055,12 +17023,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -17118,12 +17082,8 @@
       "type": "object",
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -17736,12 +17696,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -17799,12 +17755,8 @@
       "type": "object",
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -19878,13 +19830,8 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -19933,13 +19880,8 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -20700,13 +20642,8 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -23611,13 +23548,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -27753,13 +27685,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -27851,13 +27778,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -28706,13 +28628,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -28902,13 +28819,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -30116,13 +30028,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -30712,13 +30619,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -32417,13 +32319,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -34567,13 +34464,8 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "network",
-        "security"
-      ],
+      "sensitive": false,
+      "tags": [],
       "hasChildren": true
     },
     {
