@@ -2,10 +2,10 @@ import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
-import type { SlackMessageChangedEvent } from "../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMessageHandler } from "../message-handler.js";
+import type { SlackMessageChangedEvent } from "../types.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
