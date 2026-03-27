@@ -425,18 +425,20 @@ export async function tryDispatchAcpReply(params: {
     // agent timeout (agents.defaults.timeoutSeconds, default 600s). Without this,
     // a silently hung SSE connection blocks the session queue forever. refs #17258
     //
-    // P2: Align the wrapper timeout with the session-aware source so the dispatch
-    // timeout matches what AcpSessionManager.runTurn uses internally.
-    // runtimeOptions.timeoutSeconds takes priority over the global default.
-    const sessionRuntimeTimeoutSeconds =
-      acpResolution.kind === "ready"
-        ? resolveRuntimeOptionsFromMeta(acpResolution.meta).timeoutSeconds
-        : undefined;
+    // P2 (rev): Re-resolve session state immediately before runTurn so the wrapper
+    // timeout reflects the most current runtimeOptions — not the stale snapshot
+    // captured at the top of tryDispatchAcpReply (before media work and before
+    // runTurn acquires the session actor). If the session was updated in that window,
+    // this ensures dispatch and AcpSessionManager.runTurn share the same budget.
+    const liveAcpMeta = readAcpSessionEntry({ cfg: params.cfg, sessionKey })?.acp ?? undefined;
+    const liveTimeoutSeconds = liveAcpMeta
+      ? resolveRuntimeOptionsFromMeta(liveAcpMeta).timeoutSeconds
+      : undefined;
     const turnTimeoutMs =
-      typeof sessionRuntimeTimeoutSeconds === "number" &&
-      Number.isFinite(sessionRuntimeTimeoutSeconds) &&
-      sessionRuntimeTimeoutSeconds > 0
-        ? Math.max(30_000, Math.round(sessionRuntimeTimeoutSeconds * 1_000))
+      typeof liveTimeoutSeconds === "number" &&
+      Number.isFinite(liveTimeoutSeconds) &&
+      liveTimeoutSeconds > 0
+        ? Math.max(30_000, Math.round(liveTimeoutSeconds * 1_000))
         : resolveAgentTimeoutMs({ cfg: params.cfg, minMs: 30_000 });
 
     // P1b: Track the runTurn promise so that when the dispatch-level timeout fires
