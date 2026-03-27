@@ -66,7 +66,7 @@ export async function loadInternalHooks(
   },
 ): Promise<number> {
   // Check if hooks are enabled
-  if (!cfg.hooks?.internal?.enabled) {
+  if (cfg.hooks?.internal?.enabled === false) {
     return 0;
   }
 
