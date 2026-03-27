@@ -1368,12 +1368,10 @@ export async function runEmbeddedAttempt(
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
-          const pairSanitized = downgradeOpenAIFunctionCallReasoningPairs(
-            messages as AgentMessage[],
-          );
-          // Also strip orphaned reasoning blocks that lack a required following
-          // content item — OpenAI rejects these with a 400 error.
-          const sanitized = downgradeOpenAIReasoningBlocks(pairSanitized);
+          // Strip orphaned reasoning blocks first, then fix function-call
+          // pairing — matches the call order in google.ts.
+          const reasoningSanitized = downgradeOpenAIReasoningBlocks(messages as AgentMessage[]);
+          const sanitized = downgradeOpenAIFunctionCallReasoningPairs(reasoningSanitized);
           if (sanitized === messages) {
             return inner(model, context, options);
           }
