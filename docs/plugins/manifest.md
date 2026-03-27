@@ -46,6 +46,8 @@ Use it for:
 - config validation
 - auth and onboarding metadata that should be available without booting plugin
   runtime
+- static capability ownership snapshots used for bundled compat wiring and
+  contract coverage
 - config UI hints
 
 Do not use it for:
@@ -129,6 +131,7 @@ Those belong in your plugin code and `package.json`.
 | `cliBackends`         | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                  |
 | `providerAuthEnvVars` | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that OpenClaw can inspect without loading plugin code.                                      |
 | `providerAuthChoices` | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                |
+| `contracts`           | No       | `object`                         | Static bundled capability snapshot for speech, media-understanding, image-generation, web search, and tool ownership.        |
 | `skills`              | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                                      |
 | `name`                | No       | `string`                         | Human-readable plugin name.                                                                                                  |
 | `description`         | No       | `string`                         | Short summary shown in plugin surfaces.                                                                                      |
@@ -183,6 +186,38 @@ Each field hint can include:
 | `advanced`    | `boolean`  | Marks the field as advanced.            |
 | `sensitive`   | `boolean`  | Marks the field as secret or sensitive. |
 | `placeholder` | `string`   | Placeholder text for form inputs.       |
+
+## contracts reference
+
+Use `contracts` only for static capability ownership metadata that OpenClaw can
+read without importing the plugin runtime.
+
+```json
+{
+  "contracts": {
+    "speechProviders": ["openai"],
+    "mediaUnderstandingProviders": ["openai", "openai-codex"],
+    "imageGenerationProviders": ["openai"],
+    "webSearchProviders": ["gemini"],
+    "tools": ["firecrawl_search", "firecrawl_scrape"]
+  }
+}
+```
+
+Each list is optional:
+
+| Field                         | Type       | What it means                                                  |
+| ----------------------------- | ---------- | -------------------------------------------------------------- |
+| `speechProviders`             | `string[]` | Speech provider ids this plugin owns.                          |
+| `mediaUnderstandingProviders` | `string[]` | Media-understanding provider ids this plugin owns.             |
+| `imageGenerationProviders`    | `string[]` | Image-generation provider ids this plugin owns.                |
+| `webSearchProviders`          | `string[]` | Web-search provider ids this plugin owns.                      |
+| `tools`                       | `string[]` | Agent tool names this plugin owns for bundled contract checks. |
+
+Legacy top-level `speechProviders`, `mediaUnderstandingProviders`, and
+`imageGenerationProviders` are deprecated. Use `openclaw doctor --fix` to move
+them under `contracts`; normal manifest loading no longer treats them as
+capability ownership.
 
 ## Manifest versus package.json
 

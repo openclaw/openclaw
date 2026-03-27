@@ -11,8 +11,11 @@ import {
   type MemoryEmbeddingProviderAdapter,
   type MemoryEmbeddingProviderCreateOptions,
   type MemoryEmbeddingProviderRuntime,
-} from "../engine-host-api.js";
-import { canAutoSelectLocal } from "./provider-adapters.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
+  canAutoSelectLocal,
+  getBuiltinMemoryEmbeddingProviderAdapter,
+} from "./provider-adapters.js";
 
 export {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
@@ -21,7 +24,7 @@ export {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
   DEFAULT_OPENAI_EMBEDDING_MODEL,
   DEFAULT_VOYAGE_EMBEDDING_MODEL,
-} from "../engine-host-api.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 
 export type EmbeddingProvider = MemoryEmbeddingProvider;
 export type EmbeddingProviderId = string;
@@ -90,6 +93,15 @@ function resolveProviderModel(
     return trimmed;
   }
   return adapter.defaultModel ?? "";
+}
+
+export function resolveEmbeddingProviderFallbackModel(
+  providerId: string,
+  fallbackSourceModel: string,
+): string {
+  const adapter =
+    getMemoryEmbeddingProvider(providerId) ?? getBuiltinMemoryEmbeddingProviderAdapter(providerId);
+  return adapter?.defaultModel ?? fallbackSourceModel;
 }
 
 async function createWithAdapter(

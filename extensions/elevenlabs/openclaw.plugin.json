@@ -1,6 +1,8 @@
 {
   "id": "elevenlabs",
-  "speechProviders": ["elevenlabs"],
+  "contracts": {
+    "speechProviders": ["elevenlabs"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

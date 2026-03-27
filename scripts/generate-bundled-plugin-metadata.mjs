@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { collectBundledPluginSources } from "./lib/bundled-plugin-source-utils.mjs";
 import { formatGeneratedModule } from "./lib/format-generated-module.mjs";
@@ -50,6 +52,26 @@ function normalizeStringList(values) {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeManifestContracts(raw) {
+  const contracts = normalizeObject(raw);
+  if (!contracts) {
+    return undefined;
+  }
+  const speechProviders = normalizeStringList(contracts.speechProviders);
+  const mediaUnderstandingProviders = normalizeStringList(contracts.mediaUnderstandingProviders);
+  const imageGenerationProviders = normalizeStringList(contracts.imageGenerationProviders);
+  const webSearchProviders = normalizeStringList(contracts.webSearchProviders);
+  const tools = normalizeStringList(contracts.tools);
+  const normalized = {
+    ...(speechProviders?.length ? { speechProviders } : {}),
+    ...(mediaUnderstandingProviders?.length ? { mediaUnderstandingProviders } : {}),
+    ...(imageGenerationProviders?.length ? { imageGenerationProviders } : {}),
+    ...(webSearchProviders?.length ? { webSearchProviders } : {}),
+    ...(tools?.length ? { tools } : {}),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function normalizeObject(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -100,14 +122,8 @@ function normalizePluginManifest(raw) {
     ...(normalizeStringList(raw.providers)
       ? { providers: normalizeStringList(raw.providers) }
       : {}),
-    ...(normalizeStringList(raw.speechProviders)
-      ? { speechProviders: normalizeStringList(raw.speechProviders) }
-      : {}),
-    ...(normalizeStringList(raw.mediaUnderstandingProviders)
-      ? { mediaUnderstandingProviders: normalizeStringList(raw.mediaUnderstandingProviders) }
-      : {}),
-    ...(normalizeStringList(raw.imageGenerationProviders)
-      ? { imageGenerationProviders: normalizeStringList(raw.imageGenerationProviders) }
+    ...(normalizeStringList(raw.cliBackends)
+      ? { cliBackends: normalizeStringList(raw.cliBackends) }
       : {}),
     ...(normalizeObject(raw.providerAuthEnvVars)
       ? { providerAuthEnvVars: raw.providerAuthEnvVars }
@@ -120,7 +136,142 @@ function normalizePluginManifest(raw) {
     ...(typeof raw.description === "string" ? { description: raw.description.trim() } : {}),
     ...(typeof raw.version === "string" ? { version: raw.version.trim() } : {}),
     ...(normalizeObject(raw.uiHints) ? { uiHints: raw.uiHints } : {}),
+    ...(normalizeObject(raw.channelConfigs) ? { channelConfigs: raw.channelConfigs } : {}),
+    ...(normalizeManifestContracts(raw.contracts)
+      ? { contracts: normalizeManifestContracts(raw.contracts) }
+      : {}),
   };
+}
+
+function resolvePackageChannelMeta(packageJson) {
+  const openclawMeta =
+    packageJson &&
+    typeof packageJson === "object" &&
+    !Array.isArray(packageJson) &&
+    "openclaw" in packageJson
+      ? packageJson.openclaw
+      : undefined;
+  if (!openclawMeta || typeof openclawMeta !== "object" || Array.isArray(openclawMeta)) {
+    return undefined;
+  }
+  const channelMeta = openclawMeta.channel;
+  if (!channelMeta || typeof channelMeta !== "object" || Array.isArray(channelMeta)) {
+    return undefined;
+  }
+  return channelMeta;
+}
+
+function resolveChannelConfigSchemaModulePath(rootDir) {
+  const candidates = [
+    path.join(rootDir, "src", "config-schema.ts"),
+    path.join(rootDir, "src", "config-schema.js"),
+    path.join(rootDir, "src", "config-schema.mts"),
+    path.join(rootDir, "src", "config-schema.mjs"),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function resolveRootLabel(source, channelId) {
+  const channelMeta = resolvePackageChannelMeta(source.packageJson);
+  if (channelMeta?.id === channelId && typeof channelMeta.label === "string") {
+    return channelMeta.label.trim();
+  }
+  if (typeof source.manifest?.name === "string" && source.manifest.name.trim()) {
+    return source.manifest.name.trim();
+  }
+  return undefined;
+}
+
+function resolveRootDescription(source, channelId) {
+  const channelMeta = resolvePackageChannelMeta(source.packageJson);
+  if (channelMeta?.id === channelId && typeof channelMeta.blurb === "string") {
+    return channelMeta.blurb.trim();
+  }
+  if (typeof source.manifest?.description === "string" && source.manifest.description.trim()) {
+    return source.manifest.description.trim();
+  }
+  return undefined;
+}
+
+function resolveRootPreferOver(source, channelId) {
+  const channelMeta = resolvePackageChannelMeta(source.packageJson);
+  if (channelMeta?.id !== channelId || !Array.isArray(channelMeta.preferOver)) {
+    return undefined;
+  }
+  const preferOver = channelMeta.preferOver
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
+  return preferOver.length > 0 ? preferOver : undefined;
+}
+
+async function collectBundledChannelConfigsForSource({ source, manifest }) {
+  const channelIds = Array.isArray(manifest.channels)
+    ? manifest.channels.filter((entry) => typeof entry === "string" && entry.trim())
+    : [];
+  const existingChannelConfigs = normalizeObject(manifest.channelConfigs)
+    ? { ...manifest.channelConfigs }
+    : {};
+  if (channelIds.length === 0) {
+    return Object.keys(existingChannelConfigs).length > 0 ? existingChannelConfigs : undefined;
+  }
+
+  const modulePath = resolveChannelConfigSchemaModulePath(source.pluginDir);
+  if (!modulePath || !fs.existsSync(modulePath)) {
+    return Object.keys(existingChannelConfigs).length > 0 ? existingChannelConfigs : undefined;
+  }
+
+  const surfaceJson = execFileSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/load-channel-config-surface.ts", modulePath],
+    {
+      // Run from the host repo so the generator always resolves its own loader/tooling,
+      // even when inspecting a temporary or alternate repo root.
+      cwd: FORMATTER_CWD,
+      encoding: "utf8",
+    },
+  );
+  const surface = JSON.parse(surfaceJson);
+  if (!surface?.schema) {
+    return Object.keys(existingChannelConfigs).length > 0 ? existingChannelConfigs : undefined;
+  }
+
+  for (const channelId of channelIds) {
+    const existing =
+      existingChannelConfigs[channelId] &&
+      typeof existingChannelConfigs[channelId] === "object" &&
+      !Array.isArray(existingChannelConfigs[channelId])
+        ? existingChannelConfigs[channelId]
+        : undefined;
+    const label = existing?.label ?? resolveRootLabel(source, channelId);
+    const description = existing?.description ?? resolveRootDescription(source, channelId);
+    const preferOver = existing?.preferOver ?? resolveRootPreferOver(source, channelId);
+    const uiHints =
+      surface.uiHints || existing?.uiHints
+        ? {
+            ...(surface.uiHints && Object.keys(surface.uiHints).length > 0
+              ? { ...surface.uiHints }
+              : {}),
+            ...(existing?.uiHints && Object.keys(existing.uiHints).length > 0
+              ? { ...existing.uiHints }
+              : {}),
+          }
+        : undefined;
+
+    existingChannelConfigs[channelId] = {
+      schema: surface.schema,
+      ...(uiHints && Object.keys(uiHints).length > 0 ? { uiHints } : {}),
+      ...(label ? { label } : {}),
+      ...(description ? { description } : {}),
+      ...(preferOver?.length ? { preferOver } : {}),
+    };
+  }
+
+  return Object.keys(existingChannelConfigs).length > 0 ? existingChannelConfigs : undefined;
 }
 
 function formatTypeScriptModule(source, { outputPath }) {
@@ -144,7 +295,7 @@ function normalizeGeneratedImportPath(dirName, builtPath) {
   return `../../extensions/${dirName}/${String(builtPath).replace(/^\.\//u, "")}`;
 }
 
-export function collectBundledPluginMetadata(params = {}) {
+export async function collectBundledPluginMetadata(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const entries = [];
   for (const source of collectBundledPluginSources({ repoRoot, requirePackageJson: true })) {
@@ -175,6 +326,10 @@ export function collectBundledPluginMetadata(params = {}) {
             built: rewriteEntryToBuiltPath(packageManifest.setupEntry.trim()),
           }
         : undefined;
+    const channelConfigs = await collectBundledChannelConfigsForSource({ source, manifest });
+    if (channelConfigs) {
+      manifest.channelConfigs = channelConfigs;
+    }
 
     entries.push({
       dirName: source.dirName,
@@ -247,9 +402,9 @@ ${imports}
 `;
 }
 
-export function writeBundledPluginMetadataModule(params = {}) {
+export async function writeBundledPluginMetadataModule(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
-  const entries = collectBundledPluginMetadata({ repoRoot });
+  const entries = await collectBundledPluginMetadata({ repoRoot });
   const outputPath = path.resolve(repoRoot, params.outputPath ?? DEFAULT_OUTPUT_PATH);
   const entriesOutputPath = path.resolve(
     repoRoot,
@@ -282,7 +437,7 @@ export function writeBundledPluginMetadataModule(params = {}) {
 
 if (import.meta.url === new URL(process.argv[1] ?? "", "file:").href) {
   const check = process.argv.includes("--check");
-  const result = writeBundledPluginMetadataModule({ check });
+  const result = await writeBundledPluginMetadataModule({ check });
   if (!result.changed) {
     process.exitCode = 0;
   } else if (check) {

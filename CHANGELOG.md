@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Breaking
 
 - Providers/Qwen: remove the deprecated `qwen-portal-auth` OAuth integration for `portal.qwen.ai`; migrate to Model Studio with `openclaw onboard --auth-choice modelstudio-api-key`. (#52709) Thanks @pomelo-nwu.
+- Config/Doctor: drop automatic config migrations older than two months; very old legacy keys now fail validation instead of being rewritten on load or by `openclaw doctor`.
 
 ### Changes
 
@@ -23,9 +24,11 @@ Docs: https://docs.openclaw.ai
 - Plugins/CLI backends: move bundled Claude CLI, Codex CLI, and Gemini CLI inference defaults onto the plugin surface, add bundled Gemini CLI backend support, and replace `gateway run --claude-cli-logs` with generic `--cli-backend-logs` while keeping the old flag as a compatibility alias.
 - Plugins/startup: auto-load bundled provider and CLI-backend plugins from explicit config refs, so bundled Claude CLI, Codex CLI, and Gemini CLI message-provider setups no longer need manual `plugins.allow` entries.
 - Config/TTS: auto-migrate legacy speech config on normal reads and secret resolution, keep legacy diagnostics for Doctor, and remove regular-mode runtime fallback for old bundled `tts.<provider>` API-key shapes.
+- OpenAI/apply_patch: enable `apply_patch` by default for OpenAI and OpenAI Codex models, and align its sandbox policy access with `write` permissions.
 
 ### Fixes
 
+- ACP/ACPX agent registry: align OpenClaw's ACPX built-in agent mirror with the latest `openclaw/acpx` command defaults and built-in aliases, pin versioned `npx` built-ins to exact versions, and stop unknown ACP agent ids from falling through to raw `--agent` command execution on the MCP-proxy path. (#28321) Thanks @m0nkmaster and @vincentkoc.
 - Control UI/config: keep sensitive raw config hidden by default, replace the blank blocked editor with an explicit reveal-to-edit state, and restore raw JSON editing without auto-exposing secrets. Fixes #55322.
 - WhatsApp: fix infinite echo loop in self-chat DM mode where the bot's own outbound replies were re-processed as new inbound user messages. (#54570) Thanks @joelnishanth
 - OpenAI Codex/image tools: register Codex for media understanding and route image prompts through Codex instructions so image analysis no longer fails on missing provider registration or missing `instructions`. (#54829) Thanks @neeravmakwana.
@@ -39,6 +42,7 @@ Docs: https://docs.openclaw.ai
 - CLI/message send: write manual `openclaw message send` deliveries into the resolved agent session transcript again by always threading the default CLI agent through outbound mirroring. (#54187) Thanks @KevInTheCloud5617.
 - CLI/onboarding: show the Kimi Code API key option again in the Moonshot setup menu so the interactive picker includes all Kimi setup paths together. Fixes #54412 Thanks @sparkyrider
 - Agents/status: use provider-aware context window lookup for fresh Anthropic 4.6 model overrides so `/status` shows the correct 1.0m window instead of an underreported shared-cache minimum. (#54796) Thanks @neeravmakwana.
+- OpenAI/WebSocket: preserve reasoning replay metadata and tool-call item ids on WebSocket tool turns, and start a fresh response chain when full-context resend is required. (#53856) Thanks @xujingchen1996.
 - OpenAI/WS: restore reasoning blocks for Responses WebSocket runs and keep reasoning/tool-call replay metadata intact so resumed sessions do not lose or break follow-up reasoning-capable turns. (#53856) Thanks @xujingchen1996.
 - Agents/errors: surface provider quota/reset details when available, but keep HTML/Cloudflare rate-limit pages on the generic fallback so raw error pages are not shown to users. (#54512) Thanks @bugkill3r.
 - Claude CLI: switch the bundled Claude CLI backend to `stream-json` output so watchdogs see progress on long runs, and keep session/usage metadata even when Claude finishes with an empty result line. (#49698) Thanks @felear2022.
@@ -70,6 +74,8 @@ Docs: https://docs.openclaw.ai
 - Discord/gateway shutdown: treat expected reconnect-exhausted events during intentional lifecycle stop as clean shutdowns so startup-abort cleanup no longer surfaces false gateway failures. (#55324) Thanks @joelnishanth.
 - GitHub Copilot/auth refresh: treat large `expires_at` values as seconds epochs and clamp far-future runtime auth refresh timers so Copilot token refresh cannot fall into a `setTimeout` overflow hot loop. (#55360) Thanks @michael-abdo.
 - Agents/status: use the persisted runtime session model in `session_status` when no explicit override exists, and honor per-agent `thinkingDefault` in both `session_status` and `/status`. (#55425) Thanks @scoootscooob, @xaeon2026, and @ysfbsf.
+- Heartbeat/runner: guarantee the interval timer is re-armed after heartbeat runs and unexpected runner errors so scheduled heartbeats do not silently stop after an interrupted cycle. (#52270) Thanks @MiloStack.
+- Config/Doctor: rewrite stale bundled plugin load paths from legacy `extensions/*` locations to the packaged bundled path, including directory-name mismatches and slash-suffixed config entries. (#55054) Thanks @SnowSky1.
 
 ## 2026.3.24
 

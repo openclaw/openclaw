@@ -3,8 +3,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 const mockLoadConfig = vi.hoisted(() => vi.fn<() => OpenClawConfig>());
 const mockReadConfigFileSnapshot = vi.hoisted(() => vi.fn<() => Promise<ConfigFileSnapshot>>());
-const mockLoadOpenClawPlugins = vi.hoisted(() => vi.fn());
-const mockListChannelPlugins = vi.hoisted(() => vi.fn());
+const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 
 vi.mock("./config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./config.js")>();
@@ -15,12 +14,8 @@ vi.mock("./config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/loader.js", () => ({
-  loadOpenClawPlugins: (...args: unknown[]) => mockLoadOpenClawPlugins(...args),
-}));
-
-vi.mock("../channels/plugins/index.js", () => ({
-  listChannelPlugins: (...args: unknown[]) => mockListChannelPlugins(...args),
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
 }));
 
 function makeSnapshot(params: { valid: boolean; config?: OpenClawConfig }): ConfigFileSnapshot {
@@ -35,6 +30,97 @@ function makeSnapshot(params: { valid: boolean; config?: OpenClawConfig }): Conf
     issues: params.valid ? [] : [{ path: "gateway", message: "invalid" }],
     warnings: [],
     legacyIssues: [],
+  };
+}
+
+function makeManifestRegistry() {
+  return {
+    diagnostics: [],
+    plugins: [
+      {
+        id: "demo",
+        name: "Demo",
+        description: "Demo plugin",
+        origin: "bundled",
+        channels: [],
+        configUiHints: {},
+        configSchema: {
+          type: "object",
+          properties: {
+            mode: { type: "string" },
+          },
+        },
+      },
+      {
+        id: "telegram",
+        name: "Telegram",
+        description: "Telegram plugin",
+        origin: "bundled",
+        channels: ["telegram"],
+        channelCatalogMeta: {
+          id: "telegram",
+          label: "Telegram",
+          blurb: "Telegram channel",
+        },
+        channelConfigs: {
+          telegram: {
+            schema: {
+              type: "object",
+              properties: {
+                botToken: { type: "string" },
+              },
+            },
+            uiHints: {},
+          },
+        },
+      },
+      {
+        id: "slack",
+        name: "Slack",
+        description: "Slack plugin",
+        origin: "bundled",
+        channels: ["slack"],
+        channelCatalogMeta: {
+          id: "slack",
+          label: "Slack",
+          blurb: "Slack channel",
+        },
+        channelConfigs: {
+          slack: {
+            schema: {
+              type: "object",
+              properties: {
+                botToken: { type: "string" },
+              },
+            },
+            uiHints: {},
+          },
+        },
+      },
+      {
+        id: "matrix",
+        name: "Matrix",
+        description: "Matrix plugin",
+        origin: "workspace",
+        channels: ["matrix"],
+        channelCatalogMeta: {
+          id: "matrix",
+          label: "Matrix",
+          blurb: "Matrix channel",
+        },
+        channelConfigs: {
+          matrix: {
+            schema: {
+              type: "object",
+              properties: {
+                homeserver: { type: "string" },
+              },
+            },
+            uiHints: {},
+          },
+        },
+      },
+    ],
   };
 }
 
@@ -55,156 +141,44 @@ describe("readBestEffortRuntimeConfigSchema", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockLoadConfig.mockReturnValue({});
-    mockListChannelPlugins.mockReturnValue([]);
+    mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
   });
 
-  it("uses scoped plugin registry channels for valid configs", async () => {
+  it("merges manifest plugin metadata for valid configs", async () => {
     mockReadConfigFileSnapshot.mockResolvedValueOnce(
       makeSnapshot({
         valid: true,
         config: { plugins: { entries: { demo: { enabled: true } } } },
       }),
     );
-    mockLoadOpenClawPlugins.mockReturnValueOnce({
-      plugins: [
-        {
-          id: "demo",
-          name: "Demo",
-          description: "Demo plugin",
-          configUiHints: {},
-          configJsonSchema: {
-            type: "object",
-            properties: {
-              mode: { type: "string" },
-            },
-          },
-        },
-      ],
-      channels: [
-        {
-          pluginId: "telegram",
-          pluginName: "Telegram",
-          source: "bundled",
-          plugin: {
-            id: "telegram",
-            meta: { label: "Telegram", blurb: "Telegram channel" },
-            configSchema: {
-              schema: {
-                type: "object",
-                properties: {
-                  botToken: { type: "string" },
-                },
-              },
-              uiHints: {},
-            },
-          },
-        },
-      ],
-      channelSetups: [],
-    });
 
     const { channelProps, entryProps } = await readSchemaNodes();
 
-    expect(mockLoadOpenClawPlugins).toHaveBeenCalledWith(
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: { plugins: { entries: { demo: { enabled: true } } } },
-        activate: false,
         cache: false,
       }),
     );
     expect(channelProps?.telegram).toBeTruthy();
+    expect(channelProps?.matrix).toBeTruthy();
     expect(entryProps?.demo).toBeTruthy();
   });
 
-  it("falls back to channel-only schema when config is invalid", async () => {
+  it("falls back to bundled channel metadata when config is invalid", async () => {
     mockReadConfigFileSnapshot.mockResolvedValueOnce(makeSnapshot({ valid: false }));
-    mockLoadOpenClawPlugins.mockReturnValueOnce({
-      plugins: [],
-      channels: [
-        {
-          pluginId: "slack",
-          pluginName: "Slack",
-          source: "bundled",
-          plugin: {
-            id: "slack",
-            meta: { label: "Slack", blurb: "Slack channel" },
-            configSchema: {
-              schema: {
-                type: "object",
-                properties: {
-                  botToken: { type: "string" },
-                },
-              },
-              uiHints: {},
-            },
-          },
-        },
-      ],
-      channelSetups: [
-        {
-          pluginId: "telegram",
-          pluginName: "Telegram",
-          source: "bundled",
-          plugin: {
-            id: "telegram",
-            meta: { label: "Telegram", blurb: "Telegram channel" },
-            configSchema: {
-              schema: {
-                type: "object",
-                properties: {
-                  botToken: { type: "string" },
-                },
-              },
-              uiHints: {},
-            },
-          },
-        },
-      ],
-    });
 
     const { channelProps, entryProps } = await readSchemaNodes();
 
-    expect(mockLoadOpenClawPlugins).toHaveBeenCalledWith(
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: { plugins: { enabled: true } },
-        activate: false,
         cache: false,
-        includeSetupOnlyChannelPlugins: true,
       }),
     );
     expect(channelProps?.telegram).toBeTruthy();
     expect(channelProps?.slack).toBeTruthy();
     expect(entryProps?.demo).toBeUndefined();
-  });
-
-  it("does not fall back to active registry channels when invalid fallback load throws", async () => {
-    mockReadConfigFileSnapshot.mockResolvedValueOnce(makeSnapshot({ valid: false }));
-    mockLoadOpenClawPlugins.mockImplementationOnce(() => {
-      throw new Error("plugin load failed");
-    });
-    mockListChannelPlugins.mockReturnValueOnce([
-      {
-        id: "telegram",
-        meta: { label: "Telegram", blurb: "Telegram channel" },
-        configSchema: {
-          schema: {
-            type: "object",
-            properties: {
-              botToken: { type: "string" },
-            },
-          },
-          uiHints: {},
-        },
-      },
-    ]);
-
-    const { readBestEffortRuntimeConfigSchema } = await import("./runtime-schema.js");
-    const result = await readBestEffortRuntimeConfigSchema();
-    const schema = result.schema as { properties?: Record<string, unknown> };
-    const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
-    const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
-
-    expect(channelProps?.telegram).toBeUndefined();
   });
 });
 
@@ -212,67 +186,23 @@ describe("loadGatewayRuntimeConfigSchema", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockLoadConfig.mockReturnValue({ plugins: { entries: { demo: { enabled: true } } } });
+    mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
   });
 
-  it("preserves gateway channel source and loader options", async () => {
-    mockLoadOpenClawPlugins.mockReturnValueOnce({
-      plugins: [
-        {
-          id: "demo",
-          name: "Demo",
-          description: "Demo plugin",
-          configUiHints: {},
-          configJsonSchema: {
-            type: "object",
-            properties: {
-              mode: { type: "string" },
-            },
-          },
-        },
-      ],
-      channels: [
-        {
-          pluginId: "scoped-only",
-          pluginName: "Scoped Only",
-          source: "bundled",
-          plugin: {
-            id: "scoped-only",
-            meta: { label: "Scoped Only" },
-          },
-        },
-      ],
-      channelSetups: [],
-    });
-    mockListChannelPlugins.mockReturnValueOnce([
-      {
-        id: "telegram",
-        meta: { label: "Telegram", blurb: "Telegram channel" },
-        configSchema: {
-          schema: {
-            type: "object",
-            properties: {
-              botToken: { type: "string" },
-            },
-          },
-          uiHints: {},
-        },
-      },
-    ]);
-
+  it("uses manifest metadata instead of booting plugin runtime", async () => {
     const { loadGatewayRuntimeConfigSchema } = await import("./runtime-schema.js");
     const result = loadGatewayRuntimeConfigSchema();
     const schema = result.schema as { properties?: Record<string, unknown> };
     const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
     const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
 
-    expect(mockLoadOpenClawPlugins).toHaveBeenCalledWith(
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: { plugins: { entries: { demo: { enabled: true } } } },
-        cache: true,
+        cache: false,
       }),
     );
-    expect(mockLoadOpenClawPlugins.mock.calls[0]?.[0]?.activate).toBeUndefined();
     expect(channelProps?.telegram).toBeTruthy();
-    expect(channelProps?.["scoped-only"]).toBeUndefined();
+    expect(channelProps?.matrix).toBeTruthy();
   });
 });
