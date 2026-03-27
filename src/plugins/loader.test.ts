@@ -1010,6 +1010,8 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
 
     expect(scoped.plugins.find((entry) => entry.id === "command-plugin")?.status).toBe("loaded");
     expect(scoped.commands.map((entry) => entry.command.name)).toEqual(["pair"]);
+    // Non-activating loads still run register() with full mode, but they are
+    // NOT published to the global command registry because activate is false.
     expect(getPluginCommandSpecs("telegram")).toEqual([]);
 
     const active = loadOpenClawPlugins({
@@ -1202,6 +1204,85 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     expect(() => loadOpenClawPlugins({ activate: false, cache: true })).toThrow(
       "activate:false requires cache:false",
     );
+  });
+
+  it("skips register() side-effects but collects providers when activate:false (snapshot load)", () => {
+    useNoBundledPlugins();
+    const registerCalls: string[] = [];
+    // Using a global to track calls since the plugin runs in a separate module scope via jiti,
+    // but CommonJS module.exports closures can capture the array reference.
+    (globalThis as Record<string, unknown>).__snapshot_register_calls = registerCalls;
+    try {
+      const plugin = writePlugin({
+        id: "snapshot-provider-plugin",
+        filename: "snapshot-provider-plugin.cjs",
+        body: `module.exports = {
+          id: "snapshot-provider-plugin",
+          register(api) {
+            const calls = globalThis.__snapshot_register_calls;
+            if (calls) calls.push("register:" + api.registrationMode);
+            api.registerProvider({
+              id: "snapshot-test-provider",
+              label: "Snapshot Test",
+              auth: [],
+            });
+            api.registerTool({
+              name: "snapshot-tool",
+              description: "tool that should not appear in snapshot loads",
+              parameters: { type: "object", properties: {} },
+              execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+            });
+          },
+        };`,
+      });
+
+      const snapshot = loadOpenClawPlugins({
+        cache: false,
+        activate: false,
+        providerOnly: true,
+        workspaceDir: plugin.dir,
+        config: {
+          plugins: {
+            load: { paths: [plugin.file] },
+            allow: ["snapshot-provider-plugin"],
+          },
+        },
+        onlyPluginIds: ["snapshot-provider-plugin"],
+      });
+
+      // Plugin was loaded and registered.
+      expect(
+        snapshot.plugins.find((entry) => entry.id === "snapshot-provider-plugin")?.status,
+      ).toBe("loaded");
+      // Provider is collected — this is the whole point of snapshot provider loads.
+      expect(snapshot.providers.map((entry) => entry.provider.id)).toEqual([
+        "snapshot-test-provider",
+      ]);
+      // Tools are NOT registered in provider-only mode.
+      expect(snapshot.tools).toEqual([]);
+      // register() was called with provider-only mode.
+      expect(registerCalls).toEqual(["register:provider-only"]);
+
+      // Verify full activation still works for the same plugin.
+      registerCalls.length = 0;
+      const full = loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: plugin.dir,
+        config: {
+          plugins: {
+            load: { paths: [plugin.file] },
+            allow: ["snapshot-provider-plugin"],
+          },
+        },
+        onlyPluginIds: ["snapshot-provider-plugin"],
+      });
+
+      expect(full.providers.map((entry) => entry.provider.id)).toEqual(["snapshot-test-provider"]);
+      expect(full.tools.some((entry) => entry.names.includes("snapshot-tool"))).toBe(true);
+      expect(registerCalls).toEqual(["register:full"]);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__snapshot_register_calls;
+    }
   });
 
   it("re-initializes global hook runner when serving registry from cache", () => {

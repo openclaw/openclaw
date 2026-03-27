@@ -55,7 +55,8 @@ vi.mock("../agents/auth-profiles.js", async () => {
 
 const resolveProviderUsageAuthWithPluginMock = vi.fn(async (..._args: unknown[]) => null);
 
-vi.mock("../plugins/provider-runtime.js", () => ({
+vi.mock("../plugins/provider-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-runtime.js")>()),
   resolveProviderUsageAuthWithPlugin: resolveProviderUsageAuthWithPluginMock,
 }));
 

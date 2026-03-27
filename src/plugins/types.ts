@@ -1490,7 +1490,7 @@ export type OpenClawPluginModule =
   | OpenClawPluginDefinition
   | ((api: OpenClawPluginApi) => void | Promise<void>);
 
-export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime";
+export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime" | "provider-only";
 
 /** Main registration API injected into native plugin entry files. */
 export type OpenClawPluginApi = {
