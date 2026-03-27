@@ -1,70 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  type CheckpointData,
+  checkpointPath,
+  createCheckpoint,
+  readCheckpoint,
+  writeCheckpoint,
+} from "./checkpoint.js";
 import { matchCapabilities } from "./capability-matcher.js";
 import { parseTaskFrontmatter } from "./frontmatter.js";
 import { QueueManager } from "./queue-manager.js";
 import type { TaskFrontmatter } from "./types.js";
 
 const log = createSubsystemLogger("projects/heartbeat-scanner");
-
-// -- Checkpoint types (inline until checkpoint.ts ships in Plan 01) --
-
-export interface CheckpointData {
-  status: "in-progress" | "review" | "done" | "blocked";
-  claimed_by: string;
-  claimed_at: string;
-  last_step: string;
-  next_action: string;
-  progress_pct: number;
-  files_modified: string[];
-  failed_approaches: Array<{ approach: string; reason: string }>;
-  log: Array<{ timestamp: string; agent: string; action: string }>;
-  notes: string;
-}
-
-/** Derive checkpoint sidecar path from a task file path. */
-export function checkpointPath(taskFilePath: string): string {
-  const dir = path.dirname(taskFilePath);
-  const base = path.basename(taskFilePath, ".md");
-  return path.join(dir, `${base}.checkpoint.json`);
-}
-
-/** Create initial checkpoint data for a freshly claimed task. */
-export function createCheckpoint(opts: {
-  agentId: string;
-  taskId: string;
-  timestamp?: string;
-}): CheckpointData {
-  const ts = opts.timestamp ?? new Date().toISOString();
-  return {
-    status: "in-progress",
-    claimed_by: opts.agentId,
-    claimed_at: ts,
-    last_step: "Claimed task",
-    next_action: "Begin work",
-    progress_pct: 0,
-    files_modified: [],
-    failed_approaches: [],
-    log: [{ timestamp: ts, agent: opts.agentId, action: "Claimed task" }],
-    notes: "",
-  };
-}
-
-/** Write checkpoint data atomically. */
-export async function writeCheckpoint(filePath: string, data: CheckpointData): Promise<void> {
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
-}
-
-/** Read checkpoint data, returning null if missing or corrupted. */
-export async function readCheckpoint(filePath: string): Promise<CheckpointData | null> {
-  try {
-    const content = await fs.readFile(filePath, "utf8");
-    return JSON.parse(content) as CheckpointData;
-  } catch {
-    return null;
-  }
-}
 
 // -- Scanner types --
 
