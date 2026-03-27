@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { describe, expect, it } from "vitest";
+import { FeishuConfigSchema } from "./config-schema.js";
 import {
   isFeishuGroupAllowed,
   resolveFeishuAllowlistMatch,
@@ -88,12 +89,12 @@ describe("resolveFeishuReplyPolicy", () => {
 
 describe("resolveFeishuGroupConfig", () => {
   it("falls back to wildcard group config when direct match is missing", () => {
-    const cfg: FeishuConfig = {
+    const cfg: FeishuConfig = FeishuConfigSchema.parse({
       groups: {
         "*": { requireMention: false },
         "oc-explicit": { requireMention: true },
       },
-    };
+    });
 
     const resolved = resolveFeishuGroupConfig({
       cfg,
@@ -104,12 +105,12 @@ describe("resolveFeishuGroupConfig", () => {
   });
 
   it("prefers exact group config over wildcard", () => {
-    const cfg: FeishuConfig = {
+    const cfg: FeishuConfig = FeishuConfigSchema.parse({
       groups: {
         "*": { requireMention: false },
         "oc-explicit": { requireMention: true },
       },
-    };
+    });
 
     const resolved = resolveFeishuGroupConfig({
       cfg,
@@ -120,12 +121,12 @@ describe("resolveFeishuGroupConfig", () => {
   });
 
   it("keeps case-insensitive matching for explicit group ids", () => {
-    const cfg: FeishuConfig = {
+    const cfg: FeishuConfig = FeishuConfigSchema.parse({
       groups: {
         "*": { requireMention: false },
         OC_UPPER: { requireMention: true },
       },
-    };
+    });
 
     const resolved = resolveFeishuGroupConfig({
       cfg,
