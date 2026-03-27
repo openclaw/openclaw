@@ -1,3 +1,4 @@
+import { formatUpdateFailureSummary } from "../../../../src/infra/update-failure.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../types.ts";
 import type { JsonSchema } from "../views/config-form.shared.ts";
@@ -34,6 +35,19 @@ export type ConfigState = {
   configActiveSection: string | null;
   configActiveSubsection: string | null;
   lastError: string | null;
+};
+
+type UpdateStepSummary = {
+  name?: string;
+  exitCode?: number | null;
+  stderrTail?: string | null;
+};
+
+type UpdateResultSummary = {
+  status?: string;
+  reason?: string;
+  mode?: string;
+  steps?: UpdateStepSummary[];
 };
 
 export async function loadConfig(state: ConfigState) {
@@ -186,13 +200,13 @@ export async function runUpdate(state: ConfigState) {
   try {
     const res = await state.client.request<{
       ok?: boolean;
-      result?: { status?: string; reason?: string };
+      result?: UpdateResultSummary;
     }>("update.run", {
       sessionKey: state.applySessionKey,
     });
     if (res && res.ok === false) {
       const status = res.result?.status ?? "error";
-      const reason = res.result?.reason ?? "Update failed.";
+      const reason = formatUpdateFailureSummary(res.result);
       state.lastError = `Update ${status}: ${reason}`;
     }
   } catch (err) {

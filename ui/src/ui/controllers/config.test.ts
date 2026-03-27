@@ -386,4 +386,59 @@ describe("runUpdate", () => {
 
     expect(state.lastError).toBe("Update error: network unavailable");
   });
+
+  it("prefers failed step stderr for update errors", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      result: {
+        status: "error",
+        reason: "global update (omit optional)",
+        steps: [
+          { name: "global update", exitCode: 1, stderrTail: "node-gyp failed" },
+          {
+            name: "global update (omit optional)",
+            exitCode: 1,
+            stderrTail: "npm ERR! code EACCES\nnpm ERR! syscall rename",
+          },
+        ],
+      },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.applySessionKey = "main";
+
+    await runUpdate(state);
+
+    expect(state.lastError).toBe(
+      "Update error: global update (omit optional): npm ERR! code EACCES: Permission denied during global package update. Re-run with a writable npm prefix or sudo.",
+    );
+  });
+
+  it("adds omit-optional guidance for native dependency build failures", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      result: {
+        status: "error",
+        reason: "global update (omit optional)",
+        steps: [
+          {
+            name: "global update (omit optional)",
+            exitCode: 1,
+            stderrTail:
+              "prebuild-install warn install No prebuilt binaries found\nnode-gyp rebuild failed",
+          },
+        ],
+      },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+
+    expect(state.lastError).toBe(
+      "Update error: global update (omit optional): prebuild-install warn install No prebuilt binaries found: Native optional dependency build failed. Try `npm i -g openclaw@latest --omit=optional`.",
+    );
+  });
 });
