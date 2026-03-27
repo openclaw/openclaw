@@ -175,6 +175,24 @@ describe("gateway session utils", () => {
     expect(target.storeKeys).toEqual(expect.arrayContaining([uuid, `agent:main:${uuid}`]));
   });
 
+  test("resolveGatewaySessionStoreTarget keeps bare UUID aliases addressable for legacy links", () => {
+    const uuid = "7d9d8588-65bb-4ce8-b2d5-98d3794cdfcf";
+    const prefixed = `agent:main:${uuid}`;
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const target = resolveGatewaySessionStoreTarget({
+      cfg,
+      key: prefixed,
+      store: {
+        [uuid]: { sessionId: "sess-webui", updatedAt: 100 },
+      },
+    });
+    expect(target.canonicalKey).toBe(prefixed);
+    expect(target.storeKeys).toEqual(expect.arrayContaining([uuid, prefixed]));
+  });
+
   test("resolveSessionStoreKey falls back to first list entry when no agent is marked default", () => {
     const cfg = {
       session: { mainKey: "main" },

@@ -743,6 +743,14 @@ function buildGatewaySessionStoreScanTargets(params: {
   if (legacyAgentScopedUuidKey) {
     targets.add(legacyAgentScopedUuidKey);
   }
+  const parsedCanonical = parseAgentSessionKey(params.canonicalKey);
+  const legacyBareUuidKey =
+    parsedCanonical && normalizeAgentId(parsedCanonical.agentId) === params.agentId
+      ? parsedCanonical.rest.trim().toLowerCase()
+      : "";
+  if (legacyBareUuidKey && looksLikeSessionId(legacyBareUuidKey)) {
+    targets.add(legacyBareUuidKey);
+  }
   const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
   if (params.canonicalKey === agentMainKey) {
     targets.add(`agent:${params.agentId}:main`);
