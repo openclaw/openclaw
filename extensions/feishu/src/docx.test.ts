@@ -1,7 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import { createToolFactoryHarness, type ToolLike } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
+const createFeishuToolClientMock = vi.hoisted(() => vi.fn());
+const resolveAnyEnabledFeishuToolsConfigMock = vi.hoisted(() => vi.fn());
+const resolveFeishuToolAccountMock = vi.hoisted(() => vi.fn());
 const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 const convertMock = vi.hoisted(() => vi.fn());
@@ -16,24 +20,7 @@ const permissionMemberCreateMock = vi.hoisted(() => vi.fn());
 const blockPatchMock = vi.hoisted(() => vi.fn());
 const scopeListMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./client.js", () => ({
-  createFeishuClient: createFeishuClientMock,
-}));
-
-vi.mock("./runtime.js", () => ({
-  getFeishuRuntime: () => ({
-    channel: {
-      media: {
-        fetchRemoteMedia: fetchRemoteMediaMock,
-      },
-    },
-    media: {
-      loadWebMedia: loadWebMediaMock,
-    },
-  }),
-}));
-
-import { registerFeishuDocTools } from "./docx.js";
+import { __testing as feishuDocTesting, registerFeishuDocTools } from "./docx.js";
 
 type ToolResultWithDetails = {
   details: Record<string, unknown>;
@@ -76,6 +63,36 @@ describe("feishu_doc image fetch hardening", () => {
         },
       },
     });
+    createFeishuToolClientMock.mockImplementation(() => createFeishuClientMock());
+    resolveAnyEnabledFeishuToolsConfigMock.mockReturnValue({
+      doc: true,
+      chat: false,
+      wiki: false,
+      drive: false,
+      perm: false,
+      scopes: false,
+    });
+    resolveFeishuToolAccountMock.mockReturnValue({
+      config: {
+        mediaMaxMb: 30,
+      },
+    });
+    feishuDocTesting.setDepsForTest({
+      getFeishuRuntime: () =>
+        createPluginRuntimeMock({
+          channel: {
+            media: {
+              fetchRemoteMedia: fetchRemoteMediaMock,
+            },
+          },
+          media: {
+            loadWebMedia: loadWebMediaMock,
+          },
+        }),
+      createFeishuToolClient: createFeishuToolClientMock,
+      resolveAnyEnabledFeishuToolsConfig: resolveAnyEnabledFeishuToolsConfigMock,
+      resolveFeishuToolAccount: resolveFeishuToolAccountMock,
+    });
 
     convertMock.mockResolvedValue({
       code: 0,
@@ -117,6 +134,10 @@ describe("feishu_doc image fetch hardening", () => {
     permissionMemberCreateMock.mockResolvedValue({ code: 0 });
     blockPatchMock.mockResolvedValue({ code: 0 });
     scopeListMock.mockResolvedValue({ code: 0, data: { scopes: [] } });
+  });
+
+  afterEach(() => {
+    feishuDocTesting.setDepsForTest(null);
   });
 
   function resolveFeishuDocTool(context: Record<string, unknown> = {}) {

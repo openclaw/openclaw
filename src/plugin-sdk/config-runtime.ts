@@ -2,6 +2,7 @@
 // config writes, or session-store helpers without importing src internals.
 
 export {
+  createConfigIO,
   getRuntimeConfigSnapshot,
   loadConfig,
   readConfigFileSnapshotForWrite,
@@ -80,6 +81,7 @@ export type {
   TtsModelOverrideConfig,
   TtsProvider,
 } from "../config/types.js";
+export type { BrowserConfig, BrowserProfileConfig } from "../config/types.browser.js";
 export {
   loadSessionStore,
   readSessionUpdatedAt,

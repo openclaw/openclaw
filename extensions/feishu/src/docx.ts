@@ -25,6 +25,32 @@ import {
   resolveFeishuToolAccount,
 } from "./tool-account.js";
 
+const feishuDocDeps = {
+  getFeishuRuntime,
+  createFeishuToolClient,
+  resolveAnyEnabledFeishuToolsConfig,
+  resolveFeishuToolAccount,
+};
+
+export const __testing = {
+  setDepsForTest(
+    overrides: Partial<{
+      getFeishuRuntime: typeof getFeishuRuntime;
+      createFeishuToolClient: typeof createFeishuToolClient;
+      resolveAnyEnabledFeishuToolsConfig: typeof resolveAnyEnabledFeishuToolsConfig;
+      resolveFeishuToolAccount: typeof resolveFeishuToolAccount;
+    }> | null,
+  ) {
+    feishuDocDeps.getFeishuRuntime = overrides?.getFeishuRuntime ?? getFeishuRuntime;
+    feishuDocDeps.createFeishuToolClient =
+      overrides?.createFeishuToolClient ?? createFeishuToolClient;
+    feishuDocDeps.resolveAnyEnabledFeishuToolsConfig =
+      overrides?.resolveAnyEnabledFeishuToolsConfig ?? resolveAnyEnabledFeishuToolsConfig;
+    feishuDocDeps.resolveFeishuToolAccount =
+      overrides?.resolveFeishuToolAccount ?? resolveFeishuToolAccount;
+  },
+};
+
 // ============ Helpers ============
 
 function json(data: unknown) {
@@ -510,7 +536,10 @@ async function uploadImageToDocx(
 }
 
 async function downloadImage(url: string, maxBytes: number): Promise<Buffer> {
-  const fetched = await getFeishuRuntime().channel.media.fetchRemoteMedia({ url, maxBytes });
+  const fetched = await feishuDocDeps.getFeishuRuntime().channel.media.fetchRemoteMedia({
+    url,
+    maxBytes,
+  });
   return fetched.buffer;
 }
 
@@ -586,7 +615,7 @@ async function resolveUploadInput(
       // localRoots left undefined so loadWebMedia uses default roots (tmp, media,
       // workspace, sandboxes) plus workspace-profile auto-discovery.
       const resolvedPath = resolve(candidate);
-      const loaded = await getFeishuRuntime().media.loadWebMedia(resolvedPath, {
+      const loaded = await feishuDocDeps.getFeishuRuntime().media.loadWebMedia(resolvedPath, {
         maxBytes,
         optimizeImages: false,
       });
@@ -635,7 +664,10 @@ async function resolveUploadInput(
   }
 
   if (url) {
-    const fetched = await getFeishuRuntime().channel.media.fetchRemoteMedia({ url, maxBytes });
+    const fetched = await feishuDocDeps.getFeishuRuntime().channel.media.fetchRemoteMedia({
+      url,
+      maxBytes,
+    });
     const urlPath = new URL(url).pathname;
     const guessed = urlPath.split("/").pop() || "upload.bin";
     return {
@@ -647,7 +679,7 @@ async function resolveUploadInput(
   // Use loadWebMedia to enforce localRoots sandbox (same as sendMediaFeishu).
   // localRoots left undefined — see comment above.
   const resolvedFilePath = resolve(filePath!);
-  const loaded = await getFeishuRuntime().media.loadWebMedia(resolvedFilePath, {
+  const loaded = await feishuDocDeps.getFeishuRuntime().media.loadWebMedia(resolvedFilePath, {
     maxBytes,
     optimizeImages: false,
   });
@@ -1361,19 +1393,19 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   }
 
   // Register if enabled on any account; account routing is resolved per execution.
-  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
+  const toolsCfg = feishuDocDeps.resolveAnyEnabledFeishuToolsConfig(accounts);
 
   const registered: string[] = [];
   type FeishuDocExecuteParams = FeishuDocParams & { accountId?: string };
 
   const getClient = (params: { accountId?: string } | undefined, defaultAccountId?: string) =>
-    createFeishuToolClient({ api, executeParams: params, defaultAccountId });
+    feishuDocDeps.createFeishuToolClient({ api, executeParams: params, defaultAccountId });
 
   const getMediaMaxBytes = (
     params: { accountId?: string } | undefined,
     defaultAccountId?: string,
   ) =>
-    (resolveFeishuToolAccount({ api, executeParams: params, defaultAccountId }).config
+    (feishuDocDeps.resolveFeishuToolAccount({ api, executeParams: params, defaultAccountId }).config
       ?.mediaMaxMb ?? 30) *
     1024 *
     1024;

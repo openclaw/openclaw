@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/browser-support";
+export * from "openclaw/plugin-sdk/runtime-env";

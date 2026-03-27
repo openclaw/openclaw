@@ -1,4 +1,4 @@
-import { createConfigIO, getRuntimeConfigSnapshot } from "../config/config.js";
+import * as browserConfigRuntime from "../config/config.js";
 import { resolveBrowserConfig, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import type { BrowserServerState } from "./server-context.types.js";
 
@@ -73,10 +73,14 @@ export function refreshResolvedBrowserConfigFromDisk(params: {
     return;
   }
 
-  // Route-level browser config hot reload should observe on-disk changes immediately.
-  // The shared loadConfig() helper may return a cached snapshot for the configured TTL,
-  // which can leave request-time browser guards stale (for example evaluateEnabled).
-  const cfg = getRuntimeConfigSnapshot() ?? createConfigIO().loadConfig();
+  const cfg =
+    params.mode === "fresh"
+      ? // Fresh mode bypasses the shared cached snapshot so request-time profile
+        // lookups can observe new on-disk profiles without mutating global cache state.
+        browserConfigRuntime.createConfigIO().loadConfig()
+      : // Cached mode preserves the normal runtime snapshot semantics and only falls back
+        // to the shared config loader when no snapshot has been primed yet.
+        (browserConfigRuntime.getRuntimeConfigSnapshot() ?? browserConfigRuntime.loadConfig());
   const freshResolved = resolveBrowserConfig(cfg.browser, cfg);
   applyResolvedConfig(params.current, freshResolved);
 }
