@@ -271,7 +271,7 @@ describe("chat view", () => {
       container,
     );
 
-    expect(container.textContent).not.toContain("context used");
+    expect(container.textContent).not.toContain("Model context");
     expect(container.textContent).not.toContain("757.3k / 200k");
   });
 
@@ -301,12 +301,13 @@ describe("chat view", () => {
       container,
     );
 
-    expect(container.textContent).toContain("95% context used");
-    expect(container.textContent).toContain("190k / 200k");
-    expect(container.textContent).not.toContain("757.3k / 200k");
+    expect(container.textContent).toContain("Model context");
+    expect(container.textContent).toContain("Used 190k");
+    expect(container.textContent).toContain("Limit 200k");
+    expect(container.textContent).not.toContain("Used 757.3k");
   });
 
-  it("hides the context notice when totalTokens is missing even if inputTokens is high", () => {
+  it("falls back to inputTokens when totalTokens is missing", () => {
     const container = document.createElement("div");
     render(
       renderChat(
@@ -315,7 +316,7 @@ describe("chat view", () => {
             ts: 0,
             path: "",
             count: 1,
-            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+            defaults: { modelProvider: "openai", model: "openai/gpt-5.2", contextTokens: 200_000 },
             sessions: [
               {
                 key: "main",
@@ -331,7 +332,9 @@ describe("chat view", () => {
       container,
     );
 
-    expect(container.textContent).not.toContain("context used");
+    expect(container.textContent).toContain("Model context");
+    expect(container.textContent).toContain("Used 500k");
+    expect(container.textContent).toContain("Limit 200k");
   });
 
   it("hides the context notice when totalTokens is marked stale", () => {

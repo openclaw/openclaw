@@ -39930,6 +39930,34 @@
       "hasChildren": false
     },
     {
+      "path": "gateway.controlUi.chat",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "network"
+      ],
+      "label": "Control UI Chat",
+      "help": "Control UI chat-surface presentation settings. Use these to tune operator-facing notices without changing backend runtime semantics.",
+      "hasChildren": true
+    },
+    {
+      "path": "gateway.controlUi.chat.showPricingThreshold",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "network"
+      ],
+      "label": "Control UI Chat Show Pricing Threshold",
+      "help": "Show model-specific higher-rate pricing threshold hints in chat context notices when available. Disable if you want only model-context usage/limit information in the chat header.",
+      "hasChildren": false
+    },
+    {
       "path": "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
       "kind": "core",
       "type": "boolean",
