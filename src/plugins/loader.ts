@@ -839,6 +839,22 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const validateOnly = options.mode === "validate";
   const onlyPluginIdSet = onlyPluginIds ? new Set(onlyPluginIds) : null;
   const cacheEnabled = options.cache !== false;
+
+  // Early return: if an active registry is already set (from a prior load), reuse it
+  // instead of doing a full reload. This prevents redundant plugin discovery, module
+  // loading, and hook registration when multiple callers invoke loadOpenClawPlugins()
+  // within the same process (e.g. gateway startup, agent run initialization).
+  // Related: https://github.com/openclaw/openclaw/issues/48380
+  if (shouldActivate) {
+    const activeKey = getActivePluginRegistryKey();
+    if (activeKey) {
+      const activeReg = getActivePluginRegistry();
+      if (activeReg && (activeReg.plugins?.length ?? 0) > 0) {
+        return activeReg;
+      }
+    }
+  }
+
   if (cacheEnabled) {
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
