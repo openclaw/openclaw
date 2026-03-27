@@ -2439,6 +2439,29 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      // ── Inject session metadata into outbound LLM requests ───────────────
+      // Stamps session_key, message_channel, and context_limit into
+      // options.metadata on every model call so LiteLLM callbacks can read
+      // them directly from kwargs — eliminating timestamp-correlation hacks
+      // in downstream spend alerting and channel attribution.
+      if (params.sessionKey || params.messageChannel || params.contextTokenBudget) {
+        const sessionMetadata: Record<string, unknown> = {};
+        if (params.sessionKey) sessionMetadata["session_key"] = params.sessionKey;
+        if (params.messageChannel) sessionMetadata["message_channel"] = params.messageChannel;
+        if (params.contextTokenBudget) sessionMetadata["context_limit"] = params.contextTokenBudget;
+        const innerWithMeta = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          const enrichedOptions = {
+            ...options,
+            metadata: {
+              ...(options as Record<string, unknown>)?.["metadata"] as Record<string, unknown>,
+              ...sessionMetadata,
+            },
+          };
+          return innerWithMeta(model, context, enrichedOptions as typeof options);
+        };
+      }
+
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
