@@ -8,7 +8,7 @@ import {
   normalizeModelCompat,
   normalizeProviderId,
   type ProviderPlugin,
-} from "openclaw/plugin-sdk/provider-models";
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createOpenAIAttributionHeadersWrapper,
   createOpenAIDefaultTransportWrapper,

@@ -15,7 +15,10 @@ import type {
   ProviderRuntimeModel,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { DEFAULT_CONTEXT_TOKENS, normalizeProviderId } from "openclaw/plugin-sdk/provider-models";
+import {
+  DEFAULT_CONTEXT_TOKENS,
+  normalizeProviderId,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
