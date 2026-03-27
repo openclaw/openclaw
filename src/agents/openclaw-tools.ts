@@ -1,7 +1,9 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
-import { resolvePluginTools } from "../plugins/tools.js";
+import { readSnakeCaseParamRaw } from "../param-key.js";
+import { copyPluginToolMeta, resolvePluginTools } from "../plugins/tools.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -38,6 +40,131 @@ const defaultOpenClawToolsDeps: OpenClawToolsDeps = {
 };
 
 let openClawToolsDeps: OpenClawToolsDeps = defaultOpenClawToolsDeps;
+
+type ThreadInjectionKey = "threadId" | "messageThreadId";
+
+function coerceAmbientThreadIdForSchema(params: {
+  value: unknown;
+  expectedType?: "string" | "number";
+}): string | number | undefined {
+  const { value, expectedType } = params;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (expectedType === "string") {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed || undefined;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+    return undefined;
+  }
+  if (expectedType === "number") {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) {
+      return undefined;
+    }
+    if (/^-?\d+$/.test(trimmed) && !Number.isSafeInteger(parsed)) {
+      return undefined;
+    }
+    return parsed;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+  return undefined;
+}
+
+function resolveThreadInjectionTarget(tool: AnyAgentTool): {
+  key: ThreadInjectionKey;
+  expectedType?: "string" | "number";
+} | null {
+  const schema =
+    tool.parameters && typeof tool.parameters === "object"
+      ? (tool.parameters as Record<string, unknown>)
+      : null;
+  const properties =
+    schema?.properties && typeof schema.properties === "object"
+      ? (schema.properties as Record<string, unknown>)
+      : null;
+  if (!properties) {
+    return null;
+  }
+  for (const key of ["threadId", "messageThreadId"] as const) {
+    const property =
+      properties[key] && typeof properties[key] === "object"
+        ? (properties[key] as Record<string, unknown>)
+        : null;
+    if (!property) {
+      continue;
+    }
+    const type = property.type;
+    const expectedType =
+      type === "string" ? "string" : type === "number" || type === "integer" ? "number" : undefined;
+    return { key, expectedType };
+  }
+  return null;
+}
+
+function wrapPluginToolWithAmbientThreadDefaults(params: {
+  tool: AnyAgentTool;
+  ambientThreadId: string | number;
+}): AnyAgentTool {
+  const target = resolveThreadInjectionTarget(params.tool);
+  if (!params.tool.execute || !target) {
+    return params.tool;
+  }
+  const defaultThreadId = coerceAmbientThreadIdForSchema({
+    value: params.ambientThreadId,
+    expectedType: target.expectedType,
+  });
+  if (defaultThreadId === undefined) {
+    return params.tool;
+  }
+  const originalExecute = params.tool.execute.bind(params.tool);
+  const wrappedTool: AnyAgentTool = {
+    ...params.tool,
+    execute: async (...args: unknown[]) => {
+      const existingParams = args[1];
+      const paramsRecord =
+        existingParams == null
+          ? {}
+          : existingParams && typeof existingParams === "object" && !Array.isArray(existingParams)
+            ? (existingParams as Record<string, unknown>)
+            : null;
+      if (!paramsRecord) {
+        return await originalExecute(...(args as Parameters<typeof originalExecute>));
+      }
+      if (
+        readSnakeCaseParamRaw(paramsRecord, "threadId") !== undefined ||
+        readSnakeCaseParamRaw(paramsRecord, "messageThreadId") !== undefined
+      ) {
+        return await originalExecute(...(args as Parameters<typeof originalExecute>));
+      }
+      const nextArgs = [...args];
+      nextArgs[1] = { ...paramsRecord, [target.key]: defaultThreadId };
+      return await originalExecute(...(nextArgs as Parameters<typeof originalExecute>));
+    },
+  };
+  copyPluginToolMeta(params.tool, wrappedTool);
+  return wrappedTool;
+}
 
 export function createOpenClawTools(
   options?: {
@@ -101,6 +228,12 @@ export function createOpenClawTools(
   const spawnWorkspaceDir = resolveWorkspaceRoot(
     options?.spawnWorkspaceDir ?? options?.workspaceDir,
   );
+  const deliveryContext = normalizeDeliveryContext({
+    channel: options?.agentChannel,
+    to: options?.agentTo,
+    accountId: options?.agentAccountId,
+    threadId: options?.agentThreadId,
+  });
   const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
   const sandbox =
     options?.sandboxRoot && options?.sandboxFsBridge
@@ -255,6 +388,7 @@ export function createOpenClawTools(
       },
       messageChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,
+      deliveryContext,
       requesterSenderId: options?.requesterSenderId ?? undefined,
       senderIsOwner: options?.senderIsOwner ?? undefined,
       sandboxed: options?.sandboxed,
@@ -264,7 +398,18 @@ export function createOpenClawTools(
     allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
   });
 
-  return [...tools, ...pluginTools];
+  const ambientThreadId = deliveryContext?.threadId;
+  const wrappedPluginTools =
+    ambientThreadId == null
+      ? pluginTools
+      : pluginTools.map((tool) =>
+          wrapPluginToolWithAmbientThreadDefaults({
+            tool,
+            ambientThreadId,
+          }),
+        );
+
+  return [...tools, ...wrappedPluginTools];
 }
 
 export const __testing = {
