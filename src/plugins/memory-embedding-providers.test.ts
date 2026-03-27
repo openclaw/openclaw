@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   clearMemoryEmbeddingProviders,
   getMemoryEmbeddingProvider,
+  getRegisteredMemoryEmbeddingProvider,
   listMemoryEmbeddingProviders,
+  listRegisteredMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
+  restoreRegisteredMemoryEmbeddingProviders,
   restoreMemoryEmbeddingProviders,
   type MemoryEmbeddingProviderAdapter,
 } from "./memory-embedding-providers.js";
@@ -37,6 +40,38 @@ describe("memory embedding provider registry", () => {
 
     expect(getMemoryEmbeddingProvider("alpha")).toBeUndefined();
     expect(getMemoryEmbeddingProvider("beta")).toBe(beta);
+  });
+
+  it("tracks owner plugin ids in registered snapshots", () => {
+    const alpha = createAdapter("alpha");
+    registerMemoryEmbeddingProvider(alpha, { ownerPluginId: "memory-core" });
+
+    expect(getRegisteredMemoryEmbeddingProvider("alpha")).toEqual({
+      adapter: alpha,
+      ownerPluginId: "memory-core",
+    });
+    expect(listRegisteredMemoryEmbeddingProviders()).toEqual([
+      {
+        adapter: alpha,
+        ownerPluginId: "memory-core",
+      },
+    ]);
+  });
+
+  it("restores registered snapshots with owner metadata", () => {
+    const beta = createAdapter("beta");
+
+    restoreRegisteredMemoryEmbeddingProviders([
+      {
+        adapter: beta,
+        ownerPluginId: "memory-core",
+      },
+    ]);
+
+    expect(getRegisteredMemoryEmbeddingProvider("beta")).toEqual({
+      adapter: beta,
+      ownerPluginId: "memory-core",
+    });
   });
 
   it("clears the registry", () => {

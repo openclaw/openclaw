@@ -95,6 +95,7 @@
   "matrix",
   "mattermost",
   "memory-core",
+  "memory-core-engine-runtime",
   "memory-core-host",
   "memory-core-host-engine",
   "memory-core-host-runtime",

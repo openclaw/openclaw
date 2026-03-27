@@ -334,6 +334,16 @@ export const builtinMemoryEmbeddingProviderAdapters = [
   ollamaAdapter,
 ] as const;
 
+const builtinMemoryEmbeddingProviderAdapterById = new Map(
+  builtinMemoryEmbeddingProviderAdapters.map((adapter) => [adapter.id, adapter]),
+);
+
+export function getBuiltinMemoryEmbeddingProviderAdapter(
+  id: string,
+): MemoryEmbeddingProviderAdapter | undefined {
+  return builtinMemoryEmbeddingProviderAdapterById.get(id);
+}
+
 export function registerBuiltInMemoryEmbeddingProviders(register: {
   registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;
 }): void {
