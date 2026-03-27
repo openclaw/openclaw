@@ -70,7 +70,7 @@ describe("sticker-cache", () => {
       expect(result).toEqual(sticker);
     });
 
-    it("returns null after cache is cleared", () => {
+    it("returns null after cache is cleared", async () => {
       const sticker = {
         fileId: "file123",
         fileUniqueId: "unique123",
@@ -81,8 +81,10 @@ describe("sticker-cache", () => {
       stickerCache.cacheSticker(sticker);
       expect(stickerCache.getCachedSticker("unique123")).not.toBeNull();
 
-      // Manually clear the cache file
+      // Delete cache file and re-import to clear in-memory state
       fs.rmSync(TEST_CACHE_FILE, { force: true });
+      vi.resetModules();
+      stickerCache = await import("./sticker-cache.js");
 
       expect(stickerCache.getCachedSticker("unique123")).toBeNull();
     });
