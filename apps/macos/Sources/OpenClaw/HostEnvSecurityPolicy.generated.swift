@@ -35,8 +35,7 @@ enum HostEnvSecurityPolicy {
         "MAVEN_OPTS",
         "SBT_OPTS",
         "GRADLE_OPTS",
-        "ANT_OPTS",
-        "AWS_CONFIG_FILE"
+        "ANT_OPTS"
     ]
 
     static let blockedOverrideKeys: Set<String> = [
@@ -81,7 +80,8 @@ enum HostEnvSecurityPolicy {
         "GEM_PATH",
         "BUNDLE_GEMFILE",
         "COMPOSER_HOME",
-        "XDG_CONFIG_HOME"
+        "XDG_CONFIG_HOME",
+        "AWS_CONFIG_FILE"
     ]
 
     static let blockedOverridePrefixes: [String] = [
