@@ -3108,7 +3108,7 @@
           "exportName": "applyAccountNameToChannelSection",
           "kind": "function",
           "source": {
-            "line": 33,
+            "line": 34,
             "path": "src/channels/plugins/setup-helpers.ts"
           }
         },
@@ -3297,7 +3297,7 @@
           "exportName": "migrateBaseNameToDefaultAccount",
           "kind": "function",
           "source": {
-            "line": 92,
+            "line": 93,
             "path": "src/channels/plugins/setup-helpers.ts"
           }
         },
@@ -3378,7 +3378,7 @@
           "exportName": "resolveTailnetHostWithRunner",
           "kind": "function",
           "source": {
-            "line": 43,
+            "line": 47,
             "path": "src/shared/tailscale-status.ts"
           }
         },
@@ -3963,7 +3963,7 @@
           "exportName": "TailscaleStatusCommandResult",
           "kind": "type",
           "source": {
-            "line": 1,
+            "line": 4,
             "path": "src/shared/tailscale-status.ts"
           }
         },
@@ -3972,7 +3972,7 @@
           "exportName": "TailscaleStatusCommandRunner",
           "kind": "type",
           "source": {
-            "line": 6,
+            "line": 9,
             "path": "src/shared/tailscale-status.ts"
           }
         },
