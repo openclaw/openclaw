@@ -220,6 +220,10 @@
       "types": "./dist/plugin-sdk/temp-path.d.ts",
       "default": "./dist/plugin-sdk/temp-path.js"
     },
+    "./plugin-sdk/logging-core": {
+      "types": "./dist/plugin-sdk/logging-core.d.ts",
+      "default": "./dist/plugin-sdk/logging-core.js"
+    },
     "./plugin-sdk/account-helpers": {
       "types": "./dist/plugin-sdk/account-helpers.d.ts",
       "default": "./dist/plugin-sdk/account-helpers.js"
