@@ -15,7 +15,7 @@ capabilities to the agent as a node.
 ## System requirements
 
 - **macOS 15 (Sequoia)** or later
-- **Architecture**: the macOS app ships as a **Universal Binary** (arm64 + x86_64) — it runs natively on both Apple Silicon and Intel Macs
+- **Architecture**: the macOS app ships as a **Universal Binary** (arm64 + x86_64) — it runs natively on both Apple Silicon and Intel Macs. Details, verification commands, and optional thin zips: [Release artifacts & CPU architectures](/platforms/mac/release-artifacts-and-architectures).
 - For building from source, see [Cross-architecture builds](/platforms/mac/building)
 
 ## What it does

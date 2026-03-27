@@ -125,4 +125,6 @@ Stable macOS releases ship as **Universal Binaries** containing both arm64 (Appl
 
 For users who want smaller downloads, per-architecture zips (`OpenClaw-<version>-arm64.zip`, `OpenClaw-<version>-x86_64.zip`) can be produced by setting `PER_ARCH_DIST=1` during release packaging.
 
+Full detail (verify with `lipo`, maintainer scripts, FAQ for Intel vs Universal): [macOS release artifacts & CPU architectures](/platforms/mac/release-artifacts-and-architectures).
+
 For building from source with a specific architecture, see [Cross-architecture builds](/platforms/mac/building).

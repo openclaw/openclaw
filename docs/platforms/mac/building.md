@@ -136,5 +136,6 @@ lipo -archs dist/OpenClaw.app/Contents/MacOS/OpenClaw
 
 ## Related Documentation
 
+- [Release artifacts & CPU architectures](/platforms/mac/release-artifacts-and-architectures) - What stable releases ship (Universal vs per-arch zips), `lipo` verification
 - [macOS Dev Setup](/platforms/mac/dev-setup) - General macOS development setup
 - [macOS Signing](/platforms/mac/signing) - Code signing for macOS builds
