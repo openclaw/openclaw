@@ -120,7 +120,7 @@ pip install -r requirements-optimize.txt
 
 Common next steps once you have the structured output:
 
-- **Save as Markdown**: Write the `text` field to a `.md` file using the Write tool — tables, headings, and formulas are preserved
+- **Save as Markdown**: Write the `text` field to a `.md` file — tables, headings, and formulas are preserved
 - **Convert to Word**: Save the markdown first, then use pandoc if available: `pandoc output.md -o output.docx`
 - **Extract specific tables**: Navigate `result.layoutParsingResults[n].prunedResult` to access individual layout elements with position and confidence data
 - **Feed to RAG / search pipeline**: The `text` field is structured markdown, ready for chunking and indexing

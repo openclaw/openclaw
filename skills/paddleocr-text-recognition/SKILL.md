@@ -34,7 +34,7 @@ metadata:
 
 **Do not use for**:
 
-- Plain text files, code files, or markdown documents readable directly with the Read tool
+- Plain text files, code files, or markdown documents that can be read directly as text
 - Documents with tables, formulas, charts, or complex layouts — use Document Parsing instead
 - Tasks that do not involve image-to-text conversion
 
@@ -100,8 +100,8 @@ pip install -r requirements.txt
 
 Common next steps once you have the recognized text:
 
-- **Save to file**: Write the `text` field to a `.txt` or `.md` file using the Write tool
-- **Search the content**: Run Grep on the saved output file
+- **Save to file**: Write the `text` field to a `.txt` or `.md` file
+- **Search the content**: Search the saved output file for keywords
 - **Feed to another pipeline**: The `text` field is clean plain text, ready for downstream processing
 - **Poor results**: See "Tips for Better Results" below before retrying
 
