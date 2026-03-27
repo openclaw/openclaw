@@ -36,6 +36,7 @@ export {
 export {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
+  createSetupInputPresenceValidator,
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
 export { createAccountStatusSink } from "./channel-lifecycle.js";
