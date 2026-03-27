@@ -5,27 +5,83 @@
  * messages that were sent in response to the recalled user message.
  *
  * Architecture:
- * - user_message_id → bot_reply_message_id[] mapping is stored in memory
- * - On outbound send: registerMapping(userMsgId, botMsgId)
+ * - user_message_id → { botReplyIds: string[], timestamp: number } mapping is stored in memory
+ * - On outbound send: registerBotReply(userMsgId, botMsgId, viaReplyPath)
  * - On recall event: deleteBotReplies(userMsgId)
+ * - TTL eviction: mappings expire after 24h to prevent memory leaks
  */
 
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 
-// In-memory mapping: user message ID → bot reply message IDs
-// One user message may trigger multiple bot replies
-const userToBotMessageMap = new Map<string, string[]>();
+const MESSAGE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+interface MappingEntry {
+  botReplyIds: string[];
+  timestamp: number;
+  viaReplyPath: boolean; // true only if sent via im.message.reply (user can recall)
+}
+
+// In-memory mapping: user message ID → { botReplyIds, timestamp, viaReplyPath }
+// One user message may trigger multiple bot replies.
+// viaReplyPath=false entries are from fallback direct sends (user can't recall those).
+const userToBotMessageMap = new Map<string, MappingEntry>();
+
+/**
+ * Evict expired entries to prevent memory leaks.
+ * Call this periodically or on each registerBotReply call.
+ */
+function evictExpiredMappings(): void {
+  const now = Date.now();
+  for (const [userMsgId, entry] of userToBotMessageMap.entries()) {
+    if (now - entry.timestamp > MESSAGE_TTL_MS) {
+      userToBotMessageMap.delete(userMsgId);
+    }
+  }
+}
 
 /**
  * Register that bot sent a reply to a user message.
- * Call this after sendMessageFeishu() succeeds.
+ * Call this after sendMessageFeishu() succeeds via the reply path.
+ *
+ * @param userMessageId  - The user's message ID this bot is replying to
+ * @param botMessageId   - The bot's newly sent message ID
+ * @param viaReplyPath   - True if sent via im.message.reply (user CAN recall).
+ *                         False if fell back to direct send (user CANNOT recall).
+ *                         Defaults to true for backward compatibility.
+ * @returns true if registered, false if not registered (e.g., fallback path)
  */
-export function registerBotReply(userMessageId: string, botMessageId: string): void {
-  const existing = userToBotMessageMap.get(userMessageId) ?? [];
-  existing.push(botMessageId);
-  userToBotMessageMap.set(userMessageId, existing);
+export function registerBotReply(
+  userMessageId: string,
+  botMessageId: string,
+  viaReplyPath = true,
+): boolean {
+  // Only register mappings for true reply-path sends.
+  // Fallback direct sends cannot be recalled by the user.
+  if (!viaReplyPath) {
+    return false;
+  }
+
+  // Periodically evict old entries (every ~100 calls)
+  if (userToBotMessageMap.size > 100 && userToBotMessageMap.size % 100 === 0) {
+    evictExpiredMappings();
+  }
+
+  const existing = userToBotMessageMap.get(userMessageId);
+  if (existing) {
+    existing.botReplyIds.push(botMessageId);
+    // Keep newest timestamp and true viaReplyPath
+    existing.timestamp = Date.now();
+    existing.viaReplyPath = existing.viaReplyPath && viaReplyPath;
+  } else {
+    userToBotMessageMap.set(userMessageId, {
+      botReplyIds: [botMessageId],
+      timestamp: Date.now(),
+      viaReplyPath,
+    });
+  }
+  return true;
 }
 
 /**
@@ -39,10 +95,19 @@ export async function deleteBotReplies(params: {
   log?: (msg: string) => void;
 }): Promise<void> {
   const { cfg, recalledUserMessageId, accountId, log = console.log } = params;
-  const botMessageIds = userToBotMessageMap.get(recalledUserMessageId);
+  const entry = userToBotMessageMap.get(recalledUserMessageId);
 
-  if (!botMessageIds || botMessageIds.length === 0) {
+  if (!entry || entry.botReplyIds.length === 0) {
     log(`feishu[recall]: no bot replies found for recalled message ${recalledUserMessageId}`);
+    return;
+  }
+
+  // Skip non-reply-path entries (user can't recall fallback direct sends)
+  if (!entry.viaReplyPath) {
+    log(
+      `feishu[recall]: message ${recalledUserMessageId} was sent via fallback, cannot be recalled`,
+    );
+    userToBotMessageMap.delete(recalledUserMessageId);
     return;
   }
 
@@ -56,20 +121,32 @@ export async function deleteBotReplies(params: {
   let deletedCount = 0;
   let failedCount = 0;
 
-  for (const botMessageId of botMessageIds) {
+  for (const botMessageId of entry.botReplyIds) {
     try {
-      await client.im.message.delete({
+      const response = await client.im.message.delete({
         path: { message_id: botMessageId },
       });
-      deletedCount++;
-      log(`feishu[recall]: deleted bot reply ${botMessageId}`);
+      // Treat non-zero code as failure (not just thrown errors)
+      if (response.code !== undefined && response.code !== 0) {
+        if (response.code === 230011 || response.code === 231003) {
+          // Already gone
+          deletedCount++;
+          log(`feishu[recall]: bot reply ${botMessageId} already deleted (code ${response.code})`);
+        } else {
+          failedCount++;
+          log(
+            `feishu[recall]: failed to delete ${botMessageId}: code ${response.code} ${response.msg ?? ""}`,
+          );
+        }
+      } else {
+        deletedCount++;
+        log(`feishu[recall]: deleted bot reply ${botMessageId}`);
+      }
     } catch (err) {
-      // 230011 = message not found / already deleted, 231003 = withdrawn
       const code = (err as { code?: number }).code;
       if (code === 230011 || code === 231003) {
-        // Already gone, treat as success
         deletedCount++;
-        log(`feishu[recall]: bot reply ${botMessageId} already deleted (code ${code})`);
+        log(`feishu[recall]: bot reply ${botMessageId} already deleted (caught code ${code})`);
       } else {
         failedCount++;
         log(`feishu[recall]: failed to delete ${botMessageId}: ${String(err)}`);
@@ -93,7 +170,7 @@ export async function deleteBotReplies(params: {
 
 /**
  * Check if a user message has been recalled by querying the message.
- * Returns true if the message no longer exists or returns a recall error.
+ * Returns true if the message no longer exists or returns a recall error code.
  */
 export async function isMessageRecalled(params: {
   cfg: ClawdbotConfig;
@@ -106,11 +183,15 @@ export async function isMessageRecalled(params: {
 
   const client = createFeishuClient(account);
   try {
-    await client.im.message.get({ path: { message_id: userMessageId } });
+    const response = await client.im.message.get({ path: { message_id: userMessageId } });
+    // Feishu API can return resolved response with non-zero code
+    if (response.code !== undefined && response.code !== 0) {
+      if (response.code === 230011) return true; // message not found / withdrawn
+      return false;
+    }
     return false; // Message still exists
   } catch (err) {
     const code = (err as { code?: number }).code;
-    // 230011 = message not found / withdrawn
     if (code === 230011) return true;
     return false;
   }

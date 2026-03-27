@@ -116,7 +116,7 @@ async function sendFallbackDirect(
     },
   });
   assertFeishuMessageApiSuccess(response, errorPrefix);
-  return toFeishuSendResult(response, params.receiveId);
+  return toFeishuSendResult(response, params.receiveId, false); // false = viaReplyPath
 }
 
 async function sendReplyOrFallbackDirect(
@@ -137,7 +137,10 @@ async function sendReplyOrFallbackDirect(
   },
 ): Promise<FeishuSendResult> {
   if (!params.replyToMessageId) {
-    return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
+    return {
+      ...(await sendFallbackDirect(client, params.directParams, params.directErrorPrefix)),
+      viaReplyPath: false,
+    };
   }
 
   const threadReplyFallbackError = params.replyInThread
@@ -172,7 +175,7 @@ async function sendReplyOrFallbackDirect(
     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
   }
   assertFeishuMessageApiSuccess(response, params.replyErrorPrefix);
-  return toFeishuSendResult(response, params.directParams.receiveId);
+  return toFeishuSendResult(response, params.directParams.receiveId, true);
 }
 
 function parseInteractiveCardContent(parsed: unknown): string {
@@ -471,8 +474,9 @@ export async function sendMessageFeishu(
     replyErrorPrefix: "Feishu reply failed",
   });
   // Register bot reply for recall tracking
-  if (replyToMessageId && result.messageId) {
-    registerBotReply(replyToMessageId, result.messageId);
+  // Only register if sent via true reply path (not fallback direct send)
+  if (replyToMessageId && result.messageId && result.viaReplyPath === true) {
+    registerBotReply(replyToMessageId, result.messageId, true);
   }
   return result;
 }
@@ -503,8 +507,9 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
     replyErrorPrefix: "Feishu card reply failed",
   });
   // Register bot reply for recall tracking
-  if (replyToMessageId && result.messageId) {
-    registerBotReply(replyToMessageId, result.messageId);
+  // Only register if sent via true reply path (not fallback direct send)
+  if (replyToMessageId && result.messageId && result.viaReplyPath === true) {
+    registerBotReply(replyToMessageId, result.messageId, true);
   }
   return result;
 }

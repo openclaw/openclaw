@@ -58,6 +58,7 @@ export type FeishuMessageContext = {
 export type FeishuSendResult = {
   messageId: string;
   chatId: string;
+  viaReplyPath?: boolean; // true if sent via im.message.reply (user can recall)
 };
 
 export type FeishuChatType = "p2p" | "group" | "private";
