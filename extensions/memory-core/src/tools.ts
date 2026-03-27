@@ -4,7 +4,7 @@ import {
   readStringParam,
   type AnyAgentTool,
   type OpenClawConfig,
-} from "./api.js";
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   clampResultsByInjectedChars,
   decorateCitations,
