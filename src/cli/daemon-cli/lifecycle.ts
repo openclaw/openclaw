@@ -151,11 +151,18 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const json = Boolean(opts.json);
   const service = resolveGatewayService();
   let restartedWithoutServiceManager = false;
+  let preRestartRuntimePid: number | undefined;
   const restartPort = await resolveGatewayLifecyclePort(service).catch(() =>
     resolveGatewayPortFallback(),
   );
   const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
+  if (process.platform === "win32") {
+    preRestartRuntimePid = await service
+      .readRuntime(process.env)
+      .then((runtime) => runtime.pid)
+      .catch(() => undefined);
+  }
 
   return await runServiceRestart({
     serviceNoun: "Gateway",
@@ -204,14 +211,18 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         port: restartPort,
         attempts: POST_RESTART_HEALTH_ATTEMPTS,
         delayMs: POST_RESTART_HEALTH_DELAY_MS,
-        includeUnknownListenersAsStale: process.platform === "win32",
       });
 
       if (!health.healthy && health.staleGatewayPids.length > 0) {
-        const staleMsg = `Found stale gateway process(es): ${health.staleGatewayPids.join(", ")}.`;
+        const staleMsg = `Found positively identified stale gateway process(es): ${health.staleGatewayPids.join(", ")}.`;
+        const diagnostics = renderRestartDiagnostics(health);
         warnings.push(staleMsg);
+        warnings.push(...diagnostics);
         if (!json) {
           defaultRuntime.log(theme.warn(staleMsg));
+          for (const line of diagnostics) {
+            defaultRuntime.log(theme.muted(line));
+          }
           defaultRuntime.log(theme.muted("Stopping stale process(es) and retrying restart..."));
         }
 
@@ -225,11 +236,23 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           port: restartPort,
           attempts: POST_RESTART_HEALTH_ATTEMPTS,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
-          includeUnknownListenersAsStale: process.platform === "win32",
         });
       }
 
       if (health.healthy) {
+        if (
+          process.platform === "win32" &&
+          preRestartRuntimePid != null &&
+          (health.runtime.pid === preRestartRuntimePid ||
+            health.listenerKinds.gateway.includes(preRestartRuntimePid))
+        ) {
+          const identityWarning = `Gateway restart became healthy, but process identity did not clearly change from pid ${preRestartRuntimePid}; runtime may be lagging or the old process may still own the listener.`;
+          if (!json) {
+            defaultRuntime.log(theme.warn(identityWarning));
+          } else {
+            warnings.push(identityWarning);
+          }
+        }
         return;
       }
 
