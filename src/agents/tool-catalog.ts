@@ -98,6 +98,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "x_search",
+    label: "x_search",
+    description: "Search X posts",
+    sectionId: "web",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "memory_search",
     label: "memory_search",
     description: "Semantic search",
