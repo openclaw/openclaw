@@ -98,6 +98,38 @@ export function expandHomePrefix(
   return input.replace(/^~(?=$|[\\/])/, home);
 }
 
+function normalizeEnvValue(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return normalize(value);
+}
+
+function expandEnvPlaceholders(
+  input: string,
+  env: NodeJS.ProcessEnv,
+  expandTilde?: (value: string) => string,
+): string {
+  return input.replace(
+    /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g,
+    (token, braced, bare) => {
+      const key = String(braced ?? bare ?? "");
+      if (!key) {
+        return token;
+      }
+      if (!Object.hasOwn(env, key)) {
+        return token;
+      }
+      // 空字符串环境变量按未设置处理，保留原占位符，避免把路径段替换成空值。
+      const resolved = normalizeEnvValue(env[key]);
+      if (!resolved) {
+        return token;
+      }
+      return expandTilde ? expandTilde(resolved) : resolved;
+    },
+  );
+}
+
 export function resolveHomeRelativePath(
   input: string,
   opts?: {
@@ -105,19 +137,30 @@ export function resolveHomeRelativePath(
     homedir?: () => string;
   },
 ): string {
+  const env = opts?.env ?? process.env;
   const trimmed = input.trim();
   if (!trimmed) {
     return trimmed;
   }
-  if (trimmed.startsWith("~")) {
-    const expanded = expandHomePrefix(trimmed, {
-      home: resolveRequiredHomeDir(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
-      env: opts?.env,
+  const home = resolveRequiredHomeDir(env, opts?.homedir ?? os.homedir);
+  const osHome = resolveRequiredOsHomeDir(env, opts?.homedir ?? os.homedir);
+  const expandedEnv = expandEnvPlaceholders(trimmed, env, (value) =>
+    expandHomePrefix(value, {
+      home: osHome,
+      env,
       homedir: opts?.homedir,
-    });
-    return path.resolve(expanded);
+    }),
+  );
+  if (expandedEnv.startsWith("~")) {
+    return path.resolve(
+      expandHomePrefix(expandedEnv, {
+        home,
+        env,
+        homedir: opts?.homedir,
+      }),
+    );
   }
-  return path.resolve(trimmed);
+  return path.resolve(expandedEnv);
 }
 
 export function resolveOsHomeRelativePath(
@@ -127,17 +170,27 @@ export function resolveOsHomeRelativePath(
     homedir?: () => string;
   },
 ): string {
+  const env = opts?.env ?? process.env;
   const trimmed = input.trim();
   if (!trimmed) {
     return trimmed;
   }
-  if (trimmed.startsWith("~")) {
-    const expanded = expandHomePrefix(trimmed, {
-      home: resolveRequiredOsHomeDir(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
-      env: opts?.env,
+  const home = resolveRequiredOsHomeDir(env, opts?.homedir ?? os.homedir);
+  const expandedEnv = expandEnvPlaceholders(trimmed, env, (value) =>
+    expandHomePrefix(value, {
+      home,
+      env,
       homedir: opts?.homedir,
-    });
-    return path.resolve(expanded);
+    }),
+  );
+  if (expandedEnv.startsWith("~")) {
+    return path.resolve(
+      expandHomePrefix(expandedEnv, {
+        home,
+        env,
+        homedir: opts?.homedir,
+      }),
+    );
   }
-  return path.resolve(trimmed);
+  return path.resolve(expandedEnv);
 }
