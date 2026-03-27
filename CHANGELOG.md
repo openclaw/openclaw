@@ -83,6 +83,7 @@ Docs: https://docs.openclaw.ai
 - Heartbeat/runner: guarantee the interval timer is re-armed after heartbeat runs and unexpected runner errors so scheduled heartbeats do not silently stop after an interrupted cycle. (#52270) Thanks @MiloStack.
 - Config/Doctor: rewrite stale bundled plugin load paths from legacy `extensions/*` locations to the packaged bundled path, including directory-name mismatches and slash-suffixed config entries. (#55054) Thanks @SnowSky1.
 - WhatsApp/mentions: stop treating mentions embedded in quoted messages as direct mentions so replying to a message that @mentioned the bot no longer falsely triggers mention gating. (#52711) Thanks @lurebat.
+- Matrix: keep separate 2-person rooms out of DM routing after `m.direct` seeds successfully, while still honoring explicit `is_direct` state and startup fallback recovery. (#54890) thanks @private-peter
 - Agents/ollama fallback: surface non-2xx Ollama HTTP errors with a leading status code so HTTP 503 responses trigger model fallback again. (#55214) Thanks @bugkill3r.
 - Feishu/tools: stop synthetic agent ids like `agent-spawner` from being treated as Feishu account ids during tool execution, so tools fall back to the configured/default Feishu account unless the contextual id is a real enabled Feishu account. (#55627) Thanks @MonkeyLeeT.
 - Google/tools: strip empty `required: []` arrays from Gemini tool schemas so optional-only tool parameters no longer trigger Google validator 400s. (#52106) Thanks @oliviareid-svg.
