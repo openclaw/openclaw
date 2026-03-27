@@ -18,8 +18,8 @@ describe("buildAccountScopedDmSecurityPolicy", () => {
   it("builds top-level dm policy paths when no account config exists", () => {
     expect(
       buildAccountScopedDmSecurityPolicy({
-        cfg: cfgWithChannel("telegram"),
-        channelKey: "telegram",
+        cfg: cfgWithChannel("demo-root"),
+        channelKey: "demo-root",
         fallbackAccountId: "default",
         policy: "pairing",
         allowFrom: ["123"],
@@ -28,9 +28,9 @@ describe("buildAccountScopedDmSecurityPolicy", () => {
     ).toEqual({
       policy: "pairing",
       allowFrom: ["123"],
-      policyPath: "channels.telegram.dmPolicy",
-      allowFromPath: "channels.telegram.",
-      approveHint: formatPairingApproveHint("telegram"),
+      policyPath: "channels.demo-root.dmPolicy",
+      allowFromPath: "channels.demo-root.",
+      approveHint: formatPairingApproveHint("demo-root"),
       normalizeEntry: undefined,
     });
   });
@@ -38,8 +38,8 @@ describe("buildAccountScopedDmSecurityPolicy", () => {
   it("uses account-scoped paths when account config exists", () => {
     expect(
       buildAccountScopedDmSecurityPolicy({
-        cfg: cfgWithChannel("signal", { work: {} }),
-        channelKey: "signal",
+        cfg: cfgWithChannel("demo-account", { work: {} }),
+        channelKey: "demo-account",
         accountId: "work",
         fallbackAccountId: "default",
         policy: "allowlist",
@@ -49,9 +49,9 @@ describe("buildAccountScopedDmSecurityPolicy", () => {
     ).toEqual({
       policy: "allowlist",
       allowFrom: ["+12125551212"],
-      policyPath: "channels.signal.accounts.work.dmPolicy",
-      allowFromPath: "channels.signal.accounts.work.",
-      approveHint: formatPairingApproveHint("signal"),
+      policyPath: "channels.demo-account.accounts.work.dmPolicy",
+      allowFromPath: "channels.demo-account.accounts.work.",
+      approveHint: formatPairingApproveHint("demo-account"),
       normalizeEntry: undefined,
     });
   });
@@ -59,8 +59,8 @@ describe("buildAccountScopedDmSecurityPolicy", () => {
   it("supports nested dm paths without explicit policyPath", () => {
     expect(
       buildAccountScopedDmSecurityPolicy({
-        cfg: cfgWithChannel("discord", { work: {} }),
-        channelKey: "discord",
+        cfg: cfgWithChannel("demo-nested", { work: {} }),
+        channelKey: "demo-nested",
         accountId: "work",
         policy: "pairing",
         allowFrom: [],
@@ -70,8 +70,8 @@ describe("buildAccountScopedDmSecurityPolicy", () => {
       policy: "pairing",
       allowFrom: [],
       policyPath: undefined,
-      allowFromPath: "channels.discord.accounts.work.dm.",
-      approveHint: formatPairingApproveHint("discord"),
+      allowFromPath: "channels.demo-nested.accounts.work.dm.",
+      approveHint: formatPairingApproveHint("demo-nested"),
       normalizeEntry: undefined,
     });
   });
@@ -79,20 +79,20 @@ describe("buildAccountScopedDmSecurityPolicy", () => {
   it("supports custom defaults and approve hints", () => {
     expect(
       buildAccountScopedDmSecurityPolicy({
-        cfg: cfgWithChannel("synology-chat"),
-        channelKey: "synology-chat",
+        cfg: cfgWithChannel("demo-default"),
+        channelKey: "demo-default",
         fallbackAccountId: "default",
         allowFrom: ["user-1"],
         defaultPolicy: "allowlist",
         policyPathSuffix: "dmPolicy",
-        approveHint: "openclaw pairing approve synology-chat <code>",
+        approveHint: "openclaw pairing approve demo-default <code>",
       }),
     ).toEqual({
       policy: "allowlist",
       allowFrom: ["user-1"],
-      policyPath: "channels.synology-chat.dmPolicy",
-      allowFromPath: "channels.synology-chat.",
-      approveHint: "openclaw pairing approve synology-chat <code>",
+      policyPath: "channels.demo-default.dmPolicy",
+      allowFromPath: "channels.demo-default.",
+      approveHint: "openclaw pairing approve demo-default <code>",
       normalizeEntry: undefined,
     });
   });
