@@ -27,7 +27,10 @@ function isBundledProviderEnabled(
   pluginId: string,
   config: ProviderAugmentModelCatalogContext["config"],
 ): boolean {
-  const normalized = normalizePluginsConfig(config?.plugins);
+  if (!config) {
+    return false;
+  }
+  const normalized = normalizePluginsConfig(config.plugins);
   return resolveEnableState(pluginId, "bundled", normalized).enabled;
 }
 

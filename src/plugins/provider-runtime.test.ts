@@ -558,6 +558,7 @@ describe("provider-runtime", () => {
       env: process.env,
       context: {
         env: process.env,
+        config: { plugins: { enabled: true } },
         entries: [
           { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
           { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
