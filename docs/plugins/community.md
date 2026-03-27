@@ -1,4 +1,4 @@
-<img width="1201" height="961" alt="image" src="https://github.com/user-attachments/assets/34eaf367-9605-40fe-9d50-3094fec148a9" />---
+---
 summary: "Community-maintained OpenClaw plugins: browse, install, and submit your own"
 read_when:
   - You want to find third-party OpenClaw plugins
