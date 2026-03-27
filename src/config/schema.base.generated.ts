@@ -21076,6 +21076,36 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Pruning controls for per-job cron run history files under `cron/runs/<jobId>.jsonl`, including size and line retention.",
           },
+          maintenance: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              window: {
+                type: "object",
+                properties: {
+                  start: {
+                    type: "string",
+                  },
+                  end: {
+                    type: "string",
+                  },
+                  timezone: {
+                    type: "string",
+                  },
+                },
+                additionalProperties: false,
+              },
+              maintenanceAgents: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+            },
+            additionalProperties: false,
+          },
           failureAlert: {
             type: "object",
             properties: {
@@ -27932,6 +27962,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "cron.runLog.keepLines": {
       label: "Cron Run Log Keep Lines",
       help: "How many trailing run-log lines to retain when a file exceeds maxBytes (default `2000`). Increase for longer forensic history or lower for smaller disks.",
+      tags: ["automation"],
+    },
+    "cron.maintenance": {
+      label: "Cron Maintenance",
+      help: "Maintenance-window scheduler controls for role isolation between normal agents and dedicated maintenance agents across cron and heartbeat flows.",
+      tags: ["automation"],
+    },
+    "cron.maintenance.enabled": {
+      label: "Cron Maintenance Enabled",
+      help: "Enables maintenance-window phase isolation. When enabled, only maintenanceAgents run during the configured window, and those agents are blocked outside it.",
+      tags: ["automation"],
+    },
+    "cron.maintenance.window": {
+      label: "Cron Maintenance Window",
+      help: "Daily maintenance window definition with start/end 24-hour times and timezone. Supports cross-midnight windows such as `23:00` to `02:00`.",
+      tags: ["automation"],
+    },
+    "cron.maintenance.window.start": {
+      label: "Cron Maintenance Start",
+      help: "Maintenance window start time (inclusive) in `HH:MM` 24-hour format; for example `02:00`.",
+      tags: ["automation"],
+    },
+    "cron.maintenance.window.end": {
+      label: "Cron Maintenance End",
+      help: "Maintenance window end time (exclusive) in `HH:MM` 24-hour format; `24:00` is allowed only for end-of-day windows.",
+      tags: ["automation"],
+    },
+    "cron.maintenance.window.timezone": {
+      label: "Cron Maintenance Timezone",
+      help: 'Timezone for maintenance window evaluation. Use "user" (default), "local", or an IANA timezone such as `America/Los_Angeles`.',
+      tags: ["automation"],
+    },
+    "cron.maintenance.maintenanceAgents": {
+      label: "Cron Maintenance Agents",
+      help: "Explicit agent-id allowlist reserved for maintenance windows. Example: [`ops-maint`, `cleanup-bot`]. Listed agents are blocked during normal runtime.",
       tags: ["automation"],
     },
     "hooks.enabled": {
