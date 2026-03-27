@@ -36,7 +36,6 @@ describe("talk normalization", () => {
     });
 
     expect(normalized).toEqual({
-      provider: "elevenlabs",
       providers: {
         elevenlabs: {
           voiceId: "voice-123",
@@ -149,7 +148,7 @@ describe("talk normalization", () => {
         async (configPath) => {
           const io = createConfigIO({ configPath });
           const snapshot = await io.readConfigFileSnapshot();
-          expect(snapshot.config.talk?.provider).toBe("elevenlabs");
+          expect(snapshot.config.talk?.provider).toBeUndefined();
           expect(snapshot.config.talk?.providers?.elevenlabs?.voiceId).toBe("voice-123");
           expect(snapshot.config.talk?.providers?.elevenlabs?.apiKey).toBe(elevenLabsApiKey);
           expect(snapshot.config.talk?.apiKey).toBe(elevenLabsApiKey);

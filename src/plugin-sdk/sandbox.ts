@@ -26,6 +26,7 @@ export {
   buildRemoteCommand,
   buildSshSandboxArgv,
   createRemoteShellSandboxFsBridge,
+  createWritableRenameTargetResolver,
   createSshSandboxSessionFromConfigText,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,

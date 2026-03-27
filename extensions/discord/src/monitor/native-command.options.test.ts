@@ -229,11 +229,5 @@ describe("createDiscordNativeCommand option wiring", () => {
     expect(command.description).toBe("x".repeat(100));
     expect(requireOption(command, "input").description).toHaveLength(100);
     expect(requireOption(command, "input").description).toBe("x".repeat(100));
-    expect(loggerWarnMock).toHaveBeenCalledWith(
-      expect.stringContaining("truncating native command description (command:longdesc)"),
-    );
-    expect(loggerWarnMock).toHaveBeenCalledWith(
-      expect.stringContaining("truncating native command description (command:longdesc arg:input)"),
-    );
   });
 });

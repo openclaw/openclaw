@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -14,6 +13,7 @@ import {
   resolvePluginSdkAliasFile,
   shouldPreferNativeJiti,
 } from "./sdk-alias.js";
+import { makeTrackedTempDir, mkdirSafeDir } from "./test-helpers/fs-fixtures.js";
 
 type CreateJiti = typeof import("jiti").createJiti;
 
@@ -24,30 +24,13 @@ async function getCreateJiti() {
   return createJitiPromise;
 }
 
-function chmodSafeDir(dir: string) {
-  if (process.platform === "win32") {
-    return;
-  }
-  fs.chmodSync(dir, 0o755);
-}
-
-function mkdtempSafe(prefix: string) {
-  const dir = fs.mkdtempSync(prefix);
-  chmodSafeDir(dir);
-  return dir;
-}
-
-function mkdirSafe(dir: string) {
-  fs.mkdirSync(dir, { recursive: true });
-  chmodSafeDir(dir);
-}
-
-const fixtureRoot = mkdtempSafe(path.join(os.tmpdir(), "openclaw-sdk-alias-"));
+const fixtureTempDirs: string[] = [];
+const fixtureRoot = makeTrackedTempDir("openclaw-sdk-alias-root", fixtureTempDirs);
 let tempDirIndex = 0;
 
 function makeTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
-  mkdirSafe(dir);
+  mkdirSafeDir(dir);
   return dir;
 }
 
@@ -73,8 +56,8 @@ function createPluginSdkAliasFixture(params?: {
   const root = makeTempDir();
   const srcFile = path.join(root, "src", "plugin-sdk", params?.srcFile ?? "index.ts");
   const distFile = path.join(root, "dist", "plugin-sdk", params?.distFile ?? "index.js");
-  mkdirSafe(path.dirname(srcFile));
-  mkdirSafe(path.dirname(distFile));
+  mkdirSafeDir(path.dirname(srcFile));
+  mkdirSafeDir(path.dirname(distFile));
   const trustedRootIndicatorMode =
     params?.trustedRootIndicatorMode ??
     (params?.trustedRootIndicators === false ? "none" : "bin+marker");
@@ -111,8 +94,8 @@ function createExtensionApiAliasFixture(params?: { srcBody?: string; distBody?: 
   const root = makeTempDir();
   const srcFile = path.join(root, "src", "extensionAPI.ts");
   const distFile = path.join(root, "dist", "extensionAPI.js");
-  mkdirSafe(path.dirname(srcFile));
-  mkdirSafe(path.dirname(distFile));
+  mkdirSafeDir(path.dirname(srcFile));
+  mkdirSafeDir(path.dirname(distFile));
   fs.writeFileSync(
     path.join(root, "package.json"),
     JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
@@ -128,8 +111,8 @@ function createPluginRuntimeAliasFixture(params?: { srcBody?: string; distBody?:
   const root = makeTempDir();
   const srcFile = path.join(root, "src", "plugins", "runtime", "index.ts");
   const distFile = path.join(root, "dist", "plugins", "runtime", "index.js");
-  mkdirSafe(path.dirname(srcFile));
-  mkdirSafe(path.dirname(distFile));
+  mkdirSafeDir(path.dirname(srcFile));
+  mkdirSafeDir(path.dirname(distFile));
   fs.writeFileSync(
     path.join(root, "package.json"),
     JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
@@ -146,6 +129,23 @@ function createPluginRuntimeAliasFixture(params?: { srcBody?: string; distBody?:
     "utf-8",
   );
   return { root, srcFile, distFile };
+}
+
+function createUserInstalledPluginSdkAliasFixture() {
+  const fixture = createPluginSdkAliasFixture({
+    srcFile: "channel-runtime.ts",
+    distFile: "channel-runtime.js",
+    packageExports: {
+      "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
+    },
+  });
+  const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+  fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+  const externalPluginRoot = path.join(makeTempDir(), ".openclaw", "extensions", "demo");
+  const externalPluginEntry = path.join(externalPluginRoot, "index.ts");
+  mkdirSafeDir(externalPluginRoot);
+  fs.writeFileSync(externalPluginEntry, 'export const plugin = "demo";\n', "utf-8");
+  return { externalPluginEntry, externalPluginRoot, fixture, sourceRootAlias };
 }
 
 function resolvePluginSdkAlias(params: {
@@ -469,7 +469,7 @@ describe("plugin sdk alias helpers", () => {
     );
   });
 
-  it("resolves plugin-sdk aliases for user-installed plugins via the running openclaw argv hint", () => {
+  it("applies explicit dist resolution to plugin-sdk subpath aliases too", () => {
     const fixture = createPluginSdkAliasFixture({
       srcFile: "channel-runtime.ts",
       distFile: "channel-runtime.js",
@@ -478,11 +478,28 @@ describe("plugin sdk alias helpers", () => {
       },
     });
     const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    const distRootAlias = path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs");
     fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
-    const externalPluginRoot = path.join(makeTempDir(), ".openclaw", "extensions", "demo");
-    const externalPluginEntry = path.join(externalPluginRoot, "index.ts");
-    mkdirSafe(externalPluginRoot);
-    fs.writeFileSync(externalPluginEntry, 'export const plugin = "demo";\n', "utf-8");
+    fs.writeFileSync(distRootAlias, "module.exports = {};\n", "utf-8");
+    const sourcePluginEntry = path.join(fixture.root, "extensions", "demo", "src", "index.ts");
+    fs.mkdirSync(path.dirname(sourcePluginEntry), { recursive: true });
+    fs.writeFileSync(sourcePluginEntry, 'export const plugin = "demo";\n', "utf-8");
+
+    const distAliases = withEnv({ NODE_ENV: undefined }, () =>
+      buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
+    );
+
+    expect(fs.realpathSync(distAliases["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(distRootAlias),
+    );
+    expect(fs.realpathSync(distAliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
+      fs.realpathSync(path.join(fixture.root, "dist", "plugin-sdk", "channel-runtime.js")),
+    );
+  });
+
+  it("resolves plugin-sdk aliases for user-installed plugins via the running openclaw argv hint", () => {
+    const { externalPluginEntry, externalPluginRoot, fixture, sourceRootAlias } =
+      createUserInstalledPluginSdkAliasFixture();
 
     const aliases = withCwd(externalPluginRoot, () =>
       withEnv({ NODE_ENV: undefined }, () =>
@@ -499,19 +516,8 @@ describe("plugin sdk alias helpers", () => {
   });
 
   it("resolves plugin-sdk aliases for user-installed plugins via moduleUrl hint", () => {
-    const fixture = createPluginSdkAliasFixture({
-      srcFile: "channel-runtime.ts",
-      distFile: "channel-runtime.js",
-      packageExports: {
-        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
-      },
-    });
-    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
-    fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
-    const externalPluginRoot = path.join(makeTempDir(), ".openclaw", "extensions", "demo");
-    const externalPluginEntry = path.join(externalPluginRoot, "index.ts");
-    mkdirSafe(externalPluginRoot);
-    fs.writeFileSync(externalPluginEntry, 'export const plugin = "demo";\n', "utf-8");
+    const { externalPluginEntry, externalPluginRoot, fixture, sourceRootAlias } =
+      createUserInstalledPluginSdkAliasFixture();
 
     // Simulate loader.ts passing its own import.meta.url as the moduleUrl hint.
     // This covers installations where argv1 does not resolve to the openclaw root
@@ -585,8 +591,8 @@ describe("plugin sdk alias helpers", () => {
     const copiedExtensionRoot = path.join(makeTempDir(), "extensions", "discord");
     const copiedSourceDir = path.join(copiedExtensionRoot, "src");
     const copiedPluginSdkDir = path.join(copiedExtensionRoot, "plugin-sdk");
-    mkdirSafe(copiedSourceDir);
-    mkdirSafe(copiedPluginSdkDir);
+    mkdirSafeDir(copiedSourceDir);
+    mkdirSafeDir(copiedPluginSdkDir);
     const jitiBaseFile = path.join(copiedSourceDir, "__jiti-base__.mjs");
     fs.writeFileSync(jitiBaseFile, "export {};\n", "utf-8");
     fs.writeFileSync(

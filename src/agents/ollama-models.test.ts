@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 import {
   enrichOllamaModelsWithContext,
   resolveOllamaApiBase,
   type OllamaTagModel,
-} from "./ollama-models.js";
+} from "../../extensions/ollama/api.js";
+import { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 
 describe("ollama-models", () => {
   afterEach(() => {

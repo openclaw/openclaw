@@ -184,16 +184,17 @@ Paste (bracketed by default):
 { "tool": "process", "action": "paste", "sessionId": "<id>", "text": "line1\nline2\n" }
 ```
 
-## apply_patch (experimental)
+## apply_patch
 
 `apply_patch` is a subtool of `exec` for structured multi-file edits.
-Enable it explicitly:
+It is enabled by default for OpenAI and OpenAI Codex models. Use config only
+when you want to disable it or restrict it to specific models:
 
 ```json5
 {
   tools: {
     exec: {
-      applyPatch: { enabled: true, workspaceOnly: true, allowModels: ["gpt-5.2"] },
+      applyPatch: { workspaceOnly: true, allowModels: ["gpt-5.2"] },
     },
   },
 }
@@ -202,6 +203,7 @@ Enable it explicitly:
 Notes:
 
 - Only available for OpenAI/OpenAI Codex models.
-- Tool policy still applies; `allow: ["exec"]` implicitly allows `apply_patch`.
+- Tool policy still applies; `allow: ["write"]` implicitly allows `apply_patch`.
 - Config lives under `tools.exec.applyPatch`.
+- `tools.exec.applyPatch.enabled` defaults to `true`; set it to `false` to disable the tool for OpenAI models.
 - `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.

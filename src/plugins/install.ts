@@ -520,7 +520,7 @@ async function installPluginFromPackageDir(
 
   const packageMetadata = runtime.getPackageManifestMetadata(manifest);
   const minHostVersionCheck = runtime.checkMinHostVersion({
-    currentVersion: runtime.resolveRuntimeServiceVersion(),
+    currentVersion: runtime.resolveCompatibilityHostVersion(),
     minHostVersion: packageMetadata?.install?.minHostVersion,
   });
   if (!minHostVersionCheck.ok) {

@@ -1,23 +1,13 @@
+import { normalizeLegacyOnboardAuthChoice } from "../commands/auth-choice-legacy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 
 const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<string, string>> = {
-  chutes: "chutes",
-  "litellm-api-key": "litellm",
   "custom-api-key": "custom",
 };
 
 function normalizeLegacyAuthChoice(choice: string): string {
-  if (choice === "oauth") {
-    return "setup-token";
-  }
-  if (choice === "claude-cli") {
-    return "setup-token";
-  }
-  if (choice === "codex-cli") {
-    return "openai-codex";
-  }
-  return choice;
+  return normalizeLegacyOnboardAuthChoice(choice) ?? choice;
 }
 
 export async function resolvePreferredProviderForAuthChoice(params: {

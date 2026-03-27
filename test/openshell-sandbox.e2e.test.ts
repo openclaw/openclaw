@@ -7,6 +7,11 @@ import { describe, expect, it } from "vitest";
 import { createOpenShellSandboxBackendFactory } from "../extensions/openshell/src/backend.js";
 import { resolveOpenShellPluginConfig } from "../extensions/openshell/src/config.js";
 import { createSandboxTestContext } from "../src/agents/sandbox/test-fixtures.js";
+import {
+  createSandboxBrowserConfig,
+  createSandboxPruneConfig,
+  createSandboxSshConfig,
+} from "./helpers/sandbox-fixtures.js";
 
 const OPENCLAW_OPENSHELL_E2E = process.env.OPENCLAW_E2E_OPENSHELL === "1";
 const OPENCLAW_OPENSHELL_E2E_TIMEOUT_MS = 12 * 60_000;
@@ -366,28 +371,10 @@ describe("openshell sandbox backend e2e", () => {
           capDrop: ["ALL"],
           env: {},
         },
-        ssh: {
-          command: "ssh",
-          workspaceRoot: "/tmp/openclaw-sandboxes",
-          strictHostKeyChecking: true,
-          updateHostKeys: true,
-        },
-        browser: {
-          enabled: false,
-          image: "openclaw-browser",
-          containerPrefix: "openclaw-browser-",
-          network: "bridge",
-          cdpPort: 9222,
-          vncPort: 5900,
-          noVncPort: 6080,
-          headless: true,
-          enableNoVnc: false,
-          allowHostControl: false,
-          autoStart: false,
-          autoStartTimeoutMs: 1000,
-        },
+        ssh: createSandboxSshConfig("/tmp/openclaw-sandboxes"),
+        browser: createSandboxBrowserConfig(),
         tools: { allow: [], deny: [] },
-        prune: { idleHours: 24, maxAgeDays: 7 },
+        prune: createSandboxPruneConfig(),
       };
 
       const pluginConfig = resolveOpenShellPluginConfig({

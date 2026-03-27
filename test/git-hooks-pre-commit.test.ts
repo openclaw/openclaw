@@ -72,4 +72,52 @@ describe("git-hooks/pre-commit (integration)", () => {
     const staged = run(dir, "git", ["diff", "--cached", "--name-only"]).split("\n").filter(Boolean);
     expect(staged).toEqual(["--all"]);
   });
+
+  it("skips pnpm format and pnpm check when FAST_COMMIT is enabled", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-pre-commit-yolo-"));
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+
+    mkdirSync(path.join(dir, "git-hooks"), { recursive: true });
+    mkdirSync(path.join(dir, "scripts", "pre-commit"), { recursive: true });
+    symlinkSync(
+      path.join(process.cwd(), "git-hooks", "pre-commit"),
+      path.join(dir, "git-hooks", "pre-commit"),
+    );
+    writeFileSync(
+      path.join(dir, "scripts", "pre-commit", "run-node-tool.sh"),
+      "#!/usr/bin/env bash\nexit 0\n",
+      {
+        encoding: "utf8",
+        mode: 0o755,
+      },
+    );
+    writeFileSync(
+      path.join(dir, "scripts", "pre-commit", "filter-staged-files.mjs"),
+      "process.exit(0);\n",
+      "utf8",
+    );
+    writeFileSync(path.join(dir, "package.json"), "{\"name\":\"tmp\"}\n", "utf8");
+    writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+
+    const fakeBinDir = path.join(dir, "bin");
+    mkdirSync(fakeBinDir, { recursive: true });
+    writeExecutable(fakeBinDir, "node", "#!/usr/bin/env bash\nexit 0\n");
+    writeExecutable(
+      fakeBinDir,
+      "pnpm",
+      "#!/usr/bin/env bash\necho 'pnpm should not run when FAST_COMMIT is enabled' >&2\nexit 99\n",
+    );
+
+    writeFileSync(path.join(dir, "tracked.txt"), "hello\n", "utf8");
+    run(dir, "git", ["add", "--", "tracked.txt"]);
+
+    const output = run(dir, "bash", ["git-hooks/pre-commit"], {
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+      FAST_COMMIT: "1",
+    });
+
+    expect(output).toContain(
+      "FAST_COMMIT enabled: skipping pnpm format and pnpm check in pre-commit hook.",
+    );
+  });
 });
