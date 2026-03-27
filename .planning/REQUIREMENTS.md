@@ -9,7 +9,7 @@ Requirements for Phase 1 release. Each maps to roadmap phases.
 
 ### Data Model
 
-- [ ] **DATA-01**: Project folder structure exists at `~/.openclaw/projects/<name>/` with PROJECT.md, queue.md, and tasks/ directory
+- [x] **DATA-01**: Project folder structure exists at `~/.openclaw/projects/<name>/` with PROJECT.md, queue.md, and tasks/ directory
 - [ ] **DATA-02**: Sub-project folders supported one level deep under a parent project
 - [x] **DATA-03**: PROJECT.md contains YAML frontmatter with name, status, description, owner, tags, columns, dashboard widgets
 - [x] **DATA-04**: Task files in `tasks/TASK-NNN.md` contain YAML frontmatter with title, status, priority, assignee, capabilities, depends_on, created, updated
@@ -132,7 +132,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase    | Status   |
 | ----------- | -------- | -------- |
-| DATA-01     | Phase 2  | Pending  |
+| DATA-01     | Phase 2  | Complete |
 | DATA-02     | Phase 2  | Pending  |
 | DATA-03     | Phase 1  | Complete |
 | DATA-04     | Phase 1  | Complete |

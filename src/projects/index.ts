@@ -28,3 +28,8 @@ export {
 // Queue
 export { parseQueue } from "./queue-parser.js";
 export type { QueueEntry, ParsedQueue } from "./queue-parser.js";
+
+// Scaffold
+export { ProjectManager } from "./scaffold.js";
+export type { CreateProjectOpts } from "./scaffold.js";
+export { generateProjectMd, generateQueueMd } from "./templates.js";
