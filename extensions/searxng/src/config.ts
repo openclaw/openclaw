@@ -7,7 +7,6 @@ export const DEFAULT_SEARXNG_BASE_URL = "http://localhost:5000";
 export const DEFAULT_SEARXNG_COUNT = 10;
 export const MAX_SEARXNG_COUNT = 100;
 export const DEFAULT_SEARXNG_LANG = "en";
-export const DEFAULT_SEARXNG_TIMEOUT_SECONDS = 30;
 
 type SearXNGPluginConfig = {
   webSearch?: {

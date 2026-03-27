@@ -80,7 +80,6 @@ export async function runSearXNGSearch(params: {
   const searchParams = new URLSearchParams({
     q: params.query,
     format: "json",
-    results_per_page: String(count),
     language: lang,
   });
   if (categories && categories.length > 0) {
@@ -107,7 +106,7 @@ export async function runSearXNGSearch(params: {
         );
       }
       const data = (await response.json()) as SearXNGResponse;
-      return Array.isArray(data.results) ? data.results : [];
+      return Array.isArray(data.results) ? data.results.slice(0, count) : [];
     },
   );
 
