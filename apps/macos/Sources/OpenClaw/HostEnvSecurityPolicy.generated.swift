@@ -18,6 +18,7 @@ enum HostEnvSecurityPolicy {
         "ENV",
         "GIT_EXTERNAL_DIFF",
         "GIT_EXEC_PATH",
+        "GIT_TEMPLATE_DIR",
         "SHELL",
         "SHELLOPTS",
         "PS4",
@@ -34,7 +35,8 @@ enum HostEnvSecurityPolicy {
         "MAVEN_OPTS",
         "SBT_OPTS",
         "GRADLE_OPTS",
-        "ANT_OPTS"
+        "ANT_OPTS",
+        "AWS_CONFIG_FILE"
     ]
 
     static let blockedOverrideKeys: Set<String> = [
