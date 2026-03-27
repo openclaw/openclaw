@@ -29,7 +29,7 @@ import {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
 } from "./model-auth-markers.js";
-import { normalizeProviderId } from "./model-selection.js";
+import { normalizeProviderId, normalizeProviderIdForAuth } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 
@@ -49,16 +49,29 @@ function resolveProviderConfig(
     return direct;
   }
   const normalized = normalizeProviderId(provider);
-  if (normalized === provider) {
-    const matched = Object.entries(providers).find(
-      ([key]) => normalizeProviderId(key) === normalized,
-    );
-    return matched?.[1];
+  const normalizedForAuth = normalizeProviderIdForAuth(provider);
+
+  // Try exact match with normalized provider id
+  if (providers[normalized]) {
+    return providers[normalized];
   }
-  return (
-    (providers[normalized] as ModelProviderConfig | undefined) ??
-    Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1]
+
+  // Try match with auth-normalized provider id (handles -plan variants etc.)
+  if (normalizedForAuth !== normalized && providers[normalizedForAuth]) {
+    return providers[normalizedForAuth];
+  }
+
+  // Fuzzy match: find any key whose normalized form matches
+  const matched = Object.entries(providers).find(
+    ([key]) =>
+      normalizeProviderId(key) === normalized ||
+      normalizeProviderIdForAuth(key) === normalizedForAuth,
   );
+  if (matched) {
+    return matched[1];
+  }
+
+  return undefined;
 }
 
 export function getCustomProviderApiKey(

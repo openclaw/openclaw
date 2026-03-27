@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
@@ -274,6 +274,45 @@ function summarizeSessionContext(messages: AgentMessage[]): {
     totalTextChars,
     totalImageBlocks,
     maxMessageTextChars,
+  };
+}
+
+/**
+ * Wrap a base streamFn to inject auth credentials (API key + headers)
+ * into every outbound provider request.
+ *
+ * pi-coding-agent 0.63.0 (pi-mono#1835) moved auth injection into
+ * `createAgentSession()`'s default streamFn wrapper, but OpenClaw
+ * overrides `agent.streamFn` with custom stream functions that bypass
+ * that wrapper. This utility re-applies the auth injection so that
+ * every provider receives valid credentials.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/55672
+ * @see https://github.com/openclaw/openclaw/issues/55760
+ */
+export function wrapStreamFnWithModelRegistryAuth(
+  streamFn: StreamFn,
+  resolvedApiKey: string | undefined,
+): StreamFn {
+  return (model, context, options) => {
+    const modelHeaders =
+      model.headers && typeof model.headers === "object" && !Array.isArray(model.headers)
+        ? model.headers
+        : undefined;
+
+    const needsHeaderMerge = modelHeaders != null || options?.headers != null;
+
+    // Fast path: nothing to inject
+    if (!resolvedApiKey && !needsHeaderMerge) {
+      return streamFn(model, context, options);
+    }
+
+    return streamFn(model, context, {
+      ...options,
+      // Only inject apiKey when the caller hasn't already provided one
+      ...(resolvedApiKey && options?.apiKey === undefined ? { apiKey: resolvedApiKey } : {}),
+      ...(needsHeaderMerge ? { headers: { ...modelHeaders, ...options?.headers } } : {}),
+    });
   };
 }
 
@@ -850,8 +889,18 @@ export async function runEmbeddedAttempt(
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
+      // Resolve auth once per attempt so every streamFn override carries credentials.
+      const resolvedAttemptApiKey = await params.modelRegistry
+        .getApiKeyAndHeaders(params.model)
+        .then((auth) => (auth.ok && auth.apiKey ? auth.apiKey : undefined))
+        .catch(() => undefined);
+
+      const setBaseStreamFn = (fn: StreamFn) => {
+        activeSession.agent.streamFn = wrapStreamFnWithModelRegistryAuth(fn, resolvedAttemptApiKey);
+      };
+
       if (providerStreamFn) {
-        activeSession.agent.streamFn = providerStreamFn;
+        setBaseStreamFn(providerStreamFn);
       } else if (
         shouldUseOpenAIWebSocketTransport({
           provider: params.provider,
@@ -860,20 +909,22 @@ export async function runEmbeddedAttempt(
       ) {
         const wsApiKey = await params.authStorage.getApiKey(params.provider);
         if (wsApiKey) {
-          activeSession.agent.streamFn = createOpenAIWebSocketStreamFn(wsApiKey, params.sessionId, {
-            signal: runAbortController.signal,
-          });
+          setBaseStreamFn(
+            createOpenAIWebSocketStreamFn(wsApiKey, params.sessionId, {
+              signal: runAbortController.signal,
+            }),
+          );
         } else {
           log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
-          activeSession.agent.streamFn = streamSimple;
+          setBaseStreamFn(streamSimple);
         }
       } else if (params.model.provider === "anthropic-vertex") {
         // Anthropic Vertex AI: inject AnthropicVertex client into pi-ai's
         // streamAnthropic for GCP IAM auth instead of Anthropic API keys.
-        activeSession.agent.streamFn = createAnthropicVertexStreamFnForModel(params.model);
+        setBaseStreamFn(createAnthropicVertexStreamFnForModel(params.model));
       } else {
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
-        activeSession.agent.streamFn = streamSimple;
+        setBaseStreamFn(streamSimple);
       }
 
       const { effectiveExtraParams } = applyExtraParamsToAgent(
