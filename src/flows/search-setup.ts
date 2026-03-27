@@ -48,6 +48,7 @@ function resolveSearchProviderCredentialLabel(
 }
 
 const DEFAULT_ONBOARD_SEARCH_PROVIDER_IDS = new Set<SearchProvider>([
+  "baidu",
   "brave",
   "firecrawl",
   "gemini",

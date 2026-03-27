@@ -3,7 +3,7 @@ read_when:
   - 你想启用 web_search 或 web_fetch
   - 你需要设置 Brave Search API 密钥
   - 你想使用 Perplexity Sonar 进行网络搜索
-summary: Web 搜索 + 获取工具（Brave Search API、Perplexity 直连/OpenRouter）
+summary: Web 搜索 + 获取工具（Baidu、Brave、Gemini、Kimi、Perplexity 等）
 title: Web 工具
 x-i18n:
   generated_at: "2026-02-03T10:12:43Z"
@@ -18,7 +18,7 @@ x-i18n:
 
 OpenClaw 提供两个轻量级 Web 工具：
 
-- `web_search` — 通过 Brave Search API、Firecrawl Search、Gemini with Google Search grounding、Grok、Kimi 或 Perplexity Search API 搜索网络。
+- `web_search` — 通过 Baidu AppBuilder、Brave Search API、Firecrawl Search、Gemini with Google Search grounding、Grok、Kimi 或 Perplexity Search API 搜索网络。
 - `web_fetch` — HTTP 获取 + 可读性提取（HTML → markdown/文本）。
 
 这些**不是**浏览器自动化。对于 JS 密集型网站或需要登录的情况，请使用[浏览器工具](/tools/browser)。
@@ -35,6 +35,7 @@ OpenClaw 提供两个轻量级 Web 工具：
 
 | 提供商                | 结果形式           | 说明                                            | API 密钥                                    |
 | --------------------- | ------------------ | ----------------------------------------------- | ------------------------------------------- |
+| **Baidu AppBuilder**  | AI 综合答案 + 引用 | 使用百度智能搜索生成                            | `APPBUILDER_API_KEY` / `APPBUILDER_TOKEN`   |
 | **Brave Search API**  | 结构化结果 + 摘要  | 支持 Brave `llm-context` 模式                   | `BRAVE_API_KEY`                             |
 | **Firecrawl Search**  | 结构化结果 + 摘要  | Firecrawl 专用搜索控制请使用 `firecrawl_search` | `FIRECRAWL_API_KEY`                         |
 | **Gemini**            | AI 综合答案 + 引用 | 使用 Google Search grounding                    | `GEMINI_API_KEY`                            |
@@ -51,7 +52,7 @@ OpenClaw 提供两个轻量级 Web 工具：
   tools: {
     web: {
       search: {
-        provider: "brave", // 或 "firecrawl" | "gemini" | "grok" | "kimi" | "perplexity"
+        provider: "brave", // 或 "baidu" | "firecrawl" | "gemini" | "grok" | "kimi" | "perplexity"
       },
     },
   },
@@ -164,6 +165,7 @@ Perplexity Sonar 模型具有内置的网络搜索功能，并返回带有引用
 
 - `tools.web.search.enabled` 不能为 `false`（默认：启用）
 - 所选提供商的 API 密钥：
+  - **Baidu**：`APPBUILDER_API_KEY`、`APPBUILDER_TOKEN` 或 `plugins.entries.baidu.config.webSearch.apiKey`
   - **Brave**：`BRAVE_API_KEY` 或 `plugins.entries.brave.config.webSearch.apiKey`
   - **Perplexity**：`OPENROUTER_API_KEY`、`PERPLEXITY_API_KEY` 或 `plugins.entries.perplexity.config.webSearch.apiKey`
 

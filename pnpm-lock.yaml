@@ -249,6 +249,8 @@ importers:
 
   extensions/anthropic: {}
 
+  extensions/baidu: {}
+
   extensions/bluebubbles:
     devDependencies:
       openclaw:

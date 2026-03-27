@@ -212,6 +212,7 @@ describe("plugin contract registry", () => {
   });
 
   it("keeps bundled web search ownership explicit", () => {
+    expect(findWebSearchIdsForPlugin("baidu")).toEqual(["baidu"]);
     expect(findWebSearchIdsForPlugin("brave")).toEqual(["brave"]);
     expect(findWebSearchIdsForPlugin("duckduckgo")).toEqual(["duckduckgo"]);
     expect(findWebSearchIdsForPlugin("exa")).toEqual(["exa"]);

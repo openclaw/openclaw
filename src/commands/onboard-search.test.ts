@@ -13,6 +13,8 @@ const runtime: RuntimeEnv = {
 };
 
 const SEARCH_PROVIDER_ENV_VARS = [
+  "APPBUILDER_API_KEY",
+  "APPBUILDER_TOKEN",
   "BRAVE_API_KEY",
   "FIRECRAWL_API_KEY",
   "GEMINI_API_KEY",
@@ -188,6 +190,24 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(pluginWebSearchApiKey(result, "brave")).toBe("BSA-test-key");
     expect(result.plugins?.entries?.brave?.enabled).toBe(true);
+  });
+
+  it("sets provider and key for baidu", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "baidu",
+      textValue: "appbuilder-test-key",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("baidu");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(pluginWebSearchApiKey(result, "baidu")).toBe("appbuilder-test-key");
+    expect(result.plugins?.entries?.baidu?.enabled).toBe(true);
+    expect(prompter.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Baidu AppBuilder API key",
+      }),
+    );
   });
 
   it("sets provider and key for gemini", async () => {
@@ -591,10 +611,11 @@ describe("setupSearch", () => {
     expect(pluginWebSearchApiKey(result, "brave")).toBe("BSA-plain");
   });
 
-  it("exports all 7 providers in alphabetical order", () => {
+  it("exports all 8 providers in alphabetical order", () => {
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.id);
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(7);
+    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(8);
     expect(values).toEqual([
+      "baidu",
       "brave",
       "firecrawl",
       "gemini",

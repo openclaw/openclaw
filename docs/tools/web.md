@@ -1,5 +1,5 @@
 ---
-summary: "web_search tool -- search the web with Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity, or Tavily"
+summary: "web_search tool -- search the web with Baidu, Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity, or Tavily"
 read_when:
   - You want to enable or configure web_search
   - You need to choose a search provider
@@ -46,6 +46,9 @@ returns results. Results are cached by query for 15 minutes (configurable).
 ## Choosing a provider
 
 <CardGroup cols={2}>
+  <Card title="Baidu" icon="globe" href="/tools/baidu-search">
+    AI-synthesized answers with citations via Baidu AppBuilder intelligent search generation.
+  </Card>
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
     Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
   </Card>
@@ -79,6 +82,7 @@ returns results. Results are cached by query for 15 minutes (configurable).
 
 | Provider                               | Result style               | Filters                                          | API key                                     |
 | -------------------------------------- | -------------------------- | ------------------------------------------------ | ------------------------------------------- |
+| [Baidu](/tools/baidu-search)           | AI-synthesized + citations | Time, date range                                 | `APPBUILDER_API_KEY`                        |
 | [Brave](/tools/brave-search)           | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                             |
 | [DuckDuckGo](/tools/duckduckgo-search) | Structured snippets        | --                                               | None (key-free)                             |
 | [Exa](/tools/exa-search)               | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                               |
@@ -98,12 +102,14 @@ If no `provider` is set, OpenClaw checks for API keys in this order and uses
 the first one found:
 
 1. **Brave** -- `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey`
-2. **Gemini** -- `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey`
-3. **Grok** -- `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
-4. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey`
-5. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey`
-6. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
-7. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
+2. **Baidu** -- `APPBUILDER_API_KEY` / `APPBUILDER_TOKEN` or `plugins.entries.baidu.config.webSearch.apiKey`
+3. **Gemini** -- `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey`
+4. **Grok** -- `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
+5. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey`
+6. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey`
+7. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
+8. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`
+9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
 
 If no keys are found, it falls back to Brave (you will get a missing-key error
 prompting you to configure one).
@@ -191,6 +197,7 @@ examples.
 <Warning>
   Not all parameters work with all providers. Brave `llm-context` mode
   rejects `ui_lang`, `freshness`, `date_after`, and `date_before`.
+  Baidu supports `freshness` and date ranges but rejects `country` and `language`.
   Firecrawl and Tavily only support `query` and `count` through `web_search`
   -- use their dedicated tools for advanced options.
 </Warning>

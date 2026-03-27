@@ -1387,10 +1387,11 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   <Accordion title="How do I enable web search (and web fetch)?">
     `web_fetch` works without an API key. `web_search` requires a key for your
-    selected provider (Brave, Gemini, Grok, Kimi, or Perplexity).
+    selected provider (Baidu, Brave, Gemini, Grok, Kimi, or Perplexity).
     **Recommended:** run `openclaw configure --section web` and choose a provider.
     Environment alternatives:
 
+    - Baidu: `APPBUILDER_API_KEY` or `APPBUILDER_TOKEN`
     - Brave: `BRAVE_API_KEY`
     - Gemini: `GEMINI_API_KEY`
     - Grok: `XAI_API_KEY`

@@ -218,6 +218,73 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "baidu",
+    idHint: "baidu",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/baidu-plugin",
+    packageVersion: "2026.3.26",
+    packageDescription: "OpenClaw Baidu plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "baidu",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              apiKey: {
+                type: ["string", "object"],
+              },
+              baseUrl: {
+                type: "string",
+              },
+              model: {
+                type: "string",
+              },
+              enableDeepSearch: {
+                type: "boolean",
+              },
+            },
+          },
+        },
+      },
+      providerAuthEnvVars: {
+        baidu: ["APPBUILDER_API_KEY", "APPBUILDER_TOKEN"],
+      },
+      uiHints: {
+        "webSearch.apiKey": {
+          label: "Baidu AppBuilder API Key",
+          help: "Baidu AppBuilder API key for intelligent web search generation (fallback: APPBUILDER_API_KEY or APPBUILDER_TOKEN env var).",
+          sensitive: true,
+          placeholder: "appbuilder_...",
+        },
+        "webSearch.baseUrl": {
+          label: "Baidu AppBuilder Base URL",
+          help: "Baidu AppBuilder AI Search API base URL override.",
+        },
+        "webSearch.model": {
+          label: "Baidu Search Model",
+          help: "Model used for Baidu intelligent search generation. Default: ernie-4.5-turbo-32k.",
+        },
+        "webSearch.enableDeepSearch": {
+          label: "Enable Deep Search",
+          help: "Enable Baidu deep search to expand retrieval depth before synthesis.",
+        },
+      },
+      contracts: {
+        webSearchProviders: ["baidu"],
+      },
+    },
+  },
+  {
     dirName: "bluebubbles",
     idHint: "bluebubbles",
     source: {

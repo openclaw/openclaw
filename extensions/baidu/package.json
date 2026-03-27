@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/baidu-plugin",
+  "version": "2026.3.26",
+  "private": true,
+  "description": "OpenClaw Baidu plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
