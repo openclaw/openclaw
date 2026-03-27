@@ -1,33 +1,60 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
+import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 import { getFreePort, installGatewayTestHooks } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 let startGatewayServer: typeof import("./server.js").startGatewayServer;
-let createEmbeddingProviderMock: ReturnType<typeof vi.fn>;
+let createEmbeddingProviderMock: ReturnType<
+  typeof vi.fn<
+    (options: { provider: string; model: string; agentDir?: string }) => Promise<{
+      provider: {
+        id: string;
+        model: string;
+        embedQuery: (text: string) => Promise<number[]>;
+        embedBatch: (texts: string[]) => Promise<number[][]>;
+      };
+    }>
+  >
+>;
+let clearMemoryEmbeddingProviders: typeof import("../plugins/memory-embedding-providers.js").clearMemoryEmbeddingProviders;
+let registerMemoryEmbeddingProvider: typeof import("../plugins/memory-embedding-providers.js").registerMemoryEmbeddingProvider;
 let enabledServer: Awaited<ReturnType<typeof startServer>>;
 let enabledPort: number;
 
 beforeAll(async () => {
   vi.resetModules();
-  createEmbeddingProviderMock = vi.fn(async (options: { provider: string; model: string }) => ({
-    provider: {
-      id: options.provider,
-      model: options.model,
-      embedQuery: async () => [0.1, 0.2],
-      embedBatch: async (texts: string[]) =>
-        texts.map((_text, index) => [index + 0.1, index + 0.2]),
+  ({ clearMemoryEmbeddingProviders, registerMemoryEmbeddingProvider } =
+    await import("../plugins/memory-embedding-providers.js"));
+  createEmbeddingProviderMock = vi.fn(
+    async (options: { provider: string; model: string; agentDir?: string }) => ({
+      provider: {
+        id: options.provider,
+        model: options.model,
+        embedQuery: async () => [0.1, 0.2],
+        embedBatch: async (texts: string[]) =>
+          texts.map((_text, index) => [index + 0.1, index + 0.2]),
+      },
+    }),
+  );
+  clearMemoryEmbeddingProviders();
+  const openAiAdapter: MemoryEmbeddingProviderAdapter = {
+    id: "openai",
+    defaultModel: "text-embedding-3-small",
+    transport: "remote",
+    autoSelectPriority: 20,
+    allowExplicitWhenConfiguredAuto: true,
+    create: async (options) => {
+      const result = await createEmbeddingProviderMock({
+        provider: "openai",
+        model: options.model,
+        agentDir: options.agentDir,
+      });
+      return result;
     },
-  }));
-  vi.doMock("../memory/embeddings.js", async () => {
-    const actual =
-      await vi.importActual<typeof import("../memory/embeddings.js")>("../memory/embeddings.js");
-    return {
-      ...actual,
-      createEmbeddingProvider: createEmbeddingProviderMock,
-    };
-  });
+  };
+  registerMemoryEmbeddingProvider(openAiAdapter);
   ({ startGatewayServer } = await import("./server.js"));
   enabledPort = await getFreePort();
   enabledServer = await startServer(enabledPort, { openAiChatCompletionsEnabled: true });
@@ -35,6 +62,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await enabledServer.close({ reason: "embeddings http enabled suite done" });
+  clearMemoryEmbeddingProviders();
   vi.resetModules();
 });
 
@@ -120,10 +148,9 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(typeof json.data?.[0]?.embedding).toBe("string");
     expect(createEmbeddingProviderMock).toHaveBeenCalled();
     const lastCall = createEmbeddingProviderMock.mock.calls.at(-1)?.[0] as
-      | { provider?: string; model?: string; fallback?: string; agentDir?: string }
+      | { provider?: string; model?: string; agentDir?: string }
       | undefined;
     expect(typeof lastCall?.model).toBe("string");
-    expect(lastCall?.fallback).toBe("none");
     expect(lastCall?.agentDir).toBe(resolveAgentDir({}, "beta"));
   });
 

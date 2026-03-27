@@ -103,6 +103,13 @@ function requireConnectedCall(ctx: ConnectedCallContext, callId: CallId): Connec
   };
 }
 
+function resolveOpenAITtsVoice(config: SpeakContext["config"]): string | undefined {
+  const providerConfig = config.tts?.providers?.openai;
+  return providerConfig && typeof providerConfig === "object"
+    ? (providerConfig.voice as string | undefined)
+    : undefined;
+}
+
 export async function initiateCall(
   ctx: InitiateContext,
   to: string,
@@ -160,7 +167,7 @@ export async function initiateCall(
     // For notify mode with a message, use inline TwiML with <Say>.
     let inlineTwiml: string | undefined;
     if (mode === "notify" && initialMessage) {
-      const pollyVoice = mapVoiceToPolly(ctx.config.tts?.openai?.voice);
+      const pollyVoice = mapVoiceToPolly(resolveOpenAITtsVoice(ctx.config));
       inlineTwiml = generateNotifyTwiml(initialMessage, pollyVoice);
       console.log(`[voice-call] Using inline TwiML for notify mode (voice: ${pollyVoice})`);
     }
@@ -211,7 +218,7 @@ export async function speak(
     transitionState(call, "speaking");
     persistCallRecord(ctx.storePath, call);
 
-    const voice = provider.name === "twilio" ? ctx.config.tts?.openai?.voice : undefined;
+    const voice = provider.name === "twilio" ? resolveOpenAITtsVoice(ctx.config) : undefined;
     await provider.playTts({
       callId,
       providerCallId,

@@ -1,9 +1,11 @@
 import { describe, vi } from "vitest";
-import { discordOutbound } from "../../../../extensions/discord/src/outbound-adapter.js";
-import { whatsappOutbound } from "../../../../extensions/whatsapp/src/outbound-adapter.js";
-import { sendMessageZalo } from "../../../../extensions/zalo/src/send.js";
-import { sendMessageZalouser } from "../../../../extensions/zalouser/src/send.js";
-import { parseZalouserOutboundTarget } from "../../../../extensions/zalouser/src/session-route.js";
+import { discordOutbound } from "../../../../extensions/discord/test-api.js";
+import { whatsappOutbound } from "../../../../extensions/whatsapp/test-api.js";
+import { sendMessageZalo } from "../../../../extensions/zalo/test-api.js";
+import {
+  sendMessageZalouser,
+  parseZalouserOutboundTarget,
+} from "../../../../extensions/zalouser/test-api.js";
 import {
   chunkTextForOutbound as chunkZaloTextForOutbound,
   sendPayloadWithChunkedTextAndMedia as sendZaloPayloadWithChunkedTextAndMedia,
@@ -17,55 +19,58 @@ import {
   primeChannelOutboundSendMock,
 } from "./suites.js";
 
-vi.mock("../../../../extensions/zalo/src/send.js", () => ({
-  sendMessageZalo: vi.fn().mockResolvedValue({ ok: true, messageId: "zl-1" }),
-}));
+vi.mock("../../../../extensions/zalo/test-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../extensions/zalo/test-api.js")>();
+  return {
+    ...actual,
+    sendMessageZalo: vi.fn().mockResolvedValue({ ok: true, messageId: "zl-1" }),
+  };
+});
 
 // This suite only validates payload adaptation. Keep zalouser's runtime-only
 // ZCA import graph mocked so local contract runs don't depend on native socket
 // deps being resolved through the extension runtime seam.
-vi.mock("../../../../extensions/zalouser/src/accounts.js", () => ({
-  listZalouserAccountIds: vi.fn(() => ["default"]),
-  resolveDefaultZalouserAccountId: vi.fn(() => "default"),
-  resolveZalouserAccountSync: vi.fn(() => ({
-    accountId: "default",
-    profile: "default",
-    name: "test",
-    enabled: true,
-    authenticated: true,
-    config: {},
-  })),
-  getZcaUserInfo: vi.fn(async () => null),
-  checkZcaAuthenticated: vi.fn(async () => false),
-}));
-
-vi.mock("../../../../extensions/zalouser/src/zalo-js.js", () => ({
-  checkZaloAuthenticated: vi.fn(async () => false),
-  getZaloUserInfo: vi.fn(async () => null),
-  listZaloFriendsMatching: vi.fn(async () => []),
-  listZaloGroupMembers: vi.fn(async () => []),
-  listZaloGroupsMatching: vi.fn(async () => []),
-  logoutZaloProfile: vi.fn(async () => {}),
-  resolveZaloAllowFromEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
-    entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
-  ),
-  resolveZaloGroupsByEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
-    entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
-  ),
-  startZaloQrLogin: vi.fn(async () => ({
-    message: "qr pending",
-    qrDataUrl: undefined,
-  })),
-  waitForZaloQrLogin: vi.fn(async () => ({
-    connected: false,
-    message: "login pending",
-  })),
-}));
-
-vi.mock("../../../../extensions/zalouser/src/send.js", () => ({
-  sendMessageZalouser: vi.fn().mockResolvedValue({ ok: true, messageId: "zlu-1" }),
-  sendReactionZalouser: vi.fn().mockResolvedValue({ ok: true }),
-}));
+vi.mock("../../../../extensions/zalouser/test-api.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../extensions/zalouser/test-api.js")>();
+  return {
+    ...actual,
+    listZalouserAccountIds: vi.fn(() => ["default"]),
+    resolveDefaultZalouserAccountId: vi.fn(() => "default"),
+    resolveZalouserAccountSync: vi.fn(() => ({
+      accountId: "default",
+      profile: "default",
+      name: "test",
+      enabled: true,
+      authenticated: true,
+      config: {},
+    })),
+    getZcaUserInfo: vi.fn(async () => null),
+    checkZcaAuthenticated: vi.fn(async () => false),
+    checkZaloAuthenticated: vi.fn(async () => false),
+    getZaloUserInfo: vi.fn(async () => null),
+    listZaloFriendsMatching: vi.fn(async () => []),
+    listZaloGroupMembers: vi.fn(async () => []),
+    listZaloGroupsMatching: vi.fn(async () => []),
+    logoutZaloProfile: vi.fn(async () => {}),
+    resolveZaloAllowFromEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
+      entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
+    ),
+    resolveZaloGroupsByEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
+      entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
+    ),
+    startZaloQrLogin: vi.fn(async () => ({
+      message: "qr pending",
+      qrDataUrl: undefined,
+    })),
+    waitForZaloQrLogin: vi.fn(async () => ({
+      connected: false,
+      message: "login pending",
+    })),
+    sendMessageZalouser: vi.fn().mockResolvedValue({ ok: true, messageId: "zlu-1" }),
+    sendReactionZalouser: vi.fn().mockResolvedValue({ ok: true }),
+  };
+});
 
 type PayloadHarnessParams = {
   payload: ReplyPayload;

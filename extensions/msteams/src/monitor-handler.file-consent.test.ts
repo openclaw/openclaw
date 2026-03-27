@@ -1,14 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
-import type { MSTeamsAdapter } from "./messenger.js";
 import {
   type MSTeamsActivityHandler,
   type MSTeamsMessageHandlerDeps,
   registerMSTeamsHandlers,
 } from "./monitor-handler.js";
+import {
+  createActivityHandler,
+  createMSTeamsMessageHandlerDeps,
+} from "./monitor-handler.test-helpers.js";
 import { clearPendingUploads, getPendingUpload, storePendingUpload } from "./pending-uploads.js";
-import type { MSTeamsPollStore } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
@@ -39,56 +40,12 @@ const runtimeStub: PluginRuntime = {
 } as unknown as PluginRuntime;
 
 function createDeps(): MSTeamsMessageHandlerDeps {
-  const adapter: MSTeamsAdapter = {
-    continueConversation: async () => {},
-    process: async () => {},
-    updateActivity: async () => {},
-    deleteActivity: async () => {},
-  };
-  const conversationStore: MSTeamsConversationStore = {
-    upsert: async () => {},
-    get: async () => null,
-    list: async () => [],
-    remove: async () => false,
-    findByUserId: async () => null,
-  };
-  const pollStore: MSTeamsPollStore = {
-    createPoll: async () => {},
-    getPoll: async () => null,
-    recordVote: async () => null,
-  };
-  return {
+  return createMSTeamsMessageHandlerDeps({
     cfg: {} as OpenClawConfig,
     runtime: {
       error: vi.fn(),
     } as unknown as RuntimeEnv,
-    appId: "test-app-id",
-    adapter,
-    tokenProvider: {
-      getAccessToken: async () => "token",
-    },
-    textLimit: 4000,
-    mediaMaxBytes: 8 * 1024 * 1024,
-    conversationStore,
-    pollStore,
-    log: {
-      info: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    },
-  };
-}
-
-function createActivityHandler(): MSTeamsActivityHandler {
-  let handler: MSTeamsActivityHandler;
-  handler = {
-    onMessage: () => handler,
-    onMembersAdded: () => handler,
-    onReactionsAdded: () => handler,
-    onReactionsRemoved: () => handler,
-    run: async () => {},
-  };
-  return handler;
+  });
 }
 
 function createInvokeContext(params: {

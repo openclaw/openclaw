@@ -214,9 +214,7 @@ describe("FS tools with workspaceOnly=false", () => {
       config: {
         tools: {
           exec: {
-            applyPatch: {
-              enabled: true,
-            },
+            applyPatch: {},
           },
         },
       },

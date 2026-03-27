@@ -105,6 +105,7 @@ describe("isAuthErrorMessage", () => {
     "No API key found for profile openai.",
     "OAuth token refresh failed for anthropic: Failed to refresh OAuth token for anthropic. Please try again or re-authenticate.",
     "Please re-authenticate to continue.",
+    "Failed to extract accountId from token",
   ])("matches auth errors for %j", (sample) => {
     expect(isAuthErrorMessage(sample)).toBe(true);
   });
@@ -793,6 +794,11 @@ describe("classifyFailoverReason", () => {
     expect(
       classifyFailoverReason(
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}',
       ),
     ).toBe("timeout");
     expect(classifyFailoverReason("string should match pattern")).toBe("format");

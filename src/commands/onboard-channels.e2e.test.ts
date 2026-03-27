@@ -96,6 +96,71 @@ function createTelegramCfg(botToken: string, enabled?: boolean): OpenClawConfig 
   } as OpenClawConfig;
 }
 
+function createMSTeamsCatalogEntry(): ChannelPluginCatalogEntry {
+  return {
+    id: "msteams",
+    pluginId: "@openclaw/msteams-plugin",
+    meta: {
+      id: "msteams",
+      label: "Microsoft Teams",
+      selectionLabel: "Microsoft Teams",
+      docsPath: "/channels/msteams",
+      blurb: "teams channel",
+    },
+    install: {
+      npmSpec: "@openclaw/msteams",
+    },
+  };
+}
+
+function createMSTeamsPluginRegistryEntry(params?: { includeSetupWizard?: boolean }) {
+  return {
+    pluginId: "@openclaw/msteams-plugin",
+    source: "test",
+    plugin: {
+      id: "msteams",
+      meta: createMSTeamsCatalogEntry().meta,
+      capabilities: { chatTypes: ["direct"] as const },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" }),
+      },
+      ...(params?.includeSetupWizard
+        ? {
+            setupWizard: {
+              channel: "msteams",
+              status: {
+                configuredLabel: "configured",
+                unconfiguredLabel: "installed",
+                resolveConfigured: () => false,
+                resolveStatusLines: async () => [],
+                resolveSelectionHint: async () => "installed",
+              },
+              credentials: [],
+            },
+          }
+        : {}),
+      outbound: { deliveryMode: "direct" as const },
+    },
+  };
+}
+
+function mockMSTeamsRegistrySnapshot(params?: { includeSetupWizard?: boolean }) {
+  vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockImplementation(
+    ({ channel }: { channel: string }) => {
+      const registry = createEmptyPluginRegistry();
+      if (channel === "msteams") {
+        if (params?.includeSetupWizard) {
+          registry.channelSetups.push(createMSTeamsPluginRegistryEntry(params) as never);
+        } else {
+          registry.channels.push(createMSTeamsPluginRegistryEntry(params) as never);
+        }
+      }
+      return registry;
+    },
+  );
+}
+
 function patchTelegramAdapter(overrides: Parameters<typeof patchChannelSetupWizardAdapter>[1]) {
   return patchChannelSetupWizardAdapter("telegram", {
     ...overrides,
@@ -374,50 +439,8 @@ describe("setupChannels", () => {
 
   it("keeps configured external plugin channels visible when the active registry starts empty", async () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        id: "msteams",
-        pluginId: "@openclaw/msteams-plugin",
-        meta: {
-          id: "msteams",
-          label: "Microsoft Teams",
-          selectionLabel: "Microsoft Teams",
-          docsPath: "/channels/msteams",
-          blurb: "teams channel",
-        },
-        install: {
-          npmSpec: "@openclaw/msteams",
-        },
-      } satisfies ChannelPluginCatalogEntry,
-    ]);
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockImplementation(
-      ({ channel }: { channel: string }) => {
-        const registry = createEmptyPluginRegistry();
-        if (channel === "msteams") {
-          registry.channels.push({
-            pluginId: "@openclaw/msteams-plugin",
-            source: "test",
-            plugin: {
-              id: "msteams",
-              meta: {
-                id: "msteams",
-                label: "Microsoft Teams",
-                selectionLabel: "Microsoft Teams",
-                docsPath: "/channels/msteams",
-                blurb: "teams channel",
-              },
-              capabilities: { chatTypes: ["direct"] },
-              config: {
-                listAccountIds: () => [],
-                resolveAccount: () => ({ accountId: "default" }),
-              },
-              outbound: { deliveryMode: "direct" },
-            },
-          } as never);
-        }
-        return registry;
-      },
-    );
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([createMSTeamsCatalogEntry()]);
+    mockMSTeamsRegistrySnapshot();
     const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
       if (message === "Select a channel") {
         const entries = options as Array<{ value: string; hint?: string }>;
@@ -463,22 +486,7 @@ describe("setupChannels", () => {
 
   it("treats installed external plugin channels as installed without reinstall prompts", async () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        id: "msteams",
-        pluginId: "@openclaw/msteams-plugin",
-        meta: {
-          id: "msteams",
-          label: "Microsoft Teams",
-          selectionLabel: "Microsoft Teams",
-          docsPath: "/channels/msteams",
-          blurb: "teams channel",
-        },
-        install: {
-          npmSpec: "@openclaw/msteams",
-        },
-      } satisfies ChannelPluginCatalogEntry,
-    ]);
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([createMSTeamsCatalogEntry()]);
     manifestRegistryMocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         {
@@ -488,45 +496,7 @@ describe("setupChannels", () => {
       ],
       diagnostics: [],
     });
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockImplementation(
-      ({ channel }: { channel: string }) => {
-        const registry = createEmptyPluginRegistry();
-        if (channel === "msteams") {
-          registry.channelSetups.push({
-            pluginId: "@openclaw/msteams-plugin",
-            source: "test",
-            plugin: {
-              id: "msteams",
-              meta: {
-                id: "msteams",
-                label: "Microsoft Teams",
-                selectionLabel: "Microsoft Teams",
-                docsPath: "/channels/msteams",
-                blurb: "teams channel",
-              },
-              capabilities: { chatTypes: ["direct"] },
-              config: {
-                listAccountIds: () => [],
-                resolveAccount: () => ({ accountId: "default" }),
-              },
-              setupWizard: {
-                channel: "msteams",
-                status: {
-                  configuredLabel: "configured",
-                  unconfiguredLabel: "installed",
-                  resolveConfigured: () => false,
-                  resolveStatusLines: async () => [],
-                  resolveSelectionHint: async () => "installed",
-                },
-                credentials: [],
-              },
-              outbound: { deliveryMode: "direct" },
-            },
-          } as never);
-        }
-        return registry;
-      },
-    );
+    mockMSTeamsRegistrySnapshot({ includeSetupWizard: true });
 
     let channelSelectionCount = 0;
     const select = vi.fn(async ({ message }: { message: string }) => {

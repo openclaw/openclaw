@@ -53,5 +53,13 @@ git add -- "${files[@]}"
 # exist. Only run the repo-wide gate inside a real checkout.
 if [[ -f "$ROOT_DIR/package.json" ]] && [[ -f "$ROOT_DIR/pnpm-lock.yaml" ]]; then
   cd "$ROOT_DIR"
-  pnpm check
+  case "${FAST_COMMIT:-}" in
+    1|true|TRUE|yes|YES|on|ON)
+      echo "FAST_COMMIT enabled: skipping pnpm format and pnpm check in pre-commit hook."
+      ;;
+    *)
+      pnpm format
+      pnpm check
+      ;;
+  esac
 fi

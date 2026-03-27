@@ -6,6 +6,7 @@ import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
+import type { FailoverReason } from "../pi-embedded-helpers/types.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 type MockCompactionResult =
@@ -96,6 +97,13 @@ type MockTruncateOversizedToolResultsResult = {
   reason?: string;
 };
 
+export class MockedFailoverError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FailoverError";
+  }
+}
+
 export const mockedCoerceToFailoverError = vi.fn<MockCoerceToFailoverError>();
 export const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
   (err: unknown): MockFailoverErrorDescription => ({
@@ -121,12 +129,20 @@ export const mockedLog: {
   isEnabled: vi.fn(() => false),
 };
 
-export const mockedClassifyFailoverReason = vi.fn(() => null);
+export const mockedFormatBillingErrorMessage = vi.fn(() => "");
+export const mockedClassifyFailoverReason = vi.fn<(raw: string) => FailoverReason | null>(
+  () => null,
+);
 export const mockedExtractObservedOverflowTokenCount = vi.fn((msg?: string) => {
   const match = msg?.match(/prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i);
   return match?.[1] ? Number(match[1].replaceAll(",", "")) : undefined;
 });
+export const mockedFormatAssistantErrorText = vi.fn(() => "");
+export const mockedIsAuthAssistantError = vi.fn(() => false);
+export const mockedIsBillingAssistantError = vi.fn(() => false);
 export const mockedIsCompactionFailureError = vi.fn(() => false);
+export const mockedIsFailoverAssistantError = vi.fn(() => false);
+export const mockedIsFailoverErrorMessage = vi.fn(() => false);
 export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
   const lower = (msg ?? "").toLowerCase();
   return (
@@ -135,9 +151,23 @@ export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
     lower.includes("prompt is too long")
   );
 });
+export const mockedParseImageSizeError = vi.fn(() => null);
+export const mockedParseImageDimensionError = vi.fn(() => null);
+export const mockedIsRateLimitAssistantError = vi.fn(() => false);
+export const mockedIsTimeoutErrorMessage = vi.fn(() => false);
 export const mockedPickFallbackThinkingLevel = vi.fn<(params?: unknown) => ThinkLevel | null>(
   () => null,
 );
+export const mockedEvaluateContextWindowGuard = vi.fn(() => ({
+  shouldWarn: false,
+  shouldBlock: false,
+  tokens: 200000,
+  source: "model",
+}));
+export const mockedResolveContextWindowInfo = vi.fn(() => ({
+  tokens: 200000,
+  source: "model",
+}));
 export const mockedGetApiKeyForModel = vi.fn(
   async ({ profileId }: { profileId?: string } = {}) => ({
     apiKey: "test-key",
@@ -218,6 +248,14 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
 
   mockedClassifyFailoverReason.mockReset();
   mockedClassifyFailoverReason.mockReturnValue(null);
+  mockedFormatBillingErrorMessage.mockReset();
+  mockedFormatBillingErrorMessage.mockReturnValue("");
+  mockedFormatAssistantErrorText.mockReset();
+  mockedFormatAssistantErrorText.mockReturnValue("");
+  mockedIsAuthAssistantError.mockReset();
+  mockedIsAuthAssistantError.mockReturnValue(false);
+  mockedIsBillingAssistantError.mockReset();
+  mockedIsBillingAssistantError.mockReturnValue(false);
   mockedExtractObservedOverflowTokenCount.mockReset();
   mockedExtractObservedOverflowTokenCount.mockImplementation((msg?: string) => {
     const match = msg?.match(/prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i);
@@ -225,6 +263,10 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   });
   mockedIsCompactionFailureError.mockReset();
   mockedIsCompactionFailureError.mockReturnValue(false);
+  mockedIsFailoverAssistantError.mockReset();
+  mockedIsFailoverAssistantError.mockReturnValue(false);
+  mockedIsFailoverErrorMessage.mockReset();
+  mockedIsFailoverErrorMessage.mockReturnValue(false);
   mockedIsLikelyContextOverflowError.mockReset();
   mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
     const lower = (msg ?? "").toLowerCase();
@@ -234,8 +276,28 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
       lower.includes("prompt is too long")
     );
   });
+  mockedParseImageSizeError.mockReset();
+  mockedParseImageSizeError.mockReturnValue(null);
+  mockedParseImageDimensionError.mockReset();
+  mockedParseImageDimensionError.mockReturnValue(null);
+  mockedIsRateLimitAssistantError.mockReset();
+  mockedIsRateLimitAssistantError.mockReturnValue(false);
+  mockedIsTimeoutErrorMessage.mockReset();
+  mockedIsTimeoutErrorMessage.mockReturnValue(false);
   mockedPickFallbackThinkingLevel.mockReset();
   mockedPickFallbackThinkingLevel.mockReturnValue(null);
+  mockedEvaluateContextWindowGuard.mockReset();
+  mockedEvaluateContextWindowGuard.mockReturnValue({
+    shouldWarn: false,
+    shouldBlock: false,
+    tokens: 200000,
+    source: "model",
+  });
+  mockedResolveContextWindowInfo.mockReset();
+  mockedResolveContextWindowInfo.mockReturnValue({
+    tokens: 200000,
+    source: "model",
+  });
   mockedGetApiKeyForModel.mockReset();
   mockedGetApiKeyForModel.mockImplementation(
     async ({ profileId }: { profileId?: string } = {}) => ({
@@ -308,20 +370,20 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("../pi-embedded-helpers.js", () => ({
-    formatBillingErrorMessage: vi.fn(() => ""),
+    formatBillingErrorMessage: mockedFormatBillingErrorMessage,
     classifyFailoverReason: mockedClassifyFailoverReason,
     extractObservedOverflowTokenCount: mockedExtractObservedOverflowTokenCount,
-    formatAssistantErrorText: vi.fn(() => ""),
-    isAuthAssistantError: vi.fn(() => false),
-    isBillingAssistantError: vi.fn(() => false),
+    formatAssistantErrorText: mockedFormatAssistantErrorText,
+    isAuthAssistantError: mockedIsAuthAssistantError,
+    isBillingAssistantError: mockedIsBillingAssistantError,
     isCompactionFailureError: mockedIsCompactionFailureError,
     isLikelyContextOverflowError: mockedIsLikelyContextOverflowError,
-    isFailoverAssistantError: vi.fn(() => false),
-    isFailoverErrorMessage: vi.fn(() => false),
-    parseImageSizeError: vi.fn(() => null),
-    parseImageDimensionError: vi.fn(() => null),
-    isRateLimitAssistantError: vi.fn(() => false),
-    isTimeoutErrorMessage: vi.fn(() => false),
+    isFailoverAssistantError: mockedIsFailoverAssistantError,
+    isFailoverErrorMessage: mockedIsFailoverErrorMessage,
+    parseImageSizeError: mockedParseImageSizeError,
+    parseImageDimensionError: mockedParseImageDimensionError,
+    isRateLimitAssistantError: mockedIsRateLimitAssistantError,
+    isTimeoutErrorMessage: mockedIsTimeoutErrorMessage,
     pickFallbackThinkingLevel: mockedPickFallbackThinkingLevel,
   }));
 
@@ -363,16 +425,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../context-window-guard.js", () => ({
     CONTEXT_WINDOW_HARD_MIN_TOKENS: 1000,
     CONTEXT_WINDOW_WARN_BELOW_TOKENS: 5000,
-    evaluateContextWindowGuard: vi.fn(() => ({
-      shouldWarn: false,
-      shouldBlock: false,
-      tokens: 200000,
-      source: "model",
-    })),
-    resolveContextWindowInfo: vi.fn(() => ({
-      tokens: 200000,
-      source: "model",
-    })),
+    evaluateContextWindowGuard: mockedEvaluateContextWindowGuard,
+    resolveContextWindowInfo: mockedResolveContextWindowInfo,
   }));
 
   vi.doMock("../../process/command-queue.js", () => ({
@@ -394,7 +448,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("../failover-error.js", () => ({
-    FailoverError: class extends Error {},
+    FailoverError: MockedFailoverError,
     coerceToFailoverError: mockedCoerceToFailoverError,
     describeFailoverError: mockedDescribeFailoverError,
     resolveFailoverStatus: mockedResolveFailoverStatus,

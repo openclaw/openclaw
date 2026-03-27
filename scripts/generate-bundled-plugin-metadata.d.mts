@@ -17,16 +17,17 @@ export type BundledPluginMetadataEntry = {
 
 export function collectBundledPluginMetadata(params?: {
   repoRoot?: string;
-}): BundledPluginMetadataEntry[];
+}): Promise<BundledPluginMetadataEntry[]>;
 
 export function renderBundledPluginMetadataModule(entries: BundledPluginMetadataEntry[]): string;
 
 export function writeBundledPluginMetadataModule(params?: {
   repoRoot?: string;
   outputPath?: string;
+  entriesOutputPath?: string;
   check?: boolean;
-}): {
+}): Promise<{
   changed: boolean;
   wrote: boolean;
-  outputPath: string;
-};
+  outputPaths: string[];
+}>;

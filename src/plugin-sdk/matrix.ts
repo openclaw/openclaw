@@ -156,7 +156,7 @@ export {
   findMatrixAccountEntry,
   resolveConfiguredMatrixAccountIds,
   resolveMatrixChannelConfig,
-} from "../../extensions/matrix/src/account-selection.js";
+} from "../../extensions/matrix/helper-api.js";
 export {
   resolveMatrixAccountStorageRoot,
   resolveMatrixCredentialsDir,
@@ -169,6 +169,11 @@ export {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "../../extensions/matrix/helper-api.js";
+export {
+  createMatrixThreadBindingManager,
+  resetMatrixThreadBindingsForTests,
+} from "../../extensions/matrix/api.js";
+export { setMatrixRuntime } from "../../extensions/matrix/src/runtime.js";
 
 const matrixSetup = createOptionalChannelSetupSurface({
   channel: "matrix",

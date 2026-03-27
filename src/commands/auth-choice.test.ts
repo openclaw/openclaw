@@ -7,6 +7,7 @@ import cloudflareAiGatewayPlugin from "../../extensions/cloudflare-ai-gateway/in
 import googlePlugin from "../../extensions/google/index.js";
 import huggingfacePlugin from "../../extensions/huggingface/index.js";
 import kimiCodingPlugin from "../../extensions/kimi-coding/index.js";
+import litellmPlugin from "../../extensions/litellm/index.js";
 import minimaxPlugin from "../../extensions/minimax/index.js";
 import mistralPlugin from "../../extensions/mistral/index.js";
 import moonshotPlugin from "../../extensions/moonshot/index.js";
@@ -94,6 +95,7 @@ function createDefaultProviderPlugins() {
     googlePlugin,
     huggingfacePlugin,
     kimiCodingPlugin,
+    litellmPlugin,
     minimaxPlugin,
     mistralPlugin,
     moonshotPlugin,
