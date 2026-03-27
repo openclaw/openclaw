@@ -83,7 +83,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "discord-session-key",
-    source: "../../extensions/discord/api.js",
+    source: "../../extensions/discord/session-key-api.js",
     exports: ["normalizeExplicitDiscordSessionKey"],
   },
   {
