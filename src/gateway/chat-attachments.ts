@@ -1,6 +1,6 @@
 import { estimateBase64DecodedBytes } from "../media/base64.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
-import { saveMediaBuffer } from "../media/store.js"; 
+import { saveMediaBuffer } from "../media/store.js";
 
 export type ChatAttachment = {
   type?: string;
@@ -21,6 +21,7 @@ export type ParsedMessageWithImages = {
 };
 
 type AttachmentLog = {
+  info?: (message: string) => void;
   warn: (message: string) => void;
 };
 
@@ -30,10 +31,11 @@ type NormalizedAttachment = {
   base64: string;
 };
 
+const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
+const OFFLOAD_BASE_PATH = "/home/node/.openclaw/media/inbound";
+
 function normalizeMime(mime?: string): string | undefined {
-  if (!mime) {
-    return undefined;
-  }
+  if (!mime) return undefined;
   const cleaned = mime.split(";")[0]?.trim().toLowerCase();
   return cleaned || undefined;
 }
@@ -43,8 +45,11 @@ function isImageMime(mime?: string): boolean {
 }
 
 function isValidBase64(value: string): boolean {
-  // Minimal validation; avoid full decode allocations for large payloads.
   return value.length > 0 && value.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+}
+
+function sanitizePathSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9.\-_]/g, "_");
 }
 
 function normalizeAttachment(
@@ -65,7 +70,6 @@ function normalizeAttachment(
 
   let base64 = content.trim();
   if (opts.stripDataUrlPrefix) {
-    // Strip data URL prefix if present (e.g., "data:image/jpeg;base64,...").
     const dataUrlMatch = /^data:[^;]+;base64,(.*)$/.exec(base64);
     if (dataUrlMatch) {
       base64 = dataUrlMatch[1];
@@ -100,29 +104,39 @@ export async function parseMessageWithAttachments(
   attachments: ChatAttachment[] | undefined,
   opts?: { maxBytes?: number; log?: AttachmentLog },
 ): Promise<ParsedMessageWithImages> {
-  const maxBytes = opts?.maxBytes ?? 5_000_000; // decoded bytes (5,000,000)
+  const maxBytes = opts?.maxBytes ?? 5_000_000;
   const log = opts?.log;
+
   if (!attachments || attachments.length === 0) {
     return { message, images: [] };
   }
 
   const images: ChatImageContent[] = [];
-  let updatedMessage = message; 
+  let updatedMessage = message;
 
   for (const [idx, att] of attachments.entries()) {
-    if (!att) {
-      continue;
-    }
+    if (!att) continue;
+
     const normalized = normalizeAttachment(att, idx, {
       stripDataUrlPrefix: true,
       requireImageMime: false,
     });
-    validateAttachmentBase64OrThrow(normalized, { maxBytes });
+
     const { base64: b64, label, mime } = normalized;
+
+    if (!isValidBase64(b64)) {
+      throw new Error(`attachment ${label}: invalid base64 content`);
+    }
+
+    const sizeBytes = estimateBase64DecodedBytes(b64);
+    if (sizeBytes <= 0) {
+      log?.warn(`attachment ${label}: estimated size is zero, dropping`);
+      continue;
+    }
 
     const providedMime = normalizeMime(mime);
     const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
-    
+
     if (sniffedMime && !isImageMime(sniffedMime)) {
       log?.warn(`attachment ${label}: detected non-image (${sniffedMime}), dropping`);
       continue;
@@ -132,30 +146,40 @@ export async function parseMessageWithAttachments(
       continue;
     }
     if (sniffedMime && providedMime && sniffedMime !== providedMime) {
-      log?.warn(
-        `attachment ${label}: mime mismatch (${providedMime} -> ${sniffedMime}), using sniffed`,
-      );
+      log?.warn(`attachment ${label}: mime mismatch (${providedMime} -> ${sniffedMime}), using sniffed`);
     }
     const finalMime = sniffedMime ?? providedMime ?? mime;
-    try {
-      const buffer = Buffer.from(b64, "base64");
-      const savedMedia = await saveMediaBuffer(buffer, finalMime, "inbound");
-      const mediaId = savedMedia.id || label;
-      updatedMessage += `\n[media attached: inbound/${mediaId}]`;
-      log?.warn(`[Gateway] Intercepted large image payload. Saved to disk: inbound/${mediaId}`);
-      continue; 
-    } catch (err) {
-      log?.warn(`[Gateway Error] Failed to save intercepted media to disk. Falling back to memory payload: ${err}`);
+
+    let isOffloaded = false;
+
+    if (sizeBytes > OFFLOAD_THRESHOLD_BYTES) {
+      try {
+        const buffer = Buffer.from(b64, "base64");
+        const savedMedia = await saveMediaBuffer(buffer, finalMime, "inbound");
+        const mediaId = sanitizePathSegment(savedMedia.id || label);
+        const mediaPath = `${OFFLOAD_BASE_PATH}/${mediaId}`;
+
+        updatedMessage += `\n[media attached: ${mediaPath}]`;
+        log?.info?.(`[Gateway] Intercepted large image payload. Saved to disk: ${mediaPath}`);
+        isOffloaded = true;
+      } catch (err) {
+        log?.warn(`[Gateway] Failed to save intercepted media to disk, falling back to memory: ${err}`);
+      }
     }
 
-    images.push({
-      type: "image",
-      data: b64,
-      mimeType: finalMime,
-    });
+    if (isOffloaded) continue;
+
+    if (sizeBytes > maxBytes) {
+      throw new Error(`attachment ${label}: exceeds size limit (${sizeBytes} > ${maxBytes} bytes)`);
+    }
+
+    images.push({ type: "image", data: b64, mimeType: finalMime });
   }
 
-  return { message: updatedMessage.trim(), images };
+  return {
+    message: updatedMessage !== message ? updatedMessage.trimEnd() : message,
+    images,
+  };
 }
 
 /**
@@ -167,7 +191,8 @@ export function buildMessageWithAttachments(
   attachments: ChatAttachment[] | undefined,
   opts?: { maxBytes?: number },
 ): string {
-  const maxBytes = opts?.maxBytes ?? 2_000_000; // 2 MB
+  const maxBytes = opts?.maxBytes ?? 2_000_000;
+
   if (!attachments || attachments.length === 0) {
     return message;
   }
@@ -175,24 +200,21 @@ export function buildMessageWithAttachments(
   const blocks: string[] = [];
 
   for (const [idx, att] of attachments.entries()) {
-    if (!att) {
-      continue;
-    }
+    if (!att) continue;
+
     const normalized = normalizeAttachment(att, idx, {
       stripDataUrlPrefix: false,
       requireImageMime: true,
     });
     validateAttachmentBase64OrThrow(normalized, { maxBytes });
+
     const { base64, label, mime } = normalized;
-
     const safeLabel = label.replace(/\s+/g, "_");
-    const dataUrl = `![${safeLabel}](data:${mime};base64,${base64})`;
-    blocks.push(dataUrl);
+    blocks.push(`![${safeLabel}](data:${mime};base64,${base64})`);
   }
 
-  if (blocks.length === 0) {
-    return message;
-  }
+  if (blocks.length === 0) return message;
+
   const separator = message.trim().length > 0 ? "\n\n" : "";
   return `${message}${separator}${blocks.join("\n\n")}`;
 }
