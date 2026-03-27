@@ -123,6 +123,39 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages[0]).toEqual(payload.message);
   });
 
+  it("drops internal-only final payload from another run without clearing active stream", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-user",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-announce",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: [
+              "<relevant-memories>",
+              "Internal memory context",
+              "</relevant-memories>",
+            ].join("\n"),
+          },
+        ],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Working...");
+    expect(state.chatStreamStartedAt).toBe(123);
+    expect(state.chatMessages).toEqual([]);
+  });
+
   it("drops NO_REPLY final payload from another run without clearing active stream", () => {
     const state = createActiveStreamingState();
     const payload = createOtherRunNoReplyFinalPayload();
@@ -531,6 +564,50 @@ describe("loadChatHistory", () => {
 
     // text takes precedence — "real reply" is NOT silent, so message is kept.
     expect(state.chatMessages).toHaveLength(1);
+  });
+
+  it("filters internal-only context messages from history while keeping visible system messages", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: [
+              "<relevant-memories>",
+              "Internal memory context",
+              "</relevant-memories>",
+            ].join("\n"),
+          },
+        ],
+      },
+      {
+        role: "system",
+        content: [
+          {
+            type: "text",
+            text: [
+              "<thinking>",
+              "internal",
+              "</thinking>",
+              "Visible system notice",
+            ].join("\n"),
+          },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "Real answer" }] },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([messages[1], messages[2]]);
   });
 });
 

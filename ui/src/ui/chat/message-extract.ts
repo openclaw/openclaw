@@ -7,7 +7,7 @@ const thinkingCache = new WeakMap<object, string | null>();
 
 function processMessageText(text: string, role: string): string {
   const shouldStripInboundMetadata = role.toLowerCase() === "user";
-  if (role === "assistant") {
+  if (!shouldStripInboundMetadata) {
     return stripThinkingTags(text);
   }
   return shouldStripInboundMetadata
