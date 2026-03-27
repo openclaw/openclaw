@@ -214,6 +214,10 @@ Each list is optional:
 | `webSearchProviders`          | `string[]` | Web-search provider ids this plugin owns.                      |
 | `tools`                       | `string[]` | Agent tool names this plugin owns for bundled contract checks. |
 
+Legacy top-level `speechProviders`, `mediaUnderstandingProviders`, and
+`imageGenerationProviders` still parse for compatibility, but new manifests
+should declare those ids under `contracts` only.
+
 ## Manifest versus package.json
 
 The two files serve different jobs:
