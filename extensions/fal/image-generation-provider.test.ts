@@ -1,4 +1,4 @@
-import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
+import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
