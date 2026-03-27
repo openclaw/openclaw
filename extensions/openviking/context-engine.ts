@@ -220,7 +220,6 @@ export function createMemoryOpenVikingContextEngine(
         reason: "legacy_compact_unavailable",
       };
     },
-  };
 
     resolveOVSession: async (sessionKey: string): Promise<string> => {
       return sessionKey;
