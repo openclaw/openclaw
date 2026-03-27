@@ -251,6 +251,7 @@ export function registerBrowserAgentSnapshotRoutes(
           cdpUrl,
           targetId: tab.targetId,
           url,
+          signal: req.signal,
           ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
         });
         const currentTargetId = await resolveTargetIdAfterNavigate({
@@ -283,6 +284,7 @@ export function registerBrowserAgentSnapshotRoutes(
         const pdf = await pw.pdfViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          signal: req.signal,
         });
         await saveBrowserMediaResponse({
           res,
@@ -362,6 +364,7 @@ export function registerBrowserAgentSnapshotRoutes(
             element,
             fullPage,
             type,
+            signal: req.signal,
           });
           buffer = snap.buffer;
         } else {
@@ -515,6 +518,7 @@ export function registerBrowserAgentSnapshotRoutes(
               .snapshotAiViaPlaywright({
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
+                signal: req.signal,
                 ssrfPolicy: ctx.state().resolved.ssrfPolicy,
                 ...(typeof plan.resolvedMaxChars === "number"
                   ? { maxChars: plan.resolvedMaxChars }
@@ -584,6 +588,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
                 limit: plan.limit,
+                signal: req.signal,
                 ssrfPolicy: ctx.state().resolved.ssrfPolicy,
               });
             });
