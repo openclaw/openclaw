@@ -348,11 +348,21 @@ function defaultRollingPathForToday(): string {
 
 function isRollingPath(file: string): boolean {
   const base = path.basename(file);
-  return (
+
+  // Default rolling path: openclaw-YYYY-MM-DD.log
+  const isDefaultRolling = (
     base.startsWith(`${LOG_PREFIX}-`) &&
     base.endsWith(LOG_SUFFIX) &&
     base.length === `${LOG_PREFIX}-YYYY-MM-DD${LOG_SUFFIX}`.length
   );
+
+  // Custom rolling path: any-YYYY-MM-DD.log (supports %DATE% placeholder)
+  const isCustomRolling = (
+    base.endsWith(LOG_SUFFIX) &&
+    /\d{4}-\d{2}-\d{2}\.log$/.test(base)
+  );
+
+  return isDefaultRolling || isCustomRolling;
 }
 
 function pruneOldRollingLogs(dir: string): void {
@@ -363,7 +373,13 @@ function pruneOldRollingLogs(dir: string): void {
       if (!entry.isFile()) {
         continue;
       }
-      if (!entry.name.startsWith(`${LOG_PREFIX}-`) || !entry.name.endsWith(LOG_SUFFIX)) {
+      if (!entry.name.endsWith(LOG_SUFFIX)) {
+        continue;
+      }
+      // Support both default (openclaw-*.log) and custom (*-YYYY-MM-DD.log) patterns
+      const isDefaultRolling = entry.name.startsWith(`${LOG_PREFIX}-`);
+      const isCustomRolling = /\d{4}-\d{2}-\d{2}\.log$/.test(entry.name);
+      if (!isDefaultRolling && !isCustomRolling) {
         continue;
       }
       const fullPath = path.join(dir, entry.name);
