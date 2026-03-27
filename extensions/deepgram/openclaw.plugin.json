@@ -1,6 +1,9 @@
 {
   "id": "deepgram",
   "mediaUnderstandingProviders": ["deepgram"],
+  "contracts": {
+    "mediaUnderstandingProviders": ["deepgram"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
