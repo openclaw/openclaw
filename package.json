@@ -420,6 +420,10 @@
       "types": "./dist/plugin-sdk/memory-core.d.ts",
       "default": "./dist/plugin-sdk/memory-core.js"
     },
+    "./plugin-sdk/memory-core-engine-runtime": {
+      "types": "./dist/plugin-sdk/memory-core-engine-runtime.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-engine-runtime.js"
+    },
     "./plugin-sdk/memory-core-host": {
       "types": "./dist/plugin-sdk/memory-core-host.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host.js"
