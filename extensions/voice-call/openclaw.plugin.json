@@ -466,6 +466,16 @@
             "items": {
               "type": "object"
             }
+          },
+          "azureEndpoint": {
+            "type": "string",
+            "format": "uri"
+          },
+          "azureDeployment": {
+            "type": "string"
+          },
+          "azureApiVersion": {
+            "type": "string"
           }
         }
       },
