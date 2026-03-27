@@ -209,6 +209,37 @@ describe("resolveMentions", () => {
       expect(result.wasMentioned).toBe(true);
     });
 
+    it("ignores out-of-range hexadecimal HTML entities in visible labels", () => {
+      expect(() =>
+        resolveMentions({
+          content: {
+            msgtype: "m.text",
+            body: "hello",
+            formatted_body: '<a href="https://matrix.to/#/@bot:matrix.org">&#x110000;</a>: hello',
+          },
+          userId,
+          text: "hello",
+          mentionRegexes: [],
+        }),
+      ).not.toThrow();
+    });
+
+    it("ignores oversized decimal HTML entities in visible labels", () => {
+      expect(() =>
+        resolveMentions({
+          content: {
+            msgtype: "m.text",
+            body: "hello",
+            formatted_body:
+              '<a href="https://matrix.to/#/@bot:matrix.org">&#9999999999999999999999999999999999999999;</a>: hello',
+          },
+          userId,
+          text: "hello",
+          mentionRegexes: [],
+        }),
+      ).not.toThrow();
+    });
+
     it("does not detect mention when displayName is spoofed", () => {
       const result = resolveMentions({
         content: {
