@@ -136,9 +136,8 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   return html`
     <section class="ov-cards">${cards.map((c) => renderStatCard(c, props.onNavigate))}</section>
 
-    ${
-      sessions.length > 0
-        ? html`
+    ${sessions.length > 0
+      ? html`
           <section class="ov-recent">
             <h3 class="ov-recent__title">${t("overview.cards.recentSessions")}</h3>
             <ul class="ov-recent__list">
@@ -158,7 +157,6 @@ export function renderOverviewCards(props: OverviewCardsProps) {
             </ul>
           </section>
         `
-        : nothing
-    }
+      : nothing}
   `;
 }
