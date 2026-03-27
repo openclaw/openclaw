@@ -1111,6 +1111,7 @@ describe("gateway server sessions", () => {
     expect(reset.payload?.entry.modelProvider).toBe("openai");
     expect(reset.payload?.entry.model).toBe("gpt-test-a");
     expect(reset.payload?.entry.contextTokens).toBeUndefined();
+    await expect(fs.stat(reset.payload?.entry.sessionFile as string)).resolves.toBeTruthy();
 
     ws.close();
   });
