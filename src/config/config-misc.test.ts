@@ -481,9 +481,8 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
-      expect(snap.legacyIssues).toHaveLength(0);
-      expect(snap.issues[0]?.message).toContain('"routing"');
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
     });
   });
 
