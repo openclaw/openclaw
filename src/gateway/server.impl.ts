@@ -1196,6 +1196,18 @@ export async function startGatewayServer(
         }
         return false;
       },
+      disconnectClientsForDevice: (deviceId: string) => {
+        for (const gatewayClient of clients) {
+          if (gatewayClient.connect.device?.id !== deviceId) {
+            continue;
+          }
+          try {
+            gatewayClient.socket.close(4001, "device removed");
+          } catch {
+            /* ignore */
+          }
+        }
+      },
       nodeRegistry,
       agentRunSeq,
       chatAbortControllers,
