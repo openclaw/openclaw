@@ -429,7 +429,10 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
     error: undefined,
   });
   resolveSessionAuthProfileOverrideMock.mockReset();
-  resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+  resolveSessionAuthProfileOverrideMock.mockResolvedValue({
+    authProfileId: undefined,
+    authProfileIdSource: undefined,
+  });
 
   logWarnMock.mockReset();
 }
