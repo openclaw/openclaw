@@ -2062,3 +2062,97 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
     expect(payload?.text).toBeUndefined();
   });
 });
+
+describe("runReplyAgent resetTriggered verbose notice guard", () => {
+  function createRun(overrides: { resetTriggered: boolean }) {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session-abc",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "on",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude",
+      resolvedVerboseLevel: "on",
+      isNewSession: true,
+      resetTriggered: overrides.resetTriggered,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("suppresses new-session notice when resetTriggered is true", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+        },
+      },
+    });
+
+    const result = await createRun({ resetTriggered: true });
+    const payloads = Array.isArray(result) ? result : [result];
+    const texts = payloads.map((p) => (p as { text?: string })?.text ?? "");
+
+    expect(texts.some((t) => t.includes("🧭 New session"))).toBe(false);
+  });
+
+  it("emits new-session notice when resetTriggered is false", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+        },
+      },
+    });
+
+    const result = await createRun({ resetTriggered: false });
+    const payloads = Array.isArray(result) ? result : [result];
+    const texts = payloads.map((p) => (p as { text?: string })?.text ?? "");
+
+    expect(texts.some((t) => t.includes("🧭 New session"))).toBe(true);
+  });
+});
