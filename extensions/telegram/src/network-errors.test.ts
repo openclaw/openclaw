@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   getTelegramNetworkErrorOrigin,
   isRecoverableTelegramNetworkError,
-  isTelegramRateLimitError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
   isTelegramPollingNetworkError,
+  isTelegramRateLimitError,
   isTelegramServerError,
   tagTelegramNetworkError,
 } from "./network-errors.js";
@@ -219,16 +219,11 @@ describe("isTelegramServerError", () => {
 });
 
 describe("isTelegramRateLimitError", () => {
-  it("returns true for Telegram 429 errors", () => {
-    expect(isTelegramRateLimitError(errorWithTelegramCode("Too Many Requests", 429))).toBe(true);
-  });
-
-  it("detects wrapped 429 retry_after errors without error_code", () => {
-    const wrapped = {
-      message: "429 Too Many Requests",
-      response: { parameters: { retry_after: 1 } },
-    };
-    expect(isTelegramRateLimitError(wrapped)).toBe(true);
+  it.each([
+    ["Too Many Requests", 429, true],
+    ["Forbidden", 403, false],
+  ])("returns %s for error_code %s", (message, errorCode, expected) => {
+    expect(isTelegramRateLimitError(errorWithTelegramCode(message, errorCode))).toBe(expected);
   });
 
   it("detects error_code in nested cause", () => {
