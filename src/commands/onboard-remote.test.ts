@@ -119,7 +119,7 @@ describe("promptRemoteGatewayConfig", () => {
     );
   });
 
-  it("rejects discovery endpoint when trust confirmation is declined", async () => {
+  it("falls back to manual URL entry when discovery trust is declined", async () => {
     detectBinary.mockResolvedValue(true);
     discoverGatewayBeacons.mockResolvedValue([
       {
@@ -135,6 +135,14 @@ describe("promptRemoteGatewayConfig", () => {
       "Select gateway": "0",
       "Connection method": "direct",
     });
+    const manualUrl = "wss://manual.example.com:18789";
+    const text: WizardPrompter["text"] = vi.fn(async (params) => {
+      if (params.message === "Gateway WebSocket URL") {
+        expect(params.initialValue).toBe("wss://evil.example:443");
+        return manualUrl;
+      }
+      return "";
+    }) as WizardPrompter["text"];
     const confirm: WizardPrompter["confirm"] = vi.fn(async (params) => {
       if (params.message.startsWith("Discover gateway")) {
         return true;
@@ -148,12 +156,14 @@ describe("promptRemoteGatewayConfig", () => {
     const prompter = createPrompter({
       confirm,
       select,
-      text: vi.fn(async () => "") as WizardPrompter["text"],
+      text,
     });
 
-    await expect(promptRemoteGatewayConfig({} as OpenClawConfig, prompter)).rejects.toThrow(
-      "not trusted",
-    );
+    const next = await promptRemoteGatewayConfig({} as OpenClawConfig, prompter);
+
+    expect(next.gateway?.mode).toBe("remote");
+    expect(next.gateway?.remote?.url).toBe(manualUrl);
+    expect(next.gateway?.remote?.tlsFingerprint).toBeUndefined();
   });
 
   it("trusts discovery endpoint without fingerprint and omits tlsFingerprint", async () => {
