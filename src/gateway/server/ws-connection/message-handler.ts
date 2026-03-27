@@ -841,7 +841,12 @@ export function attachGatewayWsMessageHandler(params: {
             }
             // Re-resolve: another connection may have superseded/approved the request since we created it
             recoveryRequestId = await resolveLivePendingRequestId();
-            if (!(pairing.request.silent === true && (approved || resolvedByConcurrentApproval))) {
+            if (
+              !(
+                pairing.request.silent === true &&
+                (approved?.status === "approved" || resolvedByConcurrentApproval)
+              )
+            ) {
               setHandshakeState("failed");
               setCloseCause("pairing-required", {
                 deviceId: device.id,
