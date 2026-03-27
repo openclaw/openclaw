@@ -5,15 +5,8 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import chokidar, { FSWatcher } from "chokidar";
 import {
-  DEFAULT_GEMINI_EMBEDDING_MODEL,
-  DEFAULT_MISTRAL_EMBEDDING_MODEL,
-  DEFAULT_OLLAMA_EMBEDDING_MODEL,
-  DEFAULT_OPENAI_EMBEDDING_MODEL,
-  DEFAULT_VOYAGE_EMBEDDING_MODEL,
   buildCaseInsensitiveExtensionGlob,
-  buildFileEntry,
   classifyMemoryMultimodalPath,
-  createEmbeddingProvider,
   createSubsystemLogger,
   ensureDir,
   ensureMemoryIndexSchema,
@@ -22,10 +15,8 @@ import {
   isFileMissingError,
   listMemoryFiles,
   listSessionFilesForAgent,
-  loadSqliteVecExtension,
   normalizeExtraMemoryPaths,
   onSessionTranscriptUpdate,
-  requireNodeSqlite,
   resolveAgentDir,
   resolveSessionTranscriptsDirForAgent,
   resolveUserPath,
@@ -37,14 +28,22 @@ import {
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
   type SessionFileEntry,
-  type EmbeddingProvider,
-  type GeminiEmbeddingClient,
-  type MistralEmbeddingClient,
-  type OllamaEmbeddingClient,
-  type OpenAiEmbeddingClient,
-  type VoyageEmbeddingClient,
   buildSessionEntry,
-} from "../api.js";
+} from "../engine-host-api.js";
+import {
+  createEmbeddingProvider,
+  DEFAULT_GEMINI_EMBEDDING_MODEL,
+  DEFAULT_MISTRAL_EMBEDDING_MODEL,
+  DEFAULT_OLLAMA_EMBEDDING_MODEL,
+  DEFAULT_OPENAI_EMBEDDING_MODEL,
+  DEFAULT_VOYAGE_EMBEDDING_MODEL,
+  type EmbeddingProvider,
+  type EmbeddingProviderId,
+  type EmbeddingProviderRuntime,
+} from "./embeddings.js";
+import { buildFileEntry } from "./internal.js";
+import { loadSqliteVecExtension } from "./sqlite-vec.js";
+import { requireNodeSqlite } from "./sqlite.js";
 
 type MemoryIndexMeta = {
   model: string;
@@ -101,12 +100,8 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
-  protected openAi?: OpenAiEmbeddingClient;
-  protected gemini?: GeminiEmbeddingClient;
-  protected voyage?: VoyageEmbeddingClient;
-  protected mistral?: MistralEmbeddingClient;
-  protected ollama?: OllamaEmbeddingClient;
+  protected fallbackFrom?: EmbeddingProviderId;
+  protected providerRuntime?: EmbeddingProviderRuntime;
   protected abstract batch: {
     enabled: boolean;
     wait: boolean;
@@ -1104,13 +1099,7 @@ export abstract class MemoryManagerSyncOps {
     timeoutMs: number;
   } {
     const batch = this.settings.remote?.batch;
-    const enabled = Boolean(
-      batch?.enabled &&
-      this.provider &&
-      ((this.openAi && this.provider.id === "openai") ||
-        (this.gemini && this.provider.id === "gemini") ||
-        (this.voyage && this.provider.id === "voyage")),
-    );
+    const enabled = Boolean(batch?.enabled && this.provider && this.providerRuntime?.batchEmbed);
     return {
       enabled,
       wait: batch?.wait ?? true,
@@ -1128,13 +1117,7 @@ export abstract class MemoryManagerSyncOps {
     if (this.fallbackFrom) {
       return false;
     }
-    const fallbackFrom = this.provider.id as
-      | "openai"
-      | "gemini"
-      | "local"
-      | "voyage"
-      | "mistral"
-      | "ollama";
+    const fallbackFrom = this.provider.id as EmbeddingProviderId;
 
     const fallbackModel =
       fallback === "gemini"
@@ -1163,11 +1146,7 @@ export abstract class MemoryManagerSyncOps {
     this.fallbackFrom = fallbackFrom;
     this.fallbackReason = reason;
     this.provider = fallbackResult.provider;
-    this.openAi = fallbackResult.openAi;
-    this.gemini = fallbackResult.gemini;
-    this.voyage = fallbackResult.voyage;
-    this.mistral = fallbackResult.mistral;
-    this.ollama = fallbackResult.ollama;
+    this.providerRuntime = fallbackResult.runtime;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallback})`, { reason });
