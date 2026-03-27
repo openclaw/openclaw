@@ -12,6 +12,9 @@ OpenClaw supports Grok as a `web_search` provider, using xAI web-grounded
 responses to produce AI-synthesized answers backed by live search results
 with citations.
 
+The same `XAI_API_KEY` can also power the built-in `x_search` tool for X
+(formerly Twitter) post search.
+
 ## Get an API key
 
 <Steps>
@@ -69,4 +72,5 @@ Provider-specific filters are not currently supported.
 ## Related
 
 - [Web Search overview](/tools/web) -- all providers and auto-detection
+- [x_search in Web Search](/tools/web#x_search) -- first-class X search via xAI
 - [Gemini Search](/tools/gemini-search) -- AI-synthesized answers via Google grounding
