@@ -353,6 +353,7 @@ describe("sessions_spawn tool", () => {
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",
+      requesterAgentIdOverride: "ops",
     });
 
     const result = await tool.execute("call-2", {
@@ -383,6 +384,7 @@ describe("sessions_spawn tool", () => {
       }),
       expect.objectContaining({
         agentSessionKey: "agent:main:main",
+        requesterAgentIdOverride: "ops",
       }),
     );
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
