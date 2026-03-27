@@ -9,9 +9,11 @@ export type {
 export {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_MODEL,
+} from "../../extensions/ollama/src/defaults.js";
+
+export {
+  buildOllamaProvider,
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
-} from "../plugins/provider-ollama-setup.js";
-
-export { buildOllamaProvider } from "../agents/models-config.providers.discovery.js";
+} from "../../extensions/ollama/src/setup.js";

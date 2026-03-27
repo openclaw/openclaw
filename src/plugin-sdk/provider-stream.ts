@@ -17,7 +17,7 @@ export {
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
-} from "../agents/pi-embedded-runner/moonshot-stream-wrappers.js";
+} from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
 export {
   createOpenAIAttributionHeadersWrapper,
   createOpenAIDefaultTransportWrapper,

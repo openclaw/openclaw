@@ -14,6 +14,24 @@ import type { ResolvedTtsConfig } from "./tts.js";
 
 const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 
+type SummarizeTextDeps = {
+  completeSimple: typeof completeSimple;
+  getApiKeyForModel: typeof getApiKeyForModel;
+  prepareModelForSimpleCompletion: typeof prepareModelForSimpleCompletion;
+  requireApiKey: typeof requireApiKey;
+  resolveModelAsync: typeof resolveModelAsync;
+};
+
+function resolveDefaultSummarizeTextDeps(): SummarizeTextDeps {
+  return {
+    completeSimple,
+    getApiKeyForModel,
+    prepareModelForSimpleCompletion,
+    requireApiKey,
+    resolveModelAsync,
+  };
+}
+
 export function requireInRange(value: number, min: number, max: number, label: string): void {
   if (!Number.isFinite(value) || value < min || value > max) {
     throw new Error(`${label} must be between ${min} and ${max}`);
@@ -93,13 +111,16 @@ function isTextContentBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
 }
 
-export async function summarizeText(params: {
-  text: string;
-  targetLength: number;
-  cfg: OpenClawConfig;
-  config: ResolvedTtsConfig;
-  timeoutMs: number;
-}): Promise<SummarizeResult> {
+export async function summarizeText(
+  params: {
+    text: string;
+    targetLength: number;
+    cfg: OpenClawConfig;
+    config: ResolvedTtsConfig;
+    timeoutMs: number;
+  },
+  deps: SummarizeTextDeps = resolveDefaultSummarizeTextDeps(),
+): Promise<SummarizeResult> {
   const { text, targetLength, cfg, config, timeoutMs } = params;
   if (targetLength < 100 || targetLength > 10_000) {
     throw new Error(`Invalid targetLength: ${targetLength}`);
@@ -107,13 +128,13 @@ export async function summarizeText(params: {
 
   const startTime = Date.now();
   const { ref } = resolveSummaryModelRef(cfg, config);
-  const resolved = await resolveModelAsync(ref.provider, ref.model, undefined, cfg);
+  const resolved = await deps.resolveModelAsync(ref.provider, ref.model, undefined, cfg);
   if (!resolved.model) {
     throw new Error(resolved.error ?? `Unknown summary model: ${ref.provider}/${ref.model}`);
   }
-  const completionModel = prepareModelForSimpleCompletion({ model: resolved.model, cfg });
-  const apiKey = requireApiKey(
-    await getApiKeyForModel({ model: completionModel, cfg }),
+  const completionModel = deps.prepareModelForSimpleCompletion({ model: resolved.model, cfg });
+  const apiKey = deps.requireApiKey(
+    await deps.getApiKeyForModel({ model: completionModel, cfg }),
     ref.provider,
   );
 
@@ -122,7 +143,7 @@ export async function summarizeText(params: {
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const res = await completeSimple(
+      const res = await deps.completeSimple(
         completionModel,
         {
           messages: [
@@ -144,7 +165,6 @@ export async function summarizeText(params: {
           signal: controller.signal,
         },
       );
-
       const summary = res.content
         .filter(isTextContentBlock)
         .map((block) => block.text.trim())

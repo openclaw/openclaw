@@ -22,6 +22,7 @@ export type {
   ProviderBuiltInModelSuppressionContext,
   ProviderBuiltInModelSuppressionResult,
   ProviderBuildMissingAuthMessageContext,
+  ProviderBuildUnknownModelHintContext,
   ProviderCacheTtlEligibilityContext,
   ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
