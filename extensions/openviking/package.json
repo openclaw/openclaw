@@ -1,0 +1,22 @@
+{
+  "name": "@openclaw/openviking",
+  "version": "2026.2.6-3",
+  "description": "OpenClaw OpenViking-backed long-term memory plugin (install to ~/.openclaw/extensions)",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.5",
+    "vitest": "^4.1.0"
+  }
+}

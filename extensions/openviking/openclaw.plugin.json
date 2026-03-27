@@ -1,0 +1,177 @@
+{
+  "id": "openviking",
+  "kind": "context-engine",
+  "uiHints": {
+    "mode": {
+      "label": "Mode",
+      "help": "local = plugin starts OpenViking (like Claude Code); remote = use existing HTTP server"
+    },
+    "configPath": {
+      "label": "Config path (local)",
+      "placeholder": "~/.openviking/ov.conf",
+      "help": "Path to ov.conf when mode is local"
+    },
+    "port": {
+      "label": "Port (local)",
+      "placeholder": "1933",
+      "help": "Port for local OpenViking server",
+      "advanced": true
+    },
+    "baseUrl": {
+      "label": "OpenViking Base URL (remote)",
+      "placeholder": "http://127.0.0.1:1933",
+      "help": "HTTP URL when mode is remote (or ${OPENVIKING_BASE_URL})"
+    },
+    "agentId": {
+      "label": "Agent ID",
+      "placeholder": "random unique ID",
+      "help": "Identifies this agent to OpenViking. A random unique ID is generated if not set."
+    },
+    "apiKey": {
+      "label": "OpenViking API Key",
+      "sensitive": true,
+      "placeholder": "${OPENVIKING_API_KEY}",
+      "help": "Optional API key for OpenViking server"
+    },
+    "targetUri": {
+      "label": "Search Target URI",
+      "placeholder": "viking://user/memories",
+      "help": "Default OpenViking target URI for memory search"
+    },
+    "timeoutMs": {
+      "label": "Request Timeout (ms)",
+      "placeholder": "15000",
+      "advanced": true
+    },
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Extract memories from recent conversation messages via OpenViking sessions"
+    },
+    "captureMode": {
+      "label": "Capture Mode",
+      "placeholder": "semantic",
+      "advanced": true,
+      "help": "semantic captures all eligible user text; keyword uses trigger regex first"
+    },
+    "captureMaxLength": {
+      "label": "Capture Max Length",
+      "placeholder": "24000",
+      "advanced": true,
+      "help": "Maximum sanitized user text length allowed for auto-capture"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Inject relevant OpenViking memories into agent context"
+    },
+    "recallLimit": {
+      "label": "Recall Limit",
+      "placeholder": "6",
+      "advanced": true
+    },
+    "recallScoreThreshold": {
+      "label": "Recall Score Threshold",
+      "placeholder": "0.15",
+      "advanced": true
+    },
+    "recallMaxContentChars": {
+      "label": "Recall Max Content Chars",
+      "placeholder": "500",
+      "advanced": true,
+      "help": "Maximum characters per memory content in auto-recall injection"
+    },
+    "recallPreferAbstract": {
+      "label": "Recall Prefer Abstract",
+      "advanced": true,
+      "help": "Use memory abstract instead of fetching full content when available"
+    },
+    "recallTokenBudget": {
+      "label": "Recall Token Budget",
+      "placeholder": "2000",
+      "advanced": true,
+      "help": "Maximum estimated tokens for auto-recall memory injection"
+    },
+    "ingestReplyAssist": {
+      "label": "Ingest Reply Assist",
+      "help": "When transcript-like memory ingestion is detected, add a lightweight reply instruction to reduce NO_REPLY.",
+      "advanced": true
+    },
+    "ingestReplyAssistMinSpeakerTurns": {
+      "label": "Ingest Min Speaker Turns",
+      "placeholder": "2",
+      "help": "Minimum speaker-tag turns (e.g. Name:) to detect transcript-like ingest text.",
+      "advanced": true
+    },
+    "ingestReplyAssistMinChars": {
+      "label": "Ingest Min Chars",
+      "placeholder": "120",
+      "help": "Minimum sanitized text length required before ingest reply assist can trigger.",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "type": "string"
+      },
+      "configPath": {
+        "type": "string"
+      },
+      "port": {
+        "type": "number"
+      },
+      "baseUrl": {
+        "type": "string"
+      },
+      "agentId": {
+        "type": "string"
+      },
+      "apiKey": {
+        "type": "string"
+      },
+      "targetUri": {
+        "type": "string"
+      },
+      "timeoutMs": {
+        "type": "number"
+      },
+      "autoCapture": {
+        "type": "boolean"
+      },
+      "captureMode": {
+        "type": "string"
+      },
+      "captureMaxLength": {
+        "type": "number"
+      },
+      "autoRecall": {
+        "type": "boolean"
+      },
+      "recallLimit": {
+        "type": "number"
+      },
+      "recallScoreThreshold": {
+        "type": "number"
+      },
+      "recallMaxContentChars": {
+        "type": "number"
+      },
+      "recallPreferAbstract": {
+        "type": "boolean"
+      },
+      "recallTokenBudget": {
+        "type": "number"
+      },
+      "ingestReplyAssist": {
+        "type": "boolean"
+      },
+      "ingestReplyAssistMinSpeakerTurns": {
+        "type": "number"
+      },
+      "ingestReplyAssistMinChars": {
+        "type": "number"
+      }
+    }
+  }
+}
