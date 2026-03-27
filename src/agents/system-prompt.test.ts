@@ -293,7 +293,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).not.toContain(
-      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+      'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent',
     );
     expect(prompt).not.toContain('runtime="acp" requires `agentId`');
     expect(prompt).not.toContain("not ACP harness ids");
@@ -313,7 +313,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain('runtime="acp" requires `agentId`');
     expect(prompt).not.toContain("ACP harness ids follow acp.allowedAgents");
     expect(prompt).not.toContain(
-      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+      'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent',
     );
     expect(prompt).not.toContain(
       'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
