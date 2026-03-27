@@ -39,14 +39,14 @@ describe("buildSingleProviderApiKeyCatalog", () => {
   it("matches provider templates case-insensitively", () => {
     const result = findCatalogTemplate({
       entries: [
-        { provider: "OpenAI", id: "gpt-5.2" },
+        { provider: "Demo Provider", id: "demo-model" },
         { provider: "other", id: "fallback" },
       ],
-      providerId: "openai",
-      templateIds: ["missing", "GPT-5.2"],
+      providerId: "demo provider",
+      templateIds: ["missing", "DEMO-MODEL"],
     });
 
-    expect(result).toEqual({ provider: "OpenAI", id: "gpt-5.2" });
+    expect(result).toEqual({ provider: "Demo Provider", id: "demo-model" });
   });
 
   it("returns null when api key is missing", async () => {
