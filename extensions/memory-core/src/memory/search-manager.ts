@@ -7,7 +7,7 @@ import {
   type MemorySyncProgressUpdate,
   type OpenClawConfig,
   type ResolvedQmdConfig,
-} from "../api.js";
+} from "../engine-host-api.js";
 
 const MEMORY_SEARCH_MANAGER_CACHE_KEY = Symbol.for("openclaw.memorySearchManagerCache");
 type MemorySearchManagerCacheStore = {

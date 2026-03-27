@@ -59,12 +59,14 @@ describe("plugin registration", () => {
     const registerMemoryPromptSection = vi.fn();
     const registerMemoryFlushPlan = vi.fn();
     const registerMemoryRuntime = vi.fn();
+    const registerMemoryEmbeddingProvider = vi.fn();
     const registerCli = vi.fn();
     const api = {
       registerTool,
       registerMemoryPromptSection,
       registerMemoryFlushPlan,
       registerMemoryRuntime,
+      registerMemoryEmbeddingProvider,
       registerCli,
     };
 
@@ -73,6 +75,7 @@ describe("plugin registration", () => {
     expect(registerMemoryPromptSection).toHaveBeenCalledWith(buildPromptSection);
     expect(registerMemoryFlushPlan).toHaveBeenCalledWith(buildMemoryFlushPlan);
     expect(registerMemoryRuntime).toHaveBeenCalledWith(memoryRuntime);
+    expect(registerMemoryEmbeddingProvider).toHaveBeenCalledTimes(6);
     expect(registerTool).toHaveBeenCalledTimes(2);
     expect(registerTool.mock.calls[0]?.[1]).toEqual({ names: ["memory_search"] });
     expect(registerTool.mock.calls[1]?.[1]).toEqual({ names: ["memory_get"] });
