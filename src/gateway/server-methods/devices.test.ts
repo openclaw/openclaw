@@ -49,11 +49,11 @@ describe("deviceHandlers", () => {
 
   it("disconnects active clients after removing a paired device", async () => {
     removePairedDeviceMock.mockResolvedValue({ deviceId: "device-1", removedAtMs: 123 });
-    const opts = createOptions("device.pair.remove", { deviceId: "device-1" });
+    const opts = createOptions("device.pair.remove", { deviceId: " device-1 " });
 
     await deviceHandlers["device.pair.remove"](opts);
 
-    expect(removePairedDeviceMock).toHaveBeenCalledWith("device-1");
+    expect(removePairedDeviceMock).toHaveBeenCalledWith(" device-1 ");
     expect(opts.context.disconnectClientsForDevice).toHaveBeenCalledWith("device-1");
     expect(opts.respond).toHaveBeenCalledWith(
       true,
@@ -79,13 +79,16 @@ describe("deviceHandlers", () => {
   it("disconnects active clients after revoking a device token", async () => {
     revokeDeviceTokenMock.mockResolvedValue({ role: "operator", revokedAtMs: 456 });
     const opts = createOptions("device.token.revoke", {
-      deviceId: "device-1",
-      role: "operator",
+      deviceId: " device-1 ",
+      role: " operator ",
     });
 
     await deviceHandlers["device.token.revoke"](opts);
 
-    expect(revokeDeviceTokenMock).toHaveBeenCalledWith({ deviceId: "device-1", role: "operator" });
+    expect(revokeDeviceTokenMock).toHaveBeenCalledWith({
+      deviceId: " device-1 ",
+      role: " operator ",
+    });
     expect(opts.context.disconnectClientsForDevice).toHaveBeenCalledWith("device-1");
     expect(opts.respond).toHaveBeenCalledWith(
       true,

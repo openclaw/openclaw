@@ -171,7 +171,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId"));
       return;
     }
-    context.disconnectClientsForDevice?.(deviceId);
+    context.disconnectClientsForDevice?.(removed.deviceId);
     context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
     respond(true, removed, undefined);
   },
@@ -284,11 +284,16 @@ export const deviceHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId/role"));
       return;
     }
-    context.disconnectClientsForDevice?.(deviceId);
-    context.logGateway.info(`device token revoked device=${deviceId} role=${entry.role}`);
+    const normalizedDeviceId = deviceId.trim();
+    context.disconnectClientsForDevice?.(normalizedDeviceId);
+    context.logGateway.info(`device token revoked device=${normalizedDeviceId} role=${entry.role}`);
     respond(
       true,
-      { deviceId, role: entry.role, revokedAtMs: entry.revokedAtMs ?? Date.now() },
+      {
+        deviceId: normalizedDeviceId,
+        role: entry.role,
+        revokedAtMs: entry.revokedAtMs ?? Date.now(),
+      },
       undefined,
     );
   },
