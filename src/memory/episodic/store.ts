@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { requireNodeSqlite } from "../../plugins/memory-host/sqlite.js";
+import { requireNodeSqlite } from "../../../packages/memory-host-sdk/src/host/sqlite.js";
 import type { Episode, EpisodeAssociation } from "./types.js";
 
 const log = createSubsystemLogger("memory");
