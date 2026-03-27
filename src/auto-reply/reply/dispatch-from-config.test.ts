@@ -2752,12 +2752,13 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "The answer is 42" };
     };
     // Capture what actually gets dispatched as block replies.
-    // sendBlockReplyAsync is used by onBlockReply (awaits confirmed delivery).
-    (dispatcher.sendBlockReplyAsync as ReturnType<typeof vi.fn>).mockImplementation(
-      async (payload: ReplyPayload) => {
+    // onBlockReply is called without context here (non-pipeline path) → sendBlockReply (fire-and-forget).
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => {
         if (payload.text) {
           blockReplySentTexts.push(payload.text);
         }
+        return true;
       },
     );
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
