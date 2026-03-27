@@ -1,30 +1,28 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
-  collectAllowlistProviderGroupPolicyWarnings,
-  collectOpenGroupPolicyRouteAllowlistWarnings,
+  adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import { createDelegatedSetupWizardProxy } from "openclaw/plugin-sdk/setup";
-import {
-  buildChannelConfigSchema,
-  formatWhatsAppConfigAllowFromEntries,
-  getChatChannelMeta,
-  normalizeE164,
-  resolveWhatsAppGroupIntroHint,
-  WhatsAppConfigSchema,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/whatsapp-core";
 import {
   listWhatsAppAccountIds,
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
+import { WhatsAppChannelConfigSchema } from "./config-schema.js";
 import {
+  formatWhatsAppConfigAllowFromEntries,
+  getChatChannelMeta,
+  normalizeE164,
+  resolveWhatsAppGroupIntroHint,
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
-} from "./group-policy.js";
+  type ChannelPlugin,
+} from "./runtime-api.js";
 
 export const WHATSAPP_CHANNEL = "whatsapp" as const;
 
@@ -39,7 +37,7 @@ export const whatsappSetupWizardProxy = createWhatsAppSetupWizardProxy(
 const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppAccount>({
   sectionKey: WHATSAPP_CHANNEL,
   listAccountIds: listWhatsAppAccountIds,
-  resolveAccount: (cfg, accountId) => resolveWhatsAppAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveWhatsAppAccount),
   defaultAccountId: resolveDefaultWhatsAppAccountId,
   clearBaseFields: [],
   allowTopLevel: false,
@@ -91,24 +89,32 @@ export function createWhatsAppSetupWizardProxy(
 }
 
 export function createWhatsAppPluginBase(params: {
+  groups: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["groups"]>;
   setupWizard: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setup"]>;
   isConfigured: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isConfigured"];
-}): Pick<
-  ChannelPlugin<ResolvedWhatsAppAccount>,
-  | "id"
-  | "meta"
-  | "setupWizard"
-  | "capabilities"
-  | "reload"
-  | "gatewayMethods"
-  | "configSchema"
-  | "config"
-  | "security"
-  | "setup"
-  | "groups"
-> {
-  return createChannelPluginBase({
+}) {
+  const collectWhatsAppSecurityWarnings =
+    createAllowlistProviderRouteAllowlistWarningCollector<ResolvedWhatsAppAccount>({
+      providerConfigPresent: (cfg) => cfg.channels?.whatsapp !== undefined,
+      resolveGroupPolicy: (account) => account.groupPolicy,
+      resolveRouteAllowlistConfigured: (account) =>
+        Boolean(account.groups) && Object.keys(account.groups ?? {}).length > 0,
+      restrictSenders: {
+        surface: "WhatsApp groups",
+        openScope: "any member in allowed groups",
+        groupPolicyPath: "channels.whatsapp.groupPolicy",
+        groupAllowFromPath: "channels.whatsapp.groupAllowFrom",
+      },
+      noRouteAllowlist: {
+        surface: "WhatsApp groups",
+        routeAllowlistPath: "channels.whatsapp.groups",
+        routeScope: "group",
+        groupPolicyPath: "channels.whatsapp.groupPolicy",
+        groupAllowFromPath: "channels.whatsapp.groupAllowFrom",
+      },
+    });
+  const base = createChannelPluginBase({
     id: WHATSAPP_CHANNEL,
     meta: {
       ...getChatChannelMeta(WHATSAPP_CHANNEL),
@@ -126,60 +132,42 @@ export function createWhatsAppPluginBase(params: {
     },
     reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
     gatewayMethods: ["web.login.start", "web.login.wait"],
-    configSchema: buildChannelConfigSchema(WhatsAppConfigSchema),
+    configSchema: WhatsAppChannelConfigSchema,
     config: {
       ...whatsappConfigAdapter,
       isEnabled: (account, cfg) => account.enabled && cfg.web?.enabled !== false,
       disabledReason: () => "disabled",
       isConfigured: params.isConfigured,
       unconfiguredReason: () => "not linked",
-      describeAccount: (account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: Boolean(account.authDir),
-        linked: Boolean(account.authDir),
-        dmPolicy: account.dmPolicy,
-        allowFrom: account.allowFrom,
-      }),
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: Boolean(account.authDir),
+          extra: {
+            linked: Boolean(account.authDir),
+            dmPolicy: account.dmPolicy,
+            allowFrom: account.allowFrom,
+          },
+        }),
     },
     security: {
       resolveDmPolicy: whatsappResolveDmPolicy,
-      collectWarnings: ({ account, cfg }) => {
-        const groupAllowlistConfigured =
-          Boolean(account.groups) && Object.keys(account.groups ?? {}).length > 0;
-        return collectAllowlistProviderGroupPolicyWarnings({
-          cfg,
-          providerConfigPresent: cfg.channels?.whatsapp !== undefined,
-          configuredGroupPolicy: account.groupPolicy,
-          collect: (groupPolicy) =>
-            collectOpenGroupPolicyRouteAllowlistWarnings({
-              groupPolicy,
-              routeAllowlistConfigured: groupAllowlistConfigured,
-              restrictSenders: {
-                surface: "WhatsApp groups",
-                openScope: "any member in allowed groups",
-                groupPolicyPath: "channels.whatsapp.groupPolicy",
-                groupAllowFromPath: "channels.whatsapp.groupAllowFrom",
-              },
-              noRouteAllowlist: {
-                surface: "WhatsApp groups",
-                routeAllowlistPath: "channels.whatsapp.groups",
-                routeScope: "group",
-                groupPolicyPath: "channels.whatsapp.groupPolicy",
-                groupAllowFromPath: "channels.whatsapp.groupAllowFrom",
-              },
-            }),
-        });
-      },
+      collectWarnings: collectWhatsAppSecurityWarnings,
     },
     setup: params.setup,
-    groups: {
-      resolveRequireMention: resolveWhatsAppGroupRequireMention,
-      resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
-      resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
-    },
-  }) as Pick<
+    groups: params.groups,
+  });
+  return {
+    ...base,
+    setupWizard: base.setupWizard!,
+    capabilities: base.capabilities!,
+    reload: base.reload!,
+    gatewayMethods: base.gatewayMethods!,
+    configSchema: base.configSchema!,
+    config: base.config!,
+    security: base.security!,
+    groups: base.groups!,
+  } satisfies Pick<
     ChannelPlugin<ResolvedWhatsAppAccount>,
     | "id"
     | "meta"

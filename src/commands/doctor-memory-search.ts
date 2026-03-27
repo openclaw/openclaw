@@ -4,9 +4,9 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
-import { DEFAULT_LOCAL_MODEL } from "../memory/embeddings.js";
-import { hasConfiguredMemorySecretInput } from "../memory/secret-input.js";
+import { DEFAULT_LOCAL_MODEL } from "../plugins/memory-host/embeddings.js";
+import { hasConfiguredMemorySecretInput } from "../plugins/memory-host/secret-input.js";
+import { resolveActiveMemoryBackendConfig } from "../plugins/memory-runtime.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -36,7 +36,11 @@ export async function noteMemorySearchHealth(
 
   // QMD backend handles embeddings internally (e.g. embeddinggemma) — no
   // separate embedding provider is needed. Skip the provider check entirely.
-  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
+  const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });
+  if (!backendConfig) {
+    note("No active memory plugin is registered for the current config.", "Memory search");
+    return;
+  }
   if (backendConfig.backend === "qmd") {
     return;
   }
@@ -139,8 +143,8 @@ export async function noteMemorySearchHealth(
 
   note(
     [
-      "Memory search is enabled but no embedding provider is configured.",
-      "Semantic recall will not work without an embedding provider.",
+      "Memory search is enabled, but no embedding provider is ready.",
+      "Semantic recall needs at least one embedding provider.",
       gatewayProbeWarning ? gatewayProbeWarning : null,
       "",
       "Fix (pick one):",
@@ -187,7 +191,7 @@ function hasLocalEmbeddings(local: { modelPath?: string }, useDefaultFallback = 
 }
 
 async function hasApiKeyForProvider(
-  provider: "openai" | "gemini" | "voyage" | "mistral" | "ollama",
+  provider: string,
   cfg: OpenClawConfig,
   agentDir: string,
 ): Promise<boolean> {

@@ -1,5 +1,5 @@
+import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
 import { z } from "zod";
-import { requireChannelOpenAllowFrom } from "../../shared/config-schema-helpers.js";
 import {
   BlockStreamingCoalesceSchema,
   DmPolicySchema,
@@ -84,6 +84,8 @@ const MattermostAccountSchemaBase = z
         allowedSourceIps: z.array(z.string()).optional(),
       })
       .optional(),
+    /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Mattermost on LAN/VPN. */
+    allowPrivateNetwork: z.boolean().optional(),
     /** Retry configuration for DM channel creation */
     dmChannelRetry: DmChannelRetrySchema,
   })

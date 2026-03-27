@@ -11,6 +11,7 @@ import {
   approveDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
+  listDevicePairing,
   requestDevicePairing,
   updatePairedDeviceMetadata,
   verifyDeviceToken,
@@ -90,7 +91,6 @@ import {
   resolveHandshakeBrowserSecurityContext,
   resolveUnauthorizedHandshakeContext,
   shouldAllowSilentLocalPairing,
-  shouldSkipBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
@@ -520,6 +520,11 @@ export function attachGatewayWsMessageHandler(params: {
             authOk,
             authMethod,
           });
+          const preserveInsecureLocalControlUiScopes =
+            isControlUi &&
+            controlUiAuthPolicy.allowInsecureAuthConfigured &&
+            isLocalClient &&
+            (authMethod === "token" || authMethod === "password");
           const decision = evaluateMissingDeviceIdentity({
             hasDeviceIdentity: Boolean(device),
             role,
@@ -531,10 +536,16 @@ export function attachGatewayWsMessageHandler(params: {
             hasSharedAuth,
             isLocalClient,
           });
-          // Shared token/password auth can bypass pairing for trusted operators, but
-          // device-less clients must not keep self-declared scopes unless the
-          // operator explicitly chose a local break-glass Control UI mode.
-          if (!device && (!isControlUi || decision.kind !== "allow" || trustedProxyAuthOk)) {
+          // Shared token/password auth can bypass pairing for trusted operators.
+          // Device-less clients only keep self-declared scopes on the explicit
+          // allow path, including trusted token-authenticated backend operators.
+          if (
+            !device &&
+            (decision.kind !== "allow" ||
+              (!controlUiAuthPolicy.allowBypass &&
+                !preserveInsecureLocalControlUiScopes &&
+                (authMethod === "token" || authMethod === "password" || trustedProxyAuthOk)))
+          ) {
             clearUnboundScopes();
           }
           if (decision.kind === "allow") {
@@ -674,20 +685,12 @@ export function attachGatewayWsMessageHandler(params: {
           authOk,
           authMethod,
         });
-        const skipPairing =
-          shouldSkipBackendSelfPairing({
-            connectParams,
-            isLocalClient,
-            hasBrowserOriginHeader,
-            sharedAuthOk,
-            authMethod,
-          }) ||
-          shouldSkipControlUiPairing(
-            controlUiAuthPolicy,
-            role,
-            trustedProxyAuthOk,
-            resolvedAuth.mode,
-          );
+        const skipPairing = shouldSkipControlUiPairing(
+          controlUiAuthPolicy,
+          role,
+          trustedProxyAuthOk,
+          resolvedAuth.mode,
+        );
         if (device && devicePublicKey && !skipPairing) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
@@ -735,6 +738,37 @@ export function attachGatewayWsMessageHandler(params: {
           const requirePairing = async (
             reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade",
           ) => {
+            const pairingStateAllowsRequestedAccess = (
+              pairedCandidate: Awaited<ReturnType<typeof getPairedDevice>>,
+            ): boolean => {
+              if (!pairedCandidate || pairedCandidate.publicKey !== devicePublicKey) {
+                return false;
+              }
+              const pairedRoles = Array.isArray(pairedCandidate.roles)
+                ? pairedCandidate.roles
+                : pairedCandidate.role
+                  ? [pairedCandidate.role]
+                  : [];
+              if (pairedRoles.length > 0 && !pairedRoles.includes(role)) {
+                return false;
+              }
+              if (scopes.length === 0) {
+                return true;
+              }
+              const pairedScopes = Array.isArray(pairedCandidate.approvedScopes)
+                ? pairedCandidate.approvedScopes
+                : Array.isArray(pairedCandidate.scopes)
+                  ? pairedCandidate.scopes
+                  : [];
+              if (pairedScopes.length === 0) {
+                return false;
+              }
+              return roleScopesAllow({
+                role,
+                requestedScopes: scopes,
+                allowedScopes: pairedScopes,
+              });
+            };
             const allowSilentLocalPairing = shouldAllowSilentLocalPairing({
               isLocalClient,
               hasBrowserOriginHeader,
@@ -746,11 +780,28 @@ export function attachGatewayWsMessageHandler(params: {
               deviceId: device.id,
               publicKey: devicePublicKey,
               ...clientPairingMetadata,
-              silent: allowSilentLocalPairing,
+              silent: reason === "scope-upgrade" ? false : allowSilentLocalPairing,
             });
             const context = buildRequestContext();
+            let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
+            let resolvedByConcurrentApproval = false;
+            let recoveryRequestId: string | undefined = pairing.request.requestId;
+            const resolveLivePendingRequestId = async (): Promise<string | undefined> => {
+              const pendingList = await listDevicePairing();
+              const exactPending = pendingList.pending.find(
+                (pending) => pending.requestId === pairing.request.requestId,
+              );
+              if (exactPending) {
+                return exactPending.requestId;
+              }
+              const replacementPending = pendingList.pending.find(
+                (pending) =>
+                  pending.deviceId === device.id && pending.publicKey === devicePublicKey,
+              );
+              return replacementPending?.requestId;
+            };
             if (pairing.request.silent === true) {
-              const approved = await approveDevicePairing(pairing.request.requestId);
+              approved = await approveDevicePairing(pairing.request.requestId);
               if (approved) {
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
@@ -765,15 +816,29 @@ export function attachGatewayWsMessageHandler(params: {
                   },
                   { dropIfSlow: true },
                 );
+              } else {
+                resolvedByConcurrentApproval = pairingStateAllowsRequestedAccess(
+                  await getPairedDevice(device.id),
+                );
+                let requestStillPending = false;
+                if (!resolvedByConcurrentApproval) {
+                  recoveryRequestId = await resolveLivePendingRequestId();
+                  requestStillPending = recoveryRequestId === pairing.request.requestId;
+                }
+                if (requestStillPending) {
+                  context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
+                }
               }
             } else if (pairing.created) {
               context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
             }
-            if (pairing.request.silent !== true) {
+            // Re-resolve: another connection may have superseded/approved the request since we created it
+            recoveryRequestId = await resolveLivePendingRequestId();
+            if (!(pairing.request.silent === true && (approved || resolvedByConcurrentApproval))) {
               setHandshakeState("failed");
               setCloseCause("pairing-required", {
                 deviceId: device.id,
-                requestId: pairing.request.requestId,
+                ...(recoveryRequestId ? { requestId: recoveryRequestId } : {}),
                 reason,
               });
               send({
@@ -783,7 +848,7 @@ export function attachGatewayWsMessageHandler(params: {
                 error: errorShape(ErrorCodes.NOT_PAIRED, "pairing required", {
                   details: {
                     code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
-                    requestId: pairing.request.requestId,
+                    ...(recoveryRequestId ? { requestId: recoveryRequestId } : {}),
                     reason,
                   },
                 }),

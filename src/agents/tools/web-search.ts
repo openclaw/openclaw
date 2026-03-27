@@ -1,8 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveBundledWebSearchPluginId } from "../../plugins/bundled-web-search-provider-ids.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import {
-  __testing as runtimeTesting,
   resolveWebSearchDefinition,
+  resolveWebSearchProviderId,
 } from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
@@ -13,14 +14,17 @@ export function createWebSearchTool(options?: {
   sandboxed?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
 }): AnyAgentTool | null {
+  const runtimeProviderId =
+    options?.runtimeWebSearch?.selectedProvider ?? options?.runtimeWebSearch?.providerConfigured;
   const resolved = resolveWebSearchDefinition({
-    config: options?.config,
-    sandboxed: options?.sandboxed,
-    runtimeWebSearch: options?.runtimeWebSearch,
+    ...options,
+    preferRuntimeProviders:
+      Boolean(runtimeProviderId) && !resolveBundledWebSearchPluginId(runtimeProviderId),
   });
   if (!resolved) {
     return null;
   }
+
   return {
     label: "Web Search",
     name: "web_search",
@@ -32,5 +36,6 @@ export function createWebSearchTool(options?: {
 
 export const __testing = {
   SEARCH_CACHE,
-  ...runtimeTesting,
+  resolveSearchProvider: (search?: Parameters<typeof resolveWebSearchProviderId>[0]["search"]) =>
+    resolveWebSearchProviderId({ search }),
 };

@@ -2,9 +2,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config/config.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { loadGatewaySessionRow } from "./session-utils.js";
+
+const persistGatewaySessionLifecycleEventMock = vi.fn();
+
+vi.mock("./session-lifecycle-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-lifecycle-state.js")>();
+  return {
+    ...actual,
+    persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
+      persistGatewaySessionLifecycleEventMock(...args),
+  };
+});
+
 import {
   createAgentEventHandler,
   createChatRunState,
+  createSessionEventSubscriberRegistry,
   createToolEventRecipientRegistry,
 } from "./server-chat.js";
 
@@ -20,6 +34,14 @@ vi.mock("../infra/heartbeat-visibility.js", () => ({
   })),
 }));
 
+vi.mock("./session-utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-utils.js")>();
+  return {
+    ...actual,
+    loadGatewaySessionRow: vi.fn(),
+  };
+});
+
 describe("agent event handler", () => {
   beforeEach(() => {
     vi.mocked(loadConfig).mockReturnValue({});
@@ -28,6 +50,8 @@ describe("agent event handler", () => {
       showAlerts: true,
       useIndicator: true,
     });
+    vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
+    persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
     resetAgentRunContextForTest();
   });
 
@@ -47,6 +71,7 @@ describe("agent event handler", () => {
     const agentRunSeq = new Map<string, number>();
     const chatRunState = createChatRunState();
     const toolEventRecipients = createToolEventRecipientRegistry();
+    const sessionEventSubscribers = createSessionEventSubscriberRegistry();
 
     const handler = createAgentEventHandler({
       broadcast,
@@ -57,6 +82,7 @@ describe("agent event handler", () => {
       resolveSessionKeyForRun: params?.resolveSessionKeyForRun ?? (() => undefined),
       clearAgentRunContext: vi.fn(),
       toolEventRecipients,
+      sessionEventSubscribers,
     });
 
     return {
@@ -67,6 +93,7 @@ describe("agent event handler", () => {
       agentRunSeq,
       chatRunState,
       toolEventRecipients,
+      sessionEventSubscribers,
       handler,
     };
   }
@@ -470,6 +497,46 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("drops stale events that arrive after lifecycle completion", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 2_500,
+    });
+    chatRunState.registry.add("run-stale-tail", {
+      sessionKey: "session-stale-tail",
+      clientRunId: "client-stale-tail",
+    });
+
+    handler({
+      runId: "run-stale-tail",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "done" },
+    });
+    emitLifecycleEnd(handler, "run-stale-tail");
+    const errorCallsBeforeStaleEvent = broadcast.mock.calls.filter(
+      ([event, payload]) =>
+        event === "agent" && (payload as { stream?: string }).stream === "error",
+    ).length;
+    const sessionChatCallsBeforeStaleEvent = sessionChatCalls(nodeSendToSession).length;
+
+    handler({
+      runId: "run-stale-tail",
+      seq: 3,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "late tail" },
+    });
+
+    const errorCalls = broadcast.mock.calls.filter(
+      ([event, payload]) =>
+        event === "agent" && (payload as { stream?: string }).stream === "error",
+    );
+    expect(errorCalls).toHaveLength(errorCallsBeforeStaleEvent);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(sessionChatCallsBeforeStaleEvent);
+    nowSpy?.mockRestore();
+  });
+
   it("flushes buffered chat delta before tool start events", () => {
     let now = 12_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -581,6 +648,167 @@ describe("agent event handler", () => {
     const nodeToolCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
     expect(nodeToolCalls).toHaveLength(0);
     resetAgentRunContextForTest();
+  });
+
+  it("mirrors tool events to session subscribers so late-joining operator UIs can render them", () => {
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-1",
+    });
+
+    registerAgentRunContext("run-session-tool", { sessionKey: "session-1", verboseLevel: "off" });
+    sessionEventSubscribers.subscribe("conn-session");
+
+    handler({
+      runId: "run-session-tool",
+      seq: 1,
+      stream: "tool",
+      ts: 1_234,
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-session-1",
+        args: { command: "echo hi" },
+      },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "session.tool",
+      expect.objectContaining({
+        runId: "run-session-tool",
+        sessionKey: "session-1",
+        stream: "tool",
+        ts: 1_234,
+        data: expect.objectContaining({
+          phase: "start",
+          name: "exec",
+          toolCallId: "tool-session-1",
+          args: { command: "echo hi" },
+        }),
+      }),
+      new Set(["conn-session"]),
+      { dropIfSlow: true },
+    );
+    resetAgentRunContextForTest();
+  });
+
+  it("broadcasts terminal session status to session subscribers on lifecycle end", () => {
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-finished",
+    });
+
+    sessionEventSubscribers.subscribe("conn-session");
+    registerAgentRunContext("run-finished", {
+      sessionKey: "session-finished",
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-finished",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 1_000,
+      data: {
+        phase: "start",
+        startedAt: 900,
+      },
+    });
+    handler({
+      runId: "run-finished",
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_800,
+      data: {
+        phase: "end",
+        startedAt: 900,
+        endedAt: 1_700,
+      },
+    });
+
+    const sessionsChangedCalls = broadcastToConnIds.mock.calls.filter(
+      ([event]) => event === "sessions.changed",
+    );
+    expect(sessionsChangedCalls).toHaveLength(2);
+    expect(sessionsChangedCalls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        sessionKey: "session-finished",
+        phase: "end",
+        status: "done",
+        startedAt: 900,
+        endedAt: 1_700,
+        runtimeMs: 800,
+        updatedAt: 1_700,
+        abortedLastRun: false,
+      }),
+    );
+    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith({
+      sessionKey: "session-finished",
+      event: expect.objectContaining({
+        runId: "run-finished",
+        data: expect.objectContaining({ phase: "end" }),
+      }),
+    });
+    resetAgentRunContextForTest();
+  });
+
+  it("keeps live session setting metadata at the top level for lifecycle updates", () => {
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-finished",
+      kind: "direct",
+      updatedAt: 1_650,
+      fastMode: true,
+      sendPolicy: "deny",
+      verboseLevel: "on",
+      responseUsage: "full",
+      totalTokens: 42,
+      totalTokensFresh: true,
+      contextTokens: 21,
+      estimatedCostUsd: 0.12,
+      status: "running",
+      startedAt: 900,
+      runtimeMs: 750,
+      abortedLastRun: false,
+    });
+
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-finished",
+    });
+
+    sessionEventSubscribers.subscribe("conn-session");
+    registerAgentRunContext("run-finished", {
+      sessionKey: "session-finished",
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-finished",
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_800,
+      data: {
+        phase: "end",
+        startedAt: 900,
+        endedAt: 1_700,
+      },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "session-finished",
+        phase: "end",
+        fastMode: true,
+        sendPolicy: "deny",
+        verboseLevel: "on",
+        responseUsage: "full",
+        totalTokens: 42,
+        totalTokensFresh: true,
+        contextTokens: 21,
+        estimatedCostUsd: 0.12,
+      }),
+      new Set(["conn-session"]),
+      { dropIfSlow: true },
+    );
   });
 
   it("strips tool output when verbose is on", () => {

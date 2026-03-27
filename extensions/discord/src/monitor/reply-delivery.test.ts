@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
-import { deliverDiscordReply } from "./reply-delivery.js";
 import {
   __testing as threadBindingTesting,
   createThreadBindingManager,
@@ -11,16 +10,55 @@ const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendWebhookMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendDiscordTextMock = vi.hoisted(() => vi.fn());
+const retryAsyncMock = vi.hoisted(() =>
+  vi.fn(
+    async (
+      fn: () => Promise<unknown>,
+      opts?: {
+        attempts?: number;
+        shouldRetry?: (err: unknown) => boolean;
+      },
+    ) => {
+      const attempts = Math.max(1, opts?.attempts ?? 1);
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= attempts; attempt++) {
+        try {
+          return await fn();
+        } catch (error) {
+          lastError = error;
+          if (attempt >= attempts || opts?.shouldRetry?.(error) === false) {
+            throw error;
+          }
+        }
+      }
+      throw lastError;
+    },
+  ),
+);
 
-vi.mock("../send.js", () => ({
-  sendMessageDiscord: (...args: unknown[]) => sendMessageDiscordMock(...args),
-  sendVoiceMessageDiscord: (...args: unknown[]) => sendVoiceMessageDiscordMock(...args),
-  sendWebhookMessageDiscord: (...args: unknown[]) => sendWebhookMessageDiscordMock(...args),
-}));
+vi.mock("../send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.js")>();
+  return {
+    ...actual,
+    sendMessageDiscord: (...args: unknown[]) => sendMessageDiscordMock(...args),
+    sendVoiceMessageDiscord: (...args: unknown[]) => sendVoiceMessageDiscordMock(...args),
+    sendWebhookMessageDiscord: (...args: unknown[]) => sendWebhookMessageDiscordMock(...args),
+  };
+});
 
 vi.mock("../send.shared.js", () => ({
   sendDiscordText: (...args: unknown[]) => sendDiscordTextMock(...args),
 }));
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    retryAsync: retryAsyncMock,
+  };
+});
+
+let deliverDiscordReply: typeof import("./reply-delivery.js").deliverDiscordReply;
 
 describe("deliverDiscordReply", () => {
   const runtime = {} as RuntimeEnv;
@@ -74,7 +112,9 @@ describe("deliverDiscordReply", () => {
     return threadBindings;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ deliverDiscordReply } = await import("./reply-delivery.js"));
     sendMessageDiscordMock.mockClear().mockResolvedValue({
       messageId: "msg-1",
       channelId: "channel-1",
@@ -91,6 +131,7 @@ describe("deliverDiscordReply", () => {
       id: "msg-direct-1",
       channel_id: "channel-1",
     });
+    retryAsyncMock.mockClear();
     threadBindingTesting.resetThreadBindingsForTests();
   });
 
@@ -207,7 +248,11 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
     });
 
-    expect(sendMessageDiscordMock.mock.calls[0]?.[2]?.cfg).toBe(cfg);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:101",
+      "cfg path",
+      expect.objectContaining({ cfg }),
+    );
   });
 
   it("uses replyToId only for the first chunk when replyToMode is first", async () => {
@@ -227,8 +272,18 @@ describe("deliverDiscordReply", () => {
     });
 
     expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageDiscordMock.mock.calls[0]?.[2]?.replyTo).toBe("reply-1");
-    expect(sendMessageDiscordMock.mock.calls[1]?.[2]?.replyTo).toBeUndefined();
+    expect(sendMessageDiscordMock.mock.calls).toEqual([
+      expect.arrayContaining([
+        "channel:789",
+        "12345",
+        expect.objectContaining({ replyTo: "reply-1" }),
+      ]),
+      expect.arrayContaining([
+        "channel:789",
+        "67890",
+        expect.not.objectContaining({ replyTo: expect.anything() }),
+      ]),
+    ]);
   });
 
   it("does not consume replyToId for replyToMode=first on whitespace-only payloads", async () => {

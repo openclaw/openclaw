@@ -174,31 +174,13 @@ export function formatTargetDisplay(params: {
     ? trimmedTarget.slice(channelPrefix.length)
     : trimmedTarget;
 
-  const withoutPrefix = withoutProvider.replace(/^telegram:/i, "");
-  if (/^channel:/i.test(withoutPrefix)) {
-    return `#${withoutPrefix.replace(/^channel:/i, "")}`;
+  if (/^channel:/i.test(withoutProvider)) {
+    return `#${withoutProvider.replace(/^channel:/i, "")}`;
   }
-  if (/^user:/i.test(withoutPrefix)) {
-    return `@${withoutPrefix.replace(/^user:/i, "")}`;
+  if (/^user:/i.test(withoutProvider)) {
+    return `@${withoutProvider.replace(/^user:/i, "")}`;
   }
-  return withoutPrefix;
-}
-
-function preserveTargetCase(channel: ChannelId, raw: string, normalized: string): string {
-  if (channel !== "slack") {
-    return normalized;
-  }
-  const trimmed = raw.trim();
-  if (/^channel:/i.test(trimmed) || /^user:/i.test(trimmed)) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("#")) {
-    return `channel:${trimmed.slice(1).trim()}`;
-  }
-  if (trimmed.startsWith("@")) {
-    return `user:${trimmed.slice(1).trim()}`;
-  }
-  return trimmed;
+  return withoutProvider;
 }
 
 function detectTargetKind(
@@ -362,18 +344,15 @@ async function getDirectoryEntries(params: {
 }
 
 function buildNormalizedResolveResult(params: {
-  channel: ChannelId;
-  raw: string;
   normalized: string;
   kind: TargetResolveKind;
 }): ResolveMessagingTargetResult {
-  const directTarget = preserveTargetCase(params.channel, params.raw, params.normalized);
   return {
     ok: true,
     target: {
-      to: directTarget,
+      to: params.normalized,
       kind: params.kind,
-      display: stripTargetPrefixes(params.raw),
+      display: stripTargetPrefixes(params.normalized),
       source: "normalized",
     },
   };
@@ -457,8 +436,6 @@ export async function resolveMessagingTarget(params: {
       };
     }
     return buildNormalizedResolveResult({
-      channel: params.channel,
-      raw,
       normalized,
       kind,
     });

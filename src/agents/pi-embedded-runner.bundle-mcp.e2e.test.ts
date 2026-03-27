@@ -53,14 +53,8 @@ vi.mock("./pi-bundle-mcp-tools.js", () => ({
   }),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", async () => {
-  return await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
-  );
-});
-
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
 
   const buildToolUseMessage = (model: { api: string; provider: string; id: string }) => ({
     role: "assistant" as const,

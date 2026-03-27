@@ -1,7 +1,7 @@
 package ai.openclaw.app.ui
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +20,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Link
@@ -49,6 +50,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.ui.mobileCardSurface
@@ -60,6 +62,7 @@ private enum class ConnectInputMode {
 
 @Composable
 fun ConnectTabScreen(viewModel: MainViewModel) {
+  val context = LocalContext.current
   val statusText by viewModel.statusText.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
@@ -134,7 +137,8 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       }
     }
 
-  val primaryLabel = if (isConnected) "Disconnect Gateway" else "Connect Gateway"
+  val showDiagnostics = !isConnected && gatewayStatusHasDiagnostics(statusText)
+  val statusLabel = gatewayStatusForDisplay(statusText)
 
   Column(
     modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
@@ -276,6 +280,46 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           ),
       ) {
         Text("Connect Gateway", style = mobileHeadline.copy(fontWeight = FontWeight.Bold))
+      }
+    }
+
+    if (showDiagnostics) {
+      Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = mobileWarningSoft,
+        border = BorderStroke(1.dp, mobileWarning.copy(alpha = 0.25f)),
+      ) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Text("Last gateway error", style = mobileHeadline, color = mobileWarning)
+          Text(statusLabel, style = mobileBody.copy(fontFamily = FontFamily.Monospace), color = mobileText)
+          Text("OpenClaw Android ${openClawAndroidVersionLabel()}", style = mobileCaption1, color = mobileTextSecondary)
+          Button(
+            onClick = {
+              copyGatewayDiagnosticsReport(
+                context = context,
+                screen = "connect tab",
+                gatewayAddress = activeEndpoint,
+                statusText = statusLabel,
+              )
+            },
+            modifier = Modifier.fillMaxWidth().height(46.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors =
+              ButtonDefaults.buttonColors(
+                containerColor = mobileCardSurface,
+                contentColor = mobileWarning,
+              ),
+            border = BorderStroke(1.dp, mobileWarning.copy(alpha = 0.3f)),
+          ) {
+            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Copy Report for Claw", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
+          }
+        }
       }
     }
 

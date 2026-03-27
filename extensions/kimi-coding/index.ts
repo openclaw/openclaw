@@ -1,4 +1,4 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
@@ -22,7 +22,7 @@ export default definePluginEntry({
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
           methodId: "api-key",
-          label: "Kimi API key (subscription)",
+          label: "Kimi Code API key (subscription)",
           hint: "Kimi K2.5 + Kimi",
           optionKey: "kimiCodeApiKey",
           flagName: "--kimi-code-api-key",
@@ -38,10 +38,10 @@ export default definePluginEntry({
           noteTitle: "Kimi",
           wizard: {
             choiceId: "kimi-code-api-key",
-            choiceLabel: "Kimi API key (subscription)",
+            choiceLabel: "Kimi Code API key (subscription)",
             groupId: "moonshot",
             groupLabel: "Moonshot AI (Kimi K2.5)",
-            groupHint: "Kimi K2.5 + Kimi",
+            groupHint: "Kimi K2.5",
           },
         }),
       ],
@@ -77,6 +77,7 @@ export default definePluginEntry({
         },
       },
       capabilities: {
+        openAiPayloadNormalizationMode: "moonshot-thinking",
         preserveAnthropicThinkingSignatures: false,
       },
     });

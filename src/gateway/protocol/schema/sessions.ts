@@ -47,6 +47,53 @@ export const SessionsResolveParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsCreateParamsSchema = Type.Object(
+  {
+    key: Type.Optional(NonEmptyString),
+    agentId: Type.Optional(NonEmptyString),
+    label: Type.Optional(SessionLabelString),
+    model: Type.Optional(NonEmptyString),
+    parentSessionKey: Type.Optional(NonEmptyString),
+    task: Type.Optional(Type.String()),
+    message: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsSendParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    message: Type.String(),
+    thinking: Type.Optional(Type.String()),
+    attachments: Type.Optional(Type.Array(Type.Unknown())),
+    timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    idempotencyKey: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsMessagesSubscribeParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsMessagesUnsubscribeParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsAbortParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    runId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsPatchParamsSchema = Type.Object(
   {
     key: NonEmptyString,

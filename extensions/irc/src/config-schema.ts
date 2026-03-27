@@ -1,4 +1,5 @@
 import {
+  buildChannelConfigSchema,
   BlockStreamingCoalesceSchema,
   DmConfigSchema,
   DmPolicySchema,
@@ -7,9 +8,9 @@ import {
   ReplyRuntimeConfigSchemaShape,
   ToolPolicySchema,
   requireOpenAllowFrom,
-} from "openclaw/plugin-sdk/irc";
+} from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
-import { requireChannelOpenAllowFrom } from "../../shared/config-schema-helpers.js";
+import { ircChannelConfigUiHints } from "./config-ui-hints.js";
 
 const IrcGroupSchema = z
   .object({
@@ -70,12 +71,12 @@ export const IrcAccountSchemaBase = z
   .strict();
 
 export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
-  requireChannelOpenAllowFrom({
-    channel: "irc",
+  requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
-    requireOpenAllowFrom,
+    path: ["allowFrom"],
+    message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
   });
 });
 
@@ -83,11 +84,15 @@ export const IrcConfigSchema = IrcAccountSchemaBase.extend({
   accounts: z.record(z.string(), IrcAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  requireChannelOpenAllowFrom({
-    channel: "irc",
+  requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
-    requireOpenAllowFrom,
+    path: ["allowFrom"],
+    message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
   });
+});
+
+export const IrcChannelConfigSchema = buildChannelConfigSchema(IrcConfigSchema, {
+  uiHints: ircChannelConfigUiHints,
 });

@@ -1,4 +1,4 @@
-import type { ChannelPlugin } from "openclaw/plugin-sdk/zalouser";
+import type { ChannelPlugin } from "../runtime-api.js";
 import type { ResolvedZalouserAccount } from "./accounts.js";
 import { zalouserSetupAdapter } from "./setup-core.js";
 import { zalouserSetupWizard } from "./setup-surface.js";

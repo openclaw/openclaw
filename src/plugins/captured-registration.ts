@@ -1,5 +1,6 @@
 import type {
   AnyAgentTool,
+  CliBackendPlugin,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
@@ -11,6 +12,7 @@ import type {
 export type CapturedPluginRegistration = {
   api: OpenClawPluginApi;
   providers: ProviderPlugin[];
+  cliBackends: CliBackendPlugin[];
   speechProviders: SpeechProviderPlugin[];
   mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
   imageGenerationProviders: ImageGenerationProviderPlugin[];
@@ -20,6 +22,7 @@ export type CapturedPluginRegistration = {
 
 export function createCapturedPluginRegistration(): CapturedPluginRegistration {
   const providers: ProviderPlugin[] = [];
+  const cliBackends: CliBackendPlugin[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[] = [];
   const imageGenerationProviders: ImageGenerationProviderPlugin[] = [];
@@ -28,6 +31,7 @@ export function createCapturedPluginRegistration(): CapturedPluginRegistration {
 
   return {
     providers,
+    cliBackends,
     speechProviders,
     mediaUnderstandingProviders,
     imageGenerationProviders,
@@ -36,6 +40,9 @@ export function createCapturedPluginRegistration(): CapturedPluginRegistration {
     api: {
       registerProvider(provider: ProviderPlugin) {
         providers.push(provider);
+      },
+      registerCliBackend(backend: CliBackendPlugin) {
+        cliBackends.push(backend);
       },
       registerSpeechProvider(provider: SpeechProviderPlugin) {
         speechProviders.push(provider);
@@ -52,7 +59,8 @@ export function createCapturedPluginRegistration(): CapturedPluginRegistration {
       registerTool(tool: AnyAgentTool) {
         tools.push(tool);
       },
-    } as OpenClawPluginApi,
+      registerMemoryEmbeddingProvider() {},
+    } as unknown as OpenClawPluginApi,
   };
 }
 

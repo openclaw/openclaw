@@ -1,7 +1,7 @@
-import { listSkillCommandsForAgents as listSkillCommandsForAgentsImpl } from "openclaw/plugin-sdk/reply-runtime";
+import { listSkillCommandsForAgents as listSkillCommandsForAgentsImpl } from "openclaw/plugin-sdk/command-auth";
 
 type ListSkillCommandsForAgents =
-  typeof import("openclaw/plugin-sdk/reply-runtime").listSkillCommandsForAgents;
+  typeof import("openclaw/plugin-sdk/command-auth").listSkillCommandsForAgents;
 
 export function listSkillCommandsForAgents(
   ...args: Parameters<ListSkillCommandsForAgents>

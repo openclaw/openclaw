@@ -28,9 +28,29 @@ export type ActiveWebListener = {
   close?: () => Promise<void>;
 };
 
-let _currentListener: ActiveWebListener | null = null;
+// WhatsApp shares a live Baileys socket between inbound and outbound runtime
+// chunks. Keep this on a direct globalThis symbol lookup; the generic
+// singleton helper was previously inlined during code-splitting and split the
+// listener state back into per-chunk Maps.
+const WHATSAPP_ACTIVE_LISTENER_STATE_KEY = Symbol.for("openclaw.whatsapp.activeListenerState");
 
-const listeners = new Map<string, ActiveWebListener>();
+type ActiveListenerState = {
+  listeners: Map<string, ActiveWebListener>;
+  current: ActiveWebListener | null;
+};
+
+const g = globalThis as unknown as Record<symbol, ActiveListenerState | undefined>;
+if (!g[WHATSAPP_ACTIVE_LISTENER_STATE_KEY]) {
+  g[WHATSAPP_ACTIVE_LISTENER_STATE_KEY] = {
+    listeners: new Map<string, ActiveWebListener>(),
+    current: null,
+  };
+}
+const state = g[WHATSAPP_ACTIVE_LISTENER_STATE_KEY]!;
+
+function setCurrentListener(listener: ActiveWebListener | null): void {
+  state.current = listener;
+}
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
@@ -41,7 +61,7 @@ export function requireActiveWebListener(accountId?: string | null): {
   listener: ActiveWebListener;
 } {
   const id = resolveWebAccountId(accountId);
-  const listener = listeners.get(id) ?? null;
+  const listener = state.listeners.get(id) ?? null;
   if (!listener) {
     throw new Error(
       `No active WhatsApp Web listener (account: ${id}). Start the gateway, then link WhatsApp with: ${formatCliCommand(`openclaw channels login --channel whatsapp --account ${id}`)}.`,
@@ -69,16 +89,16 @@ export function setActiveWebListener(
 
   const id = resolveWebAccountId(accountId);
   if (!listener) {
-    listeners.delete(id);
+    state.listeners.delete(id);
   } else {
-    listeners.set(id, listener);
+    state.listeners.set(id, listener);
   }
   if (id === DEFAULT_ACCOUNT_ID) {
-    _currentListener = listener;
+    setCurrentListener(listener);
   }
 }
 
 export function getActiveWebListener(accountId?: string | null): ActiveWebListener | null {
   const id = resolveWebAccountId(accountId);
-  return listeners.get(id) ?? null;
+  return state.listeners.get(id) ?? null;
 }

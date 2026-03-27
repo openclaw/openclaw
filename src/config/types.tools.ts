@@ -238,6 +238,11 @@ export type ExecToolConfig = {
   pathPrepend?: string[];
   /** Safe stdin-only binaries that can run without allowlist entries. */
   safeBins?: string[];
+  /**
+   * Require explicit approval for interpreter inline-eval forms (`python -c`, `node -e`, etc.).
+   * Prevents silent allowlist reuse and allow-always persistence for those forms.
+   */
+  strictInlineEval?: boolean;
   /** Extra explicit directories trusted for safeBins path checks (never derived from PATH). */
   safeBinTrustedDirs?: string[];
   /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
@@ -257,9 +262,9 @@ export type ExecToolConfig = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
-  /** apply_patch subtool configuration (experimental). */
+  /** apply_patch subtool configuration. */
   applyPatch?: {
-    /** Enable apply_patch for OpenAI models (default: false). */
+    /** Enable apply_patch for OpenAI models (default: true; set false to disable). */
     enabled?: boolean;
     /**
      * Restrict apply_patch paths to the workspace directory.
@@ -307,6 +312,8 @@ export type AgentToolsConfig = {
   sandbox?: {
     tools?: {
       allow?: string[];
+      /** Additional allowlist entries merged into allow and/or the sandbox default allowlist. */
+      alsoAllow?: string[];
       deny?: string[];
     };
   };
@@ -333,8 +340,8 @@ export type MemorySearchConfig = {
     /** Enable session transcript indexing (experimental, default: false). */
     sessionMemory?: boolean;
   };
-  /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
+  /** Memory embedding provider adapter id. */
+  provider?: string;
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
@@ -352,8 +359,8 @@ export type MemorySearchConfig = {
       timeoutMinutes?: number;
     };
   };
-  /** Fallback behavior when embeddings fail. */
-  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
+  /** Fallback memory embedding provider adapter id when embeddings fail. */
+  fallback?: string;
   /** Embedding model id (remote) or alias (local). */
   model?: string;
   /**
@@ -444,6 +451,14 @@ export type MemorySearchConfig = {
   };
 };
 
+type WebSearchLegacyProviderConfig = {
+  apiKey?: SecretInput;
+  baseUrl?: string;
+  model?: string;
+  mode?: string;
+  inlineCitations?: boolean;
+};
+
 export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -459,13 +474,27 @@ export type ToolsConfig = {
       enabled?: boolean;
       /** Search provider id. */
       provider?: string;
+      /** Shared API key slot used by providers that do not need nested config. */
+      apiKey?: SecretInput;
       /** Default search results count (1-10). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
-    };
+      /** @deprecated Legacy Brave scoped config. */
+      brave?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Firecrawl scoped config. */
+      firecrawl?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Gemini scoped config. */
+      gemini?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Grok scoped config. */
+      grok?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Kimi scoped config. */
+      kimi?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Perplexity scoped config. */
+      perplexity?: WebSearchLegacyProviderConfig;
+    } & Record<string, unknown>;
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;
@@ -473,6 +502,8 @@ export type ToolsConfig = {
       maxChars?: number;
       /** Hard cap for maxChars (tool or config), defaults to 50000. */
       maxCharsCap?: number;
+      /** Max download size before truncation, defaults to 2000000. */
+      maxResponseBytes?: number;
       /** Timeout in seconds for fetch requests. */
       timeoutSeconds?: number;
       /** Cache TTL in minutes for fetched content. */
@@ -577,6 +608,8 @@ export type ToolsConfig = {
   sandbox?: {
     tools?: {
       allow?: string[];
+      /** Additional allowlist entries merged into allow and/or the sandbox default allowlist. */
+      alsoAllow?: string[];
       deny?: string[];
     };
   };

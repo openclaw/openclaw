@@ -162,6 +162,16 @@ function addModelSelectOption(params: {
   params.seen.add(key);
 }
 
+function matchesPreferredProvider(entryProvider: string, preferredProvider: string): boolean {
+  if (preferredProvider === "volcengine") {
+    return entryProvider === "volcengine" || entryProvider === "volcengine-plan";
+  }
+  if (preferredProvider === "byteplus") {
+    return entryProvider === "byteplus" || entryProvider === "byteplus-plan";
+  }
+  return entryProvider === preferredProvider;
+}
+
 async function promptManualModel(params: {
   prompter: WizardPrompter;
   allowBlank: boolean;
@@ -261,15 +271,7 @@ export async function promptDefaultModel(
   }
 
   if (hasPreferredProvider && preferredProvider) {
-    models = models.filter((entry) => {
-      if (preferredProvider === "volcengine") {
-        return entry.provider === "volcengine" || entry.provider === "volcengine-plan";
-      }
-      if (preferredProvider === "byteplus") {
-        return entry.provider === "byteplus" || entry.provider === "byteplus-plan";
-      }
-      return entry.provider === preferredProvider;
-    });
+    models = models.filter((entry) => matchesPreferredProvider(entry.provider, preferredProvider));
   }
 
   const agentDir = params.agentDir;
@@ -290,13 +292,28 @@ export async function promptDefaultModel(
     options.push({ value: MANUAL_VALUE, label: "Enter model manually" });
   }
   if (includeProviderPluginSetups && agentDir) {
-    const { resolveProviderModelPickerEntries } = await loadResolvedModelPickerRuntime();
+    const runtime = await loadResolvedModelPickerRuntime();
+    const providerModelPickerOptions =
+      "resolveProviderModelPickerContributions" in runtime &&
+      typeof runtime.resolveProviderModelPickerContributions === "function"
+        ? runtime
+            .resolveProviderModelPickerContributions({
+              config: cfg,
+              workspaceDir: params.workspaceDir,
+              env: params.env,
+            })
+            .map((contribution) => contribution.option)
+        : runtime.resolveProviderModelPickerEntries({
+            config: cfg,
+            workspaceDir: params.workspaceDir,
+            env: params.env,
+          });
     options.push(
-      ...resolveProviderModelPickerEntries({
-        config: cfg,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      }),
+      ...providerModelPickerOptions.map((entry) => ({
+        value: entry.value,
+        label: entry.label,
+        ...(entry.hint ? { hint: entry.hint } : {}),
+      })),
     );
   }
 
@@ -429,11 +446,16 @@ export async function promptModelAllowlist(params: {
   agentDir?: string;
   allowedKeys?: string[];
   initialSelections?: string[];
+  preferredProvider?: string;
 }): Promise<PromptModelAllowlistResult> {
   const cfg = params.config;
   const existingKeys = resolveConfiguredModelKeys(cfg);
   const allowedKeys = normalizeModelKeys(params.allowedKeys ?? []);
   const allowedKeySet = allowedKeys.length > 0 ? new Set(allowedKeys) : null;
+  const preferredProviderRaw = params.preferredProvider?.trim();
+  const preferredProvider = preferredProviderRaw
+    ? normalizeProviderId(preferredProviderRaw)
+    : undefined;
   const resolved = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -477,9 +499,16 @@ export async function promptModelAllowlist(params: {
   const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
 
-  const filteredCatalog = allowedKeySet
+  const allowedCatalog = allowedKeySet
     ? catalog.filter((entry) => allowedKeySet.has(modelKey(entry.provider, entry.id)))
     : catalog;
+  const filteredCatalog =
+    preferredProvider &&
+    allowedCatalog.some((entry) => matchesPreferredProvider(entry.provider, preferredProvider))
+      ? allowedCatalog.filter((entry) =>
+          matchesPreferredProvider(entry.provider, preferredProvider),
+        )
+      : allowedCatalog;
 
   for (const entry of filteredCatalog) {
     addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });

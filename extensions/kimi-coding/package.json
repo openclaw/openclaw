@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/kimi-provider",
-  "version": "2026.3.14",
+  "version": "2026.3.26",
   "private": true,
   "description": "OpenClaw Kimi provider plugin",
   "type": "module",
