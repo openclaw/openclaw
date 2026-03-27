@@ -37,6 +37,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { looksLikeSessionId } from "../sessions/session-id.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
   AVATAR_MAX_BYTES,
@@ -639,6 +640,9 @@ function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
   if (lowered === "global" || lowered === "unknown") {
     return lowered;
   }
+  if (looksLikeSessionId(lowered)) {
+    return lowered;
+  }
   if (lowered.startsWith("agent:")) {
     return lowered;
   }
@@ -659,6 +663,9 @@ export function resolveSessionStoreKey(params: {
   }
   const rawLower = raw.toLowerCase();
   if (rawLower === "global" || rawLower === "unknown") {
+    return rawLower;
+  }
+  if (looksLikeSessionId(rawLower)) {
     return rawLower;
   }
 
@@ -737,6 +744,20 @@ function buildGatewaySessionStoreScanTargets(params: {
   }
   if (params.canonicalKey === "global" || params.canonicalKey === "unknown") {
     return [...targets];
+  }
+  const legacyAgentScopedUuidKey = looksLikeSessionId(params.canonicalKey)
+    ? `agent:${params.agentId}:${params.canonicalKey}`
+    : null;
+  if (legacyAgentScopedUuidKey) {
+    targets.add(legacyAgentScopedUuidKey);
+  }
+  const parsedCanonical = parseAgentSessionKey(params.canonicalKey);
+  const legacyBareUuidKey =
+    parsedCanonical && normalizeAgentId(parsedCanonical.agentId) === params.agentId
+      ? parsedCanonical.rest.trim().toLowerCase()
+      : "";
+  if (legacyBareUuidKey && looksLikeSessionId(legacyBareUuidKey)) {
+    targets.add(legacyBareUuidKey);
   }
   const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
   if (params.canonicalKey === agentMainKey) {

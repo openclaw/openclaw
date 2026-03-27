@@ -92,8 +92,9 @@ export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
+  agentId?: string,
 ): unknown[] {
-  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
 
   const filePath = candidates.find((p) => fs.existsSync(p));
   if (!filePath) {

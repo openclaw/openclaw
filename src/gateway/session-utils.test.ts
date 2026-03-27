@@ -146,6 +146,54 @@ describe("gateway session utils", () => {
     );
   });
 
+  test("resolveSessionStoreKey preserves opaque bare UUID session keys", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    expect(
+      resolveSessionStoreKey({
+        cfg,
+        sessionKey: "7d9d8588-65bb-4ce8-b2d5-98d3794cdfcf",
+      }),
+    ).toBe("7d9d8588-65bb-4ce8-b2d5-98d3794cdfcf");
+  });
+
+  test("resolveGatewaySessionStoreTarget keeps legacy agent-scoped UUID aliases addressable", () => {
+    const uuid = "7d9d8588-65bb-4ce8-b2d5-98d3794cdfcf";
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const target = resolveGatewaySessionStoreTarget({
+      cfg,
+      key: uuid,
+      store: {
+        [`agent:main:${uuid}`]: { sessionId: "sess-webui", updatedAt: 100 },
+      },
+    });
+    expect(target.canonicalKey).toBe(uuid);
+    expect(target.storeKeys).toEqual(expect.arrayContaining([uuid, `agent:main:${uuid}`]));
+  });
+
+  test("resolveGatewaySessionStoreTarget keeps bare UUID aliases addressable for legacy links", () => {
+    const uuid = "7d9d8588-65bb-4ce8-b2d5-98d3794cdfcf";
+    const prefixed = `agent:main:${uuid}`;
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const target = resolveGatewaySessionStoreTarget({
+      cfg,
+      key: prefixed,
+      store: {
+        [uuid]: { sessionId: "sess-webui", updatedAt: 100 },
+      },
+    });
+    expect(target.canonicalKey).toBe(prefixed);
+    expect(target.storeKeys).toEqual(expect.arrayContaining([uuid, prefixed]));
+  });
+
   test("resolveSessionStoreKey falls back to first list entry when no agent is marked default", () => {
     const cfg = {
       session: { mainKey: "main" },
@@ -2083,6 +2131,37 @@ describe("listSessionsFromStore subagent metadata", () => {
 });
 
 describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)", () => {
+  test("preserves opaque bare UUID session keys in combined store", async () => {
+    await withStateDirEnv("openclaw-webchat-uuid-store-", async ({ stateDir }) => {
+      const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(sessionsDir, "sessions.json"),
+        JSON.stringify({
+          "7d9d8588-65bb-4ce8-b2d5-98d3794cdfcf": {
+            sessionId: "sess-webchat",
+            updatedAt: 100,
+          },
+        }),
+        "utf8",
+      );
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
+      } as OpenClawConfig;
+
+      const { store } = loadCombinedSessionStoreForGateway(cfg);
+      expect(store["7d9d8588-65bb-4ce8-b2d5-98d3794cdfcf"]).toBeDefined();
+      expect(store["agent:main:7d9d8588-65bb-4ce8-b2d5-98d3794cdfcf"]).toBeUndefined();
+    });
+  });
+
   test("ACP agent sessions are visible even when agents.list is configured", async () => {
     await withStateDirEnv("openclaw-acp-vis-", async ({ stateDir }) => {
       const customRoot = path.join(stateDir, "custom-state");

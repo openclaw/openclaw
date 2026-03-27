@@ -1,3 +1,5 @@
+import { looksLikeSessionId } from "../../../src/sessions/session-id.js";
+import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import { refreshChat } from "./app-chat.ts";
 import {
@@ -36,6 +38,25 @@ import { startThemeTransition, type ThemeTransitionContext } from "./theme-trans
 import { resolveTheme, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type { AgentsListResult, AttentionItem } from "./types.ts";
 import { resetChatViewState } from "./views/chat.ts";
+
+export function normalizeChatUrlSessionKey(sessionKey: string | undefined | null): string {
+  const raw = (sessionKey ?? "").trim();
+  if (!raw) {
+    return "";
+  }
+  const parsed = parseAgentSessionKey(raw);
+  if (!parsed) {
+    return raw;
+  }
+  if (parsed.agentId !== "main") {
+    return raw;
+  }
+  const rest = parsed.rest.trim();
+  if (!looksLikeSessionId(rest)) {
+    return raw;
+  }
+  return rest;
+}
 
 type SettingsHost = {
   settings: UiSettings;
@@ -142,7 +163,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
   }
 
   if (sessionRaw != null) {
-    const session = sessionRaw.trim();
+    const session = normalizeChatUrlSessionKey(sessionRaw);
     if (session) {
       host.sessionKey = session;
       applySettings(host, {
@@ -150,6 +171,8 @@ export function applySettingsFromUrl(host: SettingsHost) {
         sessionKey: session,
         lastActiveSessionKey: session,
       });
+      params.set("session", session);
+      shouldCleanUrl = true;
     }
   }
 
@@ -466,7 +489,7 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   const url = new URL(window.location.href);
 
   if (tab === "chat" && host.sessionKey) {
-    url.searchParams.set("session", host.sessionKey);
+    url.searchParams.set("session", normalizeChatUrlSessionKey(host.sessionKey));
   } else {
     url.searchParams.delete("session");
   }
@@ -487,7 +510,7 @@ export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, re
     return;
   }
   const url = new URL(window.location.href);
-  url.searchParams.set("session", sessionKey);
+  url.searchParams.set("session", normalizeChatUrlSessionKey(sessionKey));
   if (replace) {
     window.history.replaceState({}, "", url.toString());
   } else {

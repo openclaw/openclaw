@@ -556,6 +556,38 @@ describe("readSessionMessages", () => {
       expect((out[0] as { __openclaw?: { seq?: number } }).__openclaw?.seq).toBe(1);
     }
   });
+
+  test("uses agentId fallback to read agent-scoped transcripts from OPENCLAW_HOME", () => {
+    const sessionId = "main-agent-home-fallback";
+    vi.stubEnv("OPENCLAW_HOME", tmpDir);
+    vi.stubEnv("HOME", path.join(tmpDir, "other-home"));
+
+    try {
+      const [transcriptPath] = resolveSessionTranscriptCandidates(
+        sessionId,
+        undefined,
+        undefined,
+        "main",
+      );
+      expect(transcriptPath).toContain(path.join(".openclaw", "agents", "main", "sessions"));
+      fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+      fs.writeFileSync(
+        transcriptPath,
+        [
+          JSON.stringify({ type: "session", version: 1, id: sessionId }),
+          JSON.stringify({ message: { role: "assistant", content: "from-main-agent-home" } }),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      expect(readSessionMessages(sessionId, undefined, undefined, "main")).toMatchObject([
+        { role: "assistant", content: "from-main-agent-home" },
+      ]);
+      expect(readSessionMessages(sessionId, undefined, undefined)).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 describe("readSessionPreviewItemsFromTranscript", () => {

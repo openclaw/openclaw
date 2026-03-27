@@ -1090,7 +1090,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(true, { messages: [] }, undefined);
       return;
     }
-    const allMessages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
+    const parsed = parseAgentSessionKey(target.canonicalKey ?? key);
+    const agentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(loadConfig()));
+    const allMessages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile, agentId);
     const messages = limit < allMessages.length ? allMessages.slice(-limit) : allMessages;
     respond(true, { messages }, undefined);
   },

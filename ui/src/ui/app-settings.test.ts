@@ -5,8 +5,10 @@ import {
   applySettings,
   applySettingsFromUrl,
   attachThemeListener,
+  normalizeChatUrlSessionKey,
   setTabFromRoute,
   syncThemeWithSettings,
+  syncUrlWithSessionKey,
 } from "./app-settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 
@@ -147,10 +149,37 @@ const createHost = (tab: Tab): SettingsHost => ({
   pendingGatewayToken: null,
 });
 
+describe("normalizeChatUrlSessionKey", () => {
+  it("keeps short opaque Open WebUI UUID session keys unchanged", () => {
+    expect(normalizeChatUrlSessionKey("999b7340-6da5-46bd-9bc3-13e81094680f")).toBe(
+      "999b7340-6da5-46bd-9bc3-13e81094680f",
+    );
+  });
+
+  it("normalizes agent:main:<uuid> URL keys to the short store key", () => {
+    expect(normalizeChatUrlSessionKey("agent:main:999b7340-6da5-46bd-9bc3-13e81094680f")).toBe(
+      "999b7340-6da5-46bd-9bc3-13e81094680f",
+    );
+  });
+
+  it("normalizes future UUID variants that still match the gateway session id format", () => {
+    expect(normalizeChatUrlSessionKey("agent:main:0195b01b-3d4c-7abc-cdef-1234567890ab")).toBe(
+      "0195b01b-3d4c-7abc-cdef-1234567890ab",
+    );
+  });
+
+  it("leaves normal structured channel session keys alone", () => {
+    expect(normalizeChatUrlSessionKey("agent:main:telegram:direct:user123")).toBe(
+      "agent:main:telegram:direct:user123",
+    );
+  });
+});
+
 describe("setTabFromRoute", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
+    setTestWindowUrl("https://control.example/chat");
   });
 
   afterEach(() => {
@@ -343,6 +372,21 @@ describe("applySettingsFromUrl", () => {
     expect(host.settings.lastActiveSessionKey).toBe("agent:test_new:main");
   });
 
+  it("normalizes WebUI UUID session URLs back to the short store key", () => {
+    const uuid = "999b7340-6da5-46bd-9bc3-13e81094680f";
+    setTestWindowUrl(
+      `https://control.example/chat?session=${encodeURIComponent(`agent:main:${uuid}`)}`,
+    );
+    const host = createHost("chat");
+
+    applySettingsFromUrl(host);
+
+    expect(host.sessionKey).toBe(uuid);
+    expect(host.settings.sessionKey).toBe(uuid);
+    expect(host.settings.lastActiveSessionKey).toBe(uuid);
+    expect(window.location.search).toBe(`?session=${uuid}`);
+  });
+
   it("does not reset the current gateway session when a different gateway is pending confirmation", () => {
     setTestWindowUrl(
       "https://control.example/chat?gatewayUrl=ws%3A%2F%2Fgateway-b.example%3A18789#token=test-token",
@@ -364,5 +408,23 @@ describe("applySettingsFromUrl", () => {
     expect(host.settings.lastActiveSessionKey).toBe("agent:test_old:main");
     expect(host.pendingGatewayUrl).toBe("ws://gateway-b.example:18789");
     expect(host.pendingGatewayToken).toBe("test-token");
+  });
+});
+
+describe("syncUrlWithSessionKey", () => {
+  beforeEach(() => {
+    setTestWindowUrl("https://control.example/chat");
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("writes bare WebUI UUID session keys into the URL", () => {
+    const host = createHost("chat");
+
+    syncUrlWithSessionKey(host, "agent:main:999b7340-6da5-46bd-9bc3-13e81094680f", true);
+
+    expect(window.location.search).toBe("?session=999b7340-6da5-46bd-9bc3-13e81094680f");
   });
 });
