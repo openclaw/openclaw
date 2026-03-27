@@ -1,0 +1,25 @@
+{
+  "name": "agent-dna-auditor",
+  "version": "1.0.0",
+  "description": "Scan your AI coding agents, classify ideology vs framework skills, embed DNA directly into agent definitions",
+  "author": "Dallion King <https://github.com/Dallionking>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Dallionking/agent-dna-auditor.git"
+  },
+  "keywords": [
+    "claude-code",
+    "ai-agents",
+    "agent-engineering",
+    "skills",
+    "dna",
+    "methodology",
+    "best-practices",
+    "sigma-protocol"
+  ],
+  "homepage": "https://github.com/Dallionking/agent-dna-auditor#readme",
+  "bugs": {
+    "url": "https://github.com/Dallionking/agent-dna-auditor/issues"
+  }
+}
