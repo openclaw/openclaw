@@ -296,7 +296,7 @@ export class TelegramPollingSession {
           ? now - lastGetUpdatesAt
           : 0;
       if (startupElapsed > POLL_STARTUP_TIMEOUT_MS && runner.isRunning()) {
-        this.#discardTransportOnRestart = true;
+        this.#transportState.markDirty();
         stalledRestart = true;
         this.opts.log(
           "[telegram] Polling startup stalled before first getUpdates; forcing restart.",
