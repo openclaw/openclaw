@@ -239,9 +239,10 @@ export function wrapStreamFnWithReActFallback(
         ? await getModelCapability(configDir, config.providerId, config.modelId)
         : "unknown";
 
+      const effectiveFallback = config.toolFallback ?? "auto";
       const hasTools = (context.tools?.length ?? 0) > 0;
-      if (currentStatus === "unknown" && !hasTools && configDir && config.toolFallback !== "none") {
-        // Trigger background probe for all new models unless we can learn from this turn (has tools)
+      if (currentStatus === "unknown" && !hasTools && configDir && effectiveFallback === "auto") {
+        // Trigger background probing only in auto mode when we still need to learn tool capability.
         queueMicrotask(() =>
           runBackgroundCapabilityProbe({
             streamFn: nativeStreamFn,

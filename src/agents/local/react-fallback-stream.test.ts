@@ -1,9 +1,17 @@
-import { describe, it, expect } from "vitest";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as capabilitiesCache from "./capabilities-cache.js";
+import * as capabilityProber from "./capability-prober.js";
 import {
   injectReActPrompt,
   isUnsupportedToolError,
   parseReActResponse,
+  wrapStreamFnWithReActFallback,
 } from "./react-fallback-stream.js";
+
+type StreamModel = Parameters<StreamFn>[0];
+type StreamContext = Parameters<StreamFn>[1];
 
 describe("ReAct Fallback Stream Core", () => {
   describe("Reasoning Sanitizer (<think> block stripping)", () => {
@@ -106,6 +114,113 @@ describe("ReAct Fallback Stream Core", () => {
     it("does not match unrelated provider errors", () => {
       expect(isUnsupportedToolError("context window exceeded")).toBe(false);
       expect(isUnsupportedToolError("connection refused")).toBe(false);
+    });
+  });
+
+  describe("Background Capability Probing", () => {
+    const getModelCapabilitySpy = vi.spyOn(capabilitiesCache, "getModelCapability");
+    const runBackgroundCapabilityProbeSpy = vi.spyOn(
+      capabilityProber,
+      "runBackgroundCapabilityProbe",
+    );
+
+    beforeEach(() => {
+      vi.clearAllMocks();
+      getModelCapabilitySpy.mockResolvedValue("unknown");
+      runBackgroundCapabilityProbeSpy.mockResolvedValue();
+    });
+
+    function createNativeStreamFn(text: string): StreamFn {
+      return () => {
+        const stream = createAssistantMessageEventStream();
+        setTimeout(() => {
+          stream.push({
+            type: "done",
+            reason: "stop",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              stopReason: "stop",
+              api: "test",
+              provider: "test",
+              model: "test",
+              usage: {
+                input: 1,
+                output: 1,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 2,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              timestamp: Date.now(),
+            },
+          });
+          stream.end();
+        }, 0);
+        return Promise.resolve(stream);
+      };
+    }
+
+    function createModel(provider: string): StreamModel {
+      return { id: "tiny-llama:1b", api: "test", provider } as unknown as StreamModel;
+    }
+
+    function createContext(): StreamContext {
+      return { tools: [] } as unknown as StreamContext;
+    }
+
+    it("does not queue a background probe when fallback is forced to react", async () => {
+      const wrapped = wrapStreamFnWithReActFallback(createNativeStreamFn("hello"), {
+        modelId: "tiny-llama:1b",
+        providerId: "ollama",
+        providerType: "ollama",
+        toolFallback: "react",
+        configDir: "/tmp/openclaw-react-probe-test",
+      });
+
+      const stream = await wrapped(createModel("ollama"), createContext(), {});
+      for await (const _ of stream) {
+        // consume
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(runBackgroundCapabilityProbeSpy).not.toHaveBeenCalled();
+    });
+
+    it("queues a background probe in auto mode when capability is still unknown and the turn has no tools", async () => {
+      const wrapped = wrapStreamFnWithReActFallback(createNativeStreamFn("hello"), {
+        modelId: "tiny-llama:1b",
+        providerId: "ollama",
+        providerType: "ollama",
+        toolFallback: "auto",
+        configDir: "/tmp/openclaw-auto-probe-test",
+      });
+
+      const stream = await wrapped(createModel("ollama"), createContext(), {});
+      for await (const _ of stream) {
+        // consume
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(runBackgroundCapabilityProbeSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not queue a background probe when fallback is explicitly disabled", async () => {
+      const wrapped = wrapStreamFnWithReActFallback(createNativeStreamFn("hello"), {
+        modelId: "tiny-llama:1b",
+        providerId: "ollama",
+        providerType: "ollama",
+        toolFallback: "none",
+        configDir: "/tmp/openclaw-none-probe-test",
+      });
+
+      const stream = await wrapped(createModel("ollama"), createContext(), {});
+      for await (const _ of stream) {
+        // consume
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(runBackgroundCapabilityProbeSpy).not.toHaveBeenCalled();
     });
   });
 });
