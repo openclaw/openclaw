@@ -20,7 +20,9 @@ internal sealed class ShellExecutorAdapter : IShellExecutor
     }
 
     public async Task<ErrorOr<ShellCommandResult>> RunAsync(
-        string executable, string[] args, int? timeoutMs, CancellationToken ct)
+        string executable, string[] args, int? timeoutMs, CancellationToken ct,
+        string? cwd = null,
+        IReadOnlyDictionary<string, string>? env = null)
     {
         var sw = Stopwatch.StartNew();
         var psi = new ProcessStartInfo
@@ -30,7 +32,12 @@ internal sealed class ShellExecutorAdapter : IShellExecutor
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
+            WorkingDirectory = cwd ?? string.Empty,
         };
+
+        if (env is not null)
+            foreach (var (k, v) in env)
+                psi.Environment[k] = v;
 
         // Use ArgumentList — never ArgumentString — to prevent shell injection
         foreach (var arg in args)

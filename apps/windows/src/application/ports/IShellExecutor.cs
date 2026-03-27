@@ -9,7 +9,9 @@ namespace OpenClawWindows.Application.Ports;
 public interface IShellExecutor
 {
     Task<ErrorOr<ShellCommandResult>> RunAsync(string executable, string[] args,
-        int? timeoutMs, CancellationToken ct);
+        int? timeoutMs, CancellationToken ct,
+        string? cwd = null,
+        IReadOnlyDictionary<string, string>? env = null);
 
     Task<ExecutablePath> WhichAsync(string executableName, CancellationToken ct);
 }

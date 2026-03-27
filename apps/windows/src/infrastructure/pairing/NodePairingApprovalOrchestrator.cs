@@ -436,12 +436,14 @@ internal sealed class NodePairingApprovalOrchestrator : IHostedService, INodePai
                 {
                     case PairingDecision.Approve:
                         lock (_lock) { _queue.RemoveAll(r => r.RequestId == req.RequestId); }
+                        NotifyPendingChanged();
                         if (await ApproveAsync(req.RequestId, ct))
                             await NotifyAsync("approved", req, "local", ct);
                         break;
 
                     case PairingDecision.Reject:
                         lock (_lock) { _queue.RemoveAll(r => r.RequestId == req.RequestId); }
+                        NotifyPendingChanged();
                         await RejectAsync(req.RequestId, ct);
                         await NotifyAsync("rejected", req, "local", ct);
                         break;
@@ -449,6 +451,7 @@ internal sealed class NodePairingApprovalOrchestrator : IHostedService, INodePai
                     case PairingDecision.Later:
                         // Node "Later" removes from queue — gateway TTL manages expiry.
                         lock (_lock) { _queue.RemoveAll(r => r.RequestId == req.RequestId); }
+                        NotifyPendingChanged();
                         break;
                 }
 

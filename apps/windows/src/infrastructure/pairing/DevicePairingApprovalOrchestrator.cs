@@ -236,6 +236,7 @@ internal sealed class DevicePairingApprovalOrchestrator : IHostedService, IDevic
                 if (wasRemotelyResolved)
                 {
                     lock (_lock) { _queue.RemoveAll(r => r.RequestId == req.RequestId); }
+                    NotifyPendingChanged();
                     continue;
                 }
 

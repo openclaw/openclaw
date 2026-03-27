@@ -53,7 +53,7 @@ public sealed class EvaluateExecRequestHandlerTests
     {
         var expected = ShellCommandResult.Create(0, "output", "", 0, "ls").Value;
         // Arg.Any<string>() — executable may be resolved to full path on the test machine
-        _shell.RunAsync(Arg.Any<string>(), Arg.Any<string[]>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        _shell.RunAsync(Arg.Any<string>(), Arg.Any<string[]>(), Arg.Any<int?>(), Arg.Any<CancellationToken>(), Arg.Any<string?>(), Arg.Any<IReadOnlyDictionary<string, string>?>())
             .Returns(expected);
 
         var result = await _handler.Handle(
@@ -67,7 +67,7 @@ public sealed class EvaluateExecRequestHandlerTests
     [Fact]
     public async Task Handle_ShellError_ReturnsError()
     {
-        _shell.RunAsync(Arg.Any<string>(), Arg.Any<string[]>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        _shell.RunAsync(Arg.Any<string>(), Arg.Any<string[]>(), Arg.Any<int?>(), Arg.Any<CancellationToken>(), Arg.Any<string?>(), Arg.Any<IReadOnlyDictionary<string, string>?>())
             .Returns(Error.Failure("SHELL", "command not found"));
 
         var result = await _handler.Handle(
@@ -79,7 +79,7 @@ public sealed class EvaluateExecRequestHandlerTests
     [Fact]
     public async Task Handle_AuditsExecution()
     {
-        _shell.RunAsync(Arg.Any<string>(), Arg.Any<string[]>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        _shell.RunAsync(Arg.Any<string>(), Arg.Any<string[]>(), Arg.Any<int?>(), Arg.Any<CancellationToken>(), Arg.Any<string?>(), Arg.Any<IReadOnlyDictionary<string, string>?>())
             .Returns(ShellCommandResult.Create(0, "ok", "", 0, "ls").Value);
 
         await _handler.Handle(new EvaluateExecRequestCommand(ValidCommandJson, "c1"), default);
@@ -99,7 +99,7 @@ public sealed class EvaluateExecRequestHandlerTests
     [Fact]
     public async Task Handle_SuccessfulRun_EmitsStartedThenFinished()
     {
-        _shell.RunAsync(Arg.Any<string>(), Arg.Any<string[]>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        _shell.RunAsync(Arg.Any<string>(), Arg.Any<string[]>(), Arg.Any<int?>(), Arg.Any<CancellationToken>(), Arg.Any<string?>(), Arg.Any<IReadOnlyDictionary<string, string>?>())
             .Returns(ShellCommandResult.Create(0, "hello", "", 10, "ls").Value);
 
         await _handler.Handle(new EvaluateExecRequestCommand(ValidCommandJson, "evt-001"), default);
@@ -153,7 +153,7 @@ public sealed class EvaluateExecRequestHandlerTests
     public async Task Handle_TimeoutMs_PassedToShell()
     {
         var json = """{"command":["sleep","10"],"timeoutMs":500}""";
-        _shell.RunAsync(Arg.Any<string>(), Arg.Any<string[]>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        _shell.RunAsync(Arg.Any<string>(), Arg.Any<string[]>(), Arg.Any<int?>(), Arg.Any<CancellationToken>(), Arg.Any<string?>(), Arg.Any<IReadOnlyDictionary<string, string>?>())
             .Returns(ShellCommandResult.Create(0, "", "", 10, "sleep").Value);
 
         await _handler.Handle(new EvaluateExecRequestCommand(json, "timeout-001"), default);
@@ -162,14 +162,16 @@ public sealed class EvaluateExecRequestHandlerTests
             Arg.Any<string>(),
             Arg.Any<string[]>(),
             Arg.Is<int?>(t => t == 500),
-            Arg.Any<CancellationToken>());
+            Arg.Any<CancellationToken>(),
+            Arg.Any<string?>(),
+            Arg.Any<IReadOnlyDictionary<string, string>?>());
     }
 
     [Fact]
     public async Task Handle_SessionKeyFromParams_UsedInEvent()
     {
         var json = """{"command":["ls"],"sessionKey":"session-abc"}""";
-        _shell.RunAsync(Arg.Any<string>(), Arg.Any<string[]>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        _shell.RunAsync(Arg.Any<string>(), Arg.Any<string[]>(), Arg.Any<int?>(), Arg.Any<CancellationToken>(), Arg.Any<string?>(), Arg.Any<IReadOnlyDictionary<string, string>?>())
             .Returns(ShellCommandResult.Create(0, "", "", 5, "ls").Value);
 
         await _handler.Handle(new EvaluateExecRequestCommand(json, "sk-001"), default);
@@ -183,7 +185,7 @@ public sealed class EvaluateExecRequestHandlerTests
     public async Task Handle_NoSessionKeyInParams_FallsBackToMainSessionKey()
     {
         _nodeRuntime.MainSessionKey.Returns("main-session");
-        _shell.RunAsync(Arg.Any<string>(), Arg.Any<string[]>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        _shell.RunAsync(Arg.Any<string>(), Arg.Any<string[]>(), Arg.Any<int?>(), Arg.Any<CancellationToken>(), Arg.Any<string?>(), Arg.Any<IReadOnlyDictionary<string, string>?>())
             .Returns(ShellCommandResult.Create(0, "", "", 5, "ls").Value);
 
         await _handler.Handle(new EvaluateExecRequestCommand(ValidCommandJson, "sk-002"), default);

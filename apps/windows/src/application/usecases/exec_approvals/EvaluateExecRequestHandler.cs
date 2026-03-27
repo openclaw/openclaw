@@ -176,7 +176,7 @@ internal sealed class EvaluateExecRequestHandler
             Command = displayCommand,
         });
 
-        var result = await _shell.RunAsync(executable, args, timeoutMs, ct);
+        var result = await _shell.RunAsync(executable, args, timeoutMs, ct, cwd, env);
 
         bool timedOut = result.IsError && result.FirstError.Code == "EXEC_TIMEOUT";
         bool success  = !result.IsError && result.Value.IsSuccess;
