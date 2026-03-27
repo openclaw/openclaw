@@ -125,11 +125,11 @@
 3. A task with `depends_on: [TASK-003]` is not claimable until TASK-003 reaches Done status
 4. After context compaction, an agent can resume work on a claimed task using checkpoint and log sections in the task file
 5. Task claiming updates queue.md (moves task from Available to Claimed) with lock protection
-   **Plans:** 3 plans
+   **Plans:** 1/3 plans executed
    Plans:
 
 - [ ] 06-01-PLAN.md — Checkpoint JSON sidecar module with CheckpointData type and CRUD functions (TDD)
-- [ ] 06-02-PLAN.md — HeartbeatScanner with scanAndClaimTask: queue scan, claim, resume, deps, priority (TDD)
+- [x] 06-02-PLAN.md — HeartbeatScanner with scanAndClaimTask: queue scan, claim, resume, deps, priority (TDD)
 - [ ] 06-03-PLAN.md — Wire scanner into heartbeat runner, barrel exports, integration test
       **Estimated complexity**: L
 
@@ -286,7 +286,7 @@ Phase 1 (Types & Schemas)
 | 3. Sync Pipeline                    | 2/2            | Complete    | -          |
 | 4. Concurrency                      | 0/2            | Planned     | -          |
 | 5. Context Injection                | 1/2            | In Progress |            |
-| 6. Queue & Heartbeat                | 0/3            | Planned     | -          |
+| 6. Queue & Heartbeat                | 1/3 | In Progress|  |
 | 7. Gateway Service                  | 0/?            | Not started | -          |
 | 8. CLI Commands                     | 0/?            | Not started | -          |
 | 9. Project Views & Dashboard        | 0/?            | Not started | -          |
