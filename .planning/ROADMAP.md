@@ -88,8 +88,12 @@
 3. A lock file left behind by a crashed process is automatically cleared after 60 seconds
 4. Lock files contain PID and timestamp readable for diagnostics
 5. After a queue write, re-reading queue.md confirms the expected state persisted
-   **Plans**: TBD
-   **Estimated complexity**: M
+   **Plans:** 2 plans
+   Plans:
+
+- [ ] 04-01-PLAN.md — QueueManager class with lock-protected read-modify-write and serialization (TDD)
+- [ ] 04-02-PLAN.md — Concurrent access tests and barrel exports
+      **Estimated complexity**: M
 
 ### Phase 5: Context Injection
 
@@ -269,9 +273,9 @@ Phase 1 (Types & Schemas)
 | Phase                               | Plans Complete | Status      | Completed  |
 | ----------------------------------- | -------------- | ----------- | ---------- |
 | 1. Types & Schemas                  | 3/3            | Complete    | 2026-03-26 |
-| 2. File Structure & Scaffolding     | 1/2            | In Progress |            |
-| 3. Sync Pipeline                    | 0/2            | Planned     | -          |
-| 4. Concurrency                      | 0/?            | Not started | -          |
+| 2. File Structure & Scaffolding     | 2/2            | Complete    |            |
+| 3. Sync Pipeline                    | 2/2            | Complete    | -          |
+| 4. Concurrency                      | 0/2            | Planned     | -          |
 | 5. Context Injection                | 0/?            | Not started | -          |
 | 6. Queue & Heartbeat                | 0/?            | Not started | -          |
 | 7. Gateway Service                  | 0/?            | Not started | -          |
