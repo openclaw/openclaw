@@ -88,6 +88,13 @@ export type RunCronAgentTurnResult = {
    * cannot guarantee a final delivery ack synchronously.
    */
   deliveryAttempted?: boolean;
+  /**
+   * Explicit policy for whether this result should be surfaced as a system
+   * event in the main session.  When unset, the shared-hook fallback uses a
+   * compatibility bridge based on `delivered`, `deliveryAttempted`, and
+   * `deliver` to decide.
+   */
+  announceToMain?: boolean;
 } & CronRunOutcome &
   CronRunTelemetry;
 
