@@ -27,6 +27,7 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
+import { handleAilliumMcpHttpRequest } from "./aillium-mcp-http.js";
 import { normalizeCanvasScopedUrl } from "./canvas-capability.js";
 import {
   handleControlUiAvatarRequest,
@@ -799,6 +800,10 @@ export function createGatewayHttpServer(opts: {
               allowRealIpFallback,
               rateLimiter,
             }),
+        },
+        {
+          name: "aillium-mcp",
+          run: () => handleAilliumMcpHttpRequest(req, res, requestPath),
         },
         {
           name: "slack",
