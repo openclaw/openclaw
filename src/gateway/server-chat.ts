@@ -241,6 +241,12 @@ export type ToolEventRecipientRegistry = {
   markFinal: (runId: string) => void;
 };
 
+export type ThinkingEventRecipientRegistry = {
+  add: (runId: string, connId: string) => void;
+  get: (runId: string) => ReadonlySet<string> | undefined;
+  markFinal: (runId: string) => void;
+};
+
 export type SessionEventSubscriberRegistry = {
   subscribe: (connId: string) => void;
   unsubscribe: (connId: string) => void;
@@ -427,6 +433,64 @@ export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
   return { add, get, markFinal };
 }
 
+export function createThinkingEventRecipientRegistry(): ThinkingEventRecipientRegistry {
+  const recipients = new Map<string, ToolRecipientEntry>();
+
+  const prune = () => {
+    if (recipients.size === 0) {
+      return;
+    }
+    const now = Date.now();
+    for (const [runId, entry] of recipients) {
+      const cutoff = entry.finalizedAt
+        ? entry.finalizedAt + TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS
+        : entry.updatedAt + TOOL_EVENT_RECIPIENT_TTL_MS;
+      if (now >= cutoff) {
+        recipients.delete(runId);
+      }
+    }
+  };
+
+  const add = (runId: string, connId: string) => {
+    if (!runId || !connId) {
+      return;
+    }
+    const now = Date.now();
+    const existing = recipients.get(runId);
+    if (existing) {
+      existing.connIds.add(connId);
+      existing.updatedAt = now;
+    } else {
+      recipients.set(runId, {
+        connIds: new Set([connId]),
+        updatedAt: now,
+      });
+    }
+    prune();
+  };
+
+  const get = (runId: string) => {
+    const entry = recipients.get(runId);
+    if (!entry) {
+      return undefined;
+    }
+    entry.updatedAt = Date.now();
+    prune();
+    return entry.connIds;
+  };
+
+  const markFinal = (runId: string) => {
+    const entry = recipients.get(runId);
+    if (!entry) {
+      return;
+    }
+    entry.finalizedAt = Date.now();
+    prune();
+  };
+
+  return { add, get, markFinal };
+}
+
 export type ChatEventBroadcast = (
   event: string,
   payload: unknown,
@@ -449,6 +513,7 @@ export type AgentEventHandlerOptions = {
   resolveSessionKeyForRun: (runId: string) => string | undefined;
   clearAgentRunContext: (runId: string) => void;
   toolEventRecipients: ToolEventRecipientRegistry;
+  thinkingEventRecipients: ThinkingEventRecipientRegistry;
   sessionEventSubscribers: SessionEventSubscriberRegistry;
 };
 
@@ -461,6 +526,7 @@ export function createAgentEventHandler({
   resolveSessionKeyForRun,
   clearAgentRunContext,
   toolEventRecipients,
+  thinkingEventRecipients,
   sessionEventSubscribers,
 }: AgentEventHandlerOptions) {
   const buildSessionEventSnapshot = (sessionKey: string, evt?: AgentEventPayload) => {
@@ -751,6 +817,7 @@ export function createAgentEventHandler({
       });
     }
     agentRunSeq.set(evt.runId, evt.seq);
+    const isThinkingEvent = evt.stream === "thinking";
     if (isToolEvent) {
       const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
       // Flush pending assistant text before tool-start events so clients can
@@ -777,6 +844,16 @@ export function createAgentEventHandler({
           broadcastToConnIds("session.tool", toolPayload, sessionSubscribers, { dropIfSlow: true });
         }
       }
+    } else if (isThinkingEvent) {
+      // Thinking events are sent only to clients that subscribed via the
+      // thinking-events capability. Never broadcast to all clients or node
+      // subscribers to avoid leaking reasoning tokens to unintended surfaces.
+      if (isControlUiVisible) {
+        const thinkingRecipients = thinkingEventRecipients.get(evt.runId);
+        if (thinkingRecipients && thinkingRecipients.size > 0) {
+          broadcastToConnIds("agent", agentPayload, thinkingRecipients, { dropIfSlow: true });
+        }
+      }
     } else {
       broadcast("agent", agentPayload);
     }
@@ -787,7 +864,8 @@ export function createAgentEventHandler({
     if (isControlUiVisible && sessionKey) {
       // Send tool events to node/channel subscribers only when verbose is enabled;
       // WS clients already received the event above via broadcastToConnIds.
-      if (!isToolEvent || toolVerbose !== "off") {
+      // Thinking events are never forwarded to node/channel subscribers.
+      if ((!isToolEvent && !isThinkingEvent) || (isToolEvent && toolVerbose !== "off")) {
         nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
@@ -834,6 +912,7 @@ export function createAgentEventHandler({
 
     if (lifecyclePhase === "end" || lifecyclePhase === "error") {
       toolEventRecipients.markFinal(evt.runId);
+      thinkingEventRecipients.markFinal(evt.runId);
       clearAgentRunContext(evt.runId);
       agentRunSeq.delete(evt.runId);
       agentRunSeq.delete(clientRunId);

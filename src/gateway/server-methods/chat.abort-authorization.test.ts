@@ -1,9 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createActiveRun,
   createChatAbortContext,
   invokeChatAbortHandler,
 } from "./chat.abort.test-helpers.js";
+
+vi.mock("../session-utils.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../session-utils.js")>();
+  return {
+    ...original,
+    loadSessionEntry: () => ({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "main-session" },
+      canonicalKey: "main",
+    }),
+  };
+});
+
 import { chatHandlers } from "./chat.js";
 
 async function invokeSingleRunAbort({

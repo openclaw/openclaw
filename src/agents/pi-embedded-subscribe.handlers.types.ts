@@ -52,6 +52,10 @@ export type EmbeddedPiSubscribeState = {
   lastStreamedAssistantCleaned?: string;
   emittedAssistantUpdate: boolean;
   lastStreamedReasoning?: string;
+  /** Raw (unformatted) accumulated reasoning text; used for incremental delta computation. */
+  lastStreamedReasoningRaw?: string;
+  /** Raw text that was last actually emitted; used to compute correct delta after skipped emits. */
+  lastEmittedReasoningRaw?: string;
   lastBlockReplyText?: string;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;

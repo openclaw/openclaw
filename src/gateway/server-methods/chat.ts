@@ -1172,6 +1172,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       runId?: string;
     };
+    const { canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
 
     const ops = createChatAbortOps(context);
     const requester = resolveChatAbortRequester(client);
@@ -1180,7 +1181,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const res = abortChatRunsForSessionKeyWithPartials({
         context,
         ops,
-        sessionKey: rawSessionKey,
+        sessionKey,
         abortOrigin: "rpc",
         stopReason: "rpc",
         requester,
@@ -1198,7 +1199,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(true, { ok: true, aborted: false, runIds: [] });
       return;
     }
-    if (active.sessionKey !== rawSessionKey) {
+    if (active.sessionKey !== sessionKey) {
       respond(
         false,
         undefined,
@@ -1214,13 +1215,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     const partialText = context.chatRunBuffers.get(runId);
     const res = abortChatRunById(ops, {
       runId,
-      sessionKey: rawSessionKey,
+      sessionKey,
       stopReason: "rpc",
     });
     if (res.aborted && partialText && partialText.trim()) {
       persistAbortedPartials({
         context,
-        sessionKey: rawSessionKey,
+        sessionKey,
         snapshots: [
           {
             runId,
@@ -1348,7 +1349,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const res = abortChatRunsForSessionKeyWithPartials({
         context,
         ops: createChatAbortOps(context),
-        sessionKey: rawSessionKey,
+        sessionKey,
         abortOrigin: "stop-command",
         stopReason: "stop",
         requester: resolveChatAbortRequester(client),
@@ -1383,7 +1384,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       context.chatAbortControllers.set(clientRunId, {
         controller: abortController,
         sessionId: entry?.sessionId ?? clientRunId,
-        sessionKey: rawSessionKey,
+        sessionKey,
         startedAtMs: now,
         expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
         ownerConnId: normalizeOptionalText(client?.connId),
@@ -1534,6 +1535,43 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
 
       let agentRunStarted = false;
+
+      // Register event recipients BEFORE dispatching so early thinking/tool events
+      // are delivered even when they arrive before the first lifecycle callback.
+      // This fixes a race where thinking_delta events emitted via emitReasoningStream
+      // bypass the onAgentRunStart callback path and would be dropped because
+      // thinkingEventRecipients was still empty.
+      const connId = typeof client?.connId === "string" ? client.connId : undefined;
+      const wantsToolEvents = hasGatewayClientCap(
+        client?.connect?.caps,
+        GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+      );
+      const wantsThinkingEvents = hasGatewayClientCap(
+        client?.connect?.caps,
+        GATEWAY_CLIENT_CAPS.THINKING_EVENTS,
+      );
+      if (connId && (wantsToolEvents || wantsThinkingEvents)) {
+        if (wantsToolEvents) {
+          context.registerToolEventRecipient(clientRunId, connId);
+        }
+        if (wantsThinkingEvents) {
+          context.registerThinkingEventRecipient(clientRunId, connId);
+        }
+        // Register for any other active runs *in the same session* so
+        // late-joining clients (e.g. page refresh mid-response) receive
+        // in-progress events without leaking cross-session data.
+        for (const [activeRunId, active] of context.chatAbortControllers) {
+          if (activeRunId !== clientRunId && active.sessionKey === sessionKey) {
+            if (wantsToolEvents) {
+              context.registerToolEventRecipient(activeRunId, connId);
+            }
+            if (wantsThinkingEvents) {
+              context.registerThinkingEventRecipient(activeRunId, connId);
+            }
+          }
+        }
+      }
+
       void dispatchInboundMessage({
         ctx,
         cfg,
@@ -1545,22 +1583,6 @@ export const chatHandlers: GatewayRequestHandlers = {
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
             void emitUserTranscriptUpdate();
-            const connId = typeof client?.connId === "string" ? client.connId : undefined;
-            const wantsToolEvents = hasGatewayClientCap(
-              client?.connect?.caps,
-              GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
-            );
-            if (connId && wantsToolEvents) {
-              context.registerToolEventRecipient(runId, connId);
-              // Register for any other active runs *in the same session* so
-              // late-joining clients (e.g. page refresh mid-response) receive
-              // in-progress tool events without leaking cross-session data.
-              for (const [activeRunId, active] of context.chatAbortControllers) {
-                if (activeRunId !== runId && active.sessionKey === p.sessionKey) {
-                  context.registerToolEventRecipient(activeRunId, connId);
-                }
-              }
-            }
           },
           onModelSelected,
         },
