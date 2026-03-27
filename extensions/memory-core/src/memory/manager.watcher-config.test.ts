@@ -5,10 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../engine-host-api.js";
 import type { MemorySearchConfig } from "../engine-host-api.js";
 import type { MemoryIndexManager } from "./index.js";
-import {
-  clearTestMemoryEmbeddingProviderRegistry,
-  resetTestMemoryEmbeddingProviderRegistry,
-} from "./test-provider-registry.js";
 
 const { watchMock } = vi.hoisted(() => ({
   watchMock: vi.fn(() => ({
@@ -38,6 +34,27 @@ vi.mock("./embeddings.js", () => ({
   }),
 }));
 
+vi.mock("../../../../src/plugins/memory-embedding-providers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/plugins/memory-embedding-providers.js")>();
+  return {
+    ...actual,
+    getMemoryEmbeddingProvider: (id: string) => {
+      if (id === "gemini") {
+        return {
+          id: "gemini",
+          transport: "remote",
+          supportsMultimodalEmbeddings: ({ model }: { model: string }) =>
+            model
+              .trim()
+              .replace(/^models\//, "")
+              .replace(/^(gemini|google)\//, "") === "gemini-embedding-2-preview",
+        } as unknown as ReturnType<typeof actual.getMemoryEmbeddingProvider>;
+      }
+      return actual.getMemoryEmbeddingProvider(id);
+    },
+  };
+});
+
 type MemoryIndexModule = typeof import("./index.js");
 
 let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
@@ -50,7 +67,6 @@ describe("memory watcher config", () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    await resetTestMemoryEmbeddingProviderRegistry();
     ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
     vi.clearAllMocks();
   });
@@ -62,7 +78,6 @@ describe("memory watcher config", () => {
       manager = null;
     }
     await closeAllMemorySearchManagers();
-    await clearTestMemoryEmbeddingProviderRegistry();
     if (workspaceDir) {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       workspaceDir = "";
