@@ -3,7 +3,7 @@ export type {
   MemoryEmbeddingProbeResult,
   MemorySearchManager,
   MemorySearchResult,
-} from "../api.js";
+} from "../engine-host-api.js";
 export {
   closeAllMemorySearchManagers,
   getMemorySearchManager,

@@ -4,8 +4,8 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { DEFAULT_LOCAL_MODEL } from "../memory/embeddings.js";
-import { hasConfiguredMemorySecretInput } from "../memory/secret-input.js";
+import { DEFAULT_LOCAL_MODEL } from "../plugins/memory-host/embeddings.js";
+import { hasConfiguredMemorySecretInput } from "../plugins/memory-host/secret-input.js";
 import { resolveActiveMemoryBackendConfig } from "../plugins/memory-runtime.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
@@ -191,7 +191,7 @@ function hasLocalEmbeddings(local: { modelPath?: string }, useDefaultFallback = 
 }
 
 async function hasApiKeyForProvider(
-  provider: "openai" | "gemini" | "voyage" | "mistral" | "ollama",
+  provider: string,
   cfg: OpenClawConfig,
   agentDir: string,
 ): Promise<boolean> {

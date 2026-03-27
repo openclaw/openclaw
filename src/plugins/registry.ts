@@ -15,6 +15,10 @@ import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { registerPluginInteractiveHandler } from "./interactive.js";
 import {
+  getMemoryEmbeddingProvider,
+  registerMemoryEmbeddingProvider,
+} from "./memory-embedding-providers.js";
+import {
   registerMemoryFlushPlanResolver,
   registerMemoryPromptSection,
   registerMemoryRuntime,
@@ -1097,6 +1101,22 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           return;
         }
         registerMemoryRuntime(runtime);
+      },
+      registerMemoryEmbeddingProvider: (adapter) => {
+        if (registrationMode !== "full") {
+          return;
+        }
+        const existing = getMemoryEmbeddingProvider(adapter.id);
+        if (existing) {
+          pushDiagnostic({
+            level: "error",
+            pluginId: record.id,
+            source: record.source,
+            message: `memory embedding provider already registered: ${adapter.id}`,
+          });
+          return;
+        }
+        registerMemoryEmbeddingProvider(adapter);
       },
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>

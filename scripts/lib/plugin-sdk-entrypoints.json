@@ -96,6 +96,8 @@
   "mattermost",
   "memory-core",
   "memory-core-host",
+  "memory-core-host-engine",
+  "memory-core-host-runtime",
   "memory-lancedb",
   "msteams",
   "nextcloud-talk",

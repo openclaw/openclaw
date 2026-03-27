@@ -1882,32 +1882,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     additionalProperties: false,
                   },
                   provider: {
-                    anyOf: [
-                      {
-                        type: "string",
-                        const: "openai",
-                      },
-                      {
-                        type: "string",
-                        const: "local",
-                      },
-                      {
-                        type: "string",
-                        const: "gemini",
-                      },
-                      {
-                        type: "string",
-                        const: "voyage",
-                      },
-                      {
-                        type: "string",
-                        const: "mistral",
-                      },
-                      {
-                        type: "string",
-                        const: "ollama",
-                      },
-                    ],
+                    type: "string",
                   },
                   remote: {
                     type: "object",
@@ -2021,36 +1996,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     additionalProperties: false,
                   },
                   fallback: {
-                    anyOf: [
-                      {
-                        type: "string",
-                        const: "openai",
-                      },
-                      {
-                        type: "string",
-                        const: "gemini",
-                      },
-                      {
-                        type: "string",
-                        const: "local",
-                      },
-                      {
-                        type: "string",
-                        const: "voyage",
-                      },
-                      {
-                        type: "string",
-                        const: "mistral",
-                      },
-                      {
-                        type: "string",
-                        const: "ollama",
-                      },
-                      {
-                        type: "string",
-                        const: "none",
-                      },
-                    ],
+                    type: "string",
                   },
                   model: {
                     type: "string",
@@ -3499,32 +3445,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       additionalProperties: false,
                     },
                     provider: {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "openai",
-                        },
-                        {
-                          type: "string",
-                          const: "local",
-                        },
-                        {
-                          type: "string",
-                          const: "gemini",
-                        },
-                        {
-                          type: "string",
-                          const: "voyage",
-                        },
-                        {
-                          type: "string",
-                          const: "mistral",
-                        },
-                        {
-                          type: "string",
-                          const: "ollama",
-                        },
-                      ],
+                      type: "string",
                     },
                     remote: {
                       type: "object",
@@ -3638,36 +3559,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       additionalProperties: false,
                     },
                     fallback: {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "openai",
-                        },
-                        {
-                          type: "string",
-                          const: "gemini",
-                        },
-                        {
-                          type: "string",
-                          const: "local",
-                        },
-                        {
-                          type: "string",
-                          const: "voyage",
-                        },
-                        {
-                          type: "string",
-                          const: "mistral",
-                        },
-                        {
-                          type: "string",
-                          const: "ollama",
-                        },
-                        {
-                          type: "string",
-                          const: "none",
-                        },
-                      ],
+                      type: "string",
                     },
                     model: {
                       type: "string",

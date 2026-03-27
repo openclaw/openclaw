@@ -12,7 +12,6 @@ import {
   isQmdScopeAllowed,
   listSessionFilesForAgent,
   parseQmdQueryJson,
-  requireNodeSqlite,
   resolveAgentWorkspaceDir,
   resolveCliSpawnInvocation,
   resolveGlobalSingleton,
@@ -32,7 +31,8 @@ import {
   type ResolvedQmdMcporterConfig,
   type SessionFileEntry,
   writeFileWithinRoot,
-} from "../api.js";
+} from "../engine-host-api.js";
+import { requireNodeSqlite } from "./sqlite.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
 
