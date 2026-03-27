@@ -733,6 +733,21 @@ export type ProviderPluginWizard = {
   modelPicker?: ProviderPluginWizardModelPicker;
 };
 
+export type ProviderOAuthProfileIdRepair = {
+  /**
+   * Legacy OAuth profile id to migrate away from.
+   *
+   * When omitted, OpenClaw falls back to `<provider>:default`.
+   */
+  legacyProfileId?: string;
+  /**
+   * Optional custom doctor prompt label.
+   *
+   * Defaults to the provider label when omitted.
+   */
+  promptLabel?: string;
+};
+
 export type ProviderModelSelectedContext = {
   config: OpenClawConfig;
   model: string;
@@ -989,6 +1004,14 @@ export type ProviderPlugin = {
    * in hardcoded doctor tables.
    */
   deprecatedProfileIds?: string[];
+  /**
+   * Legacy OAuth profile-id migrations that `openclaw doctor` should offer.
+   *
+   * Use this when a provider moved from a legacy default OAuth profile id to a
+   * newer identity-based id and wants doctor to own the config rewrite without
+   * another core-specific migration branch.
+   */
+  oauthProfileIdRepairs?: ProviderOAuthProfileIdRepair[];
   /**
    * Provider-owned OAuth refresh.
    *

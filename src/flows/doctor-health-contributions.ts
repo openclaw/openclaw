@@ -10,7 +10,7 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   maybeRemoveDeprecatedCliAuthProfiles,
-  maybeRepairAnthropicOAuthProfileId,
+  maybeRepairLegacyOAuthProfileIds,
   noteAuthProfileHealth,
 } from "../commands/doctor-auth.js";
 import { noteBootstrapFileSize } from "../commands/doctor-bootstrap-size.js";
@@ -136,7 +136,7 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  ctx.cfg = await maybeRepairAnthropicOAuthProfileId(ctx.cfg, ctx.prompter);
+  ctx.cfg = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
   ctx.cfg = await maybeRemoveDeprecatedCliAuthProfiles(ctx.cfg, ctx.prompter);
   await noteAuthProfileHealth({
     cfg: ctx.cfg,
