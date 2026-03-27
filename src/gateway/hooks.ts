@@ -348,10 +348,6 @@ export function normalizeHookDispatchSessionKey(params: {
   if (!parsed) {
     return trimmed;
   }
-  const targetAgentId = normalizeAgentId(params.targetAgentId);
-  if (parsed.agentId !== targetAgentId) {
-    return parsed.rest;
-  }
   return parsed.rest;
 }
 
