@@ -42,7 +42,7 @@ OpenClaw 将自动提供本地安装路径。
 1. 安装 Nextcloud Talk 插件。
 2. 在你的 Nextcloud 服务器上创建机器人：
    ```bash
-   ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature reaction
+   ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature webhook --feature response --feature reaction
    ```
 3. 在目标房间设置中启用机器人。
 4. 配置 OpenClaw：
@@ -68,6 +68,7 @@ OpenClaw 将自动提供本地安装路径。
 ## 注意事项
 
 - 机器人无法主动发起私信。用户必须先向机器人发送消息。
+- 如果入站 webhook 正常，但每次回复都返回 HTTP 401，请用 `--feature response` 重新注册机器人。缺少这个能力时，Nextcloud 会接收 webhook，但拒绝机器人向会话回消息。
 - Webhook URL 必须可被 Gateway 网关访问；如果在代理后面，请设置 `webhookPublicUrl`。
 - 机器人 API 不支持媒体上传；媒体以 URL 形式发送。
 - Webhook 载荷无法区分私信和房间；设置 `apiUser` + `apiPassword` 以启用房间类型查询（否则私信将被视为房间）。

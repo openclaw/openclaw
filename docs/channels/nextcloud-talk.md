@@ -36,7 +36,7 @@ Details: [Plugins](/tools/plugin)
 2. On your Nextcloud server, create a bot:
 
    ```bash
-   ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature reaction
+   ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature webhook --feature response --feature reaction
    ```
 
 3. Enable the bot in the target room settings.
@@ -63,6 +63,7 @@ Minimal config:
 ## Notes
 
 - Bots cannot initiate DMs. The user must message the bot first.
+- If inbound webhooks work but every reply fails with HTTP 401, re-register the bot with `--feature response`. Without it, Nextcloud accepts the webhook but rejects outbound bot messages.
 - Webhook URL must be reachable by the Gateway; set `webhookPublicUrl` if behind a proxy.
 - Media uploads are not supported by the bot API; media is sent as URLs.
 - The webhook payload does not distinguish DMs vs rooms; set `apiUser` + `apiPassword` to enable room-type lookups (otherwise DMs are treated as rooms).
