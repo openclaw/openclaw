@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  resolveConfiguredMatrixAccountIds,
-  resolveMatrixLegacyFlatStoragePaths,
-} from "../../extensions/matrix/runtime-api.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { writeJsonFileAtomically as writeJsonFileAtomicallyImpl } from "../plugin-sdk/json-store.js";
+import {
+  resolveConfiguredMatrixAccountIds,
+  resolveMatrixLegacyFlatStoragePaths,
+} from "../plugin-sdk/matrix.js";
 import {
   resolveLegacyMatrixFlatStoreTarget,
   resolveMatrixMigrationAccountTarget,
