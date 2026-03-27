@@ -1,14 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "../../../test/helpers/extensions/provider-registration.js";
 import { createProviderUsageFetch, makeResponse } from "../../test-utils/provider-usage-fetch.js";
 import type { ProviderPlugin, ProviderRuntimeModel } from "../types.js";
-import { requireProviderContractProvider as requireBundledProviderContractProvider } from "./registry.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
-const getOAuthApiKeyMock = vi.hoisted(() => vi.fn());
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 const getOAuthProvidersMock = vi.hoisted(() =>
   vi.fn(() => [
@@ -24,9 +26,8 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   );
   return {
     ...actual,
-    getOAuthApiKey: getOAuthApiKeyMock,
-    getOAuthProviders: getOAuthProvidersMock,
     refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
+    getOAuthProviders: getOAuthProvidersMock,
   };
 });
 
@@ -49,15 +50,102 @@ function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRun
   } satisfies ProviderRuntimeModel;
 }
 
+type ProviderRuntimeContractFixture = {
+  providerIds: string[];
+  pluginId: string;
+  name: string;
+  load: () => Promise<{ default: Parameters<typeof registerProviderPlugin>[0]["plugin"] }>;
+};
+
+const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixture[] = [
+  {
+    providerIds: ["anthropic"],
+    pluginId: "anthropic",
+    name: "Anthropic",
+    load: async () => await import("../../../extensions/anthropic/index.ts"),
+  },
+  {
+    providerIds: ["github-copilot"],
+    pluginId: "github-copilot",
+    name: "GitHub Copilot",
+    load: async () => await import("../../../extensions/github-copilot/index.ts"),
+  },
+  {
+    providerIds: ["google", "google-gemini-cli"],
+    pluginId: "google",
+    name: "Google",
+    load: async () => await import("../../../extensions/google/index.ts"),
+  },
+  {
+    providerIds: ["openai", "openai-codex"],
+    pluginId: "openai",
+    name: "OpenAI",
+    load: async () => await import("../../../extensions/openai/index.ts"),
+  },
+  {
+    providerIds: ["openrouter"],
+    pluginId: "openrouter",
+    name: "OpenRouter",
+    load: async () => await import("../../../extensions/openrouter/index.ts"),
+  },
+  {
+    providerIds: ["venice"],
+    pluginId: "venice",
+    name: "Venice",
+    load: async () => await import("../../../extensions/venice/index.ts"),
+  },
+  {
+    providerIds: ["xai"],
+    pluginId: "xai",
+    name: "xAI",
+    load: async () => await import("../../../extensions/xai/index.ts"),
+  },
+  {
+    providerIds: ["zai"],
+    pluginId: "zai",
+    name: "Z.AI",
+    load: async () => await import("../../../extensions/zai/index.ts"),
+  },
+] as const;
+
+const providerRuntimeContractProviders = new Map<string, ProviderPlugin>();
+
 function requireProviderContractProvider(providerId: string): ProviderPlugin {
-  return requireBundledProviderContractProvider(providerId);
+  const provider = providerRuntimeContractProviders.get(providerId);
+  if (!provider) {
+    throw new Error(`provider runtime contract fixture missing for ${providerId}`);
+  }
+  return provider;
 }
 
-describe("provider runtime contract", () => {
+describe("provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
+  beforeAll(async () => {
+    providerRuntimeContractProviders.clear();
+    const registeredFixtures = await Promise.all(
+      PROVIDER_RUNTIME_CONTRACT_FIXTURES.map(async (fixture) => {
+        const plugin = await fixture.load();
+        return {
+          fixture,
+          providers: registerProviderPlugin({
+            plugin: plugin.default,
+            id: fixture.pluginId,
+            name: fixture.name,
+          }).providers,
+        };
+      }),
+    );
+    for (const { fixture, providers } of registeredFixtures) {
+      for (const providerId of fixture.providerIds) {
+        providerRuntimeContractProviders.set(
+          providerId,
+          requireRegisteredProvider(providers, providerId, "provider"),
+        );
+      }
+    }
+  }, CONTRACT_SETUP_TIMEOUT_MS);
   beforeEach(() => {
-    getOAuthApiKeyMock.mockReset();
-    getOAuthProvidersMock.mockClear();
     refreshOpenAICodexTokenMock.mockReset();
+    getOAuthProvidersMock.mockClear();
   }, CONTRACT_SETUP_TIMEOUT_MS);
 
   describe("anthropic", () => {
@@ -528,6 +616,7 @@ describe("provider runtime contract", () => {
   describe("openai-codex", () => {
     it(
       "owns refresh fallback for accountId extraction failures",
+      { timeout: CONTRACT_SETUP_TIMEOUT_MS },
       async () => {
         const provider = requireProviderContractProvider("openai-codex");
         const credential = {
@@ -538,27 +627,12 @@ describe("provider runtime contract", () => {
           expires: Date.now() - 60_000,
         };
 
-        const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString(
-          "base64url",
+        refreshOpenAICodexTokenMock.mockRejectedValueOnce(
+          new Error("Failed to extract accountId from token"),
         );
-        const payload = Buffer.from(JSON.stringify({})).toString("base64url");
-        const accessTokenWithoutAccountId = `${header}.${payload}.sig`;
-        const originalFetch = globalThis.fetch;
-        globalThis.fetch = vi.fn(async () =>
-          makeResponse(200, {
-            access_token: accessTokenWithoutAccountId,
-            refresh_token: "refreshed-refresh-token",
-            expires_in: 3600,
-          }),
-        ) as typeof fetch;
 
-        try {
-          await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
-        } finally {
-          globalThis.fetch = originalFetch;
-        }
+        await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
       },
-      CONTRACT_SETUP_TIMEOUT_MS,
     );
 
     it("owns forward-compat codex models", () => {

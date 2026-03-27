@@ -17,7 +17,14 @@
    xmlns="http://www.w3.org/2000/svg"
    xmlns:svg="http://www.w3.org/2000/svg">
   <defs
-     id="defs1" />
+     id="defs1">
+    <style>
+      path[style*="fill:#ffffff"] { fill: #1b1f23 !important; }
+      @media (prefers-color-scheme: dark) {
+        path[style*="fill:#ffffff"] { fill: #ffffff !important; }
+      }
+    </style>
+  </defs>
   <sodipodi:namedview
      id="namedview1"
      pagecolor="#ffffff"

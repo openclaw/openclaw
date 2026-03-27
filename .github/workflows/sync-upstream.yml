@@ -1,0 +1,94 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    # 每 6 小时执行一次
+    - cron: '0 */1 * * *'
+  # 允许手动触发
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+          token: ${{ secrets.PAT || github.token }}
+      
+      - name: Sync and Merge Upstream
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          
+          # 添加上游仓库
+          git remote add upstream https://github.com/openclaw/openclaw.git
+          
+          # 拉取上游最新代码
+          git fetch upstream
+          
+          # 确保在 main 分支，并同步自己仓库远端可能由其他途径新增的 commit
+          git checkout main
+          git pull origin main --rebase
+          
+          # 尝试合并上游，并不自动提交，以便我们在有冲突时进行处理
+          # 使用 || true 防止有冲突时脚本直接退出
+          git merge upstream/main --no-commit --no-ff || true
+          
+          # --- 自动清理: 删除原仓库里不必要的工作流文件 (不论是否有冲突) ---
+          UNWANTED_WFS=".github/workflows/auto-response.yml .github/workflows/ci.yml .github/workflows/docker-release.yml .github/workflows/install-smoke.yml .github/workflows/labeler.yml .github/workflows/stale.yml"
+          for unwanted in $UNWANTED_WFS; do
+            git rm -f "$unwanted" 2>/dev/null || true
+          done
+          
+          # 删除其他所有未在白名单的 workflows
+          if ls .github/workflows/*.yml 1> /dev/null 2>&1; then
+            ls .github/workflows/*.yml | grep -v 'android-build.yml\|sync-upstream.yml' | xargs -I {} git rm -f {} 2>/dev/null || true
+          fi
+          
+          # 检查是否有冲突未解决 (U状态的文件)
+          if git ls-files -u | grep -q "^"; then
+            echo "Conflicts detected. Applying custom resolution strategies..."
+            
+            # --- 规则1: README.md 保留我们的版本 ---
+            if git ls-files -u | grep -q "README.md"; then
+              echo "Resolving README.md with --ours"
+              git checkout --ours README.md
+              git add README.md
+            fi
+            
+            # --- 规则2: 保留我们的核心工作流文件 ---
+            for wf in ".github/workflows/android-build.yml" ".github/workflows/sync-upstream.yml"; do
+              if git ls-files -u | grep -q "$wf"; then
+                echo "Resolving $wf with --ours"
+                git checkout --ours "$wf"
+                git add "$wf"
+              fi
+            done
+            
+            # --- 规则3: 其他所有的冲突文件接受上游（远程）版本 ---
+            REMAINING_CONFLICTS=$(git ls-files -u | awk '{print $4}' | sort -u)
+            if [ -n "$REMAINING_CONFLICTS" ]; then
+              IFS=$'\n'
+              for file in $REMAINING_CONFLICTS; do
+                echo "Resolving $file with --theirs"
+                git checkout --theirs "$file"
+                git add "$file"
+              done
+            fi
+          fi
+          
+          # 检查状态，并准备提交
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            # 提交合并结果
+            git commit -m "Auto-merge upstream with custom rules"
+            # 推送到你的 GitHub 仓库
+            git push origin main
+          fi

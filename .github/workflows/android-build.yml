@@ -1,0 +1,154 @@
+name: Android Build
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'apps/android/**'
+      - 'apps/shared/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x apps/android/gradlew
+
+      - name: Setup Gradle Cache
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: wrapper
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Validate Android Signing Secrets
+        run: |
+          missing=0
+          for secret_name in \
+            ANDROID_KEYSTORE_BASE64 \
+            ANDROID_KEYSTORE_PASSWORD \
+            ANDROID_KEY_ALIAS \
+            ANDROID_KEY_PASSWORD; do
+            if [ -z "${!secret_name}" ]; then
+              echo "Missing required secret: $secret_name"
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            echo "Android release build requires signing secrets configured in this fork repository."
+            exit 1
+          fi
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > apps/android/app/keystore.jks
+
+      - name: Setup Gradle Properties
+        run: |
+          mkdir -p ~/.gradle
+          echo "OPENCLAW_ANDROID_STORE_FILE=${GITHUB_WORKSPACE}/apps/android/app/keystore.jks" >> ~/.gradle/gradle.properties
+          echo "OPENCLAW_ANDROID_STORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> ~/.gradle/gradle.properties
+          echo "OPENCLAW_ANDROID_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> ~/.gradle/gradle.properties
+          echo "OPENCLAW_ANDROID_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> ~/.gradle/gradle.properties
+
+      - name: Build thirdParty Release APK
+        working-directory: ./apps/android
+        run: ./gradlew :app:assembleThirdPartyRelease --parallel --build-cache --configure-on-demand --no-daemon
+
+      - name: Prepare Release APK
+        id: apk
+        run: |
+          mkdir -p apps/android/app/build/outputs/apk/release
+          src_apk=$(find apps/android/app/build/outputs/apk/thirdParty/release -maxdepth 1 -type f -name '*.apk' | sort | head -n 1)
+          if [ -z "$src_apk" ]; then
+            echo "Expected thirdParty release APK was not found"
+            exit 1
+          fi
+
+          src_name=$(basename "$src_apk")
+          version_name=$(printf '%s\n' "$src_name" | sed -E 's/^openclaw-([0-9.]+)-thirdParty-release\.apk$/\1/')
+          if [ "$version_name" = "$src_name" ]; then
+            echo "Could not derive version name from APK filename: $src_name"
+            exit 1
+          fi
+
+          release_name="openclaw-${version_name}-release.apk"
+          release_path="apps/android/app/build/outputs/apk/release/${release_name}"
+          cp "$src_apk" "$release_path"
+
+          echo "apk_name=${release_name}" >> "$GITHUB_OUTPUT"
+          echo "apk_path=${release_path}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-android-apk
+          path: ${{ steps.apk.outputs.apk_path }}
+
+      - name: Generate Build Variables
+        id: vars
+        run: |
+          echo "tag_date=$(TZ='Asia/Shanghai' date +'%Y.%m.%d-%H%M')" >> $GITHUB_OUTPUT
+          echo "display_date=$(TZ='Asia/Shanghai' date +'%Y.%m.%d %H:%M') UTC+8" >> $GITHUB_OUTPUT
+          echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Generate Release Notes
+        id: notes
+        run: |
+          previous_tag=$(git tag --list 'apk-*' --sort=-creatordate | head -n 1)
+          if [ -n "$previous_tag" ]; then
+            range="${previous_tag}..HEAD"
+            range_note="Changes in apps/android since ${previous_tag}:"
+          else
+            range="HEAD"
+            range_note="Changes in apps/android included in this release:"
+          fi
+
+          android_changes=$(git log $range --no-merges --pretty=format:'- %s (%h)' -- apps/android)
+          if [ -z "$android_changes" ]; then
+            android_changes='- No apps/android changes found in this release range.'
+          fi
+
+          {
+            echo "body<<EOF"
+            echo "Automated Android signed release APK from commit ${{ github.sha }}."
+            echo
+            echo "$range_note"
+            echo "$android_changes"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create Release
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "apk-${{ steps.vars.outputs.tag_date }}-${{ steps.vars.outputs.short_sha }}"
+          name: "Android APK - ${{ steps.vars.outputs.display_date }}"
+          files: ${{ steps.apk.outputs.apk_path }}
+          body: ${{ steps.notes.outputs.body }}
+          draft: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
