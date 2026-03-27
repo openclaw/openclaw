@@ -241,7 +241,10 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       const batchId = `m${batchCounter}`;
       sendRaw(`BATCH +${batchId} draft/multiline ${normalizedTarget}`);
       for (const line of lines) {
-        socket.write(`@batch=${batchId} PRIVMSG ${normalizedTarget} :${line}\r\n`);
+        // Send empty lines as a single space to preserve paragraph breaks
+        // without sending invalid empty PRIVMSG (just `:` which some servers reject)
+        const content = line || " ";
+        socket.write(`@batch=${batchId} PRIVMSG ${normalizedTarget} :${content}\r\n`);
       }
       sendRaw(`BATCH -${batchId}`);
     } else {
