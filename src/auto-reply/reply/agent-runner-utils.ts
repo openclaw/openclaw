@@ -24,7 +24,12 @@ export function buildThreadingToolContext(params: {
   hasRepliedRef: { value: boolean } | undefined;
 }): ChannelThreadingToolContext {
   const { sessionCtx, config, hasRepliedRef } = params;
-  const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+  // For callback queries (e.g. Telegram inline keyboard), prefer the source message id
+  // over the callback query id stored in MessageSid.
+  const currentMessageId =
+    sessionCtx.CallbackMessageId != null
+      ? String(sessionCtx.CallbackMessageId)
+      : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid);
   const originProvider = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
     provider: sessionCtx.Provider,

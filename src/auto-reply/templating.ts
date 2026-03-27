@@ -81,6 +81,8 @@ export type MsgContext = {
   ForwardedFromChatType?: string;
   ForwardedFromMessageId?: number;
   ForwardedDate?: number;
+  /** Source message id for callback queries (e.g. Telegram inline keyboard callbacks). */
+  CallbackMessageId?: number;
   ThreadStarterBody?: string;
   /** Full thread history when starting a new thread session. */
   ThreadHistoryBody?: string;

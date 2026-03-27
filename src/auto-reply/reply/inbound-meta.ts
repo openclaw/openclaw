@@ -92,6 +92,10 @@ export function buildInboundUserContextPrefix(
 
   const conversationInfo = {
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
+    callback_message_id:
+      shouldIncludeConversationInfo && ctx.CallbackMessageId != null
+        ? ctx.CallbackMessageId
+        : undefined,
     reply_to_id: shouldIncludeConversationInfo ? safeTrim(ctx.ReplyToId) : undefined,
     sender_id: shouldIncludeConversationInfo ? safeTrim(ctx.SenderId) : undefined,
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
