@@ -643,6 +643,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           ? content.file
           : undefined;
       const finalMediaUrl = finalContentUrl ?? finalContentFile?.url;
+      const contentBody = typeof content.body === "string" ? content.body.trim() : "";
+      const contentFilename = typeof content.filename === "string" ? content.filename.trim() : "";
+      const originalFilename = contentFilename || contentBody || undefined;
       const contentInfo =
         "info" in content && content.info && typeof content.info === "object"
           ? (content.info as { mimetype?: string; size?: number })
@@ -658,6 +661,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             sizeBytes: contentSize,
             maxBytes: mediaMaxBytes,
             file: finalContentFile,
+            originalFilename,
           });
         } catch (err) {
           mediaDownloadFailed = true;
@@ -675,8 +679,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
       }
 
-      const rawBody =
-        locationPayload?.text ?? (typeof content.body === "string" ? content.body.trim() : "");
+      const rawBody = locationPayload?.text ?? contentBody;
       const bodyText = resolveMatrixInboundBodyText({
         rawBody,
         filename: typeof content.filename === "string" ? content.filename : undefined,
