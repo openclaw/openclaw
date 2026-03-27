@@ -563,7 +563,7 @@ Located in `src/channels/plugins/contracts/*.contract.test.ts`:
 - **directory** - Directory/roster API
 - **group-policy** - Group policy enforcement
 
-### Provider contracts
+### Provider status contracts
 
 Located in `src/plugins/contracts/*.contract.test.ts`.
 
