@@ -25,7 +25,7 @@ metadata:
 
 # OpenAI Whisper API (curl)
 
-Transcribe an audio file via OpenAI’s `/v1/audio/transcriptions` endpoint.
+Transcribe an audio file via OpenAI’s `/v1/audio/transcriptions` endpoint. Set `OPENAI_BASE_URL` to use an OpenAI-compatible proxy or local gateway.
 
 ## Quick start
 
@@ -48,6 +48,8 @@ Defaults:
 ```
 
 ## API key
+
+Set `OPENAI_API_KEY`. Optionally set `OPENAI_BASE_URL` (for example `http://127.0.0.1:51805/v1`) to use an OpenAI-compatible proxy or local gateway.
 
 Set `OPENAI_API_KEY`, or configure it in `~/.openclaw/openclaw.json`:
 
