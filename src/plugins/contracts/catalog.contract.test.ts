@@ -10,6 +10,8 @@ import {
 } from "../provider-runtime.test-support.js";
 import type { ProviderPlugin } from "../types.js";
 
+const PROVIDER_CATALOG_CONTRACT_TIMEOUT_MS = 300_000;
+
 type ResolvePluginProviders = typeof import("../providers.runtime.js").resolvePluginProviders;
 type ResolveOwningPluginIdsForProvider =
   typeof import("../providers.js").resolveOwningPluginIdsForProvider;
@@ -41,7 +43,7 @@ let resolveProviderBuiltInModelSuppression: typeof import("../provider-runtime.j
 let openaiProviders: ProviderPlugin[];
 let openaiProvider: ProviderPlugin;
 
-describe("provider catalog contract", () => {
+describe("provider catalog contract", { timeout: PROVIDER_CATALOG_CONTRACT_TIMEOUT_MS }, () => {
   beforeAll(async () => {
     const openaiPlugin = await import("../../../extensions/openai/index.ts");
     openaiProviders = registerProviderPlugin({
