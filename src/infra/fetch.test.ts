@@ -147,6 +147,21 @@ describe("wrapFetchWithAbortSignal", () => {
     }
   });
 
+  it("preserves the original fetch promise when adapting a foreign abort signal", async () => {
+    const fetchResult = Promise.resolve({ ok: true } as Response);
+    const fetchImpl = withFetchPreconnect(
+      vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => fetchResult),
+    );
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
+    const { fakeSignal, removeEventListener } = createForeignSignalHarness();
+
+    const wrappedResult = wrapped("https://example.com", { signal: fakeSignal });
+
+    expect(wrappedResult).toBe(fetchResult);
+    await expect(wrappedResult).resolves.toEqual({ ok: true });
+    expect(removeEventListener).toHaveBeenCalledOnce();
+  });
+
   it("preserves original rejection when listener cleanup throws", async () => {
     const fetchError = new TypeError("fetch failed");
     const cleanupError = new TypeError("cleanup failed");

@@ -76,7 +76,10 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
     };
     try {
       const response = fetchImpl(input, { ...patchedInit, signal: controller.signal });
-      return response.finally(cleanup);
+      // Preserve the original fetch promise and avoid creating a detached
+      // rejection chain while still cleaning up the bridged abort listener.
+      void response.then(cleanup, cleanup);
+      return response;
     } catch (error) {
       cleanup();
       throw error;
