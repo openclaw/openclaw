@@ -430,7 +430,7 @@ export function createSessionStatusTool(opts?: {
         : (runtimeProviderForCard ?? "");
       const defaultModelForCard = hasExplicitModelOverride
         ? configured.model
-        : (runtimeModelForCard || configured.model);
+        : runtimeModelForCard || configured.model;
       // Preserve the "provider unknown" case for legacy runtime-only sessions so the
       // status card does not synthesize a configured provider/model pair that never ran.
       const statusSessionEntry =
