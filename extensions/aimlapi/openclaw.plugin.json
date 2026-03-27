@@ -54,5 +54,8 @@
         }
       }
     }
+  },
+  "contracts": {
+    "webSearchProviders": ["aimlapi"]
   }
 }

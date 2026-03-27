@@ -199,6 +199,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "AI/ML API model override for web search.",
         },
       },
+      contracts: {
+        webSearchProviders: ["aimlapi"],
+      },
     },
   },
   {

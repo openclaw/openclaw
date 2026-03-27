@@ -1,3 +1,4 @@
+import { createAimlapiWebSearchProvider } from "../extensions/aimlapi/src/aimlapi-web-search-provider.js";
 import { createBraveWebSearchProvider } from "../extensions/brave/web-search-provider.js";
 import { createDuckDuckGoWebSearchProvider } from "../extensions/duckduckgo/web-search-provider.js";
 import { createExaWebSearchProvider } from "../extensions/exa/web-search-provider.js";
@@ -11,6 +12,7 @@ import type { PluginWebSearchProviderEntry } from "./plugins/types.js";
 
 export function listBundledWebSearchProviderEntries(): PluginWebSearchProviderEntry[] {
   return [
+    { pluginId: "aimlapi", ...createAimlapiWebSearchProvider() },
     { pluginId: "brave", ...createBraveWebSearchProvider() },
     { pluginId: "duckduckgo", ...createDuckDuckGoWebSearchProvider() },
     { pluginId: "exa", ...createExaWebSearchProvider() },
