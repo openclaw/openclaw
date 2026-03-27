@@ -4,4 +4,4 @@
 export {
   getMemorySearchManager,
   MemoryIndexManager,
-} from "../../extensions/memory-core/src/memory/index.js";
+} from "../../extensions/memory-core/runtime-api.js";

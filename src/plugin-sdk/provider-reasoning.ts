@@ -1,1 +1,1 @@
-export { isReasoningModelHeuristic } from "../../extensions/ollama/src/provider-models.js";
+export { isReasoningModelHeuristic } from "../../extensions/ollama/api.js";
