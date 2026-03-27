@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -2122,5 +2122,190 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       expect(store["agent:main:main"]).toBeDefined();
       expect(store["agent:codex:acp-task"]).toBeDefined();
     });
+  });
+});
+
+describe("listSessionsFromStore pre-apply limit optimization", () => {
+  const baseCfg = {
+    session: { mainKey: "main" },
+    agents: { list: [{ id: "main", default: true }] },
+  } as OpenClawConfig;
+
+  let tmpDir: string;
+  let storePath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-limit-preapply-"));
+    storePath = path.join(tmpDir, "sessions.json");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  function writeTranscript(sessionId: string, totalTokens: number) {
+    fs.writeFileSync(
+      path.join(tmpDir, `${sessionId}.jsonl`),
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: Math.floor(totalTokens / 2),
+              output: totalTokens - Math.floor(totalTokens / 2),
+            },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+  }
+
+  test("with limit and no search, only limited sessions' transcripts are read", () => {
+    const now = Date.now();
+    // Create 5 sessions that will trigger the transcript usage fallback
+    // (totalTokens: 0 forces fallback).
+    const store: Record<string, SessionEntry> = {};
+    for (let i = 0; i < 5; i++) {
+      const key = `agent:main:sess-${i}`;
+      const sessionId = `limit-preapply-${i}`;
+      store[key] = {
+        sessionId,
+        updatedAt: now - i * 1000, // sess-0 is most recent, sess-4 is oldest
+        totalTokens: 0,
+        totalTokensFresh: false,
+      } as SessionEntry;
+      writeTranscript(sessionId, 100 * (i + 1));
+    }
+
+    // Spy on fs.openSync to count how many transcript files are opened for reading.
+    const originalOpenSync = fs.openSync;
+    let transcriptReadCount = 0;
+    const _readSpy = vi.spyOn(fs, "openSync").mockImplementation((...args: unknown[]) => {
+      const filePath = String(args[0]);
+      if (
+        typeof filePath === "string" &&
+        filePath.includes("limit-preapply-") &&
+        filePath.endsWith(".jsonl")
+      ) {
+        transcriptReadCount++;
+      }
+      return originalOpenSync.apply(fs, args as Parameters<typeof fs.openSync>);
+    });
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath,
+      store,
+      opts: { limit: 2 },
+    });
+
+    // Should return exactly 2 sessions (the most recent by updatedAt).
+    expect(result.sessions).toHaveLength(2);
+    expect(result.sessions[0].key).toBe("agent:main:sess-0");
+    expect(result.sessions[1].key).toBe("agent:main:sess-1");
+
+    // Only 2 transcript files should have been stat'd (not all 5).
+    expect(transcriptReadCount).toBe(2);
+  });
+
+  test("with search present, all sessions are still processed", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {};
+    for (let i = 0; i < 5; i++) {
+      const key = `agent:main:search-sess-${i}`;
+      const sessionId = `search-preapply-${i}`;
+      store[key] = {
+        sessionId,
+        updatedAt: now - i * 1000,
+        displayName: i === 4 ? "target-needle" : `Session ${i}`,
+        totalTokens: 0,
+        totalTokensFresh: false,
+      } as SessionEntry;
+      writeTranscript(sessionId, 100 * (i + 1));
+    }
+
+    const originalOpenSync = fs.openSync;
+    let transcriptReadCount = 0;
+    const _readSpy = vi.spyOn(fs, "openSync").mockImplementation((...args: unknown[]) => {
+      const filePath = String(args[0]);
+      if (
+        typeof filePath === "string" &&
+        filePath.includes("search-preapply-") &&
+        filePath.endsWith(".jsonl")
+      ) {
+        transcriptReadCount++;
+      }
+      return originalOpenSync.apply(fs, args as Parameters<typeof fs.openSync>);
+    });
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath,
+      store,
+      opts: { search: "target-needle", limit: 2 },
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].key).toBe("agent:main:search-sess-4");
+
+    // All 5 transcript files should have been read because search bypasses pre-limit.
+    expect(transcriptReadCount).toBe(5);
+  });
+
+  test("activeMinutes filter is applied before transcript fallback reads", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {};
+    // Create 4 sessions: 2 within activeMinutes, 2 outside.
+    for (let i = 0; i < 4; i++) {
+      const key = `agent:main:active-sess-${i}`;
+      const sessionId = `active-preapply-${i}`;
+      // Sessions 0 and 1 are recent (within 5 minutes), sessions 2 and 3 are old.
+      const updatedAt = i < 2 ? now - i * 60_000 : now - 30 * 60_000 - i * 1000;
+      store[key] = {
+        sessionId,
+        updatedAt,
+        totalTokens: 0,
+        totalTokensFresh: false,
+      } as SessionEntry;
+      writeTranscript(sessionId, 100 * (i + 1));
+    }
+
+    const originalOpenSync = fs.openSync;
+    let transcriptReadCount = 0;
+    const _readSpy = vi.spyOn(fs, "openSync").mockImplementation((...args: unknown[]) => {
+      const filePath = String(args[0]);
+      if (
+        typeof filePath === "string" &&
+        filePath.includes("active-preapply-") &&
+        filePath.endsWith(".jsonl")
+      ) {
+        transcriptReadCount++;
+      }
+      return originalOpenSync.apply(fs, args as Parameters<typeof fs.openSync>);
+    });
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath,
+      store,
+      opts: { activeMinutes: 5 },
+    });
+
+    // Only the 2 recent sessions should be returned.
+    expect(result.sessions).toHaveLength(2);
+    expect(result.sessions.map((s) => s.key)).toEqual([
+      "agent:main:active-sess-0",
+      "agent:main:active-sess-1",
+    ]);
+
+    // Only 2 transcript files should have been stat'd (not all 4).
+    expect(transcriptReadCount).toBe(2);
   });
 });

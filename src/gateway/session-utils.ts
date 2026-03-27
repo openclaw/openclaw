@@ -1279,7 +1279,7 @@ export function listSessionsFromStore(params: {
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
 
-  let sessions = Object.entries(store)
+  let filteredEntries = Object.entries(store)
     .filter(([key]) => {
       if (isCronRunSessionKey(key)) {
         return false;
@@ -1322,7 +1322,30 @@ export function listSessionsFromStore(params: {
         return true;
       }
       return entry?.label === label;
-    })
+    });
+
+  // Pre-sort and limit when no search filter to avoid reading unused transcripts.
+  // updatedAt and activeMinutes are available directly on SessionEntry, so we can
+  // trim the working set before the expensive buildGatewaySessionRow calls that may
+  // trigger transcript file I/O for the usage fallback path.
+  if (
+    !search &&
+    (activeMinutes !== undefined || (typeof opts.limit === "number" && Number.isFinite(opts.limit)))
+  ) {
+    filteredEntries = filteredEntries.toSorted(
+      ([, a], [, b]) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0),
+    );
+    if (activeMinutes !== undefined) {
+      const cutoff = now - activeMinutes * 60_000;
+      filteredEntries = filteredEntries.filter(([, entry]) => (entry?.updatedAt ?? 0) >= cutoff);
+    }
+    if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
+      const limit = Math.max(1, Math.floor(opts.limit));
+      filteredEntries = filteredEntries.slice(0, limit);
+    }
+  }
+
+  let sessions = filteredEntries
     .map(([key, entry]) =>
       buildGatewaySessionRow({
         cfg,
