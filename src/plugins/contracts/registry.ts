@@ -120,6 +120,7 @@ function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContr
       bundledProviderAllowlistCompat: true,
       bundledProviderVitestCompat: true,
       onlyPluginIds: [pluginId],
+      pluginSdkResolution: "dist",
       cache: false,
       activate: false,
     }).map((provider) => ({
@@ -186,6 +187,7 @@ function loadWebSearchProviderContractRegistry(): WebSearchProviderContractEntry
   if (!webSearchProviderContractRegistryCache) {
     const registry = loadBundledCapabilityRuntimeRegistry({
       pluginIds: BUNDLED_WEB_SEARCH_PLUGIN_IDS,
+      pluginSdkResolution: "dist",
     });
     webSearchProviderContractRegistryCache = registry.webSearchProviders.map((entry) => ({
       pluginId: entry.pluginId,

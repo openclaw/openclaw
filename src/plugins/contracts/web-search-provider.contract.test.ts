@@ -1,18 +1,6 @@
-import { afterAll, describe, expect, it } from "vitest";
-
-const previousPreferDistPluginSdk = process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST;
-process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST = "1";
-
-const { webSearchProviderContractRegistry } = await import("./registry.js");
-const { installWebSearchProviderContractSuite } = await import("./suites.js");
-
-afterAll(() => {
-  if (previousPreferDistPluginSdk === undefined) {
-    delete process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST;
-  } else {
-    process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST = previousPreferDistPluginSdk;
-  }
-});
+import { describe, expect, it } from "vitest";
+import { webSearchProviderContractRegistry } from "./registry.js";
+import { installWebSearchProviderContractSuite } from "./suites.js";
 
 describe("web search provider contract registry load", () => {
   it("loads bundled web search providers", () => {

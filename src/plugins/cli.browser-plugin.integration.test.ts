@@ -1,13 +1,10 @@
 import { Command } from "commander";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { registerPluginCliCommands } from "./cli.js";
 import { clearPluginLoaderCache } from "./loader.js";
 import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
-
-const previousPreferDistPluginSdk = process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST;
-process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST = "1";
 
 function resetPluginState() {
   clearPluginLoaderCache();
@@ -24,37 +21,39 @@ describe("registerPluginCliCommands browser plugin integration", () => {
     resetPluginState();
   });
 
-  afterAll(() => {
-    if (previousPreferDistPluginSdk === undefined) {
-      delete process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST;
-    } else {
-      process.env.OPENCLAW_PLUGIN_SDK_PREFER_DIST = previousPreferDistPluginSdk;
-    }
-  });
-
   it("registers the browser command from the bundled browser plugin", () => {
     const program = new Command();
-    registerPluginCliCommands(program, {
-      plugins: {
-        allow: ["browser"],
-      },
-    } as OpenClawConfig);
+    registerPluginCliCommands(
+      program,
+      {
+        plugins: {
+          allow: ["browser"],
+        },
+      } as OpenClawConfig,
+      undefined,
+      { pluginSdkResolution: "dist" },
+    );
 
     expect(program.commands.map((command) => command.name())).toContain("browser");
   });
 
   it("omits the browser command when the bundled browser plugin is disabled", () => {
     const program = new Command();
-    registerPluginCliCommands(program, {
-      plugins: {
-        allow: ["browser"],
-        entries: {
-          browser: {
-            enabled: false,
+    registerPluginCliCommands(
+      program,
+      {
+        plugins: {
+          allow: ["browser"],
+          entries: {
+            browser: {
+              enabled: false,
+            },
           },
         },
-      },
-    } as OpenClawConfig);
+      } as OpenClawConfig,
+      undefined,
+      { pluginSdkResolution: "dist" },
+    );
 
     expect(program.commands.map((command) => command.name())).not.toContain("browser");
   });

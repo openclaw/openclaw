@@ -25,11 +25,13 @@ export function buildBundledCapabilityRuntimeConfig(
 export function loadBundledCapabilityRuntimeRegistry(params: {
   pluginIds: readonly string[];
   env?: PluginLoadOptions["env"];
+  pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
 }) {
   return loadOpenClawPlugins({
     config: buildBundledCapabilityRuntimeConfig(params.pluginIds, params.env),
     env: params.env,
     onlyPluginIds: [...params.pluginIds],
+    pluginSdkResolution: params.pluginSdkResolution,
     cache: false,
     activate: false,
     logger: {
