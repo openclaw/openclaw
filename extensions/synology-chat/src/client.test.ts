@@ -249,3 +249,42 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
     expect(httpsGet).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("fetchChatUsers", () => {
+  installFakeTimerHarness();
+
+  it("filters malformed user entries while keeping valid ones", async () => {
+    const httpsGet = vi.mocked((https as any).get);
+    httpsGet.mockImplementation((_url: any, _opts: any, callback: any) => {
+      const res = new EventEmitter() as any;
+      res.statusCode = 200;
+      process.nextTick(() => {
+        callback(res);
+        res.emit(
+          "data",
+          Buffer.from(
+            JSON.stringify({
+              success: true,
+              data: {
+                users: [
+                  { user_id: 4, username: "jmn67", nickname: "jmn" },
+                  { user_id: "bad", username: "broken" },
+                ],
+              },
+            }),
+          ),
+        );
+        res.emit("end");
+      });
+      const req = new EventEmitter() as any;
+      req.destroy = vi.fn();
+      return req;
+    });
+
+    const users = await fetchChatUsers(
+      "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test%22",
+    );
+
+    expect(users).toEqual([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
+  });
+});

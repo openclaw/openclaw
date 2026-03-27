@@ -81,6 +81,7 @@ async function runMattermostReaction(
     baseUrl,
     botToken,
     fetchImpl: params.fetchImpl,
+    allowPrivateNetwork: resolved.config?.allowPrivateNetwork === true,
   });
 
   const cacheKey = `${baseUrl}:${botToken}`;

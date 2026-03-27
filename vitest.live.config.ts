@@ -13,7 +13,7 @@ export default defineConfig({
     // Vitest's buffered per-test console capture.
     disableConsoleIntercept: true,
     maxWorkers: 1,
-    include: ["src/**/*.live.test.ts"],
+    include: ["src/**/*.live.test.ts", "extensions/**/*.live.test.ts"],
     exclude,
   },
 });

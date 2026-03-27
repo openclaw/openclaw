@@ -11,7 +11,6 @@ export function loadIncludePatternsFromEnv(
 export function createChannelsVitestConfig(env?: Record<string, string | undefined>) {
   return createScopedVitestConfig(loadIncludePatternsFromEnv(env) ?? channelTestInclude, {
     env,
-    pool: "threads",
     exclude: ["src/gateway/**"],
     passWithNoTests: true,
   });

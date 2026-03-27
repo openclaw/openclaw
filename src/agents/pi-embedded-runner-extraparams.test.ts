@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createConfiguredOllamaCompatNumCtxWrapper } from "../../extensions/ollama/src/stream.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import {
   createOpenRouterSystemCacheWrapper,
@@ -54,6 +55,9 @@ beforeEach(() => {
       };
     },
     wrapProviderStreamFn: (params) => {
+      if (params.provider === "ollama") {
+        return createConfiguredOllamaCompatNumCtxWrapper(params.context);
+      }
       if (params.provider !== "openrouter") {
         return params.context.streamFn;
       }
@@ -1940,20 +1944,20 @@ describe("applyExtraParamsToAgent", () => {
     expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
   });
 
-  it("maps MiniMax M2.1 /fast to the matching highspeed model", () => {
+  it("maps MiniMax M2.7 /fast to the matching highspeed model", () => {
     const resolvedModelId = runResolvedModelIdCase({
       applyProvider: "minimax",
-      applyModelId: "MiniMax-M2.1",
+      applyModelId: "MiniMax-M2.7",
       extraParamsOverride: { fastMode: true },
       model: {
         api: "anthropic-messages",
         provider: "minimax",
-        id: "MiniMax-M2.1",
+        id: "MiniMax-M2.7",
         baseUrl: "https://api.minimax.io/anthropic",
       } as Model<"anthropic-messages">,
     });
 
-    expect(resolvedModelId).toBe("MiniMax-M2.1-highspeed");
+    expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
   });
 
   it("keeps explicit MiniMax highspeed models unchanged when /fast is off", () => {

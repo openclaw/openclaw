@@ -1,6 +1,7 @@
 import { VERSION } from "../version.js";
 import type { ConfigUiHints } from "./schema.hints.js";
 import { buildBaseHints, mapSensitivePaths } from "./schema.hints.js";
+import { asSchemaObject, cloneSchema } from "./schema.shared.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -12,6 +13,9 @@ type JsonSchemaObject = Record<string, unknown> & {
   additionalProperties?: JsonSchemaObject | boolean;
 };
 
+const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
+  asSchemaObject<JsonSchemaObject>(value);
+
 export type BaseConfigSchemaResponse = {
   schema: ConfigSchema;
   uiHints: ConfigUiHints;
@@ -21,23 +25,9 @@ export type BaseConfigSchemaResponse = {
 
 type BaseConfigSchemaStablePayload = Omit<BaseConfigSchemaResponse, "generatedAt">;
 
-function cloneSchema<T>(value: T): T {
-  if (typeof structuredClone === "function") {
-    return structuredClone(value);
-  }
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
-function asSchemaObject(value: unknown): JsonSchemaObject | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as JsonSchemaObject;
-}
-
 function stripChannelSchema(schema: ConfigSchema): ConfigSchema {
   const next = cloneSchema(schema);
-  const root = asSchemaObject(next);
+  const root = asJsonSchemaObject(next);
   if (!root || !root.properties) {
     return next;
   }
@@ -47,7 +37,7 @@ function stripChannelSchema(schema: ConfigSchema): ConfigSchema {
   if (Array.isArray(root.required)) {
     root.required = root.required.filter((key) => key !== "$schema");
   }
-  const channelsNode = asSchemaObject(root.properties.channels);
+  const channelsNode = asJsonSchemaObject(root.properties.channels);
   if (channelsNode) {
     channelsNode.properties = {};
     channelsNode.required = [];
