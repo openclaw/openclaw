@@ -1,7 +1,13 @@
 import OpenAI from "openai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
+
+const getCodexOAuthApiKeyMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./openai-codex-provider.runtime.js", () => ({
+  getOAuthApiKey: getCodexOAuthApiKeyMock,
+}));
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const DEFAULT_LIVE_MODEL_IDS = ["gpt-5.4-mini", "gpt-5.4-nano"] as const;
@@ -221,6 +227,24 @@ describe("buildOpenAIProvider", () => {
         modelId: "gpt-5.4",
       } as never),
     ).toBe(true);
+  });
+
+  it("falls back to cached codex oauth credentials on accountId extraction failures", async () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const credential = {
+      type: "oauth" as const,
+      provider: "openai-codex",
+      access: "cached-access-token",
+      refresh: "refresh-token",
+      expires: Date.now() - 60_000,
+    };
+
+    getCodexOAuthApiKeyMock.mockReset();
+    getCodexOAuthApiKeyMock.mockRejectedValueOnce(
+      new Error("Failed to extract accountId from token"),
+    );
+
+    await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
   });
 });
 
