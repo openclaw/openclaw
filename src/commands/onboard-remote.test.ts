@@ -156,6 +156,71 @@ describe("promptRemoteGatewayConfig", () => {
     );
   });
 
+  it("trusts discovery endpoint without fingerprint and omits tlsFingerprint", async () => {
+    detectBinary.mockResolvedValue(true);
+    discoverGatewayBeacons.mockResolvedValue([
+      {
+        instanceName: "gw",
+        displayName: "Gateway",
+        host: "gw.example",
+        port: 18789,
+      },
+    ]);
+
+    const text: WizardPrompter["text"] = vi.fn(async (params) => {
+      if (params.message === "Gateway WebSocket URL") {
+        return String(params.initialValue);
+      }
+      return "";
+    }) as WizardPrompter["text"];
+
+    const { next } = await runRemotePrompt({
+      text,
+      confirm: true,
+      selectResponses: {
+        "Select gateway": "0",
+        "Connection method": "direct",
+        "Gateway auth": "off",
+      },
+    });
+
+    expect(next.gateway?.remote?.url).toBe("wss://gw.example:18789");
+    expect(next.gateway?.remote?.tlsFingerprint).toBeUndefined();
+  });
+
+  it("drops discovery tlsFingerprint when the URL is edited after trust confirmation", async () => {
+    detectBinary.mockResolvedValue(true);
+    discoverGatewayBeacons.mockResolvedValue([
+      {
+        instanceName: "gateway",
+        displayName: "Gateway",
+        host: "gateway.tailnet.ts.net",
+        port: 18789,
+        gatewayTlsFingerprintSha256: "sha256:abc123",
+      },
+    ]);
+
+    const text: WizardPrompter["text"] = vi.fn(async (params) => {
+      if (params.message === "Gateway WebSocket URL") {
+        return "wss://other.example:443";
+      }
+      return "";
+    }) as WizardPrompter["text"];
+
+    const { next } = await runRemotePrompt({
+      text,
+      confirm: true,
+      selectResponses: {
+        "Select gateway": "0",
+        "Connection method": "direct",
+        "Gateway auth": "off",
+      },
+    });
+
+    expect(next.gateway?.remote?.url).toBe("wss://other.example:443");
+    expect(next.gateway?.remote?.tlsFingerprint).toBeUndefined();
+  });
+
   it("does not route from TXT-only discovery metadata", async () => {
     detectBinary.mockResolvedValue(true);
     discoverGatewayBeacons.mockResolvedValue([

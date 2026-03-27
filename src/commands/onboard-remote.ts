@@ -53,6 +53,7 @@ export async function promptRemoteGatewayConfig(
   let selectedBeacon: GatewayBonjourBeacon | null = null;
   let suggestedUrl = cfg.gateway?.remote?.url ?? DEFAULT_GATEWAY_URL;
   let discoveryTlsFingerprint: string | undefined;
+  let trustedDiscoveryUrl: string | undefined;
 
   const hasBonjourTool = (await detectBinary("dns-sd")) || (await detectBinary("avahi-browse"));
   const wantsDiscover = hasBonjourTool
@@ -125,6 +126,7 @@ export async function promptRemoteGatewayConfig(
           );
         }
         discoveryTlsFingerprint = fingerprint;
+        trustedDiscoveryUrl = suggestedUrl;
         await prompter.note(
           [
             "Direct remote access defaults to TLS.",
@@ -154,6 +156,8 @@ export async function promptRemoteGatewayConfig(
     validate: (value) => validateGatewayWebSocketUrl(String(value)),
   });
   const url = ensureWsUrl(String(urlInput));
+  const pinnedDiscoveryFingerprint =
+    discoveryTlsFingerprint && url === trustedDiscoveryUrl ? discoveryTlsFingerprint : undefined;
 
   const authChoice = await prompter.select({
     message: "Gateway auth",
@@ -244,7 +248,7 @@ export async function promptRemoteGatewayConfig(
         url,
         ...(token !== undefined ? { token } : {}),
         ...(password !== undefined ? { password } : {}),
-        ...(discoveryTlsFingerprint ? { tlsFingerprint: discoveryTlsFingerprint } : {}),
+        ...(pinnedDiscoveryFingerprint ? { tlsFingerprint: pinnedDiscoveryFingerprint } : {}),
       },
     },
   };
