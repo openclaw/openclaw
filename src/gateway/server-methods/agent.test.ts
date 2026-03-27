@@ -739,13 +739,12 @@ describe("gateway agent handler", () => {
           updatedAt: Date.now(),
         },
       };
-      return await updater(store);
+      const updated = await updater(store);
+      context.chatAbortControllers.set(runId, collisionEntry);
+      return updated;
     });
     mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
-    mocks.replaceSubagentRunAfterSteer.mockImplementationOnce(() => {
-      context.chatAbortControllers.set(runId, collisionEntry);
-      return true;
-    });
+    mocks.replaceSubagentRunAfterSteer.mockClear();
     mocks.agentCommand.mockClear();
     mocks.registerAgentRunContext.mockClear();
     const respond = vi.fn();
@@ -771,6 +770,7 @@ describe("gateway agent handler", () => {
     );
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mocks.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
     expect(mocks.registerAgentRunContext).not.toHaveBeenCalled();
     expect(registerToolEventRecipient).not.toHaveBeenCalled();
     expect(context.chatAbortControllers.get(runId)).toBe(collisionEntry);

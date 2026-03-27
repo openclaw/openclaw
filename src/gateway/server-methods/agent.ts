@@ -186,7 +186,7 @@ function dispatchAgentRunFromGateway(params: {
   ownerDeviceId?: string;
   cfg?: Parameters<typeof resolveAgentTimeoutMs>[0]["cfg"];
   onDispatchReady?: () => void;
-}) {
+}): boolean {
   const controller = new AbortController();
   const registeredAbortController = Boolean(params.sessionKey);
   const clearAcceptedDedupeIfOwned = () => {
@@ -219,7 +219,7 @@ function dispatchAgentRunFromGateway(params: {
         summary: error.message,
       };
       params.respond(false, payload, error, { runId: params.runId });
-      return;
+      return false;
     }
     const isSubagentLane =
       typeof params.ingressOpts.lane === "string" &&
@@ -304,6 +304,7 @@ function dispatchAgentRunFromGateway(params: {
         error: formatForLog(err),
       });
     });
+  return true;
 }
 
 export const agentHandlers: GatewayRequestHandlers = {
@@ -786,29 +787,9 @@ export const agentHandlers: GatewayRequestHandlers = {
     });
     respond(true, accepted, undefined, { runId });
 
-    if (resolvedSessionKey) {
-      await reactivateCompletedSubagentSession({
-        sessionKey: resolvedSessionKey,
-        runId,
-      });
-    }
-
-    if (requestedSessionKey && resolvedSessionKey && isNewSession) {
-      emitSessionsChanged(context, {
-        sessionKey: resolvedSessionKey,
-        reason: "create",
-      });
-    }
-    if (resolvedSessionKey) {
-      emitSessionsChanged(context, {
-        sessionKey: resolvedSessionKey,
-        reason: "send",
-      });
-    }
-
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
-    dispatchAgentRunFromGateway({
+    const dispatched = dispatchAgentRunFromGateway({
       ingressOpts: {
         message,
         images,
@@ -871,6 +852,29 @@ export const agentHandlers: GatewayRequestHandlers = {
             }
           : undefined,
     });
+    if (!dispatched) {
+      return;
+    }
+
+    if (resolvedSessionKey) {
+      await reactivateCompletedSubagentSession({
+        sessionKey: resolvedSessionKey,
+        runId,
+      });
+    }
+
+    if (requestedSessionKey && resolvedSessionKey && isNewSession) {
+      emitSessionsChanged(context, {
+        sessionKey: resolvedSessionKey,
+        reason: "create",
+      });
+    }
+    if (resolvedSessionKey) {
+      emitSessionsChanged(context, {
+        sessionKey: resolvedSessionKey,
+        reason: "send",
+      });
+    }
   },
   "agent.identity.get": ({ params, respond }) => {
     if (!validateAgentIdentityParams(params)) {
