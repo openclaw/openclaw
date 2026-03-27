@@ -201,7 +201,7 @@ describe("TelegramPollingSession", () => {
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
   });
 
-  it("forces a restart when polling stalls without getUpdates activity", async () => {
+  it("forces a restart when polling startup stalls before first getUpdates", async () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);
     const firstRunnerStop = vi.fn(async () => undefined);
@@ -268,7 +268,9 @@ describe("TelegramPollingSession", () => {
       expect(runMock).toHaveBeenCalledTimes(2);
       expect(firstRunnerStop).toHaveBeenCalledTimes(1);
       expect(botStop).toHaveBeenCalled();
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining("Polling startup stalled before first getUpdates"),
+      );
       expect(log).toHaveBeenCalledWith(expect.stringContaining("polling stall detected"));
     } finally {
       watchdogHarness.restore();
