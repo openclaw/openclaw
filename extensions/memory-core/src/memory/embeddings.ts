@@ -12,7 +12,10 @@ import {
   type MemoryEmbeddingProviderCreateOptions,
   type MemoryEmbeddingProviderRuntime,
 } from "../engine-host-api.js";
-import { canAutoSelectLocal } from "./provider-adapters.js";
+import {
+  canAutoSelectLocal,
+  getBuiltinMemoryEmbeddingProviderAdapter,
+} from "./provider-adapters.js";
 
 export {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
@@ -90,6 +93,15 @@ function resolveProviderModel(
     return trimmed;
   }
   return adapter.defaultModel ?? "";
+}
+
+export function resolveEmbeddingProviderFallbackModel(
+  providerId: string,
+  fallbackSourceModel: string,
+): string {
+  const adapter =
+    getMemoryEmbeddingProvider(providerId) ?? getBuiltinMemoryEmbeddingProviderAdapter(providerId);
+  return adapter?.defaultModel ?? fallbackSourceModel;
 }
 
 async function createWithAdapter(
