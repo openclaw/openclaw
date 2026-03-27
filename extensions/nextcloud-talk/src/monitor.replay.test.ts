@@ -1,10 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockIncomingRequest } from "../../../test/helpers/mock-incoming-request.js";
-import { readNextcloudTalkWebhookBody } from "./monitor.js";
+import { WEBHOOK_RATE_LIMIT_DEFAULTS } from "../runtime-api.js";
+import {
+  clearNextcloudTalkWebhookSecurityStateForTest,
+  readNextcloudTalkWebhookBody,
+} from "./monitor.js";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
 import type { NextcloudTalkInboundMessage } from "./types.js";
+
+beforeEach(() => {
+  clearNextcloudTalkWebhookSecurityStateForTest();
+});
 
 describe("readNextcloudTalkWebhookBody", () => {
   it("reads valid body within max bytes", async () => {
@@ -143,5 +151,32 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Invalid payload format" });
+  });
+});
+
+describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
+  it("rate limits repeated invalid signature attempts from the same source", async () => {
+    const harness = await startWebhookServer({
+      path: "/nextcloud-auth-rate-limit",
+      onMessage: vi.fn(),
+    });
+    const { body, headers } = createSignedCreateMessageRequest();
+    const invalidHeaders = {
+      ...headers,
+      "x-nextcloud-talk-signature": "invalid-signature",
+    };
+
+    let lastResponse: Response | undefined;
+    for (let attempt = 0; attempt <= WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests; attempt += 1) {
+      lastResponse = await fetch(harness.webhookUrl, {
+        method: "POST",
+        headers: invalidHeaders,
+        body,
+      });
+    }
+
+    expect(lastResponse).toBeDefined();
+    expect(lastResponse?.status).toBe(429);
+    expect(await lastResponse?.text()).toBe("Too Many Requests");
   });
 });

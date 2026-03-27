@@ -6,6 +6,9 @@ import {
 } from "openclaw/plugin-sdk/extension-shared";
 import { z } from "zod";
 import {
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+  applyBasicWebhookRequestGuards,
+  createFixedWindowRateLimiter,
   type RuntimeEnv,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
@@ -32,6 +35,11 @@ const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 const PREAUTH_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 const PREAUTH_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 const HEALTH_PATH = "/healthz";
+const webhookAuthRateLimiter = createFixedWindowRateLimiter({
+  windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
+  maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
+  maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
+});
 const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> = z.object({
   type: z.enum(["Create", "Update", "Delete"]),
   actor: z.object({
@@ -188,6 +196,10 @@ export function readNextcloudTalkWebhookBody(
   });
 }
 
+export function clearNextcloudTalkWebhookSecurityStateForTest(): void {
+  webhookAuthRateLimiter.clear();
+}
+
 export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServerOptions): {
   server: Server;
   start: () => Promise<void>;
@@ -214,6 +226,18 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
     if (req.url !== path || req.method !== "POST") {
       res.writeHead(404);
       res.end();
+      return;
+    }
+
+    const clientIp = req.socket.remoteAddress ?? "unknown";
+    if (
+      !applyBasicWebhookRequestGuards({
+        req,
+        res,
+        rateLimiter: webhookAuthRateLimiter,
+        rateLimitKey: `${path}:${clientIp}`,
+      })
+    ) {
       return;
     }
 

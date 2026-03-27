@@ -70,10 +70,13 @@ export {
   requireOpenAllowFrom,
 } from "../config/zod-schema.core.js";
 export {
+  applyBasicWebhookRequestGuards,
+  createFixedWindowRateLimiter,
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "../infra/http-body.js";
+} from "./webhook-ingress.js";
 export { waitForAbortSignal } from "../infra/abort-signal.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
