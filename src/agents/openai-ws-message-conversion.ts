@@ -548,7 +548,7 @@ export function buildAssistantMessageFromResponse(
     usage: buildUsageWithNoCost({
       input: normalizedUsage?.input ?? 0,
       output: normalizedUsage?.output ?? 0,
-      totalTokens: normalizedUsage?.total ?? response.usage?.total_tokens ?? 0,
+      totalTokens: normalizedUsage?.total ?? 0,
     }),
   });
 
