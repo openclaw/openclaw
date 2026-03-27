@@ -16,6 +16,7 @@ function makeRepoRoot(prefix: string): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0, tempDirs.length)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -259,6 +260,49 @@ describe("stageBundledPluginRuntime", () => {
     expect(fs.lstatSync(runtimeManifestPath).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(runtimeManifestPath, "utf8")).toBe("{}\n");
     expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("ok\n");
+  });
+
+  it("copies file artifacts when Windows denies runtime file symlinks", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-assets-win-");
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "diffs");
+    const runtimeAssetPath = path.join(
+      repoRoot,
+      "dist-runtime",
+      "extensions",
+      "diffs",
+      "assets",
+      "info.txt",
+    );
+    fs.mkdirSync(path.join(distPluginDir, "assets"), { recursive: true });
+    fs.writeFileSync(
+      path.join(distPluginDir, "package.json"),
+      JSON.stringify(
+        { name: "@openclaw/diffs", openclaw: { extensions: ["./index.js"] } },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(distPluginDir, "openclaw.plugin.json"), "{}\n", "utf8");
+    fs.writeFileSync(path.join(distPluginDir, "assets", "info.txt"), "ok\n", "utf8");
+
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const originalSymlinkSync = fs.symlinkSync.bind(fs);
+    vi.spyOn(fs, "symlinkSync").mockImplementation((target, pathLike, type) => {
+      if (String(pathLike) === runtimeAssetPath) {
+        const error = new Error("symlink denied");
+        Object.assign(error, { code: "EPERM" });
+        throw error;
+      }
+      return originalSymlinkSync(target, pathLike, type);
+    });
+
+    stageBundledPluginRuntime({ repoRoot });
+
+    expect(platformSpy).toBeDefined();
+    expect(fs.existsSync(runtimeAssetPath)).toBe(true);
+    expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("ok\n");
   });
 

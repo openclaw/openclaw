@@ -34,8 +34,46 @@ function ensureSymlink(targetValue, targetPath, type) {
   fs.symlinkSync(targetValue, targetPath, type);
 }
 
+function tryFallbackCopyFileOnWindows(sourcePath, targetPath, type, error) {
+  if (process.platform !== "win32") {
+    throw error;
+  }
+  if (type === "dir" || type === "junction") {
+    throw error;
+  }
+  if (error?.code !== "EPERM" && error?.code !== "EACCES") {
+    throw error;
+  }
+
+  let sourceStat;
+  try {
+    sourceStat = fs.statSync(sourcePath);
+  } catch {
+    throw error;
+  }
+  if (!sourceStat.isFile()) {
+    throw error;
+  }
+
+  removePathIfExists(targetPath);
+  fs.copyFileSync(sourcePath, targetPath);
+}
+
+function ensureSymlinkOrCopyFile(sourcePath, targetValue, targetPath, type) {
+  try {
+    ensureSymlink(targetValue, targetPath, type);
+  } catch (error) {
+    tryFallbackCopyFileOnWindows(sourcePath, targetPath, type, error);
+  }
+}
+
 function symlinkPath(sourcePath, targetPath, type) {
-  ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
+  ensureSymlinkOrCopyFile(
+    sourcePath,
+    relativeSymlinkTarget(sourcePath, targetPath),
+    targetPath,
+    type,
+  );
 }
 
 function shouldWrapRuntimeJsFile(sourcePath) {
@@ -85,7 +123,7 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir) {
     }
 
     if (dirent.isSymbolicLink()) {
-      ensureSymlink(fs.readlinkSync(sourcePath), targetPath);
+      ensureSymlinkOrCopyFile(sourcePath, fs.readlinkSync(sourcePath), targetPath);
       continue;
     }
 
