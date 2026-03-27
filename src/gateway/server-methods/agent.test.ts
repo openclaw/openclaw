@@ -551,6 +551,77 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("returns cached accepted for same runId retries while the first request is preparing", async () => {
+    const runId = "run-preparing-retry";
+    primeMainAgentRun();
+    const context = makeContext();
+    const firstRespond = vi.fn();
+    const retryRespond = vi.fn();
+    const storeDeferred = createDeferred<Record<string, unknown> | undefined>();
+
+    mocks.updateSessionStore.mockImplementationOnce(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry(),
+      };
+      const updated = await updater(store);
+      await storeDeferred.promise;
+      return updated;
+    });
+
+    const firstPromise = invokeAgent(
+      {
+        message: "prepare",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      {
+        reqId: `${runId}-first`,
+        respond: firstRespond,
+        context,
+      },
+    );
+
+    await waitForAssertion(() => {
+      expect(context.dedupe.get(`agent:${runId}`)?.payload).toEqual(
+        expect.objectContaining({
+          runId,
+          status: "accepted",
+        }),
+      );
+      expect(context.chatAbortControllers.get(runId)?.sessionKey).toBe("agent:main:main");
+    });
+
+    await invokeAgent(
+      {
+        message: "prepare",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      {
+        reqId: `${runId}-retry`,
+        respond: retryRespond,
+        context,
+      },
+    );
+
+    expect(mocks.updateSessionStore).toHaveBeenCalledTimes(1);
+    expect(retryRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId,
+        status: "accepted",
+      }),
+      undefined,
+      { cached: true },
+    );
+
+    storeDeferred.resolve({
+      sessionId: "existing-session-id",
+      updatedAt: Date.now(),
+    });
+    await firstPromise;
+  });
+
   it("preserves abort-entry grace for timeouts longer than 24 hours", async () => {
     vi.useFakeTimers();
     try {

@@ -494,10 +494,21 @@ export const agentHandlers: GatewayRequestHandlers = {
     let skipTimestampInjection = false;
     let onRunDispatchReady: (() => void) | undefined;
     const runId = idem;
+    const accepted = {
+      runId,
+      status: "accepted" as const,
+      acceptedAt: Date.now(),
+    };
     const ownerConnId = typeof client?.connId === "string" ? client.connId : undefined;
     const ownerDeviceId =
       typeof client?.connect?.device?.id === "string" ? client.connect.device.id : undefined;
     const claimedAbortController = requestedSessionKey ? new AbortController() : undefined;
+    const clearAcceptedDedupeIfOwned = () => {
+      const current = context.dedupe.get(`agent:${idem}`);
+      if (current?.payload === accepted) {
+        context.dedupe.delete(`agent:${idem}`);
+      }
+    };
     const clearClaimedAbortControllerIfOwned = () => {
       if (!claimedAbortController) {
         return;
@@ -535,6 +546,15 @@ export const agentHandlers: GatewayRequestHandlers = {
         ownerConnId,
         ownerDeviceId,
         cfg,
+      });
+      setGatewayDedupeEntry({
+        dedupe: context.dedupe,
+        key: `agent:${idem}`,
+        entry: {
+          ts: Date.now(),
+          ok: true,
+          payload: accepted,
+        },
       });
     }
 
@@ -798,21 +818,19 @@ export const agentHandlers: GatewayRequestHandlers = {
 
       const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
 
-      const accepted = {
-        runId,
-        status: "accepted" as const,
-        acceptedAt: Date.now(),
-      };
       // Store an in-flight ack so retries do not spawn a second run.
-      setGatewayDedupeEntry({
-        dedupe: context.dedupe,
-        key: `agent:${idem}`,
-        entry: {
-          ts: Date.now(),
-          ok: true,
-          payload: accepted,
-        },
-      });
+      // Session-backed runs prime this entry earlier, before async reset/store work.
+      if (!claimedAbortController) {
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key: `agent:${idem}`,
+          entry: {
+            ts: Date.now(),
+            ok: true,
+            payload: accepted,
+          },
+        });
+      }
       respond(true, accepted, undefined, { runId });
 
       const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
@@ -902,6 +920,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     } finally {
       if (!dispatchStarted) {
+        clearAcceptedDedupeIfOwned();
         clearClaimedAbortControllerIfOwned();
       }
     }
