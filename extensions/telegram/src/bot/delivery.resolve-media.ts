@@ -20,11 +20,17 @@ const GrammyErrorCtor: typeof GrammyError | undefined =
 
 function buildTelegramMediaSsrfPolicy(apiRoot?: string) {
   const hostnames = ["api.telegram.org"];
+  let allowedHostnames: string[] | undefined;
   if (apiRoot) {
     try {
       const customHost = new URL(apiRoot).hostname;
       if (customHost && !hostnames.includes(customHost)) {
         hostnames.push(customHost);
+        // A configured custom Bot API host is an explicit operator override and
+        // may legitimately live on a private network (for example, self-hosted
+        // Bot API or an internal reverse proxy). Keep that host reachable while
+        // still enforcing resolved-IP checks for the default public host.
+        allowedHostnames = [customHost];
       }
     } catch {
       // invalid URL; fall through to default
@@ -34,6 +40,7 @@ function buildTelegramMediaSsrfPolicy(apiRoot?: string) {
     // Restrict media downloads to the configured Telegram API hosts while still
     // enforcing SSRF checks on the resolved and redirected targets.
     hostnameAllowlist: hostnames,
+    ...(allowedHostnames ? { allowedHostnames } : {}),
     allowRfc2544BenchmarkRange: false,
   };
 }
