@@ -120,14 +120,13 @@ export function buildMimoSpeechProvider(): SpeechProviderPlugin {
     isConfigured: ({ providerConfig }) =>
       Boolean(
         readMimoProviderConfig(providerConfig).apiKey ||
-          process.env.MIMO_API_KEY ||
-          process.env.XIAOMI_API_KEY
+        process.env.MIMO_API_KEY ||
+        process.env.XIAOMI_API_KEY,
       ),
 
     synthesize: async (req) => {
       const config = readMimoProviderConfig(req.providerConfig);
-      const apiKey =
-        config.apiKey || process.env.MIMO_API_KEY || process.env.XIAOMI_API_KEY;
+      const apiKey = config.apiKey || process.env.MIMO_API_KEY || process.env.XIAOMI_API_KEY;
       if (!apiKey) {
         throw new Error("MiMo API key missing");
       }
