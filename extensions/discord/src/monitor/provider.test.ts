@@ -636,6 +636,9 @@ describe("monitorDiscordProvider", () => {
         retry_after: 193.632,
         global: false,
       },
+      new Request("https://discord.com/api/v10/applications/app-id/commands", {
+        method: "POST",
+      }),
     );
     rateLimitError.discordCode = 30034;
     clientHandleDeployRequestMock.mockRejectedValueOnce(rateLimitError);
