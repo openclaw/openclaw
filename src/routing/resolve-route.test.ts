@@ -56,6 +56,45 @@ describe("resolveAgentRoute", () => {
     }
   });
 
+  test("per-agent dmScope overrides global session.dmScope", () => {
+    const cfg: OpenClawConfig = {
+      session: { dmScope: "per-channel-peer" },
+      agents: {
+        list: [{ id: "main", dmScope: "main" }, { id: "dm" }],
+      },
+      bindings: [
+        {
+          agentId: "main",
+          match: { channel: "feishu", peer: { kind: "direct", id: "owner-uid" } },
+        },
+        {
+          agentId: "dm",
+          match: { channel: "feishu", peer: { kind: "direct", id: "other-user" } },
+        },
+      ],
+    };
+
+    // main agent has per-agent dmScope="main" → collapses to main session key
+    const mainRoute = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: null,
+      peer: { kind: "direct", id: "owner-uid" },
+    });
+    expect(mainRoute.agentId).toBe("main");
+    expect(mainRoute.sessionKey).toBe("agent:main:main");
+
+    // dm agent has no per-agent dmScope → falls back to global "per-channel-peer"
+    const dmRoute = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: null,
+      peer: { kind: "direct", id: "other-user" },
+    });
+    expect(dmRoute.agentId).toBe("dm");
+    expect(dmRoute.sessionKey).toBe("agent:dm:feishu:direct:other-user");
+  });
+
   test("resolveInboundLastRouteSessionKey follows route policy", () => {
     expect(
       resolveInboundLastRouteSessionKey({

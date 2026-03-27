@@ -660,12 +660,16 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
 
   const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
+    const agentCfg = listAgents(input.cfg).find(
+      (a) => normalizeAgentId(a.id) === normalizeAgentId(resolvedAgentId),
+    );
+    const effectiveDmScope = agentCfg?.dmScope ?? dmScope;
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
       channel,
       accountId,
       peer,
-      dmScope,
+      dmScope: effectiveDmScope,
       identityLinks,
     }).toLowerCase();
     const mainSessionKey = buildAgentMainSessionKey({
