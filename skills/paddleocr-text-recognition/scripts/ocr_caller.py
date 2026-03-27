@@ -118,7 +118,8 @@ Configuration:
 
     args = parser.parse_args()
 
-    # Run OCR
+    # Unwarping and orientation classification are off to cover common scenarios
+    # with faster response times; visualize is off to reduce response payload.
     result = ocr(
         file_path=args.file_path,
         file_url=args.file_url,

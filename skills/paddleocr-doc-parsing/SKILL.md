@@ -57,24 +57,19 @@ pip install -r requirements-optimize.txt
 
 ## How to Use This Skill
 
-**⛔ MANDATORY RESTRICTIONS - DO NOT VIOLATE ⛔**
-
-1. **ONLY use PaddleOCR Document Parsing API** - Execute the script `python scripts/vl_caller.py`
-2. **NEVER parse documents directly** - Do NOT parse documents yourself
-3. **NEVER offer alternatives** - Do NOT suggest "I can try to analyze it" or similar
-4. **IF API fails** - Display the error message and STOP immediately
-5. **NO fallback methods** - Do NOT attempt document parsing any other way
-
-If the script execution fails (API not configured, network error, etc.):
-
-- Show the error message to the user
-- Do NOT offer to help using your vision capabilities
-- Do NOT ask "Would you like me to try parsing it?"
-- Simply stop and wait for user to fix the configuration
+> **Working directory**: All `python scripts/...` commands below should be run from this skill's root directory (the directory containing this SKILL.md file).
 
 ### Basic Workflow
 
-1. **Execute document parsing**:
+1. **Identify the input source**:
+   - User provides URL: Use the `--file-url` parameter
+   - User provides local file path: Use the `--file-path` parameter
+
+   **Input type note**:
+   - Supported file types depend on the model and endpoint configuration.
+   - Always follow the file type constraints documented by your endpoint API.
+
+2. **Execute document parsing**:
 
    ```bash
    python scripts/vl_caller.py --file-url "URL provided by user" --pretty
@@ -96,6 +91,8 @@ If the script execution fails (API not configured, network error, etc.):
    - `--file-type 1`: image
    - If omitted, the service can infer file type from input.
 
+   > **Performance note**: Parsing time scales with document complexity. Single-page images typically complete in 1-5 seconds; large PDFs (50+ pages) may take several minutes. Allow adequate time before assuming a timeout.
+
    **Default behavior: save raw JSON to a temp file**:
    - If `--output` is omitted, the script saves automatically under the system temp directory
    - Default path pattern: `<system-temp>/paddleocr/doc-parsing/results/result_<timestamp>_<id>.json`
@@ -106,43 +103,39 @@ If the script execution fails (API not configured, network error, etc.):
    - In save mode, always tell the user the saved file path and that full raw JSON is available there
    - Use `--stdout` only when you explicitly want to skip file persistence
 
-2. **The output JSON contains COMPLETE content** with all document data:
-   - Headers, footers, page numbers
-   - Main text content
-   - Tables with structure
-   - Formulas (with LaTeX)
-   - Figures and charts
-   - Footnotes and references
-   - Seals and stamps
-   - Layout and reading order
+3. **Parse JSON response**:
+   - Check the `ok` field: `true` means success, `false` means error
+   - The output contains complete document data: text, tables, formulas (LaTeX), figures, seals, headers/footers, and reading order
+   - Use the appropriate field based on what the user needs:
+     - `text` — full document text across all pages
+     - `result.layoutParsingResults[n].markdown.text` — page-level markdown
+     - `result.layoutParsingResults[n].prunedResult` — structured layout data with positions and confidence
+   - Handle errors: If `ok` is false, display `error.message`
 
-   **Input type note**:
-   - Supported file types depend on the model and endpoint configuration.
-   - Always follow the file type constraints documented by your endpoint API.
+4. **Present results to user**:
+   - Display content based on what the user requested (see "Complete Output Display" below)
+   - If the content is empty, the document may contain no extractable text
+   - In save mode, always tell the user the saved file path and that full raw JSON is available there
 
-3. **Extract what the user needs** from the output JSON using these fields:
-   - Top-level `text`
-   - `result[n].markdown`
-   - `result[n].prunedResult`
+### What to Do After Parsing
 
-### IMPORTANT: Complete Content Display
+Common next steps once you have the structured output:
 
-**CRITICAL**: You must display the COMPLETE extracted content to the user based on their needs.
+- **Save as Markdown**: Write the `text` field to a `.md` file using the Write tool — tables, headings, and formulas are preserved
+- **Convert to Word**: Save the markdown first, then use pandoc if available: `pandoc output.md -o output.docx`
+- **Extract specific tables**: Navigate `result.layoutParsingResults[n].prunedResult` to access individual layout elements with position and confidence data
+- **Feed to RAG / search pipeline**: The `text` field is structured markdown, ready for chunking and indexing
+- **Poor results**: See "Tips for Better Results" below before retrying
 
-- The output JSON contains ALL document content in a structured format
-- In save mode, the raw provider result can be inspected in the saved JSON file
-- **Display the full content requested by the user**, do NOT truncate or summarize
+### Complete Output Display
+
+Display the COMPLETE extracted content based on what the user asked for. The parsed output is only useful if the user receives all of it — truncation silently drops data.
+
 - If user asks for "all text", show the entire `text` field
 - If user asks for "tables", show ALL tables in the document
 - If user asks for "main content", filter out headers/footers but show ALL body text
-
-**What this means**:
-
-- **DO**: Display complete text, all tables, all formulas as requested
-- **DO**: Present content using these fields: top-level `text`, `result[n].markdown`, and `result[n].prunedResult`
-- **DON'T**: Truncate with "..." unless content is excessively long (>10,000 chars)
-- **DON'T**: Summarize or provide excerpts when user asks for full content
-- **DON'T**: Say "Here's a preview" when user expects complete output
+- Do not truncate with "..." unless content is excessively long (>10,000 chars)
+- Do not say "Here's a preview" when user expects complete output
 
 **Example - Correct**:
 
@@ -168,25 +161,11 @@ Agent: "I found a document with multiple sections. Here's the beginning:
 'Introduction...' (content truncated for brevity)"
 ```
 
-### Understanding the JSON Response
+### Understanding the Output
 
-The output JSON uses an envelope wrapping the raw API result:
+The script returns an envelope with `ok`, `text`, `result`, and `error`. Use `text` for the full document content; navigate `result.layoutParsingResults[n]` for per-page structured data.
 
-```json
-{
-  "ok": true,
-  "text": "Full markdown/HTML text extracted from all pages",
-  "result": { ... },  // raw provider response
-  "error": null
-}
-```
-
-**Key fields**:
-
-- `text` — extracted markdown text from all pages (use this for quick text display)
-- `result` - raw provider response object
-- `result[n].prunedResult` - structured parsing output for each page (layout/content/confidence and related metadata)
-- `result[n].markdown` — full rendered page output in markdown/HTML
+For the complete schema and field-level details, see `references/output_schema.md`.
 
 > Raw result location (default): the temp-file path printed by the script on stderr
 
@@ -203,7 +182,7 @@ python scripts/vl_caller.py \
 Then use:
 
 - Top-level `text` for quick full-text output
-- `result[n].markdown` when page-level output is needed
+- `result.layoutParsingResults[n].markdown` when page-level output is needed
 
 **Example 2: Extract Structured Page Data**
 
@@ -215,10 +194,9 @@ python scripts/vl_caller.py \
 
 Then use:
 
-- `result[n].prunedResult` for structured parsing data (layout/content/confidence)
-- `result[n].markdown` for rendered page content
+- `result.layoutParsingResults[n].prunedResult` for structured parsing data (layout/content/confidence)
 
-**Example 3: Print JSON Without Saving**
+**Example 3: Print JSON to stdout (without saving to file)**
 
 ```bash
 python scripts/vl_caller.py \
@@ -227,52 +205,50 @@ python scripts/vl_caller.py \
   --pretty
 ```
 
-Then return:
-
-- Full `text` when user asks for full document content
-- `result[n].prunedResult` and `result[n].markdown` when user needs complete structured page data
+By default the script writes JSON to a temp file and prints the path to stderr. Add `--stdout` to print the full JSON directly to stdout instead. Use this when you need to inspect the result inline or pipe it to another tool.
 
 ### First-Time Configuration
 
-**When API is not configured**:
+**When API is not configured**, the script outputs:
 
-The error will show:
-
-```
-CONFIG_ERROR: PADDLEOCR_DOC_PARSING_API_URL not configured. Get your API at: https://paddleocr.com
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "CONFIG_ERROR",
+    "message": "PADDLEOCR_DOC_PARSING_API_URL not configured. Get your API at: https://paddleocr.com"
+  }
+}
 ```
 
 **Configuration workflow**:
 
 1. **Show the exact error message** to the user (including the URL).
 
-2. **Guide the user to configure securely**:
-   - Instruct the user to visit the [PaddleOCR website](https://www.paddleocr.com), click **API**, select the model you need, then copy the `API_URL` and `Token`. They correspond to the API URL (`PADDLEOCR_DOC_PARSING_API_URL`) and access token (`PADDLEOCR_ACCESS_TOKEN`) used for authentication. Supported models: `PP-StructureV3`, `PaddleOCR-VL`, `PaddleOCR-VL-1.5`.
-   - Optionally, ask the user to configure the request timeout via `PADDLEOCR_DOC_PARSING_TIMEOUT`.
-   - Recommend configuring through the host application's standard method (e.g., settings file, environment variable UI) rather than pasting credentials in chat. For example, in OpenClaw, environment variables can be set in `~/.openclaw/openclaw.json`.
+2. **Guide the user to configure securely**: Visit the [PaddleOCR website](https://www.paddleocr.com), click **API**, select the model, then copy the `API_URL` and `Token` — these map to `PADDLEOCR_DOC_PARSING_API_URL` and `PADDLEOCR_ACCESS_TOKEN`. Supported models: `PP-StructureV3`, `PaddleOCR-VL`, `PaddleOCR-VL-1.5`. Optionally configure request timeout via `PADDLEOCR_DOC_PARSING_TIMEOUT`.
 
-3. **If the user provides credentials in chat anyway** (accept any reasonable format), for example:
-   - `PADDLEOCR_DOC_PARSING_API_URL=https://xxx.paddleocr.com/layout-parsing, PADDLEOCR_ACCESS_TOKEN=abc123...`
-   - `Here's my API: https://xxx and token: abc123`
-   - Copy-pasted code format
+   Recommend using the host application's configuration UI (e.g., in OpenClaw: `~/.openclaw/openclaw.json`) rather than pasting credentials in chat.
 
-   Warn the user that credentials shared in chat may be stored in conversation history. Recommend setting them through the host application's configuration instead when possible.
+3. **If the user pastes credentials in chat**: Warn that they may be stored in conversation history. Then extract and validate:
+   - `PADDLEOCR_DOC_PARSING_API_URL` — should be a full endpoint ending with `/layout-parsing`
+   - `PADDLEOCR_ACCESS_TOKEN` — long alphanumeric string (usually 40+ chars)
 
-   Then parse and validate the values:
-   - Extract `PADDLEOCR_DOC_PARSING_API_URL` (look for URLs with `paddleocr.com` or similar)
-   - Confirm `PADDLEOCR_DOC_PARSING_API_URL` is a full endpoint ending with `/layout-parsing`
-   - Extract `PADDLEOCR_ACCESS_TOKEN` (long alphanumeric string, usually 40+ chars)
-
-4. **Ask the user to confirm the environment is configured**.
-
-5. **Retry only after confirmation**:
-   - Once the user confirms the environment variables are available, retry the original parsing task
+4. **Ask the user to confirm the environment is configured**, then retry the original task.
 
 ### Handling Large Files
 
-There is no file size limit for the API. For PDFs, the maximum is 100 pages per request.
+For PDFs, the maximum is 100 pages per request.
 
-**Tips for large files**:
+#### Optimize Large Images Before Parsing
+
+For large image files, compress before uploading — this reduces upload time and can improve processing stability:
+
+```bash
+python scripts/optimize_file.py input.png output.png --quality 85
+python scripts/vl_caller.py --file-path "output.png" --pretty
+```
+
+Requires optional dependencies: `pip install -r requirements-optimize.txt`
 
 #### Use URL for Large Local Files (Recommended)
 
@@ -299,48 +275,40 @@ python scripts/vl_caller.py --file-path "pages_1_5.pdf"
 
 ### Error Handling
 
-**Authentication failed (403)**:
+All errors return JSON with `ok: false`. Show the error message and stop — do not fall back to your own vision capabilities. Identify the issue from `error.code` and `error.message`:
 
-```
-error: Authentication failed
-```
+**Authentication failed (403)** — `error.message` contains "Authentication failed"
 
-→ Token is invalid, reconfigure with correct credentials
+- Token is invalid, reconfigure with correct credentials
 
-**API quota exceeded (429)**:
+**Quota exceeded (429)** — `error.message` contains "API rate limit exceeded"
 
-```
-error: API quota exceeded
-```
+- Daily API quota exhausted, inform user to wait or upgrade
 
-→ Daily API quota exhausted, inform user to wait or upgrade
+**Unsupported format** — `error.message` contains "Unsupported file format"
 
-**Unsupported format**:
+- File format not supported, convert to PDF/PNG/JPG
 
-```
-error: Unsupported file format
-```
+**No content detected**:
 
-→ File format not supported, convert to PDF/PNG/JPG
+- `text` field is empty
+- Document may be blank, image-only, or contain no extractable text
 
-## Important Notes
+### Tips for Better Results
 
-- **The script NEVER filters content** - It always returns complete data
-- **The AI agent decides what to present** - Based on user's specific request
-- **All data is always available** - Can be re-interpreted for different needs
-- **No information is lost** - Complete document structure preserved
+If parsing quality is poor:
+
+- **Large or high-resolution images**: Compress with `optimize_file.py` before parsing — oversized inputs can degrade layout detection:
+  ```bash
+  python scripts/optimize_file.py input.png optimized.png --quality 85
+  ```
+- **Check confidence**: `result.layoutParsingResults[n].prunedResult` includes confidence scores per layout element — low values indicate regions worth reviewing
 
 ## Reference Documentation
 
-- `references/output_schema.md` - Output format specification
+- `references/output_schema.md` — Full output schema, field descriptions, and command examples
 
 > **Note**: Model version and capabilities are determined by your API endpoint (`PADDLEOCR_DOC_PARSING_API_URL`).
-
-Load these reference documents into context when:
-
-- Debugging complex parsing issues
-- Need to understand output format
-- Working with provider API details
 
 ## Testing the Skill
 
@@ -350,4 +318,4 @@ To verify the skill is working properly:
 python scripts/smoke_test.py
 ```
 
-This tests configuration and optionally API connectivity.
+This tests configuration and API connectivity.

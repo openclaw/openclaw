@@ -45,17 +45,9 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp")
 # =============================================================================
 
 
-def _get_env(key: str, *fallback_keys: str) -> str:
-    """Get environment variable with fallback keys."""
-    value = os.getenv(key, "").strip()
-    if value:
-        return value
-    for fallback in fallback_keys:
-        value = os.getenv(fallback, "").strip()
-        if value:
-            logger.debug(f"Using fallback env var: {fallback}")
-            return value
-    return ""
+def _get_env(key: str) -> str:
+    """Get environment variable."""
+    return os.getenv(key, "").strip()
 
 
 def get_config() -> tuple[str, str]:
@@ -149,7 +141,9 @@ def _make_api_request(api_url: str, token: str, params: dict) -> dict:
     }
 
     try:
-        timeout = float(os.getenv("PADDLEOCR_DOC_PARSING_TIMEOUT", str(DEFAULT_TIMEOUT)))
+        timeout = float(
+            os.getenv("PADDLEOCR_DOC_PARSING_TIMEOUT", str(DEFAULT_TIMEOUT))
+        )
     except (ValueError, TypeError):
         logger.warning(
             "Invalid PADDLEOCR_DOC_PARSING_TIMEOUT value, using default %ds",
@@ -254,7 +248,13 @@ def parse_document(
         resolved_file_type: Optional[int] = None
         if file_url:
             params = {"file": file_url}
-            resolved_file_type = file_type
+            if file_type is not None:
+                resolved_file_type = file_type
+            else:
+                try:
+                    resolved_file_type = _detect_file_type(file_url)
+                except ValueError:
+                    resolved_file_type = None
         else:
             resolved_file_type = (
                 file_type if file_type is not None else _detect_file_type(file_path)
@@ -266,7 +266,7 @@ def parse_document(
         params.update(options)
         if resolved_file_type is not None:
             params["fileType"] = resolved_file_type
-        elif file_url:
+        else:
             params.pop("fileType", None)
 
     except (ValueError, FileNotFoundError) as e:

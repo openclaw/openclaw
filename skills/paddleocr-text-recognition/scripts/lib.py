@@ -273,7 +273,10 @@ def ocr(
         return _error("API_ERROR", str(e))
 
     # Extract text
-    text = _extract_text(result)
+    try:
+        text = _extract_text(result)
+    except ValueError as e:
+        return _error("API_ERROR", str(e))
 
     return {
         "ok": True,
@@ -285,16 +288,18 @@ def ocr(
 
 def _extract_text(result: dict) -> str:
     """Extract text from OCR result."""
-    # API returns {"errorCode": 0, "result": {"ocrResults": [{page}, ...]}}
-    raw_result = result.get("result", result) if isinstance(result, dict) else result
+    if not isinstance(result, dict):
+        raise ValueError(
+            "Invalid response schema: top-level response must be an object"
+        )
 
-    # Extract ocrResults array from the result wrapper
-    if isinstance(raw_result, dict):
-        pages = raw_result.get("ocrResults", [])
-    elif isinstance(raw_result, list):
-        pages = raw_result
-    else:
-        pages = []
+    raw_result = result.get("result")
+    if not isinstance(raw_result, dict):
+        raise ValueError("Invalid response schema: missing result object")
+
+    pages = raw_result.get("ocrResults")
+    if not isinstance(pages, list):
+        raise ValueError("Invalid response schema: result.ocrResults must be an array")
 
     all_text = []
     for item in pages:

@@ -40,7 +40,7 @@ HOW TO GET YOUR API CREDENTIALS
 ============================================================
 
 1. Visit: https://paddleocr.com
-2. Log in with your Baidu account
+2. Sign in to your account
 3. Open your model's API call example page
 4. Copy the API URL from the example request
 5. Copy your access token from the same API setup page
@@ -142,12 +142,8 @@ def main():
     print("Smoke Test PASSED")
     print("=" * 60)
     print("\nNext steps:")
-    print(
-        '  python scripts/ocr_caller.py --file-url "URL" --pretty'
-    )
-    print(
-        '  python scripts/ocr_caller.py --file-path "image.png" --pretty'
-    )
+    print('  python scripts/ocr_caller.py --file-url "URL" --pretty')
+    print('  python scripts/ocr_caller.py --file-path "image.png" --pretty')
     print(
         "  Results are auto-saved to the system temp directory; the caller prints the saved path."
     )

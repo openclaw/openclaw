@@ -70,13 +70,13 @@ Raw fields may vary by model version and endpoint.
 
 ## Important Fields
 
-- `result[n].prunedResult`  
+- `result.layoutParsingResults[n].prunedResult`  
   Structured parsing data for page `n` (layout elements, locations, content, confidence, and related metadata).
 
-- `result[n].markdown`  
+- `result.layoutParsingResults[n].markdown`  
   Rendered output for page `n`.
 
-- `result[n].markdown.text`  
+- `result.layoutParsingResults[n].markdown.text`  
   Full page markdown text.
 
 ## Text Extraction

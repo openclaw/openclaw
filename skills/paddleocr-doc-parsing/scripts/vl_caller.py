@@ -118,7 +118,8 @@ Configuration:
 
     args = parser.parse_args()
 
-    # Parse document
+    # Unwarping and orientation classification are off to cover common scenarios
+    # with faster response times; visualize is off to reduce response payload.
     result = parse_document(
         file_path=args.file_path,
         file_url=args.file_url,

@@ -76,13 +76,13 @@ Raw fields may vary by model version and endpoint.
 
 ## Stable Fields for Downstream Use
 
-- `result[n].prunedResult`  
+- `result.ocrResults[n].prunedResult`  
   Structured OCR data for page `n`.
 
-- `result[n].prunedResult.rec_texts`  
+- `result.ocrResults[n].prunedResult.rec_texts`  
   Recognized text lines for page `n`.
 
-- `result[n].prunedResult.rec_scores`  
+- `result.ocrResults[n].prunedResult.rec_scores`  
   Confidence scores for recognized text lines.
 
 ## Text Extraction
