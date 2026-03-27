@@ -1,20 +1,20 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildElevenLabsSpeechProvider } from "../../extensions/elevenlabs/test-api.js";
-import { buildMicrosoftSpeechProvider } from "../../extensions/microsoft/test-api.js";
-import { buildOpenAISpeechProvider } from "../../extensions/openai/test-api.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { withEnv } from "../test-utils/env.js";
-import * as tts from "./tts.js";
+import { buildElevenLabsSpeechProvider } from "../../../extensions/elevenlabs/test-api.js";
+import { buildMicrosoftSpeechProvider } from "../../../extensions/microsoft/test-api.js";
+import { buildOpenAISpeechProvider } from "../../../extensions/openai/test-api.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withEnv } from "../../test-utils/env.js";
+import * as tts from "../../tts/tts.js";
 
 let completeSimple: typeof import("@mariozechner/pi-ai").completeSimple;
-let getApiKeyForModelMock: typeof import("../agents/model-auth.js").getApiKeyForModel;
-let requireApiKeyMock: typeof import("../agents/model-auth.js").requireApiKey;
-let resolveModelAsyncMock: typeof import("../agents/pi-embedded-runner/model.js").resolveModelAsync;
-let ensureCustomApiRegisteredMock: typeof import("../agents/custom-api-registry.js").ensureCustomApiRegistered;
-let prepareModelForSimpleCompletionMock: typeof import("../agents/simple-completion-transport.js").prepareModelForSimpleCompletion;
+let getApiKeyForModelMock: typeof import("../../agents/model-auth.js").getApiKeyForModel;
+let requireApiKeyMock: typeof import("../../agents/model-auth.js").requireApiKey;
+let resolveModelAsyncMock: typeof import("../../agents/pi-embedded-runner/model.js").resolveModelAsync;
+let ensureCustomApiRegisteredMock: typeof import("../../agents/custom-api-registry.js").ensureCustomApiRegistered;
+let prepareModelForSimpleCompletionMock: typeof import("../../agents/simple-completion-transport.js").prepareModelForSimpleCompletion;
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
@@ -53,7 +53,7 @@ function createResolvedModel(provider: string, modelId: string, api = "openai-co
   };
 }
 
-vi.mock("../agents/pi-embedded-runner/model.js", () => ({
+vi.mock("../../agents/pi-embedded-runner/model.js", () => ({
   resolveModel: vi.fn((provider: string, modelId: string) =>
     createResolvedModel(provider, modelId),
   ),
@@ -62,7 +62,7 @@ vi.mock("../agents/pi-embedded-runner/model.js", () => ({
   ),
 }));
 
-vi.mock("../agents/model-auth.js", () => ({
+vi.mock("../../agents/model-auth.js", () => ({
   getApiKeyForModel: vi.fn(async () => ({
     apiKey: "test-api-key",
     source: "test",
@@ -71,7 +71,7 @@ vi.mock("../agents/model-auth.js", () => ({
   requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
 }));
 
-vi.mock("../agents/custom-api-registry.js", () => ({
+vi.mock("../../agents/custom-api-registry.js", () => ({
   ensureCustomApiRegistered: vi.fn(),
 }));
 
@@ -128,11 +128,11 @@ describe("tts", () => {
   beforeEach(async () => {
     ({ completeSimple } = await import("@mariozechner/pi-ai"));
     ({ getApiKeyForModel: getApiKeyForModelMock, requireApiKey: requireApiKeyMock } =
-      await import("../agents/model-auth.js"));
+      await import("../../agents/model-auth.js"));
     ({ resolveModelAsync: resolveModelAsyncMock } =
-      await import("../agents/pi-embedded-runner/model.js"));
+      await import("../../agents/pi-embedded-runner/model.js"));
     ({ ensureCustomApiRegistered: ensureCustomApiRegisteredMock } =
-      await import("../agents/custom-api-registry.js"));
+      await import("../../agents/custom-api-registry.js"));
     prepareModelForSimpleCompletionMock = vi.fn(({ model }) => model);
     const registry = createEmptyPluginRegistry();
     registry.speechProviders = [
