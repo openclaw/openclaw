@@ -88,6 +88,59 @@ function runBrowserCommand(action: () => Promise<void>) {
   });
 }
 
+async function runBrowserTabNew(parent: BrowserParentOpts, profile?: string) {
+  await runBrowserCommand(async () => {
+    const result = await callTabAction(parent, profile, { action: "new" });
+    if (printJsonResult(parent, result)) {
+      return;
+    }
+    defaultRuntime.log("opened new tab");
+  });
+}
+
+async function runBrowserTabSelect(
+  parent: BrowserParentOpts,
+  profile: string | undefined,
+  index: number,
+) {
+  if (!Number.isFinite(index) || index < 1) {
+    defaultRuntime.error(danger("index must be a positive number"));
+    defaultRuntime.exit(1);
+    return;
+  }
+  await runBrowserCommand(async () => {
+    const result = await callTabAction(parent, profile, {
+      action: "select",
+      index: Math.floor(index) - 1,
+    });
+    if (printJsonResult(parent, result)) {
+      return;
+    }
+    defaultRuntime.log(`selected tab ${Math.floor(index)}`);
+  });
+}
+
+async function runBrowserTabClose(
+  parent: BrowserParentOpts,
+  profile: string | undefined,
+  index?: number,
+) {
+  const idx =
+    typeof index === "number" && Number.isFinite(index) ? Math.floor(index) - 1 : undefined;
+  if (typeof idx === "number" && idx < 0) {
+    defaultRuntime.error(danger("index must be >= 1"));
+    defaultRuntime.exit(1);
+    return;
+  }
+  await runBrowserCommand(async () => {
+    const result = await callTabAction(parent, profile, { action: "close", index: idx });
+    if (printJsonResult(parent, result)) {
+      return;
+    }
+    defaultRuntime.log("closed tab");
+  });
+}
+
 function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
   if (json) {
     defaultRuntime.writeJson({ tabs });
@@ -244,6 +297,35 @@ export function registerBrowserManageCommands(
       });
     });
 
+  browser
+    .command("tabs new")
+    .description("Open a new tab (about:blank)")
+    .action(async (_opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const profile = parent?.browserProfile;
+      await runBrowserTabNew(parent, profile);
+    });
+
+  browser
+    .command("tabs select")
+    .description("Focus tab by index (1-based)")
+    .argument("<index>", "Tab index (1-based)", (v: string) => Number(v))
+    .action(async (index: number, _opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const profile = parent?.browserProfile;
+      await runBrowserTabSelect(parent, profile, index);
+    });
+
+  browser
+    .command("tabs close")
+    .description("Close tab by index (1-based); default: first tab")
+    .argument("[index]", "Tab index (1-based)", (v: string) => Number(v))
+    .action(async (index: number | undefined, _opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const profile = parent?.browserProfile;
+      await runBrowserTabClose(parent, profile, index);
+    });
+
   const tab = browser
     .command("tab")
     .description("Tab shortcuts (index-based)")
@@ -274,13 +356,7 @@ export function registerBrowserManageCommands(
     .action(async (_opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
-      await runBrowserCommand(async () => {
-        const result = await callTabAction(parent, profile, { action: "new" });
-        if (printJsonResult(parent, result)) {
-          return;
-        }
-        defaultRuntime.log("opened new tab");
-      });
+      await runBrowserTabNew(parent, profile);
     });
 
   tab
@@ -290,21 +366,7 @@ export function registerBrowserManageCommands(
     .action(async (index: number, _opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
-      if (!Number.isFinite(index) || index < 1) {
-        defaultRuntime.error(danger("index must be a positive number"));
-        defaultRuntime.exit(1);
-        return;
-      }
-      await runBrowserCommand(async () => {
-        const result = await callTabAction(parent, profile, {
-          action: "select",
-          index: Math.floor(index) - 1,
-        });
-        if (printJsonResult(parent, result)) {
-          return;
-        }
-        defaultRuntime.log(`selected tab ${Math.floor(index)}`);
-      });
+      await runBrowserTabSelect(parent, profile, index);
     });
 
   tab
@@ -314,20 +376,7 @@ export function registerBrowserManageCommands(
     .action(async (index: number | undefined, _opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
-      const idx =
-        typeof index === "number" && Number.isFinite(index) ? Math.floor(index) - 1 : undefined;
-      if (typeof idx === "number" && idx < 0) {
-        defaultRuntime.error(danger("index must be >= 1"));
-        defaultRuntime.exit(1);
-        return;
-      }
-      await runBrowserCommand(async () => {
-        const result = await callTabAction(parent, profile, { action: "close", index: idx });
-        if (printJsonResult(parent, result)) {
-          return;
-        }
-        defaultRuntime.log("closed tab");
-      });
+      await runBrowserTabClose(parent, profile, index);
     });
 
   browser

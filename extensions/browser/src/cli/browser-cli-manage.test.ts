@@ -179,4 +179,59 @@ describe("browser manage output", () => {
     expect(output).not.toContain("supersecretpasswordvalue1234");
     expect(output).not.toContain("supersecrettokenvalue1234567890");
   });
+
+  it.each([
+    ["browser tab new", ["browser", "tab", "new"], { action: "new" }],
+    ["browser tabs new", ["browser", "tabs", "new"], { action: "new" }],
+    ["browser tab select", ["browser", "tab", "select", "2"], { action: "select", index: 1 }],
+    [
+      "browser tabs select",
+      ["browser", "tabs", "select", "2"],
+      { action: "select", index: 1 },
+    ],
+    ["browser tab close", ["browser", "tab", "close", "2"], { action: "close", index: 1 }],
+    [
+      "browser tabs close",
+      ["browser", "tabs", "close", "2"],
+      { action: "close", index: 1 },
+    ],
+  ])("%s uses tab action endpoint", async (_label, argv, expectedBody) => {
+    const program = createBrowserManageProgram();
+    await program.parseAsync(argv, { from: "user" });
+
+    expect(getBrowserManageCallBrowserRequestMock()).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        method: "POST",
+        path: "/tabs/action",
+        body: expectedBody,
+      }),
+      { timeoutMs: 45_000 },
+    );
+  });
+
+  it("keeps browser tabs as the list command", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+      req.path === "/tabs"
+        ? {
+            running: true,
+            tabs: [{ targetId: "tab-1", title: "Example", url: "https://example.com" }],
+          }
+        : {},
+    );
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "tabs"], { from: "user" });
+
+    expect(getBrowserManageCallBrowserRequestMock()).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        method: "GET",
+        path: "/tabs",
+      }),
+      { timeoutMs: 45_000 },
+    );
+    const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
+    expect(output).toContain("1. Example");
+  });
 });
