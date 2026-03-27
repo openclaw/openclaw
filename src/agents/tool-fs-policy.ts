@@ -33,7 +33,7 @@ export function resolveEffectiveToolFsWorkspaceOnly(params: {
   return resolveToolFsConfig(params).workspaceOnly === true;
 }
 
-export function resolveEffectiveToolFsReadEnabled(params: {
+export function resolveEffectiveToolFsRootExpansionAllowed(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
 }): boolean {
@@ -44,11 +44,10 @@ export function resolveEffectiveToolFsReadEnabled(params: {
   const agentTools = params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools : undefined;
   const globalTools = cfg.tools;
   const profile = agentTools?.profile ?? globalTools?.profile;
-  const profileAlsoAllow = new Set([
-    ...(agentTools?.alsoAllow ?? []),
-    ...(globalTools?.alsoAllow ?? []),
-  ]);
-  if (agentTools?.fs || globalTools?.fs) {
+  const profileAlsoAllow = new Set(agentTools?.alsoAllow ?? globalTools?.alsoAllow ?? []);
+  const fsAllowsExpansion =
+    agentTools?.fs?.workspaceOnly === false || globalTools?.fs?.workspaceOnly === false;
+  if (fsAllowsExpansion) {
     profileAlsoAllow.add("read");
     profileAlsoAllow.add("write");
     profileAlsoAllow.add("edit");
