@@ -27,13 +27,13 @@ Requirements for Phase 1 release. Each maps to roadmap phases.
 
 ### Sync Process
 
-- [ ] **SYNC-01**: File watcher (chokidar) monitors `~/.openclaw/projects/` for changes to markdown files
-- [ ] **SYNC-02**: Watcher uses `awaitWriteFinish` with stabilityThreshold to prevent reading partial writes
-- [ ] **SYNC-03**: Watcher callbacks are debounced (300ms) to batch rapid changes
+- [x] **SYNC-01**: File watcher (chokidar) monitors `~/.openclaw/projects/` for changes to markdown files
+- [x] **SYNC-02**: Watcher uses `awaitWriteFinish` with stabilityThreshold to prevent reading partial writes
+- [x] **SYNC-03**: Watcher callbacks are debounced (300ms) to batch rapid changes
 - [x] **SYNC-04**: On file change, frontmatter is parsed and `.index/` JSON files are regenerated
 - [x] **SYNC-05**: `.index/` JSON is written atomically (write to temp file, then rename)
-- [ ] **SYNC-06**: Full `.index/` regeneration runs on gateway startup to catch any drift
-- [ ] **SYNC-07**: `.index/` directory is always deletable and fully regeneratable from markdown
+- [x] **SYNC-06**: Full `.index/` regeneration runs on gateway startup to catch any drift
+- [x] **SYNC-07**: `.index/` directory is always deletable and fully regeneratable from markdown
 
 ### Concurrency
 
@@ -144,13 +144,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PARSE-02    | Phase 1  | Complete |
 | PARSE-03    | Phase 1  | Complete |
 | PARSE-04    | Phase 1  | Complete |
-| SYNC-01     | Phase 3  | Pending  |
-| SYNC-02     | Phase 3  | Pending  |
-| SYNC-03     | Phase 3  | Pending  |
+| SYNC-01     | Phase 3  | Complete |
+| SYNC-02     | Phase 3  | Complete |
+| SYNC-03     | Phase 3  | Complete |
 | SYNC-04     | Phase 3  | Complete |
 | SYNC-05     | Phase 3  | Complete |
-| SYNC-06     | Phase 3  | Pending  |
-| SYNC-07     | Phase 3  | Pending  |
+| SYNC-06     | Phase 3  | Complete |
+| SYNC-07     | Phase 3  | Complete |
 | CONC-01     | Phase 4  | Pending  |
 | CONC-02     | Phase 4  | Pending  |
 | CONC-03     | Phase 4  | Pending  |
