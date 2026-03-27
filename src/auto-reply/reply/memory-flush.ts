@@ -57,8 +57,10 @@ function resolveMemoryFlushGateState<
   }
 
   const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
-  const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
   const softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
+  // Clamp reserve so the flush threshold stays positive even for small context windows.
+  const maxReserve = Math.max(0, contextWindow - softThreshold - 1);
+  const reserveTokens = Math.min(Math.max(0, Math.floor(params.reserveTokensFloor)), maxReserve);
   const threshold = Math.max(0, contextWindow - reserveTokens - softThreshold);
   if (threshold <= 0) {
     return null;
