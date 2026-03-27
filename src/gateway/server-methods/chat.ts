@@ -6,6 +6,7 @@ import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { stripStructuralPrefixes } from "../../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
@@ -1328,7 +1329,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     const rawSessionKey = p.sessionKey;
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
     const gatewayClientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-    if (RESET_COMMAND_RE.test(parsedMessage) && !gatewayClientScopes.includes(ADMIN_SCOPE)) {
+    const normalizedResetCandidate = stripStructuralPrefixes(parsedMessage).trim();
+    if (
+      (RESET_COMMAND_RE.test(parsedMessage) || RESET_COMMAND_RE.test(normalizedResetCandidate)) &&
+      !gatewayClientScopes.includes(ADMIN_SCOPE)
+    ) {
       respond(
         false,
         undefined,

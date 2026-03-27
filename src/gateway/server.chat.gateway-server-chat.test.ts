@@ -746,13 +746,19 @@ describe("gateway server chat", () => {
           expect(directReset.ok).toBe(false);
           expect(directReset.error?.message).toBe("missing scope: operator.admin");
 
-          const sendRes = await rpcReq(scopedWs, "chat.send", {
-            sessionKey: "main",
-            message: "/reset hello after rotate",
-            idempotencyKey: "idem-write-scope-reset-rejected",
-          });
-          expect(sendRes.ok).toBe(false);
-          expect(sendRes.error?.message).toBe("missing scope: operator.admin");
+          for (const [message, idempotencyKey] of [
+            ["/reset hello after rotate", "idem-write-scope-reset-rejected"],
+            [" /reset hello after rotate", "idem-write-scope-reset-leading-space"],
+            ["[12:00] /reset hello after rotate", "idem-write-scope-reset-structured-prefix"],
+          ] as const) {
+            const sendRes = await rpcReq(scopedWs, "chat.send", {
+              sessionKey: "main",
+              message,
+              idempotencyKey,
+            });
+            expect(sendRes.ok).toBe(false);
+            expect(sendRes.error?.message).toBe("missing scope: operator.admin");
+          }
 
           const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
           const stored = JSON.parse(raw) as {
