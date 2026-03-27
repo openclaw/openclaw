@@ -80,6 +80,11 @@ export function registerCronEditCommand(cron: Command) {
         "--failure-alert-account-id <id>",
         "Account ID for failure alert channel (multi-account setups)",
       )
+      .option(
+        "--skip-when-idle <duration>",
+        "Skip job when session idle longer than duration (e.g. 30m, 1h). Main-session jobs only.",
+      )
+      .option("--no-skip-when-idle", "Disable skip-when-idle for this job")
       .action(async (id, opts) => {
         try {
           if (opts.session === "main" && opts.message) {
@@ -238,6 +243,16 @@ export function registerCronEditCommand(cron: Command) {
               delivery.bestEffort = opts.bestEffortDeliver;
             }
             patch.delivery = delivery;
+          }
+
+          if (opts.skipWhenIdle === false) {
+            patch.skipWhenIdle = false;
+          } else if (typeof opts.skipWhenIdle === "string") {
+            const ms = parseDurationMs(opts.skipWhenIdle);
+            if (!ms) {
+              throw new Error("Invalid --skip-when-idle duration; use e.g. 30m, 1h, 2h");
+            }
+            patch.skipWhenIdle = { idleMs: ms };
           }
 
           const hasFailureAlertAfter = typeof opts.failureAlertAfter === "string";

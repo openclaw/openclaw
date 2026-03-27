@@ -40,6 +40,8 @@ const MIN_REFIRE_GAP_MS = 2_000;
 
 const DEFAULT_MISSED_JOB_STAGGER_MS = 5_000;
 const DEFAULT_MAX_MISSED_JOBS_PER_RESTART = 5;
+/** Default idle threshold for skipWhenIdle: 30 minutes. */
+const DEFAULT_SKIP_WHEN_IDLE_MS = 30 * 60_000;
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
 const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
 
@@ -1040,6 +1042,37 @@ export async function executeJobCore(
   if (abortSignal?.aborted) {
     return resolveAbortError();
   }
+
+  // skipWhenIdle: skip main-session jobs when the user has been idle too long.
+  // This is the inverse of a "deferWhileActive" check — here we skip when there
+  // has been *no* recent user interaction to avoid burning tokens while idle.
+  if (job.sessionTarget === "main" && job.skipWhenIdle !== false && job.skipWhenIdle) {
+    const idleMs = job.skipWhenIdle.idleMs ?? DEFAULT_SKIP_WHEN_IDLE_MS;
+    const lastInbound = state.deps.getLastInboundAtMs?.();
+    const now = state.deps.nowMs();
+    if (typeof lastInbound === "number" && now - lastInbound > idleMs) {
+      state.deps.log.debug(
+        {
+          jobId: job.id,
+          jobName: job.name,
+          idleMs,
+          lastInboundAtMs: lastInbound,
+          elapsedMs: now - lastInbound,
+        },
+        "cron: skipping job — session idle",
+      );
+      return { status: "skipped", error: "session-idle" };
+    }
+    // If getLastInboundAtMs is not available, skip to be safe (no activity data = idle).
+    if (lastInbound === undefined) {
+      state.deps.log.debug(
+        { jobId: job.id, jobName: job.name },
+        "cron: skipping job — no inbound activity data available",
+      );
+      return { status: "skipped", error: "session-idle" };
+    }
+  }
+
   if (job.sessionTarget === "main") {
     const text = resolveJobPayloadTextForMain(job);
     if (!text) {

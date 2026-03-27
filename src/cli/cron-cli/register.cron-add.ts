@@ -9,6 +9,7 @@ import { resolveCronCreateSchedule } from "./schedule-options.js";
 import {
   getCronChannelOptions,
   handleCronCliError,
+  parseDurationMs,
   printCronJson,
   printCronList,
   warnIfCronSchedulerDisabled,
@@ -99,6 +100,11 @@ export function registerCronAddCommand(cron: Command) {
       )
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
+      .option(
+        "--skip-when-idle <duration>",
+        "Skip job when session idle longer than duration (e.g. 30m, 1h). Main-session jobs only.",
+      )
+      .option("--no-skip-when-idle", "Disable skip-when-idle for this job")
       .option("--json", "Output JSON", false)
       .action(async (opts: GatewayRpcOpts & Record<string, unknown>, cmd?: Command) => {
         try {
@@ -224,6 +230,20 @@ export function registerCronAddCommand(cron: Command) {
               ? opts.sessionKey.trim()
               : undefined;
 
+          const skipWhenIdle = (() => {
+            if (opts.skipWhenIdle === false) {
+              return false as const;
+            }
+            if (typeof opts.skipWhenIdle === "string") {
+              const ms = parseDurationMs(opts.skipWhenIdle);
+              if (!ms) {
+                throw new Error("Invalid --skip-when-idle duration; use e.g. 30m, 1h, 2h");
+              }
+              return { idleMs: ms };
+            }
+            return undefined;
+          })();
+
           const params = {
             name,
             description,
@@ -235,6 +255,7 @@ export function registerCronAddCommand(cron: Command) {
             sessionTarget,
             wakeMode,
             payload,
+            skipWhenIdle,
             delivery: deliveryMode
               ? {
                   mode: deliveryMode,

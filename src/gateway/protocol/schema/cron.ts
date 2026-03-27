@@ -244,6 +244,13 @@ export const CronJobStateSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const CronSkipWhenIdleSchema = Type.Object(
+  {
+    idleMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
 export const CronJobSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -261,6 +268,7 @@ export const CronJobSchema = Type.Object(
     payload: CronPayloadSchema,
     delivery: Type.Optional(CronDeliverySchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
+    skipWhenIdle: Type.Optional(Type.Union([Type.Literal(false), CronSkipWhenIdleSchema])),
     state: CronJobStateSchema,
   },
   { additionalProperties: false },
@@ -291,6 +299,7 @@ export const CronAddParamsSchema = Type.Object(
     payload: CronPayloadSchema,
     delivery: Type.Optional(CronDeliverySchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
+    skipWhenIdle: Type.Optional(Type.Union([Type.Literal(false), CronSkipWhenIdleSchema])),
   },
   { additionalProperties: false },
 );
@@ -305,6 +314,7 @@ export const CronJobPatchSchema = Type.Object(
     payload: Type.Optional(CronPayloadPatchSchema),
     delivery: Type.Optional(CronDeliveryPatchSchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
+    skipWhenIdle: Type.Optional(Type.Union([Type.Literal(false), CronSkipWhenIdleSchema])),
     state: Type.Optional(Type.Partial(CronJobStateSchema)),
   },
   { additionalProperties: false },

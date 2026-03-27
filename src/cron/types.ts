@@ -135,6 +135,11 @@ export type CronJobState = {
   lastDelivered?: boolean;
 };
 
+export type CronSkipWhenIdle = {
+  /** Skip if last inbound message was more than this many ms ago. Default: 1800000 (30 min). */
+  idleMs?: number;
+};
+
 export type CronJob = CronJobBase<
   CronSchedule,
   CronSessionTarget,
@@ -143,6 +148,7 @@ export type CronJob = CronJobBase<
   CronDelivery,
   CronFailureAlert | false
 > & {
+  skipWhenIdle?: CronSkipWhenIdle | false;
   state: CronJobState;
 };
 
