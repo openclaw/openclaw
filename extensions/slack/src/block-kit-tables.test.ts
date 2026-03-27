@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { MarkdownTableData } from "../../../src/markdown/ir.js";
+import type { MarkdownTableData } from "openclaw/plugin-sdk/text-runtime";
 import { markdownTableToBlockKit, markdownTablesToBlockKitAttachment } from "./block-kit-tables.js";
 
 describe("markdownTableToBlockKit", () => {
@@ -75,7 +75,17 @@ describe("markdownTableToBlockKit", () => {
 });
 
 describe("markdownTablesToBlockKitAttachment", () => {
-  it("wraps tables in a single attachment when under limit", () => {
+  it("returns one attachment with one table block for a single table", () => {
+    const tables: MarkdownTableData[] = [
+      { headers: ["X"], rows: [["1"]], placeholderOffset: 0 },
+    ];
+
+    const result = markdownTablesToBlockKitAttachment(tables);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.blocks).toHaveLength(1);
+  });
+
+  it("only includes the first table when multiple are provided (Slack one-table limit)", () => {
     const tables: MarkdownTableData[] = [
       { headers: ["X"], rows: [["1"]], placeholderOffset: 0 },
       { headers: ["Y"], rows: [["2"]], placeholderOffset: 10 },
@@ -83,20 +93,9 @@ describe("markdownTablesToBlockKitAttachment", () => {
 
     const result = markdownTablesToBlockKitAttachment(tables);
     expect(result).toHaveLength(1);
-    expect(result[0]?.blocks).toHaveLength(2);
-  });
-
-  it("splits tables across attachments when exceeding 50-block limit", () => {
-    const tables: MarkdownTableData[] = Array.from({ length: 75 }, (_, i) => ({
-      headers: [`Col${i}`],
-      rows: [[`val${i}`]],
-      placeholderOffset: i * 10,
-    }));
-
-    const result = markdownTablesToBlockKitAttachment(tables);
-    expect(result).toHaveLength(2);
-    expect(result[0]?.blocks).toHaveLength(50);
-    expect(result[1]?.blocks).toHaveLength(25);
+    expect(result[0]?.blocks).toHaveLength(1);
+    // Should be the first table
+    expect(result[0]?.blocks[0]?.rows[0]?.[0]?.text).toBe("X");
   });
 
   it("returns empty array for no tables", () => {

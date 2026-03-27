@@ -1,4 +1,4 @@
-import type { MarkdownTableData } from "../../../src/markdown/ir.js";
+import type { MarkdownTableData } from "openclaw/plugin-sdk/text-runtime";
 
 /** A Slack Block Kit table block (for use in `attachments`). */
 export type SlackTableBlock = {
@@ -41,15 +41,18 @@ export function markdownTableToBlockKit(table: MarkdownTableData): SlackTableBlo
   return { type: "table", column_settings, rows };
 }
 
-/** Slack allows at most 50 blocks per attachment. */
-const SLACK_MAX_BLOCKS_PER_ATTACHMENT = 50;
-
 /**
- * Convert multiple parsed tables into Block Kit table blocks,
- * suitable for use in the `attachments` parameter of `chat.postMessage`.
+ * Slack allows **at most one table block per message**.
  *
- * Tables are split across multiple attachments when the total count
- * exceeds Slack's 50-block-per-attachment limit.
+ * Convert the first parsed table into a Block Kit table attachment.
+ * Any additional tables are silently dropped here — the caller is
+ * responsible for falling back (e.g. rendering them as code fences
+ * in the text stream).
+ *
+ * @returns A single-element array containing one attachment with
+ *          one table block, or an empty array when there are no tables.
+ *
+ * @see https://docs.slack.dev/reference/block-kit/blocks/table-block/
  */
 export function markdownTablesToBlockKitAttachment(
   tables: MarkdownTableData[],
@@ -57,12 +60,15 @@ export function markdownTablesToBlockKitAttachment(
   if (!tables.length) {
     return [];
   }
-  const allBlocks = tables.map(markdownTableToBlockKit);
-  const attachments: { blocks: SlackTableBlock[] }[] = [];
-  for (let i = 0; i < allBlocks.length; i += SLACK_MAX_BLOCKS_PER_ATTACHMENT) {
-    attachments.push({
-      blocks: allBlocks.slice(i, i + SLACK_MAX_BLOCKS_PER_ATTACHMENT),
-    });
-  }
-  return attachments;
+  // Slack only permits one table per message; take the first.
+  const block = markdownTableToBlockKit(tables[0]!);
+  return [{ blocks: [block] }];
+}
+
+/**
+ * Return the count of tables that couldn't be sent as Block Kit
+ * (i.e. tables beyond the first, which must be rendered differently).
+ */
+export function countOverflowTables(tables: MarkdownTableData[]): number {
+  return Math.max(0, tables.length - 1);
 }
