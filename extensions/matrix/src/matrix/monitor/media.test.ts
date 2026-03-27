@@ -75,6 +75,28 @@ describe("downloadMatrixMedia", () => {
     expect(result?.path).toBe("/tmp/media");
   });
 
+  it("forwards originalFilename to saveMediaBuffer when provided", async () => {
+    const { client } = createEncryptedClient();
+    const file = createEncryptedFile();
+
+    await downloadMatrixMedia({
+      client,
+      mxcUrl: "mxc://example/file",
+      contentType: "image/png",
+      maxBytes: 1024,
+      file,
+      originalFilename: "Screenshot 2026-03-27.png",
+    });
+
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      Buffer.from("decrypted"),
+      "image/png",
+      "inbound",
+      1024,
+      "Screenshot 2026-03-27.png",
+    );
+  });
+
   it("rejects encrypted media that exceeds maxBytes before decrypting", async () => {
     const { client, decryptMedia } = createEncryptedClient();
     const file = createEncryptedFile();

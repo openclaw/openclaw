@@ -658,6 +658,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             sizeBytes: contentSize,
             maxBytes: mediaMaxBytes,
             file: finalContentFile,
+            originalFilename: typeof content.body === "string" ? content.body.trim() : undefined,
           });
         } catch (err) {
           mediaDownloadFailed = true;
