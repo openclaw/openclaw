@@ -1,6 +1,7 @@
 // Real workspace contract for memory engine foundation concerns.
 
 export {
+  resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -15,9 +16,12 @@ export { loadConfig } from "../../../src/config/config.js";
 export { resolveStateDir } from "../../../src/config/paths.js";
 export { resolveSessionTranscriptsDirForAgent } from "../../../src/config/sessions/paths.js";
 export {
+  coerceSecretRef,
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
 } from "../../../src/config/types.secrets.js";
+export { resolveSecretRefString } from "../../../src/secrets/resolve.js";
 export { writeFileWithinRoot } from "../../../src/infra/fs-safe.js";
 export { createSubsystemLogger } from "../../../src/logging/subsystem.js";
 export { detectMime } from "../../../src/media/mime.js";

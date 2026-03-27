@@ -1,13 +1,12 @@
 import path from "node:path";
-
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createEpisodeEncoder } from "../../memory/episodic/encoder.js";
 import { EpisodicStore } from "../../memory/episodic/store.js";
-import { buildSessionEntry } from "../../plugins/memory-host/session-files.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { buildSessionEntry } from "../../plugins/memory-host/session-files.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveAgentDir, resolveSessionAgentId } from "../agent-scope.js";

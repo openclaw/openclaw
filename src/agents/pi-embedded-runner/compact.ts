@@ -1,7 +1,5 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
@@ -19,7 +17,6 @@ import {
 } from "../../context-engine/index.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
-
 import { resolveSignalReactionLevel } from "../../plugin-sdk/signal.js";
 import {
   resolveTelegramInlineButtonsScope,
@@ -124,8 +121,6 @@ import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { describeUnknownError, mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
-
-const memLog = createSubsystemLogger("memory");
 
 export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
@@ -265,8 +260,6 @@ function summarizeCompactionMessages(messages: AgentMessage[]): CompactionMessag
     contributors: contributors.toSorted((a, b) => b.chars - a.chars).slice(0, 3),
   };
 }
-
-
 
 function containsRealConversationMessages(messages: AgentMessage[]): boolean {
   return messages.some((message, index, allMessages) =>
