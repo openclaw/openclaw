@@ -12,7 +12,7 @@ import {
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "../../../../extensions/ollama/src/stream.js";
+} from "../../../../extensions/ollama/api.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramReactionLevel,
@@ -202,7 +202,7 @@ export {
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "../../../../extensions/ollama/src/stream.js";
+} from "../../../../extensions/ollama/api.js";
 export {
   decodeHtmlEntitiesInObject,
   wrapStreamFnRepairMalformedToolCallArguments,
