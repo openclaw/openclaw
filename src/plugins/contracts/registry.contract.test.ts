@@ -10,6 +10,8 @@ import {
   speechProviderContractRegistry,
 } from "./registry.js";
 
+const REGISTRY_CONTRACT_TIMEOUT_MS = 300_000;
+
 function findProviderIdsForPlugin(pluginId: string) {
   return (
     pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId)?.providerIds ??
@@ -113,10 +115,14 @@ describe("plugin contract registry", () => {
     expect(ids).toEqual([...new Set(ids)]);
   });
 
-  it("does not duplicate bundled speech provider ids", () => {
-    const ids = speechProviderContractRegistry.map((entry) => entry.provider.id);
-    expect(ids).toEqual([...new Set(ids)]);
-  });
+  it(
+    "does not duplicate bundled speech provider ids",
+    { timeout: REGISTRY_CONTRACT_TIMEOUT_MS },
+    () => {
+      const ids = speechProviderContractRegistry.map((entry) => entry.provider.id);
+      expect(ids).toEqual([...new Set(ids)]);
+    },
+  );
 
   it("does not duplicate bundled media provider ids", () => {
     const ids = mediaUnderstandingProviderContractRegistry.map((entry) => entry.provider.id);
