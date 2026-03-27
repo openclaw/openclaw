@@ -28,11 +28,11 @@ describe("formatPluginSourceForTable", () => {
     const out = formatPluginSourceForTable(
       {
         origin: "bundled",
-        source: path.join(roots.stock, "bluebubbles", "index.ts"),
+        source: path.join(roots.stock, "demo-stock", "index.ts"),
       },
       roots,
     );
-    expect(out.value).toBe("stock:bluebubbles/index.ts");
+    expect(out.value).toBe("stock:demo-stock/index.ts");
     expect(out.rootKey).toBe("stock");
   });
 
@@ -41,11 +41,11 @@ describe("formatPluginSourceForTable", () => {
     const out = formatPluginSourceForTable(
       {
         origin: "workspace",
-        source: path.join(roots.workspace, "matrix", "index.ts"),
+        source: path.join(roots.workspace, "demo-workspace", "index.ts"),
       },
       roots,
     );
-    expect(out.value).toBe("workspace:matrix/index.ts");
+    expect(out.value).toBe("workspace:demo-workspace/index.ts");
     expect(out.rootKey).toBe("workspace");
   });
 
@@ -54,11 +54,11 @@ describe("formatPluginSourceForTable", () => {
     const out = formatPluginSourceForTable(
       {
         origin: "global",
-        source: path.join(roots.global, "zalo", "index.js"),
+        source: path.join(roots.global, "demo-global", "index.js"),
       },
       roots,
     );
-    expect(out.value).toBe("global:zalo/index.js");
+    expect(out.value).toBe("global:demo-global/index.js");
     expect(out.rootKey).toBe("global");
   });
 
