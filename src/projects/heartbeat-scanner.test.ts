@@ -463,3 +463,75 @@ describe("heartbeat-scanner", () => {
     }
   });
 });
+
+describe("integration", () => {
+  let tmpDirs: string[] = [];
+
+  afterEach(async () => {
+    for (const dir of tmpDirs) {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  async function setup(opts: Parameters<typeof setupProjectDir>[0] = {}): Promise<string> {
+    const dir = await setupProjectDir(opts);
+    tmpDirs.push(dir);
+    return dir;
+  }
+
+  it("full claim flow: scan queue, claim task, create checkpoint, read checkpoint on resume", async () => {
+    // Setup: project dir with queue.md having one Available task, no deps
+    const dir = await setup({
+      availableTasks: [
+        {
+          id: "TASK-001",
+          title: "Integration test task",
+          priority: "high",
+          capabilities: ["code"],
+        },
+      ],
+    });
+
+    // Step 1: scanAndClaimTask returns { type: "claimed" }
+    const claimResult = await scanAndClaimTask({
+      agentId: "agent-int-1",
+      agentCapabilities: ["code"],
+      projectDir: dir,
+    });
+    expect(claimResult.type).toBe("claimed");
+    if (claimResult.type !== "claimed") throw new Error("expected claimed");
+    expect(claimResult.task.id).toBe("TASK-001");
+    expect(claimResult.task.content).toContain("Integration test task");
+
+    // Step 2: Verify queue.md now has task in Claimed section
+    const queueContent = await fs.readFile(path.join(dir, "queue.md"), "utf8");
+    const claimedSection = queueContent.split("## Claimed")[1]?.split("##")[0] ?? "";
+    expect(claimedSection).toContain("TASK-001");
+    // Task should NOT be in Available anymore
+    const availableSection = queueContent.split("## Available")[1]?.split("##")[0] ?? "";
+    expect(availableSection).not.toContain("TASK-001");
+
+    // Step 3: Verify checkpoint.json exists
+    const cpPath = path.join(dir, "tasks", "TASK-001.checkpoint.json");
+    const cpContent = await fs.readFile(cpPath, "utf8");
+    const cpData = JSON.parse(cpContent);
+    expect(cpData.claimed_by).toBe("agent-int-1");
+    expect(cpData.status).toBe("in-progress");
+    expect(cpData.progress_pct).toBe(0);
+
+    // Step 4: Call scanAndClaimTask again -- should return "resumed" (AGNT-08 short-circuit)
+    const resumeResult = await scanAndClaimTask({
+      agentId: "agent-int-1",
+      agentCapabilities: ["code"],
+      projectDir: dir,
+    });
+    expect(resumeResult.type).toBe("resumed");
+
+    // Step 5: Verify resumed result has same task and checkpoint data
+    if (resumeResult.type !== "resumed") throw new Error("expected resumed");
+    expect(resumeResult.task.id).toBe("TASK-001");
+    expect(resumeResult.task.content).toContain("Integration test task");
+    expect(resumeResult.checkpoint.claimed_by).toBe("agent-int-1");
+    expect(resumeResult.checkpoint.status).toBe("in-progress");
+  });
+});

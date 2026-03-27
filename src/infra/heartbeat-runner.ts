@@ -47,6 +47,8 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { parseIdentityMarkdown } from "../agents/identity-file.js";
+import { scanAndClaimTask, type ScanAndClaimResult } from "../projects/heartbeat-scanner.js";
 import { escapeRegExp } from "../utils.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
@@ -493,6 +495,21 @@ function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string):
   return `${prompt}\n${hint}`;
 }
 
+/** Build a prompt for a claimed or resumed task, including checkpoint state. */
+function buildTaskPrompt(result: ScanAndClaimResult & { type: "claimed" | "resumed" }): string {
+  const verb = result.type === "claimed" ? "claimed" : "resuming";
+  const header = `You have ${verb} ${result.task.id}. Here is the task:\n\n${result.task.content}`;
+  const checkpointSection = `\n\n## Checkpoint State\n\n\`\`\`json\n${JSON.stringify(result.checkpoint, null, 2)}\n\`\`\``;
+  if (result.type === "resumed" && result.checkpoint.failed_approaches.length > 0) {
+    const failedSection = `\n\n## Previously Failed Approaches (DO NOT RETRY)\n\n${result.checkpoint.failed_approaches.map((f) => `- **${f.approach}**: ${f.reason}`).join("\n")}`;
+    return `${header}${checkpointSection}${failedSection}\n\nResume from where you left off. Your next action: ${result.checkpoint.next_action || "review the checkpoint and continue"}`;
+  }
+  if (result.type === "resumed") {
+    return `${header}${checkpointSection}\n\nResume from where you left off. Your next action: ${result.checkpoint.next_action || "review the checkpoint and continue"}`;
+  }
+  return `${header}${checkpointSection}\n\nBegin working on this task. Update the checkpoint file as you make progress.`;
+}
+
 function resolveHeartbeatRunPrompt(params: {
   cfg: OpenClawConfig;
   heartbeat?: HeartbeatConfig;
@@ -642,13 +659,46 @@ export async function runHeartbeatOnce(opts: {
     delivery.channel !== "none" && delivery.to && visibility.showAlerts,
   );
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const { prompt, hasExecCompletion, hasCronEvents } = resolveHeartbeatRunPrompt({
-    cfg,
-    heartbeat,
-    preflight,
-    canRelayToUser,
-    workspaceDir,
-  });
+
+  // Pre-heartbeat task scan (Phase 6: AGNT-05, AGNT-06, AGNT-08)
+  let taskScanResult: ScanAndClaimResult | undefined;
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  const projectDir = (agentConfig as Record<string, unknown>)?.project as string | undefined;
+  if (projectDir) {
+    try {
+      const identityPath = path.join(workspaceDir, "IDENTITY.md");
+      let agentCapabilities: string[] = [];
+      try {
+        const identityContent = await fs.readFile(identityPath, "utf8");
+        const identity = parseIdentityMarkdown(identityContent);
+        agentCapabilities = identity.capabilities ?? [];
+      } catch {
+        // No IDENTITY.md or unreadable -- proceed with empty capabilities
+      }
+      taskScanResult = await scanAndClaimTask({ agentId, agentCapabilities, projectDir });
+    } catch (err) {
+      log.warn("heartbeat: task scan failed", { error: formatErrorMessage(err), agentId });
+    }
+  }
+
+  let prompt: string;
+  let hasExecCompletion = false;
+  let hasCronEvents = false;
+
+  if (taskScanResult && taskScanResult.type !== "idle") {
+    prompt = buildTaskPrompt(taskScanResult);
+  } else {
+    const promptResolution = resolveHeartbeatRunPrompt({
+      cfg,
+      heartbeat,
+      preflight,
+      canRelayToUser,
+      workspaceDir,
+    });
+    prompt = promptResolution.prompt;
+    hasExecCompletion = promptResolution.hasExecCompletion;
+    hasCronEvents = promptResolution.hasCronEvents;
+  }
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
