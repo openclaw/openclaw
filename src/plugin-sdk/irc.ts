@@ -58,11 +58,7 @@ export type { OpenClawPluginApi } from "../plugins/types.js";
 export { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 export type { RuntimeEnv } from "../runtime.js";
 export { createAccountStatusSink, runPassiveAccountLifecycle } from "./channel-lifecycle.js";
-export {
-  listIrcAccountIds,
-  resolveDefaultIrcAccountId,
-  resolveIrcAccount,
-} from "../../extensions/irc/api.js";
+export { listIrcAccountIds, resolveDefaultIrcAccountId, resolveIrcAccount } from "./irc-surface.js";
 export {
   readStoreAllowFromForDmPolicy,
   resolveEffectiveAllowFromLists,
@@ -71,7 +67,7 @@ export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { createChannelPairingController } from "./channel-pairing.js";
 export { dispatchInboundReplyWithBase } from "./inbound-reply-dispatch.js";
-export { ircSetupAdapter, ircSetupWizard } from "../../extensions/irc/api.js";
+export { ircSetupAdapter, ircSetupWizard } from "./irc-surface.js";
 export type { OutboundReplyPayload } from "./reply-payload.js";
 export {
   createNormalizedOutboundDeliverer,

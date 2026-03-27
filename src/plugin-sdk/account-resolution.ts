@@ -17,16 +17,10 @@ export {
   normalizeOptionalAccountId,
 } from "../routing/session-key.js";
 export { normalizeE164, pathExists, resolveUserPath } from "../utils.js";
-export {
-  resolveDiscordAccount,
-  type ResolvedDiscordAccount,
-} from "../../extensions/discord/api.js";
-export { resolveSlackAccount, type ResolvedSlackAccount } from "../../extensions/slack/api.js";
-export {
-  resolveTelegramAccount,
-  type ResolvedTelegramAccount,
-} from "../../extensions/telegram/api.js";
-export { resolveSignalAccount, type ResolvedSignalAccount } from "../../extensions/signal/api.js";
+export { resolveDiscordAccount, type ResolvedDiscordAccount } from "./discord-account.js";
+export { resolveSlackAccount, type ResolvedSlackAccount } from "./slack-account.js";
+export { resolveTelegramAccount, type ResolvedTelegramAccount } from "./telegram-account.js";
+export { resolveSignalAccount, type ResolvedSignalAccount } from "./signal-account.js";
 
 /** Resolve an account by id, then fall back to the default account when the primary lacks credentials. */
 export function resolveAccountWithDefaultFallback<TAccount>(params: {
