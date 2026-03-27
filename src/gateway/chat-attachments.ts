@@ -30,6 +30,7 @@ type NormalizedAttachment = {
   mime: string;
   base64: string;
 };
+
 type SavedMedia = {
   id: string;
   path?: string;
@@ -49,7 +50,9 @@ const MIME_TO_EXT: Record<string, string> = {
 };
 
 function normalizeMime(mime?: string): string | undefined {
-  if (!mime) return undefined;
+  if (!mime) {
+    return undefined;
+  }
   const cleaned = mime.split(";")[0]?.trim().toLowerCase();
   return cleaned || undefined;
 }
@@ -62,12 +65,10 @@ function isValidBase64(value: string): boolean {
   return value.length > 0 && value.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
 }
 
-function sanitizePathSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9.\-_]/g, "_");
-}
-
 function ensureExtension(label: string, mime: string): string {
-  if (/\.[a-zA-Z0-9]+$/.test(label)) return label;
+  if (/\.[a-zA-Z0-9]+$/.test(label)) {
+    return label;
+  }
   const ext = MIME_TO_EXT[mime.toLowerCase()] ?? "";
   return ext ? `${label}${ext}` : label;
 }
@@ -140,7 +141,9 @@ export async function parseMessageWithAttachments(
   let updatedMessage = message;
 
   for (const [idx, att] of attachments.entries()) {
-    if (!att) continue;
+    if (!att) {
+      continue;
+    }
 
     const normalized = normalizeAttachment(att, idx, {
       stripDataUrlPrefix: true,
@@ -188,7 +191,6 @@ export async function parseMessageWithAttachments(
     if (sizeBytes > OFFLOAD_THRESHOLD_BYTES && isSupportedForOffload) {
       try {
         const buffer = Buffer.from(b64, "base64");
-
         const labelWithExt = ensureExtension(label, finalMime);
 
         const savedMedia = (await saveMediaBuffer(
@@ -205,13 +207,16 @@ export async function parseMessageWithAttachments(
         log?.info?.(`[Gateway] Intercepted large image payload. Saved to disk: ${mediaPath}`);
         isOffloaded = true;
       } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
         log?.warn(
-          `[Gateway Error] Failed to save intercepted media to disk, falling back to memory: ${err}`,
+          `[Gateway Error] Failed to save intercepted media to disk, falling back to memory: ${errorMessage}`,
         );
       }
     }
 
-    if (isOffloaded) continue;
+    if (isOffloaded) {
+      continue;
+    }
 
     images.push({ type: "image", data: b64, mimeType: finalMime });
   }
@@ -240,7 +245,9 @@ export function buildMessageWithAttachments(
   const blocks: string[] = [];
 
   for (const [idx, att] of attachments.entries()) {
-    if (!att) continue;
+    if (!att) {
+      continue;
+    }
 
     const normalized = normalizeAttachment(att, idx, {
       stripDataUrlPrefix: false,
@@ -253,7 +260,9 @@ export function buildMessageWithAttachments(
     blocks.push(`![${safeLabel}](data:${mime};base64,${base64})`);
   }
 
-  if (blocks.length === 0) return message;
+  if (blocks.length === 0) {
+    return message;
+  }
 
   const separator = message.trim().length > 0 ? "\n\n" : "";
   return `${message}${separator}${blocks.join("\n\n")}`;
