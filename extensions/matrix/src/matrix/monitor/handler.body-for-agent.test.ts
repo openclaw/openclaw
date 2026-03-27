@@ -7,8 +7,17 @@ import {
 } from "./handler.test-helpers.js";
 import type { MatrixRawEvent } from "./types.js";
 
+const { downloadMatrixMediaMock } = vi.hoisted(() => ({
+  downloadMatrixMediaMock: vi.fn(),
+}));
+
+vi.mock("./media.js", () => ({
+  downloadMatrixMedia: (...args: unknown[]) => downloadMatrixMediaMock(...args),
+}));
+
 describe("createMatrixRoomMessageHandler inbound body formatting", () => {
   beforeEach(() => {
+    downloadMatrixMediaMock.mockReset();
     installMatrixMonitorTestRuntime({
       matchesMentionPatterns: () => false,
       saveMediaBuffer: vi.fn(),
@@ -120,6 +129,45 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
     expect(recordInboundSession).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:ops:main",
+      }),
+    );
+  });
+
+  it("appends a MEDIA tag with the saved inbound path for downloaded media", async () => {
+    downloadMatrixMediaMock.mockResolvedValue({
+      path: "./media/inbound/screenshot---uuid.png",
+      contentType: "image/png",
+      placeholder: "[matrix media]",
+    });
+
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: true,
+    });
+
+    await handler("!room:example.org", {
+      type: "m.room.message",
+      sender: "@user:example.org",
+      event_id: "$image1",
+      origin_server_ts: 2,
+      content: {
+        msgtype: "m.image",
+        body: "Screenshot 2026-03-26 at 12.00.09.png",
+        url: "mxc://example/image",
+      },
+    } as MatrixRawEvent);
+
+    expect(downloadMatrixMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        originalFilename: "Screenshot 2026-03-26 at 12.00.09.png",
+      }),
+    );
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          RawBody: expect.stringContaining("MEDIA:./media/inbound/screenshot---uuid.png"),
+          CommandBody: expect.stringContaining("MEDIA:./media/inbound/screenshot---uuid.png"),
+          MediaPath: "./media/inbound/screenshot---uuid.png",
+        }),
       }),
     );
   });

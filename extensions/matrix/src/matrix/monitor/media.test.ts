@@ -71,6 +71,7 @@ describe("downloadMatrixMedia", () => {
       "image/png",
       "inbound",
       1024,
+      undefined,
     );
     expect(result?.path).toBe("/tmp/media");
   });
@@ -112,5 +113,29 @@ describe("downloadMatrixMedia", () => {
       maxBytes: 4096,
       readIdleTimeoutMs: 30_000,
     });
+  });
+
+  it("passes the original filename through to saveMediaBuffer", async () => {
+    const downloadContent = vi.fn().mockResolvedValue(Buffer.from("plain"));
+
+    const client = {
+      downloadContent,
+    } as unknown as import("../sdk.js").MatrixClient;
+
+    await downloadMatrixMedia({
+      client,
+      mxcUrl: "mxc://example/file",
+      contentType: "image/png",
+      maxBytes: 4096,
+      originalFilename: "Screenshot 2026-03-26 at 12.00.09.png",
+    });
+
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      Buffer.from("plain"),
+      "image/png",
+      "inbound",
+      4096,
+      "Screenshot 2026-03-26 at 12.00.09.png",
+    );
   });
 });

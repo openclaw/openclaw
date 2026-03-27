@@ -114,21 +114,27 @@ function resolveMatrixInboundBodyText(params: {
   rawBody: string;
   filename?: string;
   mediaPlaceholder?: string;
+  mediaPath?: string;
   msgtype?: string;
   hadMediaUrl: boolean;
   mediaDownloadFailed: boolean;
 }): string {
+  let body = "";
   if (params.mediaPlaceholder) {
-    return params.rawBody || params.mediaPlaceholder;
+    body = params.rawBody || params.mediaPlaceholder;
+  } else if (!params.mediaDownloadFailed || !params.hadMediaUrl) {
+    body = params.rawBody;
+  } else {
+    body = formatMatrixMediaUnavailableText({
+      body: params.rawBody,
+      filename: params.filename,
+      msgtype: params.msgtype,
+    });
   }
-  if (!params.mediaDownloadFailed || !params.hadMediaUrl) {
-    return params.rawBody;
+  if (!params.mediaPath) {
+    return body;
   }
-  return formatMatrixMediaUnavailableText({
-    body: params.rawBody,
-    filename: params.filename,
-    msgtype: params.msgtype,
-  });
+  return body ? `${body}\nMEDIA:${params.mediaPath}` : `MEDIA:${params.mediaPath}`;
 }
 
 function resolveMatrixAllowBotsMode(value?: boolean | "mentions"): MatrixAllowBotsMode {
@@ -658,6 +664,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             sizeBytes: contentSize,
             maxBytes: mediaMaxBytes,
             file: finalContentFile,
+            originalFilename: typeof content.body === "string" ? content.body : undefined,
           });
         } catch (err) {
           mediaDownloadFailed = true;
@@ -681,6 +688,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         rawBody,
         filename: typeof content.filename === "string" ? content.filename : undefined,
         mediaPlaceholder: media?.placeholder,
+        mediaPath: media?.path,
         msgtype: content.msgtype,
         hadMediaUrl: Boolean(finalMediaUrl),
         mediaDownloadFailed,
