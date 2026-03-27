@@ -413,7 +413,17 @@ export const telegramPlugin = createChatChannelPlugin({
     status: createComputedAccountStatusAdapter<ResolvedTelegramAccount, TelegramProbe, unknown>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       collectStatusIssues: collectTelegramStatusIssues,
-      buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
+      buildChannelSummary: ({ account, snapshot }) => {
+        // The health endpoint builds a minimal snapshot without tokenSource
+        // or running. Fill them from the resolved account and probe result
+        // so the health response accurately reflects the bot's state.
+        const probeOk = !!(snapshot.probe as { ok?: boolean } | undefined)?.ok;
+        return buildTokenChannelStatusSummary({
+          ...snapshot,
+          tokenSource: snapshot.tokenSource ?? account.tokenSource,
+          running: snapshot.running ?? (snapshot.configured !== false && probeOk),
+        });
+      },
       probeAccount: async ({ account, timeoutMs }) =>
         probeTelegram(account.token, timeoutMs, {
           accountId: account.accountId,
