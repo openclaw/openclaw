@@ -3,12 +3,11 @@ import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   applyAccountNameToChannelSection,
-  createZodSetupInputValidator,
+  createSetupInputPresenceValidator,
   createTopLevelChannelAllowFromSetter,
   createTopLevelChannelDmPolicySetter,
   patchScopedAccountConfig,
 } from "openclaw/plugin-sdk/setup";
-import { z } from "zod";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const channel = "irc" as const;
@@ -29,13 +28,6 @@ type IrcSetupInput = ChannelSetupInput & {
   channels?: string[];
   password?: string;
 };
-
-const IrcSetupInputSchema = z
-  .object({
-    host: z.string().trim().min(1, "IRC requires host."),
-    nick: z.string().trim().min(1, "IRC requires nick."),
-  })
-  .passthrough() as z.ZodType<IrcSetupInput>;
 
 export function parsePort(raw: string, fallback: number): number {
   const trimmed = raw.trim();
@@ -110,7 +102,12 @@ export const ircSetupAdapter: ChannelSetupAdapter = {
       accountId,
       name,
     }),
-  validateInput: createZodSetupInputValidator({ schema: IrcSetupInputSchema }),
+  validateInput: createSetupInputPresenceValidator({
+    whenNotUseEnv: [
+      { someOf: ["host"], message: "IRC requires host." },
+      { someOf: ["nick"], message: "IRC requires nick." },
+    ],
+  }),
   applyAccountConfig: ({ cfg, accountId, input }) => {
     const setupInput = input as IrcSetupInput;
     const namedConfig = applyAccountNameToChannelSection({
