@@ -23,7 +23,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlparse, unquote
+from urllib.parse import unquote, urlparse
 
 import httpx
 
