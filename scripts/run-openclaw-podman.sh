@@ -101,11 +101,6 @@ if [[ -f "$ENV_FILE" ]]; then
   set +a
 fi
 
-# Keep Podman default local-only unless explicitly overridden.
-# Non-loopback binds require gateway.controlUi.allowedOrigins (security hardening).
-# NOTE: must be evaluated after sourcing ENV_FILE so OPENCLAW_GATEWAY_BIND set in .env takes effect.
-GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-loopback}"
-
 upsert_env_var() {
   local file="$1"
   local key="$2"
@@ -161,6 +156,31 @@ if [[ ! -f "$CONFIG_JSON" ]]; then
   chmod 600 "$CONFIG_JSON" 2>/dev/null || true
   echo "Created $CONFIG_JSON (minimal gateway.mode=local)." >&2
 fi
+
+resolve_config_gateway_bind() {
+  local config_json="$1"
+  if [[ ! -f "$config_json" ]]; then
+    return 0
+  fi
+  python3 - "$config_json" <<'PY' 2>/dev/null || true
+import pathlib
+import re
+import sys
+
+raw = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore")
+match = re.search(r'(^|[,{\s])bind\s*:\s*"(loopback|lan|auto|custom|tailnet)"', raw)
+if not match:
+    match = re.search(r'"bind"\s*:\s*"(loopback|lan|auto|custom|tailnet)"', raw)
+if match:
+    print(match.group(match.lastindex))
+PY
+}
+
+# Keep Podman default local-only unless explicitly overridden.
+# Non-loopback binds require gateway.controlUi.allowedOrigins (security hardening).
+# Precedence: explicit env > openclaw.json gateway.bind > loopback default.
+CONFIG_GATEWAY_BIND="$(resolve_config_gateway_bind "$CONFIG_JSON")"
+GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-${CONFIG_GATEWAY_BIND:-loopback}}"
 
 PODMAN_USERNS="${OPENCLAW_PODMAN_USERNS:-keep-id}"
 USERNS_ARGS=()
