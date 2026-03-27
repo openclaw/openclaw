@@ -6,6 +6,7 @@ const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const callGatewayMock = vi.fn();
 const loadCombinedSessionStoreForGatewayMock = vi.fn();
+const buildStatusMessageMock = vi.hoisted(() => vi.fn(() => "OpenClaw\n🧠 Model: GPT-5.4"));
 
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
@@ -185,12 +186,13 @@ async function loadFreshOpenClawToolsForSessionStatusTest() {
     resolveQueueSettings: () => ({ mode: "interrupt" }),
   }));
   vi.doMock("../auto-reply/status.js", () => ({
-    buildStatusMessage: () => "OpenClaw\n🧠 Model: GPT-5.4",
+    buildStatusMessage: buildStatusMessageMock,
   }));
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
 }
 
 function resetSessionStore(store: Record<string, SessionEntry>) {
+  buildStatusMessageMock.mockClear();
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
@@ -287,6 +289,7 @@ function getSessionStatusTool(agentSessionKey = "main", options?: { sandboxed?: 
 
 describe("session_status tool", () => {
   beforeEach(async () => {
+    buildStatusMessageMock.mockClear();
     await loadFreshOpenClawToolsForSessionStatusTest();
   });
 
@@ -420,6 +423,106 @@ describe("session_status tool", () => {
         }),
       }),
     );
+  });
+
+  it("uses the runtime session model as the selected card model when no override is set", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "runtime-model",
+        updatedAt: 10,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-runtime-model", {});
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: expect.objectContaining({
+          model: expect.objectContaining({
+            primary: "anthropic/claude-opus-4-6",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("preserves an unknown runtime provider in the selected status card model", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "legacy-runtime-model",
+        updatedAt: 10,
+        model: "legacy-runtime-model",
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-legacy-runtime-model", {});
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: expect.objectContaining({
+          model: expect.objectContaining({
+            primary: "legacy-runtime-model",
+          }),
+        }),
+        sessionEntry: expect.objectContaining({
+          model: "legacy-runtime-model",
+          providerOverride: "",
+        }),
+        modelAuth: undefined,
+      }),
+    );
+  });
+
+  it("passes per-agent thinkingDefault through to the status card", async () => {
+    resetSessionStore({
+      "agent:kira:main": {
+        sessionId: "agent-thinking",
+        updatedAt: 10,
+      },
+    });
+    const savedConfig = mockConfig;
+    try {
+      mockConfig = {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            models: {},
+          },
+          list: [
+            {
+              id: "kira",
+              model: "openai/gpt-5.4",
+              thinkingDefault: "xhigh",
+            },
+          ],
+        },
+        tools: {
+          agentToAgent: { enabled: false },
+        },
+      };
+
+      const tool = getSessionStatusTool("agent:kira:main");
+
+      await tool.execute("call-agent-thinking", {});
+
+      expect(buildStatusMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "kira",
+          agent: expect.objectContaining({
+            thinkingDefault: "xhigh",
+          }),
+        }),
+      );
+    } finally {
+      mockConfig = savedConfig;
+    }
   });
 
   it("resolves sessionId inputs", async () => {

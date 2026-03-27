@@ -1,4 +1,5 @@
 import {
+  resolveAgentConfig,
   resolveAgentDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
@@ -224,6 +225,7 @@ export async function buildStatusReply(params: {
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
     : undefined;
   const agentDefaults = cfg.agents?.defaults ?? {};
+  const agentConfig = resolveAgentConfig(cfg, statusAgentId);
   const effectiveFastMode =
     resolvedFastMode ??
     resolveFastModeState({
@@ -242,7 +244,7 @@ export async function buildStatusReply(params: {
         primary: `${provider}/${model}`,
       },
       contextTokens,
-      thinkingDefault: agentDefaults.thinkingDefault,
+      thinkingDefault: agentConfig?.thinkingDefault ?? agentDefaults.thinkingDefault,
       verboseDefault: agentDefaults.verboseDefault,
       elevatedDefault: agentDefaults.elevatedDefault,
     },
