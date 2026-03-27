@@ -30,7 +30,7 @@ import {
   saveAgentsConfig,
 } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
-import { loadChatHistory } from "./controllers/chat.ts";
+import { loadChatHistory, loadMoreChatHistory } from "./controllers/chat.ts";
 import {
   applyConfig,
   ensureAgentConfigEntry,
@@ -1521,6 +1521,8 @@ export function renderApp(state: AppViewState) {
                     state.lastError = String(err);
                   }
                 },
+                chatHistoryHasMore: state.chatHistoryHasMore,
+                onLoadMoreHistory: () => loadMoreChatHistory(state),
                 agentsList: state.agentsList,
                 currentAgentId: resolvedAgentId ?? "main",
                 onAgentChange: (agentId: string) => {

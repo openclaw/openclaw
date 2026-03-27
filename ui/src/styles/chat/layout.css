@@ -983,3 +983,15 @@
 
 /* Mobile dropdown toggle — hidden on desktop */
 /* Mobile gear toggle + dropdown are hidden by default in layout.css */
+
+/* Load earlier messages button */
+.chat-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0;
+}
+
+.chat-load-more__button {
+  font-size: 14px;
+  color: var(--text-secondary);
+}

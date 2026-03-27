@@ -96,6 +96,8 @@ export type ChatProps = {
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
+  chatHistoryHasMore?: boolean;
+  onLoadMoreHistory?: () => void;
   agentsList: {
     agents: Array<{ id: string; name?: string; identity?: { name?: string; avatarUrl?: string } }>;
     defaultId?: string;
@@ -993,6 +995,20 @@ export function renderChat(props: ChatProps) {
                 <div class="agent-chat__empty">No matching messages</div>
               `
             : nothing
+        }
+        ${props.chatHistoryHasMore && !isEmpty
+          ? html`
+              <div class="chat-load-more">
+                <button
+                  class="btn btn--ghost chat-load-more__button"
+                  @click=${props.onLoadMoreHistory}
+                  ?disabled=${props.loading}
+                >
+                  ${props.loading ? "Loading..." : "Load earlier messages"}
+                </button>
+              </div>
+            `
+          : nothing
         }
         ${repeat(
           chatItems,
