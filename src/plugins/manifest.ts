@@ -131,27 +131,6 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   return Object.keys(contracts).length > 0 ? contracts : undefined;
 }
 
-function normalizeLegacyCapabilityContracts(
-  raw: Record<string, unknown>,
-): PluginManifestContracts | undefined {
-  return normalizeManifestContracts({
-    speechProviders: raw.speechProviders,
-    mediaUnderstandingProviders: raw.mediaUnderstandingProviders,
-    imageGenerationProviders: raw.imageGenerationProviders,
-  });
-}
-
-function mergeManifestContracts(
-  fallback: PluginManifestContracts | undefined,
-  primary: PluginManifestContracts | undefined,
-): PluginManifestContracts | undefined {
-  const merged = {
-    ...fallback,
-    ...primary,
-  } satisfies PluginManifestContracts;
-  return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
 function normalizeProviderAuthChoices(
   value: unknown,
 ): PluginManifestProviderAuthChoice[] | undefined {
@@ -303,10 +282,7 @@ export function loadPluginManifest(
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const skills = normalizeStringList(raw.skills);
-  const contracts = mergeManifestContracts(
-    normalizeLegacyCapabilityContracts(raw),
-    normalizeManifestContracts(raw.contracts),
-  );
+  const contracts = normalizeManifestContracts(raw.contracts);
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 
   let uiHints: Record<string, PluginConfigUiHint> | undefined;
