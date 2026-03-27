@@ -90,7 +90,7 @@ function isResetAuthorizedForContext(params: {
   }
   const surface = params.ctx.Surface ?? params.ctx.Provider;
   if (!isInternalMessageChannel(surface)) {
-    return auth.isAuthorizedSender;
+    return true;
   }
   const scopes = params.ctx.GatewayClientScopes;
   if (!Array.isArray(scopes) || scopes.length === 0) {

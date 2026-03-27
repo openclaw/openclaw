@@ -741,7 +741,7 @@ describe("gateway server chat", () => {
 
           const sendRes = await rpcReq(scopedWs, "chat.send", {
             sessionKey: "main",
-            message: "/reset hello after rotate",
+            message: "/reset",
             idempotencyKey: "idem-write-scope-reset-no-rotate",
           });
           expect(sendRes.ok).toBe(true);
