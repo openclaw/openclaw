@@ -103,8 +103,10 @@ function tryParseMalformedToolCallArguments(raw: string): ToolCallArgumentRepair
     return undefined;
   }
   try {
-    JSON.parse(raw);
-    return undefined;
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? { args: parsed as Record<string, unknown>, trailingSuffix: "" }
+      : undefined;
   } catch {
     const extracted = extractBalancedJsonPrefix(raw);
     if (!extracted) {
@@ -255,7 +257,10 @@ function wrapStreamRepairMalformedToolCallArguments(
                   repairedArgsByIndex.set(event.contentIndex, repair.args);
                   repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repair.args);
                   repairToolCallArgumentsInMessage(event.message, event.contentIndex, repair.args);
-                  if (!loggedRepairIndices.has(event.contentIndex)) {
+                  if (
+                    !loggedRepairIndices.has(event.contentIndex) &&
+                    repair.trailingSuffix.length > 0
+                  ) {
                     loggedRepairIndices.add(event.contentIndex);
                     log.warn(
                       `repairing Kimi tool call arguments with ${repair.leadingPrefix.length} leading chars and ${repair.trailingSuffix.length} trailing chars`,
