@@ -73,7 +73,7 @@ describe("stageBundledPluginRuntime", () => {
     );
     expect(fs.existsSync(path.join(repoRoot, "dist-runtime", "chunk-abc.js"))).toBe(false);
 
-    const runtimeModule = await import(`${pathToFileURL(runtimeEntryPath).href}?t=${Date.now()}`);
+    const runtimeModule = await import(${pathToFileURL(runtimeEntryPath).href}?t=${Date.now()});
     expect(runtimeModule.value).toBe(1);
   });
 
@@ -118,7 +118,7 @@ describe("stageBundledPluginRuntime", () => {
       [
         "const registry = globalThis.__openclawTestPluginCommands ??= new Map();",
         "export function registerPluginCommand(pluginId, command) {",
-        "  registry.set(`/${command.name.toLowerCase()}`, { ...command, pluginId });",
+        "  registry.set(/${command.name.toLowerCase()}, { ...command, pluginId });",
         "}",
         "export function clearPluginCommands() {",
         "  registry.clear();",
@@ -155,7 +155,7 @@ describe("stageBundledPluginRuntime", () => {
         "    description: 'Pair a device',",
         "    acceptsArgs: true,",
         "    nativeNames: { telegram: 'pair', discord: 'pair' },",
-        "    handler: async ({ args }) => ({ text: `paired:${args ?? ''}` }),",
+        "    handler: async ({ args }) => ({ text: paired:${args ?? ''} }),",
         "  });",
         "}",
         "",
@@ -172,9 +172,9 @@ describe("stageBundledPluginRuntime", () => {
       false,
     );
 
-    const runtimeModule = await import(`${pathToFileURL(runtimeEntryPath).href}?t=${Date.now()}`);
+    const runtimeModule = await import(${pathToFileURL(runtimeEntryPath).href}?t=${Date.now()});
     const commandsModule = (await import(
-      `${pathToFileURL(canonicalCommandsPath).href}?t=${Date.now()}`
+      ${pathToFileURL(canonicalCommandsPath).href}?t=${Date.now()}
     )) as {
       clearPluginCommands: () => void;
       getPluginCommandSpecs: (provider?: string) => Array<{
@@ -258,8 +258,11 @@ describe("stageBundledPluginRuntime", () => {
     expect(fs.readFileSync(runtimePackagePath, "utf8")).toContain('"extensions": [');
     expect(fs.lstatSync(runtimeManifestPath).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(runtimeManifestPath, "utf8")).toBe("{}\n");
-    expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(true);
     expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("ok\n");
+    // Windows often denies file symlinks without Developer Mode; overlay may copy instead.
+    if (process.platform !== "win32") {
+      expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(true);
+    }
   });
 
   it("preserves package metadata needed for bundled plugin discovery from dist-runtime", () => {
@@ -389,8 +392,10 @@ describe("stageBundledPluginRuntime", () => {
       "feishu-doc",
       "SKILL.md",
     );
-    expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(true);
     expect(fs.readFileSync(runtimeSkillPath, "utf8")).toBe("# Feishu Doc\n");
+    if (process.platform !== "win32") {
+      expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(true);
+    }
 
     symlinkSpy.mockRestore();
   });
