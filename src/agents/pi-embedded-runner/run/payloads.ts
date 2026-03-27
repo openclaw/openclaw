@@ -77,7 +77,7 @@ const NON_EXECUTING_REPLY_PATTERNS = [
   /\bstill planning to\b/i,
   /\bworking on it\b/i,
   /\blet me (?:actually )?(?:check|do|look|read|run|test|open|inspect|verify|fetch|pull)\b/i,
-  /\bi(?:'|')ll (?:check|do|look|read|run|test|open|inspect|verify|fetch|pull)\b.*\bnow\b/i,
+  /\bi(?:'|')ll (?:check|do|look|read|run|test|open|inspect|verify|fetch|pull)\b[^.!?\n]{0,60}\bnow\b/i,
 ] as const;
 
 const NON_EXECUTING_REPLY_MAX_CHARS = 220;

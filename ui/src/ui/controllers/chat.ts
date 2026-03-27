@@ -784,6 +784,20 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStreamStartedAt = null;
   } else if (payload.state === "error") {
     const formattedError = formatChatErrorMessage(payload.errorMessage);
+    // Preserve any partial streamed content before appending the error,
+    // consistent with the done/aborted paths that commit chatStream as a
+    // fallback. Without this, mid-stream errors silently discard content.
+    const streamedText = state.chatStream ?? "";
+    if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
+      state.chatMessages = [
+        ...state.chatMessages,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: streamedText }],
+          timestamp: Date.now(),
+        },
+      ];
+    }
     state.chatMessages = [
       ...state.chatMessages,
       {

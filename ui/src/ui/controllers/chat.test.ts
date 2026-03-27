@@ -362,8 +362,13 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
     expect(state.lastError).toBe("LLM request timed out.");
-    expect(state.chatMessages).toHaveLength(1);
+    // Partial stream is preserved before the error message
+    expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Working..." }],
+    });
+    expect(state.chatMessages[1]).toMatchObject({
       role: "assistant",
       content: [{ type: "text", text: "⚠️ LLM request timed out." }],
     });
