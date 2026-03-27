@@ -45,6 +45,18 @@ services:
         value: /data/workspace
       - key: OPENCLAW_SANDBOX_MODE
         value: off
+      - key: OPENCLAW_TOOLS_PROFILE
+        value: full
+      - key: OPENCLAW_TOOLS_ALLOW_JSON
+        value: "[]"
+      - key: OPENCLAW_TOOLS_DENY_JSON
+        value: "[]"
+      - key: OPENCLAW_EXEC_HOST
+        value: gateway
+      - key: OPENCLAW_EXEC_SECURITY
+        value: full
+      - key: OPENCLAW_EXEC_ASK
+        value: off
       - key: OPENCLAW_GATEWAY_TOKEN
         generateValue: true # auto-generates a secure token
     disk:
