@@ -167,13 +167,49 @@ import pathlib
 import re
 import sys
 
+VALID = {"loopback", "lan", "auto", "custom", "tailnet"}
 raw = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore")
-gateway_match = re.search(r'["\']?gateway["\']?\s*:\s*\{([^}]*)\}', raw, re.DOTALL)
-if not gateway_match:
+
+key_match = re.search(r'["\']?gateway["\']?\s*:\s*\{', raw)
+if not key_match:
     raise SystemExit(0)
-gateway_block = gateway_match.group(1)
-match = re.search(r'["\']?bind["\']?\s*:\s*"(loopback|lan|auto|custom|tailnet)"', gateway_block)
-if match:
+
+start = raw.find("{", key_match.start())
+if start < 0:
+    raise SystemExit(0)
+
+depth = 0
+in_string = False
+quote = ""
+escaped = False
+end = -1
+for idx in range(start, len(raw)):
+    ch = raw[idx]
+    if in_string:
+        if escaped:
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == quote:
+            in_string = False
+    else:
+        if ch in ('"', "'"):
+            in_string = True
+            quote = ch
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = idx
+                break
+
+if end < 0:
+    raise SystemExit(0)
+
+gateway_block = raw[start + 1:end]
+match = re.search(r'["\']?bind["\']?\s*:\s*["\'](loopback|lan|auto|custom|tailnet)["\']', gateway_block)
+if match and match.group(1) in VALID:
     print(match.group(1))
 PY
 }
