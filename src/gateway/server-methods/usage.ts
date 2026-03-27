@@ -50,6 +50,62 @@ type CostUsageCacheEntry = {
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
 
+export type UsageReportSummary = {
+  updatedAt: number;
+  startDate: string;
+  endDate: string;
+  days: number;
+  daily: CostUsageSummary["daily"];
+  totals: CostUsageSummary["totals"];
+  byModel: SessionModelUsage[];
+  byProvider: SessionModelUsage[];
+};
+
+type UsageReportCacheEntry = {
+  summary?: UsageReportSummary;
+  updatedAt?: number;
+  inFlight?: Promise<UsageReportSummary>;
+};
+
+const usageReportCache = new Map<string, UsageReportCacheEntry>();
+
+function createCostTotals(): CostUsageSummary["totals"] {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    totalCost: 0,
+    inputCost: 0,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    missingCostEntries: 0,
+  };
+}
+
+function mergeCostTotals(
+  target: CostUsageSummary["totals"],
+  source: CostUsageSummary["totals"],
+): void {
+  target.input += source.input;
+  target.output += source.output;
+  target.cacheRead += source.cacheRead;
+  target.cacheWrite += source.cacheWrite;
+  target.totalTokens += source.totalTokens;
+  target.totalCost += source.totalCost;
+  target.inputCost += source.inputCost;
+  target.outputCost += source.outputCost;
+  target.cacheReadCost += source.cacheReadCost;
+  target.cacheWriteCost += source.cacheWriteCost;
+  target.missingCostEntries += source.missingCostEntries;
+}
+
+function formatDateUtc(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
 function resolveSessionUsageFileOrRespond(
   key: string,
   respond: RespondFn,
@@ -237,6 +293,125 @@ async function loadCostUsageSummaryCached(params: {
   return await inFlight;
 }
 
+async function loadUsageReportSummaryCached(params: {
+  startMs: number;
+  endMs: number;
+  config: ReturnType<typeof loadConfig>;
+}): Promise<UsageReportSummary> {
+  const cacheKey = `${params.startMs}-${params.endMs}`;
+  const now = Date.now();
+  const cached = usageReportCache.get(cacheKey);
+  if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
+    return cached.summary;
+  }
+
+  if (cached?.inFlight) {
+    if (cached.summary) {
+      return cached.summary;
+    }
+    return await cached.inFlight;
+  }
+
+  const entry: UsageReportCacheEntry = cached ?? {};
+  const inFlight = (async () => {
+    const costSummary = await loadCostUsageSummaryCached({
+      startMs: params.startMs,
+      endMs: params.endMs,
+      config: params.config,
+    });
+    const sessions = await discoverAllSessionsForUsage({
+      config: params.config,
+      startMs: params.startMs,
+      endMs: params.endMs,
+    });
+    const byModelMap = new Map<string, SessionModelUsage>();
+    const byProviderMap = new Map<string, SessionModelUsage>();
+
+    for (const session of sessions) {
+      const usage = await loadSessionCostSummary({
+        sessionFile: session.sessionFile,
+        config: params.config,
+        agentId: session.agentId,
+        startMs: params.startMs,
+        endMs: params.endMs,
+      });
+      if (!usage?.modelUsage?.length) {
+        continue;
+      }
+
+      for (const modelUsage of usage.modelUsage) {
+        const modelKey = `${modelUsage.provider ?? ""}\u0000${modelUsage.model ?? ""}`;
+        const nextModel =
+          byModelMap.get(modelKey) ??
+          ({
+            provider: modelUsage.provider,
+            model: modelUsage.model,
+            count: 0,
+            totals: createCostTotals(),
+          } satisfies SessionModelUsage);
+        nextModel.count += modelUsage.count;
+        mergeCostTotals(nextModel.totals, modelUsage.totals);
+        byModelMap.set(modelKey, nextModel);
+
+        const providerKey = modelUsage.provider ?? "";
+        const nextProvider =
+          byProviderMap.get(providerKey) ??
+          ({
+            provider: modelUsage.provider,
+            model: undefined,
+            count: 0,
+            totals: createCostTotals(),
+          } satisfies SessionModelUsage);
+        nextProvider.count += modelUsage.count;
+        mergeCostTotals(nextProvider.totals, modelUsage.totals);
+        byProviderMap.set(providerKey, nextProvider);
+      }
+    }
+
+    const sortUsage = (a: SessionModelUsage, b: SessionModelUsage) =>
+      b.totals.totalCost - a.totals.totalCost ||
+      b.totals.totalTokens - a.totals.totalTokens ||
+      b.count - a.count ||
+      (a.provider ?? "").localeCompare(b.provider ?? "") ||
+      (a.model ?? "").localeCompare(b.model ?? "");
+
+    const summary: UsageReportSummary = {
+      updatedAt: Date.now(),
+      startDate: formatDateUtc(params.startMs),
+      endDate: formatDateUtc(params.endMs),
+      days: costSummary.days,
+      daily: costSummary.daily,
+      totals: costSummary.totals,
+      byModel: Array.from(byModelMap.values()).toSorted(sortUsage),
+      byProvider: Array.from(byProviderMap.values()).toSorted(sortUsage),
+    };
+
+    usageReportCache.set(cacheKey, { summary, updatedAt: Date.now() });
+    return summary;
+  })()
+    .catch((err) => {
+      if (entry.summary) {
+        return entry.summary;
+      }
+      throw err;
+    })
+    .finally(() => {
+      const current = usageReportCache.get(cacheKey);
+      if (current?.inFlight === inFlight) {
+        current.inFlight = undefined;
+        usageReportCache.set(cacheKey, current);
+      }
+    });
+
+  entry.inFlight = inFlight;
+  usageReportCache.set(cacheKey, entry);
+
+  if (entry.summary) {
+    return entry.summary;
+  }
+  return await inFlight;
+}
+
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
 export const __test = {
   parseDateToMs,
@@ -245,6 +420,8 @@ export const __test = {
   discoverAllSessionsForUsage,
   loadCostUsageSummaryCached,
   costUsageCache,
+  loadUsageReportSummaryCached,
+  usageReportCache,
 };
 
 export type SessionUsageEntry = {
@@ -315,6 +492,16 @@ export const usageHandlers: GatewayRequestHandlers = {
       days: params?.days,
     });
     const summary = await loadCostUsageSummaryCached({ startMs, endMs, config });
+    respond(true, summary, undefined);
+  },
+  "usage.report": async ({ respond, params }) => {
+    const config = loadConfig();
+    const { startMs, endMs } = parseDateRange({
+      startDate: params?.startDate,
+      endDate: params?.endDate,
+      days: params?.days,
+    });
+    const summary = await loadUsageReportSummaryCached({ startMs, endMs, config });
     respond(true, summary, undefined);
   },
   "sessions.usage": async ({ respond, params }) => {
