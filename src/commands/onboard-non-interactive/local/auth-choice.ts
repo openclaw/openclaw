@@ -20,7 +20,6 @@ import {
 } from "../../onboard-custom.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
-import { applySimpleNonInteractiveApiKeyChoice } from "./auth-choice.api-key-providers.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 type ResolvedNonInteractiveApiKey = NonNullable<
@@ -170,20 +169,6 @@ export async function applyNonInteractiveAuthChoice(params: {
   });
   if (pluginProviderChoice !== undefined) {
     return pluginProviderChoice;
-  }
-
-  const simpleApiKeyChoice = await applySimpleNonInteractiveApiKeyChoice({
-    authChoice,
-    nextConfig,
-    baseConfig,
-    opts,
-    runtime,
-    apiKeyStorageOptions,
-    resolveApiKey,
-    maybeSetResolvedApiKey,
-  });
-  if (simpleApiKeyChoice !== undefined) {
-    return simpleApiKeyChoice;
   }
 
   if (authChoice === "cloudflare-ai-gateway-api-key") {
