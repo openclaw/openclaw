@@ -68,6 +68,7 @@ export {
 export {
   buildDiscordComponentMessage,
   createDiscordActionGate,
+  handleDiscordMessageAction,
   listDiscordAccountIds,
   resolveDiscordAccount,
   resolveDefaultDiscordAccountId,
