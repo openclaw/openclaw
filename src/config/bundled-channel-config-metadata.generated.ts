@@ -495,6 +495,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       required: ["enrichGroupParticipantsFromContacts"],
       additionalProperties: false,
     },
+    uiHints: {
+      "": {
+        label: "BlueBubbles",
+        help: "BlueBubbles channel provider configuration used for Apple messaging bridge integrations. Keep DM policy aligned with your trusted sender model in shared deployments.",
+      },
+      dmPolicy: {
+        label: "BlueBubbles DM Policy",
+        help: 'Direct message access control ("pairing" recommended). "open" requires channels.bluebubbles.allowFrom=["*"].',
+      },
+    },
   },
   {
     pluginId: "discord",
@@ -1398,292 +1408,109 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                   additionalProperties: false,
                 },
-                elevenlabs: {
+                providers: {
                   type: "object",
-                  properties: {
-                    apiKey: {
+                  propertyNames: {
+                    type: "string",
+                  },
+                  additionalProperties: {
+                    type: "object",
+                    properties: {
+                      apiKey: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            oneOf: [
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "env",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "file",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "exec",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                    },
+                    additionalProperties: {
                       anyOf: [
                         {
                           type: "string",
                         },
                         {
-                          oneOf: [
-                            {
-                              type: "object",
-                              properties: {
-                                source: {
-                                  type: "string",
-                                  const: "env",
-                                },
-                                provider: {
-                                  type: "string",
-                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                },
-                                id: {
-                                  type: "string",
-                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                },
-                              },
-                              required: ["source", "provider", "id"],
-                              additionalProperties: false,
-                            },
-                            {
-                              type: "object",
-                              properties: {
-                                source: {
-                                  type: "string",
-                                  const: "file",
-                                },
-                                provider: {
-                                  type: "string",
-                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                },
-                                id: {
-                                  type: "string",
-                                },
-                              },
-                              required: ["source", "provider", "id"],
-                              additionalProperties: false,
-                            },
-                            {
-                              type: "object",
-                              properties: {
-                                source: {
-                                  type: "string",
-                                  const: "exec",
-                                },
-                                provider: {
-                                  type: "string",
-                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                },
-                                id: {
-                                  type: "string",
-                                },
-                              },
-                              required: ["source", "provider", "id"],
-                              additionalProperties: false,
-                            },
-                          ],
-                        },
-                      ],
-                    },
-                    baseUrl: {
-                      type: "string",
-                    },
-                    voiceId: {
-                      type: "string",
-                    },
-                    modelId: {
-                      type: "string",
-                    },
-                    seed: {
-                      type: "integer",
-                      minimum: 0,
-                      maximum: 4294967295,
-                    },
-                    applyTextNormalization: {
-                      type: "string",
-                      enum: ["auto", "on", "off"],
-                    },
-                    languageCode: {
-                      type: "string",
-                    },
-                    voiceSettings: {
-                      type: "object",
-                      properties: {
-                        stability: {
                           type: "number",
-                          minimum: 0,
-                          maximum: 1,
                         },
-                        similarityBoost: {
-                          type: "number",
-                          minimum: 0,
-                          maximum: 1,
-                        },
-                        style: {
-                          type: "number",
-                          minimum: 0,
-                          maximum: 1,
-                        },
-                        useSpeakerBoost: {
+                        {
                           type: "boolean",
                         },
-                        speed: {
-                          type: "number",
-                          minimum: 0.5,
-                          maximum: 2,
-                        },
-                      },
-                      additionalProperties: false,
-                    },
-                  },
-                  additionalProperties: false,
-                },
-                openai: {
-                  type: "object",
-                  properties: {
-                    apiKey: {
-                      anyOf: [
                         {
-                          type: "string",
+                          type: "null",
                         },
                         {
-                          oneOf: [
-                            {
-                              type: "object",
-                              properties: {
-                                source: {
-                                  type: "string",
-                                  const: "env",
-                                },
-                                provider: {
-                                  type: "string",
-                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                },
-                                id: {
-                                  type: "string",
-                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                },
-                              },
-                              required: ["source", "provider", "id"],
-                              additionalProperties: false,
-                            },
-                            {
-                              type: "object",
-                              properties: {
-                                source: {
-                                  type: "string",
-                                  const: "file",
-                                },
-                                provider: {
-                                  type: "string",
-                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                },
-                                id: {
-                                  type: "string",
-                                },
-                              },
-                              required: ["source", "provider", "id"],
-                              additionalProperties: false,
-                            },
-                            {
-                              type: "object",
-                              properties: {
-                                source: {
-                                  type: "string",
-                                  const: "exec",
-                                },
-                                provider: {
-                                  type: "string",
-                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                },
-                                id: {
-                                  type: "string",
-                                },
-                              },
-                              required: ["source", "provider", "id"],
-                              additionalProperties: false,
-                            },
-                          ],
+                          type: "array",
+                          items: {},
+                        },
+                        {
+                          type: "object",
+                          propertyNames: {
+                            type: "string",
+                          },
+                          additionalProperties: {},
                         },
                       ],
                     },
-                    baseUrl: {
-                      type: "string",
-                    },
-                    model: {
-                      type: "string",
-                    },
-                    voice: {
-                      type: "string",
-                    },
-                    speed: {
-                      type: "number",
-                      minimum: 0.25,
-                      maximum: 4,
-                    },
-                    instructions: {
-                      type: "string",
-                    },
                   },
-                  additionalProperties: false,
-                },
-                edge: {
-                  type: "object",
-                  properties: {
-                    enabled: {
-                      type: "boolean",
-                    },
-                    voice: {
-                      type: "string",
-                    },
-                    lang: {
-                      type: "string",
-                    },
-                    outputFormat: {
-                      type: "string",
-                    },
-                    pitch: {
-                      type: "string",
-                    },
-                    rate: {
-                      type: "string",
-                    },
-                    volume: {
-                      type: "string",
-                    },
-                    saveSubtitles: {
-                      type: "boolean",
-                    },
-                    proxy: {
-                      type: "string",
-                    },
-                    timeoutMs: {
-                      type: "integer",
-                      minimum: 1000,
-                      maximum: 120000,
-                    },
-                  },
-                  additionalProperties: false,
-                },
-                microsoft: {
-                  type: "object",
-                  properties: {
-                    enabled: {
-                      type: "boolean",
-                    },
-                    voice: {
-                      type: "string",
-                    },
-                    lang: {
-                      type: "string",
-                    },
-                    outputFormat: {
-                      type: "string",
-                    },
-                    pitch: {
-                      type: "string",
-                    },
-                    rate: {
-                      type: "string",
-                    },
-                    volume: {
-                      type: "string",
-                    },
-                    saveSubtitles: {
-                      type: "boolean",
-                    },
-                    proxy: {
-                      type: "string",
-                    },
-                    timeoutMs: {
-                      type: "integer",
-                      minimum: 1000,
-                      maximum: 120000,
-                    },
-                  },
-                  additionalProperties: false,
                 },
                 prefsPath: {
                   type: "string",
@@ -2789,292 +2616,109 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         },
                         additionalProperties: false,
                       },
-                      elevenlabs: {
+                      providers: {
                         type: "object",
-                        properties: {
-                          apiKey: {
+                        propertyNames: {
+                          type: "string",
+                        },
+                        additionalProperties: {
+                          type: "object",
+                          properties: {
+                            apiKey: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  oneOf: [
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "env",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "file",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "exec",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                  ],
+                                },
+                              ],
+                            },
+                          },
+                          additionalProperties: {
                             anyOf: [
                               {
                                 type: "string",
                               },
                               {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
-                              },
-                            ],
-                          },
-                          baseUrl: {
-                            type: "string",
-                          },
-                          voiceId: {
-                            type: "string",
-                          },
-                          modelId: {
-                            type: "string",
-                          },
-                          seed: {
-                            type: "integer",
-                            minimum: 0,
-                            maximum: 4294967295,
-                          },
-                          applyTextNormalization: {
-                            type: "string",
-                            enum: ["auto", "on", "off"],
-                          },
-                          languageCode: {
-                            type: "string",
-                          },
-                          voiceSettings: {
-                            type: "object",
-                            properties: {
-                              stability: {
                                 type: "number",
-                                minimum: 0,
-                                maximum: 1,
                               },
-                              similarityBoost: {
-                                type: "number",
-                                minimum: 0,
-                                maximum: 1,
-                              },
-                              style: {
-                                type: "number",
-                                minimum: 0,
-                                maximum: 1,
-                              },
-                              useSpeakerBoost: {
+                              {
                                 type: "boolean",
                               },
-                              speed: {
-                                type: "number",
-                                minimum: 0.5,
-                                maximum: 2,
-                              },
-                            },
-                            additionalProperties: false,
-                          },
-                        },
-                        additionalProperties: false,
-                      },
-                      openai: {
-                        type: "object",
-                        properties: {
-                          apiKey: {
-                            anyOf: [
                               {
-                                type: "string",
+                                type: "null",
                               },
                               {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
+                                type: "array",
+                                items: {},
+                              },
+                              {
+                                type: "object",
+                                propertyNames: {
+                                  type: "string",
+                                },
+                                additionalProperties: {},
                               },
                             ],
                           },
-                          baseUrl: {
-                            type: "string",
-                          },
-                          model: {
-                            type: "string",
-                          },
-                          voice: {
-                            type: "string",
-                          },
-                          speed: {
-                            type: "number",
-                            minimum: 0.25,
-                            maximum: 4,
-                          },
-                          instructions: {
-                            type: "string",
-                          },
                         },
-                        additionalProperties: false,
-                      },
-                      edge: {
-                        type: "object",
-                        properties: {
-                          enabled: {
-                            type: "boolean",
-                          },
-                          voice: {
-                            type: "string",
-                          },
-                          lang: {
-                            type: "string",
-                          },
-                          outputFormat: {
-                            type: "string",
-                          },
-                          pitch: {
-                            type: "string",
-                          },
-                          rate: {
-                            type: "string",
-                          },
-                          volume: {
-                            type: "string",
-                          },
-                          saveSubtitles: {
-                            type: "boolean",
-                          },
-                          proxy: {
-                            type: "string",
-                          },
-                          timeoutMs: {
-                            type: "integer",
-                            minimum: 1000,
-                            maximum: 120000,
-                          },
-                        },
-                        additionalProperties: false,
-                      },
-                      microsoft: {
-                        type: "object",
-                        properties: {
-                          enabled: {
-                            type: "boolean",
-                          },
-                          voice: {
-                            type: "string",
-                          },
-                          lang: {
-                            type: "string",
-                          },
-                          outputFormat: {
-                            type: "string",
-                          },
-                          pitch: {
-                            type: "string",
-                          },
-                          rate: {
-                            type: "string",
-                          },
-                          volume: {
-                            type: "string",
-                          },
-                          saveSubtitles: {
-                            type: "boolean",
-                          },
-                          proxy: {
-                            type: "string",
-                          },
-                          timeoutMs: {
-                            type: "integer",
-                            minimum: 1000,
-                            maximum: 120000,
-                          },
-                        },
-                        additionalProperties: false,
                       },
                       prefsPath: {
                         type: "string",
@@ -3290,6 +2934,200 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       required: ["groupPolicy"],
       additionalProperties: false,
+    },
+    uiHints: {
+      "": {
+        label: "Discord",
+        help: "Discord channel provider configuration for bot auth, retry policy, streaming, thread bindings, and optional voice capabilities. Keep privileged intents and advanced features disabled unless needed.",
+      },
+      dmPolicy: {
+        label: "Discord DM Policy",
+        help: 'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"].',
+      },
+      "dm.policy": {
+        label: "Discord DM Policy",
+        help: 'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"] (legacy: channels.discord.dm.allowFrom).',
+      },
+      configWrites: {
+        label: "Discord Config Writes",
+        help: "Allow Discord to write config in response to channel events/commands (default: true).",
+      },
+      proxy: {
+        label: "Discord Proxy URL",
+        help: "Proxy URL for Discord gateway + API requests (app-id lookup and allowlist resolution). Set per account via channels.discord.accounts.<id>.proxy.",
+      },
+      "commands.native": {
+        label: "Discord Native Commands",
+        help: 'Override native commands for Discord (bool or "auto").',
+      },
+      "commands.nativeSkills": {
+        label: "Discord Native Skill Commands",
+        help: 'Override native skill commands for Discord (bool or "auto").',
+      },
+      streaming: {
+        label: "Discord Streaming Mode",
+        help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
+      },
+      streamMode: {
+        label: "Discord Stream Mode (Legacy)",
+        help: "Legacy Discord preview mode alias (off | partial | block); auto-migrated to channels.discord.streaming.",
+      },
+      "draftChunk.minChars": {
+        label: "Discord Draft Chunk Min Chars",
+        help: 'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming="block" (default: 200).',
+      },
+      "draftChunk.maxChars": {
+        label: "Discord Draft Chunk Max Chars",
+        help: 'Target max size for a Discord stream preview chunk when channels.discord.streaming="block" (default: 800; clamped to channels.discord.textChunkLimit).',
+      },
+      "draftChunk.breakPreference": {
+        label: "Discord Draft Chunk Break Preference",
+        help: "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
+      },
+      "retry.attempts": {
+        label: "Discord Retry Attempts",
+        help: "Max retry attempts for outbound Discord API calls (default: 3).",
+      },
+      "retry.minDelayMs": {
+        label: "Discord Retry Min Delay (ms)",
+        help: "Minimum retry delay in ms for Discord outbound calls.",
+      },
+      "retry.maxDelayMs": {
+        label: "Discord Retry Max Delay (ms)",
+        help: "Maximum retry delay cap in ms for Discord outbound calls.",
+      },
+      "retry.jitter": {
+        label: "Discord Retry Jitter",
+        help: "Jitter factor (0-1) applied to Discord retry delays.",
+      },
+      maxLinesPerMessage: {
+        label: "Discord Max Lines Per Message",
+        help: "Soft max line count per Discord message (default: 17).",
+      },
+      "inboundWorker.runTimeoutMs": {
+        label: "Discord Inbound Worker Timeout (ms)",
+        help: "Optional queued Discord inbound worker timeout in ms. This is separate from Carbon listener timeouts; defaults to 1800000 and can be disabled with 0. Set per account via channels.discord.accounts.<id>.inboundWorker.runTimeoutMs.",
+      },
+      "eventQueue.listenerTimeout": {
+        label: "Discord EventQueue Listener Timeout (ms)",
+        help: "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
+      },
+      "eventQueue.maxQueueSize": {
+        label: "Discord EventQueue Max Queue Size",
+        help: "Optional Discord EventQueue capacity override (max queued events before backpressure). Set per account via channels.discord.accounts.<id>.eventQueue.maxQueueSize.",
+      },
+      "eventQueue.maxConcurrency": {
+        label: "Discord EventQueue Max Concurrency",
+        help: "Optional Discord EventQueue concurrency override (max concurrent handler executions). Set per account via channels.discord.accounts.<id>.eventQueue.maxConcurrency.",
+      },
+      "threadBindings.enabled": {
+        label: "Discord Thread Binding Enabled",
+        help: "Enable Discord thread binding features (/focus, bound-thread routing/delivery, and thread-bound subagent sessions). Overrides session.threadBindings.enabled when set.",
+      },
+      "threadBindings.idleHours": {
+        label: "Discord Thread Binding Idle Timeout (hours)",
+        help: "Inactivity window in hours for Discord thread-bound sessions (/focus and spawned thread sessions). Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
+      },
+      "threadBindings.maxAgeHours": {
+        label: "Discord Thread Binding Max Age (hours)",
+        help: "Optional hard max age in hours for Discord thread-bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
+      },
+      "threadBindings.spawnSubagentSessions": {
+        label: "Discord Thread-Bound Subagent Spawn",
+        help: "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
+      },
+      "threadBindings.spawnAcpSessions": {
+        label: "Discord Thread-Bound ACP Spawn",
+        help: "Allow /acp spawn to auto-create and bind Discord threads for ACP sessions (default: false; opt-in). Set true to enable thread-bound ACP spawns for this account/channel.",
+      },
+      "ui.components.accentColor": {
+        label: "Discord Component Accent Color",
+        help: "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
+      },
+      "intents.presence": {
+        label: "Discord Presence Intent",
+        help: "Enable the Guild Presences privileged intent. Must also be enabled in the Discord Developer Portal. Allows tracking user activities (e.g. Spotify). Default: false.",
+      },
+      "intents.guildMembers": {
+        label: "Discord Guild Members Intent",
+        help: "Enable the Guild Members privileged intent. Must also be enabled in the Discord Developer Portal. Default: false.",
+      },
+      "voice.enabled": {
+        label: "Discord Voice Enabled",
+        help: "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
+      },
+      "voice.autoJoin": {
+        label: "Discord Voice Auto-Join",
+        help: "Voice channels to auto-join on startup (list of guildId/channelId entries).",
+      },
+      "voice.daveEncryption": {
+        label: "Discord Voice DAVE Encryption",
+        help: "Toggle DAVE end-to-end encryption for Discord voice joins (default: true in @discordjs/voice; Discord may require this).",
+      },
+      "voice.decryptionFailureTolerance": {
+        label: "Discord Voice Decrypt Failure Tolerance",
+        help: "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24).",
+      },
+      "voice.tts": {
+        label: "Discord Voice Text-to-Speech",
+        help: "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
+      },
+      "pluralkit.enabled": {
+        label: "Discord PluralKit Enabled",
+        help: "Resolve PluralKit proxied messages and treat system members as distinct senders.",
+      },
+      "pluralkit.token": {
+        label: "Discord PluralKit Token",
+        help: "Optional PluralKit token for resolving private systems or members.",
+      },
+      activity: {
+        label: "Discord Presence Activity",
+        help: "Discord presence activity text (defaults to custom status).",
+      },
+      status: {
+        label: "Discord Presence Status",
+        help: "Discord presence status (online, dnd, idle, invisible).",
+      },
+      "autoPresence.enabled": {
+        label: "Discord Auto Presence Enabled",
+        help: "Enable automatic Discord bot presence updates based on runtime/model availability signals. When enabled: healthy=>online, degraded/unknown=>idle, exhausted/unavailable=>dnd.",
+      },
+      "autoPresence.intervalMs": {
+        label: "Discord Auto Presence Check Interval (ms)",
+        help: "How often to evaluate Discord auto-presence state in milliseconds (default: 30000).",
+      },
+      "autoPresence.minUpdateIntervalMs": {
+        label: "Discord Auto Presence Min Update Interval (ms)",
+        help: "Minimum time between actual Discord presence update calls in milliseconds (default: 15000). Prevents status spam on noisy state changes.",
+      },
+      "autoPresence.healthyText": {
+        label: "Discord Auto Presence Healthy Text",
+        help: "Optional custom status text while runtime is healthy (online). If omitted, falls back to static channels.discord.activity when set.",
+      },
+      "autoPresence.degradedText": {
+        label: "Discord Auto Presence Degraded Text",
+        help: "Optional custom status text while runtime/model availability is degraded or unknown (idle).",
+      },
+      "autoPresence.exhaustedText": {
+        label: "Discord Auto Presence Exhausted Text",
+        help: "Optional custom status text while runtime detects exhausted/unavailable model quota (dnd). Supports {reason} template placeholder.",
+      },
+      activityType: {
+        label: "Discord Presence Activity Type",
+        help: "Discord presence activity type (0=Playing,1=Streaming,2=Listening,3=Watching,4=Custom,5=Competing).",
+      },
+      activityUrl: {
+        label: "Discord Presence Activity URL",
+        help: "Discord presence streaming URL (required for activityType=1).",
+      },
+      allowBots: {
+        label: "Discord Allow Bot Messages",
+        help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
+      },
+      token: {
+        label: "Discord Bot Token",
+        help: "Discord bot token used for gateway and REST API authentication for this provider account. Keep this secret out of committed config and rotate immediately after any leak.",
+      },
     },
   },
   {
@@ -5748,6 +5586,24 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       required: ["dmPolicy", "groupPolicy"],
       additionalProperties: false,
     },
+    uiHints: {
+      "": {
+        label: "iMessage",
+        help: "iMessage channel provider configuration for CLI integration and DM access policy handling. Use explicit CLI paths when runtime environments have non-standard binary locations.",
+      },
+      dmPolicy: {
+        label: "iMessage DM Policy",
+        help: 'Direct message access control ("pairing" recommended). "open" requires channels.imessage.allowFrom=["*"].',
+      },
+      configWrites: {
+        label: "iMessage Config Writes",
+        help: "Allow iMessage to write config in response to channel events/commands (default: true).",
+      },
+      cliPath: {
+        label: "iMessage CLI Path",
+        help: "Filesystem path to the iMessage bridge CLI binary used for send/receive operations. Set explicitly when the binary is not on PATH in service runtime environments.",
+      },
+    },
   },
   {
     pluginId: "irc",
@@ -6333,6 +6189,44 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       required: ["dmPolicy", "groupPolicy"],
       additionalProperties: false,
+    },
+    uiHints: {
+      "": {
+        label: "IRC",
+        help: "IRC channel provider configuration and compatibility settings for classic IRC transport workflows. Use this section when bridging legacy chat infrastructure into OpenClaw.",
+      },
+      dmPolicy: {
+        label: "IRC DM Policy",
+        help: 'Direct message access control ("pairing" recommended). "open" requires channels.irc.allowFrom=["*"].',
+      },
+      "nickserv.enabled": {
+        label: "IRC NickServ Enabled",
+        help: "Enable NickServ identify/register after connect (defaults to enabled when password is configured).",
+      },
+      "nickserv.service": {
+        label: "IRC NickServ Service",
+        help: "NickServ service nick (default: NickServ).",
+      },
+      "nickserv.password": {
+        label: "IRC NickServ Password",
+        help: "NickServ password used for IDENTIFY/REGISTER (sensitive).",
+      },
+      "nickserv.passwordFile": {
+        label: "IRC NickServ Password File",
+        help: "Optional file path containing NickServ password.",
+      },
+      "nickserv.register": {
+        label: "IRC NickServ Register",
+        help: "If true, send NickServ REGISTER on every connect. Use once for initial registration, then disable.",
+      },
+      "nickserv.registerEmail": {
+        label: "IRC NickServ Register Email",
+        help: "Email used with NickServ REGISTER (required when register=true).",
+      },
+      configWrites: {
+        label: "IRC Config Writes",
+        help: "Allow IRC to write config in response to channel events/commands (default: true).",
+      },
     },
   },
   {
@@ -8028,6 +7922,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       required: ["dmPolicy", "groupPolicy"],
       additionalProperties: false,
     },
+    uiHints: {
+      "": {
+        label: "MS Teams",
+        help: "Microsoft Teams channel provider configuration and provider-specific policy toggles. Use this section to isolate Teams behavior from other enterprise chat providers.",
+      },
+      configWrites: {
+        label: "MS Teams Config Writes",
+        help: "Allow Microsoft Teams to write config in response to channel events/commands (default: true).",
+      },
+    },
   },
   {
     pluginId: "nextcloud-talk",
@@ -9435,6 +9339,24 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       required: ["dmPolicy", "groupPolicy"],
       additionalProperties: false,
+    },
+    uiHints: {
+      "": {
+        label: "Signal",
+        help: "Signal channel provider configuration including account identity and DM policy behavior. Keep account mapping explicit so routing remains stable across multi-device setups.",
+      },
+      dmPolicy: {
+        label: "Signal DM Policy",
+        help: 'Direct message access control ("pairing" recommended). "open" requires channels.signal.allowFrom=["*"].',
+      },
+      configWrites: {
+        label: "Signal Config Writes",
+        help: "Allow Signal to write config in response to channel events/commands (default: true).",
+      },
+      account: {
+        label: "Signal Account",
+        help: "Signal account identifier (phone/number handle) used to bind this channel config to a specific Signal identity. Keep this aligned with your linked device/session state.",
+      },
     },
   },
   {
@@ -11068,6 +10990,80 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       required: ["mode", "webhookPath", "userTokenReadOnly", "groupPolicy"],
       additionalProperties: false,
+    },
+    uiHints: {
+      "": {
+        label: "Slack",
+        help: "Slack channel provider configuration for bot/app tokens, streaming behavior, and DM policy controls. Keep token handling and thread behavior explicit to avoid noisy workspace interactions.",
+      },
+      "dm.policy": {
+        label: "Slack DM Policy",
+        help: 'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"] (legacy: channels.slack.dm.allowFrom).',
+      },
+      dmPolicy: {
+        label: "Slack DM Policy",
+        help: 'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"].',
+      },
+      configWrites: {
+        label: "Slack Config Writes",
+        help: "Allow Slack to write config in response to channel events/commands (default: true).",
+      },
+      "commands.native": {
+        label: "Slack Native Commands",
+        help: 'Override native commands for Slack (bool or "auto").',
+      },
+      "commands.nativeSkills": {
+        label: "Slack Native Skill Commands",
+        help: 'Override native skill commands for Slack (bool or "auto").',
+      },
+      allowBots: {
+        label: "Slack Allow Bot Messages",
+        help: "Allow bot-authored messages to trigger Slack replies (default: false).",
+      },
+      botToken: {
+        label: "Slack Bot Token",
+        help: "Slack bot token used for standard chat actions in the configured workspace. Keep this credential scoped and rotate if workspace app permissions change.",
+      },
+      appToken: {
+        label: "Slack App Token",
+        help: "Slack app-level token used for Socket Mode connections and event transport when enabled. Use least-privilege app scopes and store this token as a secret.",
+      },
+      userToken: {
+        label: "Slack User Token",
+        help: "Optional Slack user token for workflows requiring user-context API access beyond bot permissions. Use sparingly and audit scopes because this token can carry broader authority.",
+      },
+      userTokenReadOnly: {
+        label: "Slack User Token Read Only",
+        help: "When true, treat configured Slack user token usage as read-only helper behavior where possible. Keep enabled if you only need supplemental reads without user-context writes.",
+      },
+      "capabilities.interactiveReplies": {
+        label: "Slack Interactive Replies",
+        help: "Enable agent-authored Slack interactive reply directives (`[[slack_buttons: ...]]`, `[[slack_select: ...]]`). Default: false.",
+      },
+      streaming: {
+        label: "Slack Streaming Mode",
+        help: 'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress". Legacy boolean/streamMode keys are auto-mapped.',
+      },
+      nativeStreaming: {
+        label: "Slack Native Streaming",
+        help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming is partial (default: true).",
+      },
+      streamMode: {
+        label: "Slack Stream Mode (Legacy)",
+        help: "Legacy Slack preview mode alias (replace | status_final | append); auto-migrated to channels.slack.streaming.",
+      },
+      "thread.historyScope": {
+        label: "Slack Thread History Scope",
+        help: 'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
+      },
+      "thread.inheritParent": {
+        label: "Slack Thread Parent Inheritance",
+        help: "If true, Slack thread sessions inherit the parent channel transcript (default: false).",
+      },
+      "thread.initialHistoryLimit": {
+        label: "Slack Thread Initial History Limit",
+        help: "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
+      },
     },
   },
   {
@@ -13004,6 +13000,132 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       required: ["dmPolicy", "groupPolicy"],
       additionalProperties: false,
     },
+    uiHints: {
+      "": {
+        label: "Telegram",
+        help: "Telegram channel provider configuration including auth tokens, retry behavior, and message rendering controls. Use this section to tune bot behavior for Telegram-specific API semantics.",
+      },
+      customCommands: {
+        label: "Telegram Custom Commands",
+        help: "Additional Telegram bot menu commands (merged with native; conflicts ignored).",
+      },
+      botToken: {
+        label: "Telegram Bot Token",
+        help: "Telegram bot token used to authenticate Bot API requests for this account/provider config. Use secret/env substitution and rotate tokens if exposure is suspected.",
+      },
+      dmPolicy: {
+        label: "Telegram DM Policy",
+        help: 'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
+      },
+      configWrites: {
+        label: "Telegram Config Writes",
+        help: "Allow Telegram to write config in response to channel events/commands (default: true).",
+      },
+      "commands.native": {
+        label: "Telegram Native Commands",
+        help: 'Override native commands for Telegram (bool or "auto").',
+      },
+      "commands.nativeSkills": {
+        label: "Telegram Native Skill Commands",
+        help: 'Override native skill commands for Telegram (bool or "auto").',
+      },
+      streaming: {
+        label: "Telegram Streaming Mode",
+        help: 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
+      },
+      "retry.attempts": {
+        label: "Telegram Retry Attempts",
+        help: "Max retry attempts for outbound Telegram API calls (default: 3).",
+      },
+      "retry.minDelayMs": {
+        label: "Telegram Retry Min Delay (ms)",
+        help: "Minimum retry delay in ms for Telegram outbound calls.",
+      },
+      "retry.maxDelayMs": {
+        label: "Telegram Retry Max Delay (ms)",
+        help: "Maximum retry delay cap in ms for Telegram outbound calls.",
+      },
+      "retry.jitter": {
+        label: "Telegram Retry Jitter",
+        help: "Jitter factor (0-1) applied to Telegram retry delays.",
+      },
+      "network.autoSelectFamily": {
+        label: "Telegram autoSelectFamily",
+        help: "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
+      },
+      timeoutSeconds: {
+        label: "Telegram API Timeout (seconds)",
+        help: "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
+      },
+      silentErrorReplies: {
+        label: "Telegram Silent Error Replies",
+        help: "When true, Telegram bot replies marked as errors are sent silently (no notification sound). Default: false.",
+      },
+      apiRoot: {
+        label: "Telegram API Root URL",
+        help: "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+      },
+      autoTopicLabel: {
+        label: "Telegram Auto Topic Label",
+        help: "Auto-rename DM forum topics on first message using LLM. Default: true. Set to false to disable, or use object form { enabled: true, prompt: '...' } for custom prompt.",
+      },
+      "autoTopicLabel.enabled": {
+        label: "Telegram Auto Topic Label Enabled",
+        help: "Whether auto topic labeling is enabled. Default: true.",
+      },
+      "autoTopicLabel.prompt": {
+        label: "Telegram Auto Topic Label Prompt",
+        help: "Custom prompt for LLM-based topic naming. The user message is appended after the prompt.",
+      },
+      "capabilities.inlineButtons": {
+        label: "Telegram Inline Buttons",
+        help: "Enable Telegram inline button components for supported command and interaction surfaces. Disable if your deployment needs plain-text-only compatibility behavior.",
+      },
+      execApprovals: {
+        label: "Telegram Exec Approvals",
+        help: "Telegram-native exec approval routing and approver authorization. Enable this only when Telegram should act as an explicit exec-approval client for the selected bot account.",
+      },
+      "execApprovals.enabled": {
+        label: "Telegram Exec Approvals Enabled",
+        help: "Enable Telegram exec approvals for this account. When false or unset, Telegram messages/buttons cannot approve exec requests.",
+      },
+      "execApprovals.approvers": {
+        label: "Telegram Exec Approval Approvers",
+        help: "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs; prompts are only delivered to these approvers when target includes dm.",
+      },
+      "execApprovals.agentFilter": {
+        label: "Telegram Exec Approval Agent Filter",
+        help: 'Optional allowlist of agent IDs eligible for Telegram exec approvals, for example `["main", "ops-agent"]`. Use this to keep approval prompts scoped to the agents you actually operate from Telegram.',
+      },
+      "execApprovals.sessionFilter": {
+        label: "Telegram Exec Approval Session Filter",
+        help: "Optional session-key filters matched as substring or regex-style patterns before Telegram approval routing is used. Use narrow patterns so Telegram approvals only appear for intended sessions.",
+      },
+      "execApprovals.target": {
+        label: "Telegram Exec Approval Target",
+        help: 'Controls where Telegram approval prompts are sent: "dm" sends to approver DMs (default), "channel" sends to the originating Telegram chat/topic, and "both" sends to both. Channel delivery exposes the command text to the chat, so only use it in trusted groups/topics.',
+      },
+      "threadBindings.enabled": {
+        label: "Telegram Thread Binding Enabled",
+        help: "Enable Telegram conversation binding features (/focus, /unfocus, /agents, and /session idle|max-age). Overrides session.threadBindings.enabled when set.",
+      },
+      "threadBindings.idleHours": {
+        label: "Telegram Thread Binding Idle Timeout (hours)",
+        help: "Inactivity window in hours for Telegram bound sessions. Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
+      },
+      "threadBindings.maxAgeHours": {
+        label: "Telegram Thread Binding Max Age (hours)",
+        help: "Optional hard max age in hours for Telegram bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
+      },
+      "threadBindings.spawnSubagentSessions": {
+        label: "Telegram Thread-Bound Subagent Spawn",
+        help: "Allow subagent spawns with thread=true to auto-bind Telegram current conversations when supported.",
+      },
+      "threadBindings.spawnAcpSessions": {
+        label: "Telegram Thread-Bound ACP Spawn",
+        help: "Allow ACP spawns with thread=true to auto-bind Telegram current conversations when supported.",
+      },
+    },
   },
   {
     pluginId: "tlon",
@@ -13902,6 +14024,28 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       required: ["dmPolicy", "groupPolicy", "debounceMs", "mediaMaxMb"],
       additionalProperties: false,
+    },
+    uiHints: {
+      "": {
+        label: "WhatsApp",
+        help: "WhatsApp channel provider configuration for access policy and message batching behavior. Use this section to tune responsiveness and direct-message routing safety for WhatsApp chats.",
+      },
+      dmPolicy: {
+        label: "WhatsApp DM Policy",
+        help: 'Direct message access control ("pairing" recommended). "open" requires channels.whatsapp.allowFrom=["*"].',
+      },
+      selfChatMode: {
+        label: "WhatsApp Self-Phone Mode",
+        help: "Same-phone setup (bot uses your personal WhatsApp number).",
+      },
+      debounceMs: {
+        label: "WhatsApp Message Debounce (ms)",
+        help: "Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable).",
+      },
+      configWrites: {
+        label: "WhatsApp Config Writes",
+        help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
+      },
     },
   },
   {
