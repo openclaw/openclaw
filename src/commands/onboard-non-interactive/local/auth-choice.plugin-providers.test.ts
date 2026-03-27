@@ -66,4 +66,44 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(runNonInteractive).toHaveBeenCalledOnce();
     expect(result).toEqual({ plugins: { allow: ["vllm"] } });
   });
+
+  it("enables owning plugin ids when they differ from the provider id", async () => {
+    const runtime = createRuntime();
+    const runNonInteractive = vi.fn(async () => ({ plugins: { allow: ["demo-plugin"] } }));
+    resolveOwningPluginIdsForProvider.mockReturnValue(["demo-plugin"] as never);
+    resolvePluginProviders.mockReturnValue([
+      { id: "demo-provider", pluginId: "demo-plugin" },
+    ] as never);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider: { id: "demo-provider", pluginId: "demo-plugin", label: "Demo Provider" },
+      method: { runNonInteractive },
+    });
+
+    const result = await applyNonInteractivePluginProviderChoice({
+      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      authChoice: "provider-plugin:demo-provider:custom",
+      opts: {} as never,
+      runtime: runtime as never,
+      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      resolveApiKey: vi.fn(),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(resolvePluginProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: expect.arrayContaining(["demo-provider", "demo-plugin"]),
+            entries: expect.objectContaining({
+              "demo-provider": expect.objectContaining({ enabled: true }),
+              "demo-plugin": expect.objectContaining({ enabled: true }),
+            }),
+          }),
+        }),
+        onlyPluginIds: ["demo-plugin"],
+      }),
+    );
+    expect(runNonInteractive).toHaveBeenCalledOnce();
+    expect(result).toEqual({ plugins: { allow: ["demo-plugin"] } });
+  });
 });
