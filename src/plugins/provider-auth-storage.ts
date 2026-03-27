@@ -11,6 +11,21 @@ import { KILOCODE_DEFAULT_MODEL_REF } from "./provider-model-kilocode.js";
 
 const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
 
+function upsertProviderApiKeyProfile(params: {
+  provider: string;
+  key: SecretInput;
+  agentDir?: string;
+  options?: ApiKeyStorageOptions;
+  profileId?: string;
+  metadata?: Record<string, string>;
+}) {
+  upsertAuthProfile({
+    profileId: params.profileId ?? `${params.provider}:default`,
+    credential: buildApiKeyCredential(params.provider, params.key, params.metadata, params.options),
+    agentDir: resolveAuthAgentDir(params.agentDir),
+  });
+}
+
 export { KILOCODE_DEFAULT_MODEL_REF };
 export {
   buildApiKeyCredential,
@@ -24,11 +39,7 @@ export async function setAnthropicApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "anthropic:default",
-    credential: buildApiKeyCredential("anthropic", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "anthropic", key, agentDir, options });
 }
 
 export async function setOpenaiApiKey(
@@ -36,11 +47,7 @@ export async function setOpenaiApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "openai:default",
-    credential: buildApiKeyCredential("openai", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "openai", key, agentDir, options });
 }
 
 export async function setGeminiApiKey(
@@ -48,11 +55,7 @@ export async function setGeminiApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "google:default",
-    credential: buildApiKeyCredential("google", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "google", key, agentDir, options });
 }
 
 export async function setMinimaxApiKey(
@@ -62,11 +65,7 @@ export async function setMinimaxApiKey(
   options?: ApiKeyStorageOptions,
 ) {
   const provider = profileId.split(":")[0] ?? "minimax";
-  upsertAuthProfile({
-    profileId,
-    credential: buildApiKeyCredential(provider, key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider, key, agentDir, options, profileId });
 }
 
 export async function setMoonshotApiKey(
@@ -74,11 +73,7 @@ export async function setMoonshotApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "moonshot:default",
-    credential: buildApiKeyCredential("moonshot", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "moonshot", key, agentDir, options });
 }
 
 export async function setKimiCodingApiKey(
@@ -86,11 +81,7 @@ export async function setKimiCodingApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "kimi:default",
-    credential: buildApiKeyCredential("kimi", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "kimi", key, agentDir, options });
 }
 
 export async function setVolcengineApiKey(
@@ -98,11 +89,7 @@ export async function setVolcengineApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "volcengine:default",
-    credential: buildApiKeyCredential("volcengine", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "volcengine", key, agentDir, options });
 }
 
 export async function setByteplusApiKey(
@@ -110,11 +97,7 @@ export async function setByteplusApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "byteplus:default",
-    credential: buildApiKeyCredential("byteplus", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "byteplus", key, agentDir, options });
 }
 
 export async function setSyntheticApiKey(
@@ -122,11 +105,7 @@ export async function setSyntheticApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "synthetic:default",
-    credential: buildApiKeyCredential("synthetic", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "synthetic", key, agentDir, options });
 }
 
 export async function setVeniceApiKey(
@@ -134,11 +113,7 @@ export async function setVeniceApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "venice:default",
-    credential: buildApiKeyCredential("venice", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "venice", key, agentDir, options });
 }
 
 export const ZAI_DEFAULT_MODEL_REF = "zai/glm-5";
@@ -195,18 +170,15 @@ export async function setCloudflareAiGatewayConfig(
 ) {
   const normalizedAccountId = accountId.trim();
   const normalizedGatewayId = gatewayId.trim();
-  upsertAuthProfile({
-    profileId: "cloudflare-ai-gateway:default",
-    credential: buildApiKeyCredential(
-      "cloudflare-ai-gateway",
-      apiKey,
-      {
-        accountId: normalizedAccountId,
-        gatewayId: normalizedGatewayId,
-      },
-      options,
-    ),
-    agentDir: resolveAuthAgentDir(agentDir),
+  upsertProviderApiKeyProfile({
+    provider: "cloudflare-ai-gateway",
+    key: apiKey,
+    agentDir,
+    options,
+    metadata: {
+      accountId: normalizedAccountId,
+      gatewayId: normalizedGatewayId,
+    },
   });
 }
 
@@ -215,11 +187,7 @@ export async function setLitellmApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "litellm:default",
-    credential: buildApiKeyCredential("litellm", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "litellm", key, agentDir, options });
 }
 
 export async function setVercelAiGatewayApiKey(
@@ -227,11 +195,7 @@ export async function setVercelAiGatewayApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "vercel-ai-gateway:default",
-    credential: buildApiKeyCredential("vercel-ai-gateway", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "vercel-ai-gateway", key, agentDir, options });
 }
 
 export async function setOpencodeZenApiKey(
@@ -256,11 +220,7 @@ async function setSharedOpencodeApiKey(
   options?: ApiKeyStorageOptions,
 ) {
   for (const provider of ["opencode", "opencode-go"] as const) {
-    upsertAuthProfile({
-      profileId: `${provider}:default`,
-      credential: buildApiKeyCredential(provider, key, undefined, options),
-      agentDir: resolveAuthAgentDir(agentDir),
-    });
+    upsertProviderApiKeyProfile({ provider, key, agentDir, options });
   }
 }
 
@@ -269,11 +229,7 @@ export async function setTogetherApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "together:default",
-    credential: buildApiKeyCredential("together", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "together", key, agentDir, options });
 }
 
 export async function setHuggingfaceApiKey(
@@ -281,11 +237,7 @@ export async function setHuggingfaceApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "huggingface:default",
-    credential: buildApiKeyCredential("huggingface", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "huggingface", key, agentDir, options });
 }
 
 export function setQianfanApiKey(
@@ -293,11 +245,7 @@ export function setQianfanApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "qianfan:default",
-    credential: buildApiKeyCredential("qianfan", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "qianfan", key, agentDir, options });
 }
 
 export function setModelStudioApiKey(
@@ -305,19 +253,11 @@ export function setModelStudioApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "modelstudio:default",
-    credential: buildApiKeyCredential("modelstudio", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "modelstudio", key, agentDir, options });
 }
 
 export function setXaiApiKey(key: SecretInput, agentDir?: string, options?: ApiKeyStorageOptions) {
-  upsertAuthProfile({
-    profileId: "xai:default",
-    credential: buildApiKeyCredential("xai", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "xai", key, agentDir, options });
 }
 
 export async function setMistralApiKey(
@@ -325,11 +265,7 @@ export async function setMistralApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "mistral:default",
-    credential: buildApiKeyCredential("mistral", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "mistral", key, agentDir, options });
 }
 
 export async function setKilocodeApiKey(
@@ -337,9 +273,5 @@ export async function setKilocodeApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "kilocode:default",
-    credential: buildApiKeyCredential("kilocode", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  upsertProviderApiKeyProfile({ provider: "kilocode", key, agentDir, options });
 }
