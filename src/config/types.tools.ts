@@ -293,12 +293,31 @@ export type ExecToolConfig = {
   };
 };
 
+export type FsRootAccess = "ro" | "rw";
+export type FsRootKind = "dir" | "file";
+
+export type FsRoot = {
+  /** Absolute filesystem path. */
+  path: string;
+  /** "dir" allows recursive access, "file" allows exact file only. */
+  kind: FsRootKind;
+  /** "ro" rejects writes, "rw" allows reads and writes. */
+  access: FsRootAccess;
+};
+
 export type FsToolsConfig = {
   /**
    * Restrict filesystem tools (read/write/edit/apply_patch) to the agent workspace directory.
    * Default: false (unrestricted, matches legacy behavior).
+   * Mutually exclusive with `roots` — if both are set, `roots` takes precedence.
    */
   workspaceOnly?: boolean;
+  /**
+   * Explicit filesystem roots with per-root access modes.
+   * When set, only paths within these roots are accessible.
+   * Takes precedence over `workspaceOnly` if both are present.
+   */
+  roots?: FsRoot[];
 };
 
 export type AgentToolsConfig = {

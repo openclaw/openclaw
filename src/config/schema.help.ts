@@ -702,6 +702,13 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional thread/topic target for channels that support threaded delivery of forwarded plugin approvals.",
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
+  "tools.fs.roots":
+    "Explicit filesystem roots with per-root access modes. When set, only paths within these roots are accessible to FS tools (read/write/edit/apply_patch). Each root specifies a path, kind (dir or file), and access mode (ro or rw). Takes precedence over workspaceOnly.",
+  "tools.fs.roots[].path": "Absolute filesystem path for this root.",
+  "tools.fs.roots[].kind":
+    "Root type: 'dir' allows recursive access to everything under the path, 'file' allows access to the exact file only.",
+  "tools.fs.roots[].access":
+    "Access mode: 'ro' (read-only, rejects write/edit) or 'rw' (read-write).",
   "tools.sessions.visibility":
     'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_send. ("tree" default = current session + spawned subagent sessions; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent).',
   "tools.message.allowCrossContextSend":

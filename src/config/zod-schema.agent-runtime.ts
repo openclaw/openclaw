@@ -1,3 +1,4 @@
+import path from "node:path";
 import { z } from "zod";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -481,11 +482,37 @@ const AgentToolExecSchema = z
 
 const ToolExecSchema = z.object(ToolExecBaseShape).strict().optional();
 
+const FsRootSchema = z
+  .object({
+    path: z.string().min(1),
+    kind: z.enum(["dir", "file"]),
+    access: z.enum(["ro", "rw"]),
+  })
+  .strict();
+
 const ToolFsSchema = z
   .object({
     workspaceOnly: z.boolean().optional(),
+    roots: z.array(FsRootSchema).optional(),
   })
   .strict()
+  .superRefine((val, ctx) => {
+    // NOTE: when both workspaceOnly and roots are set, roots takes precedence at runtime
+    // (handled in createToolFsPolicy). We do NOT reject the config here — the spec says
+    // "log a warning and use roots." Path validation still applies:
+    if (val.roots) {
+      for (let i = 0; i < val.roots.length; i++) {
+        const root = val.roots[i];
+        if (root && !path.isAbsolute(root.path)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["roots", i, "path"],
+            message: `tools.fs.roots[${i}].path must be an absolute path (got "${root.path}")`,
+          });
+        }
+      }
+    }
+  })
   .optional();
 
 const ToolLoopDetectionDetectorSchema = z

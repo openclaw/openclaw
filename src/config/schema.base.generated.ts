@@ -7316,6 +7316,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         workspaceOnly: {
                           type: "boolean",
                         },
+                        roots: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              path: {
+                                type: "string",
+                                minLength: 1,
+                              },
+                              kind: {
+                                type: "string",
+                                enum: ["dir", "file"],
+                              },
+                              access: {
+                                type: "string",
+                                enum: ["ro", "rw"],
+                              },
+                            },
+                            required: ["path", "kind", "access"],
+                            additionalProperties: false,
+                          },
+                        },
                       },
                       additionalProperties: false,
                     },
@@ -17572,6 +17594,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
               },
+              roots: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    path: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    kind: {
+                      type: "string",
+                      enum: ["dir", "file"],
+                    },
+                    access: {
+                      type: "string",
+                      enum: ["ro", "rw"],
+                    },
+                  },
+                  required: ["path", "kind", "access"],
+                  additionalProperties: false,
+                },
+              },
             },
             additionalProperties: false,
           },
@@ -24191,6 +24235,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Workspace-only FS tools",
       help: "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
       tags: ["tools"],
+    },
+    "tools.fs.roots": {
+      label: "FS roots",
+      help: "Explicit filesystem roots with per-root access modes. When set, only paths within these roots are accessible to FS tools (read/write/edit/apply_patch). Each root specifies a path, kind (dir or file), and access mode (ro or rw). Takes precedence over workspaceOnly.",
+      tags: ["tools"],
+    },
+    "tools.fs.roots[].path": {
+      label: "Root path",
+      help: "Absolute filesystem path for this root.",
+      tags: ["storage", "tools"],
+    },
+    "tools.fs.roots[].kind": {
+      label: "Root kind",
+      help: "Root type: 'dir' allows recursive access to everything under the path, 'file' allows access to the exact file only.",
+      tags: ["tools"],
+    },
+    "tools.fs.roots[].access": {
+      label: "Access mode",
+      help: "Access mode: 'ro' (read-only, rejects write/edit) or 'rw' (read-write).",
+      tags: ["access", "tools"],
     },
     "tools.sessions.visibility": {
       label: "Session Tools Visibility",
