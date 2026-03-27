@@ -14,6 +14,7 @@ import {
   rpcReq,
   testState,
   trackConnectChallengeNonce,
+  withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
 import { agentCommand } from "./test-helpers.mocks.js";
@@ -682,6 +683,47 @@ describe("gateway server chat", () => {
       "user:NO_REPLY",
       "assistant:NO_REPLY",
     ]);
+  });
+
+  test("chat.send does not persist verboseLevel for operator.write callers", async () => {
+    await withGatewayServer(async ({ port }) => {
+      await withMainSessionStore(async () => {
+        let scopedWs: WebSocket | undefined;
+
+        try {
+          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          trackConnectChallengeNonce(scopedWs);
+          await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+          await connectOk(scopedWs, {
+            scopes: ["operator.write"],
+          });
+
+          const sendRes = await rpcReq(scopedWs, "chat.send", {
+            sessionKey: "main",
+            message: "/verbose full",
+            idempotencyKey: "idem-write-scope-verbose-no-persist",
+          });
+          expect(sendRes.ok).toBe(true);
+
+          const waitRes = await rpcReq(scopedWs, "agent.wait", {
+            runId: "idem-write-scope-verbose-no-persist",
+            timeoutMs: 1_000,
+          });
+          expect(waitRes.ok).toBe(true);
+          expect(waitRes.payload?.status).toBe("ok");
+
+          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
+          const stored = JSON.parse(raw) as {
+            "agent:main:main"?: {
+              verboseLevel?: string;
+            };
+          };
+          expect(stored["agent:main:main"]?.verboseLevel).toBeUndefined();
+        } finally {
+          scopedWs?.close();
+        }
+      });
+    });
   });
 
   test("agent.wait resolves chat.send runs that finish without lifecycle events", async () => {
