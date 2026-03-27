@@ -1,3 +1,5 @@
+import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
+import { resolveRuntimeOptionsFromMeta } from "../../acp/control-plane/runtime-options.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { formatAcpRuntimeErrorText } from "../../acp/runtime/error-text.js";
 import { toAcpRuntimeError } from "../../acp/runtime/errors.js";
@@ -422,10 +424,38 @@ export async function tryDispatchAcpReply(params: {
     // Guard against stalled upstream streams: abort the turn after the configured
     // agent timeout (agents.defaults.timeoutSeconds, default 600s). Without this,
     // a silently hung SSE connection blocks the session queue forever. refs #17258
-    const turnTimeoutMs = resolveAgentTimeoutMs({ cfg: params.cfg, minMs: 30_000 });
+    //
+    // P2: Align the wrapper timeout with the session-aware source so the dispatch
+    // timeout matches what AcpSessionManager.runTurn uses internally.
+    // runtimeOptions.timeoutSeconds takes priority over the global default.
+    const sessionRuntimeTimeoutSeconds =
+      acpResolution.kind === "ready"
+        ? resolveRuntimeOptionsFromMeta(acpResolution.meta).timeoutSeconds
+        : undefined;
+    const turnTimeoutMs =
+      typeof sessionRuntimeTimeoutSeconds === "number" &&
+      Number.isFinite(sessionRuntimeTimeoutSeconds) &&
+      sessionRuntimeTimeoutSeconds > 0
+        ? Math.max(30_000, Math.round(sessionRuntimeTimeoutSeconds * 1_000))
+        : resolveAgentTimeoutMs({ cfg: params.cfg, minMs: 30_000 });
+
+    // P1b: Track the runTurn promise so that when the dispatch-level timeout fires
+    // we can wait for runTurn to settle before surfacing the error. Without this,
+    // withTimeout() returns while runTurn drains in the background, causing late
+    // events and keeping the session actor queue locked.
+    const DRAIN_GRACE_MS = 5_000;
+    let runTurnSettlePromise: Promise<void> | undefined;
     await withTimeout(
-      (signal) =>
-        acpManager.runTurn({
+      (timeoutSignal) => {
+        // P1a: Combine the caller's upstream abort signal with the timeout signal
+        // so that either cancellation path (caller abort OR dispatch timeout)
+        // reaches runTurn. Previously only the timeout signal was forwarded,
+        // dropping params.abortSignal entirely.
+        const signal =
+          params.abortSignal != null && typeof AbortSignal.any === "function"
+            ? AbortSignal.any([timeoutSignal!, params.abortSignal])
+            : timeoutSignal;
+        runTurnSettlePromise = acpManager.runTurn({
           cfg: params.cfg,
           sessionKey: canonicalSessionKey,
           text: promptText,
@@ -434,10 +464,29 @@ export async function tryDispatchAcpReply(params: {
           requestId: resolveAcpRequestId(params.ctx),
           onEvent: (event) => projector.onEvent(event),
           signal,
-        }),
+        });
+        return runTurnSettlePromise;
+      },
       turnTimeoutMs,
       "ACP turn",
-    );
+    ).catch(async (err: unknown) => {
+      // P1b: On timeout (or upstream abort), wait for runTurn to drain before
+      // re-throwing. runTurn's own internal cleanup (cleanupTimedOutTurn) will
+      // abort and close the runtime, but we need to wait for that to finish
+      // so the session actor queue is fully released before we hand back control.
+      if (runTurnSettlePromise !== undefined) {
+        await Promise.race([
+          runTurnSettlePromise.catch(() => {
+            /* runTurn's own error is irrelevant here — we already have err */
+          }),
+          new Promise<void>((resolve) => {
+            const t = setTimeout(resolve, DRAIN_GRACE_MS);
+            (t as NodeJS.Timeout).unref?.();
+          }),
+        ]);
+      }
+      throw err;
+    });
 
     await projector.flush(true);
     queuedFinal =
