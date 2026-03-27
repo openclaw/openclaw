@@ -24,10 +24,14 @@ export const formatInternalVerboseCurrentReplyOnlyText = () =>
   "Verbose logging set for the current reply only.";
 
 function canPersistInternalDirective(params: {
+  messageProvider?: string;
   surface?: string;
   gatewayClientScopes?: string[];
 }): boolean {
-  if (!isInternalMessageChannel(params.surface)) {
+  const authoritativeChannel = isInternalMessageChannel(params.messageProvider)
+    ? params.messageProvider
+    : params.surface;
+  if (!isInternalMessageChannel(authoritativeChannel)) {
     return true;
   }
   const scopes = params.gatewayClientScopes ?? [];

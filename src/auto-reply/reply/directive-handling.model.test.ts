@@ -717,4 +717,39 @@ describe("persistInlineDirectives internal exec scope gate", () => {
 
     expect(sessionEntry.verboseLevel).toBeUndefined();
   });
+
+  it("treats internal provider context as authoritative over external surface metadata", async () => {
+    const allowedModelKeys = new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]);
+    const directives = parseInlineDirectives("/verbose full");
+    const sessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+    } as SessionEntry;
+    const sessionStore = { "agent:main:main": sessionEntry };
+
+    await persistInlineDirectives({
+      directives,
+      cfg: baseConfig(),
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/sessions.json",
+      elevatedEnabled: true,
+      elevatedAllowed: true,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => `Switched to ${label}`,
+      agentCfg: undefined,
+      messageProvider: "webchat",
+      surface: "telegram",
+      gatewayClientScopes: ["operator.write"],
+    });
+
+    expect(sessionEntry.verboseLevel).toBeUndefined();
+  });
 });

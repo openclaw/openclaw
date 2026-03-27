@@ -41,6 +41,7 @@ export async function persistInlineDirectives(params: {
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
   agentCfg: NonNullable<OpenClawConfig["agents"]>["defaults"] | undefined;
+  messageProvider?: string;
   surface?: string;
   gatewayClientScopes?: string[];
 }): Promise<{ provider: string; model: string; contextTokens: number }> {
@@ -63,10 +64,12 @@ export async function persistInlineDirectives(params: {
   } = params;
   let { provider, model } = params;
   const allowInternalExecPersistence = canPersistInternalExecDirective({
+    messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
   });
   const allowInternalVerbosePersistence = canPersistInternalVerboseDirective({
+    messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
   });
