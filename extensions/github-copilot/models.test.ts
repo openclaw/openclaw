@@ -17,7 +17,7 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/provider-models", () => ({
+vi.mock("openclaw/plugin-sdk/provider-model-shared", () => ({
   normalizeModelCompat: (model: Record<string, unknown>) => model,
 }));
 
