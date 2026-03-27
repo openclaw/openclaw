@@ -546,6 +546,62 @@ describe("message tool schema scoping", () => {
     expect(schema.required ?? []).not.toContain("buttons");
   });
 
+  it("does not expose top-level card schema for feishu shared sends", () => {
+    const feishuPlugin = createChannelPlugin({
+      id: "feishu",
+      label: "Feishu",
+      docsPath: "/channels/feishu",
+      blurb: "Feishu test plugin.",
+      actions: ["send"],
+      capabilities: ["cards"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "feishu", source: "test", plugin: feishuPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "feishu",
+    });
+    const schema = tool.parameters as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+
+    expect(schema.properties?.card).toBeUndefined();
+    expect(schema.required ?? []).not.toContain("card");
+  });
+
+  it("allows feishu plain send params without card when sending path", async () => {
+    mockSendResult({ channel: "feishu", to: "user:open_id" });
+    const feishuPlugin = createChannelPlugin({
+      id: "feishu",
+      label: "Feishu",
+      docsPath: "/channels/feishu",
+      blurb: "Feishu test plugin.",
+      actions: ["send"],
+      capabilities: ["cards"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "feishu", source: "test", plugin: feishuPlugin }]),
+    );
+
+    const call = await executeSend({
+      action: {
+        channel: "feishu",
+        path: "C:/tmp/test.png",
+      },
+      toolOptions: {
+        currentChannelProvider: "feishu",
+      },
+    });
+
+    expect(call?.params?.path).toBe("C:/tmp/test.png");
+    expect(call?.params?.card).toBeUndefined();
+  });
+
   it("hides telegram poll extras when telegram polls are disabled in scoped mode", () => {
     const telegramPluginWithConfig = createChannelPlugin({
       id: "telegram",

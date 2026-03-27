@@ -135,13 +135,7 @@ function describeFeishuMessageTool({
     return {
       actions: [],
       capabilities: enabled ? ["cards"] : [],
-      schema: enabled
-        ? {
-            properties: {
-              card: createMessageToolCardSchema(),
-            },
-          }
-        : null,
+      schema: null,
     };
   }
   const actions = new Set<ChannelMessageActionName>([
@@ -163,13 +157,7 @@ function describeFeishuMessageTool({
   return {
     actions: Array.from(actions),
     capabilities: enabled ? ["cards"] : [],
-    schema: enabled
-      ? {
-          properties: {
-            card: createMessageToolCardSchema(),
-          },
-        }
-      : null,
+    schema: null,
   };
 }
 
