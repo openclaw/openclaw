@@ -310,7 +310,7 @@ export async function resolveGatewayConnection(
       url,
       token: explicitAuth.token,
       password: explicitAuth.password,
-      allowInsecureLocalOperatorUi: false,
+      allowInsecureLocalOperatorUi,
     };
   }
 

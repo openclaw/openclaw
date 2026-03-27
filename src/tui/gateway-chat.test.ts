@@ -368,6 +368,28 @@ describe("resolveGatewayConnection", () => {
     const result = await resolveGatewayConnection({});
     expect(result.allowInsecureLocalOperatorUi).toBe(true);
   });
+
+  it("preserves insecure local operator ui auth when a loopback url override is provided", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        controlUi: {
+          allowInsecureAuth: true,
+        },
+        auth: {
+          mode: "token",
+          token: "config-token",
+        },
+      },
+    });
+
+    const result = await resolveGatewayConnection({
+      url: "ws://127.0.0.1:18791",
+      token: "override-token",
+    });
+    expect(result.allowInsecureLocalOperatorUi).toBe(true);
+    expect(result.token).toBe("override-token");
+  });
 });
 
 describe("GatewayChatClient", () => {
