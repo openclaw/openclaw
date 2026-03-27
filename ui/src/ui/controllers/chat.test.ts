@@ -65,6 +65,69 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe(null);
   });
 
+  it("accepts canonical default main session key for main alias", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Working...",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Done" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Done" }],
+      },
+    ]);
+  });
+
+  it("accepts main alias for canonical default main session key", () => {
+    const state = createState({
+      sessionKey: "agent:main:main",
+      chatRunId: "run-1",
+      chatStream: "Working...",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Done" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Done" }],
+      },
+    ]);
+  });
+
+  it("does not match a different canonical session key", () => {
+    const state = createState({ sessionKey: "main" });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "agent:other:main",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+  });
+
   it("returns null for delta from another run", () => {
     const state = createState({
       sessionKey: "main",
