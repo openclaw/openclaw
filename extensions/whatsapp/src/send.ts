@@ -8,7 +8,11 @@ import { redactIdentifier } from "openclaw/plugin-sdk/text-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { markdownToWhatsApp } from "openclaw/plugin-sdk/text-runtime";
 import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
-import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "./accounts.js";
+import {
+  resolveDefaultWhatsAppAccountId,
+  resolveWhatsAppAccount,
+  resolveWhatsAppMediaMaxBytes,
+} from "./accounts.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 
@@ -58,15 +62,17 @@ export async function sendMessageWhatsApp(
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
   const cfg = options.cfg ?? loadConfig();
-  // Resolve the listener key by case-insensitively matching the requested ID
-  // against the accounts config keys, then using the matched key as-is.
-  // Listeners are registered with the raw config key (setActiveWebListener →
-  // resolveWebAccountId trims only), so we must preserve that exact casing.
-  const whatsappCfg = cfg.channels?.whatsapp as
-    | { defaultAccount?: string; accounts?: Record<string, unknown> }
-    | undefined;
-  const requestedId = options.accountId?.trim() || whatsappCfg?.defaultAccount?.trim() || undefined;
-  const requestedAccountId = resolveListenerAccountId(requestedId, whatsappCfg?.accounts);
+  // Determine effective account ID:
+  // - Explicit accountId takes precedence (trim only).
+  // - Otherwise use resolveDefaultWhatsAppAccountId which validates defaultAccount
+  //   against known accounts and falls back to DEFAULT_ACCOUNT_ID when it is
+  //   missing or typoed — preserving pre-existing fallback semantics.
+  // Then case-insensitively match against config keys so requireActiveWebListener's
+  // exact Map lookup succeeds (listeners are keyed by raw config key via
+  // setActiveWebListener → resolveWebAccountId, which trims but does not lowercase).
+  const whatsappCfg = cfg.channels?.whatsapp as { accounts?: Record<string, unknown> } | undefined;
+  const effectiveId = options.accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);
+  const requestedAccountId = resolveListenerAccountId(effectiveId, whatsappCfg?.accounts);
   const { listener: active, accountId: resolvedAccountId } =
     requireActiveWebListener(requestedAccountId);
   const account = resolveWhatsAppAccount({
@@ -199,15 +205,10 @@ export async function sendPollWhatsApp(
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
   const cfg = options.cfg ?? loadConfig();
-  // Resolve the listener key by case-insensitively matching the requested ID
-  // against the accounts config keys, then using the matched key as-is.
-  // Listeners are registered with the raw config key (setActiveWebListener →
-  // resolveWebAccountId trims only), so we must preserve that exact casing.
-  const whatsappCfg = cfg.channels?.whatsapp as
-    | { defaultAccount?: string; accounts?: Record<string, unknown> }
-    | undefined;
-  const requestedId = options.accountId?.trim() || whatsappCfg?.defaultAccount?.trim() || undefined;
-  const requestedAccountId = resolveListenerAccountId(requestedId, whatsappCfg?.accounts);
+  // Same account resolution as sendMessageWhatsApp — see comment there.
+  const whatsappCfg = cfg.channels?.whatsapp as { accounts?: Record<string, unknown> } | undefined;
+  const effectiveId = options.accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);
+  const requestedAccountId = resolveListenerAccountId(effectiveId, whatsappCfg?.accounts);
   const { listener: active } = requireActiveWebListener(requestedAccountId);
   const redactedTo = redactIdentifier(to);
   const logger = getChildLogger({

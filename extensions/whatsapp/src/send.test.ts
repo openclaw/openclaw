@@ -169,6 +169,42 @@ describe("web outbound", () => {
     });
   });
 
+  it("falls back to default listener when defaultAccount is invalid/typoed", async () => {
+    // Listener registered as the default (no accountId).
+    // defaultAccount is a typo — should fall back to default listener, not throw.
+    const defaultSendMessage = vi.fn(async () => ({ messageId: "default-msg" }));
+    const defaultSendPoll = vi.fn(async () => ({ messageId: "default-poll" }));
+    const defaultSendComposingTo = vi.fn(async () => {});
+
+    setActiveWebListener(null);
+    setActiveWebListener({
+      sendComposingTo: defaultSendComposingTo,
+      sendMessage: defaultSendMessage,
+      sendPoll: defaultSendPoll,
+      sendReaction: vi.fn(async () => {}),
+    });
+
+    // No accounts config = single-account setup. resolveDefaultWhatsAppAccountId
+    // falls back to DEFAULT_ACCOUNT_ID when defaultAccount is invalid/typoed.
+    const cfg = {
+      channels: {
+        whatsapp: {
+          defaultAccount: "priamry", // typo — doesn't match any known account
+        },
+      },
+    } as OpenClawConfig;
+
+    await sendMessageWhatsApp("+1555", "hi", { verbose: false, cfg });
+    await sendPollWhatsApp(
+      "+1555",
+      { question: "Q?", options: ["A", "B"], maxSelections: 1 },
+      { verbose: false, cfg },
+    );
+
+    expect(defaultSendMessage).toHaveBeenCalled();
+    expect(defaultSendPoll).toHaveBeenCalled();
+  });
+
   it("resolves defaultAccount case-insensitively against config keys", async () => {
     // Listener registered with config key "Primary" (capital P).
     // defaultAccount set to "primary" (lowercase) — must still find the listener.
