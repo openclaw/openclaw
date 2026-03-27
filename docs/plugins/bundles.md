@@ -145,7 +145,8 @@ MCP servers can use stdio or HTTP transport:
         "transport": "streamable-http",
         "headers": {
           "Authorization": "Bearer ${MY_SECRET_TOKEN}"
-        }
+        },
+        "connectionTimeoutMs": 30000
       }
     }
   }
@@ -153,10 +154,13 @@ MCP servers can use stdio or HTTP transport:
 ```
 
 - `transport` must be `"streamable-http"` or `"sse"` — there is no auto-detection
+- only `http:` and `https:` URL schemes are allowed
 - `headers` values support `${ENV_VAR}` interpolation
 - a server entry with both `command` and `url` is rejected
 - URL credentials (userinfo, query params) are redacted from tool descriptions
   and log output
+- `connectionTimeoutMs` overrides the default 30-second connection timeout for
+  both stdio and HTTP transports
 
 ##### Tool namespacing
 
