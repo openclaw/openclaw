@@ -30,7 +30,6 @@ import {
   type SlashCommandDef,
 } from "../chat/slash-commands.ts";
 import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
-import { handleCodeBlockCopyClick } from "../code-block-copy.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
@@ -917,6 +916,21 @@ export function renderChat(props: ChatProps) {
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
 
+  const handleCodeBlockCopy = (e: Event) => {
+    const btn = (e.target as HTMLElement).closest(".code-block-copy");
+    if (!btn) {
+      return;
+    }
+    const code = (btn as HTMLElement).dataset.code ?? "";
+    navigator.clipboard.writeText(code).then(
+      () => {
+        btn.classList.add("copied");
+        setTimeout(() => btn.classList.remove("copied"), 1500);
+      },
+      () => {},
+    );
+  };
+
   const chatItems = buildChatItems(props);
   const isEmpty = chatItems.length === 0 && !props.loading;
 
@@ -926,7 +940,7 @@ export function renderChat(props: ChatProps) {
       role="log"
       aria-live="polite"
       @scroll=${props.onChatScroll}
-      @click=${handleCodeBlockCopyClick}
+      @click=${handleCodeBlockCopy}
     >
       <div class="chat-thread-inner">
         ${props.loading
