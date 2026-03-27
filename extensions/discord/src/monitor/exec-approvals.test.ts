@@ -126,6 +126,93 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => {
   };
 });
 
+vi.mock("../../../../src/gateway/operator-approvals-client.js", () => ({
+  createOperatorApprovalsGatewayClient: async (params: {
+    config?: unknown;
+    gatewayUrl?: string;
+    clientDisplayName?: string;
+    onEvent?: unknown;
+    onHelloOk?: unknown;
+    onConnectError?: unknown;
+    onClose?: unknown;
+  }) => {
+    mockCreateOperatorApprovalsGatewayClient(params);
+    const envUrl = process.env.OPENCLAW_GATEWAY_URL?.trim();
+    const gatewayUrl = params.gatewayUrl?.trim() || envUrl || "ws://127.0.0.1:18789";
+    const urlOverrideSource = params.gatewayUrl?.trim() ? "cli" : envUrl ? "env" : undefined;
+    const auth = await mockResolveGatewayConnectionAuth({
+      config: params.config,
+      env: process.env,
+      ...(urlOverrideSource
+        ? {
+            urlOverride: gatewayUrl,
+            urlOverrideSource,
+          }
+        : {}),
+    });
+    const clientParams = {
+      url: gatewayUrl,
+      token: auth?.token,
+      password: auth?.password,
+      clientName: "gateway-client",
+      clientDisplayName: params.clientDisplayName,
+      mode: "backend",
+      scopes: ["operator.approvals"],
+      onEvent: params.onEvent,
+      onHelloOk: params.onHelloOk,
+      onConnectError: params.onConnectError,
+      onClose: params.onClose,
+    };
+    gatewayClientParams.push(clientParams);
+    mockGatewayClientCtor(clientParams);
+    return {
+      start: gatewayClientStarts,
+      stop: gatewayClientStops,
+      request: gatewayClientRequests,
+    };
+  },
+}));
+
+vi.mock("../../../../src/gateway/client.js", () => ({
+  GatewayClient: class {
+    params: Record<string, unknown>;
+    constructor(params: Record<string, unknown>) {
+      this.params = params;
+      gatewayClientParams.push(params);
+      mockGatewayClientCtor(params);
+    }
+    start() {
+      gatewayClientStarts();
+    }
+    stop() {
+      gatewayClientStops();
+    }
+    async request() {
+      return gatewayClientRequests();
+    }
+  },
+}));
+
+vi.mock("../../../../src/gateway/connection-auth.js", () => ({
+  resolveGatewayConnectionAuth: (params: {
+    config?: unknown;
+    env: NodeJS.ProcessEnv;
+    urlOverride?: string;
+    urlOverrideSource?: "cli" | "env";
+  }) => mockResolveGatewayConnectionAuth(params),
+}));
+
+vi.mock("../client.js", () => ({
+  createDiscordClient: () => ({
+    rest: {
+      post: mockRestPost,
+      patch: mockRestPatch,
+      delete: mockRestDelete,
+    },
+    request: (_fn: () => Promise<unknown>, _label: string) => _fn(),
+  }),
+}));
+
 vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
   return {
@@ -152,6 +239,66 @@ type DiscordExecApprovalHandlerInstance = InstanceType<
 type ExecApprovalRequest = import("./exec-approvals.js").ExecApprovalRequest;
 type ExecApprovalButtonContext = import("./exec-approvals.js").ExecApprovalButtonContext;
 
+function createTestingDeps() {
+  return {
+    createGatewayClient: async (params: {
+      config?: unknown;
+      gatewayUrl?: string;
+      clientDisplayName?: string;
+      onEvent?: unknown;
+      onHelloOk?: unknown;
+      onConnectError?: unknown;
+      onClose?: unknown;
+    }) => {
+      mockCreateOperatorApprovalsGatewayClient(params);
+      const envUrl = process.env.OPENCLAW_GATEWAY_URL?.trim();
+      const gatewayUrl = params.gatewayUrl?.trim() || envUrl || "ws://127.0.0.1:18789";
+      const urlOverrideSource = params.gatewayUrl?.trim() ? "cli" : envUrl ? "env" : undefined;
+      const auth = await mockResolveGatewayConnectionAuth({
+        config: params.config,
+        env: process.env,
+        ...(urlOverrideSource
+          ? {
+              urlOverride: gatewayUrl,
+              urlOverrideSource,
+            }
+          : {}),
+      });
+      const clientParams = {
+        url: gatewayUrl,
+        token: auth?.token,
+        password: auth?.password,
+        clientName: "gateway-client",
+        clientDisplayName: params.clientDisplayName,
+        mode: "backend",
+        scopes: ["operator.approvals"],
+        onEvent: params.onEvent,
+        onHelloOk: params.onHelloOk,
+        onConnectError: params.onConnectError,
+        onClose: params.onClose,
+      };
+      gatewayClientParams.push(clientParams);
+      mockGatewayClientCtor(clientParams);
+      return {
+        start: gatewayClientStarts,
+        stop: gatewayClientStops,
+        request: gatewayClientRequests,
+      } as unknown as InstanceType<
+        typeof import("../../../../src/gateway/client.js").GatewayClient
+      >;
+    },
+    createDiscordClient: () => ({
+      rest: {
+        post: mockRestPost,
+        patch: mockRestPatch,
+        delete: mockRestDelete,
+      },
+      request: (_fn: () => Promise<unknown>, _label: string) => _fn(),
+      token: "test-token",
+    }),
+  };
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function createHandler(config: DiscordExecApprovalConfig, accountId = "default") {
@@ -160,6 +307,7 @@ function createHandler(config: DiscordExecApprovalConfig, accountId = "default")
     accountId,
     config,
     cfg: { session: { store: STORE_PATH } },
+    __testing: createTestingDeps(),
   });
 }
 
@@ -785,6 +933,7 @@ describe("DiscordExecApprovalHandler gateway auth", () => {
           auth: { mode: "token", token: "shared-gateway-token" },
         },
       },
+      __testing: createTestingDeps(),
     });
 
     await handler.start();
@@ -811,6 +960,7 @@ describe("DiscordExecApprovalHandler gateway auth", () => {
           auth: { mode: "token" },
         },
       },
+      __testing: createTestingDeps(),
     });
 
     try {
@@ -978,6 +1128,7 @@ describe("DiscordExecApprovalHandler gateway auth resolution", () => {
       gatewayUrl: "wss://override.example/ws",
       config: { enabled: true, approvers: ["123"] },
       cfg: { session: { store: STORE_PATH } },
+      __testing: createTestingDeps(),
     });
 
     await expectGatewayAuthStart({
@@ -1000,6 +1151,7 @@ describe("DiscordExecApprovalHandler gateway auth resolution", () => {
         accountId: "default",
         config: { enabled: true, approvers: ["123"] },
         cfg: { session: { store: STORE_PATH } },
+        __testing: createTestingDeps(),
       });
 
       await expectGatewayAuthStart({

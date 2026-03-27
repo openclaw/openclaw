@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./config.js";
 import { migrateLegacyConfig, validateConfigObject } from "./config.js";
-import { WHISPER_BASE_AUDIO_MODEL } from "./legacy-migrate.test-helpers.js";
-
-function getLegacyRouting(config: unknown) {
-  return (config as { routing?: Record<string, unknown> } | undefined)?.routing;
-}
 
 function getChannelConfig(config: unknown, provider: string) {
   const channels = (config as { channels?: Record<string, Record<string, unknown>> } | undefined)
@@ -19,12 +14,14 @@ describe("legacy config detection", () => {
       {
         name: "routing.allowFrom",
         input: { routing: { allowFrom: ["+15555550123"] } },
-        expectedPath: "routing.allowFrom",
+        expectedPath: "",
+        expectedMessage: '"routing"',
       },
       {
         name: "routing.groupChat.requireMention",
         input: { routing: { groupChat: { requireMention: false } } },
-        expectedPath: "routing.groupChat.requireMention",
+        expectedPath: "",
+        expectedMessage: '"routing"',
       },
     ] as const;
     for (const testCase of cases) {
@@ -32,91 +29,36 @@ describe("legacy config detection", () => {
       expect(res.ok, testCase.name).toBe(false);
       if (!res.ok) {
         expect(res.issues[0]?.path, testCase.name).toBe(testCase.expectedPath);
+        expect(res.issues[0]?.message, testCase.name).toContain(testCase.expectedMessage);
       }
     }
   });
 
-  it("migrates or drops routing.allowFrom based on whatsapp configuration", async () => {
-    const cases = [
-      {
-        name: "whatsapp configured",
-        input: { routing: { allowFrom: ["+15555550123"] }, channels: { whatsapp: {} } },
-        expectedChange: "Moved routing.allowFrom → channels.whatsapp.allowFrom.",
-        expectWhatsappAllowFrom: true,
-      },
-      {
-        name: "whatsapp missing",
-        input: { routing: { allowFrom: ["+15555550123"] } },
-        expectedChange: "Removed routing.allowFrom (channels.whatsapp not configured).",
-        expectWhatsappAllowFrom: false,
-      },
-    ] as const;
-    for (const testCase of cases) {
-      const res = migrateLegacyConfig(testCase.input);
-      expect(res.changes, testCase.name).toContain(testCase.expectedChange);
-      if (testCase.expectWhatsappAllowFrom) {
-        expect(res.config?.channels?.whatsapp?.allowFrom, testCase.name).toEqual(["+15555550123"]);
-      } else {
-        expect(res.config?.channels?.whatsapp, testCase.name).toBeUndefined();
-      }
-      expect(getLegacyRouting(res.config)?.allowFrom, testCase.name).toBeUndefined();
-    }
+  it("does not rewrite removed routing.allowFrom migrations", async () => {
+    const res = migrateLegacyConfig({
+      routing: { allowFrom: ["+15555550123"] },
+      channels: { whatsapp: {} },
+    });
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
 
-  it("migrates routing.groupChat.requireMention to provider group defaults", async () => {
-    const cases = [
-      {
-        name: "whatsapp configured",
-        input: { routing: { groupChat: { requireMention: false } }, channels: { whatsapp: {} } },
-        expectWhatsapp: true,
-      },
-      {
-        name: "whatsapp missing",
-        input: { routing: { groupChat: { requireMention: false } } },
-        expectWhatsapp: false,
-      },
-    ] as const;
-    for (const testCase of cases) {
-      const res = migrateLegacyConfig(testCase.input);
-      expect(res.changes, testCase.name).toContain(
-        'Moved routing.groupChat.requireMention → channels.telegram.groups."*".requireMention.',
-      );
-      expect(res.changes, testCase.name).toContain(
-        'Moved routing.groupChat.requireMention → channels.imessage.groups."*".requireMention.',
-      );
-      if (testCase.expectWhatsapp) {
-        expect(res.changes, testCase.name).toContain(
-          'Moved routing.groupChat.requireMention → channels.whatsapp.groups."*".requireMention.',
-        );
-        expect(res.config?.channels?.whatsapp?.groups?.["*"]?.requireMention, testCase.name).toBe(
-          false,
-        );
-      } else {
-        expect(res.changes, testCase.name).not.toContain(
-          'Moved routing.groupChat.requireMention → channels.whatsapp.groups."*".requireMention.',
-        );
-        expect(res.config?.channels?.whatsapp, testCase.name).toBeUndefined();
-      }
-      expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention, testCase.name).toBe(
-        false,
-      );
-      expect(res.config?.channels?.imessage?.groups?.["*"]?.requireMention, testCase.name).toBe(
-        false,
-      );
-      expect(getLegacyRouting(res.config)?.groupChat, testCase.name).toBeUndefined();
-    }
+  it("does not rewrite removed routing.groupChat.requireMention migrations", async () => {
+    const res = migrateLegacyConfig({
+      routing: { groupChat: { requireMention: false } },
+      channels: { whatsapp: {} },
+    });
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
-  it("migrates routing.groupChat.mentionPatterns to messages.groupChat.mentionPatterns", async () => {
+  it("does not rewrite removed routing.groupChat.mentionPatterns migrations", async () => {
     const res = migrateLegacyConfig({
       routing: { groupChat: { mentionPatterns: ["@openclaw"] } },
     });
-    expect(res.changes).toContain(
-      "Moved routing.groupChat.mentionPatterns → messages.groupChat.mentionPatterns.",
-    );
-    expect(res.config?.messages?.groupChat?.mentionPatterns).toEqual(["@openclaw"]);
-    expect(getLegacyRouting(res.config)?.groupChat).toBeUndefined();
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
-  it("migrates routing agentToAgent/queue/transcribeAudio to tools/messages/media", async () => {
+  it("does not rewrite removed routing agentToAgent/queue/transcribeAudio migrations", async () => {
     const res = migrateLegacyConfig({
       routing: {
         agentToAgent: { enabled: true, allow: ["main"] },
@@ -127,19 +69,8 @@ describe("legacy config detection", () => {
         },
       },
     });
-    expect(res.changes).toContain("Moved routing.agentToAgent → tools.agentToAgent.");
-    expect(res.changes).toContain("Moved routing.queue → messages.queue.");
-    expect(res.changes).toContain("Moved routing.transcribeAudio → tools.media.audio.models.");
-    expect(res.config?.tools?.agentToAgent).toEqual({
-      enabled: true,
-      allow: ["main"],
-    });
-    expect(res.config?.messages?.queue).toEqual({
-      mode: "queue",
-      cap: 3,
-    });
-    expect(res.config?.tools?.media?.audio).toEqual(WHISPER_BASE_AUDIO_MODEL);
-    expect(getLegacyRouting(res.config)).toBeUndefined();
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
   it("migrates audio.transcription with custom script names", async () => {
     const res = migrateLegacyConfig({
@@ -176,7 +107,7 @@ describe("legacy config detection", () => {
     expect(res.config?.tools?.media?.audio).toBeUndefined();
     expect(res.config?.audio).toBeUndefined();
   });
-  it("migrates agent config into agents.defaults and tools", async () => {
+  it("does not rewrite removed agent config migrations", async () => {
     const res = migrateLegacyConfig({
       agent: {
         model: "openai/gpt-5.2",
@@ -187,31 +118,8 @@ describe("legacy config detection", () => {
         subagents: { tools: { deny: ["sandbox"] } },
       },
     });
-    expect(res.changes).toContain("Moved agent.tools.allow → tools.allow.");
-    expect(res.changes).toContain("Moved agent.tools.deny → tools.deny.");
-    expect(res.changes).toContain("Moved agent.elevated → tools.elevated.");
-    expect(res.changes).toContain("Moved agent.bash → tools.exec.");
-    expect(res.changes).toContain("Moved agent.sandbox.tools → tools.sandbox.tools.");
-    expect(res.changes).toContain("Moved agent.subagents.tools → tools.subagents.tools.");
-    expect(res.changes).toContain("Moved agent → agents.defaults.");
-    expect(res.config?.agents?.defaults?.model).toEqual({
-      primary: "openai/gpt-5.2",
-      fallbacks: [],
-    });
-    expect(res.config?.tools?.allow).toEqual(["sessions.list"]);
-    expect(res.config?.tools?.deny).toEqual(["danger"]);
-    expect(res.config?.tools?.elevated).toEqual({
-      enabled: true,
-      allowFrom: { discord: ["user:1"] },
-    });
-    expect(res.config?.tools?.exec).toEqual({ timeoutSec: 12 });
-    expect(res.config?.tools?.sandbox?.tools).toEqual({
-      allow: ["browser.open"],
-    });
-    expect(res.config?.tools?.subagents?.tools).toEqual({
-      deny: ["sandbox"],
-    });
-    expect((res.config as { agent?: unknown }).agent).toBeUndefined();
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
   it("migrates top-level memorySearch to agents.defaults.memorySearch", async () => {
     const res = migrateLegacyConfig({
@@ -284,15 +192,14 @@ describe("legacy config detection", () => {
       },
     });
   });
-  it("migrates tools.bash to tools.exec", async () => {
+  it("does not rewrite removed tools.bash migrations", async () => {
     const res = migrateLegacyConfig({
       tools: {
         bash: { timeoutSec: 12 },
       },
     });
-    expect(res.changes).toContain("Moved tools.bash → tools.exec.");
-    expect(res.config?.tools?.exec).toEqual({ timeoutSec: 12 });
-    expect((res.config?.tools as { bash?: unknown } | undefined)?.bash).toBeUndefined();
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
   it("accepts per-agent tools.elevated overrides", async () => {
     const res = validateConfigObject({
@@ -330,7 +237,8 @@ describe("legacy config detection", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((issue) => issue.path === "telegram.requireMention")).toBe(true);
+      expect(res.issues[0]?.path).toBe("");
+      expect(res.issues[0]?.message).toContain('"telegram"');
     }
   });
   it("rejects gateway.token", async () => {
@@ -339,17 +247,15 @@ describe("legacy config detection", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("gateway.token");
+      expect(res.issues[0]?.path).toBe("gateway");
     }
   });
-  it("migrates gateway.token to gateway.auth.token", async () => {
+  it("does not rewrite removed gateway.token migrations", async () => {
     const res = migrateLegacyConfig({
       gateway: { token: "legacy-token" },
     });
-    expect(res.changes).toContain("Moved gateway.token → gateway.auth.token.");
-    expect(res.config?.gateway?.auth?.token).toBe("legacy-token");
-    expect(res.config?.gateway?.auth?.mode).toBe("token");
-    expect((res.config?.gateway as { token?: string })?.token).toBeUndefined();
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
   it("keeps gateway.bind tailnet", async () => {
     const res = migrateLegacyConfig({
