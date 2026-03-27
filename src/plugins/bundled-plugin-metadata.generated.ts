@@ -11817,6 +11817,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["sambanova"],
       providerAuthEnvVars: {
         sambanova: ["SAMBANOVA_API_KEY"],
