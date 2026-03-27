@@ -203,6 +203,30 @@ describe("detectCommandObfuscation", () => {
       expect(result.matchedPatterns).toContain("command-too-long");
     });
 
+    it("respects custom maxCommandChars threshold", () => {
+      const longCommand = `a=${"x".repeat(100)};b=y;END`;
+      // With default threshold (10000), this should not be flagged
+      expect(detectCommandObfuscation(longCommand).detected).toBe(false);
+      // With custom threshold (50), this should be flagged
+      const result = detectCommandObfuscation(longCommand, { maxCommandChars: 50 });
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("command-too-long");
+    });
+
+    it("disables length check when maxCommandChars is 0", () => {
+      const veryLongCommand = `a=${"x".repeat(20_000)};b=y;END`;
+      // With threshold 0, length check is disabled
+      const result = detectCommandObfuscation(veryLongCommand, { maxCommandChars: 0 });
+      expect(result.matchedPatterns).not.toContain("command-too-long");
+    });
+
+    it("disables length check when maxCommandChars is negative", () => {
+      const veryLongCommand = `a=${"x".repeat(20_000)};b=y;END`;
+      // With negative threshold, length check is disabled
+      const result = detectCommandObfuscation(veryLongCommand, { maxCommandChars: -1 });
+      expect(result.matchedPatterns).not.toContain("command-too-long");
+    });
+
     it("returns no detection for empty input", () => {
       const result = detectCommandObfuscation("");
       expect(result.detected).toBe(false);

@@ -175,6 +175,8 @@ export async function ensureSessionHeader(params: {
   sessionFile: string;
   sessionId: string;
   cwd: string;
+  sessionKey?: string;
+  agentId?: string;
 }) {
   const file = params.sessionFile;
   try {
@@ -185,13 +187,19 @@ export async function ensureSessionHeader(params: {
   }
   await fs.mkdir(path.dirname(file), { recursive: true });
   const sessionVersion = 2;
-  const entry = {
+  const entry: Record<string, unknown> = {
     type: "session",
     version: sessionVersion,
     id: params.sessionId,
     timestamp: new Date().toISOString(),
     cwd: params.cwd,
   };
+  if (params.sessionKey) {
+    entry.sessionKey = params.sessionKey;
+  }
+  if (params.agentId) {
+    entry.agentId = params.agentId;
+  }
   await fs.writeFile(file, `${JSON.stringify(entry)}\n`, "utf-8");
 }
 

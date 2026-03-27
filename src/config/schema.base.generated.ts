@@ -4694,6 +4694,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           },
                           additionalProperties: false,
                         },
+                        maxCommandChars: {
+                          type: "integer",
+                          minimum: -9007199254740991,
+                          maximum: 9007199254740991,
+                        },
                         approvalRunningNoticeMs: {
                           type: "integer",
                           minimum: 0,
@@ -7180,6 +7185,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 },
                 additionalProperties: false,
+              },
+              maxCommandChars: {
+                type: "integer",
+                minimum: -9007199254740991,
+                maximum: 9007199254740991,
               },
             },
             additionalProperties: false,
@@ -12507,6 +12517,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Exec Approval Running Notice (ms)",
       help: "Delay in milliseconds before showing an in-progress notice after an exec approval is granted. Increase to reduce flicker for fast commands, or lower for quicker operator feedback.",
       tags: ["tools"],
+    },
+    "tools.exec.maxCommandChars": {
+      label: "Exec Max Command Chars",
+      help: "Maximum command length (in characters) before triggering obfuscation detection. Commands longer than this threshold are flagged as potentially obfuscated and require approval. Set to 0 or negative to disable the length check. Default: 10000.",
+      tags: ["performance", "tools"],
     },
     "tools.exec.host": {
       label: "Exec Host",

@@ -433,6 +433,8 @@ const ToolExecBaseShape = {
   notifyOnExit: z.boolean().optional(),
   notifyOnExitEmptySuccess: z.boolean().optional(),
   applyPatch: ToolExecApplyPatchSchema,
+  /** Maximum command length (in characters) before triggering obfuscation detection. Default: 10000. Set to 0 or negative to disable. */
+  maxCommandChars: z.number().int().optional(),
 } as const;
 
 const AgentToolExecSchema = z

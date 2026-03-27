@@ -398,10 +398,16 @@ export async function compactEmbeddedPiSessionDirect(
       : sandbox.workspaceDir
     : resolvedWorkspace;
   await fs.mkdir(effectiveWorkspace, { recursive: true });
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+  });
   await ensureSessionHeader({
     sessionFile: params.sessionFile,
     sessionId: params.sessionId,
     cwd: effectiveWorkspace,
+    sessionKey: params.sessionKey,
+    agentId: sessionAgentId,
   });
 
   let restoreSkillEnv: (() => void) | undefined;

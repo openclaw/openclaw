@@ -28,6 +28,8 @@ export type ExecToolDefaults = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
+  /** Maximum command length before triggering obfuscation detection. Default: 10000. Set to 0 or negative to disable. */
+  maxCommandChars?: number;
 };
 
 export type ExecElevatedDefaults = {

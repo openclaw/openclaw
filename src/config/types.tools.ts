@@ -277,6 +277,13 @@ export type ExecToolConfig = {
      */
     allowModels?: string[];
   };
+  /**
+   * Maximum command length (in characters) before triggering obfuscation detection.
+   * Commands longer than this threshold will be flagged as potentially obfuscated
+   * and require approval. Set to 0 or negative to disable the length check.
+   * Default: 10000
+   */
+  maxCommandChars?: number;
 };
 
 export type FsToolsConfig = {

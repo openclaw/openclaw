@@ -578,6 +578,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-agent provider-specific tool policy overrides for channel-scoped capability control. Use this when a single agent needs tighter restrictions on one provider than others.",
   "tools.exec.approvalRunningNoticeMs":
     "Delay in milliseconds before showing an in-progress notice after an exec approval is granted. Increase to reduce flicker for fast commands, or lower for quicker operator feedback.",
+  "tools.exec.maxCommandChars":
+    "Maximum command length (in characters) before triggering obfuscation detection. Commands longer than this threshold are flagged as potentially obfuscated and require approval. Set to 0 or negative to disable the length check. Default: 10000.",
   "tools.links.enabled":
     "Enable automatic link understanding pre-processing so URLs can be summarized before agent reasoning. Keep enabled for richer context, and disable when strict minimal processing is required.",
   "tools.links.maxLinks":
