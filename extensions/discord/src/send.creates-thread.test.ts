@@ -423,15 +423,11 @@ function createMockRateLimitError(retryAfter = 0.001): RateLimitError {
       "X-RateLimit-Bucket": "test-bucket",
     },
   });
-  return new RateLimitError(
-    response,
-    {
-      message: "You are being rate limited.",
-      retry_after: retryAfter,
-      global: false,
-    },
-    request,
-  );
+  return new RateLimitError(response, {
+    message: "You are being rate limited.",
+    retry_after: retryAfter,
+    global: false,
+  });
 }
 
 describe("retry rate limits", () => {
