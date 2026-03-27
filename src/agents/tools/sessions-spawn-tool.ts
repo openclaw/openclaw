@@ -105,7 +105,10 @@ export function createSessionsSpawnTool(
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
-      const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const requestedStreamTo = params.streamTo === "parent" ? "parent" : undefined;
+      // Some callers retain ACP-only fields when they fall back to subagent runtime.
+      // Treat streamTo as ACP-only and drop it for subagent requests.
+      const streamTo = runtime === "acp" ? requestedStreamTo : undefined;
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
@@ -126,13 +129,6 @@ export function createSessionsSpawnTool(
             mimeType?: string;
           }>)
         : undefined;
-
-      if (streamTo && runtime !== "acp") {
-        return jsonResult({
-          status: "error",
-          error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
-        });
-      }
 
       if (resumeSessionId && runtime !== "acp") {
         return jsonResult({
