@@ -182,6 +182,10 @@ export async function loadStatusScanModuleForTest(
     probeGateway: mocks.probeGateway,
   }));
   vi.doMock("./status.gateway-probe.js", () => createStatusGatewayProbeModuleMock(mocks));
+  vi.doMock("../gateway/connection-details.js", () => ({
+    buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
+    buildGatewayConnectionDetailsWithResolvers: mocks.buildGatewayConnectionDetails,
+  }));
   vi.doMock("../process/exec.js", () => createStatusExecModuleMock());
   vi.doMock("../cli/plugin-registry.js", () => createStatusPluginRegistryModuleMock(mocks));
   vi.doMock("../plugins/status.js", () => createStatusPluginStatusModuleMock(mocks));

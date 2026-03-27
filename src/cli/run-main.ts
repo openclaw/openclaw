@@ -1,11 +1,15 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { resolveStateDir } from "../config/paths.js";
 import { normalizeEnv } from "../infra/env.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
+import { hasMemoryRuntime } from "../plugins/memory-state.js";
 import {
   getCommandPathWithRootOptions,
   getPrimaryCommand,
@@ -13,12 +17,14 @@ import {
   isRootHelpInvocation,
 } from "./argv.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
-import { loadCliDotEnv } from "./dotenv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { tryRouteCli } from "./route.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 async function closeCliMemoryManagers(): Promise<void> {
+  if (!hasMemoryRuntime()) {
+    return;
+  }
   try {
     const { closeActiveMemorySearchManagers } = await import("../plugins/memory-runtime.js");
     await closeActiveMemorySearchManagers();
@@ -80,6 +86,13 @@ export function shouldUseRootHelpFastPath(argv: string[]): boolean {
   return isRootHelpInvocation(argv);
 }
 
+function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (existsSync(path.join(process.cwd(), ".env"))) {
+    return true;
+  }
+  return existsSync(path.join(resolveStateDir(env), ".env"));
+}
+
 export async function runCli(argv: string[] = process.argv) {
   const originalArgv = normalizeWindowsArgv(argv);
   const parsedContainer = parseCliContainerArgs(originalArgv);
@@ -108,7 +121,10 @@ export async function runCli(argv: string[] = process.argv) {
   }
   let normalizedArgv = parsedProfile.argv;
 
-  loadCliDotEnv({ quiet: true });
+  if (shouldLoadCliDotEnv()) {
+    const { loadCliDotEnv } = await import("./dotenv.js");
+    loadCliDotEnv({ quiet: true });
+  }
   normalizeEnv();
   if (shouldEnsureCliPath(normalizedArgv)) {
     ensureOpenClawCliOnPath();
