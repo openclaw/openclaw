@@ -69,6 +69,16 @@ describe("ReAct Fallback Stream Core", () => {
       expect(result.toolCalls[0].arguments).toEqual({ code: "function() { return 42; }" });
     });
 
+    it("ignores apostrophes in natural language before the JSON block", () => {
+      const input = `Action: I'll use {"tool": "read", "args": {"path": "README.md"}}`;
+      const result = parseReActResponse(input, false);
+
+      expect(result.toolCalls).toHaveLength(1);
+      expect(result.toolCalls[0].name).toBe("read");
+      expect(result.toolCalls[0].arguments).toEqual({ path: "README.md" });
+      expect(result.text).toBe("");
+    });
+
     it("handles multiple calls (if model hallucinates them, though we only typically execute the first)", () => {
       const input = 'Action: {"tool": "t1", "args": {}}\nAction: {"tool": "t2", "args": {}}';
       const result = parseReActResponse(input, false);

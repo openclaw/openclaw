@@ -141,7 +141,9 @@ export function parseReActResponse(
         }
         continue;
       }
-      if (char === '"' || char === "'") {
+      // Only double quotes delimit strings before we've entered the JSON payload.
+      // This avoids natural-language apostrophes like `I'll` suppressing brace detection.
+      if (char === '"' || (char === "'" && jsonStartIndex !== -1)) {
         inString = true;
         stringChar = char;
         continue;
