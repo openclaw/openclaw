@@ -736,6 +736,87 @@ it("keeps allowed legacy combined session overrides after normalization", async 
     expect(state.provider).toBe("openai");
     expect(state.model).toBe("gpt-4.1");
   });
+
+  it("resets model override when stored model is not vision-capable via catalog", async () => {
+    // Test that stored override is cleared when it's not in imageModel config
+    // AND the catalog confirms it doesn't support vision
+    const { loadModelCatalog } = await import("../../agents/model-catalog.js");
+    vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      { provider: "openai", id: "gpt-3.5-turbo", name: "GPT-3.5", input: ["text"] }, // No image support
+    ]);
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+            "openai/gpt-3.5-turbo": {},
+          },
+          imageModel: "openai/gpt-4o",
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-3.5-turbo", // Not in imageModel list, catalog confirms no vision
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+      hasAppliedImageModelOverride: true,
+    });
+
+    // Stored override should be skipped since it's not vision-capable
+    expect(state.provider).toBe("anthropic");
+    expect(state.model).toBe("claude-opus-4-5");
+    // Note: resetModelOverride is only set when hasModelDirective is true
+  });
+
+  it("uses default model when imageModel is not configured", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+          },
+          // No imageModel configured
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({});
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+      hasAppliedImageModelOverride: true,
+    });
+
+    // Should use default model when imageModel is not configured
+    expect(state.provider).toBe("anthropic");
+    expect(state.model).toBe("claude-opus-4-5");
+  });
 });
 
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {

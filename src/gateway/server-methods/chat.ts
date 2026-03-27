@@ -1858,6 +1858,11 @@ export const chatHandlers: GatewayRequestHandlers = {
             `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}${imageModelFallbacks && imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
           );
         }
+      } else {
+        // imageModel not configured - log warning since default model may not support images
+        context.logGateway.warn(
+          `[image-model-switch] Images detected but no imageModel configured for agent ${agentId}, using default model which may not support images`,
+        );
       }
     }
     const timeoutMs = resolveAgentTimeoutMs({

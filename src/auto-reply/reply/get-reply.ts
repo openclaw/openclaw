@@ -238,6 +238,9 @@ export async function getReplyFromConfig(
           if (!fallbackAppliedForImageModel) {
             // No allowlisted fallback, skip the override and let default model be used
             // This prevents Dashboard images from bypassing agent model restrictions
+            defaultRuntime.log?.(
+              `[image-model-switch] Model override ${opts.modelOverride} not in agent allowlist and no fallback available, using default model ${defaultProvider}/${defaultModel}`,
+            );
           }
         } else {
           provider = modelRef.ref.provider;
