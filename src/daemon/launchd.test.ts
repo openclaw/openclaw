@@ -479,7 +479,7 @@ describe("launchd install", () => {
   });
 
   it("retries bootstrap after bootout when service is already registered", async () => {
-    state.bootstrapError = "Bootstrap failed: 5: Input/output error";
+    state.bootstrapError = "Service is already bootstrapped";
     state.bootstrapFailuresRemaining = 1; // first bootstrap fails, retry succeeds
     const env = createDefaultLaunchdEnv();
     const stdout = new PassThrough();
