@@ -90,6 +90,7 @@ Docs: https://docs.openclaw.ai
 - Agents/model switching: apply `/model` changes to active embedded runs at the next safe retry boundary, so overloaded or retrying turns switch to the newly selected model instead of staying pinned to the old provider.
 - Agents/Codex fallback: classify Codex `server_error` payloads as failoverable, sanitize `Codex error:` payloads before they reach chat, preserve context-overflow guidance for prefixed `invalid_request_error` payloads, and omit provider `request_id` values from user-facing UI copy. (#42892) Thanks @xaeon2026.
 - Memory/search: share memory embedding provider registrations across split plugin runtimes so memory search no longer fails with unknown provider errors after memory-core registers built-in adapters. (#55945) Thanks @glitch418x.
+- Discord/Carbon beta: update `@buape/carbon` to the latest beta and pass the new `RateLimitError` request argument so Discord stays compatible with the upstream beta constructor change. (#55980) Thanks @ngutman.
 
 ## 2026.3.24
 
