@@ -82,3 +82,44 @@ export function markdownTablesToBlockKitAttachment(
     blocks: [markdownTableToBlockKit(table)],
   }));
 }
+
+/**
+ * Generate a meaningful plain-text fallback for table-only messages.
+ *
+ * Slack uses the top-level `text` field for notifications, accessibility
+ * readers, and contexts that don't render Block Kit attachments.  When a
+ * message consists solely of table attachments, this function produces a
+ * code-block representation of the table data so those contexts still
+ * show useful content instead of whitespace.
+ */
+export function tableFallbackText(tables: MarkdownTableData[]): string {
+  if (!tables.length) return " ";
+
+  const parts: string[] = [];
+  for (const table of tables) {
+    const rows = [table.headers, ...(table.rows ?? [])].filter((r) => r.length > 0);
+
+    if (rows.length === 0) continue;
+
+    // Compute column widths for alignment
+    const colCount = Math.max(...rows.map((r) => r.length));
+    const widths = Array.from({ length: colCount }, (_, c) =>
+      Math.max(...rows.map((r) => (r[c] ?? "").length), 1),
+    );
+
+    const lines: string[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const cells = Array.from({ length: colCount }, (_, c) =>
+        (rows[i][c] ?? "").padEnd(widths[c]),
+      );
+      lines.push("| " + cells.join(" | ") + " |");
+      // Add separator after header row
+      if (i === 0 && table.headers.length > 0) {
+        lines.push("| " + widths.map((w) => "-".repeat(w)).join(" | ") + " |");
+      }
+    }
+    parts.push(lines.join("\n"));
+  }
+
+  return parts.length > 0 ? parts.join("\n\n") : " ";
+}

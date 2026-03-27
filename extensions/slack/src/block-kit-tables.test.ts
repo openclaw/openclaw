@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
 import type { MarkdownTableData } from "openclaw/plugin-sdk/text-runtime";
-import { markdownTableToBlockKit, markdownTablesToBlockKitAttachment } from "./block-kit-tables.js";
+import { describe, expect, it } from "vitest";
+import {
+  markdownTableToBlockKit,
+  markdownTablesToBlockKitAttachment,
+  tableFallbackText,
+} from "./block-kit-tables.js";
 
 describe("markdownTableToBlockKit", () => {
   it("converts a simple table to Block Kit format", () => {
@@ -115,9 +119,7 @@ describe("markdownTableToBlockKit", () => {
 
 describe("markdownTablesToBlockKitAttachment", () => {
   it("wraps a single table in one attachment", () => {
-    const tables: MarkdownTableData[] = [
-      { headers: ["X"], rows: [["1"]], placeholderOffset: 0 },
-    ];
+    const tables: MarkdownTableData[] = [{ headers: ["X"], rows: [["1"]], placeholderOffset: 0 }];
 
     const result = markdownTablesToBlockKitAttachment(tables);
     expect(result).toHaveLength(1);
@@ -140,5 +142,51 @@ describe("markdownTablesToBlockKitAttachment", () => {
 
   it("returns empty array for no tables", () => {
     expect(markdownTablesToBlockKitAttachment([])).toEqual([]);
+  });
+});
+
+describe("tableFallbackText", () => {
+  it("returns a space for empty tables", () => {
+    expect(tableFallbackText([])).toBe(" ");
+  });
+
+  it("generates pipe-table fallback for a simple table", () => {
+    const tables: MarkdownTableData[] = [
+      {
+        headers: ["Name", "Age"],
+        rows: [
+          ["Alice", "30"],
+          ["Bob", "25"],
+        ],
+        placeholderOffset: 0,
+      },
+    ];
+    const result = tableFallbackText(tables);
+    expect(result).toContain("Name");
+    expect(result).toContain("Age");
+    expect(result).toContain("Alice");
+    expect(result).toContain("30");
+    expect(result).toContain("|");
+    // Should have separator line
+    expect(result).toContain("---");
+  });
+
+  it("generates fallback for multiple tables", () => {
+    const tables: MarkdownTableData[] = [
+      { headers: ["A"], rows: [["1"]], placeholderOffset: 0 },
+      { headers: ["B"], rows: [["2"]], placeholderOffset: 5 },
+    ];
+    const result = tableFallbackText(tables);
+    expect(result).toContain("A");
+    expect(result).toContain("B");
+    expect(result).toContain("1");
+    expect(result).toContain("2");
+  });
+
+  it("handles tables with empty headers gracefully", () => {
+    const tables: MarkdownTableData[] = [{ headers: [], rows: [["x", "y"]], placeholderOffset: 0 }];
+    const result = tableFallbackText(tables);
+    expect(result).toContain("x");
+    expect(result).toContain("y");
   });
 });

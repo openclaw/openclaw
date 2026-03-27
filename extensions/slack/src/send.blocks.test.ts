@@ -4,8 +4,6 @@ import { createSlackSendTestClient, installSlackBlockTestMocks } from "./blocks.
 installSlackBlockTestMocks();
 const { sendMessageSlack } = await import("./send.js");
 
-
-
 describe("sendMessageSlack NO_REPLY guard", () => {
   it("suppresses NO_REPLY text before any Slack API call", async () => {
     const client = createSlackSendTestClient();
@@ -200,7 +198,7 @@ describe("sendMessageSlack Block Kit table attachments", () => {
   // These tests use tableMode: "block" explicitly because the channel plugin
   // registry isn't initialized in unit tests, so resolveMarkdownTableMode
   // can't resolve "slack" to its production default ("block").
-  it("does not send raw pipe-table markdown for table-only messages", async () => {
+  it("provides meaningful fallback text for table-only messages", async () => {
     const client = createSlackSendTestClient();
     await sendMessageSlack("channel:C123", "| A | B |\n|---|---|\n| 1 | 2 |", {
       token: "xoxb-test",
@@ -210,11 +208,14 @@ describe("sendMessageSlack Block Kit table attachments", () => {
 
     const calls = client.chat.postMessage.mock.calls;
     expect(calls.length).toBeGreaterThan(0);
-    // The text should NOT contain raw pipe-table markdown
+    // The text field should contain a meaningful fallback (pipe-table
+    // representation) for notifications/accessibility, not whitespace.
     for (const call of calls) {
       const text = (call[0] as { text?: string }).text ?? "";
-      expect(text).not.toContain("| A |");
-      expect(text).not.toContain("| 1 |");
+      expect(text.trim().length).toBeGreaterThan(0);
+      // Should contain table content as fallback
+      expect(text).toContain("A");
+      expect(text).toContain("B");
     }
   });
 
