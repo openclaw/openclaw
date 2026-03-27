@@ -806,8 +806,10 @@ export function attachGatewayWsMessageHandler(params: {
               return replacementPending?.requestId;
             };
             if (pairing.request.silent === true) {
-              approved = await approveDevicePairing(pairing.request.requestId);
-              if (approved) {
+              approved = await approveDevicePairing(pairing.request.requestId, {
+                callerScopes: scopes,
+              });
+              if (approved?.status === "approved") {
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
                 );
@@ -839,7 +841,12 @@ export function attachGatewayWsMessageHandler(params: {
             }
             // Re-resolve: another connection may have superseded/approved the request since we created it
             recoveryRequestId = await resolveLivePendingRequestId();
-            if (!(pairing.request.silent === true && (approved || resolvedByConcurrentApproval))) {
+            if (
+              !(
+                pairing.request.silent === true &&
+                (approved?.status === "approved" || resolvedByConcurrentApproval)
+              )
+            ) {
               setHandshakeState("failed");
               setCloseCause("pairing-required", {
                 deviceId: device.id,
