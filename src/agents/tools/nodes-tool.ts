@@ -86,7 +86,7 @@ function resolveApproveScopes(commands: unknown): OperatorScope[] {
   if (normalized.length > 0) {
     return ["operator.write"];
   }
-  return ["operator.pairing"];
+  return ["operator.write"];
 }
 
 async function resolveNodePairApproveScopes(
@@ -95,7 +95,7 @@ async function resolveNodePairApproveScopes(
 ): Promise<OperatorScope[]> {
   const pairing = await callGatewayTool<{
     pending?: Array<{ requestId?: string; commands?: unknown }>;
-  }>("node.pair.list", gatewayOpts, {});
+  }>("node.pair.list", gatewayOpts, {}, { scopes: ["operator.pairing", "operator.write"] });
   const pending = Array.isArray(pairing?.pending) ? pairing.pending : [];
   const match = pending.find((entry) => entry?.requestId === requestId);
   return resolveApproveScopes(match?.commands);
