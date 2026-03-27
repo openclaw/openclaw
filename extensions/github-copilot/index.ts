@@ -1,4 +1,8 @@
-import { definePluginEntry, type ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  definePluginEntry,
+  type ProviderAuthContext,
+  type ProviderWrapStreamFnContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import {
   coerceSecretRef,
   ensureAuthProfileStore,
@@ -11,6 +15,42 @@ import { fetchCopilotUsage } from "./usage.js";
 
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.2", "gpt-5.2-codex"] as const;
+const COPILOT_REASONING_UNSUPPORTED_MODEL_IDS = ["gpt-5-mini"] as const;
+
+function isCopilotReasoningUnsupportedModel(modelId: unknown): boolean {
+  if (typeof modelId !== "string") {
+    return false;
+  }
+  const normalized = modelId.trim().toLowerCase();
+  return COPILOT_REASONING_UNSUPPORTED_MODEL_IDS.some(
+    (candidate) => normalized === candidate || normalized.startsWith(`${candidate}-`),
+  );
+}
+
+type CopilotStreamFn = NonNullable<ProviderWrapStreamFnContext["streamFn"]>;
+
+function createCopilotPayloadCompatibilityWrapper(
+  streamFn: ProviderWrapStreamFnContext["streamFn"],
+): ProviderWrapStreamFnContext["streamFn"] {
+  if (!streamFn) {
+    return streamFn;
+  }
+  const wrapped: CopilotStreamFn = (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return streamFn(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (isCopilotReasoningUnsupportedModel(model.id) && payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          delete payloadObj.reasoning;
+          delete payloadObj.reasoning_effort;
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+  return wrapped;
+}
 
 function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.ProcessEnv }): {
   githubToken: string;
@@ -149,6 +189,7 @@ export default definePluginEntry({
       },
       supportsXHighThinking: ({ modelId }) =>
         COPILOT_XHIGH_MODEL_IDS.includes(modelId.trim().toLowerCase() as never),
+      wrapStreamFn: ({ streamFn }) => createCopilotPayloadCompatibilityWrapper(streamFn),
       prepareRuntimeAuth: async (ctx) => {
         const token = await resolveCopilotApiToken({
           githubToken: ctx.apiKey,
