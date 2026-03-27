@@ -24,62 +24,69 @@ afterEach(() => {
 });
 
 describe("normalizeWindowsPathForComparison", () => {
-  it("normalizes extended-length and UNC windows paths", () => {
-    expect(normalizeWindowsPathForComparison("\\\\?\\C:\\Users\\Peter/Repo")).toBe(
-      "c:\\users\\peter\\repo",
-    );
-    expect(normalizeWindowsPathForComparison("\\\\?\\UNC\\Server\\Share\\Folder")).toBe(
-      "\\\\server\\share\\folder",
-    );
-    expect(normalizeWindowsPathForComparison("\\\\?\\unc\\Server\\Share\\Folder")).toBe(
-      "\\\\server\\share\\folder",
-    );
+  it.each([
+    ["\\\\?\\C:\\Users\\Peter/Repo", "c:\\users\\peter\\repo"],
+    ["\\\\?\\UNC\\Server\\Share\\Folder", "\\\\server\\share\\folder"],
+    ["\\\\?\\unc\\Server\\Share\\Folder", "\\\\server\\share\\folder"],
+  ])("normalizes windows path %s", (input, expected) => {
+    expect(normalizeWindowsPathForComparison(input)).toBe(expected);
   });
 });
 
 describe("node path error helpers", () => {
-  it("recognizes node-style error objects and exact codes", () => {
-    const enoent = { code: "ENOENT" };
-
-    expect(isNodeError(enoent)).toBe(true);
-    expect(isNodeError({ message: "nope" })).toBe(false);
-    expect(hasNodeErrorCode(enoent, "ENOENT")).toBe(true);
-    expect(hasNodeErrorCode(enoent, "EACCES")).toBe(false);
+  it.each([
+    [{ code: "ENOENT" }, true],
+    [{ message: "nope" }, false],
+  ])("detects node-style error %j", (value, expected) => {
+    expect(isNodeError(value)).toBe(expected);
   });
 
-  it("classifies not-found and symlink-open error codes", () => {
-    expect(isNotFoundPathError({ code: "ENOENT" })).toBe(true);
-    expect(isNotFoundPathError({ code: "ENOTDIR" })).toBe(true);
-    expect(isNotFoundPathError({ code: "EACCES" })).toBe(false);
-    expect(isNotFoundPathError({ code: 404 })).toBe(false);
+  it.each([
+    [{ code: "ENOENT" }, "ENOENT", true],
+    [{ code: "ENOENT" }, "EACCES", false],
+  ])("matches node error code for %j", (value, code, expected) => {
+    expect(hasNodeErrorCode(value, code)).toBe(expected);
+  });
 
-    expect(isSymlinkOpenError({ code: "ELOOP" })).toBe(true);
-    expect(isSymlinkOpenError({ code: "EINVAL" })).toBe(true);
-    expect(isSymlinkOpenError({ code: "ENOTSUP" })).toBe(true);
-    expect(isSymlinkOpenError({ code: "ENOENT" })).toBe(false);
-    expect(isSymlinkOpenError({ code: null })).toBe(false);
+  it.each([
+    [{ code: "ENOENT" }, true],
+    [{ code: "ENOTDIR" }, true],
+    [{ code: "EACCES" }, false],
+    [{ code: 404 }, false],
+  ])("classifies not-found path error for %j", (value, expected) => {
+    expect(isNotFoundPathError(value)).toBe(expected);
+  });
+
+  it.each([
+    [{ code: "ELOOP" }, true],
+    [{ code: "EINVAL" }, true],
+    [{ code: "ENOTSUP" }, true],
+    [{ code: "ENOENT" }, false],
+    [{ code: null }, false],
+  ])("classifies symlink-open error for %j", (value, expected) => {
+    expect(isSymlinkOpenError(value)).toBe(expected);
   });
 });
 
 describe("isPathInside", () => {
-  it("accepts identical and nested paths but rejects escapes", () => {
-    expect(isPathInside("/workspace/root", "/workspace/root")).toBe(true);
-    expect(isPathInside("/workspace/root", "/workspace/root/nested/file.txt")).toBe(true);
-    expect(isPathInside("/workspace/root", "/workspace/root/../escape.txt")).toBe(false);
+  it.each([
+    ["/workspace/root", "/workspace/root", true],
+    ["/workspace/root", "/workspace/root/nested/file.txt", true],
+    ["/workspace/root", "/workspace/root/../escape.txt", false],
+  ])("checks posix containment %s -> %s", (basePath, targetPath, expected) => {
+    expect(isPathInside(basePath, targetPath)).toBe(expected);
   });
 
   it("uses win32 path semantics for windows containment checks", () => {
     setPlatform("win32");
 
-    expect(isPathInside(String.raw`C:\workspace\root`, String.raw`C:\workspace\root`)).toBe(true);
-    expect(
-      isPathInside(String.raw`C:\workspace\root`, String.raw`C:\workspace\root\Nested\File.txt`),
-    ).toBe(true);
-    expect(
-      isPathInside(String.raw`C:\workspace\root`, String.raw`C:\workspace\root\..\escape.txt`),
-    ).toBe(false);
-    expect(
-      isPathInside(String.raw`C:\workspace\root`, String.raw`D:\workspace\root\file.txt`),
-    ).toBe(false);
+    for (const [basePath, targetPath, expected] of [
+      [String.raw`C:\workspace\root`, String.raw`C:\workspace\root`, true],
+      [String.raw`C:\workspace\root`, String.raw`C:\workspace\root\Nested\File.txt`, true],
+      [String.raw`C:\workspace\root`, String.raw`C:\workspace\root\..\escape.txt`, false],
+      [String.raw`C:\workspace\root`, String.raw`D:\workspace\root\file.txt`, false],
+    ] as const) {
+      expect(isPathInside(basePath, targetPath)).toBe(expected);
+    }
   });
 });

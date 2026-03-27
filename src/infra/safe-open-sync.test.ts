@@ -65,6 +65,17 @@ async function expectOpenFailure(params: {
   });
 }
 
+function expectOpenReason(
+  opened: ReturnType<typeof openVerifiedFileSync>,
+  expectedReason: "path" | "validation" | "io",
+): void {
+  expect(opened.ok).toBe(false);
+  if (opened.ok) {
+    return;
+  }
+  expect(opened.reason).toBe(expectedReason);
+}
+
 describe("openVerifiedFileSync", () => {
   it.each([
     {
@@ -152,10 +163,7 @@ describe("openVerifiedFileSync", () => {
       filePath: "/input/file.txt",
       ioFs,
     });
-    expect(opened.ok).toBe(false);
-    if (!opened.ok) {
-      expect(opened.reason).toBe("validation");
-    }
+    expectOpenReason(opened, "validation");
     expect(closed).toEqual([42]);
   });
 
@@ -178,9 +186,6 @@ describe("openVerifiedFileSync", () => {
       rejectPathSymlink: true,
       ioFs,
     });
-    expect(opened.ok).toBe(false);
-    if (!opened.ok) {
-      expect(opened.reason).toBe("io");
-    }
+    expectOpenReason(opened, "io");
   });
 });
