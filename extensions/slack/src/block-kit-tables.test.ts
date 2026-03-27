@@ -93,6 +93,24 @@ describe("markdownTableToBlockKit", () => {
     // Column 21+ should be dropped
     expect(result.rows[1]?.[19]?.text).toBe("Val20");
   });
+
+  it("clamps rows to Slack's 100-row maximum (including header)", () => {
+    const headers = ["Name", "Value"];
+    const dataRows = Array.from({ length: 110 }, (_, i) => [`Item${i + 1}`, `${i + 1}`]);
+    const table: MarkdownTableData = {
+      headers,
+      rows: dataRows,
+      placeholderOffset: 0,
+    };
+
+    const result = markdownTableToBlockKit(table);
+    // 1 header row + 110 data rows = 111, clamped to 100
+    expect(result.rows).toHaveLength(100);
+    // First row should be the header
+    expect(result.rows[0]?.[0]?.text).toBe("Name");
+    // Last row should be data row 99 (index 98, since header takes slot 0)
+    expect(result.rows[99]?.[0]?.text).toBe("Item99");
+  });
 });
 
 describe("markdownTablesToBlockKitAttachment", () => {

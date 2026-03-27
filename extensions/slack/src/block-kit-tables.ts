@@ -6,6 +6,12 @@ import type { MarkdownTableData } from "openclaw/plugin-sdk/text-runtime";
  */
 const SLACK_MAX_TABLE_COLUMNS = 20;
 
+/**
+ * Slack table blocks support at most 100 rows per table (including the header row).
+ * @see https://docs.slack.dev/reference/block-kit/blocks/table-block/
+ */
+const SLACK_MAX_TABLE_ROWS = 100;
+
 /** A Slack Block Kit table block (for use in `attachments`). */
 export type SlackTableBlock = {
   type: "table";
@@ -46,7 +52,10 @@ export function markdownTableToBlockKit(table: MarkdownTableData): SlackTableBlo
 
   // Only include a header row if there are actual headers with content.
   const hasHeaders = table.headers.some((h) => h.length > 0);
-  const rows = [...(hasHeaders ? [makeRow(table.headers)] : []), ...table.rows.map(makeRow)];
+  const allRows = [...(hasHeaders ? [makeRow(table.headers)] : []), ...table.rows.map(makeRow)];
+
+  // Clamp to Slack's maximum of 100 rows (including header) — excess rows are silently dropped.
+  const rows = allRows.slice(0, SLACK_MAX_TABLE_ROWS);
 
   return { type: "table", column_settings, rows };
 }
