@@ -215,4 +215,44 @@ describe("pw-tools-core.snapshot navigate guard", () => {
 
     expect(goto).not.toHaveBeenCalled();
   });
+
+  it("disconnects and rejects immediately when navigation aborts in flight", async () => {
+    const ctrl = new AbortController();
+    let resolveStarted!: () => void;
+    let resolveGoto!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const pendingGoto = new Promise<void>((resolve) => {
+      resolveGoto = resolve;
+    });
+    const goto = vi.fn(async () => {
+      resolveStarted();
+      return await pendingGoto;
+    });
+    setPwToolsCoreCurrentPage({
+      goto,
+      url: vi.fn(() => "https://example.com/aborted"),
+    });
+
+    const promise = mod.navigateViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      url: "https://example.com/aborted",
+      ssrfPolicy: { allowPrivateNetwork: true },
+      signal: ctrl.signal,
+    });
+
+    await started;
+    ctrl.abort(new Error("navigate aborted in flight"));
+
+    await expect(promise).rejects.toThrow("navigate aborted in flight");
+    expect(getPwToolsCoreSessionMocks().forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      reason: "abort browser navigate",
+    });
+
+    resolveGoto();
+  });
 });
