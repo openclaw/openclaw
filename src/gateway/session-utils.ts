@@ -1196,17 +1196,19 @@ export function buildGatewaySessionRow(params: {
       : null;
   const preferLiveSubagentModelIdentity =
     Boolean(subagentRun?.model?.trim()) && subagentStatus === "running";
-  const preferTranscriptModelIdentity = runtimeModelPresent && !preferLiveSubagentModelIdentity;
-  const modelProvider = preferLiveSubagentModelIdentity
-    ? resolvedModel.provider
-    : (preferTranscriptModelIdentity
-        ? (transcriptUsage?.modelProvider ?? resolvedModel.provider)
-        : resolvedModel.provider);
-  const model = preferLiveSubagentModelIdentity
-    ? (resolvedModel.model ?? DEFAULT_MODEL)
-    : (preferTranscriptModelIdentity
-        ? (transcriptUsage?.model ?? resolvedModel.model ?? DEFAULT_MODEL)
-        : (resolvedModel.model ?? DEFAULT_MODEL));
+  const shouldUseTranscriptModelIdentity =
+    runtimeModelPresent && !preferLiveSubagentModelIdentity;
+  const resolvedModelIdentity = {
+    provider: resolvedModel.provider,
+    model: resolvedModel.model ?? DEFAULT_MODEL,
+  };
+  const modelIdentity = shouldUseTranscriptModelIdentity
+    ? {
+        provider: transcriptUsage?.modelProvider ?? resolvedModelIdentity.provider,
+        model: transcriptUsage?.model ?? resolvedModelIdentity.model,
+      }
+    : resolvedModelIdentity;
+  const { provider: modelProvider, model } = modelIdentity;
   const totalTokens =
     resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
     resolvePositiveNumber(transcriptUsage?.totalTokens);
