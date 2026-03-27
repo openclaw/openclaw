@@ -30,30 +30,33 @@ function resolveImplicitToolAccountId(params: {
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
 }): string | undefined {
+  // Priority order (highest → lowest):
+  // 1. Explicit accountId from the tool call params
+  // 2. Session/contextual accountId (agentAccountId from the inbound message route)
+  // 3. Configured defaultAccount in feishu config
+  //
+  // Session accountId must outrank the config default so that each bot in a
+  // multi-account setup uses its own account's credentials. Fixes #40691.
   const explicitAccountId = normalizeOptionalAccountId(params.executeParams?.accountId);
   if (explicitAccountId) {
     return explicitAccountId;
   }
 
-  const configuredDefaultAccountId = readConfiguredDefaultAccountId(params.api.config);
-  if (configuredDefaultAccountId) {
-    return configuredDefaultAccountId;
-  }
-
   const contextualAccountId = normalizeOptionalAccountId(params.defaultAccountId);
-  if (!contextualAccountId) {
-    return undefined;
+  if (contextualAccountId) {
+    if (!listFeishuAccountIds(params.api.config).includes(contextualAccountId)) {
+      return undefined;
+    }
+    const contextualAccount = resolveFeishuAccount({
+      cfg: params.api.config,
+      accountId: contextualAccountId,
+    });
+    if (contextualAccount.enabled) {
+      return contextualAccountId;
+    }
   }
 
-  if (!listFeishuAccountIds(params.api.config).includes(contextualAccountId)) {
-    return undefined;
-  }
-
-  const contextualAccount = resolveFeishuAccount({
-    cfg: params.api.config,
-    accountId: contextualAccountId,
-  });
-  return contextualAccount.enabled ? contextualAccountId : undefined;
+  return readConfiguredDefaultAccountId(params.api.config);
 }
 
 export function resolveFeishuToolAccount(params: {
