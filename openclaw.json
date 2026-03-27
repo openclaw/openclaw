@@ -1,7 +1,0 @@
-{
-  "gateway": {
-    "bind": "custom",
-    "customBindHost": "0.0.0.0",
-    "port": 18789
-  }
-}
