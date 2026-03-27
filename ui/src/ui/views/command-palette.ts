@@ -220,15 +220,16 @@ export function renderCommandPalette(props: CommandPaletteProps) {
           }}
         />
         <div class="cmd-palette__results">
-          ${grouped.length === 0
-            ? html`<div class="cmd-palette__empty">
+          ${
+            grouped.length === 0
+              ? html`<div class="cmd-palette__empty">
                 <span class="nav-item__icon" style="opacity:0.3;width:20px;height:20px"
                   >${icons.search}</span
                 >
                 <span>${t("overview.palette.noResults")}</span>
               </div>`
-            : grouped.map(
-                ([category, groupedItems]) => html`
+              : grouped.map(
+                  ([category, groupedItems]) => html`
                   <div class="cmd-palette__group-label">
                     ${CATEGORY_LABELS[category] ?? category}
                   </div>
@@ -246,16 +247,19 @@ export function renderCommandPalette(props: CommandPaletteProps) {
                       >
                         <span class="nav-item__icon">${icons[item.icon]}</span>
                         <span>${item.label}</span>
-                        ${item.description
-                          ? html`<span class="cmd-palette__item-desc muted"
+                        ${
+                          item.description
+                            ? html`<span class="cmd-palette__item-desc muted"
                               >${item.description}</span
                             >`
-                          : nothing}
+                            : nothing
+                        }
                       </div>
                     `;
                   })}
                 `,
-              )}
+                )
+          }
         </div>
         <div class="cmd-palette__footer">
           <span><kbd>↑↓</kbd> navigate</span>

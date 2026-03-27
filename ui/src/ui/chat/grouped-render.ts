@@ -177,9 +177,11 @@ export function renderMessageGroup(
           <span class="chat-group-timestamp">${timestamp}</span>
           ${renderMessageMeta(meta)}
           ${normalizedRole === "assistant" && isTtsSupported() ? renderTtsButton(group) : nothing}
-          ${opts.onDelete
-            ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
-            : nothing}
+          ${
+            opts.onDelete
+              ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
+              : nothing
+          }
         </div>
       </div>
     </div>
@@ -695,70 +697,84 @@ function renderGroupedMessage(
 
   return html`
     <div class="${bubbleClasses}">
-      ${hasActions
-        ? html`<div class="chat-bubble-actions">
+      ${
+        hasActions
+          ? html`<div class="chat-bubble-actions">
             ${canExpand ? renderExpandButton(markdown!, onOpenSidebar!) : nothing}
             ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
           </div>`
-        : nothing}
-      ${isToolMessage
-        ? html`
+          : nothing
+      }
+      ${
+        isToolMessage
+          ? html`
             <details class="chat-tool-msg-collapse">
               <summary class="chat-tool-msg-summary">
                 <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
                 <span class="chat-tool-msg-summary__label">Tool output</span>
-                ${toolSummaryLabel
-                  ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
-                  : toolPreview
-                    ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
-                    : nothing}
+                ${
+                  toolSummaryLabel
+                    ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
+                    : toolPreview
+                      ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
+                      : nothing
+                }
               </summary>
               <div class="chat-tool-msg-body">
                 ${renderMessageImages(images)}
-                ${reasoningMarkdown
-                  ? html`<div class="chat-thinking">
+                ${
+                  reasoningMarkdown
+                    ? html`<div class="chat-thinking">
                       ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
                     </div>`
-                  : nothing}
-                ${jsonResult
-                  ? html`<details class="chat-json-collapse">
+                    : nothing
+                }
+                ${
+                  jsonResult
+                    ? html`<details class="chat-json-collapse">
                       <summary class="chat-json-summary">
                         <span class="chat-json-badge">JSON</span>
                         <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
                       </summary>
                       <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                     </details>`
-                  : markdown
-                    ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
+                    : markdown
+                      ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
                         ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
                       </div>`
-                    : nothing}
+                      : nothing
+                }
                 ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
               </div>
             </details>
           `
-        : html`
+          : html`
             ${renderMessageImages(images)}
-            ${reasoningMarkdown
-              ? html`<div class="chat-thinking">
+            ${
+              reasoningMarkdown
+                ? html`<div class="chat-thinking">
                   ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
                 </div>`
-              : nothing}
-            ${jsonResult
-              ? html`<details class="chat-json-collapse">
+                : nothing
+            }
+            ${
+              jsonResult
+                ? html`<details class="chat-json-collapse">
                   <summary class="chat-json-summary">
                     <span class="chat-json-badge">JSON</span>
                     <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
                   </summary>
                   <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                 </details>`
-              : markdown
-                ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
+                : markdown
+                  ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
                     ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
                   </div>`
-                : nothing}
+                  : nothing
+            }
             ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
-          `}
+          `
+      }
     </div>
   `;
 }

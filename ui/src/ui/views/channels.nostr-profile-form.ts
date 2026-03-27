@@ -108,16 +108,20 @@ export function renderNostrProfileForm(params: {
             }}
             ?disabled=${state.saving}
           ></textarea>
-          ${help
-            ? html`<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+          ${
+            help
+              ? html`<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
                 ${help}
               </div>`
-            : nothing}
-          ${error
-            ? html`<div style="font-size: 12px; color: var(--danger-color); margin-top: 2px;">
+              : nothing
+          }
+          ${
+            error
+              ? html`<div style="font-size: 12px; color: var(--danger-color); margin-top: 2px;">
                 ${error}
               </div>`
-            : nothing}
+              : nothing
+          }
         </div>
       `;
     }
@@ -140,16 +144,20 @@ export function renderNostrProfileForm(params: {
           }}
           ?disabled=${state.saving}
         />
-        ${help
-          ? html`<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+        ${
+          help
+            ? html`<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
               ${help}
             </div>`
-          : nothing}
-        ${error
-          ? html`<div style="font-size: 12px; color: var(--danger-color); margin-top: 2px;">
+            : nothing
+        }
+        ${
+          error
+            ? html`<div style="font-size: 12px; color: var(--danger-color); margin-top: 2px;">
               ${error}
             </div>`
-          : nothing}
+            : nothing
+        }
       </div>
     `;
   };
@@ -191,12 +199,16 @@ export function renderNostrProfileForm(params: {
         <div style="font-size: 12px; color: var(--text-muted);">Account: ${accountId}</div>
       </div>
 
-      ${state.error
-        ? html`<div class="callout danger" style="margin-bottom: 12px;">${state.error}</div>`
-        : nothing}
-      ${state.success
-        ? html`<div class="callout success" style="margin-bottom: 12px;">${state.success}</div>`
-        : nothing}
+      ${
+        state.error
+          ? html`<div class="callout danger" style="margin-bottom: 12px;">${state.error}</div>`
+          : nothing
+      }
+      ${
+        state.success
+          ? html`<div class="callout success" style="margin-bottom: 12px;">${state.success}</div>`
+          : nothing
+      }
       ${renderPicturePreview()}
       ${renderField("name", "Username", {
         placeholder: "satoshi",
@@ -219,8 +231,9 @@ export function renderNostrProfileForm(params: {
         placeholder: "https://example.com/avatar.jpg",
         help: "HTTPS URL to your profile picture",
       })}
-      ${state.showAdvanced
-        ? html`
+      ${
+        state.showAdvanced
+          ? html`
             <div
               style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 12px;"
             >
@@ -248,7 +261,8 @@ export function renderNostrProfileForm(params: {
               })}
             </div>
           `
-        : nothing}
+          : nothing
+      }
 
       <div style="display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap;">
         <button
@@ -274,13 +288,15 @@ export function renderNostrProfileForm(params: {
         <button class="btn" @click=${callbacks.onCancel} ?disabled=${state.saving}>Cancel</button>
       </div>
 
-      ${isDirty
-        ? html`
-            <div style="font-size: 12px; color: var(--warning-color); margin-top: 8px">
-              You have unsaved changes
-            </div>
-          `
-        : nothing}
+      ${
+        isDirty
+          ? html`
+              <div style="font-size: 12px; color: var(--warning-color); margin-top: 8px">
+                You have unsaved changes
+              </div>
+            `
+          : nothing
+      }
     </div>
   `;
 }
