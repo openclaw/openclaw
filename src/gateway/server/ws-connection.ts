@@ -320,6 +320,20 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
     };
 
+    // Absorb socket errors that fire before or after close() so Node does not
+    // treat them as unhandled emitter errors and crash the process.
+    socket.once("error", (err) => {
+      if (isWsPayloadLimitError(err)) {
+        logRejectedLargePayload({
+          surface: client ? "gateway.ws.frame" : "gateway.ws.preauth",
+          limitBytes: client ? MAX_PAYLOAD_BYTES : MAX_PREAUTH_PAYLOAD_BYTES,
+          reason: client ? "ws_frame_limit" : "preauth_frame_limit",
+        });
+      }
+      logWsControl.warn(`error conn=${connId} remote=${remoteAddr ?? "?"}: ${formatError(err)}`);
+      close();
+    });
+
     // Reject legacy websocket clients using query-auth immediately instead of
     // waiting for the handshake timeout. This eliminates the repeated timeout
     // noise reported in #40082.
@@ -343,18 +357,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       type: "event",
       event: "connect.challenge",
       payload: { nonce: connectNonce, ts: Date.now() },
-    });
-
-    socket.once("error", (err) => {
-      if (isWsPayloadLimitError(err)) {
-        logRejectedLargePayload({
-          surface: client ? "gateway.ws.frame" : "gateway.ws.preauth",
-          limitBytes: client ? MAX_PAYLOAD_BYTES : MAX_PREAUTH_PAYLOAD_BYTES,
-          reason: client ? "ws_frame_limit" : "preauth_frame_limit",
-        });
-      }
-      logWsControl.warn(`error conn=${connId} remote=${remoteAddr ?? "?"}: ${formatError(err)}`);
-      close();
     });
 
     const isNoisySwiftPmHelperClose = (userAgent: string | undefined, remote: string | undefined) =>

@@ -73,7 +73,7 @@ const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/
 // <=4 lines) matching explicit "let me check" / "one sec" patterns are flagged.
 const NON_EXECUTING_REPLY_PATTERNS = [
   /\bone sec\b/i,
-  /\bhold on\b/i,
+  /(?:^|[.!?]\s+)hold on\b/i,
   /\bstill planning to\b/i,
   /\bworking on it\b/i,
   /\blet me (?:actually )?(?:check|do|look|read|run|test|open|inspect|verify|fetch|pull)\b/i,
