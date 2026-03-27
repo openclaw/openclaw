@@ -16,7 +16,7 @@ import {
   normalizeModelCompat,
   normalizeProviderId,
   type ProviderPlugin,
-} from "openclaw/plugin-sdk/provider-models";
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { createOpenAIAttributionHeadersWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";

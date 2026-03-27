@@ -1,4 +1,4 @@
-import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-models";
+import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 
 export function findCatalogTemplate(params: {
   entries: ReadonlyArray<{ provider: string; id: string }>;

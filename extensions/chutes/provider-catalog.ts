@@ -1,4 +1,4 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   CHUTES_BASE_URL,
   CHUTES_MODEL_CATALOG,

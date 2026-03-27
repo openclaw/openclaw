@@ -2,7 +2,7 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
-import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
+import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
 import { applyXaiModelCompat } from "./api.js";
 import { resolveXaiCatalogEntry, XAI_BASE_URL } from "./model-definitions.js";
 
