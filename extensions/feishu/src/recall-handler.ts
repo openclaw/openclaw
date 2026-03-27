@@ -1,7 +1,7 @@
 /**
  * Feishu message recall handler.
  *
- * Handles im.message.recall_v1 events by deleting the corresponding bot reply
+ * Handles im.message.recalled_v1 events by deleting the corresponding bot reply
  * messages that were sent in response to the recalled user message.
  *
  * Architecture:

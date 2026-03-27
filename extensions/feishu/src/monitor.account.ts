@@ -618,7 +618,7 @@ function registerEventHandlers(
         error(`feishu[${accountId}]: error handling card action: ${String(err)}`);
       }
     },
-    "im.message.recall_v1": async (data: unknown) => {
+    "im.message.recalled_v1": async (data: unknown) => {
       const event = data as { message_id: string };
       await deleteBotReplies({ cfg, recalledUserMessageId: event.message_id, accountId, log });
     },
