@@ -84,30 +84,25 @@ describe("media server", () => {
     await expect(fs.stat(file)).rejects.toThrow();
   });
 
-  it.each([
-    {
-      testName: "blocks path traversal attempts",
-      mediaPath: "%2e%2e%2fpackage.json",
-    },
-    {
-      testName: "rejects invalid media ids",
-      mediaPath: "invalid%20id",
-      setup: async () => {
-        await writeMediaFile("file2", "hello");
-      },
-    },
-    {
-      testName: "blocks symlink escaping outside media dir",
-      mediaPath: "link-out",
-      setup: async () => {
-        const target = path.join(process.cwd(), "package.json"); // outside MEDIA_DIR
-        const link = path.join(MEDIA_DIR, "link-out");
-        await fs.symlink(target, link);
-      },
-    },
-  ] as const)("$testName", async (testCase) => {
-    await testCase.setup?.();
-    const res = await realFetch(mediaUrl(testCase.mediaPath));
+  it("blocks path traversal attempts", async () => {
+    const res = await realFetch(mediaUrl("%2e%2e%2fpackage.json"));
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe("invalid path");
+  });
+
+  it("rejects invalid media ids", async () => {
+    await writeMediaFile("file2", "hello");
+    const res = await realFetch(mediaUrl("invalid%20id"));
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe("invalid path");
+  });
+
+  it.runIf(process.platform !== "win32")("blocks symlink escaping outside media dir", async () => {
+    const target = path.join(process.cwd(), "package.json"); // outside MEDIA_DIR
+    const link = path.join(MEDIA_DIR, "link-out");
+    await fs.symlink(target, link, "file");
+
+    const res = await realFetch(mediaUrl("link-out"));
     expect(res.status).toBe(400);
     expect(await res.text()).toBe("invalid path");
   });

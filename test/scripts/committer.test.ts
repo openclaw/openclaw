@@ -7,6 +7,18 @@ import { afterEach, describe, expect, it } from "vitest";
 const scriptPath = path.join(process.cwd(), "scripts", "committer");
 const tempRepos: string[] = [];
 
+function toBashPath(filePath: string) {
+  if (process.platform !== "win32") {
+    return filePath;
+  }
+  const normalized = path.resolve(filePath).replace(/\\/g, "/");
+  const driveMatch = normalized.match(/^([A-Za-z]):\/(.*)$/);
+  if (!driveMatch) {
+    return normalized;
+  }
+  return `/mnt/${driveMatch[1].toLowerCase()}/${driveMatch[2]}`;
+}
+
 function run(cwd: string, command: string, args: string[]) {
   return execFileSync(command, args, {
     cwd,
@@ -39,7 +51,7 @@ function writeRepoFile(repo: string, relativePath: string, contents: string) {
 }
 
 function commitWithHelper(repo: string, commitMessage: string, ...args: string[]) {
-  return run(repo, "bash", [scriptPath, commitMessage, ...args]);
+  return run(repo, "bash", [toBashPath(scriptPath), commitMessage, ...args]);
 }
 
 function committedPaths(repo: string) {

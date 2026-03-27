@@ -198,11 +198,23 @@ describe("queued prompt recovery", () => {
     ).toBe(false);
   });
 
-  it("does not queue when disconnected or not busy", () => {
+  it("keeps queue ordering while a run is still finalizing", () => {
     expect(
       shouldQueuePromptBehindActiveRun({
         activeChatRunId: "run-1",
         activityStatus: "idle",
+        isConnected: true,
+        activeRunLastProgressAt: 10_000,
+        now: 10_001,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not queue when disconnected or after a terminal status", () => {
+    expect(
+      shouldQueuePromptBehindActiveRun({
+        activeChatRunId: "run-1",
+        activityStatus: "error",
         isConnected: true,
         activeRunLastProgressAt: 10_000,
         now: 10_001,

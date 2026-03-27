@@ -37,8 +37,7 @@ function createHarness(params?: {
   const shouldQueuePrompt =
     params?.shouldQueuePrompt ?? (vi.fn().mockReturnValue(false) as ShouldQueuePromptMock);
   const flushQueuedMessage =
-    params?.flushQueuedMessage ??
-    (vi.fn().mockResolvedValue(false) as FlushQueuedMessageMock);
+    params?.flushQueuedMessage ?? (vi.fn().mockResolvedValue(false) as FlushQueuedMessageMock);
   const loadHistory =
     params?.loadHistory ?? (vi.fn().mockResolvedValue(undefined) as LoadHistoryMock);
   const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
@@ -274,6 +273,34 @@ describe("tui command handlers", () => {
 
     expect(addSystem).toHaveBeenCalledWith("send failed: Error: gateway down");
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
+  });
+
+  it("delays queued prompt echo until the dispatch send succeeds", async () => {
+    const sendChat = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("gateway down"))
+      .mockResolvedValueOnce({ runId: "r2" });
+    const { sendMessageInternal, addUser } = createHarness({
+      sendChat,
+    });
+
+    await expect(
+      sendMessageInternal("/context", {
+        allowQueue: false,
+        echoUserBeforeSend: false,
+      }),
+    ).resolves.toBe(false);
+    expect(addUser).not.toHaveBeenCalled();
+
+    await expect(
+      sendMessageInternal("/context", {
+        allowQueue: false,
+        echoUserBeforeSend: false,
+      }),
+    ).resolves.toBe(true);
+
+    expect(addUser).toHaveBeenCalledTimes(1);
+    expect(addUser).toHaveBeenCalledWith("/context");
   });
 
   it("sanitizes control sequences in /new and /reset failures", async () => {

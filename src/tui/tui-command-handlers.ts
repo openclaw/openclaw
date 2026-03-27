@@ -520,9 +520,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
   const sendMessageInternal = async (
     text: string,
-    sendOpts?: { allowQueue?: boolean },
+    sendOpts?: { allowQueue?: boolean; echoUserBeforeSend?: boolean },
   ): Promise<boolean> => {
     const allowQueue = sendOpts?.allowQueue ?? true;
+    const echoUserBeforeSend = sendOpts?.echoUserBeforeSend ?? true;
     if (!state.isConnected) {
       chatLog.addSystem("not connected to gateway — message not sent");
       setActivityStatus("disconnected");
@@ -555,7 +556,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     const runId = randomUUID();
     try {
       if (!isBtw) {
-        chatLog.addUser(text);
+        if (echoUserBeforeSend) {
+          chatLog.addUser(text);
+        }
         noteLocalRunId(runId);
         state.activeChatRunId = runId;
         setActivityStatus("sending");
@@ -572,6 +575,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         runId,
       });
       if (!isBtw) {
+        if (!echoUserBeforeSend) {
+          chatLog.addUser(text);
+        }
         setActivityStatus("waiting");
         tui.requestRender();
       }

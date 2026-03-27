@@ -185,7 +185,7 @@ export function resolveCtrlCAction(params: {
   };
 }
 
-const queuedPromptBusyStates = new Set(["sending", "waiting", "streaming", "running"]);
+const queuedPromptTerminalStates = new Set(["error", "aborted"]);
 const defaultActiveChatRunStallMs = 30_000;
 
 export function shouldQueuePromptBehindActiveRun(params: {
@@ -199,7 +199,7 @@ export function shouldQueuePromptBehindActiveRun(params: {
   if (!params.isConnected || !params.activeChatRunId) {
     return false;
   }
-  if (!queuedPromptBusyStates.has(params.activityStatus)) {
+  if (queuedPromptTerminalStates.has(params.activityStatus)) {
     return false;
   }
   if (params.activeRunLastProgressAt == null) {
@@ -867,7 +867,11 @@ export async function runTui(opts: TuiOptions) {
     openOverlay,
     closeOverlay,
   });
-  dispatchQueuedMessage = (text) => sendMessageInternal(text, { allowQueue: false });
+  dispatchQueuedMessage = (text) =>
+    sendMessageInternal(text, {
+      allowQueue: false,
+      echoUserBeforeSend: false,
+    });
   updateAutocompleteProvider();
   const submitHandler = createEditorSubmitHandler({
     editor,
