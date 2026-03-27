@@ -29,7 +29,9 @@ function buildTelegramExecApprovalButtonsForDecisions(
   const primaryRow: Array<{ text: string; callback_data: string }> = [
     { text: "Allow Once", callback_data: allowOnce },
   ];
-  const allowAlways = `/approve ${approvalId} allow-always`;
+  // Use a shorter decision alias so full plugin:<uuid> IDs still fit Telegram's
+  // 64-byte callback_data limit for the "Allow Always" action.
+  const allowAlways = `/approve ${approvalId} always`;
   if (allowedDecisions.includes("allow-always") && fitsCallbackData(allowAlways)) {
     primaryRow.push({ text: "Allow Always", callback_data: allowAlways });
   }
