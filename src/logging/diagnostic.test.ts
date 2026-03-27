@@ -54,12 +54,12 @@ describe("diagnostic session state pruning", () => {
   it("reuses keyed session state when later looked up by sessionId", () => {
     const keyed = getDiagnosticSessionState({
       sessionId: "s1",
-      sessionKey: "agent:main:discord:channel:c1",
+      sessionKey: "agent:main:demo-channel:channel:c1",
     });
     const bySessionId = getDiagnosticSessionState({ sessionId: "s1" });
 
     expect(bySessionId).toBe(keyed);
-    expect(bySessionId.sessionKey).toBe("agent:main:discord:channel:c1");
+    expect(bySessionId.sessionKey).toBe("agent:main:demo-channel:channel:c1");
     expect(getDiagnosticSessionStateCountForTest()).toBe(1);
   });
 });
