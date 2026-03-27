@@ -121,21 +121,6 @@ export async function applyNonInteractiveAuthChoice(params: {
       ...(params.metadata ? { metadata: params.metadata } : {}),
     };
   };
-  const maybeSetResolvedApiKey = async (
-    resolved: ResolvedNonInteractiveApiKey,
-    setter: (value: SecretInput) => Promise<void> | void,
-  ): Promise<boolean> => {
-    if (resolved.source === "profile") {
-      return true;
-    }
-    const stored = toStoredSecretInput(resolved);
-    if (!stored) {
-      return false;
-    }
-    await setter(stored);
-    return true;
-  };
-
   if (isDeprecatedAuthChoice(authChoice)) {
     runtime.error(formatDeprecatedNonInteractiveAuthChoiceError(authChoice));
     runtime.exit(1);
