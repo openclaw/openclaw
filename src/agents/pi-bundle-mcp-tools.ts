@@ -40,15 +40,16 @@ function connectWithTimeout(
   transport: Transport,
   timeoutMs: number,
 ): Promise<void> {
-  return Promise.race([
-    client.connect(transport),
-    new Promise<never>((_, reject) =>
-      setTimeout(
-        () => reject(new Error(`MCP server connection timed out after ${timeoutMs}ms`)),
-        timeoutMs,
-      ),
-    ),
-  ]);
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`MCP server connection timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+    client.connect(transport).then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
 }
 
 async function listAllTools(client: Client) {
@@ -122,6 +123,13 @@ function redactUrl(raw: string): string {
   } catch {
     return "<invalid-url>";
   }
+}
+
+const URL_LIKE_RE = /https?:\/\/[^\s)}\]"']+/gi;
+
+function redactErrorUrls(error: unknown): string {
+  const message = String(error);
+  return message.replace(URL_LIKE_RE, (match) => redactUrl(match));
 }
 
 const TOOL_NAME_SAFE_RE = /[^A-Za-z0-9_.-]/g;
@@ -396,13 +404,13 @@ export async function createBundleMcpToolRuntime(params: {
             });
           } catch (error) {
             logWarn(
-              `bundle-mcp: failed to list tools from server "${serverName}" (${redactUrl(httpConfig.url)}): ${String(error)}`,
+              `bundle-mcp: failed to list tools from server "${serverName}" (${redactUrl(httpConfig.url)}): ${redactErrorUrls(error)}`,
             );
             await disposeSession(session);
           }
         } catch (error) {
           logWarn(
-            `bundle-mcp: failed to connect to server "${serverName}" (${redactUrl(httpConfig.url)}): ${String(error)}`,
+            `bundle-mcp: failed to connect to server "${serverName}" (${redactUrl(httpConfig.url)}): ${redactErrorUrls(error)}`,
           );
         }
         continue;
