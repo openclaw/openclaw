@@ -37,54 +37,13 @@ vi.mock("../gateway/call.js", () => ({
   randomIdempotencyKey: () => "idem-1",
 }));
 
-const webAuthExists = vi.hoisted(() => vi.fn(async () => false));
-vi.mock("../../extensions/whatsapp/runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../extensions/whatsapp/runtime-api.js")>();
-  return {
-    ...actual,
-    webAuthExists,
-  };
-});
-
 const handleDiscordAction = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } })),
 );
-vi.mock("../../extensions/discord/runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../extensions/discord/runtime-api.js")>();
-  return {
-    ...actual,
-    handleDiscordAction,
-  };
-});
-
-const handleSlackAction = vi.hoisted(() =>
-  vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } })),
-);
-vi.mock("../../extensions/slack/runtime-api.js", () => ({
-  handleSlackAction,
-}));
 
 const handleTelegramAction = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } })),
 );
-vi.mock("../../extensions/telegram/test-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../extensions/telegram/test-api.js")>();
-  return {
-    ...actual,
-    handleTelegramAction,
-  };
-});
-
-const handleWhatsAppAction = vi.hoisted(() =>
-  vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } })),
-);
-vi.mock("../../extensions/whatsapp/runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../extensions/whatsapp/runtime-api.js")>();
-  return {
-    ...actual,
-    handleWhatsAppAction,
-  };
-});
 
 let messageCommand: typeof import("./message.js").messageCommand;
 
@@ -103,11 +62,8 @@ beforeEach(() => {
   testConfig = {};
   setActivePluginRegistry(EMPTY_TEST_REGISTRY);
   callGatewayMock.mockClear();
-  webAuthExists.mockClear().mockResolvedValue(false);
   handleDiscordAction.mockClear();
-  handleSlackAction.mockClear();
   handleTelegramAction.mockClear();
-  handleWhatsAppAction.mockClear();
   resolveCommandSecretRefsViaGateway.mockClear();
 });
 
