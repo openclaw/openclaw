@@ -191,7 +191,6 @@ function extractJsonCardTexts(elements: unknown[]): string[] {
       property?: { content?: string };
       elements?: unknown[];
       columns?: unknown[];
-      rows?: unknown[];
     };
     if (node.tag === "plain_text" && typeof node.property?.content === "string") {
       texts.push(node.property.content);
@@ -425,19 +424,18 @@ export async function listFeishuThreadMessages(params: {
 
   const client = createFeishuClient(account);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- card_msg_content_type is not in the SDK types yet
-  const listParams: any = {
-    container_id_type: "thread",
+  const listParams = {
+    container_id_type: "thread" as const,
     container_id: threadId,
     // Fetch newest messages first so long threads keep the most recent turns.
     // Results are reversed below to restore chronological order.
-    sort_type: "ByCreateTimeDesc",
+    sort_type: "ByCreateTimeDesc" as const,
     page_size: Math.min(limit + 1, 50),
     // See comment in getMessageFeishu – retrieve full card content.
     card_msg_content_type: "raw_card_content",
   };
   const response = (await client.im.message.list({
-    params: listParams,
+    params: listParams as typeof listParams & { card_msg_content_type?: string },
   })) as {
     code?: number;
     msg?: string;
