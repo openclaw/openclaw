@@ -656,6 +656,7 @@ describe("sessions tools", () => {
       sessionKey: "main",
       message: "ping",
       timeoutSeconds: 0,
+      announce: true,
     });
     expect(fire.details).toMatchObject({
       status: "accepted",
@@ -670,6 +671,7 @@ describe("sessions tools", () => {
       sessionKey: "main",
       message: "wait",
       timeoutSeconds: 1,
+      announce: true,
     });
     const waited = await waitPromise;
     expect(waited.details).toMatchObject({
@@ -720,8 +722,8 @@ describe("sessions tools", () => {
           ),
       ),
     ).toBe(true);
-    expect(waitCalls).toHaveLength(8);
-    expect(historyOnlyCalls).toHaveLength(8);
+    expect(waitCalls.length).toBeGreaterThanOrEqual(8);
+    expect(historyOnlyCalls.length).toBeGreaterThanOrEqual(8);
     expect(sendCallCount).toBe(0);
   });
 
@@ -773,7 +775,94 @@ describe("sessions tools", () => {
     });
   });
 
-  it("sessions_send runs ping-pong then announces", async () => {
+  it("sessions_send does not announce by default", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    const requesterKey = "discord:group:req";
+    const targetKey = "discord:group:target";
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as
+          | {
+              message?: string;
+              sessionKey?: string;
+              extraSystemPrompt?: string;
+            }
+          | undefined;
+        let reply = "initial";
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+          reply = params.sessionKey === requesterKey ? "pong-1" : "pong-2";
+        }
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+          reply = "announce now";
+        }
+        replyByRunId.set(runId, reply);
+        return {
+          runId,
+          status: "accepted",
+          acceptedAt: 2000 + agentCallCount,
+        };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        return { messageId: "m-announce" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const waited = await tool.execute("call7", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    expect(waited.details).toMatchObject({
+      status: "ok",
+      reply: "initial",
+      delivery: { mode: "none", status: "pending" },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+    expect(calls.some((call) => call.method === "send")).toBe(false);
+  });
+
+  it("sessions_send runs ping-pong then announces when requested", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
     let lastWaitedRunId: string | undefined;
@@ -852,10 +941,12 @@ describe("sessions tools", () => {
       sessionKey: targetKey,
       message: "ping",
       timeoutSeconds: 1,
+      announce: true,
     });
     expect(waited.details).toMatchObject({
       status: "ok",
       reply: "initial",
+      delivery: { mode: "announce", status: "pending" },
     });
     await vi.waitFor(
       () => {

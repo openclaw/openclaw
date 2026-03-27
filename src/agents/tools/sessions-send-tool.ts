@@ -30,6 +30,7 @@ const SessionsSendToolSchema = Type.Object({
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+  announce: Type.Optional(Type.Boolean()),
 });
 
 type GatewayCaller = typeof callGateway;
@@ -245,6 +246,7 @@ export function createSessionsSendTool(opts?: {
         typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
           ? Math.max(0, Math.floor(params.timeoutSeconds))
           : 30;
+      const announce = params.announce === true;
       const timeoutMs = timeoutSeconds * 1000;
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
@@ -288,8 +290,14 @@ export function createSessionsSendTool(opts?: {
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
-      const delivery = { status: "pending", mode: "announce" as const };
+      const delivery = {
+        status: "pending",
+        mode: announce ? ("announce" as const) : ("none" as const),
+      };
       const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
+        if (!announce) {
+          return;
+        }
         void runSessionsSendA2AFlow({
           targetSessionKey: resolvedKey,
           displayKey,
