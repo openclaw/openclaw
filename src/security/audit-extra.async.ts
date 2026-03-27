@@ -11,6 +11,7 @@ import { SANDBOX_BROWSER_SECURITY_HASH_EPOCH } from "../agents/sandbox/constants
 import { execDockerRaw, type ExecDockerRawResult } from "../agents/sandbox/docker.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
+import { resolveSkillSource } from "../agents/skills/source.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
@@ -1261,7 +1262,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   for (const workspaceDir of workspaceDirs) {
     const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });
     for (const entry of entries) {
-      if (entry.skill.source === "openclaw-bundled") {
+      if (resolveSkillSource(entry.skill) === "openclaw-bundled") {
         continue;
       }
 
