@@ -33,6 +33,11 @@
       "cliDescription": "OpenAI API key"
     }
   ],
+  "contracts": {
+    "speechProviders": ["openai"],
+    "mediaUnderstandingProviders": ["openai", "openai-codex"],
+    "imageGenerationProviders": ["openai"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

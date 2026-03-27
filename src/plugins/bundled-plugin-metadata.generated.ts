@@ -170,6 +170,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       },
       providers: ["anthropic"],
       mediaUnderstandingProviders: ["anthropic"],
+      cliBackends: ["claude-cli"],
       providerAuthEnvVars: {
         anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
       },
@@ -208,6 +209,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "Anthropic API key",
         },
       ],
+      contracts: {
+        mediaUnderstandingProviders: ["anthropic"],
+      },
     },
   },
   {
@@ -305,6 +309,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           label: "Brave Search Mode",
           help: "Brave Search mode: web or llm-context.",
         },
+      },
+      contracts: {
+        webSearchProviders: ["brave"],
       },
     },
   },
@@ -523,6 +530,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       mediaUnderstandingProviders: ["deepgram"],
+      contracts: {
+        mediaUnderstandingProviders: ["deepgram"],
+      },
     },
   },
   {
@@ -872,6 +882,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "SafeSearch level for DuckDuckGo results.",
         },
       },
+      contracts: {
+        webSearchProviders: ["duckduckgo"],
+      },
     },
   },
   {
@@ -895,6 +908,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       speechProviders: ["elevenlabs"],
+      contracts: {
+        speechProviders: ["elevenlabs"],
+      },
     },
   },
   {
@@ -937,6 +953,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           sensitive: true,
           placeholder: "exa-...",
         },
+      },
+      contracts: {
+        webSearchProviders: ["exa"],
       },
     },
   },
@@ -981,6 +1000,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "fal API key",
         },
       ],
+      contracts: {
+        imageGenerationProviders: ["fal"],
+      },
     },
   },
   {
@@ -1077,6 +1099,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "Firecrawl Search base URL override.",
         },
       },
+      contracts: {
+        webSearchProviders: ["firecrawl"],
+        tools: ["firecrawl_search", "firecrawl_scrape"],
+      },
     },
   },
   {
@@ -1153,6 +1179,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       providers: ["google", "google-gemini-cli"],
       mediaUnderstandingProviders: ["google"],
       imageGenerationProviders: ["google"],
+      cliBackends: ["google-gemini-cli"],
       providerAuthEnvVars: {
         google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
       },
@@ -1192,6 +1219,11 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           label: "Gemini Search Model",
           help: "Gemini model override for web search grounding.",
         },
+      },
+      contracts: {
+        mediaUnderstandingProviders: ["google"],
+        imageGenerationProviders: ["google"],
+        webSearchProviders: ["gemini"],
       },
     },
   },
@@ -1261,6 +1293,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       mediaUnderstandingProviders: ["groq"],
+      contracts: {
+        mediaUnderstandingProviders: ["groq"],
+      },
     },
   },
   {
@@ -1823,6 +1858,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       speechProviders: ["microsoft"],
+      contracts: {
+        speechProviders: ["microsoft"],
+      },
     },
   },
   {
@@ -1951,6 +1989,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "MiniMax API key",
         },
       ],
+      contracts: {
+        mediaUnderstandingProviders: ["minimax", "minimax-portal"],
+        imageGenerationProviders: ["minimax", "minimax-portal"],
+      },
     },
   },
   {
@@ -1993,6 +2035,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "Mistral API key",
         },
       ],
+      contracts: {
+        mediaUnderstandingProviders: ["mistral"],
+      },
     },
   },
   {
@@ -2162,6 +2207,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           label: "Kimi Search Model",
           help: "Kimi model override.",
         },
+      },
+      contracts: {
+        mediaUnderstandingProviders: ["moonshot"],
+        webSearchProviders: ["kimi"],
       },
     },
   },
@@ -2411,6 +2460,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       speechProviders: ["openai"],
       mediaUnderstandingProviders: ["openai", "openai-codex"],
       imageGenerationProviders: ["openai"],
+      cliBackends: ["codex-cli"],
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
       },
@@ -2439,6 +2489,11 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "OpenAI API key",
         },
       ],
+      contracts: {
+        speechProviders: ["openai"],
+        mediaUnderstandingProviders: ["openai", "openai-codex"],
+        imageGenerationProviders: ["openai"],
+      },
     },
   },
   {
@@ -2733,6 +2788,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "Optional Sonar/OpenRouter model override.",
         },
       },
+      contracts: {
+        webSearchProviders: ["perplexity"],
+      },
     },
   },
   {
@@ -3022,6 +3080,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           label: "Tavily Base URL",
           help: "Tavily API base URL override.",
         },
+      },
+      contracts: {
+        webSearchProviders: ["tavily"],
+        tools: ["tavily_search", "tavily_extract"],
       },
     },
   },
@@ -4085,6 +4147,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "Include inline markdown citations in Grok responses.",
         },
       },
+      contracts: {
+        webSearchProviders: ["grok"],
+      },
     },
   },
   {
@@ -4224,6 +4289,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "Z.AI API key",
         },
       ],
+      contracts: {
+        mediaUnderstandingProviders: ["zai"],
+      },
     },
   },
   {

@@ -20,6 +20,9 @@
       "cliDescription": "Mistral API key"
     }
   ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["mistral"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
