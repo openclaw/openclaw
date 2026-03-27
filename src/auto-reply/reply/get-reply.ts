@@ -417,20 +417,69 @@ export async function getReplyFromConfig(
       if (imageModelPrimary || fallbacks.length > 0) {
         const imageModelKeys = new Set<string>();
 
-        // Determine the provider for fallback resolution:
-        // Use the image model's primary if available, otherwise use the first fallback.
-        // Providerless fallbacks should resolve against the image model's provider,
+        // Determine the provider for image model resolution.
+        // This mirrors collectImageModelKeys in model-selection.ts for consistency.
+        // Providerless models should resolve against the image model's provider,
         // not the agent's default provider (to handle mixed-provider configs correctly).
         let imageModelDefaultProvider = defaultProvider;
-        const firstModel = imageModelPrimary ?? fallbacks[0];
-        if (firstModel && channelAliasIndex && defaultProvider) {
-          const resolved = resolveModelRefFromString({
-            raw: firstModel.trim(),
-            defaultProvider,
-            aliasIndex: channelAliasIndex,
-          });
-          if (resolved) {
-            imageModelDefaultProvider = resolved.ref.provider;
+
+        const primaryTrimmed = imageModelPrimary?.trim() ?? "";
+        const primaryHasProvider = primaryTrimmed.includes("/");
+
+        if (imageModelPrimary && channelAliasIndex && defaultProvider) {
+          if (primaryHasProvider) {
+            // Primary has explicit provider - resolve it directly
+            const resolved = resolveModelRefFromString({
+              raw: primaryTrimmed,
+              defaultProvider,
+              aliasIndex: channelAliasIndex,
+            });
+            if (resolved) {
+              imageModelDefaultProvider = resolved.ref.provider;
+            }
+          } else {
+            // Primary is providerless - first try to resolve it (handles aliases)
+            const resolved = resolveModelRefFromString({
+              raw: primaryTrimmed,
+              defaultProvider,
+              aliasIndex: channelAliasIndex,
+            });
+            if (resolved?.ref.provider) {
+              imageModelDefaultProvider = resolved.ref.provider;
+            }
+
+            // If primary resolution didn't determine provider, derive from fallbacks
+            if (imageModelDefaultProvider === defaultProvider) {
+              // Scan fallbacks for first with explicit provider
+              for (const fb of fallbacks) {
+                if (!fb?.trim()) {
+                  continue;
+                }
+                const slash = fb.indexOf("/");
+                if (slash > 0) {
+                  imageModelDefaultProvider = fb.slice(0, slash).trim();
+                  break;
+                }
+              }
+
+              // If still not found, try alias resolution on fallbacks
+              if (imageModelDefaultProvider === defaultProvider) {
+                for (const fb of fallbacks) {
+                  if (!fb?.trim()) {
+                    continue;
+                  }
+                  const fbResolved = resolveModelRefFromString({
+                    raw: fb.trim(),
+                    defaultProvider,
+                    aliasIndex: channelAliasIndex,
+                  });
+                  if (fbResolved?.ref.provider) {
+                    imageModelDefaultProvider = fbResolved.ref.provider;
+                    break;
+                  }
+                }
+              }
+            }
           }
         }
 

@@ -1649,39 +1649,51 @@ export const chatHandlers: GatewayRequestHandlers = {
           imageModelProvider = imageModelResolved?.ref.provider;
         } else if (!primaryHasProvider) {
           // Primary has no explicit provider (providerless).
-          // Scan the fallback chain to find the first entry with an explicit provider.
-          // This handles two cases:
-          // 1. Primary was promoted from fallback (usedPrimaryFromFallback=true) - e.g., fallbacks: ["gpt-4o", "openai/gpt-4.1"]
-          // 2. Primary was explicitly set to providerless (usedPrimaryFromFallback=false) - e.g., imageModel.primary: "gpt-4o"
-          // In both cases, the provider context should come from an explicit fallback so that
-          // subsequent providerless fallbacks resolve correctly against the right provider.
-
-          // First pass: find first fallback with explicit provider prefix
-          for (const fb of imageModelConfigFallbacks) {
-            if (!fb?.trim()) {
-              continue;
-            }
-            const slash = fb.indexOf("/");
-            if (slash > 0) {
-              imageModelProvider = fb.slice(0, slash).trim();
-              break;
-            }
+          // First, try to resolve the primary itself (handles aliases like "vision").
+          // This ensures that if primary is an alias pointing to a specific provider,
+          // we use that provider instead of inferring from fallbacks.
+          // Only fall back to scanning fallback entries if the primary cannot determine provider.
+          const primaryResolved = resolveModelRefFromString({
+            raw: primaryTrimmed,
+            defaultProvider,
+            aliasIndex,
+          });
+          if (primaryResolved?.ref.provider) {
+            imageModelProvider = primaryResolved.ref.provider;
           }
 
-          // Second pass: if no fallback had explicit provider, try alias resolution
+          // If primary resolution didn't determine provider, scan fallback chain.
+          // This handles two cases:
+          // 1. Primary was promoted from fallback (usedPrimaryFromFallback=true) - e.g., fallbacks: ["gpt-4o", "openai/gpt-4.1"]
+          // 2. Primary was explicitly set to providerless non-alias - e.g., imageModel.primary: "gpt-4o"
           if (!imageModelProvider) {
+            // First pass: find first fallback with explicit provider prefix
             for (const fb of imageModelConfigFallbacks) {
               if (!fb?.trim()) {
                 continue;
               }
-              const resolved = resolveModelRefFromString({
-                raw: fb.trim(),
-                defaultProvider,
-                aliasIndex,
-              });
-              if (resolved?.ref.provider) {
-                imageModelProvider = resolved.ref.provider;
+              const slash = fb.indexOf("/");
+              if (slash > 0) {
+                imageModelProvider = fb.slice(0, slash).trim();
                 break;
+              }
+            }
+
+            // Second pass: if no fallback had explicit provider, try alias resolution
+            if (!imageModelProvider) {
+              for (const fb of imageModelConfigFallbacks) {
+                if (!fb?.trim()) {
+                  continue;
+                }
+                const resolved = resolveModelRefFromString({
+                  raw: fb.trim(),
+                  defaultProvider,
+                  aliasIndex,
+                });
+                if (resolved?.ref.provider) {
+                  imageModelProvider = resolved.ref.provider;
+                  break;
+                }
               }
             }
           }
