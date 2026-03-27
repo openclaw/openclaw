@@ -184,7 +184,11 @@ export function stripInboundMetadata(text: string): string {
     result.push(line);
   }
 
-  return result.join("\n").replace(/^\n+/, "").replace(/\n+$/, "");
+  return result
+    .join("\n")
+    .replace(/^\n+/, "")
+    .replace(/\n+$/, "")
+    .replace(LEADING_TIMESTAMP_PREFIX_RE, "");
 }
 
 export function stripLeadingInboundMetadata(text: string): string {

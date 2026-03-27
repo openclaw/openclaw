@@ -5,6 +5,7 @@ import {
   DEFAULT_TEST_MODEL_CATALOG,
   assertModelSelection,
   installDirectiveBehaviorE2EHooks,
+  installFreshDirectiveBehaviorReplyMocks,
   makeEmbeddedTextResult,
   makeWhatsAppDirectiveConfig,
   mockEmbeddedTextResult,
@@ -20,20 +21,6 @@ import {
 import { runModelDirectiveText } from "./reply.directive.directive-behavior.model-directive-test-utils.js";
 
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
-
-function installFreshDirectiveBehaviorReplyMocks() {
-  vi.doMock("../agents/pi-embedded.js", () => ({
-    abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-    runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
-    queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-    isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-    isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-  }));
-  vi.doMock("../agents/model-catalog.js", () => ({
-    loadModelCatalog: loadModelCatalogMock,
-  }));
-}
 
 function makeDefaultModelConfig(home: string) {
   return makeWhatsAppDirectiveConfig(home, {
