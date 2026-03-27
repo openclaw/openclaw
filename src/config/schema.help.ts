@@ -317,6 +317,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Execution security posture selector controlling sandbox/approval expectations for command execution. Keep strict security mode for untrusted prompts and relax only for trusted operator workflows.",
   "tools.exec.ask":
     "Approval strategy for when exec commands require human confirmation before running. Use stricter ask behavior in shared channels and lower-friction settings in private operator contexts.",
+  "tools.exec.maxCommandChars":
+    "Maximum characters allowed in a single exec command before it is flagged as potential obfuscation. Default: 10000. Increase for legitimate long commands (e.g. heredocs), or set to 0 to disable the length check while keeping all other obfuscation pattern checks active.",
   "tools.exec.node":
     "Node binding configuration for exec tooling when command execution is delegated through connected nodes. Use explicit node binding only when multi-node routing is required.",
   "tools.agentToAgent":

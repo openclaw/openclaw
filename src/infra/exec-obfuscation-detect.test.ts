@@ -203,6 +203,22 @@ describe("detectCommandObfuscation", () => {
       expect(result.matchedPatterns).toContain("command-too-long");
     });
 
+    it("respects custom maxCommandChars threshold", () => {
+      const longCommand = "echo " + "x".repeat(15_000);
+      const defaultResult = detectCommandObfuscation(longCommand);
+      expect(defaultResult.detected).toBe(true);
+      expect(defaultResult.matchedPatterns).toContain("command-too-long");
+
+      const customResult = detectCommandObfuscation(longCommand, 20_000);
+      expect(customResult.matchedPatterns).not.toContain("command-too-long");
+    });
+
+    it("disables length check when maxCommandChars is 0", () => {
+      const longCommand = "echo " + "x".repeat(50_000);
+      const result = detectCommandObfuscation(longCommand, 0);
+      expect(result.matchedPatterns).not.toContain("command-too-long");
+    });
+
     it("returns no detection for empty input", () => {
       const result = detectCommandObfuscation("");
       expect(result.detected).toBe(false);

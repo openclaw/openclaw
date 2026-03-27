@@ -262,6 +262,11 @@ export type ExecToolConfig = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
+  /**
+   * Maximum characters allowed in a single exec command before it is flagged
+   * as potential obfuscation. Default: 10000. Set to 0 to disable the length check.
+   */
+  maxCommandChars?: number;
   /** apply_patch subtool configuration. */
   applyPatch?: {
     /** Enable apply_patch for OpenAI models (default: true; set false to disable). */

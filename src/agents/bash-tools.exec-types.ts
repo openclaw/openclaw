@@ -25,6 +25,7 @@ export type ExecToolDefaults = {
   currentChannelId?: string;
   currentThreadTs?: string;
   accountId?: string;
+  maxCommandChars?: number;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;

@@ -53,6 +53,7 @@ export type ExecuteNodeHostCommandParams = {
   warnings: string[];
   notifySessionKey?: string;
   trustedSafeBinDirs?: ReadonlySet<string>;
+  maxCommandChars?: number;
 };
 
 export async function executeNodeHostCommand(
@@ -183,7 +184,7 @@ export async function executeNodeHostCommand(
       // Fall back to requiring approval if node approvals cannot be fetched.
     }
   }
-  const obfuscation = detectCommandObfuscation(params.command);
+  const obfuscation = detectCommandObfuscation(params.command, params.maxCommandChars);
   if (obfuscation.detected) {
     logInfo(
       `exec: obfuscation detected (node=${nodeQuery ?? "default"}): ${obfuscation.reasons.join(", ")}`,

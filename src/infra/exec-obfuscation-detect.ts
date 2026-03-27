@@ -17,7 +17,7 @@ type ObfuscationPattern = {
   regex: RegExp;
 };
 
-const MAX_COMMAND_CHARS = 10_000;
+const DEFAULT_MAX_COMMAND_CHARS = 10_000;
 
 const INVISIBLE_UNICODE_CODE_POINTS = new Set<number>([
   0x00ad,
@@ -214,11 +214,14 @@ function shouldSuppressCurlPipeShell(command: string): boolean {
   );
 }
 
-export function detectCommandObfuscation(command: string): ObfuscationDetection {
+export function detectCommandObfuscation(
+  command: string,
+  maxCommandChars: number = DEFAULT_MAX_COMMAND_CHARS,
+): ObfuscationDetection {
   if (!command || !command.trim()) {
     return { detected: false, reasons: [], matchedPatterns: [] };
   }
-  if (command.length > MAX_COMMAND_CHARS) {
+  if (maxCommandChars > 0 && command.length > maxCommandChars) {
     return {
       detected: true,
       reasons: ["Command too long; potential obfuscation"],

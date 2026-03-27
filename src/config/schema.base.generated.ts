@@ -12435,6 +12435,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Delay in milliseconds before showing an in-progress notice after an exec approval is granted. Increase to reduce flicker for fast commands, or lower for quicker operator feedback.",
       tags: ["tools"],
     },
+    "tools.exec.maxCommandChars": {
+      label: "Exec Max Command Characters",
+      help: "Maximum characters allowed in a single exec command before it is flagged as potential obfuscation. Default: 10000. Increase for legitimate long commands (e.g. heredocs), or set to 0 to disable the length check while keeping all other obfuscation pattern checks active.",
+      tags: ["performance", "tools"],
+    },
     "tools.exec.host": {
       label: "Exec Host",
       help: "Selects execution host strategy for shell commands, typically controlling local vs delegated execution environment. Use the safest host mode that still satisfies your automation requirements.",
