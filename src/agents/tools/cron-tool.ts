@@ -12,14 +12,19 @@ import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
-// NOTE: We use Type.Object({}, { additionalProperties: true }) for job/patch
-// instead of CronAddParamsSchema/CronJobPatchSchema because the gateway schemas
-// contain nested unions. Tool schemas need to stay provider-friendly, so we
-// accept "any object" here and validate at runtime.
+// NOTE: We spell out top-level properties for job/patch so that LLMs know
+// what fields to populate. Without them, models like GPT-5.4 send `job: {}`
+// because the JSON Schema has `"properties": {}`.
+// Nested unions are avoided — we use flat string enums instead of
+// Type.Union([Type.Literal(...)]) which some providers reject.
+// Runtime validation still happens in normalizeCronJobCreate/Patch.
 
 const CRON_ACTIONS = ["status", "list", "add", "update", "remove", "run", "runs", "wake"] as const;
 
+const CRON_SCHEDULE_KINDS = ["at", "every", "cron"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
+const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;
+const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
 
 const REMINDER_CONTEXT_MESSAGES_MAX = 10;
@@ -27,18 +32,194 @@ const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
 const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
 
+// Reusable sub-schemas for the job/patch objects.
+const CronScheduleSchema = Type.Optional(
+  Type.Object(
+    {
+      kind: optionalStringEnum(CRON_SCHEDULE_KINDS, { description: "Schedule type" }),
+      at: Type.Optional(Type.String({ description: "ISO-8601 timestamp (kind=at)" })),
+      everyMs: Type.Optional(Type.Number({ description: "Interval in milliseconds (kind=every)" })),
+      anchorMs: Type.Optional(
+        Type.Number({ description: "Optional start anchor in milliseconds (kind=every)" }),
+      ),
+      expr: Type.Optional(Type.String({ description: "Cron expression (kind=cron)" })),
+      tz: Type.Optional(Type.String({ description: "IANA timezone (kind=cron)" })),
+      staggerMs: Type.Optional(Type.Number({ description: "Random jitter in ms (kind=every)" })),
+    },
+    { additionalProperties: true },
+  ),
+);
+
+const CronPayloadSchema = Type.Optional(
+  Type.Object(
+    {
+      kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload type" }),
+      text: Type.Optional(Type.String({ description: "Message text (kind=systemEvent)" })),
+      message: Type.Optional(Type.String({ description: "Agent prompt (kind=agentTurn)" })),
+      model: Type.Optional(Type.String({ description: "Model override" })),
+      thinking: Type.Optional(Type.String({ description: "Thinking level override" })),
+      timeoutSeconds: Type.Optional(Type.Number()),
+      lightContext: Type.Optional(Type.Boolean()),
+      allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
+      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback model ids" })),
+    },
+    { additionalProperties: true },
+  ),
+);
+
+const CronDeliverySchema = Type.Optional(
+  Type.Object(
+    {
+      mode: optionalStringEnum(CRON_DELIVERY_MODES, { description: "Delivery mode" }),
+      channel: Type.Optional(Type.String({ description: "Delivery channel" })),
+      to: Type.Optional(Type.String({ description: "Delivery target" })),
+      bestEffort: Type.Optional(Type.Boolean()),
+      accountId: Type.Optional(Type.String({ description: "Account target for delivery" })),
+      failureDestination: Type.Optional(
+        Type.Object(
+          {
+            channel: Type.Optional(Type.String()),
+            to: Type.Optional(Type.String()),
+            accountId: Type.Optional(Type.String()),
+            mode: optionalStringEnum(["announce", "webhook"] as const),
+          },
+          { additionalProperties: true },
+        ),
+      ),
+    },
+    { additionalProperties: true },
+  ),
+);
+
+const CronJobObjectSchema = Type.Optional(
+  Type.Object(
+    {
+      name: Type.Optional(Type.String({ description: "Job name" })),
+      schedule: CronScheduleSchema,
+      sessionTarget: Type.Optional(
+        Type.String({
+          description: 'Session target: "main", "isolated", "current", or "session:<id>"',
+        }),
+      ),
+      wakeMode: optionalStringEnum(CRON_WAKE_MODES, { description: "When to wake the session" }),
+      payload: CronPayloadSchema,
+      delivery: CronDeliverySchema,
+      agentId: Type.Optional(Type.String({ description: "Agent id" })),
+      description: Type.Optional(Type.String({ description: "Human-readable description" })),
+      enabled: Type.Optional(Type.Boolean()),
+      deleteAfterRun: Type.Optional(Type.Boolean({ description: "Delete after first execution" })),
+      sessionKey: Type.Optional(Type.String({ description: "Explicit session key" })),
+    },
+    { additionalProperties: true },
+  ),
+);
+
+const CronPatchObjectSchema = Type.Optional(
+  Type.Object(
+    {
+      name: Type.Optional(Type.String({ description: "Job name" })),
+      schedule: Type.Optional(
+        Type.Object(
+          {
+            kind: optionalStringEnum(CRON_SCHEDULE_KINDS, { description: "Schedule type" }),
+            at: Type.Optional(Type.String({ description: "ISO-8601 timestamp (kind=at)" })),
+            everyMs: Type.Optional(
+              Type.Number({ description: "Interval in milliseconds (kind=every)" }),
+            ),
+            anchorMs: Type.Optional(
+              Type.Number({ description: "Optional start anchor in milliseconds (kind=every)" }),
+            ),
+            expr: Type.Optional(Type.String({ description: "Cron expression (kind=cron)" })),
+            tz: Type.Optional(Type.String({ description: "IANA timezone (kind=cron)" })),
+            staggerMs: Type.Optional(
+              Type.Number({ description: "Random jitter in ms (kind=every)" }),
+            ),
+          },
+          { additionalProperties: true },
+        ),
+      ),
+      sessionTarget: Type.Optional(Type.String({ description: "Session target" })),
+      wakeMode: optionalStringEnum(CRON_WAKE_MODES),
+      payload: Type.Optional(
+        Type.Object(
+          {
+            kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload type" }),
+            text: Type.Optional(Type.String({ description: "Message text (kind=systemEvent)" })),
+            message: Type.Optional(Type.String({ description: "Agent prompt (kind=agentTurn)" })),
+            model: Type.Optional(Type.String({ description: "Model override" })),
+            thinking: Type.Optional(Type.String({ description: "Thinking level override" })),
+            timeoutSeconds: Type.Optional(Type.Number()),
+            lightContext: Type.Optional(Type.Boolean()),
+            allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
+            fallbacks: Type.Optional(
+              Type.Array(Type.String(), { description: "Fallback model ids" }),
+            ),
+          },
+          { additionalProperties: true },
+        ),
+      ),
+      delivery: Type.Optional(
+        Type.Object(
+          {
+            mode: optionalStringEnum(CRON_DELIVERY_MODES, { description: "Delivery mode" }),
+            channel: Type.Optional(Type.String({ description: "Delivery channel" })),
+            to: Type.Optional(Type.String({ description: "Delivery target" })),
+            bestEffort: Type.Optional(Type.Boolean()),
+            accountId: Type.Optional(Type.String({ description: "Account target for delivery" })),
+            failureDestination: Type.Optional(
+              Type.Object(
+                {
+                  channel: Type.Optional(Type.String()),
+                  to: Type.Optional(Type.String()),
+                  accountId: Type.Optional(Type.String()),
+                  mode: optionalStringEnum(["announce", "webhook"] as const),
+                },
+                { additionalProperties: true },
+              ),
+            ),
+          },
+          { additionalProperties: true },
+        ),
+      ),
+      description: Type.Optional(Type.String()),
+      enabled: Type.Optional(Type.Boolean()),
+      deleteAfterRun: Type.Optional(Type.Boolean()),
+      agentId: Type.Optional(Type.String({ description: "Agent id" })),
+      sessionKey: Type.Optional(Type.String({ description: "Explicit session key" })),
+      failureAlert: Type.Optional(
+        Type.Union([
+          Type.Literal(false),
+          Type.Object(
+            {
+              enabled: Type.Optional(Type.Boolean()),
+              after: Type.Optional(Type.Number({ description: "Failures before alerting" })),
+              cooldownMs: Type.Optional(
+                Type.Number({ description: "Cooldown between alerts in ms" }),
+              ),
+              mode: optionalStringEnum(["announce", "webhook"] as const),
+              accountId: Type.Optional(Type.String()),
+            },
+            { additionalProperties: true },
+          ),
+        ]),
+      ),
+    },
+    { additionalProperties: true },
+  ),
+);
+
 // Flattened schema: runtime validates per-action requirements.
-const CronToolSchema = Type.Object(
+export const CronToolSchema = Type.Object(
   {
     action: stringEnum(CRON_ACTIONS),
     gatewayUrl: Type.Optional(Type.String()),
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
     includeDisabled: Type.Optional(Type.Boolean()),
-    job: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    job: CronJobObjectSchema,
     jobId: Type.Optional(Type.String()),
     id: Type.Optional(Type.String()),
-    patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    patch: CronPatchObjectSchema,
     text: Type.Optional(Type.String()),
     mode: optionalStringEnum(CRON_WAKE_MODES),
     runMode: optionalStringEnum(CRON_RUN_MODES),
