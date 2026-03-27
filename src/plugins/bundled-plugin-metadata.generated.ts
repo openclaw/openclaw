@@ -11804,6 +11804,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["onboard.js", "provider-catalog.js"],
     packageName: "@openclaw/sambanova-provider",
     packageVersion: "2026.3.25",
     packageDescription: "OpenClaw SambaNova provider plugin",
