@@ -258,6 +258,9 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
+# Install Codex CLI for autonomous engineering pipeline (pinned 2026-03-26)
+RUN npm install -g @openai/codex@0.117.0
+
 ENV NODE_ENV=production
 
 # Security hardening: Run as non-root user
