@@ -420,6 +420,9 @@ export function createDiscordGatewayReconnectController(params: {
         for (const listener of socket.listeners("error")) {
           socket.removeListener("error", listener);
         }
+        // Keep a no-op error listener so Node does not throw an uncaught
+        // exception if the underlying socket emits "error" during disconnect.
+        socket.on("error", () => {});
       }
     }
 
