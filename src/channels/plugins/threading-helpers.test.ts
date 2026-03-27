@@ -15,16 +15,16 @@ describe("createStaticReplyToModeResolver", () => {
 
 describe("createTopLevelChannelReplyToModeResolver", () => {
   it("reads the top-level channel config", () => {
-    const resolver = createTopLevelChannelReplyToModeResolver("discord");
+    const resolver = createTopLevelChannelReplyToModeResolver("demo-top-level");
     expect(
       resolver({
-        cfg: { channels: { discord: { replyToMode: "first" } } } as OpenClawConfig,
+        cfg: { channels: { "demo-top-level": { replyToMode: "first" } } } as OpenClawConfig,
       }),
     ).toBe("first");
   });
 
   it("falls back to off", () => {
-    const resolver = createTopLevelChannelReplyToModeResolver("discord");
+    const resolver = createTopLevelChannelReplyToModeResolver("demo-top-level");
     expect(resolver({ cfg: {} as OpenClawConfig })).toBe("off");
   });
 });
@@ -35,9 +35,9 @@ describe("createScopedAccountReplyToModeResolver", () => {
       resolveAccount: (cfg, accountId) =>
         ((
           cfg.channels as {
-            matrix?: { accounts?: Record<string, { replyToMode?: "off" | "first" | "all" }> };
+            demo?: { accounts?: Record<string, { replyToMode?: "off" | "first" | "all" }> };
           }
-        ).matrix?.accounts?.[accountId?.toLowerCase() ?? "default"] ?? {}) as {
+        ).demo?.accounts?.[accountId?.toLowerCase() ?? "default"] ?? {}) as {
           replyToMode?: "off" | "first" | "all";
         },
       resolveReplyToMode: (account) => account.replyToMode,
@@ -45,7 +45,7 @@ describe("createScopedAccountReplyToModeResolver", () => {
 
     const cfg = {
       channels: {
-        matrix: {
+        demo: {
           accounts: {
             assistant: { replyToMode: "all" },
           },
