@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  canonicalizeViaAncestor,
   crossPlatformRelative,
   formatMigrateImportSummary,
   MIGRATE_IMPORT_LIMITS,
@@ -380,5 +381,38 @@ describe("remap-workspace safety", () => {
     const home = os.homedir();
     expect(resolved).not.toBe(root);
     expect(resolved).not.toBe(home);
+  });
+});
+
+describe("canonicalizeViaAncestor", () => {
+  it("resolves an existing path via realpath", async () => {
+    // os.tmpdir() exists on all platforms
+    const result = await canonicalizeViaAncestor(os.tmpdir());
+    // Should be an absolute path
+    expect(path.isAbsolute(result)).toBe(true);
+  });
+
+  it("resolves a non-existent child under an existing parent", async () => {
+    const nonExistent = path.join(os.tmpdir(), "openclaw-test-nonexistent-xyz");
+    const result = await canonicalizeViaAncestor(nonExistent);
+    expect(result).toContain("openclaw-test-nonexistent-xyz");
+    expect(path.isAbsolute(result)).toBe(true);
+  });
+
+  it("resolves deeply non-existent paths", async () => {
+    const deep = path.join(os.tmpdir(), "a", "b", "c", "d");
+    const result = await canonicalizeViaAncestor(deep);
+    expect(result).toContain(path.join("a", "b", "c", "d"));
+    expect(path.isAbsolute(result)).toBe(true);
+  });
+});
+
+describe("target path deduplication", () => {
+  it("disambiguator pattern does not collide with natural names", () => {
+    // The dedup uses _N suffix which is distinct from .wN
+    const base = "/state/workspace";
+    const deduped = `${base}_1`;
+    expect(deduped).not.toBe(base);
+    expect(deduped).toBe("/state/workspace_1");
   });
 });

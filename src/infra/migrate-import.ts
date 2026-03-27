@@ -264,6 +264,33 @@ export function crossPlatformRelative(parent: string, child: string): string | u
 }
 
 /**
+ * Canonicalize a path by resolving symlinks in the nearest existing ancestor,
+ * then appending the remaining non-existent segments. This catches symlinked
+ * parent directories that `path.resolve` alone would miss.
+ */
+/** @internal Exported for testing. */
+export async function canonicalizeViaAncestor(targetPath: string): Promise<string> {
+  const resolved = path.resolve(targetPath);
+  const suffix: string[] = [];
+  let probe = resolved;
+
+  while (true) {
+    try {
+      const realProbe = await fs.realpath(probe);
+      return suffix.length === 0 ? realProbe : path.join(realProbe, ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) {
+        // Reached filesystem root without finding an existing ancestor.
+        return resolved;
+      }
+      suffix.push(path.basename(probe));
+      probe = parent;
+    }
+  }
+}
+
+/**
  * Sanitize a basename derived from an untrusted source path.
  * Rejects traversal segments and empty values.
  * @internal Exported for testing.
@@ -492,13 +519,11 @@ export async function importMigrateArchive(
   // Canonicalize via realpath to dereference symlinks — a symlink to "/"
   // or home would otherwise pass the path.resolve check.
   if (resolvedRemapWorkspace) {
-    let canonicalRemap: string;
-    try {
-      canonicalRemap = await fs.realpath(resolvedRemapWorkspace);
-    } catch {
-      // Path doesn't exist yet — use resolved path (will be created on import).
-      canonicalRemap = path.resolve(resolvedRemapWorkspace);
-    }
+    // Canonicalize by walking up to the nearest existing ancestor and
+    // resolving symlinks there, then appending the remaining segments.
+    // This catches symlinked parents (e.g. /tmp/link/new-ws where
+    // /tmp/link → /) that path.resolve alone would miss.
+    const canonicalRemap = await canonicalizeViaAncestor(resolvedRemapWorkspace);
     const root = path.parse(canonicalRemap).root;
     const home = os.homedir();
     if (
@@ -513,8 +538,10 @@ export async function importMigrateArchive(
   }
 
   // Build import plan: map each manifest asset to a local target path.
+  // Track assigned targets to detect and resolve collisions.
+  const assignedTargets = new Set<string>();
   const importAssets: MigrateImportAsset[] = manifest.assets.map((asset) => {
-    const targetPath = remapSourceToTarget({
+    let targetPath = remapSourceToTarget({
       sourcePath: asset.sourcePath,
       sourceStateDir: manifest.paths.stateDir,
       sourceConfigPath: manifest.paths.configPath,
@@ -526,6 +553,18 @@ export async function importMigrateArchive(
       remapWorkspace: resolvedRemapWorkspace,
       kind: asset.kind,
     });
+
+    // Deduplicate: if another asset already claimed this target, append
+    // a numeric disambiguator until unique.
+    const resolvedTarget = path.resolve(targetPath);
+    if (assignedTargets.has(resolvedTarget)) {
+      let counter = 1;
+      while (assignedTargets.has(path.resolve(`${targetPath}_${counter}`))) {
+        counter++;
+      }
+      targetPath = `${targetPath}_${counter}`;
+    }
+    assignedTargets.add(path.resolve(targetPath));
 
     return {
       kind: asset.kind,
