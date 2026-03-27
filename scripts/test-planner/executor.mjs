@@ -146,7 +146,8 @@ export const resolveVitestFsModuleCachePath = ({
   if (explicitPath) {
     return explicitPath;
   }
-  return path.join(
+  const pathImpl = isWindowsEnv(env, platform) ? path.win32 : path.posix;
+  return pathImpl.join(
     cwd,
     "node_modules",
     ".experimental-vitest-cache",
