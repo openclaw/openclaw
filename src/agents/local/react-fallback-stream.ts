@@ -207,12 +207,17 @@ export function parseReActResponse(
     if (jsonStartIndex !== -1 && jsonEndIndex !== -1) {
       const jsonStr = part.substring(jsonStartIndex, jsonEndIndex + 1);
       try {
-        const parsed = JSON.parse(jsonStr);
-        if (parsed.tool && parsed.args) {
+        const parsed = JSON.parse(jsonStr) as {
+          tool?: string;
+          args?: Record<string, unknown>;
+          arguments?: Record<string, unknown>;
+        };
+        const toolArguments = parsed.args ?? parsed.arguments;
+        if (parsed.tool && toolArguments) {
           toolCalls.push({
             id: `react_call_${Date.now().toString(36)}_${(reactCallCounter++).toString(36)}`,
             name: parsed.tool,
-            arguments: parsed.args,
+            arguments: toolArguments,
           });
           // Move lastIndex to after the JSON block
           lastIndex = actionIndex + actionMarker.length + jsonEndIndex + 1;
