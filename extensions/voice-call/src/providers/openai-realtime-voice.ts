@@ -375,7 +375,9 @@ export class OpenAIRealtimeVoiceBridge {
         clearTimeout(connectTimeout);
         console.log("[RealtimeVoice] WebSocket connected");
         this.connected = true;
-        this.reconnectAttempts = 0;
+        // Do NOT reset reconnectAttempts here — the budget must persist across
+        // reconnect cycles so a socket that briefly opens then closes cannot
+        // reset the counter and retry forever.
         // Send session config immediately — no need to wait; the server
         // confirms receipt via session.created which triggers drain + onReady.
         this.sendSessionUpdate();
