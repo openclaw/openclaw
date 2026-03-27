@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import {
   findMatrixAccountEntry,
   getMatrixScopedEnvVarNames,
@@ -10,9 +12,7 @@ import {
   resolveMatrixChannelConfig,
   resolveMatrixCredentialsPath,
   resolveMatrixDefaultOrOnlyAccountId,
-} from "../../extensions/matrix/runtime-api.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
+} from "../plugin-sdk/matrix.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
 export type MatrixStoredCredentials = {
