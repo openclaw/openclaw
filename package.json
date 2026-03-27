@@ -432,9 +432,37 @@
       "types": "./dist/plugin-sdk/memory-core-host-engine.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine.js"
     },
+    "./plugin-sdk/memory-core-host-engine-embeddings": {
+      "types": "./dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-engine-embeddings.js"
+    },
+    "./plugin-sdk/memory-core-host-engine-foundation": {
+      "types": "./dist/plugin-sdk/memory-core-host-engine-foundation.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-engine-foundation.js"
+    },
+    "./plugin-sdk/memory-core-host-engine-qmd": {
+      "types": "./dist/plugin-sdk/memory-core-host-engine-qmd.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-engine-qmd.js"
+    },
+    "./plugin-sdk/memory-core-host-engine-storage": {
+      "types": "./dist/plugin-sdk/memory-core-host-engine-storage.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-engine-storage.js"
+    },
     "./plugin-sdk/memory-core-host-runtime": {
       "types": "./dist/plugin-sdk/memory-core-host-runtime.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-runtime.js"
+    },
+    "./plugin-sdk/memory-core-host-runtime-cli": {
+      "types": "./dist/plugin-sdk/memory-core-host-runtime-cli.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-runtime-cli.js"
+    },
+    "./plugin-sdk/memory-core-host-runtime-core": {
+      "types": "./dist/plugin-sdk/memory-core-host-runtime-core.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-runtime-core.js"
+    },
+    "./plugin-sdk/memory-core-host-runtime-files": {
+      "types": "./dist/plugin-sdk/memory-core-host-runtime-files.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-runtime-files.js"
     },
     "./plugin-sdk/memory-lancedb": {
       "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
