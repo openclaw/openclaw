@@ -26,6 +26,16 @@ function runScript(args: string[], cwd = process.cwd()) {
   });
 }
 
+function findExtensionWithoutTests() {
+  const extensionId = listAvailableExtensionIds().find(
+    (candidate) =>
+      resolveExtensionTestPlan({ targetArg: candidate, cwd: process.cwd() }).testFiles.length === 0,
+  );
+
+  expect(extensionId).toBeDefined();
+  return extensionId ?? "missing-no-test-extension";
+}
+
 describe("scripts/test-extension.mjs", () => {
   it("resolves channel-root extensions onto the channel vitest config", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "slack", cwd: process.cwd() });
@@ -113,16 +123,18 @@ describe("scripts/test-extension.mjs", () => {
   });
 
   it("dry-run still reports a plan for extensions without tests", () => {
-    const plan = readPlan(["copilot-proxy"]);
+    const extensionId = findExtensionWithoutTests();
+    const plan = readPlan([extensionId]);
 
-    expect(plan.extensionId).toBe("copilot-proxy");
+    expect(plan.extensionId).toBe(extensionId);
     expect(plan.testFiles).toEqual([]);
   });
 
   it("treats extensions without tests as a no-op by default", () => {
-    const stdout = runScript(["copilot-proxy"]);
+    const extensionId = findExtensionWithoutTests();
+    const stdout = runScript([extensionId]);
 
-    expect(stdout).toContain("No tests found for extensions/copilot-proxy.");
+    expect(stdout).toContain(`No tests found for extensions/${extensionId}.`);
     expect(stdout).toContain("Skipping.");
   });
 });
