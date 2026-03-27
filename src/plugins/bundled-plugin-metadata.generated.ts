@@ -2777,6 +2777,70 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "searxng",
+    idHint: "searxng",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/searxng-plugin",
+    packageVersion: "2026.3.25",
+    packageDescription: "OpenClaw SearXNG plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "searxng",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              baseUrl: {
+                type: "string",
+              },
+              count: {
+                type: "integer",
+                minimum: 1,
+                maximum: 100,
+              },
+              lang: {
+                type: "string",
+              },
+              categories: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+            },
+          },
+        },
+      },
+      uiHints: {
+        "webSearch.baseUrl": {
+          label: "SearXNG Base URL",
+          help: "Base URL of your self-hosted SearXNG instance (e.g., http://localhost:5000). No API key required.",
+        },
+        "webSearch.count": {
+          label: "Result Count",
+          help: "Default number of search results (1–100, default: 10).",
+        },
+        "webSearch.lang": {
+          label: "Language",
+          help: "Language code for results (e.g., en, de, fr). Default: en.",
+        },
+        "webSearch.categories": {
+          label: "Categories",
+          help: 'Category filter array (e.g., ["general", "news"]).',
+        },
+      },
+    },
+  },
+  {
     dirName: "sglang",
     idHint: "sglang",
     source: {
