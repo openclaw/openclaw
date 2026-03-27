@@ -137,13 +137,18 @@ export function createMemoryOpenVikingContextEngine(
       }
 
       const sessionKey = extractSessionKey(afterTurnParams.runtimeContext);
-      const lockKey = sessionKey ?? afterTurnParams.sessionId ?? "unknown";
+      const sessionId = sessionKey ?? afterTurnParams.sessionId;
       
-      if (commitLocks.has(lockKey)) {
-        warnOrInfo(logger, "openviking: auto-capture skipped (commit in progress for " + lockKey + ")");
+      if (!sessionId) {
+        warnOrInfo(logger, "openviking: auto-capture skipped (no session identifier)");
         return;
       }
-      commitLocks.add(lockKey);
+      
+      if (commitLocks.has(sessionId)) {
+        warnOrInfo(logger, "openviking: auto-capture skipped (commit in progress for " + sessionId + ")");
+        return;
+      }
+      commitLocks.add(sessionId);
 
       try {
         const agentId = resolveAgentId(sessionKey ?? afterTurnParams.sessionId);
@@ -193,7 +198,7 @@ export function createMemoryOpenVikingContextEngine(
       } catch (err) {
         warnOrInfo(logger, "openviking: auto-capture failed: " + String(err));
       } finally {
-        commitLocks.delete(lockKey);
+        if (sessionId) commitLocks.delete(sessionId);
       }
     },
 
