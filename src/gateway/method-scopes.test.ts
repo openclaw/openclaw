@@ -22,6 +22,7 @@ describe("method scope resolution", () => {
     ["sessions.abort", ["operator.write"]],
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
+    ["node.pair.approve", ["operator.write"]],
     ["poll", ["operator.write"]],
     ["config.patch", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
@@ -63,6 +64,10 @@ describe("operator scope authorization", () => {
 
   it("requires operator.write for write methods", () => {
     expect(authorizeOperatorScopesForMethod("send", ["operator.read"])).toEqual({
+      allowed: false,
+      missingScope: "operator.write",
+    });
+    expect(authorizeOperatorScopesForMethod("node.pair.approve", ["operator.pairing"])).toEqual({
       allowed: false,
       missingScope: "operator.write",
     });

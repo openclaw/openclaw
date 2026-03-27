@@ -539,7 +539,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       respond(true, list, undefined);
     });
   },
-  "node.pair.approve": async ({ params, respond, context }) => {
+  "node.pair.approve": async ({ params, respond, context, client }) => {
     if (!validateNodePairApproveParams(params)) {
       respondInvalidParams({
         respond,
@@ -549,17 +549,32 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     const { requestId } = params as { requestId: string };
+    // Intentionally fail closed for RPC callers without an explicit scoped session.
+    const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     await respondUnavailableOnThrow(respond, async () => {
-      const approved = await approveNodePairing(requestId);
+      const approved = await approveNodePairing(requestId, { callerScopes });
       if (!approved) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
         return;
       }
+      if ("status" in approved && approved.status === "forbidden") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${approved.missingScope}`),
+        );
+        return;
+      }
+      if (!("node" in approved)) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
+        return;
+      }
+      const approvedNode = approved.node;
       context.broadcast(
         "node.pair.resolved",
         {
           requestId,
-          nodeId: approved.node.nodeId,
+          nodeId: approvedNode.nodeId,
           decision: "approved",
           ts: Date.now(),
         },
