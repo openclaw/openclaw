@@ -70,22 +70,15 @@ type ToolFailure = {
   meta?: string;
 };
 
-type ModelRegistryWithRequestAuthLookup = {
-  getApiKeyAndHeaders?: (
-    model: NonNullable<ExtensionContext["model"]>,
-  ) => Promise<ResolvedRequestAuth>;
+type ModelRegistryWithLegacyAuthLookup = {
+  getApiKey?: (model: NonNullable<ExtensionContext["model"]>) => Promise<string | undefined>;
+  getApiKeyAndHeaders?: (model: NonNullable<ExtensionContext["model"]>) => Promise<{
+    ok: boolean;
+    apiKey?: string;
+    headers?: Record<string, string>;
+    error?: string;
+  }>;
 };
-
-type ResolvedRequestAuth =
-  | {
-      ok: true;
-      apiKey?: string;
-      headers?: Record<string, string>;
-    }
-  | {
-      ok: false;
-      error: string;
-    };
 
 function clampNonNegativeInt(value: unknown, fallback: number): number {
   const normalized = typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -631,13 +624,22 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    let requestAuth: ResolvedRequestAuth;
+    let apiKey: string | undefined;
+    let headers = model.headers;
     try {
-      const modelRegistry = ctx.modelRegistry as ModelRegistryWithRequestAuthLookup;
-      if (typeof modelRegistry.getApiKeyAndHeaders !== "function") {
+      const modelRegistry = ctx.modelRegistry as ModelRegistryWithLegacyAuthLookup;
+      if (typeof modelRegistry.getApiKeyAndHeaders === "function") {
+        const requestAuth = await modelRegistry.getApiKeyAndHeaders(model);
+        if (!requestAuth.ok) {
+          throw new Error(requestAuth.error || "request auth unavailable");
+        }
+        apiKey = requestAuth.apiKey;
+        headers = requestAuth.headers ?? headers;
+      } else if (typeof modelRegistry.getApiKey === "function") {
+        apiKey = await modelRegistry.getApiKey(model);
+      } else {
         throw new Error("model registry auth lookup unavailable");
       }
-      requestAuth = await modelRegistry.getApiKeyAndHeaders(model);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       log.warn(
@@ -649,18 +651,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       );
       return { cancel: true };
     }
-    if (!requestAuth.ok) {
-      log.warn(
-        `Compaction safeguard: request credential resolution failed for ${model.provider}/${model.id}: ${requestAuth.error}`,
-      );
-      setCompactionSafeguardCancelReason(
-        ctx.sessionManager,
-        `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${requestAuth.error}`,
-      );
-      return { cancel: true };
-    }
-    const apiKey = requestAuth.apiKey;
-    const headers = requestAuth.headers;
     if (!apiKey && !headers) {
       log.warn(
         "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
