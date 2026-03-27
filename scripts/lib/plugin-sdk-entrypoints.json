@@ -1,7 +1,6 @@
 [
   "index",
   "core",
-  "ollama-setup",
   "provider-setup",
   "sandbox",
   "self-hosted-provider-setup",
