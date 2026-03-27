@@ -293,7 +293,8 @@ export function renderAgents(props: AgentsProps) {
                           toolsEffectiveError: props.toolsEffective.error,
                           toolsEffectiveResult: props.toolsEffective.result,
                           runtimeSessionKey: props.runtimeSessionKey,
-                          runtimeSessionMatchesSelectedAgent: props.runtimeSessionMatchesSelectedAgent,
+                          runtimeSessionMatchesSelectedAgent:
+                            props.runtimeSessionMatchesSelectedAgent,
                           onProfileChange: props.onToolsProfileChange,
                           onOverridesChange: props.onToolsOverridesChange,
                           onConfigReload: props.onConfigReload,
