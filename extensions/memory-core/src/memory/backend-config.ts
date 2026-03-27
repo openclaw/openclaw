@@ -1,1 +1,1 @@
-export { resolveMemoryBackendConfig } from "../engine-host-api.js";
+export { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
