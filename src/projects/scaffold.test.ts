@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import YAML from "yaml";
-import { ProjectFrontmatterSchema } from "./schemas.js";
-import { ProjectManager } from "./scaffold.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import { ProjectManager } from "./scaffold.js";
+import { ProjectFrontmatterSchema } from "./schemas.js";
 
 describe("ProjectManager", () => {
   let env: TempHomeEnv;
