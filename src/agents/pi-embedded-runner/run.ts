@@ -146,6 +146,7 @@ export async function runEmbeddedPiAgent(
       await ensureOpenClawModelsJson(params.config, agentDir);
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
+        runId: params.runId,
         agentId: workspaceResolution.agentId,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,

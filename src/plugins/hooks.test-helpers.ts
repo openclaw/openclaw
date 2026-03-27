@@ -40,6 +40,7 @@ export function createMockPluginRegistry(
 }
 
 export const TEST_PLUGIN_AGENT_CTX: PluginHookAgentContext = {
+  runId: "test-run-id",
   agentId: "test-agent",
   sessionKey: "test-session",
   sessionId: "test-session-id",
