@@ -45,6 +45,51 @@ describe("createMatrixRoomInfoResolver", () => {
     expect(client.getRoomStateEvent).toHaveBeenCalledTimes(3);
   });
 
+  it("caches fallback user IDs when member display names are missing", async () => {
+    const client = {
+      getRoomStateEvent: vi.fn(
+        async (_roomId: string, eventType: string): Promise<Record<string, unknown>> => {
+          if (eventType === "m.room.member") {
+            return {};
+          }
+          return {};
+        },
+      ),
+    } as unknown as MatrixClient & {
+      getRoomStateEvent: ReturnType<typeof vi.fn>;
+    };
+    const resolver = createMatrixRoomInfoResolver(client);
+
+    await expect(
+      resolver.getMemberDisplayName("!room:example.org", "@alice:example.org"),
+    ).resolves.toBe("@alice:example.org");
+    await expect(
+      resolver.getMemberDisplayName("!room:example.org", "@alice:example.org"),
+    ).resolves.toBe("@alice:example.org");
+
+    expect(client.getRoomStateEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("caches fallback user IDs when member display-name lookups fail", async () => {
+    const client = {
+      getRoomStateEvent: vi.fn(async (): Promise<Record<string, unknown>> => {
+        throw new Error("member lookup failed");
+      }),
+    } as unknown as MatrixClient & {
+      getRoomStateEvent: ReturnType<typeof vi.fn>;
+    };
+    const resolver = createMatrixRoomInfoResolver(client);
+
+    await expect(
+      resolver.getMemberDisplayName("!room:example.org", "@alice:example.org"),
+    ).resolves.toBe("@alice:example.org");
+    await expect(
+      resolver.getMemberDisplayName("!room:example.org", "@alice:example.org"),
+    ).resolves.toBe("@alice:example.org");
+
+    expect(client.getRoomStateEvent).toHaveBeenCalledTimes(1);
+  });
+
   it("bounds cached room and member entries", async () => {
     const client = createClientStub();
     const resolver = createMatrixRoomInfoResolver(client);

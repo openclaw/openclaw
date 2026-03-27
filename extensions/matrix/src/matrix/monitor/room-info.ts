@@ -83,27 +83,21 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
 
   const getMemberDisplayName = async (roomId: string, userId: string): Promise<string> => {
     const cacheKey = `${roomId}:${userId}`;
-    const cached = memberDisplayNameCache.get(cacheKey);
-    if (cached) {
-      return cached;
+    if (memberDisplayNameCache.has(cacheKey)) {
+      return memberDisplayNameCache.get(cacheKey) ?? userId;
     }
-    try {
-      const memberState = await client
-        .getRoomStateEvent(roomId, "m.room.member", userId)
-        .catch(() => null);
-      if (memberState && typeof memberState.displayname === "string") {
-        rememberBounded(
-          memberDisplayNameCache,
-          cacheKey,
-          memberState.displayname,
-          MAX_TRACKED_MEMBER_DISPLAY_NAMES,
-        );
-        return memberState.displayname;
-      }
-      return userId;
-    } catch {
-      return userId;
-    }
+    const memberState = await client
+      .getRoomStateEvent(roomId, "m.room.member", userId)
+      .catch(() => null);
+    const displayName =
+      memberState && typeof memberState.displayname === "string" ? memberState.displayname : userId;
+    rememberBounded(
+      memberDisplayNameCache,
+      cacheKey,
+      displayName,
+      MAX_TRACKED_MEMBER_DISPLAY_NAMES,
+    );
+    return displayName;
   };
 
   return {
