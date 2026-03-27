@@ -1,12 +1,13 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  computeBackoff: vi.fn((_policy, attempt: number) => attempt * 1000),
   sleepWithAbort: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock the runtime-exported backoff sleep that the handler actually imports.
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  computeBackoff: vi.fn((_policy, attempt: number) => attempt * 1000),
+  computeBackoff: mocks.computeBackoff,
   sleepWithAbort: mocks.sleepWithAbort,
 }));
 
@@ -18,7 +19,19 @@ describe("createTelegramSendChatActionHandler", () => {
   });
 
   const make401Error = () => new Error("401 Unauthorized");
-  const make500Error = () => new Error("500 Internal Server Error");
+  const makeTransientNetworkError = () =>
+    Object.assign(new Error("TypeError: fetch failed"), { code: "ETIMEDOUT" });
+  const makeRateLimitError = () => ({
+    error_code: 429,
+    message: "429 Too Many Requests",
+    description: "Too Many Requests: retry after 5",
+  });
+  const makeServerError = () => ({
+    error_code: 502,
+    message: "502 Bad Gateway",
+    description: "Bad Gateway",
+  });
+  const makeUnexpectedError = () => new Error("400 Bad Request: invalid action");
 
   it("calls sendChatActionFn on success", async () => {
     const fn = vi.fn().mockResolvedValue(true);
@@ -72,7 +85,7 @@ describe("createTelegramSendChatActionHandler", () => {
     expect(fn).toHaveBeenCalledTimes(3); // not called again
   });
 
-  it("resets failure counter on success", async () => {
+  it("resets the 401 failure counter on success", async () => {
     let callCount = 0;
     const fn = vi.fn().mockImplementation(() => {
       callCount++;
@@ -97,8 +110,8 @@ describe("createTelegramSendChatActionHandler", () => {
     expect(logger).toHaveBeenCalledWith(expect.stringContaining("recovered"));
   });
 
-  it("does not count non-401 errors toward suspension", async () => {
-    const fn = vi.fn().mockRejectedValue(make500Error());
+  it("suppresses repeated transient network errors during cooldown", async () => {
+    const fn = vi.fn().mockRejectedValue(makeTransientNetworkError());
     const logger = vi.fn();
     const handler = createTelegramSendChatActionHandler({
       sendChatActionFn: fn,
@@ -106,11 +119,12 @@ describe("createTelegramSendChatActionHandler", () => {
       maxConsecutive401: 2,
     });
 
-    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("500");
-    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("500");
-    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("500");
+    await expect(handler.sendChatAction(123, "typing")).resolves.toBeUndefined();
+    await expect(handler.sendChatAction(123, "typing")).resolves.toBeUndefined();
 
     expect(handler.isSuspended()).toBe(false);
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(logger).toHaveBeenCalledWith(expect.stringContaining("transient failure"));
   });
 
   it("reset() clears suspension", async () => {
@@ -127,6 +141,101 @@ describe("createTelegramSendChatActionHandler", () => {
 
     handler.reset();
     expect(handler.isSuspended()).toBe(false);
+  });
+
+  it("recovers after a transient cooldown expires", async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      let fail = true;
+      const fn = vi.fn().mockImplementation(() => {
+        if (fail) {
+          fail = false;
+          throw makeTransientNetworkError();
+        }
+        return Promise.resolve(true);
+      });
+      const logger = vi.fn();
+      const handler = createTelegramSendChatActionHandler({
+        sendChatActionFn: fn,
+        logger,
+      });
+
+      await expect(handler.sendChatAction(123, "typing")).resolves.toBeUndefined();
+      now = 10_000;
+      await expect(handler.sendChatAction(123, "typing")).resolves.toBeUndefined();
+
+      expect(fn).toHaveBeenCalledTimes(2);
+      expect(logger).toHaveBeenCalledWith(expect.stringContaining("recovered"));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("treats Telegram 429 responses as transient and does not suspend", async () => {
+    const fn = vi.fn().mockRejectedValue(makeRateLimitError());
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).resolves.toBeUndefined();
+    expect(handler.isSuspended()).toBe(false);
+    expect(logger).toHaveBeenCalledWith(expect.stringContaining("transient failure"));
+  });
+
+  it("treats Telegram 5xx responses as transient and does not suspend", async () => {
+    const fn = vi.fn().mockRejectedValue(makeServerError());
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).resolves.toBeUndefined();
+    expect(handler.isSuspended()).toBe(false);
+    expect(logger).toHaveBeenCalledWith(expect.stringContaining("transient failure"));
+  });
+
+  it("still throws unexpected non-transient errors", async () => {
+    const fn = vi.fn().mockRejectedValue(makeUnexpectedError());
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("400 Bad Request");
+    expect(handler.isSuspended()).toBe(false);
+  });
+
+  it("preserves the 401 failure counter across an intervening transient cooldown", async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const fn = vi
+        .fn()
+        .mockRejectedValueOnce(make401Error())
+        .mockRejectedValueOnce(makeTransientNetworkError())
+        .mockRejectedValueOnce(make401Error());
+      const logger = vi.fn();
+      const handler = createTelegramSendChatActionHandler({
+        sendChatActionFn: fn,
+        logger,
+        maxConsecutive401: 3,
+      });
+
+      await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("401");
+      await expect(handler.sendChatAction(123, "typing")).resolves.toBeUndefined();
+      now = 10_000;
+      await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("401");
+
+      expect(handler.isSuspended()).toBe(false);
+      expect(logger).toHaveBeenCalledWith(expect.stringContaining("401 error (2/3)"));
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("is shared across multiple chatIds (global handler)", async () => {
