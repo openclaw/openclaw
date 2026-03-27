@@ -168,11 +168,13 @@ import re
 import sys
 
 raw = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore")
-match = re.search(r'(^|[,{\s])bind\s*:\s*"(loopback|lan|auto|custom|tailnet)"', raw)
-if not match:
-    match = re.search(r'"bind"\s*:\s*"(loopback|lan|auto|custom|tailnet)"', raw)
+gateway_match = re.search(r'["\']?gateway["\']?\s*:\s*\{([^}]*)\}', raw, re.DOTALL)
+if not gateway_match:
+    raise SystemExit(0)
+gateway_block = gateway_match.group(1)
+match = re.search(r'["\']?bind["\']?\s*:\s*"(loopback|lan|auto|custom|tailnet)"', gateway_block)
 if match:
-    print(match.group(match.lastindex))
+    print(match.group(1))
 PY
 }
 
