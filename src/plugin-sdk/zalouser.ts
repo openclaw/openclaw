@@ -47,7 +47,11 @@ export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
 export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
-export type { AnyAgentTool, OpenClawPluginApi } from "../plugins/types.js";
+export type {
+  AnyAgentTool,
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "../plugins/types.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export type { RuntimeEnv } from "../runtime.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
