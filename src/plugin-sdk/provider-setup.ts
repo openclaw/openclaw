@@ -17,13 +17,13 @@ export {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../plugins/provider-self-hosted-setup.js";
-export { OLLAMA_DEFAULT_BASE_URL, OLLAMA_DEFAULT_MODEL } from "../../extensions/ollama/api.js";
+export { OLLAMA_DEFAULT_BASE_URL, OLLAMA_DEFAULT_MODEL } from "./ollama-surface.js";
 export {
   buildOllamaProvider,
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
-} from "../../extensions/ollama/api.js";
+} from "./ollama-surface.js";
 export {
   VLLM_DEFAULT_BASE_URL,
   VLLM_DEFAULT_CONTEXT_WINDOW,
