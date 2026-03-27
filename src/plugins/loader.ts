@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createJiti } from "jiti";
+import { unregisterPluginStreamProviders } from "../agents/stream-provider-registry.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -1231,6 +1232,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           pluginConfig: {},
           hookPolicy: entry?.hooks,
           registrationMode,
+          shouldActivate,
         });
         api.registerChannel(setupRegistration.plugin);
         registry.plugins.push(record);
@@ -1320,6 +1322,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       pluginConfig: validatedConfig.value,
       hookPolicy: entry?.hooks,
       registrationMode,
+      shouldActivate,
     });
     const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
     const previousMemoryFlushPlanResolver = getMemoryFlushPlanResolver();
@@ -1354,6 +1357,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         flushPlanResolver: previousMemoryFlushPlanResolver,
         runtime: previousMemoryRuntime,
       });
+      // Roll back any stream provider registrations made during the failed register call.
+      unregisterPluginStreamProviders(record.id);
       recordPluginError({
         logger,
         registry,

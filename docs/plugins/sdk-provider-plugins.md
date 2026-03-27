@@ -349,6 +349,135 @@ API key auth, and dynamic model resolution.
 
   </Step>
 
+  <Step title="Register a custom stream provider">
+    If your provider uses an API that pi-ai does not natively support — such as
+    a proprietary protocol, a custom WebSocket API, a browser-session endpoint,
+    or any other transport that cannot be expressed through `wrapStreamFn` alone
+    — register a custom `StreamFn`
+    factory with `api.registerStreamProvider()`.
+
+    The factory is called once per agent run attempt, after credentials are
+    resolved and before the session starts. Return a `StreamFn` if credentials
+    are available, or `null` to fall back to `streamSimple`.
+
+    <Info>
+      Most providers do **not** need this. Use `wrapStreamFn` for header/body
+      customisation and `prepareRuntimeAuth` for token exchange. Only reach for
+      `registerStreamProvider` when the underlying transport itself cannot be
+      expressed through the standard hooks — for example a completely different
+      wire protocol or a custom streaming format.
+    </Info>
+
+    ```typescript index.ts
+    import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+    import type { StreamFn, StreamFnFactory } from "openclaw/plugin-sdk/core";
+    import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/core";
+
+    const PROVIDER_ID = "my-web-provider";
+
+    // Your custom StreamFn implementation
+    function createMyStreamFn(credential: string): StreamFn {
+      return (model, context, options) => {
+        const stream = createAssistantMessageEventStream();
+
+        const run = async () => {
+          try {
+            // Call your custom API here using `credential`
+            // Push events into the stream as they arrive:
+            //   stream.push({ type: "text_start", ... })
+            //   stream.push({ type: "text_delta", ... })
+            //   stream.push({ type: "done", ... })
+          } catch (err) {
+            stream.push({ type: "error", ... });
+          } finally {
+            stream.end();
+          }
+        };
+
+        queueMicrotask(() => void run());
+        return stream;
+      };
+    }
+
+    export default definePluginEntry({
+      id: PROVIDER_ID,
+      name: "My Web Provider",
+      register(api) {
+        // Step 1: register the provider so models appear in the model list.
+        // Set api: PROVIDER_ID in the discovery result to match the factory below.
+        api.registerProvider({
+          id: PROVIDER_ID,
+          label: "My Web Provider",
+          auth: [ /* your auth methods */ ],
+          discovery: {
+            order: "late",
+            run: async (ctx) => {
+              const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+              return {
+                provider: {
+                  baseUrl: "https://example.com",
+                  api: PROVIDER_ID,   // must match the apiId passed to registerStreamProvider
+                  ...(apiKey ? { apiKey } : {}),
+                  models: [
+                    {
+                      id: "my-model",
+                      name: "My Model",
+                      reasoning: false,
+                      input: ["text"],
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      contextWindow: 64000,
+                      maxTokens: 8192,
+                    },
+                  ],
+                },
+              };
+            },
+          },
+        });
+
+        // Step 2: register the StreamFn factory keyed by the same api id.
+        // The runtime calls this factory instead of streamSimple when
+        // model.api === PROVIDER_ID.
+        api.registerStreamProvider(PROVIDER_ID, async (ctx) => {
+          const credential = await ctx.authStorage.getApiKey(PROVIDER_ID);
+          if (!credential) {
+            // Returning null falls back to streamSimple (will likely error,
+            // but avoids a hard crash before the user has authenticated).
+            return null;
+          }
+          return createMyStreamFn(credential);
+        });
+      },
+    });
+    ```
+
+    ### StreamProviderResolveContext fields
+
+    | Field | Type | Description |
+    | --- | --- | --- |
+    | `api` | `string` | The `model.api` value from the resolved model |
+    | `provider` | `string` | The active provider id |
+    | `modelId` | `string` | The active model id |
+    | `authStorage` | `AuthStorage` | Use `getApiKey(providerId)` to retrieve stored credentials |
+    | `sessionId` | `string` | The current session id |
+    | `signal` | `AbortSignal | undefined` | Abort signal for the run. Always set by the runtime; may be omitted in unit tests. |
+
+    ### Rules
+
+    - **`api` field must match**: the `api` value returned from `discovery.run`
+      must equal the `apiId` you pass to `registerStreamProvider`. This is
+      how the runtime routes the model to your factory.
+    - **First-writer wins**: if two plugins register the same `apiId`, the
+      first one wins and a warning is emitted. Use a unique, namespaced id
+      (e.g. `"myorg-myprovider"`) to avoid conflicts.
+    - **Pair with `registerProvider`**: the provider must appear in the model
+      catalog for the user to be able to select it. `registerStreamProvider`
+      alone has no effect without a matching registered provider.
+    - **Null is safe**: returning `null` from the factory gracefully falls back
+      to `streamSimple`. Use this when credentials are missing.
+
+  </Step>
+
   <Step title="Test">
     ```typescript src/provider.test.ts
     import { describe, it, expect } from "vitest";

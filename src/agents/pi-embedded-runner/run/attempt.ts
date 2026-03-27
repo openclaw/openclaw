@@ -49,6 +49,7 @@ import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
+import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
@@ -91,6 +92,7 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
+import { findPluginStreamProvider, resolvePluginStreamFn } from "../../stream-provider-registry.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
@@ -871,6 +873,25 @@ export async function runEmbeddedAttempt(
         // Anthropic Vertex AI: inject AnthropicVertex client into pi-ai's
         // streamAnthropic for GCP IAM auth instead of Anthropic API keys.
         activeSession.agent.streamFn = createAnthropicVertexStreamFnForModel(params.model);
+      } else if (params.model.api && findPluginStreamProvider(params.model.api)) {
+        // Plugin-registered stream provider for non-standard API types.
+        // Plugins call api.registerStreamProvider() during load to hook in here.
+        const pluginStreamFn = await resolvePluginStreamFn({
+          api: params.model.api,
+          provider: params.provider,
+          modelId: params.modelId,
+          authStorage: params.authStorage,
+          sessionId: params.sessionId,
+          signal: runAbortController.signal,
+        });
+        // Always register the api id with pi-ai so it is known even when the
+        // factory returns null (e.g. credentials not yet configured). Falling
+        // back to streamSimple ensures the run degrades gracefully rather than
+        // failing with an unregistered-api error.
+        activeSession.agent.streamFn = pluginStreamFn ?? defaultSessionStreamFn;
+        if (pluginStreamFn) {
+          ensureCustomApiRegistered(params.model.api, pluginStreamFn);
+        }
       } else {
         activeSession.agent.streamFn = defaultSessionStreamFn;
       }

@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  registerPluginStreamProvider,
+  unregisterPluginStreamProviders,
+} from "../agents/stream-provider-registry.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { registerContextEngineForOwner } from "../context-engine/registry.js";
@@ -956,9 +960,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginConfig?: Record<string, unknown>;
       hookPolicy?: PluginTypedHookPolicy;
       registrationMode?: PluginRegistrationMode;
+      shouldActivate?: boolean;
     },
   ): OpenClawPluginApi => {
     const registrationMode = params.registrationMode ?? "full";
+    // Only clear stale stream providers on activating loads (not snapshot/discovery loads).
+    // snapshot loads (activate:false) must not mutate the process-global stream-provider
+    // registry, to avoid disrupting routing in concurrent live runs.
+    if (registrationMode === "full" && params.shouldActivate !== false) {
+      unregisterPluginStreamProviders(record.id);
+    }
     return buildPluginApi({
       id: record.id,
       name: record.name,
@@ -1095,6 +1106,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               on: (hookName, handler, opts) =>
                 registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
+              registerStreamProvider: (apiId, factory) => {
+                const ok = registerPluginStreamProvider(record.id, apiId, factory);
+                if (!ok) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `stream provider already registered for api: ${apiId}`,
+                  });
+                }
+              },
             }
           : {}),
         registerChannel: (registration) => registerChannel(record, registration, registrationMode),

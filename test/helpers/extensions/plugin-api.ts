@@ -19,6 +19,7 @@ export function createTestPluginApi(api: TestPluginApiInput): OpenClawPluginApi 
     registerSpeechProvider() {},
     registerMediaUnderstandingProvider() {},
     registerImageGenerationProvider() {},
+    registerStreamProvider() {},
     registerWebSearchProvider() {},
     registerInteractiveHandler() {},
     onConversationBindingResolved() {},

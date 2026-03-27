@@ -553,3 +553,19 @@ export function createChannelPluginBase<TResolvedAccount>(
     setup: params.setup,
   } as CreatedChannelPluginBase<TResolvedAccount>;
 }
+
+// Stream provider support — re-exported for use in web provider plugins
+export {
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type AssistantMessageEvent,
+  type TextContent,
+  type ThinkingContent,
+  type ToolCall,
+  type ToolResultMessage,
+} from "@mariozechner/pi-ai";
+export type { StreamFn } from "@mariozechner/pi-agent-core";
+export type {
+  StreamFnFactory,
+  StreamProviderResolveContext,
+} from "../agents/stream-provider-registry.js";

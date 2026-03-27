@@ -39,10 +39,10 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
 
 ### Plugin entry
 
-| Subpath                   | Key exports                                                                                                                            |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `plugin-sdk/plugin-entry` | `definePluginEntry`                                                                                                                    |
-| `plugin-sdk/core`         | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema` |
+| Subpath                   | Key exports                                                                                                                                                                                                                                |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `plugin-sdk/plugin-entry` | `definePluginEntry`                                                                                                                                                                                                                        |
+| `plugin-sdk/core`         | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema`, `createAssistantMessageEventStream`, `StreamFn`, `StreamFnFactory`, `StreamProviderResolveContext` |
 
 <AccordionGroup>
   <Accordion title="Channel subpaths">

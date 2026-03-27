@@ -1695,6 +1695,34 @@ export type OpenClawPluginApi = {
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
   ) => void;
+  /**
+   * Register a custom StreamFn factory for a non-standard API type.
+   *
+   * Use this when the built-in stream transports (OpenAI-compatible, Anthropic,
+   * Ollama, etc.) do not fit your provider — for example a proprietary protocol,
+   * a custom WebSocket API, or any other transport that `wrapStreamFn` alone
+   * cannot express.  When the agent runtime selects a model whose `api` field
+   * matches `apiId`, it calls your `factory` instead of the built-in `streamSimple`.
+   *
+   * The `factory` receives a {@link StreamProviderResolveContext} (containing
+   * `authStorage`, `provider`, `modelId`, `sessionId`, etc.) and must return a
+   * `StreamFn` compatible with `@mariozechner/pi-agent-core`.
+   *
+   * Pair this with `registerProvider()` so the model appears in the model list
+   * and its `api` field matches the `apiId` you register here.
+   *
+   * Example:
+   * ```ts
+   * api.registerStreamProvider("my-web-provider", async (ctx) => {
+   *   const credential = await ctx.authStorage.getApiKey("my-web-provider");
+   *   return createMyWebProviderStreamFn(credential ?? "");
+   * });
+   * ```
+   */
+  registerStreamProvider: (
+    apiId: string,
+    factory: import("../agents/stream-provider-registry.js").StreamFnFactory,
+  ) => void;
   /** Register the system prompt section builder for this memory plugin (exclusive slot). */
   registerMemoryPromptSection: (
     builder: import("./memory-state.js").MemoryPromptSectionBuilder,
