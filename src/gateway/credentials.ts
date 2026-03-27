@@ -330,10 +330,11 @@ export function resolveGatewayProbeCredentialsFromConfig(params: {
 
 export function resolveGatewayDriftCheckCredentialsFromConfig(params: {
   cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
 }): ResolvedGatewayCredentials {
   return resolveGatewayCredentialsFromConfig({
     cfg: params.cfg,
-    env: {} as NodeJS.ProcessEnv,
+    env: params.env,
     modeOverride: "local",
     localTokenPrecedence: "config-first",
   });
