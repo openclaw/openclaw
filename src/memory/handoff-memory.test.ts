@@ -66,6 +66,7 @@ describe("handoff memory", () => {
     await cleanupTempPaths(tempPaths);
   });
 
+  // Keep one direct lifecycle seam test here so the CI guardrail always has a stable trigger file.
   it("writes handoff-latest and an immutable handoff snapshot from the agent_end lifecycle seam", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-workspace-"));
     tempPaths.push(workspaceDir);
