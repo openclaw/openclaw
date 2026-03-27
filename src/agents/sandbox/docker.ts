@@ -462,6 +462,7 @@ async function createSandboxContainer(params: {
     agentWorkspaceDir: params.agentWorkspaceDir,
     workdir: cfg.workdir,
     workspaceAccess: params.workspaceAccess,
+    workspaceMountPropagation: cfg.workspaceMountPropagation,
   });
   appendCustomBinds(args, cfg);
   args.push(cfg.image, "sleep", "infinity");

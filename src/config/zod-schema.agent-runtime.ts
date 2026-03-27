@@ -135,6 +135,7 @@ export const SandboxDockerSchema = z
     dangerouslyAllowReservedContainerTargets: z.boolean().optional(),
     dangerouslyAllowExternalBindSources: z.boolean().optional(),
     dangerouslyAllowContainerNamespaceJoin: z.boolean().optional(),
+    workspaceMountPropagation: z.enum(["private", "rslave", "rshared"]).optional(),
   })
   .strict()
   .superRefine((data, ctx) => {
