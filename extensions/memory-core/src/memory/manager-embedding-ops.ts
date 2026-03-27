@@ -1,21 +1,23 @@
 import fs from "node:fs/promises";
 import {
-  buildMultimodalChunkForIndexing,
-  chunkMarkdown,
-  createSubsystemLogger,
   enforceEmbeddingMaxInputTokens,
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
   hasNonTextEmbeddingParts,
+  type EmbeddingInput,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { type SessionFileEntry } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import {
+  buildMultimodalChunkForIndexing,
+  chunkMarkdown,
   hashText,
   parseEmbedding,
   remapChunkLines,
-  type EmbeddingInput,
   type MemoryChunk,
   type MemoryFileEntry,
   type MemorySource,
-  type SessionFileEntry,
-} from "../engine-host-api.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 const VECTOR_TABLE = "chunks_vec";

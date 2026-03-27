@@ -7,29 +7,35 @@ import chokidar, { FSWatcher } from "chokidar";
 import {
   buildCaseInsensitiveExtensionGlob,
   classifyMemoryMultimodalPath,
-  createSubsystemLogger,
-  ensureDir,
-  ensureMemoryIndexSchema,
   getMemoryMultimodalExtensions,
-  hashText,
-  isFileMissingError,
-  listMemoryFiles,
-  listSessionFilesForAgent,
-  normalizeExtraMemoryPaths,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
+  createSubsystemLogger,
   onSessionTranscriptUpdate,
   resolveAgentDir,
   resolveSessionTranscriptsDirForAgent,
   resolveUserPath,
-  runWithConcurrency,
+  type OpenClawConfig,
+  type ResolvedMemorySearchConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import {
+  buildSessionEntry,
+  listSessionFilesForAgent,
   sessionPathForFile,
+  type SessionFileEntry,
+} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import {
+  ensureDir,
+  ensureMemoryIndexSchema,
+  hashText,
+  isFileMissingError,
+  listMemoryFiles,
+  normalizeExtraMemoryPaths,
+  runWithConcurrency,
   type MemoryFileEntry,
   type MemorySource,
   type MemorySyncProgressUpdate,
-  type OpenClawConfig,
-  type ResolvedMemorySearchConfig,
-  type SessionFileEntry,
-  buildSessionEntry,
-} from "../engine-host-api.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,

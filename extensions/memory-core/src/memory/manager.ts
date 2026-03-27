@@ -1,22 +1,24 @@
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
 import {
-  extractKeywords,
-  readMemoryFile,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
   resolveMemorySearchConfig,
+  createSubsystemLogger,
+  type OpenClawConfig,
+  type ResolvedMemorySearchConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import {
+  readMemoryFile,
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
   type MemorySearchManager,
   type MemorySearchResult,
   type MemorySource,
   type MemorySyncProgressUpdate,
-  type OpenClawConfig,
-  type ResolvedMemorySearchConfig,
-  createSubsystemLogger,
-} from "../engine-host-api.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
