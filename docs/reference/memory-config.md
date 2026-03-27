@@ -20,7 +20,12 @@ automatic flush), see [Memory](/concepts/memory).
 - Watches memory files for changes (debounced).
 - Configure memory search under `agents.defaults.memorySearch` (not top-level
   `memorySearch`).
-- Uses remote embeddings by default. If `memorySearch.provider` is not set, OpenClaw auto-selects:
+- `memorySearch.provider` and `memorySearch.fallback` accept **adapter ids**
+  registered by the active memory plugin.
+- The default `memory-core` plugin registers these built-in adapter ids:
+  `local`, `openai`, `gemini`, `voyage`, `mistral`, and `ollama`.
+- With the default `memory-core` plugin, if `memorySearch.provider` is not set,
+  OpenClaw auto-selects:
   1. `local` if a `memorySearch.local.modelPath` is configured and the file exists.
   2. `openai` if an OpenAI key can be resolved.
   3. `gemini` if a Gemini key can be resolved.
@@ -29,8 +34,9 @@ automatic flush), see [Memory](/concepts/memory).
   6. Otherwise memory search stays disabled until configured.
 - Local mode uses node-llama-cpp and may require `pnpm approve-builds`.
 - Uses sqlite-vec (when available) to accelerate vector search inside SQLite.
-- `memorySearch.provider = "ollama"` is also supported for local/self-hosted
-  Ollama embeddings (`/api/embeddings`), but it is not auto-selected.
+- With the default `memory-core` plugin, `memorySearch.provider = "ollama"` is
+  also supported for local/self-hosted Ollama embeddings (`/api/embeddings`),
+  but it is not auto-selected.
 
 Remote embeddings **require** an API key for the embedding provider. OpenClaw
 resolves keys from auth profiles, `models.providers.*.apiKey`, or environment
@@ -317,15 +323,16 @@ If you don't want to set an API key, use `memorySearch.provider = "local"` or se
 
 ### Fallbacks
 
-- `memorySearch.fallback` can be `openai`, `gemini`, `voyage`, `mistral`, `ollama`, `local`, or `none`.
+- `memorySearch.fallback` can be any registered memory embedding adapter id, or `none`.
+- With the default `memory-core` plugin, valid built-in fallback ids are `openai`, `gemini`, `voyage`, `mistral`, `ollama`, and `local`.
 - The fallback provider is only used when the primary embedding provider fails.
 
-### Batch indexing (OpenAI + Gemini + Voyage)
+### Batch indexing
 
-- Disabled by default. Set `agents.defaults.memorySearch.remote.batch.enabled = true` to enable for large-corpus indexing (OpenAI, Gemini, and Voyage).
+- Disabled by default. Set `agents.defaults.memorySearch.remote.batch.enabled = true` to enable batch indexing for providers whose adapter exposes batch support.
 - Default behavior waits for batch completion; tune `remote.batch.wait`, `remote.batch.pollIntervalMs`, and `remote.batch.timeoutMinutes` if needed.
 - Set `remote.batch.concurrency` to control how many batch jobs we submit in parallel (default: 2).
-- Batch mode applies when `memorySearch.provider = "openai"` or `"gemini"` and uses the corresponding API key.
+- With the default `memory-core` plugin, batch indexing is available for `openai`, `gemini`, and `voyage`.
 - Gemini batch jobs use the async embeddings batch endpoint and require Gemini Batch API availability.
 
 Why OpenAI batch is fast and cheap:
