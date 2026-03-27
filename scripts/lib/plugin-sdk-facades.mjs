@@ -83,7 +83,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "discord-session-key",
-    source: "../../extensions/discord/session-key-api.js",
+    source: "../../extensions/discord/api.js",
     exports: ["normalizeExplicitDiscordSessionKey"],
   },
   {
@@ -147,12 +147,12 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "discord-timeouts",
-    source: "../../extensions/discord/timeouts.js",
+    source: "../../extensions/discord/api.js",
     exports: ["DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS", "DISCORD_DEFAULT_LISTENER_TIMEOUT_MS"],
   },
   {
     subpath: "anthropic-cli",
-    source: "../../extensions/anthropic/cli-shared.js",
+    source: "../../extensions/anthropic/api.js",
     exports: ["CLAUDE_CLI_BACKEND_ID", "isClaudeCliProvider"],
   },
   {
@@ -177,7 +177,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "browser-runtime",
-    source: "../../extensions/browser/browser-runtime-api.js",
+    source: "../../extensions/browser/runtime-api.js",
     exportAll: true,
   },
   {
@@ -260,12 +260,12 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "feishu-setup",
-    source: "../../extensions/feishu/setup-api.js",
+    source: "../../extensions/feishu/api.js",
     exports: ["feishuSetupAdapter", "feishuSetupWizard"],
   },
   {
     subpath: "github-copilot-login",
-    source: "../../extensions/github-copilot/login.js",
+    source: "../../extensions/github-copilot/api.js",
     exports: ["githubCopilotLoginCommand"],
   },
   {
@@ -443,7 +443,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "matrix-helper",
-    source: "../../extensions/matrix/helper-api.js",
+    source: "../../extensions/matrix/api.js",
     exports: [
       "findMatrixAccountEntry",
       "getMatrixScopedEnvVarNames",
@@ -469,7 +469,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "matrix-thread-bindings",
-    source: "../../extensions/matrix/thread-bindings-runtime.js",
+    source: "../../extensions/matrix/api.js",
     exports: [
       "setMatrixThreadBindingIdleTimeoutBySessionKey",
       "setMatrixThreadBindingMaxAgeBySessionKey",
@@ -497,11 +497,21 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "modelstudio",
     source: "../../extensions/modelstudio/api.js",
-    exports: ["MODELSTUDIO_BASE_URL", "MODELSTUDIO_DEFAULT_MODEL_ID", "buildModelStudioProvider"],
+    exports: [
+      "buildModelStudioDefaultModelDefinition",
+      "buildModelStudioModelDefinition",
+      "MODELSTUDIO_BASE_URL",
+      "MODELSTUDIO_CN_BASE_URL",
+      "MODELSTUDIO_DEFAULT_COST",
+      "MODELSTUDIO_DEFAULT_MODEL_ID",
+      "MODELSTUDIO_DEFAULT_MODEL_REF",
+      "MODELSTUDIO_GLOBAL_BASE_URL",
+      "buildModelStudioProvider",
+    ],
   },
   {
     subpath: "modelstudio-definitions",
-    source: "../../extensions/modelstudio/model-definitions.js",
+    source: "../../extensions/modelstudio/api.js",
     exports: [
       "buildModelStudioDefaultModelDefinition",
       "buildModelStudioModelDefinition",
@@ -752,7 +762,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "telegram-allow-from",
-    source: "../../extensions/telegram/allow-from.js",
+    source: "../../extensions/telegram/api.js",
     exports: ["isNumericTelegramUserId", "normalizeTelegramAllowFromEntry"],
   },
   {
@@ -846,7 +856,12 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "discoverVercelAiGatewayModels",
       "getStaticVercelAiGatewayModelCatalog",
       "VERCEL_AI_GATEWAY_BASE_URL",
+      "VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW",
+      "VERCEL_AI_GATEWAY_DEFAULT_COST",
+      "VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS",
+      "VERCEL_AI_GATEWAY_DEFAULT_MODEL_ID",
       "VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF",
+      "VERCEL_AI_GATEWAY_PROVIDER_ID",
     ],
   },
   {

@@ -10,4 +10,4 @@ export {
   resolveMatrixCredentialsPath,
   resolveMatrixDefaultOrOnlyAccountId,
   resolveMatrixLegacyFlatStoragePaths,
-} from "../../extensions/matrix/helper-api.js";
+} from "../../extensions/matrix/api.js";

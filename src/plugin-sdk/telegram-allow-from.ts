@@ -2,4 +2,4 @@
 export {
   isNumericTelegramUserId,
   normalizeTelegramAllowFromEntry,
-} from "../../extensions/telegram/allow-from.js";
+} from "../../extensions/telegram/api.js";
