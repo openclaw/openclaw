@@ -106,16 +106,6 @@ vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal
   return patched;
 });
 
-// Prevent transitive import chain from reaching discord/monitor which needs https-proxy-agent.
-vi.mock("../../../extensions/discord/runtime-api.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../extensions/discord/runtime-api.js")>();
-  return {
-    ...actual,
-    createDiscordGatewayPlugin: () => ({}),
-  };
-});
-
 const { handleAcpCommand } = await import("./commands-acp.js");
 const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
 const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
