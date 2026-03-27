@@ -15,29 +15,29 @@ function cfgWithChannel(channelKey: string, accounts?: Record<string, unknown>):
 }
 
 describe("buildAccountScopedDmSecurityPolicy", () => {
-  it("builds top-level dm policy paths when no account config exists", () => {
-    expect(
-      buildAccountScopedDmSecurityPolicy({
+  it.each([
+    {
+      name: "builds top-level dm policy paths when no account config exists",
+      input: {
         cfg: cfgWithChannel("demo-root"),
         channelKey: "demo-root",
         fallbackAccountId: "default",
         policy: "pairing",
         allowFrom: ["123"],
         policyPathSuffix: "dmPolicy",
-      }),
-    ).toEqual({
-      policy: "pairing",
-      allowFrom: ["123"],
-      policyPath: "channels.demo-root.dmPolicy",
-      allowFromPath: "channels.demo-root.",
-      approveHint: formatPairingApproveHint("demo-root"),
-      normalizeEntry: undefined,
-    });
-  });
-
-  it("uses account-scoped paths when account config exists", () => {
-    expect(
-      buildAccountScopedDmSecurityPolicy({
+      },
+      expected: {
+        policy: "pairing",
+        allowFrom: ["123"],
+        policyPath: "channels.demo-root.dmPolicy",
+        allowFromPath: "channels.demo-root.",
+        approveHint: formatPairingApproveHint("demo-root"),
+        normalizeEntry: undefined,
+      },
+    },
+    {
+      name: "uses account-scoped paths when account config exists",
+      input: {
         cfg: cfgWithChannel("demo-account", { work: {} }),
         channelKey: "demo-account",
         accountId: "work",
@@ -45,40 +45,38 @@ describe("buildAccountScopedDmSecurityPolicy", () => {
         policy: "allowlist",
         allowFrom: ["+12125551212"],
         policyPathSuffix: "dmPolicy",
-      }),
-    ).toEqual({
-      policy: "allowlist",
-      allowFrom: ["+12125551212"],
-      policyPath: "channels.demo-account.accounts.work.dmPolicy",
-      allowFromPath: "channels.demo-account.accounts.work.",
-      approveHint: formatPairingApproveHint("demo-account"),
-      normalizeEntry: undefined,
-    });
-  });
-
-  it("supports nested dm paths without explicit policyPath", () => {
-    expect(
-      buildAccountScopedDmSecurityPolicy({
+      },
+      expected: {
+        policy: "allowlist",
+        allowFrom: ["+12125551212"],
+        policyPath: "channels.demo-account.accounts.work.dmPolicy",
+        allowFromPath: "channels.demo-account.accounts.work.",
+        approveHint: formatPairingApproveHint("demo-account"),
+        normalizeEntry: undefined,
+      },
+    },
+    {
+      name: "supports nested dm paths without explicit policyPath",
+      input: {
         cfg: cfgWithChannel("demo-nested", { work: {} }),
         channelKey: "demo-nested",
         accountId: "work",
         policy: "pairing",
         allowFrom: [],
         allowFromPathSuffix: "dm.",
-      }),
-    ).toEqual({
-      policy: "pairing",
-      allowFrom: [],
-      policyPath: undefined,
-      allowFromPath: "channels.demo-nested.accounts.work.dm.",
-      approveHint: formatPairingApproveHint("demo-nested"),
-      normalizeEntry: undefined,
-    });
-  });
-
-  it("supports custom defaults and approve hints", () => {
-    expect(
-      buildAccountScopedDmSecurityPolicy({
+      },
+      expected: {
+        policy: "pairing",
+        allowFrom: [],
+        policyPath: undefined,
+        allowFromPath: "channels.demo-nested.accounts.work.dm.",
+        approveHint: formatPairingApproveHint("demo-nested"),
+        normalizeEntry: undefined,
+      },
+    },
+    {
+      name: "supports custom defaults and approve hints",
+      input: {
         cfg: cfgWithChannel("demo-default"),
         channelKey: "demo-default",
         fallbackAccountId: "default",
@@ -86,15 +84,18 @@ describe("buildAccountScopedDmSecurityPolicy", () => {
         defaultPolicy: "allowlist",
         policyPathSuffix: "dmPolicy",
         approveHint: "openclaw pairing approve demo-default <code>",
-      }),
-    ).toEqual({
-      policy: "allowlist",
-      allowFrom: ["user-1"],
-      policyPath: "channels.demo-default.dmPolicy",
-      allowFromPath: "channels.demo-default.",
-      approveHint: "openclaw pairing approve demo-default <code>",
-      normalizeEntry: undefined,
-    });
+      },
+      expected: {
+        policy: "allowlist",
+        allowFrom: ["user-1"],
+        policyPath: "channels.demo-default.dmPolicy",
+        allowFromPath: "channels.demo-default.",
+        approveHint: "openclaw pairing approve demo-default <code>",
+        normalizeEntry: undefined,
+      },
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(buildAccountScopedDmSecurityPolicy(input)).toEqual(expected);
   });
 });
 

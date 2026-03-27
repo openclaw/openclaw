@@ -51,6 +51,19 @@ function createPromptAndCredentialSpies(params?: { confirmResult?: boolean; text
   };
 }
 
+function setMinimaxEnv(params: { apiKey?: string; oauthToken?: string } = {}) {
+  if (params.apiKey === undefined) {
+    delete process.env.MINIMAX_API_KEY;
+  } else {
+    process.env.MINIMAX_API_KEY = params.apiKey; // pragma: allowlist secret
+  }
+  if (params.oauthToken === undefined) {
+    delete process.env.MINIMAX_OAUTH_TOKEN;
+  } else {
+    process.env.MINIMAX_OAUTH_TOKEN = params.oauthToken; // pragma: allowlist secret
+  }
+}
+
 async function ensureMinimaxApiKey(params: {
   config?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["config"];
   env?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["env"];
@@ -114,8 +127,7 @@ async function ensureMinimaxApiKeyWithEnvRefPrompter(params: {
 }
 
 async function runEnsureMinimaxApiKeyFlow(params: { confirmResult: boolean; textResult: string }) {
-  process.env.MINIMAX_API_KEY = "env-key"; // pragma: allowlist secret
-  delete process.env.MINIMAX_OAUTH_TOKEN;
+  setMinimaxEnv({ apiKey: "env-key" });
 
   const { confirm, text } = createPromptSpies({
     confirmResult: params.confirmResult,
@@ -193,19 +205,15 @@ describe("normalizeTokenProviderInput", () => {
 });
 
 describe("maybeApplyApiKeyFromOption", () => {
-  it("stores normalized token when provider matches", async () => {
-    const { result, setCredential } = await runMaybeApplyDemoToken("demo-provider");
+  it.each(["demo-provider", "  DeMo-PrOvIdEr  "])(
+    "stores normalized token when provider %p matches",
+    async (tokenProvider) => {
+      const { result, setCredential } = await runMaybeApplyDemoToken(tokenProvider);
 
-    expect(result).toBe("opt-key");
-    expect(setCredential).toHaveBeenCalledWith("opt-key", undefined);
-  });
-
-  it("matches provider with whitespace/case normalization", async () => {
-    const { result, setCredential } = await runMaybeApplyDemoToken("  DeMo-PrOvIdEr  ");
-
-    expect(result).toBe("opt-key");
-    expect(setCredential).toHaveBeenCalledWith("opt-key", undefined);
-  });
+      expect(result).toBe("opt-key");
+      expect(setCredential).toHaveBeenCalledWith("opt-key", undefined);
+    },
+  );
 
   it("skips when provider does not match", async () => {
     const setCredential = vi.fn(async () => undefined);
@@ -251,8 +259,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
   });
 
   it("uses explicit inline env ref when secret-input-mode=ref selects existing env key", async () => {
-    process.env.MINIMAX_API_KEY = "env-key"; // pragma: allowlist secret
-    delete process.env.MINIMAX_OAUTH_TOKEN;
+    setMinimaxEnv({ apiKey: "env-key" });
 
     const { confirm, text, setCredential } = createPromptAndCredentialSpies({
       confirmResult: true,
@@ -272,8 +279,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
   });
 
   it("fails ref mode without select when fallback env var is missing", async () => {
-    delete process.env.MINIMAX_API_KEY;
-    delete process.env.MINIMAX_OAUTH_TOKEN;
+    setMinimaxEnv();
 
     const { confirm, text, setCredential } = createPromptAndCredentialSpies({
       confirmResult: true,
@@ -294,8 +300,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
   });
 
   it("uses explicit env for ref fallback instead of host process env", async () => {
-    process.env.MINIMAX_API_KEY = "host-key"; // pragma: allowlist secret
-    delete process.env.MINIMAX_OAUTH_TOKEN;
+    setMinimaxEnv({ apiKey: "host-key" });
     const env = { MINIMAX_API_KEY: "explicit-key" } as NodeJS.ProcessEnv;
 
     const { confirm, text, setCredential } = createPromptAndCredentialSpies({
@@ -316,8 +321,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
   });
 
   it("re-prompts after provider ref validation failure and succeeds with env ref", async () => {
-    process.env.MINIMAX_API_KEY = "env-key"; // pragma: allowlist secret
-    delete process.env.MINIMAX_OAUTH_TOKEN;
+    setMinimaxEnv({ apiKey: "env-key" });
 
     const selectValues: Array<"provider" | "env" | "filemain"> = ["provider", "filemain", "env"];
     const select = vi.fn(async () => selectValues.shift() ?? "env") as WizardPrompter["select"];
@@ -355,8 +359,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
   });
 
   it("never includes resolved env secret values in reference validation notes", async () => {
-    process.env.MINIMAX_API_KEY = "sk-minimax-redacted-value"; // pragma: allowlist secret
-    delete process.env.MINIMAX_OAUTH_TOKEN;
+    setMinimaxEnv({ apiKey: "sk-minimax-redacted-value" });
 
     const select = vi.fn(async () => "env") as WizardPrompter["select"];
     const text = vi.fn<WizardPrompter["text"]>().mockResolvedValue("MINIMAX_API_KEY");
@@ -407,8 +410,7 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
   });
 
   it("falls back to env flow and shows note when opts provider does not match", async () => {
-    delete process.env.MINIMAX_OAUTH_TOKEN;
-    process.env.MINIMAX_API_KEY = "env-key"; // pragma: allowlist secret
+    setMinimaxEnv({ apiKey: "env-key" });
 
     const { confirm, note, text, setCredential } = createPromptAndCredentialSpies({
       confirmResult: true,

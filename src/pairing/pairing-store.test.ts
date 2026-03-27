@@ -160,6 +160,14 @@ async function withAllowFromCacheReadSpy(params: {
   readSpy.mockRestore();
 }
 
+async function seedDefaultAccountAllowFromFixture(stateDir: string) {
+  await seedTelegramAllowFromFixtures({
+    stateDir,
+    scopedAccountId: DEFAULT_ACCOUNT_ID,
+    scopedAllowFrom: ["1002"],
+  });
+}
+
 describe("pairing store", () => {
   it("reuses pending code and reports created=false", async () => {
     await withTempStateDir(async () => {
@@ -448,11 +456,7 @@ describe("pairing store", () => {
 
   it("reads legacy channel-scoped allowFrom for default account", async () => {
     await withTempStateDir(async (stateDir) => {
-      await seedTelegramAllowFromFixtures({
-        stateDir,
-        scopedAccountId: "default",
-        scopedAllowFrom: ["1002"],
-      });
+      await seedDefaultAccountAllowFromFixture(stateDir);
 
       const scoped = await readChannelAllowFromStore("telegram", process.env, DEFAULT_ACCOUNT_ID);
       expect(scoped).toEqual(["1002", "1001"]);
@@ -461,11 +465,7 @@ describe("pairing store", () => {
 
   it("uses default-account allowFrom when account id is omitted", async () => {
     await withTempStateDir(async (stateDir) => {
-      await seedTelegramAllowFromFixtures({
-        stateDir,
-        scopedAccountId: DEFAULT_ACCOUNT_ID,
-        scopedAllowFrom: ["1002"],
-      });
+      await seedDefaultAccountAllowFromFixture(stateDir);
 
       const asyncScoped = await readChannelAllowFromStore("telegram", process.env);
       const syncScoped = readChannelAllowFromStoreSync("telegram", process.env);
@@ -474,22 +474,23 @@ describe("pairing store", () => {
     });
   });
 
-  it("reuses cached async allowFrom reads and invalidates on file updates", async () => {
+  it.each([
+    {
+      label: "async",
+      createReadSpy: () => vi.spyOn(fs, "readFile"),
+      readAllowFrom: () => readChannelAllowFromStore("telegram", process.env, "yy"),
+    },
+    {
+      label: "sync",
+      createReadSpy: () => vi.spyOn(fsSync, "readFileSync"),
+      readAllowFrom: async () => readChannelAllowFromStoreSync("telegram", process.env, "yy"),
+    },
+  ])("reuses cached $label allowFrom reads and invalidates on file updates", async (variant) => {
     await withTempStateDir(async (stateDir) => {
       await withAllowFromCacheReadSpy({
         stateDir,
-        createReadSpy: () => vi.spyOn(fs, "readFile"),
-        readAllowFrom: () => readChannelAllowFromStore("telegram", process.env, "yy"),
-      });
-    });
-  });
-
-  it("reuses cached sync allowFrom reads and invalidates on file updates", async () => {
-    await withTempStateDir(async (stateDir) => {
-      await withAllowFromCacheReadSpy({
-        stateDir,
-        createReadSpy: () => vi.spyOn(fsSync, "readFileSync"),
-        readAllowFrom: async () => readChannelAllowFromStoreSync("telegram", process.env, "yy"),
+        createReadSpy: variant.createReadSpy,
+        readAllowFrom: variant.readAllowFrom,
       });
     });
   });
