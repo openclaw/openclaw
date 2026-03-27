@@ -7,6 +7,7 @@ const updateSessionStoreMock = vi.fn();
 const callGatewayMock = vi.fn();
 const loadCombinedSessionStoreForGatewayMock = vi.fn();
 const buildStatusMessageMock = vi.hoisted(() => vi.fn(() => "OpenClaw\n🧠 Model: GPT-5.4"));
+const resolveQueueSettingsMock = vi.hoisted(() => vi.fn(() => ({ mode: "interrupt" })));
 
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
@@ -183,7 +184,7 @@ async function loadFreshOpenClawToolsForSessionStatusTest() {
   }));
   vi.doMock("../auto-reply/reply/queue.js", () => ({
     getFollowupQueueDepth: () => 0,
-    resolveQueueSettings: () => ({ mode: "interrupt" }),
+    resolveQueueSettings: resolveQueueSettingsMock,
   }));
   vi.doMock("../auto-reply/status.js", () => ({
     buildStatusMessage: buildStatusMessageMock,
@@ -193,6 +194,8 @@ async function loadFreshOpenClawToolsForSessionStatusTest() {
 
 function resetSessionStore(store: Record<string, SessionEntry>) {
   buildStatusMessageMock.mockClear();
+  resolveQueueSettingsMock.mockClear();
+  resolveQueueSettingsMock.mockReturnValue({ mode: "interrupt" });
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
@@ -523,6 +526,29 @@ describe("session_status tool", () => {
     } finally {
       mockConfig = savedConfig;
     }
+  });
+
+  it("falls back to origin.provider when resolving queue settings", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "status-origin-provider",
+        updatedAt: 10,
+        origin: { provider: "discord" },
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-origin-provider", {});
+
+    expect(resolveQueueSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        sessionEntry: expect.objectContaining({
+          origin: { provider: "discord" },
+        }),
+      }),
+    );
   });
 
   it("resolves sessionId inputs", async () => {
