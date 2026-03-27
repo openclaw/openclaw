@@ -22,9 +22,9 @@ vi.mock("undici", () => ({
 }));
 
 let fetchRemoteMedia: typeof import("./fetch.js").fetchRemoteMedia;
-let resolveTelegramTransport: typeof import("../../extensions/telegram/src/fetch.js").resolveTelegramTransport;
-let shouldRetryTelegramTransportFallback: typeof import("../../extensions/telegram/src/fetch.js").shouldRetryTelegramTransportFallback;
-let makeProxyFetch: typeof import("../../extensions/telegram/src/proxy.js").makeProxyFetch;
+let resolveTelegramTransport: typeof import("../../extensions/telegram/runtime-api.js").resolveTelegramTransport;
+let shouldRetryTelegramTransportFallback: typeof import("../../extensions/telegram/runtime-api.js").shouldRetryTelegramTransportFallback;
+let makeProxyFetch: typeof import("../../extensions/telegram/runtime-api.js").makeProxyFetch;
 let TEST_UNDICI_RUNTIME_DEPS_KEY: typeof import("../infra/net/undici-runtime.js").TEST_UNDICI_RUNTIME_DEPS_KEY;
 
 describe("fetchRemoteMedia telegram network policy", () => {
@@ -35,8 +35,8 @@ describe("fetchRemoteMedia telegram network policy", () => {
     ({ TEST_UNDICI_RUNTIME_DEPS_KEY } = await import("../infra/net/undici-runtime.js"));
     ({ fetchRemoteMedia } = await import("./fetch.js"));
     ({ resolveTelegramTransport, shouldRetryTelegramTransportFallback } =
-      await import("../../extensions/telegram/src/fetch.js"));
-    ({ makeProxyFetch } = await import("../../extensions/telegram/src/proxy.js"));
+      await import("../../extensions/telegram/runtime-api.js"));
+    ({ makeProxyFetch } = await import("../../extensions/telegram/runtime-api.js"));
   });
 
   beforeEach(() => {

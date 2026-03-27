@@ -25,8 +25,8 @@ const hoisted = vi.hoisted(() => {
 
 vi.mock("../../plugins/runtime/index.js", async () => {
   const discordThreadBindings = await vi.importActual<
-    typeof import("../../../extensions/discord/src/monitor/thread-bindings.js")
-  >("../../../extensions/discord/src/monitor/thread-bindings.js");
+    typeof import("../../../extensions/discord/runtime-api.js")
+  >("../../../extensions/discord/runtime-api.js");
   return {
     createPluginRuntime: () => ({
       channel: {
