@@ -22,19 +22,23 @@ type NumberRetryCase = {
 async function runRetryAfterCase(params: {
   minDelayMs: number;
   maxDelayMs: number;
-  retryAfterMs: number;
+  retryAfterMs?: number;
+  error?: Error;
 }): Promise<number[]> {
   vi.clearAllTimers();
   vi.useFakeTimers();
   try {
-    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(params.error ?? new Error("boom"))
+      .mockResolvedValueOnce("ok");
     const delays: number[] = [];
     const promise = retryAsync(fn, {
       attempts: 2,
       minDelayMs: params.minDelayMs,
       maxDelayMs: params.maxDelayMs,
       jitter: 0,
-      retryAfterMs: () => params.retryAfterMs,
+      ...(params.retryAfterMs === undefined ? {} : { retryAfterMs: () => params.retryAfterMs }),
       onRetry: (info) => delays.push(info.delayMs),
     });
     await vi.runAllTimersAsync();
@@ -213,6 +217,24 @@ describe("retryAsync", () => {
       vi.clearAllTimers();
       vi.useRealTimers();
     }
+  });
+
+  it("honors retry-after from 429 errors even without retryAfterMs option", async () => {
+    const err = Object.assign(new Error("429 Too Many Requests"), {
+      status: 429,
+      headers: { "retry-after": "2" },
+    });
+    const delays = await runRetryAfterCase({ minDelayMs: 0, maxDelayMs: 5000, error: err });
+    expect(delays[0]).toBe(2000);
+  });
+
+  it("honors retry after hints in rate-limit style messages", async () => {
+    const delays = await runRetryAfterCase({
+      minDelayMs: 0,
+      maxDelayMs: 5000,
+      error: new Error("rate limited, retry after 3 seconds"),
+    });
+    expect(delays[0]).toBe(3000);
   });
 });
 

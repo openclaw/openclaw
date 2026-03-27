@@ -30,6 +30,10 @@ const DEFAULT_RETRY_CONFIG = {
   jitter: 0,
 };
 
+const RATE_LIMIT_RETRY_AFTER_RE = /retry[- ]after[^\d]*(\d+)/i;
+const RATE_LIMIT_MESSAGE_RE =
+  /\b(?:429|too many requests|rate[_ -]?limit(?:ed)?|throttl(?:ed|ing)|resource exhausted)\b/i;
+
 const asFiniteNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
 
@@ -67,6 +71,83 @@ function applyJitter(delayMs: number, jitter: number): number {
   const offset = (generateSecureFraction() * 2 - 1) * jitter;
   return Math.max(0, Math.round(delayMs * (1 + offset)));
 }
+
+const parseRetryAfterHeaderValue = (value: string): number | undefined => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds)) {
+    return Math.max(0, Math.round(seconds * 1000));
+  }
+  const atMs = Date.parse(trimmed);
+  if (Number.isNaN(atMs)) {
+    return undefined;
+  }
+  return Math.max(0, atMs - Date.now());
+};
+
+const extractRetryAfterMsFromError = (err: unknown): number | undefined => {
+  const candidates = [
+    (err as { retryAfterMs?: unknown } | null | undefined)?.retryAfterMs,
+    (err as { retryAfter?: unknown } | null | undefined)?.retryAfter,
+    (err as { response?: { headers?: Headers | Record<string, unknown> } } | null | undefined)
+      ?.response?.headers,
+    (err as { headers?: Headers | Record<string, unknown> } | null | undefined)?.headers,
+  ];
+
+  for (const candidate of candidates) {
+    const direct = asFiniteNumber(candidate);
+    if (direct !== undefined) {
+      return Math.max(0, Math.round(direct));
+    }
+    if (typeof candidate === "string") {
+      const parsed = parseRetryAfterHeaderValue(candidate);
+      if (parsed !== undefined) {
+        return parsed;
+      }
+      continue;
+    }
+    if (candidate instanceof Headers) {
+      const parsed = parseRetryAfterHeaderValue(candidate.get("retry-after") ?? "");
+      if (parsed !== undefined) {
+        return parsed;
+      }
+      continue;
+    }
+    const headerValue =
+      typeof candidate === "object" && candidate !== null
+        ? ((candidate as Record<string, unknown>)["retry-after"] ??
+          (candidate as Record<string, unknown>)["Retry-After"])
+        : undefined;
+    if (typeof headerValue === "string") {
+      const parsed = parseRetryAfterHeaderValue(headerValue);
+      if (parsed !== undefined) {
+        return parsed;
+      }
+    }
+  }
+
+  const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  const retryAfterMatch = RATE_LIMIT_RETRY_AFTER_RE.exec(message);
+  if (retryAfterMatch) {
+    return Math.max(0, Number(retryAfterMatch[1]) * 1000);
+  }
+  return undefined;
+};
+
+const isRateLimitLikeError = (err: unknown): boolean => {
+  const status =
+    asFiniteNumber((err as { status?: unknown } | null | undefined)?.status) ??
+    asFiniteNumber((err as { statusCode?: unknown } | null | undefined)?.statusCode) ??
+    asFiniteNumber((err as { code?: unknown } | null | undefined)?.code);
+  if (status === 429) {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  return RATE_LIMIT_MESSAGE_RE.test(message);
+};
 
 export async function retryAsync<T>(
   fn: () => Promise<T>,
@@ -114,9 +195,15 @@ export async function retryAsync<T>(
       }
 
       const retryAfterMs = options.retryAfterMs?.(err);
-      const hasRetryAfter = typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs);
+      const inferredRetryAfterMs =
+        retryAfterMs === undefined && isRateLimitLikeError(err)
+          ? extractRetryAfterMsFromError(err)
+          : undefined;
+      const resolvedRetryAfterMs = retryAfterMs ?? inferredRetryAfterMs;
+      const hasRetryAfter =
+        typeof resolvedRetryAfterMs === "number" && Number.isFinite(resolvedRetryAfterMs);
       const baseDelay = hasRetryAfter
-        ? Math.max(retryAfterMs, minDelayMs)
+        ? Math.max(resolvedRetryAfterMs, minDelayMs)
         : minDelayMs * 2 ** (attempt - 1);
       let delay = Math.min(baseDelay, maxDelayMs);
       delay = applyJitter(delay, jitter);
