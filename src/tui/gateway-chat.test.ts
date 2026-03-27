@@ -8,7 +8,7 @@ import {
 } from "../gateway/gateway-connection.test-mocks.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
-const { resolveGatewayConnection } = await import("./gateway-chat.js");
+const { GatewayChatClient, resolveGatewayConnection } = await import("./gateway-chat.js");
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -131,6 +131,7 @@ describe("resolveGatewayConnection", () => {
     expect(result).toEqual({
       url: "wss://override.example/ws",
       ...expected,
+      allowInsecureLocalOperatorUi: false,
     });
   });
   it("uses config auth token for local mode when both config and env tokens are set", async () => {
@@ -348,5 +349,68 @@ describe("resolveGatewayConnection", () => {
         expect(await fileExists(passwordMarker)).toBe(true);
       },
     );
+  });
+
+  it("marks loopback local connections for insecure operator ui auth when enabled", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        controlUi: {
+          allowInsecureAuth: true,
+        },
+        auth: {
+          mode: "token",
+          token: "config-token",
+        },
+      },
+    });
+
+    const result = await resolveGatewayConnection({});
+    expect(result.allowInsecureLocalOperatorUi).toBe(true);
+  });
+
+  it("preserves insecure local operator ui auth when a loopback url override is provided", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        controlUi: {
+          allowInsecureAuth: true,
+        },
+        auth: {
+          mode: "token",
+          token: "config-token",
+        },
+      },
+    });
+
+    const result = await resolveGatewayConnection({
+      url: "ws://127.0.0.1:18791",
+      token: "override-token",
+    });
+    expect(result.allowInsecureLocalOperatorUi).toBe(true);
+    expect(result.token).toBe("override-token");
+  });
+});
+
+describe("GatewayChatClient", () => {
+  it("identifies the TUI as a tui client and skips device identity on insecure local ui paths", () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+
+    expect(
+      (client as unknown as { client: { opts: { clientName?: string; mode?: string } } }).client
+        .opts.clientName,
+    ).toBe("openclaw-tui");
+    expect(
+      (client as unknown as { client: { opts: { clientName?: string; mode?: string } } }).client
+        .opts.mode,
+    ).toBe("ui");
+    expect(
+      (client as unknown as { client: { opts: { deviceIdentity?: unknown } } }).client.opts
+        .deviceIdentity,
+    ).toBeUndefined();
   });
 });
