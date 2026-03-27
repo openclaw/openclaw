@@ -332,9 +332,25 @@ export const TypingModeSchema = z.union([
 // Used with .default("allowlist").optional() pattern:
 //   - .optional() allows field omission in input config
 //   - .default("allowlist") ensures runtime always resolves to "allowlist" if not provided
-export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
+export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"], {
+  errorMap: (issue, ctx) => {
+    if (issue.code === "invalid_enum_value") {
+      return { message: "Invalid groupPolicy: expected 'open', 'disabled', or 'allowlist'" };
+    }
+    return { message: ctx.defaultError };
+  },
+});
 
-export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
+export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"], {
+  errorMap: (issue, ctx) => {
+    if (issue.code === "invalid_enum_value") {
+      return {
+        message: "Invalid dmPolicy: expected 'pairing', 'allowlist', 'open', or 'disabled'",
+      };
+    }
+    return { message: ctx.defaultError };
+  },
+});
 
 export const BlockStreamingCoalesceSchema = z
   .object({
