@@ -26,7 +26,6 @@ import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
-import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
   scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel,
@@ -75,7 +74,6 @@ export async function startGatewaySidecars(params: {
     error: (msg: string) => void;
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
-  logBrowser: { error: (msg: string) => void };
 }) {
   try {
     const stateDir = resolveStateDir(process.env);
@@ -90,14 +88,6 @@ export async function startGatewaySidecars(params: {
     }
   } catch (err) {
     params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
-  }
-
-  // Start OpenClaw browser control server (unless disabled via config).
-  let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
-  try {
-    browserControl = await startBrowserControlServerIfEnabled();
-  } catch (err) {
-    params.logBrowser.error(`server failed to start: ${String(err)}`);
   }
 
   // Start Gmail watcher if configured (hooks.gmail.account).
@@ -222,7 +212,7 @@ export async function startGatewaySidecars(params: {
     }, 750);
   }
 
-  return { browserControl, pluginServices };
+  return { pluginServices };
 }
 
 export const __testing = {

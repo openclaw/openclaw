@@ -65,6 +65,7 @@ type TelegramSendOpts = {
   verbose?: boolean;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
+  gatewayClientScopes?: readonly string[];
   maxBytes?: number;
   api?: TelegramApiOverride;
   retry?: RetryConfig;
@@ -315,6 +316,7 @@ async function resolveAndPersistChatId(params: {
   lookupTarget: string;
   persistTarget: string;
   verbose?: boolean;
+  gatewayClientScopes?: readonly string[];
 }): Promise<string> {
   const chatId = await resolveChatId(params.lookupTarget, {
     api: params.api,
@@ -325,6 +327,7 @@ async function resolveAndPersistChatId(params: {
     rawTarget: params.persistTarget,
     resolvedChatId: chatId,
     verbose: params.verbose,
+    gatewayClientScopes: params.gatewayClientScopes,
   });
   return chatId;
 }
@@ -632,6 +635,7 @@ export async function sendMessageTelegram(
     lookupTarget: target.chatId,
     persistTarget: to,
     verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
   });
   const mediaUrl = opts.mediaUrl?.trim();
   const mediaMaxBytes =
@@ -1555,6 +1559,7 @@ type TelegramPollOpts = {
   verbose?: boolean;
   api?: TelegramApiOverride;
   retry?: RetryConfig;
+  gatewayClientScopes?: readonly string[];
   /** Message ID to reply to (for threading) */
   replyToMessageId?: number;
   /** Forum topic thread ID (for forum supergroups) */
@@ -1584,6 +1589,7 @@ export async function sendPollTelegram(
     lookupTarget: target.chatId,
     persistTarget: to,
     verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
   });
 
   // Normalize the poll input (validates question, options, maxSelections)

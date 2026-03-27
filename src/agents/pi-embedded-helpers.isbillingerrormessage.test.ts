@@ -104,6 +104,7 @@ describe("isAuthErrorMessage", () => {
     "No API key found for profile openai.",
     "OAuth token refresh failed for anthropic: Failed to refresh OAuth token for anthropic. Please try again or re-authenticate.",
     "Please re-authenticate to continue.",
+    "Failed to extract accountId from token",
   ])("matches auth errors for %j", (sample) => {
     expect(isAuthErrorMessage(sample)).toBe(true);
   });

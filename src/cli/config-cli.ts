@@ -1,12 +1,12 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
-import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-defaults.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
+import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -68,8 +68,6 @@ type ConfigSetOperation = {
   assignedRef?: SecretRef;
 };
 
-const OLLAMA_API_KEY_PATH: PathSegment[] = ["models", "providers", "ollama", "apiKey"];
-const OLLAMA_PROVIDER_PATH: PathSegment[] = ["models", "providers", "ollama"];
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
 const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
 const CONFIG_SET_EXAMPLE_VALUE = formatCliCommand(
@@ -334,24 +332,6 @@ function pathEquals(path: PathSegment[], expected: PathSegment[]): boolean {
   return (
     path.length === expected.length && path.every((segment, index) => segment === expected[index])
   );
-}
-
-function ensureValidOllamaProviderForApiKeySet(
-  root: Record<string, unknown>,
-  path: PathSegment[],
-): void {
-  if (!pathEquals(path, OLLAMA_API_KEY_PATH)) {
-    return;
-  }
-  const existing = getAtPath(root, OLLAMA_PROVIDER_PATH);
-  if (existing.found) {
-    return;
-  }
-  setAtPath(root, OLLAMA_PROVIDER_PATH, {
-    baseUrl: OLLAMA_DEFAULT_BASE_URL,
-    api: "ollama",
-    models: [],
-  });
 }
 
 function pruneInactiveGatewayAuthCredentials(params: {
@@ -1005,7 +985,6 @@ export async function runConfigSet(opts: {
     // This prevents runtime defaults from leaking into the written config file (issue #6070)
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
     for (const operation of operations) {
-      ensureValidOllamaProviderForApiKeySet(next, operation.setPath);
       setAtPath(next, operation.setPath, operation.value);
     }
     const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({
@@ -1195,6 +1174,30 @@ export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   }
 }
 
+async function buildCliConfigSchema(): Promise<Record<string, unknown>> {
+  const schema = structuredClone((await readBestEffortRuntimeConfigSchema()).schema) as {
+    properties?: Record<string, unknown>;
+    required?: string[];
+  };
+
+  schema.properties = {
+    $schema: { type: "string" },
+    ...schema.properties,
+  };
+
+  return schema;
+}
+
+export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  try {
+    writeRuntimeJson(runtime, await buildCliConfigSchema());
+  } catch (err) {
+    runtime.error(danger(`Config schema error: ${String(err)}`));
+    runtime.exit(1);
+  }
+}
+
 export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
@@ -1250,7 +1253,7 @@ export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
     .description(
-      "Non-interactive config helpers (get/set/unset/file/validate). Run without subcommand for guided setup.",
+      "Non-interactive config helpers (get/set/unset/file/schema/validate). Run without subcommand for guided setup.",
     )
     .addHelpText(
       "after",
@@ -1368,6 +1371,13 @@ export function registerConfigCli(program: Command) {
     .description("Print the active config file path")
     .action(async () => {
       await runConfigFile({});
+    });
+
+  cmd
+    .command("schema")
+    .description("Print the JSON schema for openclaw.json")
+    .action(async () => {
+      await runConfigSchema({});
     });
 
   cmd

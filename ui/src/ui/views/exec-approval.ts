@@ -47,13 +47,10 @@ export function renderExecApprovalPrompt(state: AppViewState) {
         </div>
         <div class="exec-approval-command mono">${request.command}</div>
         <div class="exec-approval-meta">
-          ${renderMetaRow("Host", request.host)}
-          ${renderMetaRow("Agent", request.agentId)}
-          ${renderMetaRow("Session", request.sessionKey)}
-          ${renderMetaRow("CWD", request.cwd)}
+          ${renderMetaRow("Host", request.host)} ${renderMetaRow("Agent", request.agentId)}
+          ${renderMetaRow("Session", request.sessionKey)} ${renderMetaRow("CWD", request.cwd)}
           ${renderMetaRow("Resolved", request.resolvedPath)}
-          ${renderMetaRow("Security", request.security)}
-          ${renderMetaRow("Ask", request.ask)}
+          ${renderMetaRow("Security", request.security)} ${renderMetaRow("Ask", request.ask)}
         </div>
         ${
           state.execApprovalError

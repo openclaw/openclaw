@@ -222,8 +222,8 @@ vi.mock("../channels/config-presence.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../memory/index.js", () => ({
-  getMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
+vi.mock("../plugins/memory-runtime.js", () => ({
+  getActiveMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
     manager: {
       probeVectorAvailability: vi.fn(async () => true),
       status: () => ({

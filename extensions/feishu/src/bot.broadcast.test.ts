@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
@@ -60,6 +61,51 @@ describe("broadcast dispatch", () => {
     contentType: "video/mp4",
   });
 
+  function createBroadcastConfig(): ClawdbotConfig {
+    return {
+      broadcast: { "oc-broadcast-group": ["susan", "main"] },
+      agents: { list: [{ id: "main" }, { id: "susan" }] },
+      channels: {
+        feishu: {
+          groups: {
+            "oc-broadcast-group": {
+              requireMention: true,
+            },
+          },
+        },
+      },
+    };
+  }
+
+  function createBroadcastEvent(options: {
+    messageId: string;
+    text: string;
+    botMentioned?: boolean;
+  }): FeishuMessageEvent {
+    return {
+      sender: { sender_id: { open_id: "ou-sender" } },
+      message: {
+        message_id: options.messageId,
+        chat_id: "oc-broadcast-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: options.text }),
+        ...(options.botMentioned
+          ? {
+              mentions: [
+                {
+                  key: "@_user_1",
+                  id: { open_id: "bot-open-id" },
+                  name: "Bot",
+                  tenant_key: "",
+                },
+              ],
+            }
+          : {}),
+      },
+    };
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockResolveAgentRoute.mockReturnValue({
@@ -77,68 +123,49 @@ describe("broadcast dispatch", () => {
         },
       },
     });
-    setFeishuRuntime({
-      system: {
-        enqueueSystemEvent: vi.fn(),
-      },
-      channel: {
-        routing: {
-          resolveAgentRoute: mockResolveAgentRoute,
+    setFeishuRuntime(
+      createPluginRuntimeMock({
+        system: {
+          enqueueSystemEvent: vi.fn(),
         },
-        reply: {
-          resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
-          formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-          finalizeInboundContext: mockFinalizeInboundContext,
-          dispatchReplyFromConfig: mockDispatchReplyFromConfig,
-          withReplyDispatcher: mockWithReplyDispatcher,
-        },
-        commands: {
-          shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
-          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+        channel: {
+          routing: {
+            resolveAgentRoute: (params) => mockResolveAgentRoute(params),
+          },
+          reply: {
+            resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
+            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+            finalizeInboundContext: mockFinalizeInboundContext,
+            dispatchReplyFromConfig: mockDispatchReplyFromConfig,
+            withReplyDispatcher: mockWithReplyDispatcher,
+          },
+          commands: {
+            shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
+            resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+          },
+          media: {
+            saveMediaBuffer: mockSaveMediaBuffer,
+          },
+          pairing: {
+            readAllowFromStore: vi.fn().mockResolvedValue([]),
+            upsertPairingRequest: vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false }),
+            buildPairingReply: vi.fn(() => "Pairing response"),
+          },
         },
         media: {
-          saveMediaBuffer: mockSaveMediaBuffer,
+          detectMime: vi.fn(async () => "application/octet-stream"),
         },
-        pairing: {
-          readAllowFromStore: vi.fn().mockResolvedValue([]),
-          upsertPairingRequest: vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false }),
-          buildPairingReply: vi.fn(() => "Pairing response"),
-        },
-      },
-      media: {
-        detectMime: vi.fn(async () => "application/octet-stream"),
-      },
-    } as unknown as PluginRuntime);
+      }),
+    );
   });
 
   it("dispatches to all broadcast agents when bot is mentioned", async () => {
-    const cfg: ClawdbotConfig = {
-      broadcast: { "oc-broadcast-group": ["susan", "main"] },
-      agents: { list: [{ id: "main" }, { id: "susan" }] },
-      channels: {
-        feishu: {
-          groups: {
-            "oc-broadcast-group": {
-              requireMention: true,
-            },
-          },
-        },
-      },
-    } as unknown as ClawdbotConfig;
-
-    const event: FeishuMessageEvent = {
-      sender: { sender_id: { open_id: "ou-sender" } },
-      message: {
-        message_id: "msg-broadcast-mentioned",
-        chat_id: "oc-broadcast-group",
-        chat_type: "group",
-        message_type: "text",
-        content: JSON.stringify({ text: "hello @bot" }),
-        mentions: [
-          { key: "@_user_1", id: { open_id: "bot-open-id" }, name: "Bot", tenant_key: "" },
-        ],
-      },
-    };
+    const cfg = createBroadcastConfig();
+    const event = createBroadcastEvent({
+      messageId: "msg-broadcast-mentioned",
+      text: "hello @bot",
+      botMentioned: true,
+    });
 
     await handleFeishuMessage({
       cfg,
@@ -160,30 +187,11 @@ describe("broadcast dispatch", () => {
   });
 
   it("skips broadcast dispatch when bot is NOT mentioned (requireMention=true)", async () => {
-    const cfg: ClawdbotConfig = {
-      broadcast: { "oc-broadcast-group": ["susan", "main"] },
-      agents: { list: [{ id: "main" }, { id: "susan" }] },
-      channels: {
-        feishu: {
-          groups: {
-            "oc-broadcast-group": {
-              requireMention: true,
-            },
-          },
-        },
-      },
-    } as unknown as ClawdbotConfig;
-
-    const event: FeishuMessageEvent = {
-      sender: { sender_id: { open_id: "ou-sender" } },
-      message: {
-        message_id: "msg-broadcast-not-mentioned",
-        chat_id: "oc-broadcast-group",
-        chat_type: "group",
-        message_type: "text",
-        content: JSON.stringify({ text: "hello everyone" }),
-      },
-    };
+    const cfg = createBroadcastConfig();
+    const event = createBroadcastEvent({
+      messageId: "msg-broadcast-not-mentioned",
+      text: "hello everyone",
+    });
 
     await handleFeishuMessage({
       cfg,
@@ -197,30 +205,11 @@ describe("broadcast dispatch", () => {
   });
 
   it("skips broadcast dispatch when bot identity is unknown (requireMention=true)", async () => {
-    const cfg: ClawdbotConfig = {
-      broadcast: { "oc-broadcast-group": ["susan", "main"] },
-      agents: { list: [{ id: "main" }, { id: "susan" }] },
-      channels: {
-        feishu: {
-          groups: {
-            "oc-broadcast-group": {
-              requireMention: true,
-            },
-          },
-        },
-      },
-    } as unknown as ClawdbotConfig;
-
-    const event: FeishuMessageEvent = {
-      sender: { sender_id: { open_id: "ou-sender" } },
-      message: {
-        message_id: "msg-broadcast-unknown-bot-id",
-        chat_id: "oc-broadcast-group",
-        chat_type: "group",
-        message_type: "text",
-        content: JSON.stringify({ text: "hello everyone" }),
-      },
-    };
+    const cfg = createBroadcastConfig();
+    const event = createBroadcastEvent({
+      messageId: "msg-broadcast-unknown-bot-id",
+      text: "hello everyone",
+    });
 
     await handleFeishuMessage({
       cfg,
@@ -243,7 +232,7 @@ describe("broadcast dispatch", () => {
           },
         },
       },
-    } as ClawdbotConfig;
+    };
 
     const event: FeishuMessageEvent = {
       sender: { sender_id: { open_id: "ou-sender" } },
@@ -284,7 +273,7 @@ describe("broadcast dispatch", () => {
           },
         },
       },
-    } as unknown as ClawdbotConfig;
+    };
 
     const event: FeishuMessageEvent = {
       sender: { sender_id: { open_id: "ou-sender" } },
@@ -330,7 +319,7 @@ describe("broadcast dispatch", () => {
           },
         },
       },
-    } as unknown as ClawdbotConfig;
+    };
 
     const event: FeishuMessageEvent = {
       sender: { sender_id: { open_id: "ou-sender" } },
