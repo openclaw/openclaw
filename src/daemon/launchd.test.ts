@@ -9,6 +9,7 @@ import {
   isLaunchAgentListed,
   parseLaunchctlPrint,
   repairLaunchAgentBootstrap,
+  readLaunchAgentRuntime,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
 } from "./launchd.js";
@@ -17,6 +18,8 @@ const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
   listOutput: "",
   printOutput: "",
+  printError: "",
+  printCode: 0,
   bootstrapError: "",
   kickstartError: "",
   kickstartFailuresRemaining: 0,
@@ -72,7 +75,7 @@ vi.mock("./exec-file.js", () => ({
       return { stdout: state.listOutput, stderr: "", code: 0 };
     }
     if (call[0] === "print") {
-      return { stdout: state.printOutput, stderr: "", code: 0 };
+      return { stdout: state.printOutput, stderr: state.printError, code: state.printCode };
     }
     if (call[0] === "bootstrap" && state.bootstrapError) {
       return { stdout: "", stderr: state.bootstrapError, code: 1 };
@@ -151,6 +154,8 @@ beforeEach(() => {
   state.launchctlCalls.length = 0;
   state.listOutput = "";
   state.printOutput = "";
+  state.printError = "";
+  state.printCode = 0;
   state.bootstrapError = "";
   state.kickstartError = "";
   state.kickstartFailuresRemaining = 0;
@@ -171,6 +176,13 @@ beforeEach(() => {
 });
 
 describe("launchd runtime parsing", () => {
+  function createDefaultLaunchdEnv(): Record<string, string | undefined> {
+    return {
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "default",
+    };
+  }
+
   it("parses state, pid, and exit status", () => {
     const output = [
       "state = running",
@@ -216,6 +228,36 @@ describe("launchd runtime parsing", () => {
     expect(parseLaunchctlPrint(output)).toEqual({
       state: "waiting",
       lastExitReason: "exited",
+    });
+  });
+
+  it("does not mark the launch agent missing when the plist still exists but launchctl print fails", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "<plist />");
+    state.printCode = 113;
+    state.printError = "Could not find service";
+
+    const runtime = await readLaunchAgentRuntime(env);
+
+    expect(runtime).toEqual({
+      status: "unknown",
+      detail: "Could not find service",
+      missingUnit: false,
+    });
+  });
+
+  it("marks the launch agent missing when launchctl print fails and the plist is absent", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.printCode = 113;
+    state.printError = "Could not find service";
+
+    const runtime = await readLaunchAgentRuntime(env);
+
+    expect(runtime).toEqual({
+      status: "unknown",
+      detail: "Could not find service",
+      missingUnit: true,
     });
   });
 });
