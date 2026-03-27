@@ -529,8 +529,16 @@ export async function prepareSlackMessage(params: {
   }
 
   // Drop messages that mention other users/bots but not this bot (parity with Discord).
+  // Guard on canDetectMention so we don't false-drop when bot ID resolution failed.
   const ignoreOtherMentions = channelConfig?.ignoreOtherMentions ?? false;
-  if (isRoom && ignoreOtherMentions && hasAnyMention && !wasMentioned && !implicitMention) {
+  if (
+    isRoom &&
+    ignoreOtherMentions &&
+    canDetectMention &&
+    hasAnyMention &&
+    !wasMentioned &&
+    !implicitMention
+  ) {
     logInboundDrop({
       log: logVerbose,
       channel: "slack",
