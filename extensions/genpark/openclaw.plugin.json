@@ -6,8 +6,23 @@
     "additionalProperties": false,
     "properties": {
       "genpark_api_token": {
-        "type": "string"
+        "type": "string",
+        "description": "GenPark API token (get yours at https://genpark.ai/settings/api)"
+      },
+      "circle_id": {
+        "type": "string",
+        "description": "Default GenPark Circle ID to watch for inbound messages"
+      },
+      "circle_webhook_secret": {
+        "type": "string",
+        "description": "HMAC secret for verifying inbound Circle webhook payloads"
+      },
+      "marketplace_enabled": {
+        "type": "boolean",
+        "description": "Enable the genpark_marketplace_search tool (default: true)",
+        "default": true
       }
-    }
+    },
+    "required": ["genpark_api_token"]
   }
 }

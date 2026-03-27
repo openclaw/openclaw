@@ -652,6 +652,7 @@
   },
   "devDependencies": {
     "@grammyjs/types": "^3.25.0",
+    "@hono/node-server": "1.19.10",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
     "@types/express": "^5.0.6",

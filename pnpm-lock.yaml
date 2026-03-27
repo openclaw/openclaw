@@ -207,6 +207,9 @@ importers:
       '@grammyjs/types':
         specifier: ^3.25.0
         version: 3.25.0
+      '@hono/node-server':
+        specifier: 1.19.10
+        version: 1.19.10(hono@4.12.8)
       '@lit-labs/signals':
         specifier: ^0.2.0
         version: 0.2.0
@@ -364,6 +367,12 @@ importers:
         version: 4.3.6
 
   extensions/firecrawl: {}
+
+  extensions/genpark:
+    dependencies:
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
 
   extensions/github-copilot: {}
 

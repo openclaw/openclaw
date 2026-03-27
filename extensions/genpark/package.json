@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/genpark",
-  "version": "2026.3.18",
-  "description": "OpenClaw GenPark Circle and Marketplace integration plugin",
+  "version": "2026.3.26",
+  "description": "OpenClaw GenPark Circle channel integration and Skill Marketplace search tool",
   "type": "module",
   "dependencies": {
     "zod": "^4.3.6"
@@ -11,5 +11,13 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts"
-  }
+  },
+  "keywords": [
+    "openclaw",
+    "genpark",
+    "circle",
+    "marketplace",
+    "skills",
+    "channel"
+  ]
 }
