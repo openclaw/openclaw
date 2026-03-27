@@ -12358,7 +12358,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "tools.exec.applyPatch.enabled": {
       label: "Enable apply_patch",
-      help: "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
+      help: "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
       tags: ["tools"],
     },
     "tools.exec.applyPatch.workspaceOnly": {
