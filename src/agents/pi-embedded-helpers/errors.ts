@@ -733,7 +733,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
 
   // Provider error payloads should not leak directly into user-visible text even
   // when a stream chunk was not explicitly flagged as an error.
-  if (shouldRewriteRawPayloadWithoutErrorContext(trimmed)) {
+  if (!errorContext && shouldRewriteRawPayloadWithoutErrorContext(trimmed)) {
     return formatRawAssistantErrorForUi(trimmed);
   }
 

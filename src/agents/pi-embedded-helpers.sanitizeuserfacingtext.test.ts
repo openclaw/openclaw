@@ -114,6 +114,14 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("preserves specialized context overflow guidance for Codex-prefixed API payloads", () => {
+    const raw =
+      'Codex error: {"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}';
+    expect(sanitizeUserFacingText(raw, { errorContext: true })).toContain(
+      "Context overflow: prompt too large for the model.",
+    );
+  });
+
   it("returns a friendly message for rate limit errors in Error: prefixed payloads", () => {
     expect(sanitizeUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
       "⚠️ API rate limit reached. Please try again later.",
