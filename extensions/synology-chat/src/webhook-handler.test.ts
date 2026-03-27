@@ -1,18 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { resolveLegacyWebhookNameToChatUserId, sendMessage } from "./client.js";
 import { makeFormBody, makeReq, makeRes, makeStalledReq } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import type { WebhookHandlerDeps } from "./webhook-handler.js";
-import {
-  clearSynologyWebhookRateLimiterStateForTest,
-  createWebhookHandler,
-} from "./webhook-handler.js";
-
-// Mock sendMessage and resolveLegacyWebhookNameToChatUserId to prevent real HTTP calls
-vi.mock("./client.js", () => ({
-  sendMessage: vi.fn().mockResolvedValue(true),
-  resolveLegacyWebhookNameToChatUserId: vi.fn().mockResolvedValue(undefined),
-}));
+const clientModule = await import("./client.js");
+const sendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true);
+const resolveLegacyWebhookNameToChatUserId = vi
+  .spyOn(clientModule, "resolveLegacyWebhookNameToChatUserId")
+  .mockResolvedValue(undefined);
+const { clearSynologyWebhookRateLimiterStateForTest, createWebhookHandler } =
+  await import("./webhook-handler.js");
 
 function makeAccount(
   overrides: Partial<ResolvedSynologyChatAccount> = {},
@@ -81,6 +77,10 @@ describe("createWebhookHandler", () => {
 
   beforeEach(() => {
     clearSynologyWebhookRateLimiterStateForTest();
+    sendMessage.mockClear();
+    sendMessage.mockResolvedValue(true);
+    resolveLegacyWebhookNameToChatUserId.mockClear();
+    resolveLegacyWebhookNameToChatUserId.mockResolvedValue(undefined);
     log = {
       info: vi.fn(),
       warn: vi.fn(),

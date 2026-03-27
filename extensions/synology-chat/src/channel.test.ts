@@ -1,17 +1,47 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { makeSecurityAccount, registerPluginHttpRouteMock } from "./channel.test-mocks.js";
-import { sendMessage } from "./client.js";
+import type { ResolvedSynologyChatAccount } from "./types.js";
+
+function makeSecurityAccount(
+  overrides: Partial<ResolvedSynologyChatAccount> = {},
+): ResolvedSynologyChatAccount {
+  return {
+    accountId: "default",
+    enabled: true,
+    token: "t",
+    incomingUrl: "https://nas/incoming",
+    nasHost: "h",
+    webhookPath: "/w",
+    webhookPathSource: "default" as const,
+    dangerouslyAllowNameMatching: false,
+    dangerouslyAllowInheritedWebhookPath: false,
+    dmPolicy: "allowlist" as const,
+    allowedUserIds: [],
+    rateLimitPerMinute: 30,
+    botName: "Bot",
+    allowInsecureSsl: false,
+    ...overrides,
+  };
+}
+
+const clientModule = await import("./client.js");
+const gatewayRuntimeModule = await import("./gateway-runtime.js");
+const mockSendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true);
+const registerSynologyWebhookRouteMock = vi
+  .spyOn(gatewayRuntimeModule, "registerSynologyWebhookRoute")
+  .mockImplementation(() => vi.fn());
 
 vi.mock("./webhook-handler.js", () => ({
   createWebhookHandler: vi.fn(() => vi.fn()),
 }));
 
 const { createSynologyChatPlugin } = await import("./channel.js");
-const mockSendMessage = vi.mocked(sendMessage);
 
 describe("createSynologyChatPlugin", () => {
   beforeEach(() => {
     mockSendMessage.mockClear();
+    registerSynologyWebhookRouteMock.mockClear();
+    mockSendMessage.mockResolvedValue(true);
+    registerSynologyWebhookRouteMock.mockImplementation(() => vi.fn());
   });
 
   describe("meta", () => {
@@ -442,7 +472,7 @@ describe("createSynologyChatPlugin", () => {
     });
 
     it("startAccount refuses allowlist accounts with empty allowedUserIds", async () => {
-      const registerMock = registerPluginHttpRouteMock;
+      const registerMock = registerSynologyWebhookRouteMock;
       registerMock.mockClear();
       const plugin = createSynologyChatPlugin();
       const { ctx, abortController } = makeStartAccountCtx({
@@ -460,7 +490,7 @@ describe("createSynologyChatPlugin", () => {
     });
 
     it("startAccount refuses named accounts without explicit webhookPath in multi-account setups", async () => {
-      const registerMock = registerPluginHttpRouteMock;
+      const registerMock = registerSynologyWebhookRouteMock;
       const plugin = createSynologyChatPlugin();
       const { ctx, abortController } = makeNamedStartAccountCtx({
         dmPolicy: "allowlist",
@@ -476,7 +506,7 @@ describe("createSynologyChatPlugin", () => {
     });
 
     it("startAccount refuses duplicate exact webhook paths across accounts", async () => {
-      const registerMock = registerPluginHttpRouteMock;
+      const registerMock = registerSynologyWebhookRouteMock;
       const plugin = createSynologyChatPlugin();
       const { ctx, abortController } = makeNamedStartAccountCtx({
         webhookPath: "/webhook/synology-shared",
@@ -491,10 +521,10 @@ describe("createSynologyChatPlugin", () => {
       expect(registerMock).not.toHaveBeenCalled();
     });
 
-    it("deregisters stale route before re-registering same account/path", async () => {
+    it("re-registers same account/path through the route registrar", async () => {
       const unregisterFirst = vi.fn();
       const unregisterSecond = vi.fn();
-      const registerMock = registerPluginHttpRouteMock;
+      const registerMock = registerSynologyWebhookRouteMock;
       registerMock.mockReturnValueOnce(unregisterFirst).mockReturnValueOnce(unregisterSecond);
 
       const plugin = createSynologyChatPlugin();
@@ -527,7 +557,7 @@ describe("createSynologyChatPlugin", () => {
       await new Promise((r) => setTimeout(r, 10));
 
       expect(registerMock).toHaveBeenCalledTimes(2);
-      expect(unregisterFirst).toHaveBeenCalledTimes(1);
+      expect(unregisterFirst).not.toHaveBeenCalled();
       expect(unregisterSecond).not.toHaveBeenCalled();
 
       // Clean up: abort both to resolve promises and prevent test leak
