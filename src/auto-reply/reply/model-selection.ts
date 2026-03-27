@@ -130,19 +130,35 @@ function collectImageModelKeys(
           ? imageModelConfig.fallbacks
           : [];
 
-    // First pass: find the first fallback with an explicit provider
-    for (const fb of fallbacks) {
-      if (typeof fb !== "string" || !fb.trim()) {
-        continue;
-      }
-      const slash = fb.indexOf("/");
-      if (slash > 0) {
-        imageModelDefaultProvider = fb.slice(0, slash).trim();
-        break;
+    // First pass: try to resolve providerless primary alias to get its provider.
+    // This handles the case where imageModel: { primary: "vision" } with "vision"
+    // being an alias to "openai/gpt-4o" — we should derive "openai" as the provider.
+    if (!primaryHasProvider && imageModelPrimary && defaultProvider) {
+      const resolved = resolveModelRefFromString({
+        raw: primaryTrimmed,
+        defaultProvider,
+        aliasIndex,
+      });
+      if (resolved) {
+        imageModelDefaultProvider = resolved.ref.provider;
       }
     }
 
-    // Second pass: if no fallback had an explicit provider, use alias resolution
+    // Second pass: find the first fallback with an explicit provider
+    if (!imageModelDefaultProvider) {
+      for (const fb of fallbacks) {
+        if (typeof fb !== "string" || !fb.trim()) {
+          continue;
+        }
+        const slash = fb.indexOf("/");
+        if (slash > 0) {
+          imageModelDefaultProvider = fb.slice(0, slash).trim();
+          break;
+        }
+      }
+    }
+
+    // Third pass: if still no provider, use alias resolution on fallbacks
     if (!imageModelDefaultProvider && defaultProvider) {
       for (const fb of fallbacks) {
         if (typeof fb !== "string" || !fb.trim()) {
