@@ -13,7 +13,7 @@ const { normalizeRoute, resolveRoute, runDocsLinkAuditCli } =
         command: string,
         args: string[],
         options: { cwd: string; stdio: string },
-      ) => { status: number | null };
+      ) => { status: number | null; error?: { code?: string } };
     }) => number;
   };
 
@@ -37,7 +37,7 @@ describe("docs-link-audit", () => {
     });
   });
 
-  it("delegates anchor validation to mintlify", () => {
+  it("prefers a local mint binary for anchor validation", () => {
     let invocation:
       | {
           command: string;
@@ -56,12 +56,51 @@ describe("docs-link-audit", () => {
 
     expect(exitCode).toBe(0);
     expect(invocation).toEqual({
-      command: "pnpm",
-      args: ["dlx", "mint", "broken-links", "--check-anchors"],
+      command: "mint",
+      args: ["broken-links", "--check-anchors"],
       options: {
         cwd: expect.stringMatching(/\/docs$/),
         stdio: "inherit",
       },
     });
+  });
+
+  it("falls back to pnpm dlx when mint is not on PATH", () => {
+    const invocations: Array<{
+      command: string;
+      args: string[];
+      options: { cwd: string; stdio: string };
+    }> = [];
+
+    const exitCode = runDocsLinkAuditCli({
+      args: ["--anchors"],
+      spawnSyncImpl(command, args, options) {
+        invocations.push({ command, args, options });
+        if (command === "mint") {
+          return { status: null, error: { code: "ENOENT" } };
+        }
+        return { status: 0 };
+      },
+    });
+
+    expect(exitCode).toBe(0);
+    expect(invocations).toEqual([
+      {
+        command: "mint",
+        args: ["broken-links", "--check-anchors"],
+        options: {
+          cwd: expect.stringMatching(/\/docs$/),
+          stdio: "inherit",
+        },
+      },
+      {
+        command: "pnpm",
+        args: ["dlx", "mint", "broken-links", "--check-anchors"],
+        options: {
+          cwd: expect.stringMatching(/\/docs$/),
+          stdio: "inherit",
+        },
+      },
+    ]);
   });
 });

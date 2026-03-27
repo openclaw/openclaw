@@ -298,14 +298,20 @@ export function auditDocsLinks() {
 export function runDocsLinkAuditCli(options = {}) {
   const args = options.args ?? process.argv.slice(2);
   if (args.includes("--anchors")) {
-    const result = (options.spawnSyncImpl ?? spawnSync)(
-      "pnpm",
-      ["dlx", "mint", "broken-links", "--check-anchors"],
-      {
+    const spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
+    const result = spawnSyncImpl("mint", ["broken-links", "--check-anchors"], {
+      cwd: DOCS_DIR,
+      stdio: "inherit",
+    });
+
+    if (result.error?.code === "ENOENT") {
+      const fallback = spawnSyncImpl("pnpm", ["dlx", "mint", "broken-links", "--check-anchors"], {
         cwd: DOCS_DIR,
         stdio: "inherit",
-      },
-    );
+      });
+      return fallback.status ?? 1;
+    }
+
     return result.status ?? 1;
   }
 
