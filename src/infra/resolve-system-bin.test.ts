@@ -284,9 +284,14 @@ describe("trusted directory list", () => {
 
       _resetResolveSystemBin((p: string) => executables.has(path.resolve(p)));
       const dirs = _getTrustedDirs();
-      expect(dirs).toContain(path.win32.join("C:\\Windows", "System32"));
-      expect(dirs).toContain(path.win32.join("C:\\Program Files", "OpenSSL-Win64", "bin"));
-      expect(dirs).toContain(path.win32.join("C:\\Program Files (x86)", "OpenSSL", "bin"));
+      const normalizedDirs = dirs.map((dir) => dir.toLowerCase());
+      expect(normalizedDirs).toContain(path.win32.join("C:\\Windows", "System32").toLowerCase());
+      expect(normalizedDirs).toContain(
+        path.win32.join("C:\\Program Files", "OpenSSL-Win64", "bin").toLowerCase(),
+      );
+      expect(normalizedDirs).toContain(
+        path.win32.join("C:\\Program Files (x86)", "OpenSSL", "bin").toLowerCase(),
+      );
     });
 
     it("does not include Unix paths on Windows", () => {

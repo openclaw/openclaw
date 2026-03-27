@@ -55,18 +55,60 @@ describe("getWindowsInstallRoots", () => {
       },
     });
 
-    const roots = getWindowsInstallRoots({
-      SystemRoot: "C:\\PoisonedWindows",
-      ProgramFiles: "C:\\Poisoned Programs",
-      "ProgramFiles(x86)": "C:\\Poisoned Programs (x86)",
-      ProgramW6432: "C:\\Poisoned Programs",
-    });
+    const originalEnv = process.env;
+    let roots;
+    try {
+      process.env = {
+        ...originalEnv,
+        SystemRoot: "C:\\PoisonedWindows",
+        ProgramFiles: "C:\\Poisoned Programs",
+        "ProgramFiles(x86)": "C:\\Poisoned Programs (x86)",
+        ProgramW6432: "C:\\Poisoned Programs",
+      };
+      roots = getWindowsInstallRoots();
+    } finally {
+      process.env = originalEnv;
+    }
 
     expect(roots).toEqual({
       systemRoot: "D:\\Windows",
       programFiles: "E:\\Programs",
       programFilesX86: "F:\\Programs (x86)",
       programW6432: "E:\\Programs",
+    });
+  });
+
+  it("uses explicit env roots without consulting HKLM", () => {
+    _resetWindowsInstallRootsForTests({
+      queryRegistryValue: (key, valueName) => {
+        if (
+          key === "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion" &&
+          valueName === "SystemRoot"
+        ) {
+          return "D:\\Windows";
+        }
+        if (
+          key === "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion" &&
+          valueName === "ProgramFilesDir"
+        ) {
+          return "E:\\Programs";
+        }
+        return null;
+      },
+    });
+
+    const roots = getWindowsInstallRoots({
+      SystemRoot: "G:\\Windows",
+      ProgramFiles: "H:\\Programs",
+      "ProgramFiles(x86)": "I:\\Programs (x86)",
+      ProgramW6432: "H:\\Programs",
+    });
+
+    expect(roots).toEqual({
+      systemRoot: "G:\\Windows",
+      programFiles: "H:\\Programs",
+      programFilesX86: "I:\\Programs (x86)",
+      programW6432: "H:\\Programs",
     });
   });
 

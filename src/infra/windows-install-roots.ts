@@ -198,8 +198,11 @@ function getRegistryInstallRoots(): Partial<WindowsInstallRoots> {
   };
 }
 
-function buildWindowsInstallRoots(env: Record<string, string | undefined>): WindowsInstallRoots {
-  const registryRoots = getRegistryInstallRoots();
+function buildWindowsInstallRoots(
+  env: Record<string, string | undefined>,
+  useRegistryRoots: boolean,
+): WindowsInstallRoots {
+  const registryRoots = useRegistryRoots ? getRegistryInstallRoots() : {};
   const envProgramW6432 = normalizeWindowsInstallRoot(
     getEnvValueCaseInsensitive(env, "ProgramW6432"),
   );
@@ -228,10 +231,10 @@ export function getWindowsInstallRoots(
   env: Record<string, string | undefined> = process.env,
 ): WindowsInstallRoots {
   if (env === process.env) {
-    cachedProcessInstallRoots ??= buildWindowsInstallRoots(env);
+    cachedProcessInstallRoots ??= buildWindowsInstallRoots(env, true);
     return cachedProcessInstallRoots;
   }
-  return buildWindowsInstallRoots(env);
+  return buildWindowsInstallRoots(env, false);
 }
 
 export function getWindowsProgramFilesRoots(
