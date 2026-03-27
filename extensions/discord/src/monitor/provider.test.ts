@@ -639,6 +639,7 @@ describe("monitorDiscordProvider", () => {
         retry_after: 193.632,
         global: false,
       },
+      request,
     );
     rateLimitError.discordCode = 30034;
     clientHandleDeployRequestMock.mockRejectedValueOnce(rateLimitError);
