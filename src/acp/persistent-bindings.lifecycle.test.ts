@@ -62,7 +62,7 @@ beforeEach(async () => {
 
 describe("resetConfiguredBindingTargetInPlace", () => {
   it("does not resolve configured bindings when ACP metadata already exists", async () => {
-    const sessionKey = "agent:claude:acp:binding:discord:default:9373ab192b2317f4";
+    const sessionKey = "agent:claude:acp:binding:demo-binding:default:9373ab192b2317f4";
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
       acp: {
         agent: "claude",
