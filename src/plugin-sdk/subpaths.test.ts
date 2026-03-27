@@ -540,6 +540,10 @@ describe("plugin-sdk subpath exports", () => {
         "resolveZaiBaseUrl",
       ],
     });
+    expectSourceContract("provider-model-shared", {
+      mentions: ["DEFAULT_CONTEXT_TOKENS", "normalizeModelCompat", "cloneFirstTemplateModel"],
+      omits: ["applyOpenAIConfig", "buildKilocodeModelDefinition", "discoverHuggingfaceModels"],
+    });
 
     expectSourceMentions("setup", [
       "DEFAULT_ACCOUNT_ID",

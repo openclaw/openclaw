@@ -1,4 +1,4 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildLitellmModelDefinition, LITELLM_BASE_URL } from "./onboard.js";
 
 export function buildLitellmProvider(): ModelProviderConfig {

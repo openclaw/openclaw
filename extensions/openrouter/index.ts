@@ -5,7 +5,7 @@ import {
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { DEFAULT_CONTEXT_TOKENS } from "openclaw/plugin-sdk/provider-models";
+import { DEFAULT_CONTEXT_TOKENS } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,

@@ -1,4 +1,4 @@
-import { matchesExactOrPrefix } from "openclaw/plugin-sdk/provider-models";
+import { matchesExactOrPrefix } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const MINIMAX_DEFAULT_MODEL_ID = "MiniMax-M2.7";
 export const MINIMAX_DEFAULT_MODEL_REF = `minimax/${MINIMAX_DEFAULT_MODEL_ID}`;
