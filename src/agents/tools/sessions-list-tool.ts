@@ -152,6 +152,8 @@ export function createSessionsListTool(opts?: {
         const deliveryTo = typeof deliveryContext?.to === "string" ? deliveryContext.to : undefined;
         const deliveryAccountId =
           typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined;
+        const deliveryThreadId =
+          typeof deliveryContext?.threadId === "string" ? deliveryContext.threadId : undefined;
         const lastChannel =
           deliveryChannel ??
           (typeof entry.lastChannel === "string" ? entry.lastChannel : undefined);
@@ -218,11 +220,12 @@ export function createSessionsListTool(opts?: {
                 })
               : undefined,
           deliveryContext:
-            deliveryChannel || deliveryTo || deliveryAccountId
+            deliveryChannel || deliveryTo || deliveryAccountId || deliveryThreadId
               ? {
                   channel: deliveryChannel,
                   to: deliveryTo,
                   accountId: deliveryAccountId,
+                  threadId: deliveryThreadId,
                 }
               : undefined,
           updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : undefined,
