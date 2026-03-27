@@ -434,6 +434,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               dangerouslyAllowPrivateNetwork: {
                 type: "boolean",
               },
+              allowRfc2544BenchmarkRange: {
+                type: "boolean",
+              },
               allowedHostnames: {
                 type: "array",
                 items: {
@@ -4953,6 +4956,39 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     type: "number",
                     minimum: 0,
                   },
+                  citationRedirect: {
+                    type: "object",
+                    properties: {
+                      ssrfPolicy: {
+                        type: "object",
+                        properties: {
+                          allowPrivateNetwork: {
+                            type: "boolean",
+                          },
+                          dangerouslyAllowPrivateNetwork: {
+                            type: "boolean",
+                          },
+                          allowRfc2544BenchmarkRange: {
+                            type: "boolean",
+                          },
+                          allowedHostnames: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          hostnameAllowlist: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
                   apiKey: {
                     anyOf: [
                       {
@@ -5533,6 +5569,33 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                   userAgent: {
                     type: "string",
+                  },
+                  ssrfPolicy: {
+                    type: "object",
+                    properties: {
+                      allowPrivateNetwork: {
+                        type: "boolean",
+                      },
+                      dangerouslyAllowPrivateNetwork: {
+                        type: "boolean",
+                      },
+                      allowRfc2544BenchmarkRange: {
+                        type: "boolean",
+                      },
+                      allowedHostnames: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                      },
+                      hostnameAllowlist: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                      },
+                    },
+                    additionalProperties: false,
                   },
                   readability: {
                     type: "boolean",
@@ -8035,6 +8098,39 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
           },
           suppressToolErrors: {
             type: "boolean",
+          },
+          remoteMedia: {
+            type: "object",
+            properties: {
+              ssrfPolicy: {
+                type: "object",
+                properties: {
+                  allowPrivateNetwork: {
+                    type: "boolean",
+                  },
+                  dangerouslyAllowPrivateNetwork: {
+                    type: "boolean",
+                  },
+                  allowRfc2544BenchmarkRange: {
+                    type: "boolean",
+                  },
+                  allowedHostnames: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  hostnameAllowlist: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                },
+                additionalProperties: false,
+              },
+            },
+            additionalProperties: false,
           },
           tts: {
             type: "object",
@@ -12645,6 +12741,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Cache TTL in minutes for web_search results.",
       tags: ["performance", "storage", "tools"],
     },
+    "tools.web.search.citationRedirect": {
+      label: "Web Search Citation Redirect",
+      help: "Settings for resolving web search citation redirect URLs before returning citations.",
+      tags: ["tools"],
+    },
+    "tools.web.search.citationRedirect.ssrfPolicy": {
+      label: "Web Search Citation Redirect SSRF Policy",
+      help: "SSRF policy for resolving citation redirect URLs.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.search.citationRedirect.ssrfPolicy.allowPrivateNetwork": {
+      label: "Web Search Citation Redirect Allow Private Network",
+      help: "Legacy alias for tools.web.search.citationRedirect.ssrfPolicy.dangerouslyAllowPrivateNetwork.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.search.citationRedirect.ssrfPolicy.dangerouslyAllowPrivateNetwork": {
+      label: "Web Search Citation Redirect Dangerously Allow Private Network",
+      help: "If true, permit citation redirect resolution to private or internal network destinations.",
+      tags: ["security", "access", "advanced", "tools"],
+    },
+    "tools.web.search.citationRedirect.ssrfPolicy.allowRfc2544BenchmarkRange": {
+      label: "Web Search Citation Redirect Allow RFC 2544 Benchmark Range",
+      help: "If true, permit RFC 2544 benchmarking IP ranges during citation redirect resolution.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.search.citationRedirect.ssrfPolicy.allowedHostnames": {
+      label: "Web Search Citation Redirect Allowed Hostnames",
+      help: "Exact hostnames allowed during citation redirect resolution even when they would otherwise be blocked.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.search.citationRedirect.ssrfPolicy.hostnameAllowlist": {
+      label: "Web Search Citation Redirect Hostname Allowlist",
+      help: 'Hostname allowlist patterns for citation redirect resolution (exact hosts or "*.example.com").',
+      tags: ["access", "tools"],
+    },
     "tools.web.fetch.enabled": {
       label: "Enable Web Fetch Tool",
       help: "Enable the web_fetch tool (lightweight HTTP fetch).",
@@ -12684,6 +12815,36 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Web Fetch User-Agent",
       help: "Override User-Agent header for web_fetch requests.",
       tags: ["tools"],
+    },
+    "tools.web.fetch.ssrfPolicy": {
+      label: "Web Fetch SSRF Policy",
+      help: "SSRF policy for outbound web_fetch requests.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.fetch.ssrfPolicy.allowPrivateNetwork": {
+      label: "Web Fetch Allow Private Network",
+      help: "Legacy alias for tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork": {
+      label: "Web Fetch Dangerously Allow Private Network",
+      help: "If true, permit web_fetch requests to private or internal network destinations.",
+      tags: ["security", "access", "advanced", "tools"],
+    },
+    "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange": {
+      label: "Web Fetch Allow RFC 2544 Benchmark Range",
+      help: "If true, permit RFC 2544 benchmarking IP ranges that are otherwise blocked as special-use addresses.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.fetch.ssrfPolicy.allowedHostnames": {
+      label: "Web Fetch Allowed Hostnames",
+      help: "Exact hostnames allowed even when they would otherwise be blocked.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.fetch.ssrfPolicy.hostnameAllowlist": {
+      label: "Web Fetch Hostname Allowlist",
+      help: 'Hostname allowlist patterns for web_fetch requests (exact hosts or "*.example.com").',
+      tags: ["access", "tools"],
     },
     "tools.web.fetch.readability": {
       label: "Web Fetch Readability Extraction",
@@ -14028,6 +14189,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Allows access to private-network address ranges from browser tooling. Default is enabled for trusted-network operator setups; disable to enforce strict public-only resolution checks.",
       tags: ["security", "access", "advanced"],
     },
+    "browser.ssrfPolicy.allowRfc2544BenchmarkRange": {
+      label: "Browser Allow RFC 2544 Benchmark Range",
+      help: "If true, permit RFC 2544 benchmarking IP ranges that are otherwise blocked as special-use addresses.",
+      tags: ["access"],
+    },
     "browser.ssrfPolicy.allowedHostnames": {
       label: "Browser Allowed Hostnames",
       help: "Explicit hostname allowlist exceptions for SSRF policy checks on browser/network requests. Keep this list minimal and review entries regularly to avoid stale broad access.",
@@ -14841,6 +15007,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Suppress Tool Error Warnings",
       help: "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
       tags: ["advanced"],
+    },
+    "messages.remoteMedia": {
+      label: "Messages Remote Media",
+      help: "Settings for loading outbound remote media URLs.",
+      tags: ["advanced"],
+    },
+    "messages.remoteMedia.ssrfPolicy": {
+      label: "Messages Remote Media SSRF Policy",
+      help: "SSRF policy for outbound remote media loading.",
+      tags: ["access", "advanced"],
+    },
+    "messages.remoteMedia.ssrfPolicy.allowPrivateNetwork": {
+      label: "Messages Remote Media Allow Private Network",
+      help: "Legacy alias for messages.remoteMedia.ssrfPolicy.dangerouslyAllowPrivateNetwork.",
+      tags: ["access", "advanced"],
+    },
+    "messages.remoteMedia.ssrfPolicy.dangerouslyAllowPrivateNetwork": {
+      label: "Messages Remote Media Dangerously Allow Private Network",
+      help: "If true, permit outbound remote media loading from private or internal network destinations.",
+      tags: ["security", "access", "advanced"],
+    },
+    "messages.remoteMedia.ssrfPolicy.allowRfc2544BenchmarkRange": {
+      label: "Messages Remote Media Allow RFC 2544 Benchmark Range",
+      help: "If true, permit RFC 2544 benchmarking IP ranges during outbound remote media loading.",
+      tags: ["access", "advanced"],
+    },
+    "messages.remoteMedia.ssrfPolicy.allowedHostnames": {
+      label: "Messages Remote Media Allowed Hostnames",
+      help: "Exact hostnames allowed during outbound remote media loading even when they would otherwise be blocked.",
+      tags: ["access", "advanced"],
+    },
+    "messages.remoteMedia.ssrfPolicy.hostnameAllowlist": {
+      label: "Messages Remote Media Hostname Allowlist",
+      help: 'Hostname allowlist patterns for outbound remote media loading (exact hosts or "*.example.com").',
+      tags: ["access", "advanced"],
     },
     "messages.ackReaction": {
       label: "Ack Reaction Emoji",

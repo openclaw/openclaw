@@ -40,6 +40,27 @@ describe("web_search redirect resolution hardening", () => {
     );
   });
 
+  it("forwards citation redirect SSRF policy", async () => {
+    const resolve = await resolveRedirectUrl();
+    withStrictWebToolsEndpointMock.mockImplementation(async (_params, run) => {
+      return await run({
+        response: new Response(null, { status: 200 }),
+        finalUrl: "https://example.com/final",
+      });
+    });
+
+    await resolve("https://example.com/start", {
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    expect(withStrictWebToolsEndpointMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        policy: { allowRfc2544BenchmarkRange: true },
+      }),
+      expect.any(Function),
+    );
+  });
+
   it("falls back to the original URL when guarded resolution fails", async () => {
     const resolve = await resolveRedirectUrl();
     withStrictWebToolsEndpointMock.mockRejectedValue(new Error("blocked"));

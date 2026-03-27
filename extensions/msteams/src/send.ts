@@ -127,6 +127,7 @@ export async function sendMessageMSTeams(
     const media = await loadOutboundMediaFromUrl(mediaUrl, {
       maxBytes: mediaMaxBytes,
       mediaLocalRoots,
+      ssrfPolicy: cfg.messages?.remoteMedia?.ssrfPolicy,
     });
     const isLargeFile = media.buffer.length >= FILE_CONSENT_THRESHOLD_BYTES;
     const isImage = media.contentType?.startsWith("image/") ?? false;

@@ -27,11 +27,13 @@ describe("loadOutboundMediaFromUrl", () => {
     await loadOutboundMediaFromUrl("file:///tmp/image.png", {
       maxBytes: 1024,
       mediaLocalRoots: ["/tmp/workspace-agent"],
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
 
     expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/image.png", {
       maxBytes: 1024,
       localRoots: ["/tmp/workspace-agent"],
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
   });
 
@@ -47,6 +49,7 @@ describe("loadOutboundMediaFromUrl", () => {
     expect(loadWebMediaMock).toHaveBeenCalledWith("https://example.com/image.png", {
       maxBytes: undefined,
       localRoots: undefined,
+      ssrfPolicy: undefined,
     });
   });
 });

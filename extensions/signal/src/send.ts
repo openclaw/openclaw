@@ -129,6 +129,7 @@ export async function sendMessageSignal(
   if (opts.mediaUrl?.trim()) {
     const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {
       localRoots: opts.mediaLocalRoots,
+      ssrfPolicy: cfg.messages?.remoteMedia?.ssrfPolicy,
     });
     attachments = [resolved.path];
     const kind = kindFromMime(resolved.contentType ?? undefined);

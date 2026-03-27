@@ -16,10 +16,12 @@ describe("media load options", () => {
       buildOutboundMediaLoadOptions({
         maxBytes: 1024,
         mediaLocalRoots: ["/tmp/workspace"],
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
       }),
     ).toEqual({
       maxBytes: 1024,
       localRoots: ["/tmp/workspace"],
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
   });
 });

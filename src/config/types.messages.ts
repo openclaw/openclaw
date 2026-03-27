@@ -1,4 +1,5 @@
 import type { QueueDropPolicy, QueueMode, QueueModeByProvider } from "./types.queue.js";
+import type { SsrFPolicyConfig } from "./types.browser.js";
 import type { TtsConfig } from "./types.tts.js";
 
 export type GroupChatConfig = {
@@ -120,6 +121,10 @@ export type MessagesConfig = {
   statusReactions?: StatusReactionsConfig;
   /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
   suppressToolErrors?: boolean;
+  /** SSRF policy for outbound remote media loading. */
+  remoteMedia?: {
+    ssrfPolicy?: SsrFPolicyConfig;
+  };
   /** Text-to-speech settings for outbound replies. */
   tts?: TtsConfig;
 };

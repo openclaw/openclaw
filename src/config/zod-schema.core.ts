@@ -11,6 +11,17 @@ import { MODEL_APIS } from "./types.models.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
+export const SsrFPolicySchema = z
+  .object({
+    allowPrivateNetwork: z.boolean().optional(),
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+    allowRfc2544BenchmarkRange: z.boolean().optional(),
+    allowedHostnames: z.array(z.string()).optional(),
+    hostnameAllowlist: z.array(z.string()).optional(),
+  })
+  .strict()
+  .optional();
+
 const ENV_SECRET_REF_ID_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
 const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;

@@ -401,6 +401,7 @@ export async function sendMessageMattermost(
     try {
       const media = await loadOutboundMediaFromUrl(mediaUrl, {
         mediaLocalRoots: opts.mediaLocalRoots,
+        ssrfPolicy: cfg.messages?.remoteMedia?.ssrfPolicy,
       });
       const fileInfo = await uploadMattermostFile(client, {
         channelId,

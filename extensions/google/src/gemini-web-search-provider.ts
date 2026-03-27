@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "openclaw/plugin-sdk/provider-google";
 import {
   buildSearchCacheKey,
@@ -82,6 +83,7 @@ async function runGeminiSearch(params: {
   apiKey: string;
   model: string;
   timeoutSeconds: number;
+  citationRedirectSsrFPolicy?: SsrFPolicy;
 }): Promise<{ content: string; citations: Array<{ url: string; title?: string }> }> {
   const endpoint = `${GEMINI_API_BASE}/models/${params.model}:generateContent`;
 
@@ -144,7 +146,9 @@ async function runGeminiSearch(params: {
         const resolved = await Promise.all(
           batch.map(async (citation) => ({
             ...citation,
-            url: await resolveCitationRedirectUrl(citation.url),
+            url: await resolveCitationRedirectUrl(citation.url, {
+              ssrfPolicy: params.citationRedirectSsrFPolicy,
+            }),
           })),
         );
         citations.push(...resolved);
@@ -221,6 +225,7 @@ function createGeminiToolDefinition(
         apiKey,
         model,
         timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
+        citationRedirectSsrFPolicy: searchConfig?.citationRedirect?.ssrfPolicy,
       });
       const payload = {
         query,
