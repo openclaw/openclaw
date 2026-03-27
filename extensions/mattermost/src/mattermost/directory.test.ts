@@ -28,11 +28,15 @@ vi.mock("./client.js", () => {
   };
 });
 
-import { listMattermostDirectoryGroups, listMattermostDirectoryPeers } from "./directory.js";
+let listMattermostDirectoryGroups: typeof import("./directory.js").listMattermostDirectoryGroups;
+let listMattermostDirectoryPeers: typeof import("./directory.js").listMattermostDirectoryPeers;
 
 describe("mattermost directory", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
+    ({ listMattermostDirectoryGroups, listMattermostDirectoryPeers } =
+      await import("./directory.js"));
   });
 
   it("deduplicates channels across enabled accounts and skips failing accounts", async () => {

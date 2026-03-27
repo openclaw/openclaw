@@ -1,5 +1,5 @@
 import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
-import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup";
+import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup-runtime";
 import { resolveMattermostAccount, type ResolvedMattermostAccount } from "./mattermost/accounts.js";
 import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 import {

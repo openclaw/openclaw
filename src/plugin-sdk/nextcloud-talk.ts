@@ -27,11 +27,14 @@ export {
 } from "../channels/plugins/setup-wizard-helpers.js";
 export {
   applyAccountNameToChannelSection,
+  createSetupInputPresenceValidator,
   patchScopedAccountConfig,
 } from "../channels/plugins/setup-helpers.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export type { ChannelGroupContext, ChannelSetupInput } from "../channels/plugins/types.js";
+export type { ChannelSetupDmPolicy } from "../channels/plugins/setup-wizard-types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+export type { ChannelSetupWizard } from "../channels/plugins/setup-wizard.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { mapAllowFromEntries } from "./channel-config-helpers.js";
@@ -78,12 +81,12 @@ export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export type { RuntimeEnv } from "../runtime.js";
+export type { WizardPrompter } from "../wizard/prompts.js";
 export {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithCommandGate,
 } from "../security/dm-policy-shared.js";
 export { formatDocsLink } from "../terminal/links.js";
-export type { WizardPrompter } from "../wizard/prompts.js";
 export {
   listConfiguredAccountIds,
   resolveAccountWithDefaultFallback,
@@ -103,3 +106,9 @@ export {
   buildBaseChannelStatusSummary,
   buildRuntimeAccountStatusSnapshot,
 } from "./status-helpers.js";
+export {
+  createTopLevelChannelDmPolicy,
+  promptParsedAllowFromForAccount,
+  resolveSetupAccountId,
+  setSetupChannelEnabled,
+} from "../channels/plugins/setup-wizard-helpers.js";
