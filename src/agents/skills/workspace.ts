@@ -571,7 +571,11 @@ function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawCon
 } {
   const limits = resolveSkillsLimits(params.config);
   const total = params.skills.length;
-  const byCount = params.skills.slice(0, Math.max(0, limits.maxSkillsInPrompt));
+
+  // Skills arrive in priority order (low → high) from the merged Map.
+  // When truncating by count, keep the highest-priority skills (the tail).
+  const countLimit = Math.max(0, limits.maxSkillsInPrompt);
+  const byCount = total > countLimit ? params.skills.slice(total - countLimit) : params.skills;
 
   let skillsForPrompt = byCount;
   let truncated = total > byCount.length;
@@ -592,19 +596,20 @@ function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawCon
       compact = true;
       // No skills dropped — only format downgraded. Preserve existing truncated state.
     } else {
-      // Compact still too large — binary search the largest prefix that fits.
+      // Compact still too large — binary search the largest suffix that fits.
+      // Drop low-priority skills (from the start) first to preserve high-priority ones.
       compact = true;
       let lo = 0;
       let hi = skillsForPrompt.length;
       while (lo < hi) {
         const mid = Math.ceil((lo + hi) / 2);
-        if (fitsCompact(skillsForPrompt.slice(0, mid))) {
+        if (fitsCompact(skillsForPrompt.slice(skillsForPrompt.length - mid))) {
           lo = mid;
         } else {
           hi = mid - 1;
         }
       }
-      skillsForPrompt = skillsForPrompt.slice(0, lo);
+      skillsForPrompt = skillsForPrompt.slice(skillsForPrompt.length - lo);
       truncated = true;
     }
   }

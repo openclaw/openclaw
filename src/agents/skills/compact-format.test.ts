@@ -112,7 +112,9 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     const prompt = buildPrompt(skills, { maxChars: 2000 });
     expect(prompt).toContain("compact format, descriptions omitted");
     expect(prompt).not.toContain("<description>");
-    expect(prompt).toContain("skill-0");
+    // High-priority skills (tail) are preserved; low-priority (head) are dropped.
+    expect(prompt).toContain("skill-99");
+    expect(prompt).not.toContain("skill-0");
     const match = prompt.match(/included (\d+) of (\d+)/);
     expect(match).toBeTruthy();
     expect(Number(match![1])).toBeLessThan(Number(match![2]));
@@ -136,9 +138,9 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
   it("count truncation + compact: shows included X of Y with compact note", () => {
     // 30 skills but maxCount=10, and full format of 10 exceeds budget
     const skills = Array.from({ length: 30 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(200)));
-    const tenSkills = skills.slice(0, 10);
-    const fullLen = formatSkillsForPrompt(tenSkills).length;
-    const compactLen = formatSkillsCompact(tenSkills).length;
+    const keptSkills = skills.slice(skills.length - 10);
+    const fullLen = formatSkillsForPrompt(keptSkills).length;
+    const compactLen = formatSkillsCompact(keptSkills).length;
     const budget = compactLen + 200;
     // Verify precondition: full format of 10 skills exceeds budget
     expect(fullLen).toBeGreaterThan(budget);
@@ -165,6 +167,30 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).toContain("included 5 of 20");
     expect(prompt).not.toContain("compact");
     expect(prompt).toContain("<description>");
+    // Highest-priority skills (tail) are kept
+    expect(prompt).toContain("skill-19");
+    expect(prompt).not.toContain("skill-0");
+  });
+
+  it("truncation preserves high-priority (workspace) skills over low-priority (bundled)", () => {
+    const bundled = Array.from({ length: 10 }, (_, i) =>
+      makeSkill(`bundled-${i}`, "A bundled skill"),
+    );
+    const workspace = Array.from({ length: 3 }, (_, i) =>
+      makeSkill(`workspace-${i}`, "A workspace skill"),
+    );
+    // Simulate merged order: bundled (low priority) first, workspace (high priority) last
+    const all = [...bundled, ...workspace];
+    const prompt = buildPrompt(all, { maxChars: 50_000, maxCount: 5 });
+    expect(prompt).toContain("included 5 of 13");
+    // All 3 workspace skills must survive
+    expect(prompt).toContain("workspace-0");
+    expect(prompt).toContain("workspace-1");
+    expect(prompt).toContain("workspace-2");
+    // Only 2 bundled skills fit (highest-indexed = latest in bundled batch)
+    expect(prompt).toContain("bundled-9");
+    expect(prompt).toContain("bundled-8");
+    expect(prompt).not.toContain("bundled-0");
   });
 
   it("compact budget reserves space for the warning line", () => {
