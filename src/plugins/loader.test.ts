@@ -11,6 +11,11 @@ import { createHookRunner } from "./hooks.js";
 import { __testing, clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.js";
 import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 import {
+  getMemoryEmbeddingProvider,
+  listMemoryEmbeddingProviders,
+  registerMemoryEmbeddingProvider,
+} from "./memory-embedding-providers.js";
+import {
   buildMemoryPromptSection,
   getMemoryRuntime,
   registerMemoryFlushPlanResolver,
@@ -1057,6 +1062,10 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
 
   it("does not replace active memory plugin registries during non-activating loads", () => {
     useNoBundledPlugins();
+    registerMemoryEmbeddingProvider({
+      id: "active",
+      create: async () => ({ provider: null }),
+    });
     registerMemoryPromptSection(() => ["active memory section"]);
     registerMemoryFlushPlanResolver(() => ({
       softThresholdTokens: 1,
@@ -1082,6 +1091,10 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         id: "snapshot-memory",
         kind: "memory",
         register(api) {
+          api.registerMemoryEmbeddingProvider({
+            id: "snapshot",
+            create: async () => ({ provider: null }),
+          });
           api.registerMemoryPromptSection(() => ["snapshot memory section"]);
           api.registerMemoryFlushPlan(() => ({
             softThresholdTokens: 10,
@@ -1123,6 +1136,7 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     ]);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
+    expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
   });
 
   it("clears newly-registered memory plugin registries when plugin register fails", () => {
@@ -1134,6 +1148,10 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         id: "failing-memory",
         kind: "memory",
         register(api) {
+          api.registerMemoryEmbeddingProvider({
+            id: "failed",
+            create: async () => ({ provider: null }),
+          });
           api.registerMemoryPromptSection(() => ["stale failure section"]);
           api.registerMemoryFlushPlan(() => ({
             softThresholdTokens: 10,
@@ -1173,6 +1191,7 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
+    expect(listMemoryEmbeddingProviders()).toEqual([]);
   });
 
   it("throws when activate:false is used without cache:false", () => {
@@ -3435,6 +3454,10 @@ export const runtimeValue = helperValue;`,
 
 describe("clearPluginLoaderCache", () => {
   it("resets registered memory plugin registries", () => {
+    registerMemoryEmbeddingProvider({
+      id: "stale",
+      create: async () => ({ provider: null }),
+    });
     registerMemoryPromptSection(() => ["stale memory section"]);
     registerMemoryFlushPlanResolver(() => ({
       softThresholdTokens: 1,
@@ -3457,11 +3480,13 @@ describe("clearPluginLoaderCache", () => {
     ]);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/stale.md");
     expect(getMemoryRuntime()).toBeDefined();
+    expect(getMemoryEmbeddingProvider("stale")).toBeDefined();
 
     clearPluginLoaderCache();
 
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
+    expect(getMemoryEmbeddingProvider("stale")).toBeUndefined();
   });
 });

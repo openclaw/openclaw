@@ -100,9 +100,10 @@ semantic queries can find related notes even when wording differs. Hybrid search
 (BM25 + vector) is available for combining semantic matching with exact keyword
 lookups.
 
-Memory search supports multiple embedding providers (OpenAI, Gemini, Voyage,
-Mistral, Ollama, and local GGUF models), an optional QMD sidecar backend for
-advanced retrieval, and post-processing features like MMR diversity re-ranking
+Memory search adapter ids come from the active memory plugin. The default
+`memory-core` plugin ships built-ins for OpenAI, Gemini, Voyage, Mistral,
+Ollama, and local GGUF models, plus an optional QMD sidecar backend for
+advanced retrieval and post-processing features like MMR diversity re-ranking
 and temporal decay.
 
 For the full configuration reference -- including embedding provider setup, QMD

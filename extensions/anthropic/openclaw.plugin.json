@@ -1,7 +1,6 @@
 {
   "id": "anthropic",
   "providers": ["anthropic"],
-  "mediaUnderstandingProviders": ["anthropic"],
   "cliBackends": ["claude-cli"],
   "providerAuthEnvVars": {
     "anthropic": ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]
@@ -41,6 +40,9 @@
       "cliDescription": "Anthropic API key"
     }
   ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["anthropic"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
