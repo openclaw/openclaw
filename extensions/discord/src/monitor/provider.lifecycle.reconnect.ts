@@ -402,6 +402,27 @@ export function createDiscordGatewayReconnectController(params: {
       return;
     }
     params.gateway.options.reconnect = { maxAttempts: 0 };
+
+    // Strip Carbon's close/error listeners from the WebSocket before
+    // disconnecting. When maxAttempts is 0 the close handler would fire and
+    // emit a "Max reconnect attempts (0)" error with no listener attached,
+    // surfacing as an uncaught exception that crashes the process.
+    //
+    // Only do this when no reconnect is in flight — if
+    // disconnectGatewaySocketWithoutAutoReconnect is awaiting the socket
+    // close event, its own listener must stay so the drain promise resolves.
+    if (!reconnectInFlight) {
+      const socket = params.gateway.ws;
+      if (socket) {
+        for (const listener of socket.listeners("close")) {
+          socket.removeListener("close", listener);
+        }
+        for (const listener of socket.listeners("error")) {
+          socket.removeListener("error", listener);
+        }
+      }
+    }
+
     params.gateway.disconnect();
   };
   const ensureStartupReady = async () => {

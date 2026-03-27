@@ -857,6 +857,41 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("Max reconnect attempts"));
   });
 
+  it("strips socket close/error listeners on abort so stale-socket close does not crash", async () => {
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const socket = Object.assign(new EventEmitter(), {
+      terminate: vi.fn(),
+    });
+    const { emitter, gateway } = createGatewayHarness({ ws: socket });
+    gateway.isConnected = true;
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+    // Simulate Carbon's internal close/error listeners on the WebSocket.
+    const carbonCloseListener = vi.fn();
+    const carbonErrorListener = vi.fn();
+    socket.on("close", carbonCloseListener);
+    socket.on("error", carbonErrorListener);
+
+    const abortController = new AbortController();
+    const { lifecycleParams, runtimeError } = createLifecycleHarness({ gateway });
+    lifecycleParams.abortSignal = abortController.signal;
+
+    const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+    abortController.abort();
+    await expect(lifecyclePromise).resolves.toBeUndefined();
+
+    // After abort, the WebSocket's close/error listeners should have been
+    // removed to prevent Carbon's handleClose from firing during teardown.
+    expect(socket.listenerCount("close")).toBe(0);
+    expect(socket.listenerCount("error")).toBe(0);
+
+    // Simulate a late stale-socket close arriving after the lifecycle ended.
+    // This must not throw (previously caused "Uncaught exception: Max
+    // reconnect attempts (0)").
+    expect(() => socket.emit("close", 1005, "")).not.toThrow();
+    expect(carbonCloseListener).not.toHaveBeenCalled();
+  });
+
   it("does not push connected: true when abortSignal is already aborted", async () => {
     const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const emitter = new EventEmitter();
