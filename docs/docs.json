@@ -513,6 +513,10 @@
       "destination": "/platforms/mac/child-process"
     },
     {
+      "source": "/mac/building",
+      "destination": "/platforms/mac/building"
+    },
+    {
       "source": "/mac/dev-setup",
       "destination": "/platforms/mac/dev-setup"
     },
@@ -1240,6 +1244,7 @@
               {
                 "group": "macOS companion app",
                 "pages": [
+                  "platforms/mac/building",
                   "platforms/mac/dev-setup",
                   "platforms/mac/menu-bar",
                   "platforms/mac/voicewake",

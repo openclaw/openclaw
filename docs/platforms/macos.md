@@ -12,6 +12,12 @@ The macOS app is the **menu‑bar companion** for OpenClaw. It owns permissions,
 manages/attaches to the Gateway locally (launchd or manual), and exposes macOS
 capabilities to the agent as a node.
 
+## System requirements
+
+- **macOS 15 (Sequoia)** or later
+- **Architecture**: the macOS app ships as a **Universal Binary** (arm64 + x86_64) — it runs natively on both Apple Silicon and Intel Macs
+- For building from source, see [Cross-architecture builds](/platforms/mac/building)
+
 ## What it does
 
 - Shows native notifications and status in the menu bar.

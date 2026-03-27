@@ -43,6 +43,22 @@ if [[ ! -d "$APP" ]]; then
   exit 1
 fi
 
+# Verify architecture of the built binary.
+# Release builds MUST be Universal (arm64 + x86_64) unless explicitly overridden.
+APP_BINARY="$APP/Contents/MacOS/OpenClaw"
+if [[ -f "$APP_BINARY" ]]; then
+  ACTUAL_ARCHS="$(/usr/bin/lipo -archs "$APP_BINARY" 2>/dev/null || true)"
+  echo "🔍 Binary architectures: $ACTUAL_ARCHS"
+  if [[ "$BUILD_CONFIG" == "release" && "${BUILD_ARCHS}" == "all" ]]; then
+    if [[ ! "$ACTUAL_ARCHS" == *"arm64"* ]] || [[ ! "$ACTUAL_ARCHS" == *"x86_64"* ]]; then
+      echo "Error: release build is not Universal Binary (expected arm64 + x86_64, got: $ACTUAL_ARCHS)" >&2
+      echo "Set BUILD_ARCHS explicitly to override this check." >&2
+      exit 1
+    fi
+    echo "✅ Verified: Universal Binary (arm64 + x86_64)"
+  fi
+fi
+
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null || echo "0.0.0")
 BUNDLE_VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$APP/Contents/Info.plist" 2>/dev/null || echo "")
 ACTUAL_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$APP/Contents/Info.plist" 2>/dev/null || echo "")
@@ -110,6 +126,34 @@ if [[ "$SKIP_DMG" != "1" ]]; then
   fi
 else
   echo "💿 Skipping DMG (SKIP_DMG=1)"
+fi
+
+# Produce per-architecture dist artifacts alongside the Universal zip/dmg.
+# Useful for users who want smaller, single-architecture downloads.
+# Enable with PER_ARCH_DIST=1 (only meaningful for multi-arch builds).
+PER_ARCH_DIST="${PER_ARCH_DIST:-0}"
+if [[ "$PER_ARCH_DIST" == "1" && "${BUILD_ARCHS}" == "all" ]]; then
+  for THIN_ARCH in arm64 x86_64; do
+    THIN_BIN="$BUILD_ROOT/$THIN_ARCH/$BUILD_CONFIG/$PRODUCT"
+    if [[ -f "$THIN_BIN" ]]; then
+      THIN_ZIP="$ROOT_DIR/dist/OpenClaw-${VERSION}-${THIN_ARCH}.zip"
+      THIN_TMP="$(mktemp -d)"
+      mkdir -p "$THIN_TMP/OpenClaw.app/Contents/MacOS"
+      cp -R "$APP/Contents/Info.plist" "$THIN_TMP/OpenClaw.app/Contents/"
+      cp -R "$APP/Contents/Resources" "$THIN_TMP/OpenClaw.app/Contents/"
+      cp -R "$APP/Contents/Frameworks" "$THIN_TMP/OpenClaw.app/Contents/" 2>/dev/null || true
+      # Extract the single-arch slice from the Universal binary
+      /usr/bin/lipo -thin "$THIN_ARCH" "$APP_BINARY" -output "$THIN_TMP/OpenClaw.app/Contents/MacOS/OpenClaw" 2>/dev/null \
+        || cp "$THIN_BIN" "$THIN_TMP/OpenClaw.app/Contents/MacOS/OpenClaw"
+      chmod +x "$THIN_TMP/OpenClaw.app/Contents/MacOS/OpenClaw"
+      echo "📦 Per-arch zip ($THIN_ARCH): $THIN_ZIP"
+      rm -f "$THIN_ZIP"
+      ditto -c -k --sequesterRsrc --keepParent "$THIN_TMP/OpenClaw.app" "$THIN_ZIP"
+      rm -rf "$THIN_TMP"
+    else
+      echo "WARN: $THIN_ARCH binary not found at $THIN_BIN; skipping per-arch zip" >&2
+    fi
+  done
 fi
 
 if [[ "$SKIP_DSYM" != "1" ]]; then

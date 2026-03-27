@@ -32,6 +32,8 @@ To build the macOS app and package it into `dist/OpenClaw.app`, run:
 ./scripts/package-mac-app.sh
 ```
 
+This creates a Universal binary (arm64 + x86_64) by default for release builds. For debugging and testing, see the [cross-architecture builds guide](/platforms/mac/building) for options to build for specific architectures (Intel-only, Apple Silicon-only, or Universal debug builds).
+
 If you don't have an Apple Developer ID certificate, the script will automatically use **ad-hoc signing** (`-`).
 
 For dev run modes, signing flags, and Team ID troubleshooting, see the macOS app README:

@@ -3,6 +3,17 @@ set -euo pipefail
 
 # Build and bundle OpenClaw into a minimal .app we can open.
 # Outputs to dist/OpenClaw.app
+#
+# ARCHITECTURE OPTIONS:
+# - Release builds (BUILD_CONFIG=release) create Universal binaries (arm64 + x86_64) by default
+# - Debug builds default to the current machine architecture (uname -m)
+# - Build for specific architectures with BUILD_ARCHS:
+#   BUILD_ARCHS="x86_64" - Intel-only build
+#   BUILD_ARCHS="arm64" - Apple Silicon-only build
+#   BUILD_ARCHS="arm64 x86_64" - Universal binary
+# Examples:
+#   BUILD_ARCHS="x86_64" scripts/package-mac-app.sh  # Intel-only debug build
+#   BUILD_ARCHS="arm64 x86_64" BUILD_CONFIG=debug scripts/package-mac-app.sh  # Universal debug build
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
@@ -203,6 +214,17 @@ fi
 chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
+
+# Verify the final binary contains exactly the expected architectures.
+ACTUAL_ARCHS=$(/usr/bin/lipo -archs "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null | tr ' ' '\n' | sort | tr '\n' ' ' | xargs)
+EXPECTED_ARCHS=$(printf '%s\n' "${BUILD_ARCHS[@]}" | sort | tr '\n' ' ' | xargs)
+if [[ "$ACTUAL_ARCHS" != "$EXPECTED_ARCHS" ]]; then
+  echo "ERROR: Architecture mismatch in final binary." >&2
+  echo "  Expected: $EXPECTED_ARCHS" >&2
+  echo "  Actual:   $ACTUAL_ARCHS" >&2
+  exit 1
+fi
+echo "✅ Binary architecture verified: $ACTUAL_ARCHS"
 
 SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
 if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
