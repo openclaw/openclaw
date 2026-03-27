@@ -12,8 +12,11 @@ async function ensureSessionTranscriptHeader(params: {
   try {
     await fs.stat(params.sessionFile);
     return;
-  } catch {
-    // Create a fresh header below.
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+    // File does not exist. Create a fresh header below.
   }
 
   await fs.mkdir(path.dirname(params.sessionFile), { recursive: true });

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
@@ -1544,7 +1545,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       existingSessionFile,
       `${JSON.stringify({
         type: "session",
-        version: 3,
+        version: CURRENT_SESSION_VERSION,
         id: existingSessionId,
         timestamp: new Date().toISOString(),
         cwd: process.cwd(),
