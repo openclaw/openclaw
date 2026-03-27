@@ -13,57 +13,51 @@ import {
 } from "./infra/ports.js";
 import { assertWebChannel, normalizeE164, toWhatsappJid } from "./utils.js";
 
-type GetReplyFromConfig = typeof import("./auto-reply/reply.runtime.js").getReplyFromConfig;
-type PromptYesNo = typeof import("./cli/prompt.js").promptYesNo;
-type EnsureBinary = typeof import("./infra/binaries.js").ensureBinary;
-type RunExec = typeof import("./process/exec.js").runExec;
-type RunCommandWithTimeout = typeof import("./process/exec.js").runCommandWithTimeout;
-type MonitorWebChannel =
-  typeof import("./plugins/runtime/runtime-whatsapp-boundary.js").monitorWebChannel;
+type ReplyRuntimeModule = typeof import("./auto-reply/reply.runtime.js");
+type PromptRuntimeModule = typeof import("./cli/prompt.runtime.js");
+type BinariesRuntimeModule = typeof import("./infra/binaries.runtime.js");
+type ExecRuntimeModule = typeof import("./process/exec.js");
+type WhatsAppRuntimeModule = typeof import("./plugins/runtime/runtime-whatsapp-boundary.js");
 
-let replyRuntimePromise: Promise<typeof import("./auto-reply/reply.runtime.js")> | null = null;
-let promptRuntimePromise: Promise<typeof import("./cli/prompt.js")> | null = null;
-let binariesRuntimePromise: Promise<typeof import("./infra/binaries.js")> | null = null;
-let execRuntimePromise: Promise<typeof import("./process/exec.js")> | null = null;
-let whatsappRuntimePromise: Promise<
-  typeof import("./plugins/runtime/runtime-whatsapp-boundary.js")
-> | null = null;
+let replyRuntimePromise: Promise<ReplyRuntimeModule> | undefined;
+let promptRuntimePromise: Promise<PromptRuntimeModule> | undefined;
+let binariesRuntimePromise: Promise<BinariesRuntimeModule> | undefined;
+let execRuntimePromise: Promise<ExecRuntimeModule> | undefined;
+let whatsappRuntimePromise: Promise<WhatsAppRuntimeModule> | undefined;
 
-function loadReplyRuntime() {
-  replyRuntimePromise ??= import("./auto-reply/reply.runtime.js");
-  return replyRuntimePromise;
+function loadReplyRuntime(): Promise<ReplyRuntimeModule> {
+  return (replyRuntimePromise ??= import("./auto-reply/reply.runtime.js"));
 }
 
-function loadPromptRuntime() {
-  promptRuntimePromise ??= import("./cli/prompt.js");
-  return promptRuntimePromise;
+function loadPromptRuntime(): Promise<PromptRuntimeModule> {
+  return (promptRuntimePromise ??= import("./cli/prompt.runtime.js"));
 }
 
-function loadBinariesRuntime() {
-  binariesRuntimePromise ??= import("./infra/binaries.js");
-  return binariesRuntimePromise;
+function loadBinariesRuntime(): Promise<BinariesRuntimeModule> {
+  return (binariesRuntimePromise ??= import("./infra/binaries.runtime.js"));
 }
 
-function loadExecRuntime() {
-  execRuntimePromise ??= import("./process/exec.js");
-  return execRuntimePromise;
+function loadExecRuntime(): Promise<ExecRuntimeModule> {
+  return (execRuntimePromise ??= import("./process/exec.js"));
 }
 
-function loadWhatsAppRuntime() {
-  whatsappRuntimePromise ??= import("./plugins/runtime/runtime-whatsapp-boundary.js");
-  return whatsappRuntimePromise;
+function loadWhatsAppRuntime(): Promise<WhatsAppRuntimeModule> {
+  return (whatsappRuntimePromise ??= import("./plugins/runtime/runtime-whatsapp-boundary.js"));
 }
 
-export const getReplyFromConfig: GetReplyFromConfig = async (...args) =>
+export const getReplyFromConfig: ReplyRuntimeModule["getReplyFromConfig"] = async (...args) =>
   (await loadReplyRuntime()).getReplyFromConfig(...args);
-export const promptYesNo: PromptYesNo = async (...args) =>
+export const promptYesNo: PromptRuntimeModule["promptYesNo"] = async (...args) =>
   (await loadPromptRuntime()).promptYesNo(...args);
-export const ensureBinary: EnsureBinary = async (...args) =>
+export const ensureBinary: BinariesRuntimeModule["ensureBinary"] = async (...args) =>
   (await loadBinariesRuntime()).ensureBinary(...args);
-export const runExec: RunExec = async (...args) => (await loadExecRuntime()).runExec(...args);
-export const runCommandWithTimeout: RunCommandWithTimeout = async (...args) =>
+export const runExec: ExecRuntimeModule["runExec"] = async (...args) =>
+  (await loadExecRuntime()).runExec(...args);
+export const runCommandWithTimeout: ExecRuntimeModule["runCommandWithTimeout"] = async (
+  ...args
+) =>
   (await loadExecRuntime()).runCommandWithTimeout(...args);
-export const monitorWebChannel: MonitorWebChannel = async (...args) =>
+export const monitorWebChannel: WhatsAppRuntimeModule["monitorWebChannel"] = async (...args) =>
   (await loadWhatsAppRuntime()).monitorWebChannel(...args);
 
 export {

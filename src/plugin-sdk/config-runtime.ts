@@ -74,7 +74,11 @@ export type {
   TelegramInlineButtonsScope,
   TelegramNetworkConfig,
   TelegramTopicConfig,
+  TtsAutoMode,
   TtsConfig,
+  TtsMode,
+  TtsModelOverrideConfig,
+  TtsProvider,
 } from "../config/types.js";
 export {
   loadSessionStore,

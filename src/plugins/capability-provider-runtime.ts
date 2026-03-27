@@ -16,7 +16,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   cfg?: OpenClawConfig;
   useActiveRegistryWhen?: (active: PluginRegistry | undefined) => boolean;
 }): CapabilityProviderForKey<K>[] {
-  const active = getActivePluginRegistry();
+  const active = getActivePluginRegistry() ?? undefined;
   const shouldUseActive =
     params.useActiveRegistryWhen?.(active) ?? (active?.[params.key].length ?? 0) > 0;
   const registry =

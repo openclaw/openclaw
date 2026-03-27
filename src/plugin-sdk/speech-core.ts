@@ -20,9 +20,18 @@ export type {
 } from "../tts/provider-types.js";
 
 export {
+  scheduleCleanup,
+  summarizeText,
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
   requireInRange,
 } from "../tts/tts-core.js";
 export { parseTtsDirectives } from "../tts/directives.js";
+export {
+  canonicalizeSpeechProviderId,
+  getSpeechProvider,
+  listSpeechProviders,
+  normalizeSpeechProviderId,
+} from "../tts/provider-registry.js";
+export { normalizeTtsAutoMode, TTS_AUTO_MODES } from "../tts/tts-auto-mode.js";

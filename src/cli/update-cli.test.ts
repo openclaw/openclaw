@@ -4,8 +4,8 @@ import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
-import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../extensions/public-artifacts.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/public-artifacts.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
