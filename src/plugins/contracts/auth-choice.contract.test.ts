@@ -58,8 +58,8 @@ describe("provider auth-choice contract", () => {
   it("maps provider-plugin choices through the shared preferred-provider fallback resolver", async () => {
     const pluginFallbackScenarios: ProviderPlugin[] = [
       {
-        id: "github-copilot",
-        label: "GitHub Copilot",
+        id: "demo-oauth-provider",
+        label: "Demo OAuth Provider",
         auth: [
           {
             id: "oauth",
@@ -71,8 +71,8 @@ describe("provider auth-choice contract", () => {
         ],
       },
       {
-        id: "minimax-portal",
-        label: "MiniMax Portal",
+        id: "demo-browser-provider",
+        label: "Demo Browser Provider",
         auth: [
           {
             id: "portal",
@@ -84,8 +84,8 @@ describe("provider auth-choice contract", () => {
         ],
       },
       {
-        id: "modelstudio",
-        label: "ModelStudio",
+        id: "demo-api-key-provider",
+        label: "Demo API Key Provider",
         auth: [
           {
             id: "api-key",
@@ -97,8 +97,8 @@ describe("provider auth-choice contract", () => {
         ],
       },
       {
-        id: "ollama",
-        label: "Ollama",
+        id: "demo-local-provider",
+        label: "Demo Local Provider",
         auth: [
           {
             id: "local",

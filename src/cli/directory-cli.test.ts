@@ -56,8 +56,8 @@ describe("registerDirectoryCli", () => {
     mocks.writeConfigFile.mockResolvedValue(undefined);
     mocks.resolveChannelDefaultAccountId.mockReturnValue("default");
     mocks.resolveMessageChannelSelection.mockResolvedValue({
-      channel: "slack",
-      configured: ["slack"],
+      channel: "demo-channel",
+      configured: ["demo-channel"],
       source: "explicit",
     });
     getRuntimeCapture().defaultRuntime.exit.mockImplementation((code: number) => {
@@ -70,11 +70,11 @@ describe("registerDirectoryCli", () => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: {
         channels: {},
-        plugins: { entries: { whatsapp: { enabled: true } } },
+        plugins: { entries: { "demo-directory": { enabled: true } } },
       },
-      channelId: "whatsapp",
+      channelId: "demo-directory",
       plugin: {
-        id: "whatsapp",
+        id: "demo-directory",
         directory: { self },
       },
       configChanged: true,
@@ -83,19 +83,19 @@ describe("registerDirectoryCli", () => {
     const program = new Command().name("openclaw");
     registerDirectoryCli(program);
 
-    await program.parseAsync(["directory", "self", "--channel", "whatsapp", "--json"], {
+    await program.parseAsync(["directory", "self", "--channel", "demo-directory", "--json"], {
       from: "user",
     });
 
     expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledWith(
       expect.objectContaining({
-        rawChannel: "whatsapp",
+        rawChannel: "demo-directory",
         allowInstall: true,
       }),
     );
     expect(mocks.writeConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
-        plugins: { entries: { whatsapp: { enabled: true } } },
+        plugins: { entries: { "demo-directory": { enabled: true } } },
       }),
     );
     expect(self).toHaveBeenCalledWith(
