@@ -5,6 +5,7 @@ import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./t
 export type FollowupQueueState = {
   items: FollowupRun[];
   draining: boolean;
+  paused: boolean;
   lastEnqueuedAt: number;
   mode: QueueMode;
   debounceMs: number;
@@ -24,8 +25,10 @@ export const DEFAULT_QUEUE_DROP: QueueDropPolicy = "summarize";
  * logic observes one queue registry per process.
  */
 const FOLLOWUP_QUEUES_KEY = Symbol.for("openclaw.followupQueues");
+const PAUSED_FOLLOWUP_QUEUE_KEYS = Symbol.for("openclaw.pausedFollowupQueueKeys");
 
 export const FOLLOWUP_QUEUES = resolveGlobalMap<string, FollowupQueueState>(FOLLOWUP_QUEUES_KEY);
+const FOLLOWUP_QUEUE_PAUSES = resolveGlobalMap<string, true>(PAUSED_FOLLOWUP_QUEUE_KEYS);
 
 export function getExistingFollowupQueue(key: string): FollowupQueueState | undefined {
   const cleaned = key.trim();
@@ -36,7 +39,8 @@ export function getExistingFollowupQueue(key: string): FollowupQueueState | unde
 }
 
 export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
-  const existing = FOLLOWUP_QUEUES.get(key);
+  const cleaned = key.trim();
+  const existing = FOLLOWUP_QUEUES.get(cleaned);
   if (existing) {
     applyQueueRuntimeSettings({
       target: existing,
@@ -48,6 +52,7 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
   const created: FollowupQueueState = {
     items: [],
     draining: false,
+    paused: FOLLOWUP_QUEUE_PAUSES.has(cleaned),
     lastEnqueuedAt: 0,
     mode: settings.mode,
     debounceMs:
@@ -66,13 +71,14 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     target: created,
     settings,
   });
-  FOLLOWUP_QUEUES.set(key, created);
+  FOLLOWUP_QUEUES.set(cleaned, created);
   return created;
 }
 
 export function clearFollowupQueue(key: string): number {
   const cleaned = key.trim();
   const queue = getExistingFollowupQueue(cleaned);
+  FOLLOWUP_QUEUE_PAUSES.delete(cleaned);
   if (!queue) {
     return 0;
   }
@@ -118,4 +124,31 @@ export function refreshQueuedFollowupSession(params: {
   for (const item of queue.items) {
     rewriteRun(item.run);
   }
+}
+
+export function pauseFollowupQueue(key: string): boolean {
+  const cleaned = key.trim();
+  if (!cleaned) {
+    return false;
+  }
+  FOLLOWUP_QUEUE_PAUSES.set(cleaned, true);
+  const queue = getExistingFollowupQueue(cleaned);
+  if (queue) {
+    queue.paused = true;
+  }
+  return true;
+}
+
+export function resumeFollowupQueue(key: string): boolean {
+  const cleaned = key.trim();
+  if (!cleaned) {
+    return false;
+  }
+  FOLLOWUP_QUEUE_PAUSES.delete(cleaned);
+  const queue = getExistingFollowupQueue(cleaned);
+  if (!queue) {
+    return false;
+  }
+  queue.paused = false;
+  return queue.items.length > 0 || queue.droppedCount > 0;
 }

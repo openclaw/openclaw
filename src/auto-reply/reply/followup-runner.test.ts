@@ -1,9 +1,22 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
+import { loadSessionStore, saveSessionStore } from "../../config/sessions/store.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../../config/config.js";
+import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions/paths.js";
+import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
+import { clearFollowupQueue, type FollowupRun } from "./queue.js";
+import * as sessionRunAccounting from "./session-run-accounting.js";
+import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 const compactEmbeddedPiSessionMock = vi.fn();
@@ -353,8 +366,13 @@ describe("createFollowupRunner compaction", () => {
     await runner(queued);
 
     expect(onBlockReply).toHaveBeenCalled();
-    const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
+    const firstCall = (
+      onBlockReply.mock.calls as unknown as Array<
+        Array<{ text?: string; isCompactionNotice?: boolean }>
+      >
+    )[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
+    expect(firstCall?.[0]?.isCompactionNotice).toBe(true);
     expect(sessionStore.main.compactionCount).toBe(1);
   });
 
@@ -404,73 +422,20 @@ describe("createFollowupRunner compaction", () => {
     await runner(queued);
 
     expect(onBlockReply).toHaveBeenCalled();
-    const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
+    expect(queued.run.sessionId).toBe("session-rotated");
+    expect(await normalizeComparablePath(queued.run.sessionFile ?? "")).toBe(
+      await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
+    );
+    const firstCall = (
+      onBlockReply.mock.calls as unknown as Array<
+        Array<{ text?: string; isCompactionNotice?: boolean }>
+      >
+    )[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
+    expect(firstCall?.[0]?.isCompactionNotice).toBe(true);
     expect(sessionStore.main.compactionCount).toBe(2);
     expect(sessionStore.main.sessionId).toBe("session-rotated");
     expect(await normalizeComparablePath(sessionStore.main.sessionFile ?? "")).toBe(
-      await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
-    );
-  });
-
-  it("refreshes queued followup runs to the rotated transcript", async () => {
-    const storePath = path.join(
-      await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-queue-")),
-      "sessions.json",
-    );
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
-      updatedAt: Date.now(),
-    };
-    const sessionStore: Record<string, SessionEntry> = {
-      main: sessionEntry,
-    };
-
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "final" }],
-      meta: {
-        agentMeta: {
-          sessionId: "session-rotated",
-          compactionCount: 1,
-          lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
-        },
-      },
-    });
-
-    const runner = createFollowupRunner({
-      opts: { onBlockReply: vi.fn(async () => {}) },
-      typing: createMockTypingController(),
-      typingMode: "instant",
-      sessionEntry,
-      sessionStore,
-      sessionKey: "main",
-      storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
-    });
-
-    const queuedNext = createQueuedRun({
-      prompt: "next",
-      run: {
-        sessionId: "session",
-        sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
-      },
-    });
-    const queueSettings: QueueSettings = { mode: "queue" };
-    enqueueFollowupRun("main", queuedNext, queueSettings);
-
-    const current = createQueuedRun({
-      run: {
-        verboseLevel: "on",
-        sessionId: "session",
-        sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
-      },
-    });
-
-    await runner(current);
-
-    expect(queuedNext.run.sessionId).toBe("session-rotated");
-    expect(await normalizeComparablePath(queuedNext.run.sessionFile)).toBe(
       await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
     );
   });
@@ -622,6 +587,294 @@ describe("createFollowupRunner compaction", () => {
   });
 });
 
+describe("createFollowupRunner session resets", () => {
+  it("rebinds queued followups to the latest session after a reset", async () => {
+    const sessionStore: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "session-new",
+        sessionFile: "/tmp/session-new.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const onBlockReply = vi.fn(async () => {});
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: {
+        sessionId: "session-old",
+        sessionFile: "/tmp/session-old.jsonl",
+        updatedAt: Date.now(),
+      },
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-old",
+          sessionFile: "/tmp/session-old.jsonl",
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
+      sessionId?: string;
+      sessionFile?: string;
+    };
+    expect(call.sessionId).toBe("session-new");
+    expect(call.sessionFile).toBe(
+      resolveSessionFilePath(
+        "session-new",
+        sessionStore.main,
+        resolveSessionFilePathOptions({ storePath: undefined }),
+      ),
+    );
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("tracks compaction counts on the rebound session entry", async () => {
+    const sessionStore: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "session-new",
+        sessionFile: "/tmp/session-new.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+
+    mockCompactionRun({
+      willRetry: true,
+      result: { payloads: [{ text: "ok" }], meta: {} },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: {
+        sessionId: "session-old",
+        sessionFile: "/tmp/session-old.jsonl",
+        updatedAt: Date.now(),
+      },
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-old",
+          sessionFile: "/tmp/session-old.jsonl",
+          verboseLevel: "on",
+        },
+      }),
+    );
+
+    expect(sessionStore.main.compactionCount).toBe(1);
+  });
+
+  it("reloads reset sessions through canonical store aliases", async () => {
+    const dir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-canonical-"));
+    const storePath = path.join(dir, "sessions.json");
+    const target = resolveGatewaySessionStoreTarget({ cfg: loadConfig(), key: "main" });
+    const reboundEntry: SessionEntry = {
+      sessionId: "session-new",
+      sessionFile: "/tmp/session-new.jsonl",
+      updatedAt: Date.now(),
+    };
+    await fs.writeFile(storePath, JSON.stringify({ [target.canonicalKey]: reboundEntry }), "utf-8");
+
+    const sessionStore: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "session-old",
+        sessionFile: "/tmp/session-old.jsonl",
+        updatedAt: Date.now() - 1_000,
+      },
+    };
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: sessionStore.main,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-old",
+          sessionFile: "/tmp/session-old.jsonl",
+        },
+      }),
+    );
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      sessionId?: string;
+      sessionFile?: string;
+    };
+    expect(call.sessionId).toBe("session-new");
+    expect(call.sessionFile).toBe(
+      resolveSessionFilePath(
+        "session-new",
+        reboundEntry,
+        resolveSessionFilePathOptions({ storePath }),
+      ),
+    );
+    expect(sessionStore.main.sessionId).toBe("session-new");
+  });
+
+  it("preserves topic transcript suffixes when rebinding to a reset session without sessionFile", async () => {
+    const sessionStore: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "session-new",
+        updatedAt: Date.now(),
+      },
+    };
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: {
+        sessionId: "session-old",
+        sessionFile: "session-old-topic-456.jsonl",
+        updatedAt: Date.now(),
+      },
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-old",
+          sessionFile: "session-old-topic-456.jsonl",
+        },
+      }),
+    );
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as { sessionFile?: string };
+    expect(path.basename(call.sessionFile ?? "")).toBe("session-new-topic-456.jsonl");
+  });
+
+  it("drops followup output when the run is superseded by a newer session", async () => {
+    const sessionStore: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "session-old",
+        sessionFile: "/tmp/session-old.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const onBlockReply = vi.fn(async () => {});
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      sessionStore.main = {
+        sessionId: "session-new",
+        sessionFile: "/tmp/session-new.jsonl",
+        updatedAt: Date.now(),
+      };
+      return {
+        payloads: [{ text: "stale reply" }],
+        meta: {},
+      };
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-old",
+          sessionFile: "/tmp/session-old.jsonl",
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("drops followup output when the run is superseded during usage persistence", async () => {
+    const sessionStore: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "session-old",
+        sessionFile: "/tmp/session-old.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const onBlockReply = vi.fn(async () => {});
+    const persistSpy = vi
+      .spyOn(sessionRunAccounting, "persistRunSessionUsage")
+      .mockImplementationOnce(async () => {
+        sessionStore.main = {
+          sessionId: "session-new",
+          sessionFile: "/tmp/session-new.jsonl",
+          updatedAt: Date.now(),
+        };
+      });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "stale reply" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionStore,
+      sessionKey: "main",
+      storePath: "/tmp/sessions.json",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-old",
+          sessionFile: "/tmp/session-old.jsonl",
+        },
+      }),
+    );
+
+    expect(persistSpy).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
+    persistSpy.mockRestore();
+  });
+});
+
 describe("createFollowupRunner bootstrap warning dedupe", () => {
   it("passes stored warning signature history to embedded followup runs", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
@@ -685,6 +938,97 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
     expect(call?.allowGatewaySubagentBinding).toBe(true);
     expect(call?.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
     expect(call?.bootstrapPromptWarningSignature).toBe("sig-b");
+  });
+});
+
+describe("createFollowupRunner reply threading", () => {
+  it("threads followup replies to the current message when reply mode targets the first reply", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        messageId: "msg-42",
+        run: {
+          messageProvider: "discord",
+          config: {
+            channels: {
+              discord: {
+                replyToMode: "first",
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "final",
+        replyToId: "msg-42",
+      }),
+      expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("threads compaction notices without consuming the first reply slot", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    mockCompactionRun({
+      willRetry: true,
+      result: { payloads: [{ text: "final" }], meta: {} },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        messageId: "msg-42",
+        run: {
+          verboseLevel: "on",
+          messageProvider: "discord",
+          config: {
+            channels: {
+              discord: {
+                replyToMode: "first",
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(onBlockReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: expect.stringContaining("Auto-compaction complete"),
+        isCompactionNotice: true,
+        replyToId: "msg-42",
+      }),
+      expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
+    );
+    expect(onBlockReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: "final",
+        replyToId: "msg-42",
+      }),
+      expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
+    );
   });
 });
 
@@ -968,7 +1312,10 @@ describe("createFollowupRunner messaging tool dedupe", () => {
 
     expect(routeReplyMock).toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello world!" }),
+      expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
+    );
   });
 
   it("routes followups with originating account/thread metadata", async () => {

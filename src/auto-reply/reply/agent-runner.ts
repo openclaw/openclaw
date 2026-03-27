@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
@@ -15,6 +16,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
@@ -59,11 +61,41 @@ import {
 } from "./queue.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
+import {
+  cacheResolvedSessionEntry,
+  loadCanonicalLatestSessionEntry,
+} from "./session-entry-resolution.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+function transplantSessionFilePath(params: {
+  previousSessionId?: string;
+  previousSessionFile?: string;
+  nextSessionId: string;
+}): string | undefined {
+  const previousSessionId = params.previousSessionId?.trim();
+  const previousSessionFile = params.previousSessionFile?.trim();
+  if (!previousSessionId || !previousSessionFile) {
+    return undefined;
+  }
+  const parsed = path.parse(previousSessionFile);
+  if (!parsed.name) {
+    return undefined;
+  }
+  if (parsed.name === previousSessionId) {
+    return path.join(parsed.dir, `${params.nextSessionId}${parsed.ext}`);
+  }
+  if (!parsed.name.startsWith(`${previousSessionId}-`)) {
+    return undefined;
+  }
+  return path.join(
+    parsed.dir,
+    `${params.nextSessionId}${parsed.name.slice(previousSessionId.length)}${parsed.ext}`,
+  );
+}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -128,6 +160,62 @@ export async function runReplyAgent(params: {
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
   let activeIsNewSession = isNewSession;
+  const loadLatestSessionEntry = () => {
+    const latest = loadCanonicalLatestSessionEntry({
+      sessionKey,
+      storePath,
+    });
+    if (!latest.entry) {
+      return undefined;
+    }
+    activeSessionEntry = latest.entry;
+    cacheResolvedSessionEntry(activeSessionStore, latest.entry, [
+      sessionKey ?? "",
+      latest.canonicalKey ?? "",
+      ...latest.storeKeys,
+    ]);
+    return latest.entry;
+  };
+  const resolveCurrentSessionEntry = () =>
+    loadLatestSessionEntry() ??
+    (sessionKey ? activeSessionStore?.[sessionKey] : undefined) ??
+    activeSessionEntry;
+  const rebindFollowupRunToCurrentSession = () => {
+    const latestEntry = resolveCurrentSessionEntry();
+    const latestSessionId = latestEntry?.sessionId?.trim();
+    if (latestEntry) {
+      activeSessionEntry = latestEntry;
+    }
+    if (!latestSessionId || latestSessionId === followupRun.run.sessionId) {
+      return;
+    }
+    const previousSessionId = followupRun.run.sessionId;
+    const previousSessionFile = followupRun.run.sessionFile;
+    followupRun.run.sessionId = latestSessionId;
+    followupRun.run.sessionFile = resolveSessionFilePath(
+      latestSessionId,
+      latestEntry?.sessionFile?.trim()
+        ? latestEntry
+        : {
+            sessionFile: transplantSessionFilePath({
+              previousSessionId,
+              previousSessionFile,
+              nextSessionId: latestSessionId,
+            }),
+          },
+      resolveSessionFilePathOptions({
+        agentId: resolveAgentIdFromSessionKey(sessionKey),
+        storePath,
+      }),
+    );
+    logVerbose(`reply runner: rebound ${sessionKey ?? queueKey} to session ${latestSessionId}`);
+  };
+  const isFollowupRunSuperseded = () => {
+    const latestSessionId = resolveCurrentSessionEntry()?.sessionId?.trim();
+    const runSessionId = followupRun.run.sessionId?.trim();
+    return Boolean(latestSessionId && runSessionId && latestSessionId !== runSessionId);
+  };
+  rebindFollowupRunToCurrentSession();
 
   const isHeartbeat = opts?.isHeartbeat === true;
   const typingSignals = createTypingSignaler({
@@ -423,7 +511,17 @@ export async function runReplyAgent(params: {
       activeSessionStore,
       storePath,
       resolvedVerboseLevel,
+      shouldSuppressOutboundDelivery: isFollowupRunSuperseded,
     });
+
+    if (isFollowupRunSuperseded()) {
+      logVerbose(`reply runner: dropping superseded reply for ${sessionKey ?? queueKey}`);
+      blockReplyPipeline?.abort();
+      if (pendingToolTasks.size > 0) {
+        await Promise.allSettled(pendingToolTasks);
+      }
+      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    }
 
     if (runOutcome.kind === "final") {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
@@ -743,6 +841,14 @@ export async function runReplyAgent(params: {
         sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
       if (refreshedSessionEntry) {
         activeSessionEntry = refreshedSessionEntry;
+        const refreshedSessionId = refreshedSessionEntry.sessionId?.trim();
+        if (refreshedSessionId) {
+          followupRun.run.sessionId = refreshedSessionId;
+        }
+        const refreshedSessionFile = refreshedSessionEntry.sessionFile?.trim();
+        if (refreshedSessionFile) {
+          followupRun.run.sessionFile = refreshedSessionFile;
+        }
         refreshQueuedFollowupSession({
           key: queueKey,
           previousSessionId,
@@ -767,7 +873,19 @@ export async function runReplyAgent(params: {
 
       if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
-        verboseNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
+        const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+        const compactionNotice = currentMessageId
+          ? applyReplyToMode({
+              text: `🧹 Auto-compaction complete${suffix}.`,
+              replyToId: currentMessageId,
+              replyToCurrent: true,
+              isCompactionNotice: true,
+            })
+          : {
+              text: `🧹 Auto-compaction complete${suffix}.`,
+              isCompactionNotice: true,
+            };
+        verboseNotices.push(compactionNotice);
       }
     }
     if (verboseNotices.length > 0) {
@@ -775,6 +893,10 @@ export async function runReplyAgent(params: {
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    }
+
+    if (isFollowupRunSuperseded()) {
+      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
     return finalizeWithFollowup(

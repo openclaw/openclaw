@@ -2,12 +2,18 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessions from "../../config/sessions.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions/paths.js";
 import type { TypingMode } from "../../config/types.js";
+import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { TemplateContext } from "../templating.js";
-import type { GetReplyOptions } from "../types.js";
+import type { BlockReplyContext, GetReplyOptions } from "../types.js";
 import {
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
@@ -22,7 +28,7 @@ type AgentRunParams = {
   onAssistantMessageStart?: () => Promise<void> | void;
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
-  onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
+  onToolResult?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
 };
 
@@ -543,6 +549,46 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(onPartialReply).toHaveBeenCalledWith({ text: "answer chunk", mediaUrls: undefined });
   });
 
+  it("suppresses partial and reasoning streams after a session reset supersedes the run", async () => {
+    const onPartialReply = vi.fn();
+    const onReasoningStream = vi.fn();
+    const sessionEntry = { sessionId: "session", updatedAt: Date.now() };
+    const sessionStore = { main: sessionEntry };
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onReasoningStream?.({ text: "Reasoning before reset" });
+      await params.onPartialReply?.({ text: "partial before reset" });
+      sessionStore.main = {
+        ...sessionStore.main,
+        sessionId: "session-reset",
+        updatedAt: Date.now(),
+      };
+      await params.onReasoningStream?.({ text: "Reasoning after reset" });
+      await params.onPartialReply?.({ text: "partial after reset" });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onPartialReply, onReasoningStream },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      typingMode: "thinking",
+      runOverrides: { reasoningLevel: "stream" },
+    });
+    await run();
+
+    expect(onReasoningStream).toHaveBeenCalledTimes(1);
+    expect(onReasoningStream).toHaveBeenCalledWith({
+      text: "Reasoning before reset",
+      mediaUrls: undefined,
+    });
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledWith({
+      text: "partial before reset",
+      mediaUrls: undefined,
+    });
+  });
+
   it("suppresses typing in never mode", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onPartialReply?.({ text: "hi" });
@@ -616,9 +662,14 @@ describe("runReplyAgent typing (heartbeat)", () => {
       }
 
       if (testCase.shouldForward) {
-        expect(onToolResult).toHaveBeenCalledWith({
+        expect(onToolResult).toHaveBeenCalledTimes(1);
+        const [payload, context] = onToolResult.mock.calls[0] ?? [];
+        expect(payload).toEqual({
           text: testCase.toolText,
           mediaUrls: [],
+        });
+        expect(context).toMatchObject({
+          abortSignal: expect.any(AbortSignal),
         });
       } else {
         expect(onToolResult).not.toHaveBeenCalled();
@@ -648,7 +699,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     await run();
 
-    expect(onToolResult).toHaveBeenCalledWith({
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    const [toolPayload, toolContext] = onToolResult.mock.calls[0] ?? [];
+    expect(toolPayload).toEqual({
       text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
       channelData: {
         execApproval: {
@@ -657,6 +710,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
           allowedDecisions: ["allow-once", "allow-always", "deny"],
         },
       },
+    });
+    expect(toolContext).toMatchObject({
+      abortSignal: expect.any(AbortSignal),
     });
   });
 
@@ -784,43 +840,59 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
       const res = await run();
       expect(Array.isArray(res)).toBe(true);
-      const payloads = res as { text?: string }[];
+      const payloads = res as { text?: string; isCompactionNotice?: boolean }[];
       expect(payloads[0]?.text).toContain("Auto-compaction complete");
       expect(payloads[0]?.text).toContain("count 1");
+      expect(payloads[0]?.isCompactionNotice).toBe(true);
       expect(sessionStore.main.compactionCount).toBe(1);
     });
   });
 
-  it("refreshes queued followups when auto-compaction rotates the session", async () => {
-    await withTempStateDir(async (stateDir) => {
-      const storePath = path.join(stateDir, "sessions", "sessions.json");
-      const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
-      const sessionStore = { main: sessionEntry };
+  it("threads compaction notices without consuming the first reply slot", async () => {
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", willRetry: false, completed: true },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
 
-      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "final" }],
-        meta: {
-          agentMeta: {
-            sessionId: "session-rotated",
-            compactionCount: 1,
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const { run } = createMinimalRun({
+      resolvedVerboseLevel: "on",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      runOverrides: {
+        config: {
+          channels: {
+            whatsapp: {
+              replyToMode: "first",
+            },
           },
-        },
-      });
+        } as ReturnType<typeof loadConfig>,
+      },
+    });
 
-      const { run } = createMinimalRun({
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-        storePath,
-      });
-      await run();
+    const res = await run();
 
-      expect(vi.mocked(refreshQueuedFollowupSession)).toHaveBeenCalledWith({
-        key: "main",
-        previousSessionId: "session",
-        nextSessionId: "session-rotated",
-        nextSessionFile: expect.stringContaining("session-rotated.jsonl"),
-      });
+    expect(Array.isArray(res)).toBe(true);
+    const payloads = res as Array<{
+      text?: string;
+      isCompactionNotice?: boolean;
+      replyToId?: string;
+    }>;
+    expect(payloads[0]).toMatchObject({
+      isCompactionNotice: true,
+      replyToId: "msg",
+    });
+    expect(payloads[1]).toMatchObject({
+      text: "final",
+      replyToId: "msg",
     });
   });
 
@@ -1291,6 +1363,58 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(persisted.main.fallbackNoticeSelectedModel).toBeUndefined();
       expect(persisted.main.fallbackNoticeActiveModel).toBeUndefined();
       expect(persisted.main.fallbackNoticeReason).toBeUndefined();
+    });
+  });
+
+  it("reloads reset sessions through canonical store aliases", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const target = resolveGatewaySessionStoreTarget({ cfg: loadConfig(), key: "main" });
+      const reboundEntry: SessionEntry = {
+        sessionId: "session-new",
+        sessionFile: "/tmp/session-new.jsonl",
+        updatedAt: Date.now(),
+      };
+      const staleEntry: SessionEntry = {
+        sessionId: "session-old",
+        sessionFile: "/tmp/session-old.jsonl",
+        updatedAt: Date.now() - 1_000,
+      };
+      const sessionStore = { main: staleEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({ [target.canonicalKey]: reboundEntry }),
+        "utf-8",
+      );
+
+      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "ok" }],
+        meta: {},
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry: staleEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      await run();
+
+      const call = state.runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+        sessionId?: string;
+        sessionFile?: string;
+      };
+      expect(call.sessionId).toBe("session-new");
+      expect(call.sessionFile).toBe(
+        resolveSessionFilePath(
+          "session-new",
+          reboundEntry,
+          resolveSessionFilePathOptions({ storePath }),
+        ),
+      );
+      expect(sessionStore.main.sessionId).toBe("session-new");
     });
   });
 

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as sessionsModule from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
@@ -320,6 +321,196 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
   });
 });
 
+describe("runReplyAgent session supersession", () => {
+  it("drops output when a run is overtaken by a newer session", async () => {
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-old",
+      sessionFile: "/tmp/session-old.jsonl",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: sessionEntry,
+    };
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      OriginatingTo: "chat",
+      AccountId: "primary",
+      MessageSid: "msg",
+      Surface: "telegram",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        sessionId: "session-old",
+        sessionKey,
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session-old.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude-opus",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 5_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      sessionStore[sessionKey] = {
+        ...sessionStore[sessionKey],
+        sessionId: "session-new",
+        sessionFile: "/tmp/session-new.jsonl",
+        updatedAt: Date.now(),
+      };
+      return {
+        payloads: [{ text: "stale duplicate" }],
+        meta: {},
+      };
+    });
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultModel: "anthropic/claude-opus-4-5",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(result).toBeUndefined();
+  });
+
+  it("re-reads the persisted session store before suppressing stale replies", async () => {
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-old",
+      sessionFile: "/tmp/session-old.jsonl",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: sessionEntry,
+    };
+    let loadCount = 0;
+    const loadSpy = vi.spyOn(sessionsModule, "loadSessionStore").mockImplementation(() => {
+      loadCount += 1;
+      if (loadCount === 1) {
+        return { [sessionKey]: sessionEntry };
+      }
+      return {
+        [sessionKey]: {
+          sessionId: "session-new",
+          sessionFile: "/tmp/session-new.jsonl",
+          updatedAt: Date.now(),
+        },
+      };
+    });
+
+    try {
+      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runreplyagent-reset-"));
+      const storePath = path.join(tmp, "sessions.json");
+      const typing = createMockTypingController();
+      const sessionCtx = {
+        Provider: "telegram",
+        OriginatingTo: "chat",
+        AccountId: "primary",
+        MessageSid: "msg",
+        Surface: "telegram",
+      } as unknown as TemplateContext;
+      const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+      const followupRun = {
+        prompt: "hello",
+        summaryLine: "hello",
+        enqueuedAt: Date.now(),
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          sessionId: "session-old",
+          sessionKey,
+          messageProvider: "telegram",
+          sessionFile: "/tmp/session-old.jsonl",
+          workspaceDir: "/tmp",
+          config: {},
+          skillsSnapshot: {},
+          provider: "anthropic",
+          model: "claude-opus",
+          thinkLevel: "low",
+          verboseLevel: "off",
+          elevatedLevel: "off",
+          bashElevated: {
+            enabled: false,
+            allowed: false,
+            defaultLevel: "off",
+          },
+          timeoutMs: 5_000,
+          blockReplyBreak: "message_end",
+        },
+      } as unknown as FollowupRun;
+
+      runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "stale duplicate" }],
+        meta: {},
+      });
+
+      const result = await runReplyAgent({
+        commandBody: "hello",
+        followupRun,
+        queueKey: sessionKey,
+        resolvedQueue,
+        shouldSteer: false,
+        shouldFollowup: false,
+        isActive: false,
+        isStreaming: false,
+        typing,
+        sessionCtx,
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        defaultModel: "anthropic/claude-opus-4-5",
+        resolvedVerboseLevel: "off",
+        isNewSession: false,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        shouldInjectGroupIntro: false,
+        typingMode: "instant",
+      });
+
+      expect(result).toBeUndefined();
+    } finally {
+      loadSpy.mockRestore();
+    }
+  });
+});
+
 describe("runReplyAgent auto-compaction token update", () => {
   type EmbeddedRunParams = {
     prompt?: string;
@@ -502,7 +693,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       config,
     });
 
-    await runReplyAgent({
+    const result = await runReplyAgent({
       commandBody: "hello",
       followupRun,
       queueKey: "main",
@@ -527,6 +718,11 @@ describe("runReplyAgent auto-compaction token update", () => {
       typingMode: "instant",
     });
 
+    expect(result).toEqual(expect.objectContaining({ text: "done" }));
+    expect(followupRun.run.sessionId).toBe("session-rotated");
+    expect(await normalizeComparablePath(followupRun.run.sessionFile ?? "")).toBe(
+      await normalizeComparablePath(path.join(tmp, "session-rotated.jsonl")),
+    );
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(10_000);
     expect(stored[sessionKey].compactionCount).toBe(2);

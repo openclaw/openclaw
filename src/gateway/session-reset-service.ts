@@ -4,7 +4,8 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
-import { clearSessionQueues } from "../auto-reply/reply/queue.js";
+import { clearSessionQueues, resumeFollowupDrain } from "../auto-reply/reply/queue.js";
+import { closeTrackedBrowserTabsForSessions } from "../browser/session-tab-registry.js";
 import { loadConfig } from "../config/config.js";
 import {
   snapshotSessionOrigin,
@@ -49,6 +50,18 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
     contextTokens: undefined,
     systemPromptReport: undefined,
   };
+}
+
+function resolveSessionQueueKeys(params: {
+  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  sessionId?: string;
+}): string[] {
+  const queueKeys = new Set<string>(params.target.storeKeys);
+  queueKeys.add(params.target.canonicalKey);
+  if (params.sessionId) {
+    queueKeys.add(params.sessionId);
+  }
+  return [...queueKeys];
 }
 
 export function archiveSessionTranscriptsForSession(params: {
@@ -111,6 +124,7 @@ async function ensureSessionRuntimeCleanup(params: {
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   sessionId?: string;
+  reason: "session-reset" | "session-delete";
 }) {
   const closeTrackedBrowserTabs = async () => {
     const closeKeys = new Set<string>([
@@ -125,12 +139,21 @@ async function ensureSessionRuntimeCleanup(params: {
     });
   };
 
-  const queueKeys = new Set<string>(params.target.storeKeys);
-  queueKeys.add(params.target.canonicalKey);
-  if (params.sessionId) {
-    queueKeys.add(params.sessionId);
-  }
-  clearSessionQueues([...queueKeys]);
+  const queueKeys = resolveSessionQueueKeys({
+    target: params.target,
+    sessionId: params.sessionId,
+  });
+  clearSessionQueues(
+    queueKeys,
+    params.reason === "session-reset"
+      ? {
+          clearFollowups: false,
+          clearDrainCallbacks: false,
+          clearLanes: true,
+          pauseFollowups: true,
+        }
+      : undefined,
+  );
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
   if (!params.sessionId) {
     clearBootstrapSnapshot(params.target.canonicalKey);
@@ -238,6 +261,7 @@ export async function cleanupSessionBeforeMutation(params: {
     key: params.key,
     target: params.target,
     sessionId: params.entry?.sessionId,
+    reason: params.reason,
   });
   if (cleanupError) {
     return cleanupError;
@@ -265,6 +289,20 @@ export async function performGatewaySessionReset(params: {
   })();
   const { entry, legacyKey, canonicalKey } = loadSessionEntry(params.key);
   const hadExistingEntry = Boolean(entry);
+  const queueKeys = resolveSessionQueueKeys({
+    target,
+    sessionId: entry?.sessionId,
+  });
+  let followupsResumed = false;
+  const resumePreservedFollowups = () => {
+    if (followupsResumed) {
+      return;
+    }
+    followupsResumed = true;
+    for (const queueKey of queueKeys) {
+      resumeFollowupDrain(queueKey);
+    }
+  };
   const hookEvent = createInternalHookEvent(
     "command",
     params.reason,
@@ -277,110 +315,80 @@ export async function performGatewaySessionReset(params: {
     },
   );
   await triggerInternalHook(hookEvent);
-  const mutationCleanupError = await cleanupSessionBeforeMutation({
-    cfg,
-    key: params.key,
-    target,
-    entry,
-    legacyKey,
-    canonicalKey,
-    reason: "session-reset",
-  });
-  if (mutationCleanupError) {
-    return { ok: false, error: mutationCleanupError };
-  }
-
-  let oldSessionId: string | undefined;
-  let oldSessionFile: string | undefined;
-  const next = await updateSessionStore(storePath, (store) => {
-    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+  try {
+    const mutationCleanupError = await cleanupSessionBeforeMutation({
       cfg,
       key: params.key,
-      store,
-    });
-    const currentEntry = store[primaryKey];
-    const resetEntry = stripRuntimeModelState(currentEntry);
-    const parsed = parseAgentSessionKey(primaryKey);
-    const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
-    const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
-    oldSessionId = currentEntry?.sessionId;
-    oldSessionFile = currentEntry?.sessionFile;
-    const now = Date.now();
-    const nextEntry: SessionEntry = {
-      sessionId: randomUUID(),
-      updatedAt: now,
-      systemSent: false,
-      abortedLastRun: false,
-      thinkingLevel: currentEntry?.thinkingLevel,
-      fastMode: currentEntry?.fastMode,
-      verboseLevel: currentEntry?.verboseLevel,
-      reasoningLevel: currentEntry?.reasoningLevel,
-      elevatedLevel: currentEntry?.elevatedLevel,
-      ttsAuto: currentEntry?.ttsAuto,
-      execHost: currentEntry?.execHost,
-      execSecurity: currentEntry?.execSecurity,
-      execAsk: currentEntry?.execAsk,
-      execNode: currentEntry?.execNode,
-      responseUsage: currentEntry?.responseUsage,
-      providerOverride: currentEntry?.providerOverride,
-      modelOverride: currentEntry?.modelOverride,
-      authProfileOverride: currentEntry?.authProfileOverride,
-      authProfileOverrideSource: currentEntry?.authProfileOverrideSource,
-      authProfileOverrideCompactionCount: currentEntry?.authProfileOverrideCompactionCount,
-      groupActivation: currentEntry?.groupActivation,
-      groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
-      chatType: currentEntry?.chatType,
-      model: resolvedModel.model,
-      modelProvider: resolvedModel.provider,
-      contextTokens: resetEntry?.contextTokens,
-      sendPolicy: currentEntry?.sendPolicy,
-      queueMode: currentEntry?.queueMode,
-      queueDebounceMs: currentEntry?.queueDebounceMs,
-      queueCap: currentEntry?.queueCap,
-      queueDrop: currentEntry?.queueDrop,
-      spawnedBy: currentEntry?.spawnedBy,
-      spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
-      parentSessionKey: currentEntry?.parentSessionKey,
-      forkedFromParent: currentEntry?.forkedFromParent,
-      spawnDepth: currentEntry?.spawnDepth,
-      subagentRole: currentEntry?.subagentRole,
-      subagentControlScope: currentEntry?.subagentControlScope,
-      label: currentEntry?.label,
-      displayName: currentEntry?.displayName,
-      channel: currentEntry?.channel,
-      groupId: currentEntry?.groupId,
-      subject: currentEntry?.subject,
-      groupChannel: currentEntry?.groupChannel,
-      space: currentEntry?.space,
-      origin: snapshotSessionOrigin(currentEntry),
-      deliveryContext: currentEntry?.deliveryContext,
-      lastChannel: currentEntry?.lastChannel,
-      lastTo: currentEntry?.lastTo,
-      lastAccountId: currentEntry?.lastAccountId,
-      lastThreadId: currentEntry?.lastThreadId,
-      skillsSnapshot: currentEntry?.skillsSnapshot,
-      acp: currentEntry?.acp,
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-      totalTokensFresh: true,
-    };
-    store[primaryKey] = nextEntry;
-    return nextEntry;
-  });
-
-  archiveSessionTranscriptsForSession({
-    sessionId: oldSessionId,
-    storePath,
-    sessionFile: oldSessionFile,
-    agentId: target.agentId,
-    reason: "reset",
-  });
-  if (hadExistingEntry) {
-    await emitSessionUnboundLifecycleEvent({
-      targetSessionKey: target.canonicalKey ?? params.key,
       reason: "session-reset",
+      reason: params.reason === "new" ? "session-delete" : "session-reset",
     });
+    if (mutationCleanupError) {
+      return { ok: false, error: mutationCleanupError };
+    }
+
+    let oldSessionId: string | undefined;
+    let oldSessionFile: string | undefined;
+    const next = await updateSessionStore(storePath, (store) => {
+      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key: params.key,
+        store,
+      });
+      const currentEntry = store[primaryKey];
+      const resetEntry = stripRuntimeModelState(currentEntry);
+      const parsed = parseAgentSessionKey(primaryKey);
+      const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
+      const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
+      oldSessionId = currentEntry?.sessionId;
+      oldSessionFile = currentEntry?.sessionFile;
+      const now = Date.now();
+      const nextEntry: SessionEntry = {
+        sessionId: randomUUID(),
+        updatedAt: now,
+        systemSent: false,
+        abortedLastRun: false,
+        thinkingLevel: currentEntry?.thinkingLevel,
+        fastMode: currentEntry?.fastMode,
+        verboseLevel: currentEntry?.verboseLevel,
+        reasoningLevel: currentEntry?.reasoningLevel,
+        responseUsage: currentEntry?.responseUsage,
+        model: resolvedModel.model,
+        modelProvider: resolvedModel.provider,
+        contextTokens: resetEntry?.contextTokens,
+        sendPolicy: currentEntry?.sendPolicy,
+        label: currentEntry?.label,
+        origin: snapshotSessionOrigin(currentEntry),
+        lastChannel: currentEntry?.lastChannel,
+        lastTo: currentEntry?.lastTo,
+        lastAccountId: currentEntry?.lastAccountId,
+        lastThreadId: currentEntry?.lastThreadId,
+        skillsSnapshot: currentEntry?.skillsSnapshot,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      };
+      store[primaryKey] = nextEntry;
+      return nextEntry;
+    });
+
+    resumePreservedFollowups();
+
+    archiveSessionTranscriptsForSession({
+      sessionId: oldSessionId,
+      storePath,
+      sessionFile: oldSessionFile,
+      agentId: target.agentId,
+      reason: "reset",
+    });
+    if (hadExistingEntry) {
+      await emitSessionUnboundLifecycleEvent({
+        targetSessionKey: target.canonicalKey ?? params.key,
+        reason: "session-reset",
+      });
+    }
+    return { ok: true, key: target.canonicalKey, entry: next };
+  } finally {
+    resumePreservedFollowups();
   }
-  return { ok: true, key: target.canonicalKey, entry: next };
 }

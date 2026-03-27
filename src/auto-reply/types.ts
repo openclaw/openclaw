@@ -52,7 +52,7 @@ export type GetReplyOptions = {
   /** Called when a new assistant message starts (e.g., after tool call or thinking block). */
   onAssistantMessageStart?: () => Promise<void> | void;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
-  onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
+  onToolResult?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
   /** Called when context auto-compaction starts (allows UX feedback during the pause). */

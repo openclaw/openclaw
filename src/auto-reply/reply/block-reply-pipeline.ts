@@ -7,6 +7,7 @@ import type { BlockStreamingCoalescing } from "./block-streaming.js";
 export type BlockReplyPipeline = {
   enqueue: (payload: ReplyPayload) => void;
   flush: (options?: { force?: boolean }) => Promise<void>;
+  abort: () => void;
   stop: () => void;
   hasBuffered: () => boolean;
   didStream: () => boolean;
@@ -91,6 +92,7 @@ export function createBlockReplyPipeline(params: {
   const bufferedPayloadKeys = new Set<string>();
   const bufferedPayloads: ReplyPayload[] = [];
   let sendChain: Promise<void> = Promise.resolve();
+  let activeAbortController: AbortController | null = null;
   let aborted = false;
   let didStream = false;
   let didLogTimeout = false;
@@ -119,6 +121,7 @@ export function createBlockReplyPipeline(params: {
         if (aborted) {
           return false;
         }
+        activeAbortController = abortController;
         await withTimeout(
           Promise.resolve(
             onBlockReply(payload, {
@@ -154,6 +157,9 @@ export function createBlockReplyPipeline(params: {
         logVerbose(`block reply delivery failed: ${String(err)}`);
       })
       .finally(() => {
+        if (activeAbortController === abortController) {
+          activeAbortController = null;
+        }
         pendingKeys.delete(payloadKey);
       });
   };
@@ -233,6 +239,18 @@ export function createBlockReplyPipeline(params: {
     await sendChain;
   };
 
+  const abort = () => {
+    if (aborted) {
+      return;
+    }
+    aborted = true;
+    activeAbortController?.abort();
+    coalescer?.stop();
+    bufferedKeys.clear();
+    bufferedPayloadKeys.clear();
+    bufferedPayloads.length = 0;
+  };
+
   const stop = () => {
     coalescer?.stop();
   };
@@ -240,6 +258,7 @@ export function createBlockReplyPipeline(params: {
   return {
     enqueue,
     flush,
+    abort,
     stop,
     hasBuffered: () => Boolean(coalescer?.hasBuffered() || bufferedPayloads.length > 0),
     didStream: () => didStream,

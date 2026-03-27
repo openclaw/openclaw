@@ -76,4 +76,34 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(pipeline.hasSentPayload({ text: "response text" })).toBe(true);
     expect(pipeline.hasSentPayload({ text: "response text", replyToId: "other-id" })).toBe(true);
   });
+
+  it("aborts an in-flight block reply when the pipeline is aborted", async () => {
+    let beginSend: (() => void) | undefined;
+    const sendStarted = new Promise<void>((resolve) => {
+      beginSend = resolve;
+    });
+    let resolveAbort: (() => void) | undefined;
+    const aborted = new Promise<void>((resolve) => {
+      resolveAbort = resolve;
+    });
+    let abortSignal: AbortSignal | undefined;
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (_payload, options) => {
+        abortSignal = options?.abortSignal;
+        options?.abortSignal?.addEventListener("abort", () => resolveAbort?.(), {
+          once: true,
+        });
+        beginSend?.();
+        await aborted;
+      },
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "streamed reply" });
+    await sendStarted;
+    pipeline.abort();
+
+    await aborted;
+    expect(abortSignal?.aborted).toBe(true);
+  });
 });

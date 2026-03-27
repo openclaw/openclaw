@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -11,9 +12,14 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions/paths.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
@@ -21,6 +27,7 @@ import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
+import { runAbortableDelivery } from "./abortable-delivery.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
 import {
   resolveOriginAccountId,
@@ -36,9 +43,39 @@ import {
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+import {
+  cacheResolvedSessionEntry,
+  loadCanonicalLatestSessionEntry,
+} from "./session-entry-resolution.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
+
+function transplantSessionFilePath(params: {
+  previousSessionId?: string;
+  previousSessionFile?: string;
+  nextSessionId: string;
+}): string | undefined {
+  const previousSessionId = params.previousSessionId?.trim();
+  const previousSessionFile = params.previousSessionFile?.trim();
+  if (!previousSessionId || !previousSessionFile) {
+    return undefined;
+  }
+  const parsed = path.parse(previousSessionFile);
+  if (!parsed.name) {
+    return undefined;
+  }
+  if (parsed.name === previousSessionId) {
+    return path.join(parsed.dir, `${params.nextSessionId}${parsed.ext}`);
+  }
+  if (!parsed.name.startsWith(`${previousSessionId}-`)) {
+    return undefined;
+  }
+  return path.join(
+    parsed.dir,
+    `${params.nextSessionId}${parsed.name.slice(previousSessionId.length)}${parsed.ext}`,
+  );
+}
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -76,7 +113,14 @@ export function createFollowupRunner(params: {
    * session's current dispatcher. This ensures replies go back to
    * where the message originated.
    */
-  const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
+  const sendFollowupPayloads = async (
+    payloads: ReplyPayload[],
+    queued: FollowupRun,
+    controls: {
+      isQueuedRunSuperseded: () => boolean;
+      shouldDropSupersededQueuedRun: () => boolean;
+    },
+  ) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
     const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
@@ -87,6 +131,9 @@ export function createFollowupRunner(params: {
     }
 
     for (const payload of payloads) {
+      if (controls.shouldDropSupersededQueuedRun()) {
+        return;
+      }
       if (!payload || !hasOutboundReplyContent(payload)) {
         continue;
       }
@@ -97,45 +144,135 @@ export function createFollowupRunner(params: {
         continue;
       }
       await typingSignals.signalTextDelta(payload.text);
+      if (controls.shouldDropSupersededQueuedRun()) {
+        return;
+      }
 
       // Route to originating channel if set, otherwise fall back to dispatcher.
-      if (shouldRouteToOriginating) {
-        const result = await routeReply({
-          payload,
-          channel: originatingChannel,
-          to: originatingTo,
-          sessionKey: queued.run.sessionKey,
-          accountId: queued.originatingAccountId,
-          threadId: queued.originatingThreadId,
-          cfg: queued.run.config,
-        });
-        if (!result.ok) {
-          const errorMsg = result.error ?? "unknown error";
-          logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
-          // Fall back to the caller-provided dispatcher only when the
-          // originating channel matches the session's message provider.
-          // In that case onBlockReply was created by the same channel's
-          // handler and delivers to the correct destination.  For true
-          // cross-channel routing (origin !== provider), falling back
-          // would send to the wrong channel, so we drop the payload.
-          const provider = resolveOriginMessageProvider({
-            provider: queued.run.messageProvider,
-          });
-          const origin = resolveOriginMessageProvider({
-            originatingChannel,
-          });
-          if (opts?.onBlockReply && origin && origin === provider) {
-            await opts.onBlockReply(payload);
+      const delivery = await runAbortableDelivery({
+        shouldAbort: controls.isQueuedRunSuperseded,
+        outerSignal: opts?.abortSignal,
+        run: async (abortSignal) => {
+          if (shouldRouteToOriginating) {
+            const result = await routeReply({
+              payload,
+              channel: originatingChannel,
+              to: originatingTo,
+              sessionKey: queued.run.sessionKey,
+              accountId: queued.originatingAccountId,
+              threadId: queued.originatingThreadId,
+              cfg: queued.run.config,
+              abortSignal,
+            });
+            if (!result.ok) {
+              if (abortSignal.aborted && controls.isQueuedRunSuperseded()) {
+                return;
+              }
+              const errorMsg = result.error ?? "unknown error";
+              logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
+              // Fall back to the caller-provided dispatcher only when the
+              // originating channel matches the session's message provider.
+              // In that case onBlockReply was created by the same channel's
+              // handler and delivers to the correct destination.  For true
+              // cross-channel routing (origin !== provider), falling back
+              // would send to the wrong channel, so we drop the payload.
+              const provider = resolveOriginMessageProvider({
+                provider: queued.run.messageProvider,
+              });
+              const origin = resolveOriginMessageProvider({
+                originatingChannel,
+              });
+              if (opts?.onBlockReply && origin && origin === provider) {
+                await opts.onBlockReply(payload, { abortSignal });
+              }
+            }
+            return;
           }
-        }
-      } else if (opts?.onBlockReply) {
-        await opts.onBlockReply(payload);
+          if (opts?.onBlockReply) {
+            await opts.onBlockReply(payload, { abortSignal });
+          }
+        },
+      });
+      if (!delivery.completed) {
+        controls.shouldDropSupersededQueuedRun();
+        return;
       }
     }
   };
 
   return async (queued: FollowupRun) => {
     try {
+      const loadLatestSessionEntry = () => {
+        const latest = loadCanonicalLatestSessionEntry({
+          sessionKey,
+          storePath,
+        });
+        if (!latest.entry) {
+          return undefined;
+        }
+        cacheResolvedSessionEntry(sessionStore, latest.entry, [
+          sessionKey ?? "",
+          latest.canonicalKey ?? "",
+          ...latest.storeKeys,
+        ]);
+        return latest.entry;
+      };
+      const resolveLatestSessionEntry = () =>
+        loadLatestSessionEntry() ??
+        (sessionKey ? sessionStore?.[sessionKey] : undefined) ??
+        sessionEntry;
+      const rebindQueuedRunToCurrentSession = () => {
+        const latestEntry = resolveLatestSessionEntry();
+        const latestSessionId = latestEntry?.sessionId?.trim();
+        if (!latestSessionId || latestSessionId === queued.run.sessionId) {
+          return latestEntry;
+        }
+        const reboundSessionFile = resolveSessionFilePath(
+          latestSessionId,
+          latestEntry?.sessionFile?.trim()
+            ? latestEntry
+            : {
+                sessionFile: transplantSessionFilePath({
+                  previousSessionId: queued.run.sessionId,
+                  previousSessionFile: queued.run.sessionFile,
+                  nextSessionId: latestSessionId,
+                }),
+              },
+          resolveSessionFilePathOptions({
+            agentId: resolveAgentIdFromSessionKey(sessionKey),
+            storePath,
+          }),
+        );
+        queued.run.sessionId = latestSessionId;
+        queued.run.sessionFile = reboundSessionFile;
+        logVerbose(
+          `followup queue: rebound ${sessionKey ?? queued.run.sessionId} to session ${latestSessionId}`,
+        );
+        return latestEntry
+          ? {
+              ...latestEntry,
+              sessionId: latestSessionId,
+              sessionFile: reboundSessionFile,
+            }
+          : latestEntry;
+      };
+      const isQueuedRunSuperseded = () => {
+        const latestEntry = resolveLatestSessionEntry();
+        const latestSessionId = latestEntry?.sessionId?.trim();
+        const runSessionId = queued.run.sessionId?.trim();
+        return Boolean(latestSessionId && runSessionId && latestSessionId !== runSessionId);
+      };
+      const shouldDropSupersededQueuedRun = () => {
+        if (!isQueuedRunSuperseded()) {
+          return false;
+        }
+        logVerbose(
+          `followup queue: dropping superseded reply for ${sessionKey ?? queued.run.sessionId}`,
+        );
+        return true;
+      };
+
+      let activeSessionEntry = rebindQueuedRunToCurrentSession();
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
         resolveOriginMessageProvider({
@@ -278,8 +415,12 @@ export function createFollowupRunner(params: {
       const contextTokensUsed =
         agentCfgContextTokens ??
         lookupContextTokens(modelUsed) ??
-        sessionEntry?.contextTokens ??
+        activeSessionEntry?.contextTokens ??
         DEFAULT_CONTEXT_TOKENS;
+
+      if (shouldDropSupersededQueuedRun()) {
+        return;
+      }
 
       if (storePath && sessionKey) {
         await persistRunSessionUsage({
@@ -300,6 +441,9 @@ export function createFollowupRunner(params: {
           ),
           logLabel: "followup",
         });
+      }
+      if (shouldDropSupersededQueuedRun()) {
+        return;
       }
 
       const payloadArray = runResult.payloads ?? [];
@@ -328,11 +472,13 @@ export function createFollowupRunner(params: {
         queued.originatingAccountId,
         queued.originatingChatType,
       );
+      const currentMessageId = queued.messageId?.trim() || undefined;
 
       const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
         payloads: sanitizedPayloads,
         replyToMode,
         replyToChannel,
+        currentMessageId,
       });
 
       const dedupedPayloads = filterMessagingToolDuplicates({
@@ -358,15 +504,17 @@ export function createFollowupRunner(params: {
         }),
       });
       const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
-
-      if (finalPayloads.length === 0) {
+      if (shouldDropSupersededQueuedRun()) {
         return;
       }
 
       if (autoCompactionCount > 0) {
         const previousSessionId = queued.run.sessionId;
+        if (shouldDropSupersededQueuedRun()) {
+          return;
+        }
         const count = await incrementRunCompactionCount({
-          sessionEntry,
+          sessionEntry: activeSessionEntry ?? sessionEntry,
           sessionStore,
           sessionKey,
           storePath,
@@ -378,6 +526,14 @@ export function createFollowupRunner(params: {
         const refreshedSessionEntry =
           sessionKey && sessionStore ? sessionStore[sessionKey] : undefined;
         if (refreshedSessionEntry) {
+          const refreshedSessionId = refreshedSessionEntry.sessionId?.trim();
+          if (refreshedSessionId) {
+            queued.run.sessionId = refreshedSessionId;
+          }
+          const refreshedSessionFile = refreshedSessionEntry.sessionFile?.trim();
+          if (refreshedSessionFile) {
+            queued.run.sessionFile = refreshedSessionFile;
+          }
           const queueKey = queued.run.sessionKey ?? sessionKey;
           if (queueKey) {
             refreshQueuedFollowupSession({
@@ -390,13 +546,37 @@ export function createFollowupRunner(params: {
         }
         if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
-          finalPayloads.unshift({
-            text: `🧹 Auto-compaction complete${suffix}.`,
+          const [compactionNotice] = applyReplyThreading({
+            payloads: [
+              {
+                text: `🧹 Auto-compaction complete${suffix}.`,
+                isCompactionNotice: true,
+              },
+            ],
+            replyToMode,
+            replyToChannel,
+            currentMessageId,
           });
+          if (compactionNotice) {
+            finalPayloads.unshift(compactionNotice);
+          }
         }
       }
+      if (shouldDropSupersededQueuedRun()) {
+        return;
+      }
 
-      await sendFollowupPayloads(finalPayloads, queued);
+      if (finalPayloads.length === 0) {
+        return;
+      }
+
+      if (shouldDropSupersededQueuedRun()) {
+        return;
+      }
+      await sendFollowupPayloads(finalPayloads, queued, {
+        isQueuedRunSuperseded,
+        shouldDropSupersededQueuedRun,
+      });
     } finally {
       // Both signals are required for the typing controller to clean up.
       // The main inbound dispatch path calls markDispatchIdle() from the
