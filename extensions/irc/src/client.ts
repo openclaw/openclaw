@@ -142,6 +142,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   }>>();
   let multilineCap = false;
   let batchCounter = 0;
+  let accumulatedCaps = ""; // Accumulate caps across multi-chunk CAP LS responses
   let resolveCapComplete: (() => void) | null = null;
   const capCompletePromise = new Promise<void>((resolve) => {
     resolveCapComplete = resolve;
@@ -305,12 +306,14 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
       // CAP negotiation for draft/multiline
       if (line.command === "CAP" && line.params[1] === "LS") {
+        // Accumulate caps from each chunk
+        accumulatedCaps += " " + (line.trailing ?? "").toLowerCase();
         // params[2] === "*" means more chunks coming; wait for final chunk
         if (line.params[2] === "*") {
           continue;
         }
-        const caps = (line.trailing ?? "").toLowerCase();
-        if (caps.includes("draft/multiline")) {
+        // Final chunk - process accumulated caps
+        if (accumulatedCaps.includes("draft/multiline")) {
           sendRaw(`CAP REQ draft/multiline`);
         } else {
           resolveCapComplete?.();
