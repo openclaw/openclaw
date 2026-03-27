@@ -186,13 +186,18 @@ export function normalizeToolParameters(
         : undefined;
 
   const nextSchema: Record<string, unknown> = { ...schema };
+  const finalProperties =
+    Object.keys(mergedProperties).length > 0 ? mergedProperties : (schema.properties ?? {});
+  const validRequired =
+    mergedRequired && mergedRequired.length > 0
+      ? mergedRequired.filter((key) => key in (finalProperties as Record<string, unknown>))
+      : mergedRequired;
   const flattenedSchema = {
     type: "object",
     ...(typeof nextSchema.title === "string" ? { title: nextSchema.title } : {}),
     ...(typeof nextSchema.description === "string" ? { description: nextSchema.description } : {}),
-    properties:
-      Object.keys(mergedProperties).length > 0 ? mergedProperties : (schema.properties ?? {}),
-    ...(mergedRequired && mergedRequired.length > 0 ? { required: mergedRequired } : {}),
+    properties: finalProperties,
+    ...(validRequired && validRequired.length > 0 ? { required: validRequired } : {}),
     additionalProperties: "additionalProperties" in schema ? schema.additionalProperties : true,
   };
 

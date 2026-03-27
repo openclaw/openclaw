@@ -207,6 +207,27 @@ function simplifyUnionVariants(params: { obj: Record<string, unknown>; variants:
   return { variants: stripped ? nonNullVariants : variants };
 }
 
+/**
+ * Gemini rejects schemas where `required` references properties not in `properties`.
+ * Filter out any mismatched required fields so the schema passes validation.
+ */
+function sanitizeRequiredFields(schema: Record<string, unknown>): Record<string, unknown> {
+  if (
+    Array.isArray(schema.required) &&
+    schema.properties &&
+    typeof schema.properties === "object"
+  ) {
+    const props = schema.properties as Record<string, unknown>;
+    const filtered = (schema.required as string[]).filter((key) => key in props);
+    if (filtered.length > 0) {
+      schema.required = filtered;
+    } else {
+      delete schema.required;
+    }
+  }
+  return schema;
+}
+
 function cleanSchemaForGeminiWithDefs(
   schema: unknown,
   defs: SchemaDefs | undefined,
@@ -352,17 +373,17 @@ function cleanSchemaForGeminiWithDefs(
   if (cleaned.anyOf && Array.isArray(cleaned.anyOf)) {
     const flattened = flattenUnionFallback(cleaned, cleaned.anyOf);
     if (flattened) {
-      return flattened;
+      return sanitizeRequiredFields(flattened);
     }
   }
   if (cleaned.oneOf && Array.isArray(cleaned.oneOf)) {
     const flattened = flattenUnionFallback(cleaned, cleaned.oneOf);
     if (flattened) {
-      return flattened;
+      return sanitizeRequiredFields(flattened);
     }
   }
 
-  return cleaned;
+  return sanitizeRequiredFields(cleaned);
 }
 
 /**
