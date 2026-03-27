@@ -78,18 +78,19 @@ export function renderChannels(props: ChannelsProps) {
           <div class="card-title">Channel health</div>
           <div class="card-sub">Channel status snapshots from the gateway.</div>
         </div>
-        <div class="muted">${props.lastSuccessAt ? formatRelativeTimestamp(props.lastSuccessAt) : "n/a"}</div>
+        <div class="muted">
+          ${props.lastSuccessAt ? formatRelativeTimestamp(props.lastSuccessAt) : "n/a"}
+        </div>
       </div>
       ${
         props.lastError
-          ? html`<div class="callout danger" style="margin-top: 12px;">
-            ${props.lastError}
-          </div>`
+          ? html`<div class="callout danger" style="margin-top: 12px;">${props.lastError}</div>`
           : nothing
       }
       <pre class="code-block" style="margin-top: 12px;">
 ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : "No snapshot yet."}
-      </pre>
+      </pre
+      >
     </section>
   `;
 }
@@ -199,7 +200,6 @@ function renderGenericChannelCard(
       <div class="card-title">${label}</div>
       <div class="card-sub">Channel status and configuration.</div>
       ${accountCountLabel}
-
       ${
         accounts.length > 0
           ? html`
@@ -224,15 +224,11 @@ function renderGenericChannelCard(
             </div>
           `
       }
-
       ${
         lastError
-          ? html`<div class="callout danger" style="margin-top: 12px;">
-            ${lastError}
-          </div>`
+          ? html`<div class="callout danger" style="margin-top: 12px;">${lastError}</div>`
           : nothing
       }
-
       ${renderChannelConfigSection({ channelId: key, props })}
     </div>
   `;
@@ -311,15 +307,13 @@ function renderGenericAccount(account: ChannelAccountSnapshot) {
         </div>
         <div>
           <span class="label">Last inbound</span>
-          <span>${account.lastInboundAt ? formatRelativeTimestamp(account.lastInboundAt) : "n/a"}</span>
+          <span
+            >${account.lastInboundAt ? formatRelativeTimestamp(account.lastInboundAt) : "n/a"}</span
+          >
         </div>
         ${
           account.lastError
-            ? html`
-              <div class="account-card-error">
-                ${account.lastError}
-              </div>
-            `
+            ? html` <div class="account-card-error">${account.lastError}</div> `
             : nothing
         }
       </div>

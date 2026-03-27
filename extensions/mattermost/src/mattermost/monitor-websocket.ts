@@ -1,13 +1,15 @@
+import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { z } from "openclaw/plugin-sdk/zod";
 import WebSocket from "ws";
 import type { ChannelAccountSnapshot, RuntimeEnv } from "../runtime-api.js";
-import type { MattermostPost } from "./client.js";
+import { MattermostPostSchema, type MattermostPost } from "./client.js";
 import { rawDataToString } from "./monitor-helpers.js";
 
 export type MattermostEventPayload = {
   event?: string;
   data?: {
-    post?: string;
-    reaction?: string;
+    post?: string | MattermostPost;
+    reaction?: string | Record<string, unknown>;
     channel_id?: string;
     channel_name?: string;
     channel_display_name?: string;
@@ -33,6 +35,40 @@ export type MattermostWebSocketLike = {
 };
 
 export type MattermostWebSocketFactory = (url: string) => MattermostWebSocketLike;
+
+const MattermostEventPayloadSchema = z.object({
+  event: z.string().optional(),
+  data: z
+    .object({
+      post: z.union([z.string(), MattermostPostSchema]).optional(),
+      reaction: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
+      channel_id: z.string().optional(),
+      channel_name: z.string().optional(),
+      channel_display_name: z.string().optional(),
+      channel_type: z.string().optional(),
+      sender_name: z.string().optional(),
+      team_id: z.string().optional(),
+    })
+    .optional(),
+  broadcast: z
+    .object({
+      channel_id: z.string().optional(),
+      team_id: z.string().optional(),
+      user_id: z.string().optional(),
+    })
+    .optional(),
+}) as z.ZodType<MattermostEventPayload>;
+
+function parseMattermostEventPayload(raw: string): MattermostEventPayload | null {
+  return safeParseJsonWithSchema(MattermostEventPayloadSchema, raw);
+}
+
+function parseMattermostPost(value: unknown): MattermostPost | null {
+  if (typeof value === "string") {
+    return safeParseJsonWithSchema(MattermostPostSchema, value);
+  }
+  return safeParseWithSchema(MattermostPostSchema, value);
+}
 
 export class WebSocketClosedBeforeOpenError extends Error {
   constructor(
@@ -69,16 +105,7 @@ export function parsePostedPayload(
   if (!postData) {
     return null;
   }
-  let post: MattermostPost | null = null;
-  if (typeof postData === "string") {
-    try {
-      post = JSON.parse(postData) as MattermostPost;
-    } catch {
-      return null;
-    }
-  } else if (typeof postData === "object") {
-    post = postData as MattermostPost;
-  }
+  const post = parseMattermostPost(postData);
   if (!post) {
     return null;
   }
@@ -89,10 +116,8 @@ export function parsePostedEvent(
   data: WebSocket.RawData,
 ): { payload: MattermostEventPayload; post: MattermostPost } | null {
   const raw = rawDataToString(data);
-  let payload: MattermostEventPayload;
-  try {
-    payload = JSON.parse(raw) as MattermostEventPayload;
-  } catch {
+  const payload = parseMattermostEventPayload(raw);
+  if (!payload) {
     return null;
   }
   return parsePostedPayload(payload);
@@ -144,10 +169,8 @@ export function createMattermostConnectOnce(
 
         ws.on("message", async (data) => {
           const raw = rawDataToString(data);
-          let payload: MattermostEventPayload;
-          try {
-            payload = JSON.parse(raw) as MattermostEventPayload;
-          } catch {
+          const payload = parseMattermostEventPayload(raw);
+          if (!payload) {
             return;
           }
 

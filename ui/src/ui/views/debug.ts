@@ -77,7 +77,8 @@ export function renderDebug(props: DebugProps) {
             <span>Method</span>
             <select
               .value=${props.callMethod}
-              @change=${(e: Event) => props.onCallMethodChange((e.target as HTMLSelectElement).value)}
+              @change=${(e: Event) =>
+                props.onCallMethodChange((e.target as HTMLSelectElement).value)}
             >
               ${
                 !props.callMethod
@@ -104,9 +105,7 @@ export function renderDebug(props: DebugProps) {
         </div>
         ${
           props.callError
-            ? html`<div class="callout danger" style="margin-top: 12px;">
-              ${props.callError}
-            </div>`
+            ? html`<div class="callout danger" style="margin-top: 12px;">${props.callError}</div>`
             : nothing
         }
         ${
@@ -120,11 +119,9 @@ export function renderDebug(props: DebugProps) {
     <section class="card" style="margin-top: 18px;">
       <div class="card-title">Models</div>
       <div class="card-sub">Catalog from models.list.</div>
-      <pre class="code-block" style="margin-top: 12px;">${JSON.stringify(
-        props.models ?? [],
-        null,
-        2,
-      )}</pre>
+      <pre class="code-block" style="margin-top: 12px;">
+${JSON.stringify(props.models ?? [], null, 2)}</pre
+      >
     </section>
 
     <section class="card" style="margin-top: 18px;">
@@ -145,9 +142,9 @@ export function renderDebug(props: DebugProps) {
                       <div class="list-sub">${new Date(evt.ts).toLocaleTimeString()}</div>
                     </div>
                     <div class="list-meta debug-event-log__meta">
-                      <pre class="code-block debug-event-log__payload">${formatEventPayload(
-                        evt.payload,
-                      )}</pre>
+                      <pre class="code-block debug-event-log__payload">
+${formatEventPayload(evt.payload)}</pre
+                      >
                     </div>
                   </div>
                 `,

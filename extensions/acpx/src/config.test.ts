@@ -187,4 +187,12 @@ describe("acpx plugin config parsing", () => {
       }),
     ).toThrow("strictWindowsCmdWrapper must be a boolean");
   });
+
+  it("keeps the runtime json schema in sync with the manifest config schema", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as { configSchema?: unknown };
+
+    expect(createAcpxPluginConfigSchema().jsonSchema).toEqual(manifest.configSchema);
+  });
 });

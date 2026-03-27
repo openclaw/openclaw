@@ -14,7 +14,7 @@ import {
   type ClawHubPackageDetail,
   type ClawHubPackageFamily,
 } from "../infra/clawhub.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import { installPluginFromArchive, type InstallPluginResult } from "./install.js";
 
 export const CLAWHUB_INSTALL_ERROR_CODE = {
@@ -274,7 +274,7 @@ export async function installPluginFromClawHub(params: {
   if (!versionState.ok) {
     return versionState;
   }
-  const runtimeVersion = resolveRuntimeServiceVersion();
+  const runtimeVersion = resolveCompatibilityHostVersion();
   const validationFailure = validateClawHubPluginPackage({
     detail,
     compatibility: versionState.compatibility,

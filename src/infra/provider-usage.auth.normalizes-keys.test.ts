@@ -7,16 +7,69 @@ import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 
+vi.mock("../agents/auth-profiles.js", async () => {
+  const profiles = await vi.importActual<typeof import("../agents/auth-profiles/profiles.js")>(
+    "../agents/auth-profiles/profiles.js",
+  );
+  const order = await vi.importActual<typeof import("../agents/auth-profiles/order.js")>(
+    "../agents/auth-profiles/order.js",
+  );
+  const oauth = await vi.importActual<typeof import("../agents/auth-profiles/oauth.js")>(
+    "../agents/auth-profiles/oauth.js",
+  );
+
+  const readStore = (agentDir?: string) => {
+    if (!agentDir) {
+      return { version: 1, profiles: {} };
+    }
+    const authPath = path.join(agentDir, "auth-profiles.json");
+    try {
+      const parsed = JSON.parse(nodeFs.readFileSync(authPath, "utf8")) as {
+        version?: number;
+        profiles?: Record<string, unknown>;
+        order?: Record<string, string[]>;
+        lastGood?: Record<string, string>;
+        usageStats?: Record<string, unknown>;
+      };
+      return {
+        version: parsed.version ?? 1,
+        profiles: parsed.profiles ?? {},
+        ...(parsed.order ? { order: parsed.order } : {}),
+        ...(parsed.lastGood ? { lastGood: parsed.lastGood } : {}),
+        ...(parsed.usageStats ? { usageStats: parsed.usageStats } : {}),
+      };
+    } catch {
+      return { version: 1, profiles: {} };
+    }
+  };
+
+  return {
+    clearRuntimeAuthProfileStoreSnapshots: () => {},
+    ensureAuthProfileStore: (agentDir?: string) => readStore(agentDir),
+    dedupeProfileIds: profiles.dedupeProfileIds,
+    listProfilesForProvider: profiles.listProfilesForProvider,
+    resolveApiKeyForProfile: oauth.resolveApiKeyForProfile,
+    resolveAuthProfileOrder: order.resolveAuthProfileOrder,
+  };
+});
+
 const resolveProviderUsageAuthWithPluginMock = vi.fn(async (..._args: unknown[]) => null);
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderUsageAuthWithPlugin: resolveProviderUsageAuthWithPluginMock,
 }));
 
+vi.mock("../plugins/provider-runtime.ts", () => ({
+  resolveProviderUsageAuthWithPlugin: resolveProviderUsageAuthWithPluginMock,
+}));
+
 vi.mock("../agents/cli-credentials.js", () => ({
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
-  readQwenCliCredentialsCached: () => null,
+}));
+
+vi.mock("../agents/auth-profiles/external-cli-sync.js", () => ({
+  syncExternalCliCredentials: () => false,
 }));
 
 let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
@@ -64,9 +117,15 @@ describe("resolveProviderAuths key normalization", () => {
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const base = path.join(suiteRoot, `case-${++suiteCase}`);
     nodeFs.mkdirSync(base, { recursive: true });
-    nodeFs.mkdirSync(path.join(base, ".openclaw", "agents", "main", "sessions"), {
-      recursive: true,
-    });
+    const stateDir = path.join(base, ".openclaw");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    nodeFs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
+    nodeFs.mkdirSync(agentDir, { recursive: true });
+    nodeFs.writeFileSync(
+      path.join(agentDir, "auth-profiles.json"),
+      `${JSON.stringify({ version: 1, profiles: {} }, null, 2)}\n`,
+      "utf8",
+    );
     return await fn(base);
   }
 

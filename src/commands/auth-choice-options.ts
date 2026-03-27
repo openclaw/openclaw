@@ -1,7 +1,9 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
-import { resolveProviderWizardOptions } from "../plugins/provider-wizard.js";
+import {
+  resolveManifestProviderSetupFlowContributions,
+  resolveProviderSetupFlowContributions,
+} from "../flows/provider-flow.js";
 import {
   CORE_AUTH_CHOICE_OPTIONS,
   type AuthChoiceGroup,
@@ -9,17 +11,6 @@ import {
   formatStaticAuthChoiceChoicesForCli,
 } from "./auth-choice-options.static.js";
 import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
-
-const DEFAULT_AUTH_CHOICE_ONBOARDING_SCOPE = "text-inference" as const;
-
-function includesOnboardingScope(
-  onboardingScopes: readonly ("text-inference" | "image-generation")[] | undefined,
-  scope: "text-inference" | "image-generation",
-): boolean {
-  return onboardingScopes
-    ? onboardingScopes.includes(scope)
-    : scope === DEFAULT_AUTH_CHOICE_ONBOARDING_SCOPE;
-}
 
 function compareOptionLabels(a: AuthChoiceOption, b: AuthChoiceOption): number {
   return a.label.localeCompare(b.label);
@@ -29,42 +20,26 @@ function compareGroupLabels(a: AuthChoiceGroup, b: AuthChoiceGroup): number {
   return a.label.localeCompare(b.label);
 }
 
-function resolveManifestProviderChoiceOptions(params?: {
+function resolveProviderChoiceOptions(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): AuthChoiceOption[] {
-  return resolveManifestProviderAuthChoices(params ?? {})
-    .filter((choice) =>
-      includesOnboardingScope(choice.onboardingScopes, DEFAULT_AUTH_CHOICE_ONBOARDING_SCOPE),
-    )
-    .map((choice) => ({
-      value: choice.choiceId as AuthChoice,
-      label: choice.choiceLabel,
-      ...(choice.choiceHint ? { hint: choice.choiceHint } : {}),
-      ...(choice.groupId ? { groupId: choice.groupId as AuthChoiceGroupId } : {}),
-      ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
-      ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
-    }));
-}
-
-function resolveRuntimeFallbackProviderChoiceOptions(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): AuthChoiceOption[] {
-  return resolveProviderWizardOptions(params ?? {})
-    .filter((option) =>
-      includesOnboardingScope(option.onboardingScopes, DEFAULT_AUTH_CHOICE_ONBOARDING_SCOPE),
-    )
-    .map((option) => ({
-      value: option.value as AuthChoice,
-      label: option.label,
-      ...(option.hint ? { hint: option.hint } : {}),
-      groupId: option.groupId as AuthChoiceGroupId,
-      groupLabel: option.groupLabel,
-      ...(option.groupHint ? { groupHint: option.groupHint } : {}),
-    }));
+  return resolveProviderSetupFlowContributions({
+    ...params,
+    scope: "text-inference",
+  }).map((contribution) => ({
+    value: contribution.option.value as AuthChoice,
+    label: contribution.option.label,
+    ...(contribution.option.hint ? { hint: contribution.option.hint } : {}),
+    ...(contribution.option.group
+      ? {
+          groupId: contribution.option.group.id as AuthChoiceGroupId,
+          groupLabel: contribution.option.group.label,
+          ...(contribution.option.group.hint ? { groupHint: contribution.option.group.hint } : {}),
+        }
+      : {}),
+  }));
 }
 
 export function formatAuthChoiceChoicesForCli(params?: {
@@ -76,7 +51,10 @@ export function formatAuthChoiceChoicesForCli(params?: {
 }): string {
   const values = [
     ...formatStaticAuthChoiceChoicesForCli(params).split("|"),
-    ...resolveManifestProviderChoiceOptions(params).map((option) => option.value),
+    ...resolveManifestProviderSetupFlowContributions({
+      ...params,
+      scope: "text-inference",
+    }).map((contribution) => contribution.option.value),
   ];
 
   return [...new Set(values)].join("|");
@@ -94,21 +72,12 @@ export function buildAuthChoiceOptions(params: {
   for (const option of CORE_AUTH_CHOICE_OPTIONS) {
     optionByValue.set(option.value, option);
   }
-  for (const option of resolveManifestProviderChoiceOptions({
+  for (const option of resolveProviderChoiceOptions({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   })) {
     optionByValue.set(option.value, option);
-  }
-  for (const option of resolveRuntimeFallbackProviderChoiceOptions({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  })) {
-    if (!optionByValue.has(option.value)) {
-      optionByValue.set(option.value, option);
-    }
   }
 
   const options: AuthChoiceOption[] = Array.from(optionByValue.values()).toSorted(

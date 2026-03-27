@@ -523,7 +523,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
 
     expect(res.config.talk).toEqual({
-      provider: "elevenlabs",
       providers: {
         elevenlabs: {
           voiceId: "voice-123",
@@ -545,9 +544,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     });
-    expect(res.changes).toEqual([
-      "Moved legacy talk flat fields → talk.provider/talk.providers.elevenlabs.",
-    ]);
+    expect(res.changes).toEqual(["Moved legacy talk flat fields → talk.providers.elevenlabs."]);
   });
 
   it("normalizes talk provider ids without overriding explicit provider config", () => {

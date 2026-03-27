@@ -54,6 +54,7 @@ describe("scoped vitest configs", () => {
 
   it("defaults channel tests to non-isolated mode", () => {
     expect(defaultChannelsConfig.test?.isolate).toBe(false);
+    expect(defaultChannelsConfig.test?.pool).toBe("forks");
   });
 
   it("loads channel include overrides from OPENCLAW_VITEST_INCLUDE_FILE", () => {
@@ -82,6 +83,7 @@ describe("scoped vitest configs", () => {
 
   it("defaults extension tests to non-isolated mode", () => {
     expect(defaultExtensionsConfig.test?.isolate).toBe(false);
+    expect(defaultExtensionsConfig.test?.pool).toBe("forks");
   });
 
   it("normalizes extension include patterns relative to the scoped dir", () => {

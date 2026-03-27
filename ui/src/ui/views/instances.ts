@@ -44,16 +44,12 @@ export function renderInstances(props: InstancesProps) {
       </div>
       ${
         props.lastError
-          ? html`<div class="callout danger" style="margin-top: 12px;">
-            ${props.lastError}
-          </div>`
+          ? html`<div class="callout danger" style="margin-top: 12px;">${props.lastError}</div>`
           : nothing
       }
       ${
         props.statusMessage
-          ? html`<div class="callout" style="margin-top: 12px;">
-            ${props.statusMessage}
-          </div>`
+          ? html`<div class="callout" style="margin-top: 12px;">${props.statusMessage}</div>`
           : nothing
       }
       <div class="list" style="margin-top: 16px;">
@@ -89,7 +85,8 @@ function renderEntry(entry: PresenceEntry, masked: boolean) {
           <span class="${masked ? "redacted" : ""}">${host}</span>
         </div>
         <div class="list-sub">
-          ${ip ? html`<span class="${masked ? "redacted" : ""}">${ip}</span> ` : nothing}${mode} ${entry.version ?? ""}
+          ${ip ? html`<span class="${masked ? "redacted" : ""}">${ip}</span> ` : nothing}${mode}
+          ${entry.version ?? ""}
         </div>
         <div class="chip-row">
           <span class="chip">${mode}</span>
