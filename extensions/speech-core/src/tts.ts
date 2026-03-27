@@ -522,6 +522,7 @@ function resolveTtsRequestSetup(params: {
   prefsPath?: string;
   providerOverride?: TtsProvider;
   disableFallback?: boolean;
+  agentId?: string;
 }):
   | {
       config: ResolvedTtsConfig;
@@ -530,7 +531,7 @@ function resolveTtsRequestSetup(params: {
   | {
       error: string;
     } {
-  const config = resolveTtsConfig(params.cfg);
+  const config = resolveTtsConfig(params.cfg, params.agentId);
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
   if (params.text.length > config.maxTextLength) {
     return {
@@ -554,6 +555,7 @@ export async function textToSpeech(params: {
   channel?: string;
   overrides?: TtsDirectiveOverrides;
   disableFallback?: boolean;
+  agentId?: string;
 }): Promise<TtsResult> {
   const synthesis = await synthesizeSpeech(params);
   if (!synthesis.success || !synthesis.audioBuffer || !synthesis.fileExtension) {
@@ -584,6 +586,7 @@ export async function synthesizeSpeech(params: {
   channel?: string;
   overrides?: TtsDirectiveOverrides;
   disableFallback?: boolean;
+  agentId?: string;
 }): Promise<TtsSynthesisResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
@@ -591,6 +594,7 @@ export async function synthesizeSpeech(params: {
     prefsPath: params.prefsPath,
     providerOverride: params.overrides?.provider,
     disableFallback: params.disableFallback,
+    agentId: params.agentId,
   });
   if ("error" in setup) {
     return { success: false, error: setup.error };
@@ -643,11 +647,13 @@ export async function textToSpeechTelephony(params: {
   text: string;
   cfg: OpenClawConfig;
   prefsPath?: string;
+  agentId?: string;
 }): Promise<TtsTelephonyResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
     cfg: params.cfg,
     prefsPath: params.prefsPath,
+    agentId: params.agentId,
   });
   if ("error" in setup) {
     return { success: false, error: setup.error };

@@ -16800,6 +16800,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["speech-provider.js"],
     packageName: "@openclaw/tts-local-cli",
     packageVersion: "2026.3.27",
     packageDescription: "OpenClaw TTS Local CLI plugin for local text-to-speech commands",
@@ -16813,7 +16814,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
-      speechProviders: ["cli"],
+      enabledByDefault: true,
     },
   },
   {
