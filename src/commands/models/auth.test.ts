@@ -378,6 +378,101 @@ describe("modelsAuthLoginCommand", () => {
     });
   });
 
+  it("accepts --token flag and skips interactive prompt", async () => {
+    const runtime = createRuntime();
+
+    await modelsAuthPasteTokenCommand({ provider: "openai", token: "tok-from-flag" }, runtime);
+
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "openai:manual",
+      credential: {
+        type: "token",
+        provider: "openai",
+        token: "tok-from-flag",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+  });
+
+  it("reads token from OPENCLAW_PASTE_TOKEN env var", async () => {
+    const runtime = createRuntime();
+    const prev = process.env.OPENCLAW_PASTE_TOKEN;
+    process.env.OPENCLAW_PASTE_TOKEN = "tok-from-env";
+    try {
+      await modelsAuthPasteTokenCommand({ provider: "openai" }, runtime);
+
+      expect(mocks.clackText).not.toHaveBeenCalled();
+      expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+        profileId: "openai:manual",
+        credential: {
+          type: "token",
+          provider: "openai",
+          token: "tok-from-env",
+        },
+        agentDir: "/tmp/openclaw/agents/main",
+      });
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_PASTE_TOKEN;
+      } else {
+        process.env.OPENCLAW_PASTE_TOKEN = prev;
+      }
+    }
+  });
+
+  it("--token flag takes priority over OPENCLAW_PASTE_TOKEN env var", async () => {
+    const runtime = createRuntime();
+    const prev = process.env.OPENCLAW_PASTE_TOKEN;
+    process.env.OPENCLAW_PASTE_TOKEN = "tok-from-env";
+    try {
+      await modelsAuthPasteTokenCommand(
+        { provider: "openai", token: "tok-from-flag" },
+        runtime,
+      );
+
+      expect(mocks.upsertAuthProfile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          credential: expect.objectContaining({ token: "tok-from-flag" }),
+        }),
+      );
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_PASTE_TOKEN;
+      } else {
+        process.env.OPENCLAW_PASTE_TOKEN = prev;
+      }
+    }
+  });
+
+  it("throws when no TTY and no --token or env var", async () => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    restoreStdin = null;
+    const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
+    const hadOwnIsTTY = Object.prototype.hasOwnProperty.call(stdin, "isTTY");
+    const previousDescriptor = Object.getOwnPropertyDescriptor(stdin, "isTTY");
+    Object.defineProperty(stdin, "isTTY", {
+      configurable: true,
+      enumerable: true,
+      get: () => false,
+    });
+    try {
+      await expect(
+        modelsAuthPasteTokenCommand({ provider: "openai" }, runtime),
+      ).rejects.toThrow(
+        "No token provided. Use --token <value>, --token - (stdin), or set OPENCLAW_PASTE_TOKEN.",
+      );
+      expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    } finally {
+      if (previousDescriptor) {
+        Object.defineProperty(stdin, "isTTY", previousDescriptor);
+      } else if (!hadOwnIsTTY) {
+        delete (stdin as { isTTY?: boolean }).isTTY;
+      }
+    }
+  });
+
   it("runs token auth for any token-capable provider plugin", async () => {
     const runtime = createRuntime();
     const runTokenAuth = vi.fn().mockResolvedValue({

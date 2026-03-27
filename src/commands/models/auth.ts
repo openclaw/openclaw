@@ -81,6 +81,17 @@ function resolveDefaultTokenProfileId(provider: string): string {
   return `${normalizeProviderId(provider)}:manual`;
 }
 
+/** Read a token from stdin when piped (non-TTY). */
+async function readStdinToken(): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    process.stdin.on("data", (chunk: Buffer) => chunks.push(chunk));
+    process.stdin.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    process.stdin.on("error", reject);
+    process.stdin.resume();
+  });
+}
+
 type ResolvedModelsAuthContext = {
   config: OpenClawConfig;
   agentDir: string;
@@ -356,6 +367,7 @@ export async function modelsAuthPasteTokenCommand(
     provider?: string;
     profileId?: string;
     expiresIn?: string;
+    token?: string;
   },
   runtime: RuntimeEnv,
 ) {
@@ -367,11 +379,33 @@ export async function modelsAuthPasteTokenCommand(
   const provider = normalizeProviderId(rawProvider);
   const profileId = opts.profileId?.trim() || resolveDefaultTokenProfileId(provider);
 
-  const tokenInput = await text({
-    message: `Paste token for ${provider}`,
-    validate: (value) => (value?.trim() ? undefined : "Required"),
-  });
-  const token = String(tokenInput ?? "").trim();
+  let token: string;
+
+  if (opts.token && opts.token !== "-") {
+    // Highest priority: explicit --token value
+    token = opts.token.trim();
+  } else if (opts.token === "-") {
+    // Read from stdin pipe
+    token = (await readStdinToken()).trim();
+  } else if (process.env.OPENCLAW_PASTE_TOKEN?.trim()) {
+    // Environment variable fallback
+    token = process.env.OPENCLAW_PASTE_TOKEN.trim();
+  } else if (process.stdin.isTTY) {
+    // Interactive prompt fallback
+    const tokenInput = await text({
+      message: `Paste token for ${provider}`,
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    token = String(tokenInput ?? "").trim();
+  } else {
+    throw new Error(
+      "No token provided. Use --token <value>, --token - (stdin), or set OPENCLAW_PASTE_TOKEN.",
+    );
+  }
+
+  if (!token) {
+    throw new Error("Token is empty.");
+  }
 
   const expires =
     opts.expiresIn?.trim() && opts.expiresIn.trim().length > 0
