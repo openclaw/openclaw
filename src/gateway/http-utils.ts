@@ -8,7 +8,11 @@ import {
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
+import {
+  buildAgentMainSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -35,6 +39,14 @@ export {
 
 export const OPENCLAW_MODEL_ID = "openclaw";
 export const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
+const RESERVED_SESSION_KEY_PREFIXES = ["subagent:", "acp:", "cron:"] as const;
+
+export class GatewaySessionKeyOverrideError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewaySessionKeyOverrideError";
+  }
+}
 
 export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
   const raw =
@@ -134,12 +146,35 @@ export function resolveSessionKey(params: {
 }): string {
   const explicit = getHeader(params.req, "x-openclaw-session-key")?.trim();
   if (explicit) {
+    const reservedPrefix = resolveReservedSessionKeyPrefix(explicit);
+    if (reservedPrefix) {
+      throw new GatewaySessionKeyOverrideError(
+        `x-openclaw-session-key may not target internal session namespace ${reservedPrefix}`,
+      );
+    }
     return explicit;
   }
 
   const user = params.user?.trim();
   const mainKey = user ? `${params.prefix}-user:${user}` : `${params.prefix}:${randomUUID()}`;
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
+}
+
+function resolveReservedSessionKeyPrefix(sessionKey: string): string | undefined {
+  const normalized = normalizeReservedSessionKeyCandidate(sessionKey);
+  if (!normalized) {
+    return undefined;
+  }
+  return RESERVED_SESSION_KEY_PREFIXES.find((prefix) => normalized.startsWith(prefix));
+}
+
+function normalizeReservedSessionKeyCandidate(sessionKey: string): string | undefined {
+  const trimmed = sessionKey.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = parseAgentSessionKey(trimmed)?.rest ?? trimmed;
+  return normalized.trim().toLowerCase() || undefined;
 }
 
 export function resolveGatewayRequestContext(params: {
