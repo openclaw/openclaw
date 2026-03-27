@@ -338,12 +338,16 @@ function isRunnableJob(params: {
   nowMs: number;
   skipJobIds?: ReadonlySet<string>;
   skipAtIfAlreadyRan?: boolean;
+  isCatchup?: boolean;
 }): boolean {
   const { job, nowMs } = params;
   if (!job.state) {
     job.state = {};
   }
   if (!job.enabled) {
+    return false;
+  }
+  if (params.isCatchup && job.skipIfMissed) {
     return false;
   }
   if (params.skipJobIds?.has(job.id)) {
@@ -365,7 +369,7 @@ function isRunnableJob(params: {
 function collectRunnableJobs(
   state: CronServiceState,
   nowMs: number,
-  opts?: { skipJobIds?: ReadonlySet<string>; skipAtIfAlreadyRan?: boolean },
+  opts?: { skipJobIds?: ReadonlySet<string>; skipAtIfAlreadyRan?: boolean; isCatchup?: boolean },
 ): CronJob[] {
   if (!state.store) {
     return [];
@@ -376,6 +380,7 @@ function collectRunnableJobs(
       nowMs,
       skipJobIds: opts?.skipJobIds,
       skipAtIfAlreadyRan: opts?.skipAtIfAlreadyRan,
+      isCatchup: opts?.isCatchup,
     }),
   );
 }
@@ -389,7 +394,11 @@ export async function runMissedJobs(
   }
   const now = state.deps.nowMs();
   const skipJobIds = opts?.skipJobIds;
-  const missed = collectRunnableJobs(state, now, { skipJobIds, skipAtIfAlreadyRan: true });
+  const missed = collectRunnableJobs(state, now, {
+    skipJobIds,
+    skipAtIfAlreadyRan: true,
+    isCatchup: true,
+  });
 
   if (missed.length > 0) {
     state.deps.log.info(

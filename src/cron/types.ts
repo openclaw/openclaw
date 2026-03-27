@@ -73,6 +73,7 @@ export type CronJob = {
   enabled: boolean;
   notify?: boolean;
   deleteAfterRun?: boolean;
+  skipIfMissed?: boolean;
   createdAtMs: number;
   updatedAtMs: number;
   schedule: CronSchedule;
