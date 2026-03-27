@@ -358,7 +358,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               },
               dmPolicy: {
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -388,7 +387,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               },
               groupPolicy: {
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
               },
               enrichGroupParticipantsFromContacts: {
                 default: true,
@@ -566,7 +564,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     },
                     dmPolicy: {
                       type: "string",
-                      enum: ["pairing", "allowlist", "open", "disabled"],
                     },
                     allowFrom: {
                       type: "array",
@@ -596,7 +593,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     },
                     groupPolicy: {
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
                     },
                     enrichGroupParticipantsFromContacts: {
                       default: true,
@@ -1489,7 +1485,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
               },
               historyLimit: {
                 type: "integer",
@@ -1714,7 +1709,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               },
               dmPolicy: {
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -1740,7 +1734,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                   },
                   policy: {
                     type: "string",
-                    enum: ["pairing", "allowlist", "open", "disabled"],
                   },
                   allowFrom: {
                     type: "array",
@@ -2697,7 +2690,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     groupPolicy: {
                       default: "allowlist",
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
                     },
                     historyLimit: {
                       type: "integer",
@@ -2922,7 +2914,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     },
                     dmPolicy: {
                       type: "string",
-                      enum: ["pairing", "allowlist", "open", "disabled"],
                     },
                     allowFrom: {
                       type: "array",
@@ -2948,7 +2939,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                         },
                         policy: {
                           type: "string",
-                          enum: ["pairing", "allowlist", "open", "disabled"],
                         },
                         allowFrom: {
                           type: "array",
@@ -5544,7 +5534,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
               },
               groupAllowFrom: {
                 type: "array",
@@ -5856,7 +5845,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                   policy: {
                     default: "pairing",
                     type: "string",
-                    enum: ["pairing", "allowlist", "open", "disabled"],
                   },
                   allowFrom: {
                     type: "array",
@@ -5926,7 +5914,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     groupPolicy: {
                       default: "allowlist",
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
                     },
                     groupAllowFrom: {
                       type: "array",
@@ -6238,7 +6225,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                         policy: {
                           default: "pairing",
                           type: "string",
-                          enum: ["pairing", "allowlist", "open", "disabled"],
                         },
                         allowFrom: {
                           type: "array",
@@ -6457,7 +6443,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               dmPolicy: {
                 default: "pairing",
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -6491,7 +6476,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
               },
               historyLimit: {
                 type: "integer",
@@ -6733,7 +6717,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     dmPolicy: {
                       default: "pairing",
                       type: "string",
-                      enum: ["pairing", "allowlist", "open", "disabled"],
                     },
                     allowFrom: {
                       type: "array",
@@ -6767,7 +6750,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     groupPolicy: {
                       default: "allowlist",
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
                     },
                     historyLimit: {
                       type: "integer",
@@ -7088,7 +7070,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               dmPolicy: {
                 default: "pairing",
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -7106,7 +7087,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
               },
               groupAllowFrom: {
                 type: "array",
@@ -7374,7 +7354,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     dmPolicy: {
                       default: "pairing",
                       type: "string",
-                      enum: ["pairing", "allowlist", "open", "disabled"],
                     },
                     allowFrom: {
                       type: "array",
@@ -7392,7 +7371,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     groupPolicy: {
                       default: "allowlist",
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
                     },
                     groupAllowFrom: {
                       type: "array",
@@ -8264,7 +8242,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               },
               groupPolicy: {
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
               },
               replyToMode: {
                 type: "string",
@@ -8366,7 +8343,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                   },
                   policy: {
                     type: "string",
-                    enum: ["pairing", "allowlist", "open", "disabled"],
                   },
                   allowFrom: {
                     type: "array",
@@ -8738,7 +8714,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               dmPolicy: {
                 default: "pairing",
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -8769,7 +8744,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
               },
               textChunkLimit: {
                 type: "integer",
@@ -9019,7 +8993,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     dmPolicy: {
                       default: "pairing",
                       type: "string",
-                      enum: ["pairing", "allowlist", "open", "disabled"],
                     },
                     allowFrom: {
                       type: "array",
@@ -9050,7 +9023,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     groupPolicy: {
                       default: "allowlist",
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
                     },
                     textChunkLimit: {
                       type: "integer",
@@ -9862,7 +9834,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               dmPolicy: {
                 default: "pairing",
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -9882,7 +9853,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
               },
               textChunkLimit: {
                 type: "integer",
@@ -10395,7 +10365,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               dmPolicy: {
                 default: "pairing",
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
               },
               webhookPort: {
                 type: "integer",
@@ -10426,7 +10395,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
               },
               rooms: {
                 type: "object",
@@ -10726,7 +10694,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     dmPolicy: {
                       default: "pairing",
                       type: "string",
-                      enum: ["pairing", "allowlist", "open", "disabled"],
                     },
                     webhookPort: {
                       type: "integer",
@@ -10757,7 +10724,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     groupPolicy: {
                       default: "allowlist",
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
                     },
                     rooms: {
                       type: "object",
@@ -10982,7 +10948,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               },
               dmPolicy: {
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -11702,7 +11667,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               dmPolicy: {
                 default: "pairing",
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -11736,7 +11700,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
               },
               groups: {
                 type: "object",
@@ -12014,7 +11977,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     dmPolicy: {
                       default: "pairing",
                       type: "string",
-                      enum: ["pairing", "allowlist", "open", "disabled"],
                     },
                     allowFrom: {
                       type: "array",
@@ -12048,7 +12010,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     groupPolicy: {
                       default: "allowlist",
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
                     },
                     groups: {
                       type: "object",
@@ -12674,7 +12635,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
               },
               historyLimit: {
                 type: "integer",
@@ -12913,7 +12873,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               },
               dmPolicy: {
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -12939,7 +12898,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                   },
                   policy: {
                     type: "string",
-                    enum: ["pairing", "allowlist", "open", "disabled"],
                   },
                   allowFrom: {
                     type: "array",
@@ -13482,7 +13440,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     },
                     groupPolicy: {
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
                     },
                     historyLimit: {
                       type: "integer",
@@ -13721,7 +13678,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     },
                     dmPolicy: {
                       type: "string",
-                      enum: ["pairing", "allowlist", "open", "disabled"],
                     },
                     allowFrom: {
                       type: "array",
@@ -13747,7 +13703,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                         },
                         policy: {
                           type: "string",
-                          enum: ["pairing", "allowlist", "open", "disabled"],
                         },
                         allowFrom: {
                           type: "array",
@@ -14346,7 +14301,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               dmPolicy: {
                 default: "pairing",
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
               },
               botToken: {
                 anyOf: [
@@ -14449,7 +14403,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     },
                     groupPolicy: {
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
                     },
                     tools: {
                       type: "object",
@@ -14546,7 +14499,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                           },
                           groupPolicy: {
                             type: "string",
-                            enum: ["open", "disabled", "allowlist"],
                           },
                           skills: {
                             type: "array",
@@ -14623,7 +14575,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
               },
               historyLimit: {
                 type: "integer",
@@ -14662,7 +14613,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                   properties: {
                     dmPolicy: {
                       type: "string",
-                      enum: ["pairing", "allowlist", "open", "disabled"],
                     },
                     tools: {
                       type: "object",
@@ -14759,7 +14709,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                           },
                           groupPolicy: {
                             type: "string",
-                            enum: ["open", "disabled", "allowlist"],
                           },
                           skills: {
                             type: "array",
@@ -15297,7 +15246,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     dmPolicy: {
                       default: "pairing",
                       type: "string",
-                      enum: ["pairing", "allowlist", "open", "disabled"],
                     },
                     botToken: {
                       anyOf: [
@@ -15400,7 +15348,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                           },
                           groupPolicy: {
                             type: "string",
-                            enum: ["open", "disabled", "allowlist"],
                           },
                           tools: {
                             type: "object",
@@ -15497,7 +15444,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                                 },
                                 groupPolicy: {
                                   type: "string",
-                                  enum: ["open", "disabled", "allowlist"],
                                 },
                                 skills: {
                                   type: "array",
@@ -15574,7 +15520,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     groupPolicy: {
                       default: "allowlist",
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
                     },
                     historyLimit: {
                       type: "integer",
@@ -15613,7 +15558,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                         properties: {
                           dmPolicy: {
                             type: "string",
-                            enum: ["pairing", "allowlist", "open", "disabled"],
                           },
                           tools: {
                             type: "object",
@@ -15710,7 +15654,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                                 },
                                 groupPolicy: {
                                   type: "string",
-                                  enum: ["open", "disabled", "allowlist"],
                                 },
                                 skills: {
                                   type: "array",
@@ -17614,7 +17557,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               dmPolicy: {
                 default: "pairing",
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
               },
               selfChatMode: {
                 type: "boolean",
@@ -17637,7 +17579,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
               },
               historyLimit: {
                 type: "integer",
@@ -17859,7 +17800,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     dmPolicy: {
                       default: "pairing",
                       type: "string",
-                      enum: ["pairing", "allowlist", "open", "disabled"],
                     },
                     selfChatMode: {
                       type: "boolean",
@@ -17882,7 +17822,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     groupPolicy: {
                       default: "allowlist",
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
                     },
                     historyLimit: {
                       type: "integer",
@@ -18558,7 +18497,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               },
               dmPolicy: {
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -18575,7 +18513,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               },
               groupPolicy: {
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
               },
               groupAllowFrom: {
                 type: "array",
@@ -18764,7 +18701,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     },
                     dmPolicy: {
                       type: "string",
-                      enum: ["pairing", "allowlist", "open", "disabled"],
                     },
                     allowFrom: {
                       type: "array",
@@ -18781,7 +18717,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     },
                     groupPolicy: {
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
                     },
                     groupAllowFrom: {
                       type: "array",
@@ -18894,7 +18829,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               },
               dmPolicy: {
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -18930,7 +18864,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
               },
               groups: {
                 type: "object",
@@ -19011,7 +18944,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     },
                     dmPolicy: {
                       type: "string",
-                      enum: ["pairing", "allowlist", "open", "disabled"],
                     },
                     allowFrom: {
                       type: "array",
@@ -19047,7 +18979,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     groupPolicy: {
                       default: "allowlist",
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
                     },
                     groups: {
                       type: "object",
