@@ -48,6 +48,8 @@ export type AgentRouteBinding = {
   /** Missing type is interpreted as route for backward compatibility. */
   type?: "route";
   agentId: string;
+  /** When the bot is @mentioned, route to this agent instead of agentId. */
+  mentionAgentId?: string;
   comment?: string;
   match: AgentBindingMatch;
 };

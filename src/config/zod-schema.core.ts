@@ -383,6 +383,7 @@ export const IdentitySchema = z
     theme: z.string().optional(),
     emoji: z.string().optional(),
     avatar: z.string().optional(),
+    discordRoleIds: z.array(z.string()).optional(),
   })
   .strict()
   .optional();
