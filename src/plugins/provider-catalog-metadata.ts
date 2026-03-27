@@ -31,7 +31,7 @@ function isBundledProviderEnabled(
     return false;
   }
   const normalized = normalizePluginsConfig(config.plugins);
-  return resolveEnableState(pluginId, "bundled", normalized).enabled;
+  return resolveEnableState(pluginId, "bundled", normalized, true).enabled;
 }
 
 function findCatalogTemplate(params: {
