@@ -202,17 +202,19 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
 
   const cfg = loadConfig();
+  const snapshot = await readConfigFileSnapshot().catch(() => null);
+  const effectiveCfg = snapshot?.valid ? snapshot.config : cfg;
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error("Invalid port");
     defaultRuntime.exit(1);
   }
-  const port = portOverride ?? resolveGatewayPort(cfg);
+  const port = portOverride ?? resolveGatewayPort(effectiveCfg);
   if (!Number.isFinite(port) || port <= 0) {
     defaultRuntime.error("Invalid port");
     defaultRuntime.exit(1);
   }
-  const bindRaw = toOptionString(opts.bind) ?? cfg.gateway?.bind ?? "loopback";
+  const bindRaw = toOptionString(opts.bind) ?? effectiveCfg.gateway?.bind ?? "loopback";
   const bind =
     bindRaw === "loopback" ||
     bindRaw === "lan" ||
@@ -263,7 +265,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
           : bind === "lan"
             ? "0.0.0.0"
             : bind === "custom"
-              ? toOptionString(cfg.gateway?.customBindHost)
+              ? toOptionString(effectiveCfg.gateway?.customBindHost)
               : undefined;
       const bindWaitMs = await waitForPortBindable(port, {
         timeoutMs: 3000,
@@ -314,10 +316,8 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
   const tokenRaw = toOptionString(opts.token);
 
-  const snapshot = await readConfigFileSnapshot().catch(() => null);
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
   const configAuditPath = path.join(resolveStateDir(process.env), "logs", "config-audit.jsonl");
-  const effectiveCfg = snapshot?.valid ? snapshot.config : cfg;
   const mode = effectiveCfg.gateway?.mode;
   if (!opts.allowUnconfigured && mode !== "local") {
     if (!configExists) {
@@ -343,10 +343,10 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         }
       : undefined;
   const resolvedAuth = resolveGatewayAuth({
-    authConfig: cfg.gateway?.auth,
+    authConfig: effectiveCfg.gateway?.auth,
     authOverride,
     env: process.env,
-    tailscaleMode: tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off",
+    tailscaleMode: tailscaleMode ?? effectiveCfg.gateway?.tailscale?.mode ?? "off",
   });
   const resolvedAuthMode = resolvedAuth.mode;
   const tokenValue = resolvedAuth.token;
@@ -356,14 +356,14 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const tokenConfigured =
     hasToken ||
     hasConfiguredSecretInput(
-      authOverride?.token ?? cfg.gateway?.auth?.token,
-      cfg.secrets?.defaults,
+      authOverride?.token ?? effectiveCfg.gateway?.auth?.token,
+      effectiveCfg.secrets?.defaults,
     );
   const passwordConfigured =
     hasPassword ||
     hasConfiguredSecretInput(
-      authOverride?.password ?? cfg.gateway?.auth?.password,
-      cfg.secrets?.defaults,
+      authOverride?.password ?? effectiveCfg.gateway?.auth?.password,
+      effectiveCfg.secrets?.defaults,
     );
   const hasSharedSecret =
     (resolvedAuthMode === "token" && tokenConfigured) ||

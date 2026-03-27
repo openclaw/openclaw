@@ -193,6 +193,37 @@ describe("gateway run option collisions", () => {
     );
   });
 
+  it("prefers current snapshot gateway.bind over stale cached loadConfig values", async () => {
+    configState.cfg = {
+      gateway: {
+        bind: "loopback",
+      },
+    };
+    configState.snapshot = {
+      exists: true,
+      valid: true,
+      config: {
+        gateway: {
+          bind: "lan",
+        },
+      },
+      parsed: {
+        gateway: {
+          bind: "lan",
+        },
+      },
+    };
+
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        bind: "lan",
+      }),
+    );
+  });
+
   it("blocks startup when the observed snapshot loses gateway.mode even if loadConfig still says local", async () => {
     configState.cfg = {
       gateway: {
