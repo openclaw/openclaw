@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { listBundledWebSearchProviderEntries } from "../bundled-web-search.entries.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import { BUNDLED_WEB_SEARCH_PLUGIN_IDS } from "./bundled-web-search-ids.js";
 import { resolveBundledWebSearchPluginId } from "./bundled-web-search-provider-ids.js";
 import {
@@ -105,7 +105,13 @@ describe("bundled web search metadata", () => {
 
   it("keeps bundled provider metadata aligned with bundled plugin contracts", async () => {
     const fastPathProviders = listBundledWebSearchProviders();
-    const bundledProviderEntries = listBundledWebSearchProviderEntries();
+    const bundledProviderEntries = loadBundledCapabilityRuntimeRegistry({
+      pluginIds: BUNDLED_WEB_SEARCH_PLUGIN_IDS,
+      pluginSdkResolution: "dist",
+    }).webSearchProviders.map((entry) => ({
+      pluginId: entry.pluginId,
+      ...entry.provider,
+    }));
 
     expect(
       sortComparableEntries(

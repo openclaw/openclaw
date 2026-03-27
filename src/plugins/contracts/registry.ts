@@ -1,4 +1,3 @@
-import { listBundledImageGenerationProviderEntries } from "../../bundled-image-generation-providers.js";
 import {
   BUNDLED_IMAGE_GENERATION_PLUGIN_IDS,
   BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
@@ -226,10 +225,16 @@ function loadMediaUnderstandingProviderContractRegistry(): MediaUnderstandingPro
 
 function loadImageGenerationProviderContractRegistry(): ImageGenerationProviderContractEntry[] {
   if (!imageGenerationProviderContractRegistryCache) {
-    imageGenerationProviderContractRegistryCache =
-      listBundledImageGenerationProviderEntries().filter((entry) =>
-        BUNDLED_IMAGE_GENERATION_PLUGIN_IDS.includes(entry.pluginId),
-      );
+    const registry = loadBundledCapabilityRuntimeRegistry({
+      pluginIds: BUNDLED_IMAGE_GENERATION_PLUGIN_IDS,
+      pluginSdkResolution: "dist",
+    });
+    imageGenerationProviderContractRegistryCache = registry.imageGenerationProviders.map(
+      (entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      }),
+    );
   }
   return imageGenerationProviderContractRegistryCache;
 }
