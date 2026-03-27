@@ -31,8 +31,7 @@ export function buildModelStudioModelDefinition(params: {
     name: params.name ?? catalog?.name ?? params.id,
     reasoning: params.reasoning ?? catalog?.reasoning ?? false,
     input:
-      (params.input as ("text" | "image")[]) ??
-      (catalog?.input ? [...catalog.input] : ["text"]),
+      (params.input as ("text" | "image")[]) ?? (catalog?.input ? [...catalog.input] : ["text"]),
     cost: params.cost ?? catalog?.cost ?? MODELSTUDIO_DEFAULT_COST,
     contextWindow: params.contextWindow ?? catalog?.contextWindow ?? 262_144,
     maxTokens: params.maxTokens ?? catalog?.maxTokens ?? 65_536,
