@@ -53,6 +53,7 @@ function createPromptAndCredentialSpies(params?: { confirmResult?: boolean; text
 
 async function ensureMinimaxApiKey(params: {
   config?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["config"];
+  env?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["env"];
   confirm: WizardPrompter["confirm"];
   note?: WizardPrompter["note"];
   select?: WizardPrompter["select"];
@@ -62,6 +63,7 @@ async function ensureMinimaxApiKey(params: {
 }) {
   return await ensureMinimaxApiKeyInternal({
     config: params.config,
+    env: params.env,
     prompter: createPrompter({
       confirm: params.confirm,
       note: params.note,
@@ -75,12 +77,14 @@ async function ensureMinimaxApiKey(params: {
 
 async function ensureMinimaxApiKeyInternal(params: {
   config?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["config"];
+  env?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["env"];
   prompter: WizardPrompter;
   secretInputMode?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["secretInputMode"];
   setCredential: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["setCredential"];
 }) {
   return await ensureApiKeyFromEnvOrPrompt({
     config: params.config ?? {},
+    env: params.env,
     provider: "minimax",
     envLabel: "MINIMAX_API_KEY",
     promptMessage: "Enter key",
@@ -94,6 +98,7 @@ async function ensureMinimaxApiKeyInternal(params: {
 
 async function ensureMinimaxApiKeyWithEnvRefPrompter(params: {
   config?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["config"];
+  env?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["env"];
   note: WizardPrompter["note"];
   select: WizardPrompter["select"];
   setCredential: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["setCredential"];
@@ -101,6 +106,7 @@ async function ensureMinimaxApiKeyWithEnvRefPrompter(params: {
 }) {
   return await ensureMinimaxApiKeyInternal({
     config: params.config,
+    env: params.env,
     prompter: createPrompter({ select: params.select, text: params.text, note: params.note }),
     secretInputMode: "ref", // pragma: allowlist secret
     setCredential: params.setCredential,
@@ -285,6 +291,28 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
       'Environment variable "MINIMAX_API_KEY" is required for --secret-input-mode ref in non-interactive setup.',
     );
     expect(setCredential).not.toHaveBeenCalled();
+  });
+
+  it("uses explicit env for ref fallback instead of host process env", async () => {
+    process.env.MINIMAX_API_KEY = "host-key"; // pragma: allowlist secret
+    delete process.env.MINIMAX_OAUTH_TOKEN;
+    const env = { MINIMAX_API_KEY: "explicit-key" } as NodeJS.ProcessEnv;
+
+    const { confirm, text, setCredential } = createPromptAndCredentialSpies({
+      confirmResult: true,
+      textResult: "prompt-key",
+    });
+
+    const result = await ensureMinimaxApiKey({
+      confirm,
+      text,
+      env,
+      secretInputMode: "ref", // pragma: allowlist secret
+      setCredential,
+    });
+
+    expect(result).toBe("explicit-key");
+    expectMinimaxEnvRefCredentialStored(setCredential);
   });
 
   it("re-prompts after provider ref validation failure and succeeds with env ref", async () => {

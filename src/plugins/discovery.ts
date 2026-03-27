@@ -10,6 +10,7 @@ import {
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
+  loadPluginManifest,
   type PluginManifest,
   resolvePackageExtensionEntries,
   type OpenClawPackageManifest,
@@ -20,14 +21,6 @@ import { resolvePluginCacheInputs, resolvePluginSourceRoots } from "./roots.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
-
-const CANONICAL_PACKAGE_ID_ALIASES: Record<string, string> = {
-  "elevenlabs-speech": "elevenlabs",
-  "microsoft-speech": "microsoft",
-  "ollama-provider": "ollama",
-  "sglang-provider": "sglang",
-  "vllm-provider": "vllm",
-};
 
 export type PluginCandidate = {
   idHint: string;
@@ -338,10 +331,15 @@ function readPackageManifest(dir: string, rejectHardlinks = true): PackageManife
 
 function deriveIdHint(params: {
   filePath: string;
+  manifestId?: string;
   packageName?: string;
   hasMultipleExtensions: boolean;
 }): string {
   const base = path.basename(params.filePath, path.extname(params.filePath));
+  const rawManifestId = params.manifestId?.trim();
+  if (rawManifestId) {
+    return params.hasMultipleExtensions ? `${rawManifestId}/${base}` : rawManifestId;
+  }
   const rawPackageName = params.packageName?.trim();
   if (!rawPackageName) {
     return base;
@@ -352,16 +350,20 @@ function deriveIdHint(params: {
   const unscoped = rawPackageName.includes("/")
     ? (rawPackageName.split("/").pop() ?? rawPackageName)
     : rawPackageName;
-  const canonicalPackageId = CANONICAL_PACKAGE_ID_ALIASES[unscoped] ?? unscoped;
   const normalizedPackageId =
-    canonicalPackageId.endsWith("-provider") && canonicalPackageId.length > "-provider".length
-      ? canonicalPackageId.slice(0, -"-provider".length)
-      : canonicalPackageId;
+    unscoped.endsWith("-provider") && unscoped.length > "-provider".length
+      ? unscoped.slice(0, -"-provider".length)
+      : unscoped;
 
   if (!params.hasMultipleExtensions) {
     return normalizedPackageId;
   }
   return `${normalizedPackageId}/${base}`;
+}
+
+function resolveIdHintManifestId(rootDir: string, rejectHardlinks: boolean): string | undefined {
+  const manifest = loadPluginManifest(rootDir, rejectHardlinks);
+  return manifest.ok ? manifest.manifest.id : undefined;
 }
 
 function addCandidate(params: {
@@ -558,6 +560,7 @@ function discoverInDirectory(params: {
     const manifest = readPackageManifest(fullPath, rejectHardlinks);
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
+    const manifestId = resolveIdHintManifestId(fullPath, rejectHardlinks);
     const setupEntryPath = getPackageManifestMetadata(manifest ?? undefined)?.setupEntry;
     const setupSource =
       typeof setupEntryPath === "string" && setupEntryPath.trim().length > 0
@@ -588,6 +591,7 @@ function discoverInDirectory(params: {
           seen: params.seen,
           idHint: deriveIdHint({
             filePath: resolved,
+            manifestId,
             packageName: manifest?.name,
             hasMultipleExtensions: extensions.length > 1,
           }),
@@ -688,6 +692,7 @@ function discoverFromPath(params: {
     const manifest = readPackageManifest(resolved, rejectHardlinks);
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
+    const manifestId = resolveIdHintManifestId(resolved, rejectHardlinks);
     const setupEntryPath = getPackageManifestMetadata(manifest ?? undefined)?.setupEntry;
     const setupSource =
       typeof setupEntryPath === "string" && setupEntryPath.trim().length > 0
@@ -718,6 +723,7 @@ function discoverFromPath(params: {
           seen: params.seen,
           idHint: deriveIdHint({
             filePath: source,
+            manifestId,
             packageName: manifest?.name,
             hasMultipleExtensions: extensions.length > 1,
           }),
