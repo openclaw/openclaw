@@ -243,6 +243,36 @@ const DISCORD_VOICE_TTS_EDGE_RULE: LegacyConfigRule = {
     "channels.discord.voice.tts.edge was moved; use channels.discord.voice.tts.providers.microsoft instead (auto-migrated on load).",
 };
 
+const DISCORD_ACCOUNTS_TTS_RULE: LegacyConfigRule = {
+  path: ["channels", "discord", "accounts"],
+  message:
+    "channels.discord.accounts.*.voice.tts.* keys were moved; use channels.discord.accounts.*.voice.tts.providers.* instead (auto-migrated on load).",
+  match: (accountsValue) => {
+    const accounts = getRecord(accountsValue);
+    if (!accounts) {
+      return false;
+    }
+    for (const [accountId, accountValue] of Object.entries(accounts)) {
+      if (isBlockedObjectKey(accountId)) {
+        continue;
+      }
+      const account = getRecord(accountValue);
+      const voice = getRecord(account?.voice);
+      const tts = getRecord(voice?.tts);
+      if (!tts) {
+        continue;
+      }
+      // Check if this account has any legacy TTS keys (not in providers)
+      for (const key of Object.keys(tts)) {
+        if (key !== "providers" && !isBlockedObjectKey(key)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  },
+};
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     // v2026.2.26 added a startup guard requiring gateway.controlUi.allowedOrigins (or the
@@ -364,6 +394,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
       DISCORD_VOICE_TTS_ELEVENLABS_RULE,
       DISCORD_VOICE_TTS_MICROSOFT_RULE,
       DISCORD_VOICE_TTS_EDGE_RULE,
+      DISCORD_ACCOUNTS_TTS_RULE,
     ],
     apply: (raw, changes) => {
       const messages = getRecord(raw.messages);

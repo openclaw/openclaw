@@ -611,4 +611,129 @@ describe("legacy migrate TTS config", () => {
       lang: "en-US", // Filled from legacy
     });
   });
+
+  it("moves channels.discord.accounts.{id}.voice.tts.microsoft into providers", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          accounts: {
+            work: {
+              voice: {
+                tts: {
+                  microsoft: {
+                    enabled: true,
+                    voice: "en-US-AriaNeural",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.discord.accounts.work.voice.tts.microsoft → channels.discord.accounts.work.voice.tts.providers.microsoft.",
+    );
+    expect(res.config?.channels?.discord?.accounts?.work?.voice?.tts?.providers?.microsoft).toEqual(
+      {
+        enabled: true,
+        voice: "en-US-AriaNeural",
+      },
+    );
+    expect(
+      (res.config?.channels?.discord?.accounts?.work?.voice?.tts as { microsoft?: unknown } | null)
+        ?.microsoft,
+    ).toBeUndefined();
+  });
+
+  it("moves channels.discord.accounts.{id}.voice.tts.edge into providers", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          accounts: {
+            work: {
+              voice: {
+                tts: {
+                  edge: {
+                    enabled: true,
+                    voice: "en-US-JennyNeural",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.discord.accounts.work.voice.tts.edge → channels.discord.accounts.work.voice.tts.providers.microsoft.",
+    );
+    expect(res.config?.channels?.discord?.accounts?.work?.voice?.tts?.providers?.microsoft).toEqual(
+      {
+        enabled: true,
+        voice: "en-US-JennyNeural",
+      },
+    );
+    expect(
+      (res.config?.channels?.discord?.accounts?.work?.voice?.tts as { edge?: unknown } | null)
+        ?.edge,
+    ).toBeUndefined();
+  });
+
+  it("detects legacy TTS keys at account level", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          accounts: {
+            ops: {
+              voice: {
+                tts: {
+                  openai: {
+                    apiKey: "sk-test",
+                    voice: "alloy",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.discord.accounts.ops.voice.tts.openai → channels.discord.accounts.ops.voice.tts.providers.openai.",
+    );
+    expect(res.config?.channels?.discord?.accounts?.ops?.voice?.tts?.providers?.openai).toEqual({
+      apiKey: "sk-test",
+      voice: "alloy",
+    });
+  });
+
+  it("does not trigger migration when Discord accounts have only providers", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          accounts: {
+            work: {
+              voice: {
+                tts: {
+                  providers: {
+                    microsoft: {
+                      enabled: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    // Should return null (no changes) since there are no legacy keys
+    expect(res.config).toBeNull();
+    expect(res.changes).toHaveLength(0);
+  });
 });
