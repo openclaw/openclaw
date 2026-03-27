@@ -11,6 +11,7 @@ export * from "../infra/exec-approval-command-display.ts";
 export * from "../infra/exec-approval-reply.ts";
 export * from "../infra/exec-approval-session-target.ts";
 export * from "../infra/exec-approvals.ts";
+export * from "../infra/plugin-approvals.ts";
 export * from "../infra/fetch.js";
 export * from "../infra/file-lock.js";
 export * from "../infra/format-time/format-duration.ts";

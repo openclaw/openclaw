@@ -868,7 +868,9 @@ describe("exec approval handlers", () => {
       false,
       undefined,
       expect.objectContaining({
+        code: "INVALID_REQUEST",
         message: "unknown or expired approval id",
+        details: expect.objectContaining({ reason: "APPROVAL_NOT_FOUND" }),
       }),
     );
   });
