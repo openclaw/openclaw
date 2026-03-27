@@ -138,6 +138,10 @@ type DocxDescendantCreatePayload = NonNullable<
 type DocxDescendantCreateBlock = NonNullable<
   NonNullable<DocxDescendantCreatePayload["data"]>["descendants"]
 >[number];
+type DriveMediaUploadAllPayload = NonNullable<
+  Parameters<Lark.Client["drive"]["media"]["uploadAll"]>[0]
+>;
+type DriveMediaUploadFile = NonNullable<NonNullable<DriveMediaUploadAllPayload["data"]>["file"]>;
 
 function toCreateChildBlock(block: FeishuDocxBlock): DocxChildrenCreateChild {
   return block as DocxChildrenCreateChild;
@@ -247,7 +251,6 @@ function normalizeConvertedBlockTree(
   return { orderedBlocks, rootIds: rootIds.filter((id): id is string => typeof id === "string") };
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any -- SDK block types */
 async function insertBlocks(
   client: Lark.Client,
   docToken: string,
@@ -365,7 +368,6 @@ async function convertMarkdownWithFallback(client: Lark.Client, markdown: string
       throw error;
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
     const blocks: FeishuDocxBlock[] = [];
     const firstLevelBlockIds: string[] = [];
 
@@ -382,7 +384,6 @@ async function convertMarkdownWithFallback(client: Lark.Client, markdown: string
 /** Convert markdown in chunks to avoid document.convert content size limits */
 async function chunkedConvertMarkdown(client: Lark.Client, markdown: string) {
   const chunks = splitMarkdownByHeadings(markdown);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
   const allBlocks: FeishuDocxBlock[] = [];
   const allRootIds: string[] = [];
   for (const chunk of chunks) {
@@ -395,7 +396,6 @@ async function chunkedConvertMarkdown(client: Lark.Client, markdown: string) {
 }
 
 /** Insert blocks in batches of MAX_BLOCKS_PER_INSERT to avoid API 400 errors */
-/* eslint-disable @typescript-eslint/no-explicit-any -- SDK block types */
 async function chunkedInsertBlocks(
   client: Lark.Client,
   docToken: string,
@@ -424,7 +424,6 @@ type Logger = { info?: (msg: string) => void };
  * @param parentBlockId - Parent block to insert into (defaults to docToken = document root)
  * @param index - Position within parent's children (-1 = end, 0 = first)
  */
-/* eslint-disable @typescript-eslint/no-explicit-any -- SDK block types */
 async function insertBlocksWithDescendant(
   client: Lark.Client,
   docToken: string,
@@ -495,8 +494,7 @@ async function uploadImageToDocx(
       // Pass Buffer directly so form-data can calculate Content-Length correctly.
       // Readable.from() produces a stream with unknown length, causing Content-Length
       // mismatch that silently truncates uploads for images larger than ~1KB.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK file type
-      file: imageBuffer as any,
+      file: imageBuffer as DriveMediaUploadFile,
       // Required when the document block belongs to a non-default datacenter:
       // tells the drive service which document the block belongs to for routing.
       // Per API docs: certain upload scenarios require the cloud document token.
@@ -659,7 +657,6 @@ async function resolveUploadInput(
   };
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any -- SDK block types */
 async function processImages(
   client: Lark.Client,
   docToken: string,
@@ -816,8 +813,7 @@ async function uploadFileBlock(
       parent_type: "docx_file",
       parent_node: docToken,
       size: upload.buffer.length,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK file type
-      file: upload.buffer as any,
+      file: upload.buffer as DriveMediaUploadFile,
     },
   });
 
@@ -998,7 +994,6 @@ async function appendDoc(
     success: true,
     blocks_added: blocks.length,
     images_processed: imagesProcessed,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
     block_ids: inserted.map((b) => b.block_id),
   };
 }
@@ -1073,7 +1068,6 @@ async function insertDoc(
     success: true,
     blocks_added: blocks.length,
     images_processed: imagesProcessed,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
     block_ids: inserted.map((b) => b.block_id),
   };
 }
@@ -1292,7 +1286,6 @@ async function deleteBlock(client: Lark.Client, docToken: string, blockId: strin
   }
 
   const items = children.data?.items ?? [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
   const index = items.findIndex((item) => item.block_id === blockId);
   if (index === -1) {
     throw new Error("Block not found");
@@ -1545,8 +1538,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                     ),
                   );
                 default:
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
-                  return json({ error: `Unknown action: ${(p as any).action}` });
+                  return json({ error: "Unknown action" });
               }
             } catch (err) {
               return json({ error: err instanceof Error ? err.message : String(err) });
