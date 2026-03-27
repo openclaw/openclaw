@@ -1,20 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDiscordOutboundHoisted,
-  createDiscordSendModuleMock,
-  createDiscordThreadBindingsModuleMock,
+  installDiscordOutboundModuleSpies,
   resetDiscordOutboundMocks,
 } from "./outbound-adapter.test-harness.js";
 
 const hoisted = createDiscordOutboundHoisted();
-
-vi.mock("./send.js", async (importOriginal) => {
-  return await createDiscordSendModuleMock(hoisted, importOriginal);
-});
-
-vi.mock("./monitor/thread-bindings.js", async (importOriginal) => {
-  return await createDiscordThreadBindingsModuleMock(hoisted, importOriginal);
-});
+await installDiscordOutboundModuleSpies(hoisted);
 
 const { discordOutbound } = await import("./outbound-adapter.js");
 

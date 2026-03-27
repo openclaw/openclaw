@@ -6,7 +6,7 @@ import type {
   SandboxFsStat,
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
-import { resolveWritableRenameTargetsForBridge } from "openclaw/plugin-sdk/sandbox";
+import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
 import type { OpenShellSandboxBackend } from "./backend.js";
 import { movePathWithCopyFallback } from "./mirror.js";
 
@@ -24,18 +24,15 @@ export function createOpenShellFsBridge(params: {
 }
 
 class OpenShellFsBridge implements SandboxFsBridge {
+  private readonly resolveRenameTargets = createWritableRenameTargetResolver(
+    (target) => this.resolveTarget(target),
+    (target, action) => this.ensureWritable(target, action),
+  );
+
   constructor(
     private readonly sandbox: SandboxContext,
     private readonly backend: OpenShellSandboxBackend,
   ) {}
-
-  private resolveRenameTargets(params: { from: string; to: string; cwd?: string }) {
-    return resolveWritableRenameTargetsForBridge(
-      params,
-      (target) => this.resolveTarget(target),
-      (target, action) => this.ensureWritable(target, action),
-    );
-  }
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
     const target = this.resolveTarget(params);

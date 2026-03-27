@@ -66,7 +66,6 @@ vi.mock("../plugins/provider-runtime.ts", () => ({
 vi.mock("../agents/cli-credentials.js", () => ({
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
-  readQwenCliCredentialsCached: () => null,
 }));
 
 vi.mock("../agents/auth-profiles/external-cli-sync.js", () => ({

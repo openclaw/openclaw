@@ -1,13 +1,9 @@
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
-import {
-  listInspectedDirectoryEntriesFromSources,
-  type DirectoryConfigParams,
-} from "openclaw/plugin-sdk/directory-runtime";
+import { createInspectedDirectoryEntriesLister } from "openclaw/plugin-sdk/directory-runtime";
 import { inspectTelegramAccount, type InspectedTelegramAccount } from "./account-inspect.js";
 
-export async function listTelegramDirectoryPeersFromConfig(params: DirectoryConfigParams) {
-  return listInspectedDirectoryEntriesFromSources({
-    ...params,
+export const listTelegramDirectoryPeersFromConfig =
+  createInspectedDirectoryEntriesLister<InspectedTelegramAccount>({
     kind: "user",
     inspectAccount: (cfg, accountId) =>
       inspectTelegramAccount({ cfg, accountId }) as InspectedTelegramAccount | null,
@@ -26,15 +22,12 @@ export async function listTelegramDirectoryPeersFromConfig(params: DirectoryConf
       return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
     },
   });
-}
 
-export async function listTelegramDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
-  return listInspectedDirectoryEntriesFromSources({
-    ...params,
+export const listTelegramDirectoryGroupsFromConfig =
+  createInspectedDirectoryEntriesLister<InspectedTelegramAccount>({
     kind: "group",
     inspectAccount: (cfg, accountId) =>
       inspectTelegramAccount({ cfg, accountId }) as InspectedTelegramAccount | null,
     resolveSources: (account) => [Object.keys(account.config.groups ?? {})],
     normalizeId: (entry) => entry.trim() || null,
   });
-}

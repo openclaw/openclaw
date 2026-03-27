@@ -15,13 +15,10 @@ import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/com
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
-import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
+import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import {
-  readStoreAllowFromForDmPolicy,
-  resolvePinnedMainDmOwnerFromAllowlist,
-} from "openclaw/plugin-sdk/security-runtime";
+import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
 import { logError } from "openclaw/plugin-sdk/text-runtime";
 import {
   createDiscordFormModal,
@@ -139,6 +136,8 @@ export function buildAgentButtonCustomId(componentId: string): string {
 export function buildAgentSelectCustomId(componentId: string): string {
   return `${AGENT_SELECT_KEY}:componentId=${encodeURIComponent(componentId)}`;
 }
+
+const { resolvePinnedMainDmOwnerFromAllowlist } = securityRuntime;
 
 export function resolveAgentComponentRoute(params: {
   ctx: AgentComponentContext;
@@ -474,7 +473,7 @@ async function ensureDmComponentAuthorized(params: {
     return false;
   }
 
-  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+  const storeAllowFrom = await securityRuntime.readStoreAllowFromForDmPolicy({
     provider: "discord",
     accountId: ctx.accountId,
     dmPolicy,
@@ -488,7 +487,7 @@ async function ensureDmComponentAuthorized(params: {
     const pairingResult = await createChannelPairingChallengeIssuer({
       channel: "discord",
       upsertPairingRequest: async ({ id, meta }) =>
-        await upsertChannelPairingRequest({
+        await conversationRuntime.upsertChannelPairingRequest({
           channel: "discord",
           id,
           accountId: ctx.accountId,
