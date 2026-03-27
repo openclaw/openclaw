@@ -28,7 +28,7 @@ import {
   normalizeExtraMemoryPaths,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import type { MemoryCommandOptions, MemorySearchCommandOptions } from "./cli.types.js";
-import { getMemorySearchManager } from "./runtime-api.js";
+import { getMemorySearchManager } from "./memory/index.js";
 
 type MemoryManager = NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
