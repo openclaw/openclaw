@@ -52,7 +52,7 @@ jobs:
           skip="false"
           if [[ "${EVENT_NAME}" == "push" && "${SOURCE_REF}" == "refs/heads/main" ]]; then
             msg="${HEAD_COMMIT_MESSAGE}"
-            if [[ "${msg}" == chore(sync):\ merge\ upstream/main\ into\ main\ (* ]]; then
+            if [[ "${msg}" == "chore(sync): merge upstream/main into main ("* ]]; then
               skip="true"
             fi
           fi
