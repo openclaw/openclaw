@@ -11,6 +11,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
+import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-runtime.js";
@@ -306,8 +307,18 @@ export async function performGatewaySessionReset(params: {
     oldSessionId = currentEntry?.sessionId;
     oldSessionFile = currentEntry?.sessionFile;
     const now = Date.now();
+    const nextSessionId = randomUUID();
+    const sessionFile = resolveSessionFilePath(
+      nextSessionId,
+      undefined,
+      resolveSessionFilePathOptions({
+        storePath,
+        agentId: sessionAgentId,
+      }),
+    );
     const nextEntry: SessionEntry = {
-      sessionId: randomUUID(),
+      sessionId: nextSessionId,
+      sessionFile,
       updatedAt: now,
       systemSent: false,
       abortedLastRun: false,
