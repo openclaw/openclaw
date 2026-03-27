@@ -312,6 +312,8 @@ function resolveTranscriptUsageFallback(params: {
   totalTokens?: number;
   totalTokensFresh?: boolean;
   contextTokens?: number;
+  modelProvider?: string;
+  model?: string;
 } | null {
   const entry = params.entry;
   if (!entry?.sessionId) {
@@ -352,6 +354,8 @@ function resolveTranscriptUsageFallback(params: {
     },
   });
   return {
+    modelProvider,
+    model,
     totalTokens: resolvePositiveNumber(snapshot.totalTokens),
     totalTokensFresh: snapshot.totalTokensFresh === true,
     contextTokens: resolvePositiveNumber(contextTokens),
@@ -1170,15 +1174,13 @@ export function buildGatewaySessionRow(params: {
     sessionAgentId,
     subagentRun?.model,
   );
-  const modelProvider = resolvedModel.provider;
-  const model = resolvedModel.model ?? DEFAULT_MODEL;
   const transcriptUsage =
     resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined ||
     resolvePositiveNumber(entry?.contextTokens) === undefined ||
     resolveEstimatedSessionCostUsd({
       cfg,
-      provider: modelProvider,
-      model,
+      provider: resolvedModel.provider,
+      model: resolvedModel.model ?? DEFAULT_MODEL,
       entry,
     }) === undefined
       ? resolveTranscriptUsageFallback({
@@ -1186,10 +1188,12 @@ export function buildGatewaySessionRow(params: {
           key,
           entry,
           storePath,
-          fallbackProvider: modelProvider,
-          fallbackModel: model,
+          fallbackProvider: resolvedModel.provider,
+          fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
         })
       : null;
+  const modelProvider = transcriptUsage?.modelProvider ?? resolvedModel.provider;
+  const model = transcriptUsage?.model ?? resolvedModel.model ?? DEFAULT_MODEL;
   const totalTokens =
     resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
     resolvePositiveNumber(transcriptUsage?.totalTokens);
