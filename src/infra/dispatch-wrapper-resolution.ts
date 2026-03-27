@@ -42,6 +42,8 @@ const TIME_FLAG_OPTIONS = new Set([
   "--version",
 ]);
 const TIME_OPTIONS_WITH_VALUE = new Set(["-f", "--format", "-o", "--output"]);
+const BSD_SCRIPT_FLAG_OPTIONS = new Set(["-a", "-d", "-k", "-p", "-q", "-r"]);
+const BSD_SCRIPT_OPTIONS_WITH_VALUE = new Set(["-F", "-t"]);
 const TIMEOUT_FLAG_OPTIONS = new Set(["--foreground", "--preserve-status", "-v", "--verbose"]);
 const TIMEOUT_OPTIONS_WITH_VALUE = new Set(["-k", "--kill-after", "-s", "--signal"]);
 
@@ -259,6 +261,47 @@ function unwrapTimeInvocation(argv: string[]): string[] | null {
   });
 }
 
+function supportsScriptPositionalCommand(platform: NodeJS.Platform = process.platform): boolean {
+  return platform === "darwin" || platform === "freebsd";
+}
+
+function unwrapScriptInvocation(argv: string[]): string[] | null {
+  if (!supportsScriptPositionalCommand()) {
+    return null;
+  }
+  return scanWrapperInvocation(argv, {
+    separators: new Set(["--"]),
+    onToken: (token, lower) => {
+      if (!lower.startsWith("-") || lower === "-") {
+        return "stop";
+      }
+      const [flag] = token.split("=", 2);
+      if (BSD_SCRIPT_OPTIONS_WITH_VALUE.has(flag)) {
+        return token.includes("=") ? "continue" : "consume-next";
+      }
+      if (BSD_SCRIPT_FLAG_OPTIONS.has(flag)) {
+        return "continue";
+      }
+      return "invalid";
+    },
+    adjustCommandIndex: (commandIndex, currentArgv) => {
+      let sawTranscript = false;
+      for (let idx = commandIndex; idx < currentArgv.length; idx += 1) {
+        const token = currentArgv[idx]?.trim() ?? "";
+        if (!token) {
+          continue;
+        }
+        if (!sawTranscript) {
+          sawTranscript = true;
+          continue;
+        }
+        return idx;
+      }
+      return null;
+    },
+  });
+}
+
 function unwrapTimeoutInvocation(argv: string[]): string[] | null {
   return unwrapDashOptionInvocation(argv, {
     onFlag: (flag, lower) => {
@@ -294,6 +337,7 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
   { name: "ionice" },
   { name: "nice", unwrap: unwrapNiceInvocation, transparentUsage: true },
   { name: "nohup", unwrap: unwrapNohupInvocation, transparentUsage: true },
+  { name: "script", unwrap: unwrapScriptInvocation, transparentUsage: true },
   { name: "setsid" },
   { name: "stdbuf", unwrap: unwrapStdbufInvocation, transparentUsage: true },
   { name: "sudo" },
