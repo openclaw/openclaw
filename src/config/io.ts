@@ -1769,6 +1769,22 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     }
     // Do NOT apply runtime defaults when writing — user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
+
+    // Skip write when the config payload (excluding meta timestamps) is identical
+    // to what is already on disk. stampConfigVersion() sets meta.lastTouchedAt to
+    // the current time on every call, so we must compare BEFORE stamping to avoid
+    // a perpetual hash mismatch that triggers the chokidar file watcher and
+    // causes a SIGUSR1 restart loop (see #55472, #55219, #40410).
+    if (snapshot.valid && snapshot.exists) {
+      const { meta: _prevMeta, ...prevBody } = (snapshot.resolved ?? {}) as Record<string, unknown>;
+      const { meta: _nextMeta, ...nextBody } = outputConfig as unknown as Record<string, unknown>;
+      const prevBodyHash = hashConfigRaw(JSON.stringify(prevBody));
+      const nextBodyHash = hashConfigRaw(JSON.stringify(nextBody));
+      if (prevBodyHash === nextBodyHash) {
+        return;
+      }
+    }
+
     const stampedOutputConfig = stampConfigVersion(outputConfig);
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
     const nextHash = hashConfigRaw(json);

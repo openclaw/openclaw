@@ -584,4 +584,35 @@ describe("config io write", () => {
       expect(last.watchCommand).toBe("gateway --force");
     });
   });
+
+  it("skips write when serialized output is byte-identical to current file", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, snapshot, configPath } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: { gateway: { mode: "local" } },
+      });
+
+      // First write: apply a real change so we know the pipeline works.
+      const changed = structuredClone(snapshot.config) as Record<string, unknown>;
+      const gw = (changed.gateway ?? {}) as Record<string, unknown>;
+      changed.gateway = { ...gw, auth: { mode: "token" } };
+      await io.writeConfigFile(changed);
+
+      // Record mtime after the real write.
+      const statAfterWrite = await fs.stat(configPath);
+
+      // Small delay so mtime would differ if a second write actually touched disk.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Re-read snapshot so the IO layer sees the current file.
+      const snap2 = await io.readConfigFileSnapshot();
+      expect(snap2.valid).toBe(true);
+
+      // Second write: identical config — should be skipped by hash guard.
+      await io.writeConfigFile(snap2.config);
+
+      const statAfterNoop = await fs.stat(configPath);
+      expect(statAfterNoop.mtimeMs).toBe(statAfterWrite.mtimeMs);
+    });
+  });
 });
