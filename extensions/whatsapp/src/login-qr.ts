@@ -261,6 +261,23 @@ export async function waitForWebLogin(
     }
 
     if (login.error) {
+      // After a successful QR scan, Baileys receives a 515 "restart required"
+      // and internally attempts to reconnect. If creds haven't flushed to disk
+      // yet, that reconnection fails with 401 (loggedOut). waitForWaConnection
+      // only captures the final disconnect, so errorStatus may be 401 instead
+      // of the original 515.
+      //
+      // Try a restart for 515 directly, or for 401 if we haven't tried yet
+      // (distinguishes post-QR 401 from a genuine logged-out session).
+      const isRestartCandidate =
+        login.errorStatus === 515 ||
+        (login.errorStatus === DisconnectReason.loggedOut && !login.restartAttempted);
+      if (isRestartCandidate) {
+        const restarted = await restartLoginSocket(login, runtime);
+        if (restarted && isLoginFresh(login)) {
+          continue;
+        }
+      }
       if (login.errorStatus === DisconnectReason.loggedOut) {
         await logoutWeb({
           authDir: login.authDir,
@@ -272,12 +289,6 @@ export async function waitForWebLogin(
         await resetActiveLogin(account.accountId, message);
         runtime.log(danger(message));
         return { connected: false, message };
-      }
-      if (login.errorStatus === 515) {
-        const restarted = await restartLoginSocket(login, runtime);
-        if (restarted && isLoginFresh(login)) {
-          continue;
-        }
       }
       const message = `WhatsApp login failed: ${login.error}`;
       await resetActiveLogin(account.accountId, message);
