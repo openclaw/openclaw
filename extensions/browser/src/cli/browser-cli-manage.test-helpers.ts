@@ -1,6 +1,7 @@
 import { vi } from "vitest";
-import { registerBrowserManageCommands } from "./browser-cli-manage.js";
-import { createBrowserProgram } from "./browser-cli.test-support.js";
+import * as parentCoreApiModule from "../core-api.js";
+import * as browserCliSharedModule from "./browser-cli-shared.js";
+import * as cliCoreApiModule from "./core-api.js";
 
 type BrowserRequest = { path?: string };
 type BrowserRuntimeOptions = { timeoutMs?: number };
@@ -31,15 +32,29 @@ const browserManageMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("./browser-cli-shared.js", () => ({
-  callBrowserRequest: browserManageMocks.callBrowserRequest,
-}));
+vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(
+  browserManageMocks.callBrowserRequest,
+);
+vi.spyOn(parentCoreApiModule, "runCommandWithRuntime").mockImplementation(
+  async (_runtime, action, onError) => {
+    try {
+      await action();
+    } catch (err) {
+      onError?.(err);
+    }
+  },
+);
+const { createBrowserProgram, getBrowserCliRuntime } =
+  await import("./browser-cli.test-support.js");
+const browserCliRuntime = getBrowserCliRuntime();
+vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
+vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
+  browserCliRuntime.writeJson,
+);
+vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
+vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
 
-vi.mock("../core-api.js", async () => ({
-  ...(await vi.importActual<object>("../core-api.js")),
-  ...(await (await import("./browser-cli.test-support.js")).createBrowserCliRuntimeMockModule()),
-  ...(await (await import("./browser-cli.test-support.js")).createBrowserCliUtilsMockModule()),
-}));
+const { registerBrowserManageCommands } = await import("./browser-cli-manage.js");
 
 export function createBrowserManageProgram(params?: { withParentTimeout?: boolean }) {
   const { program, browser, parentOpts } = createBrowserProgram();

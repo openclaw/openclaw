@@ -1,6 +1,8 @@
 import { Command } from "commander";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
+import * as browserCliSharedModule from "./browser-cli-shared.js";
+import * as cliCoreApiModule from "./core-api.js";
 
 const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
 
@@ -46,15 +48,14 @@ const sharedMocks = vi.hoisted(() => ({
     },
   ),
 }));
-vi.mock("./browser-cli-shared.js", () => ({
-  callBrowserRequest: sharedMocks.callBrowserRequest,
-}));
-
-vi.mock("../core-api.js", async () => ({
-  ...(await vi.importActual<object>("../core-api.js")),
-  defaultRuntime: runtime,
-  loadConfig: configMocks.loadConfig,
-}));
+vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(
+  sharedMocks.callBrowserRequest,
+);
+vi.spyOn(cliCoreApiModule, "loadConfig").mockImplementation(configMocks.loadConfig);
+vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log);
+vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(runtime.writeJson);
+vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(runtime.error);
+vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(runtime.exit);
 
 let registerBrowserInspectCommands: typeof import("./browser-cli-inspect.js").registerBrowserInspectCommands;
 
