@@ -13,6 +13,7 @@ import {
 } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { resolveSecretInputString } from "../secrets/resolve-secret-input-string.js";
 import {
@@ -223,6 +224,23 @@ export function ensureExplicitGatewayAuth(params: {
   throw new Error(message);
 }
 
+/**
+ * Resolve the host the CLI should connect to based on the gateway bind mode.
+ * tailnet/custom bind to a specific interface; loopback and lan accept on 127.0.0.1.
+ */
+function resolveLocalHostForBind(bindMode: string, customBindHost?: string): string {
+  if (bindMode === "tailnet") {
+    return pickPrimaryTailnetIPv4() ?? "127.0.0.1";
+  }
+  if (bindMode === "custom") {
+    const host = customBindHost?.trim();
+    if (host) {
+      return host;
+    }
+  }
+  return "127.0.0.1";
+}
+
 export function buildGatewayConnectionDetails(
   options: {
     config?: OpenClawConfig;
@@ -239,8 +257,11 @@ export function buildGatewayConnectionDetails(
   const localPort = resolveGatewayPortValue(config);
   const bindMode = config.gateway?.bind ?? "loopback";
   const scheme = tlsEnabled ? "wss" : "ws";
-  // Self-connections should always target loopback; bind mode only controls listener exposure.
-  const localUrl = `${scheme}://127.0.0.1:${localPort}`;
+  // Derive local connection host from bind mode: tailnet/custom bind to a specific interface
+  // that may not include loopback, so the CLI must target the same address the server listens on.
+  // lan (0.0.0.0) and loopback always accept connections on 127.0.0.1.
+  const localHost = resolveLocalHostForBind(bindMode, config.gateway?.customBindHost);
+  const localUrl = `${scheme}://${localHost}:${localPort}`;
   const cliUrlOverride =
     typeof options.url === "string" && options.url.trim().length > 0
       ? options.url.trim()
@@ -810,12 +831,17 @@ function formatGatewayCloseError(
   code: number,
   reason: string,
   connectionDetails: GatewayConnectionDetails,
+  authHint?: string,
 ): string {
   const reasonText = reason?.trim() || "no close reason";
   const hint =
     code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
   const suffix = hint ? ` ${hint}` : "";
-  return `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`;
+  // Surface auth hint when the gateway closes without an explicit reason — a common
+  // symptom of missing or rejected credentials.
+  const authLine =
+    authHint && (code === 1000 || code === 1008) && !reason?.trim() ? `\n${authHint}` : "";
+  return `gateway closed (${code}${suffix}): ${reasonText}${authLine}\n${connectionDetails.message}`;
 }
 
 function formatGatewayTimeoutError(
@@ -864,6 +890,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
   timeoutMs: number;
   safeTimerTimeoutMs: number;
   connectionDetails: GatewayConnectionDetails;
+  authHint?: string;
 }): Promise<T> {
   const { opts, scopes, url, token, password, tlsFingerprint, timeoutMs, safeTimerTimeoutMs } =
     params;
@@ -925,7 +952,11 @@ async function executeGatewayRequestWithScopes<T>(params: {
         }
         ignoreClose = true;
         client.stop();
-        stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
+        stop(
+          new Error(
+            formatGatewayCloseError(code, reason, params.connectionDetails, params.authHint),
+          ),
+        );
       },
     });
 
@@ -964,6 +995,13 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const { token, password } = resolvedCredentials;
+  // Build auth hint for better error messages when the gateway rejects unauthenticated connections.
+  const authMode = context.config.gateway?.auth?.mode;
+  const hasResolvedAuth = Boolean(token || password);
+  const authHint =
+    authMode && authMode !== "none" && !hasResolvedAuth
+      ? `Authentication required — pass --token or configure gateway.auth.token in ${context.configPath}`
+      : undefined;
   return await executeGatewayRequestWithScopes<T>({
     opts,
     scopes,
@@ -974,6 +1012,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     timeoutMs,
     safeTimerTimeoutMs,
     connectionDetails,
+    authHint,
   });
 }
 
