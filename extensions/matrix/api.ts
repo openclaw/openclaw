@@ -6,3 +6,5 @@ export {
   resetMatrixThreadBindingsForTests,
 } from "./src/matrix/thread-bindings.js";
 export { matrixOnboardingAdapter as matrixSetupWizard } from "./src/onboarding.js";
+
+export const matrixSessionBindingAdapterChannels = ["matrix"] as const;
