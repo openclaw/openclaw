@@ -163,6 +163,27 @@ describe("control UI routing", () => {
     expect(headerStyles.justifyContent).toBe("center");
   });
 
+  it("keeps collapsed desktop content clear of the nav rail", async () => {
+    const app = mountApp("/overview");
+    await app.updateComplete;
+
+    app.applySettings({ ...app.settings, navCollapsed: true });
+    await app.updateComplete;
+    await nextFrame();
+
+    const shellNav = app.querySelector<HTMLElement>(".shell-nav");
+    const content = app.querySelector<HTMLElement>(".content");
+    expect(shellNav).not.toBeNull();
+    expect(content).not.toBeNull();
+    if (!shellNav || !content) {
+      return;
+    }
+
+    const navRect = shellNav.getBoundingClientRect();
+    const contentRect = content.getBoundingClientRect();
+    expect(contentRect.left).toBeGreaterThanOrEqual(navRect.right);
+  });
+
   it("resets to the main session when opening chat from sidebar navigation", async () => {
     const app = mountApp("/sessions?session=agent:main:subagent:task-123");
     await app.updateComplete;
