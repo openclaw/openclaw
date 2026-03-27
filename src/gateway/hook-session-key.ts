@@ -8,11 +8,15 @@ function resolveSessionKey(raw: string | undefined): string | undefined {
 }
 
 function normalizeHookValidatedSessionKey(raw: string | undefined): string | undefined {
-  const value = resolveSessionKey(raw);
-  if (!value) {
-    return undefined;
+  let value = resolveSessionKey(raw);
+  while (value) {
+    const parsed = parseAgentSessionKey(value);
+    if (!parsed) {
+      return value;
+    }
+    value = parsed.rest;
   }
-  return parseAgentSessionKey(value)?.rest ?? value;
+  return undefined;
 }
 
 export function resolveReservedHookSessionKeyPrefix(
