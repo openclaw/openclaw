@@ -1,1 +1,1 @@
-export { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/browser-support";
+export { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
