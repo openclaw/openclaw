@@ -45,12 +45,12 @@ type ProviderMonitorTestMocks = {
     (params?: { cfg?: unknown; agentIds?: string[] }) => unknown[]
   >;
   monitorLifecycleMock: Mock<(params: { threadBindings: { stop: () => void } }) => Promise<void>>;
-  resolveDiscordAccountMock: Mock<
-    (params?: { cfg?: unknown; accountId?: string | null; token?: string | null }) => unknown
-  >;
+  rememberDiscordManagedBotIdentityMock: Mock<() => void>;
+  resolveDiscordAccountMock: Mock<() => unknown>;
   resolveDiscordAllowlistConfigMock: Mock<() => Promise<unknown>>;
-  resolveNativeCommandsEnabledMock: Mock<(params?: unknown) => boolean>;
-  resolveNativeSkillsEnabledMock: Mock<(params?: unknown) => boolean>;
+  forgetDiscordManagedBotIdentityMock: Mock<() => void>;
+  resolveNativeCommandsEnabledMock: Mock<() => boolean>;
+  resolveNativeSkillsEnabledMock: Mock<() => boolean>;
   isVerboseMock: Mock<() => boolean>;
   shouldLogVerboseMock: Mock<() => boolean>;
   voiceRuntimeModuleLoadedMock: Mock<() => void>;
@@ -90,6 +90,7 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
         vi.fn(async () => undefined),
         {
           deactivate: vi.fn(),
+          waitForIdle: vi.fn(async () => undefined),
         },
       ),
     ),
@@ -127,7 +128,8 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
     monitorLifecycleMock: vi.fn(async (params: { threadBindings: { stop: () => void } }) => {
       params.threadBindings.stop();
     }),
-    resolveDiscordAccountMock: vi.fn((_) => ({
+    rememberDiscordManagedBotIdentityMock: vi.fn(),
+    resolveDiscordAccountMock: vi.fn(() => ({
       accountId: "default",
       token: "cfg-token",
       config: baseDiscordAccountConfig(),
@@ -136,8 +138,9 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
       guildEntries: undefined,
       allowFrom: undefined,
     })),
-    resolveNativeCommandsEnabledMock: vi.fn((_params) => true),
-    resolveNativeSkillsEnabledMock: vi.fn((_params) => false),
+    forgetDiscordManagedBotIdentityMock: vi.fn(),
+    resolveNativeCommandsEnabledMock: vi.fn(() => true),
+    resolveNativeSkillsEnabledMock: vi.fn(() => false),
     isVerboseMock,
     shouldLogVerboseMock,
     voiceRuntimeModuleLoadedMock: vi.fn(),
@@ -161,8 +164,10 @@ const {
   listNativeCommandSpecsForConfigMock,
   listSkillCommandsForAgentsMock,
   monitorLifecycleMock,
+  rememberDiscordManagedBotIdentityMock,
   resolveDiscordAccountMock,
   resolveDiscordAllowlistConfigMock,
+  forgetDiscordManagedBotIdentityMock,
   resolveNativeCommandsEnabledMock,
   resolveNativeSkillsEnabledMock,
   isVerboseMock,
@@ -213,6 +218,7 @@ export function resetDiscordProviderMonitorMocks(params?: {
       vi.fn(async () => undefined),
       {
         deactivate: vi.fn(),
+        waitForIdle: vi.fn(async () => undefined),
       },
     ),
   );
@@ -235,6 +241,7 @@ export function resetDiscordProviderMonitorMocks(params?: {
   monitorLifecycleMock.mockClear().mockImplementation(async (monitorParams) => {
     monitorParams.threadBindings.stop();
   });
+  rememberDiscordManagedBotIdentityMock.mockClear();
   resolveDiscordAccountMock.mockClear().mockReturnValue({
     accountId: "default",
     token: "cfg-token",
@@ -244,6 +251,7 @@ export function resetDiscordProviderMonitorMocks(params?: {
     guildEntries: undefined,
     allowFrom: undefined,
   });
+  forgetDiscordManagedBotIdentityMock.mockClear();
   resolveNativeCommandsEnabledMock.mockClear().mockReturnValue(true);
   resolveNativeSkillsEnabledMock.mockClear().mockReturnValue(false);
   isVerboseMock.mockClear().mockReturnValue(false);
@@ -262,16 +270,34 @@ export const baseConfig = (): OpenClawConfig =>
     channels: {
       discord: {
         accounts: {
-          default: {
-            token: "MTIz.abc.def",
-          },
+          default: {},
         },
       },
     },
   }) as OpenClawConfig;
 
-vi.mock("@buape/carbon", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@buape/carbon")>();
+vi.mock("@buape/carbon", () => {
+  class Button {}
+  class ChannelSelectMenu {}
+  class Command {}
+  class CommandWithSubcommands {}
+  class Container {
+    constructor(
+      _components?: unknown,
+      _options?: {
+        accentColor?: string;
+        spoiler?: boolean;
+      },
+    ) {}
+  }
+  class MentionableSelectMenu {}
+  class Message {}
+  class MessageCreateListener {}
+  class MessageReactionAddListener {}
+  class MessageReactionRemoveListener {}
+  class Modal {}
+  class PresenceUpdateListener {}
+  class ReadyListener {}
   class RateLimitError extends Error {
     status = 429;
     discordCode?: number;
@@ -308,16 +334,111 @@ vi.mock("@buape/carbon", async (importOriginal) => {
       return clientGetPluginMock(name);
     }
   }
-  return { ...actual, Client, RateLimitError };
+  class RequestClient {}
+  class Row {}
+  class RoleSelectMenu {}
+  class Separator {}
+  class StringSelectMenu {}
+  class TextDisplay {}
+  class ThreadUpdateListener {}
+  class UserSelectMenu {}
+  class Embed {}
+  const ChannelType = {
+    GuildText: 0,
+    DM: 1,
+    GuildVoice: 2,
+    GroupDM: 3,
+    GuildCategory: 4,
+    GuildAnnouncement: 5,
+    AnnouncementThread: 10,
+    PublicThread: 11,
+    PrivateThread: 12,
+  };
+  const MessageType = {
+    Default: 0,
+    Reply: 19,
+  };
+  class CheckboxGroup {}
+  class File {}
+  class Label {}
+  class LinkButton {}
+  class MediaGallery {}
+  class RadioGroup {}
+  class Section {}
+  class TextInput {}
+  class Thumbnail {}
+  const parseCustomId = (_id: string) => ({ baseId: _id });
+  return {
+    Client,
+    Button,
+    ChannelSelectMenu,
+    ChannelType,
+    CheckboxGroup,
+    Command,
+    CommandWithSubcommands,
+    Container,
+    Embed,
+    File,
+    Label,
+    LinkButton,
+    MediaGallery,
+    MentionableSelectMenu,
+    Message,
+    MessageCreateListener,
+    MessageType,
+    MessageReactionAddListener,
+    MessageReactionRemoveListener,
+    Modal,
+    PresenceUpdateListener,
+    RadioGroup,
+    RateLimitError,
+    ReadyListener,
+    RequestClient,
+    Row,
+    RoleSelectMenu,
+    Section,
+    Separator,
+    serializePayload: (payload: unknown) => payload,
+    StringSelectMenu,
+    TextDisplay,
+    TextInput,
+    ThreadUpdateListener,
+    Thumbnail,
+    UserSelectMenu,
+    parseCustomId,
+  };
 });
 
-vi.mock("@buape/carbon/gateway", () => ({
-  GatewayCloseCodes: { DisallowedIntents: 4014 },
-}));
+vi.mock("@buape/carbon/gateway", () => {
+  class GatewayPlugin {
+    gatewayInfo?: unknown;
+    constructor(_options?: unknown) {}
+    async registerClient(_client: unknown) {
+      return undefined;
+    }
+  }
+  return {
+    GatewayCloseCodes: { DisallowedIntents: 4014 },
+    GatewayIntents: {
+      Guilds: 1 << 0,
+      GuildMessages: 1 << 9,
+      MessageContent: 1 << 15,
+      DirectMessages: 1 << 12,
+      GuildMessageReactions: 1 << 10,
+      DirectMessageReactions: 1 << 13,
+      GuildVoiceStates: 1 << 7,
+      GuildPresences: 1 << 8,
+      GuildMembers: 1 << 1,
+    },
+    GatewayPlugin,
+  };
+});
 
-vi.mock("@buape/carbon/voice", () => ({
-  VoicePlugin: class VoicePlugin {},
-}));
+vi.mock("@buape/carbon/voice", () => {
+  return {
+    VoicePlugin: class VoicePlugin {},
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
@@ -402,6 +523,8 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
 });
 
 vi.mock("../../../extensions/discord/src/accounts.js", () => ({
+  forgetDiscordManagedBotIdentity: forgetDiscordManagedBotIdentityMock,
+  rememberDiscordManagedBotIdentity: rememberDiscordManagedBotIdentityMock,
   resolveDiscordAccount: resolveDiscordAccountMock,
 }));
 
@@ -486,9 +609,7 @@ vi.mock("../../../extensions/discord/src/monitor/provider.lifecycle.js", () => (
 }));
 
 vi.mock("../../../extensions/discord/src/monitor/rest-fetch.js", () => ({
-  resolveDiscordRestFetch: () => async () => {
-    throw new Error("offline");
-  },
+  resolveDiscordRestFetch: () => async () => undefined,
 }));
 
 vi.mock("../../../extensions/discord/src/monitor/thread-bindings.js", () => ({

@@ -7,6 +7,7 @@ import {
   baseRuntime,
   getFirstDiscordMessageHandlerParams,
   getProviderMonitorTestMocks,
+  mockResolvedDiscordAccountConfig,
   resetDiscordProviderMonitorMocks,
 } from "../../../../test/helpers/extensions/discord-provider.test-support.js";
 
@@ -34,6 +35,8 @@ const {
   resolveNativeSkillsEnabledMock,
   shouldLogVerboseMock,
   voiceRuntimeModuleLoadedMock,
+  rememberDiscordManagedBotIdentityMock,
+  forgetDiscordManagedBotIdentityMock,
 } = getProviderMonitorTestMocks();
 
 let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvider;
@@ -121,6 +124,12 @@ describe("monitorDiscordProvider", () => {
 
   beforeAll(async () => {
     vi.doMock("../accounts.js", () => ({
+      forgetDiscordManagedBotIdentity: (
+        ...args: Parameters<typeof forgetDiscordManagedBotIdentityMock>
+      ) => forgetDiscordManagedBotIdentityMock(...args),
+      rememberDiscordManagedBotIdentity: (
+        ...args: Parameters<typeof rememberDiscordManagedBotIdentityMock>
+      ) => rememberDiscordManagedBotIdentityMock(...args),
       resolveDiscordAccount: (...args: Parameters<typeof resolveDiscordAccountMock>) =>
         resolveDiscordAccountMock(...args),
     }));
@@ -772,5 +781,136 @@ describe("monitorDiscordProvider", () => {
 
     const messages = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0]));
     expect(messages.some((msg) => msg.includes("discord startup ["))).toBe(false);
+  });
+
+  it("waits for inbound handler idle before forgetting managed bot identity", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const deactivate = vi.fn();
+    const waitForIdle = vi.fn(async () => undefined);
+    createDiscordMessageHandlerMock.mockImplementation(() =>
+      Object.assign(
+        vi.fn(async () => undefined),
+        {
+          deactivate,
+          waitForIdle,
+        },
+      ),
+    );
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(rememberDiscordManagedBotIdentityMock).toHaveBeenCalledWith({
+      botUserId: "bot-1",
+      accountId: "default",
+    });
+    expect(deactivate).toHaveBeenCalledTimes(1);
+    expect(waitForIdle).toHaveBeenCalledTimes(1);
+    expect(forgetDiscordManagedBotIdentityMock).toHaveBeenCalledWith({
+      botUserId: "bot-1",
+      accountId: "default",
+    });
+    expect(deactivate.mock.invocationCallOrder[0]).toBeLessThan(
+      waitForIdle.mock.invocationCallOrder[0],
+    );
+    expect(waitForIdle.mock.invocationCallOrder[0]).toBeLessThan(
+      forgetDiscordManagedBotIdentityMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("bounds inbound handler idle wait during teardown", async () => {
+    vi.useFakeTimers();
+    try {
+      const { monitorDiscordProvider } = await import("./provider.js");
+      const deactivate = vi.fn();
+      const waitForIdle = vi.fn(() => new Promise<undefined>(() => undefined));
+      createDiscordMessageHandlerMock.mockImplementation(() =>
+        Object.assign(
+          vi.fn(async () => undefined),
+          {
+            deactivate,
+            waitForIdle,
+          },
+        ),
+      );
+      mockResolvedDiscordAccountConfig({
+        inboundWorker: { runTimeoutMs: 5_000 },
+      });
+      const runtime = baseRuntime();
+
+      const monitorPromise = monitorDiscordProvider({
+        config: baseConfig(),
+        runtime,
+      });
+
+      // Advance past drain timeout (5 000 ms) + deferred identity cleanup delay (5 000 ms)
+      await vi.advanceTimersByTimeAsync(10_200);
+      await expect(monitorPromise).resolves.toBeUndefined();
+
+      expect(deactivate).toHaveBeenCalledTimes(1);
+      expect(waitForIdle).toHaveBeenCalledTimes(1);
+      expect(forgetDiscordManagedBotIdentityMock).toHaveBeenCalledWith({
+        botUserId: "bot-1",
+        accountId: "default",
+      });
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("inbound handler did not drain within 5000ms during teardown"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("defers forget managed-identity cleanup when inbound drain times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const { monitorDiscordProvider } = await import("./provider.js");
+      const deactivate = vi.fn();
+      const waitForIdle = vi.fn(() => new Promise<undefined>(() => undefined));
+      createDiscordMessageHandlerMock.mockImplementation(() =>
+        Object.assign(
+          vi.fn(async () => undefined),
+          {
+            deactivate,
+            waitForIdle,
+          },
+        ),
+      );
+      mockResolvedDiscordAccountConfig({
+        inboundWorker: { runTimeoutMs: 5_000 },
+      });
+      const runtime = baseRuntime();
+
+      const monitorPromise = monitorDiscordProvider({
+        config: baseConfig(),
+        runtime,
+      });
+
+      // Advance past the drain timeout (5 000 ms cap)
+      await vi.advanceTimersByTimeAsync(5_100);
+
+      // At this point the drain timed out, but the 5 000 ms defer delay is
+      // still pending -- forgetDiscordManagedBotIdentity must NOT have been
+      // called yet.
+      expect(forgetDiscordManagedBotIdentityMock).not.toHaveBeenCalled();
+
+      // Now advance past the 5 000 ms defer delay
+      await vi.advanceTimersByTimeAsync(5_100);
+      await expect(monitorPromise).resolves.toBeUndefined();
+
+      // After the defer delay the identity should finally be forgotten
+      expect(forgetDiscordManagedBotIdentityMock).toHaveBeenCalledWith({
+        botUserId: "bot-1",
+        accountId: "default",
+      });
+
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("deferring managed-identity cleanup"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

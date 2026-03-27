@@ -37,6 +37,7 @@ type DiscordMessageHandlerTestingHooks = DiscordInboundWorkerTestingHooks & {
 
 export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;
+  waitForIdle: () => Promise<void>;
 };
 
 const RECENT_DISCORD_MESSAGE_TTL_MS = 5 * 60_000;
@@ -225,6 +226,7 @@ export function createDiscordMessageHandler(
   };
 
   handler.deactivate = inboundWorker.deactivate;
+  handler.waitForIdle = inboundWorker.waitForIdle;
 
   return handler;
 }

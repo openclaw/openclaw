@@ -105,4 +105,42 @@ describe("KeyedAsyncQueue", () => {
     await Promise.resolve();
     expect(queue.getTailMapForTesting().has("actor")).toBe(false);
   });
+
+  it("waits for tasks enqueued while draining", async () => {
+    const queue = new KeyedAsyncQueue();
+    const firstGate = deferred<void>();
+    const secondGate = deferred<void>();
+    let secondStarted = false;
+
+    void queue.enqueue("actor", async () => {
+      await firstGate.promise;
+    });
+
+    const idlePromise = queue.waitForIdle();
+
+    await vi.waitFor(() => {
+      expect(queue.getTailMapForTesting().has("actor")).toBe(true);
+    });
+
+    void queue.enqueue("actor", async () => {
+      secondStarted = true;
+      await secondGate.promise;
+    });
+
+    firstGate.resolve();
+    await vi.waitFor(() => {
+      expect(secondStarted).toBe(true);
+    });
+
+    let idleResolved = false;
+    void idlePromise.then(() => {
+      idleResolved = true;
+    });
+    await Promise.resolve();
+    expect(idleResolved).toBe(false);
+
+    secondGate.resolve();
+    await idlePromise;
+    expect(queue.getTailMapForTesting().size).toBe(0);
+  });
 });
