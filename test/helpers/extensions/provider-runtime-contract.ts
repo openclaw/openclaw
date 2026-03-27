@@ -531,6 +531,94 @@ export function describeOpenAIProviderRuntimeContract() {
       await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
     });
 
+    it("owns xai modern-model matching without accepting multi-agent ids", () => {
+      const provider = requireProviderContractProvider("xai");
+
+      expect(
+        provider.isModernModelRef?.({
+          provider: "xai",
+          modelId: "grok-4-1-fast-reasoning",
+        } as never),
+      ).toBe(true);
+      expect(
+        provider.isModernModelRef?.({
+          provider: "xai",
+          modelId: "grok-4.20-multi-agent-experimental-beta-0304",
+        } as never),
+      ).toBe(false);
+    });
+
+    it("owns direct xai compat flags on resolved models", () => {
+      const provider = requireProviderContractProvider("xai");
+
+      expect(
+        provider.normalizeResolvedModel?.({
+          provider: "xai",
+          modelId: "grok-4-1-fast",
+          model: createModel({
+            id: "grok-4-1-fast",
+            provider: "xai",
+            api: "openai-responses",
+            baseUrl: "https://api.x.ai/v1",
+          }),
+        } as never),
+      ).toMatchObject({
+        compat: {
+          toolSchemaProfile: "xai",
+          nativeWebSearchTool: true,
+          toolCallArgumentsEncoding: "html-entities",
+        },
+      });
+    });
+  });
+
+  describe("openrouter", () => {
+    it("owns xai downstream compat flags for x-ai routed models", () => {
+      const provider = requireProviderContractProvider("openrouter");
+      expect(
+        provider.normalizeResolvedModel?.({
+          provider: "openrouter",
+          modelId: "x-ai/grok-4-1-fast",
+          model: createModel({
+            id: "x-ai/grok-4-1-fast",
+            provider: "openrouter",
+            api: "openai-completions",
+            baseUrl: "https://openrouter.ai/api/v1",
+          }),
+        }),
+      ).toMatchObject({
+        compat: {
+          toolSchemaProfile: "xai",
+          nativeWebSearchTool: true,
+          toolCallArgumentsEncoding: "html-entities",
+        },
+      });
+    });
+  });
+
+  describe("venice", () => {
+    it("owns xai downstream compat flags for grok-backed Venice models", () => {
+      const provider = requireProviderContractProvider("venice");
+      expect(
+        provider.normalizeResolvedModel?.({
+          provider: "venice",
+          modelId: "grok-41-fast",
+          model: createModel({
+            id: "grok-41-fast",
+            provider: "venice",
+            api: "openai-completions",
+            baseUrl: "https://api.venice.ai/api/v1",
+          }),
+        }),
+      ).toMatchObject({
+        compat: {
+          toolSchemaProfile: "xai",
+          nativeWebSearchTool: true,
+          toolCallArgumentsEncoding: "html-entities",
+        },
+      });
+    });
+  });
     it("owns forward-compat codex models", () => {
       const provider = requireProviderContractProvider("openai-codex");
       const model = provider.resolveDynamicModel?.({

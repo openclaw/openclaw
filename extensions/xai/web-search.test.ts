@@ -303,7 +303,7 @@ describe("xai provider models", () => {
         modelId: "grok-4-1-fast",
         modelRegistry: { find: () => null } as never,
         providerConfig: {
-          api: "openai-completions",
+          api: "openai-responses",
           baseUrl: "https://api.x.ai/v1",
         },
       },
@@ -315,7 +315,7 @@ describe("xai provider models", () => {
         modelId: "grok-4.20-beta-latest-reasoning",
         modelRegistry: { find: () => null } as never,
         providerConfig: {
-          api: "openai-completions",
+          api: "openai-responses",
           baseUrl: "https://api.x.ai/v1",
         },
       },
@@ -327,7 +327,7 @@ describe("xai provider models", () => {
         modelId: "grok-3-mini-fast",
         modelRegistry: { find: () => null } as never,
         providerConfig: {
-          api: "openai-completions",
+          api: "openai-responses",
           baseUrl: "https://api.x.ai/v1",
         },
       },
@@ -336,7 +336,7 @@ describe("xai provider models", () => {
     expect(grok41).toMatchObject({
       provider: "xai",
       id: "grok-4-1-fast",
-      api: "openai-completions",
+      api: "openai-responses",
       baseUrl: "https://api.x.ai/v1",
       reasoning: true,
       contextWindow: 2_000_000,
@@ -345,7 +345,7 @@ describe("xai provider models", () => {
     expect(grok420).toMatchObject({
       provider: "xai",
       id: "grok-4.20-beta-latest-reasoning",
-      api: "openai-completions",
+      api: "openai-responses",
       baseUrl: "https://api.x.ai/v1",
       reasoning: true,
       input: ["text", "image"],
@@ -355,7 +355,7 @@ describe("xai provider models", () => {
     expect(grok3Mini).toMatchObject({
       provider: "xai",
       id: "grok-3-mini-fast",
-      api: "openai-completions",
+      api: "openai-responses",
       baseUrl: "https://api.x.ai/v1",
       reasoning: true,
       contextWindow: 131_072,
@@ -371,7 +371,7 @@ describe("xai provider models", () => {
         modelId: "grok-4.20-multi-agent-experimental-beta-0304",
         modelRegistry: { find: () => null } as never,
         providerConfig: {
-          api: "openai-completions",
+          api: "openai-responses",
           baseUrl: "https://api.x.ai/v1",
         },
       },
