@@ -54,7 +54,9 @@ describe("mistral onboard", () => {
   it("uses the bundled mistral default model definition", () => {
     const bundled = buildBundledMistralModelDefinition();
     const cfg = applyMistralProviderConfig({});
-    const defaultModel = cfg.models?.providers?.mistral?.models.find((model) => model.id === bundled.id);
+    const defaultModel = cfg.models?.providers?.mistral?.models.find(
+      (model) => model.id === bundled.id,
+    );
 
     expect(defaultModel).toMatchObject({
       id: bundled.id,
