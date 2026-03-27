@@ -5,4 +5,4 @@ export {
   LITELLM_BASE_URL,
   LITELLM_DEFAULT_MODEL_ID,
   LITELLM_DEFAULT_MODEL_REF,
-} from "../../extensions/litellm/api.js";
+} from "./onboard.js";
