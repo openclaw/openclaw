@@ -112,6 +112,7 @@ export const registerTelegramHandlers = ({
   processMessage,
   logger,
   telegramDeps = defaultTelegramBotDeps,
+  validatedCustomCommandIndices,
 }: RegisterTelegramHandlerParams) => {
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
@@ -1564,6 +1565,79 @@ export const registerTelegramHandlers = ({
 
         return;
       }
+
+      // Config-driven menu navigation for customCommands with menus.
+      // Callbacks are scoped to their originating command: we collect all known
+      // callback_data values for a command (from its menus + routes) and check
+      // that every button on the originating message belongs to that command.
+      // This prevents unrelated inline keyboards (or other customCommands) with
+      // colliding callback_data values from being intercepted.
+      // Only consider validated commands (dedup + native-conflict-free) to avoid rejected
+      // entries from intercepting callbacks. validatedCustomCommandIndices is passed from
+      // registerTelegramNativeCommands and contains the exact raw array indices that passed
+      // validation, so rejected duplicates cannot participate even if they share a command name.
+      const menuCustomCommands = (telegramCfg.customCommands ?? []).filter((c, i) => {
+        if (!c.menus || !c.routes) return false;
+        if (validatedCustomCommandIndices && !validatedCustomCommandIndices.has(i)) return false;
+        return true;
+      });
+      const cbMessageButtons: string[] = [];
+      const inlineKb = (
+        callbackMessage as {
+          reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string }>> };
+        }
+      ).reply_markup?.inline_keyboard;
+      if (inlineKb) {
+        for (const row of inlineKb) {
+          for (const btn of row) {
+            if (btn.callback_data) cbMessageButtons.push(btn.callback_data);
+          }
+        }
+      }
+      let menuHandled = false;
+      for (const mc of menuCustomCommands) {
+        const targetMenuName = mc.routes![data];
+        if (!targetMenuName || !mc.menus![targetMenuName]) continue;
+        // Build the set of all callback_data values owned by this command
+        const ownedCallbackData = new Set<string>(Object.keys(mc.routes!));
+        for (const menu of Object.values(mc.menus!)) {
+          for (const row of menu.buttons) {
+            for (const btn of row) {
+              ownedCallbackData.add(btn.callback_data);
+            }
+          }
+        }
+        // Only handle if every button on the originating message belongs to this command.
+        // Note: if two different customCommands define identical button sets (same callback_data
+        // values), the first match wins. This is a degenerate config; users should namespace
+        // their callback_data values per command (e.g. "work:back" vs "admin:back").
+        if (
+          cbMessageButtons.length > 0 &&
+          cbMessageButtons.every((cb) => ownedCallbackData.has(cb))
+        ) {
+          const menu = mc.menus![targetMenuName];
+          try {
+            await editCallbackMessage(menu.text, {
+              // parse_mode omitted: menu text is sent as plain text to avoid Markdown escaping issues
+              reply_markup: { inline_keyboard: menu.buttons },
+            });
+          } catch (editErr) {
+            const errStr = String(editErr);
+            if (!errStr.includes("message is not modified")) {
+              await replyToCallbackChat(menu.text, {
+                // parse_mode omitted: menu text is sent as plain text to avoid Markdown escaping issues
+                reply_markup: { inline_keyboard: menu.buttons },
+                ...(callbackMessage.message_thread_id
+                  ? { message_thread_id: callbackMessage.message_thread_id }
+                  : {}),
+              });
+            }
+          }
+          menuHandled = true;
+          break;
+        }
+      }
+      if (menuHandled) return;
 
       const syntheticMessage = buildSyntheticTextMessage({
         base: withResolvedTelegramForumFlag(callbackMessage, isForum),

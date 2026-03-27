@@ -83,6 +83,13 @@ export type TelegramCustomCommand = {
   command: string;
   /** Description shown in Telegram command menu. */
   description: string;
+  /** Multi-level menu definitions. Key is menu name, "main" is the entry point. */
+  menus?: Record<
+    string,
+    { text: string; buttons: Array<Array<{ text: string; callback_data: string }>> }
+  >;
+  /** Callback data → menu name routing. Navigation callbacks are handled without AI. */
+  routes?: Record<string, string>;
 };
 
 export type TelegramAccountConfig = {

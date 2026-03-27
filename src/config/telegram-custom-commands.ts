@@ -93,3 +93,40 @@ export function resolveTelegramCustomCommands(params: {
 
   return { commands: resolved, issues };
 }
+
+/**
+ * Returns the set of indices in the raw commands array that were accepted by
+ * resolveTelegramCustomCommands. Useful for filtering the raw array to only
+ * include validated entries while preserving their full shape (menus, routes, etc.).
+ */
+export function resolveValidatedCustomCommandIndices(params: {
+  commands?: TelegramCustomCommandInput[] | null;
+  reservedCommands?: Set<string>;
+}): Set<number> {
+  const entries = Array.isArray(params.commands) ? params.commands : [];
+  const reserved = params.reservedCommands ?? new Set<string>();
+  const seen = new Set<string>();
+  const accepted = new Set<number>();
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    const normalized = normalizeTelegramCommandName(String(entry?.command ?? ""));
+    if (!normalized || !TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)) {
+      continue;
+    }
+    if (reserved.has(normalized)) {
+      continue;
+    }
+    if (seen.has(normalized)) {
+      continue;
+    }
+    const description = normalizeTelegramCommandDescription(String(entry?.description ?? ""));
+    if (!description) {
+      continue;
+    }
+    seen.add(normalized);
+    accepted.add(index);
+  }
+
+  return accepted;
+}
