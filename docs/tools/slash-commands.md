@@ -125,6 +125,7 @@ Current source-of-truth:
   <Accordion title="Sessions and runs">
     - `/new [model]` starts a new session; `/reset` is the reset alias.
     - `/reset soft [message]` keeps the current transcript, drops reused CLI backend session ids, and reruns startup/system-prompt loading in-place.
+    - `/restore [number]` lists recent archived sessions or restores one into the current session slot.
     - `/compact [instructions]` compacts the session context. See [Compaction](/concepts/compaction).
     - `/stop` aborts the current run.
     - `/session idle <duration|off>` and `/session max-age <duration|off>` manage thread-binding expiry.

@@ -720,6 +720,22 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       ],
     }),
     defineChatCommand({
+      key: "restore",
+      nativeName: "restore",
+      description: "Restore an archived session.",
+      textAlias: "/restore",
+      acceptsArgs: true,
+      category: "session",
+      tier: "standard",
+      args: [
+        {
+          name: "number",
+          description: "Archive number from /restore list",
+          type: "number",
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "think",
       nativeName: "think",
       description: "Set thinking level.",
