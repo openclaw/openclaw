@@ -1,1 +1,1 @@
-export * from "./src/session-key-normalization.js";
+export { normalizeExplicitDiscordSessionKey } from "./src/session-key-normalization.js";
