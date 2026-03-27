@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { parseFeishuMessageEvent } from "./bot.js";
+import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 
 // Helper to build a minimal FeishuMessageEvent for testing
 function makeEvent(
   chatType: "p2p" | "group" | "private",
   mentions?: Array<{ key: string; name: string; id: { open_id?: string } }>,
   text = "hello",
-) {
+): FeishuMessageEvent {
   return {
     sender: {
       sender_id: { user_id: "u1", open_id: "ou_sender" },
@@ -22,7 +22,7 @@ function makeEvent(
   };
 }
 
-function makePostEvent(content: unknown) {
+function makePostEvent(content: unknown): FeishuMessageEvent {
   return {
     sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
     message: {
@@ -36,7 +36,7 @@ function makePostEvent(content: unknown) {
   };
 }
 
-function makeShareChatEvent(content: unknown) {
+function makeShareChatEvent(content: unknown): FeishuMessageEvent {
   return {
     sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
     message: {
@@ -55,15 +55,15 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
 
   it("returns mentionedBot=false when there are no mentions", () => {
     const event = makeEvent("group", []);
-    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
     expect(ctx.mentionedBot).toBe(false);
   });
 
   it("falls back to sender user_id when open_id is missing", () => {
     const event = makeEvent("p2p", []);
-    (event as any).sender.sender_id = { user_id: "u_mobile_only" };
+    event.sender.sender_id = { user_id: "u_mobile_only" };
 
-    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
     expect(ctx.senderOpenId).toBe("u_mobile_only");
     expect(ctx.senderId).toBe("u_mobile_only");
   });
@@ -72,7 +72,7 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     const event = makeEvent("group", [
       { key: "@_user_1", name: "Bot", id: { open_id: BOT_OPEN_ID } },
     ]);
-    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
     expect(ctx.mentionedBot).toBe(true);
   });
 
@@ -80,7 +80,7 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     const event = makeEvent("group", [
       { key: "@_user_1", name: "OpenClaw Bot (Alias)", id: { open_id: BOT_OPEN_ID } },
     ]);
-    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID, "OpenClaw Bot");
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID, "OpenClaw Bot");
     expect(ctx.mentionedBot).toBe(true);
   });
 
@@ -88,7 +88,7 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     const event = makeEvent("group", [
       { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },
     ]);
-    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
     expect(ctx.mentionedBot).toBe(false);
   });
 
@@ -96,7 +96,7 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     const event = makeEvent("group", [
       { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },
     ]);
-    const ctx = parseFeishuMessageEvent(event as any, undefined);
+    const ctx = parseFeishuMessageEvent(event, undefined);
     expect(ctx.mentionedBot).toBe(false);
   });
 
@@ -104,7 +104,7 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     const event = makeEvent("group", [
       { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },
     ]);
-    const ctx = parseFeishuMessageEvent(event as any, "");
+    const ctx = parseFeishuMessageEvent(event, "");
     expect(ctx.mentionedBot).toBe(false);
   });
 
@@ -114,7 +114,7 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
       [{ key: "@_bot_1", name: ".*", id: { open_id: BOT_OPEN_ID } }],
       "@NotBot hello",
     );
-    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
     expect(ctx.content).toBe("@NotBot hello");
   });
 
@@ -124,7 +124,7 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
       [{ key: ".*", name: "Bot", id: { open_id: BOT_OPEN_ID } }],
       "hello world",
     );
-    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
     expect(ctx.content).toBe("hello world");
   });
 
@@ -136,7 +136,7 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
         [{ tag: "text", text: "What does this document say" }],
       ],
     });
-    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
     expect(ctx.mentionedBot).toBe(true);
   });
 
@@ -144,7 +144,7 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     const event = makePostEvent({
       content: [[{ tag: "text", text: "hello" }]],
     });
-    const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
+    const ctx = parseFeishuMessageEvent(event, "ou_bot_123");
     expect(ctx.mentionedBot).toBe(false);
   });
 
@@ -155,7 +155,7 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
         [{ tag: "text", text: "hello" }],
       ],
     });
-    const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
+    const ctx = parseFeishuMessageEvent(event, "ou_bot_123");
     expect(ctx.mentionedBot).toBe(false);
   });
 
@@ -169,7 +169,7 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
         [{ tag: "code_block", language: "ts", text: "const x = 1;" }],
       ],
     });
-    const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
+    const ctx = parseFeishuMessageEvent(event, "ou_bot_123");
     expect(ctx.content).toContain("before `inline()`");
     expect(ctx.content).toContain("```ts\nconst x = 1;\n```");
   });
@@ -179,7 +179,7 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
       body: "Merged and Forwarded Message",
       share_chat_id: "sc_abc123",
     });
-    const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
+    const ctx = parseFeishuMessageEvent(event, "ou_bot_123");
     expect(ctx.content).toBe("Merged and Forwarded Message");
   });
 
@@ -187,7 +187,7 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     const event = makeShareChatEvent({
       share_chat_id: "sc_abc123",
     });
-    const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
+    const ctx = parseFeishuMessageEvent(event, "ou_bot_123");
     expect(ctx.content).toBe("[Forwarded message: sc_abc123]");
   });
 });
