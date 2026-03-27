@@ -1,11 +1,11 @@
 import { afterEach, expect, test } from "vitest";
+import { killProcessTree } from "../process/kill-tree.js";
 import {
   getFinishedSession,
   getSession,
   resetProcessRegistryForTests,
 } from "./bash-process-registry.js";
 import { createExecTool } from "./bash-tools.exec.js";
-import { killProcessTree } from "./shell-utils.js";
 
 const BACKGROUND_HOLD_CMD = 'node -e "setTimeout(() => {}, 5000)"';
 const ABORT_SETTLE_MS = process.platform === "win32" ? 200 : 25;
