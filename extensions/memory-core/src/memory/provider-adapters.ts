@@ -16,12 +16,12 @@ import {
   createVoyageEmbeddingProvider,
   hasNonTextEmbeddingParts,
   listMemoryEmbeddingProviders,
-  resolveUserPath,
   runGeminiEmbeddingBatches,
   runOpenAiEmbeddingBatches,
   runVoyageEmbeddingBatches,
   type MemoryEmbeddingProviderAdapter,
-} from "../engine-host-api.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 
 function formatErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);

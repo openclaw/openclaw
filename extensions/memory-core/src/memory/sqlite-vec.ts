@@ -1,1 +1,1 @@
-export { loadSqliteVecExtension } from "../engine-host-api.js";
+export { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";

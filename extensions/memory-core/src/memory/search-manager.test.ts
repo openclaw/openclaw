@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../engine-host-api.js";
 
 function createManagerStatus(params: {
   backend: "qmd" | "builtin";
@@ -102,7 +102,7 @@ vi.mock("./qmd-manager.js", () => ({
   },
 }));
 
-vi.mock("../../extensions/memory-core/src/memory/manager-runtime.js", () => ({
+vi.mock("./manager-runtime.js", () => ({
   MemoryIndexManager: {
     get: mockMemoryIndexGet,
   },
