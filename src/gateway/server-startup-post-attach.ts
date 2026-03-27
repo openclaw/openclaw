@@ -256,10 +256,11 @@ export async function startGatewaySidecars(params: {
               : entry.channel === "discord"
                 ? `discord:channel:${payload.channelId ?? "unknown"}`
                 : `${entry.channel}:unknown`);
-          // Include entry.id in the event text so that two identical messages sent during
-          // a drain window (same text, same sender) are never collapsed by enqueueSystemEvent's
-          // consecutive-duplicate guard.
-          const eventText = `[pending-inbound:${entry.id}] Missed message during restart from ${senderLabel}: "${textPreview || "(no text)"}"`;
+          // Include entry.channel, entry.accountId, and entry.id in the event text so that
+          // entries from different channels or accounts that share the same message id are
+          // never collapsed by enqueueSystemEvent's consecutive-duplicate guard.
+          const accountSuffix = entry.accountId ? `:${entry.accountId}` : "";
+          const eventText = `[pending-inbound:${entry.channel}${accountSuffix}:${entry.id}] Missed message during restart from ${senderLabel}: "${textPreview || "(no text)"}"`;
           const list = bySession.get(sessionKey) ?? [];
           list.push({ entry, sessionKey, eventText });
           bySession.set(sessionKey, list);
@@ -369,7 +370,16 @@ export async function startGatewaySidecars(params: {
         }
 
         // Consume first to prevent infinite retry on crash.
-        await clearActiveTurn(stateDir, turn.sessionId);
+        // Wrapped in a per-turn try/catch so a single disk error does not abort
+        // the entire recovery loop.
+        try {
+          await clearActiveTurn(stateDir, turn.sessionId);
+        } catch (err) {
+          params.log.warn(
+            `active-turn recovery: clear failed for ${turn.sessionId}: ${String(err)}`,
+          );
+          continue;
+        }
 
         // Skip probe sessions -- they are synthetic health-check runs.
         if (turn.sessionId.startsWith("probe-")) {
