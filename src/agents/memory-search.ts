@@ -381,7 +381,8 @@ export function resolveMemorySearchConfig(
     resolved.provider === "auto" ? undefined : getMemoryEmbeddingProvider(resolved.provider);
   if (
     multimodalActive &&
-    !multimodalProvider?.supportsMultimodalEmbeddings?.({
+    multimodalProvider &&
+    !multimodalProvider.supportsMultimodalEmbeddings?.({
       model: resolved.model,
     })
   ) {
