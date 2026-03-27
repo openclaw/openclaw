@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
@@ -7,37 +6,22 @@ import {
   clearPluginManifestRegistryCache,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
+import {
+  cleanupTrackedTempDirs,
+  makeTrackedTempDir,
+  mkdirSafeDir,
+} from "../plugins/test-helpers/fs-fixtures.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 import { validateConfigObject } from "./validation.js";
 
 const tempDirs: string[] = [];
 
-function chmodSafeDir(dir: string) {
-  if (process.platform === "win32") {
-    return;
-  }
-  fs.chmodSync(dir, 0o755);
-}
-
-function mkdtempSafe(prefix: string) {
-  const dir = fs.mkdtempSync(prefix);
-  chmodSafeDir(dir);
-  return dir;
-}
-
-function mkdirSafe(dir: string) {
-  fs.mkdirSync(dir, { recursive: true });
-  chmodSafeDir(dir);
-}
-
 function makeTempDir() {
-  const dir = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-auto-enable-"));
-  tempDirs.push(dir);
-  return dir;
+  return makeTrackedTempDir("openclaw-plugin-auto-enable", tempDirs);
 }
 
 function writePluginManifestFixture(params: { rootDir: string; id: string; channels: string[] }) {
-  mkdirSafe(params.rootDir);
+  mkdirSafeDir(params.rootDir);
   fs.writeFileSync(
     path.join(params.rootDir, "openclaw.plugin.json"),
     JSON.stringify(
@@ -61,6 +45,7 @@ function makeRegistry(plugins: Array<{ id: string; channels: string[] }>): Plugi
       id: p.id,
       channels: p.channels,
       providers: [],
+      cliBackends: [],
       skills: [],
       hooks: [],
       origin: "config" as const,
@@ -121,9 +106,7 @@ function applyWithBluebubblesImessageConfig(extra?: {
 afterEach(() => {
   clearPluginDiscoveryCache();
   clearPluginManifestRegistryCache();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("applyPluginAutoEnable", () => {
@@ -305,7 +288,7 @@ describe("applyPluginAutoEnable", () => {
   it("uses env-scoped catalog metadata for preferOver auto-enable decisions", () => {
     const stateDir = makeTempDir();
     const catalogPath = path.join(stateDir, "plugins", "catalog.json");
-    mkdirSafe(path.dirname(catalogPath));
+    mkdirSafeDir(path.dirname(catalogPath));
     fs.writeFileSync(
       catalogPath,
       JSON.stringify({

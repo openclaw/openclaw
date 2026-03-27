@@ -29,37 +29,63 @@ function formatHourLabel(hour: number): string {
   return date.toLocaleTimeString(undefined, { hour: "numeric" });
 }
 
+function forEachSessionHourSlice(
+  session: UsageSessionEntry,
+  timeZone: "local" | "utc",
+  visitor: (params: {
+    usage: NonNullable<UsageSessionEntry["usage"]>;
+    hour: number;
+    weekday: number;
+    share: number;
+  }) => void,
+) {
+  const usage = session.usage;
+  if (!usage) {
+    return false;
+  }
+
+  const start = usage.firstActivity ?? session.updatedAt;
+  const end = usage.lastActivity ?? session.updatedAt;
+  if (!start || !end) {
+    return false;
+  }
+
+  const startMs = Math.min(start, end);
+  const endMs = Math.max(start, end);
+  const durationMs = Math.max(endMs - startMs, 1);
+  const totalMinutes = durationMs / 60000;
+
+  let cursor = startMs;
+  while (cursor < endMs) {
+    const date = new Date(cursor);
+    const nextHour = setToHourEnd(date, timeZone);
+    const nextMs = Math.min(nextHour.getTime(), endMs);
+    const minutes = Math.max((nextMs - cursor) / 60000, 0);
+    visitor({
+      usage,
+      hour: getZonedHour(date, timeZone),
+      weekday: getZonedWeekday(date, timeZone),
+      share: minutes / totalMinutes,
+    });
+    cursor = nextMs + 1;
+  }
+
+  return true;
+}
+
 function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | "utc") {
   const hourErrors = Array.from({ length: 24 }, () => 0);
   const hourMsgs = Array.from({ length: 24 }, () => 0);
 
   for (const session of sessions) {
-    const usage = session.usage;
-    if (!usage?.messageCounts || usage.messageCounts.total === 0) {
+    const messageCounts = session.usage?.messageCounts;
+    if (!messageCounts || messageCounts.total === 0) {
       continue;
     }
-    const start = usage.firstActivity ?? session.updatedAt;
-    const end = usage.lastActivity ?? session.updatedAt;
-    if (!start || !end) {
-      continue;
-    }
-    const startMs = Math.min(start, end);
-    const endMs = Math.max(start, end);
-    const durationMs = Math.max(endMs - startMs, 1);
-    const totalMinutes = durationMs / 60000;
-
-    let cursor = startMs;
-    while (cursor < endMs) {
-      const date = new Date(cursor);
-      const hour = getZonedHour(date, timeZone);
-      const nextHour = setToHourEnd(date, timeZone);
-      const nextMs = Math.min(nextHour.getTime(), endMs);
-      const minutes = Math.max((nextMs - cursor) / 60000, 0);
-      const share = minutes / totalMinutes;
-      hourErrors[hour] += usage.messageCounts.errors * share;
-      hourMsgs[hour] += usage.messageCounts.total * share;
-      cursor = nextMs + 1;
-    }
+    forEachSessionHourSlice(session, timeZone, ({ hour, share }) => {
+      hourErrors[hour] += messageCounts.errors * share;
+      hourMsgs[hour] += messageCounts.total * share;
+    });
   }
 
   return hourMsgs
@@ -124,31 +150,15 @@ function buildUsageMosaicStats(
     }
     totalTokens += usage.totalTokens;
 
-    const start = usage.firstActivity ?? session.updatedAt;
-    const end = usage.lastActivity ?? session.updatedAt;
-    if (!start || !end) {
+    if (
+      !forEachSessionHourSlice(session, timeZone, ({ usage, hour, weekday, share }) => {
+        hourTotals[hour] += usage.totalTokens * share;
+        weekdayTotals[weekday] += usage.totalTokens * share;
+      })
+    ) {
       continue;
     }
     hasData = true;
-
-    const startMs = Math.min(start, end);
-    const endMs = Math.max(start, end);
-    const durationMs = Math.max(endMs - startMs, 1);
-    const totalMinutes = durationMs / 60000;
-
-    let cursor = startMs;
-    while (cursor < endMs) {
-      const date = new Date(cursor);
-      const hour = getZonedHour(date, timeZone);
-      const weekday = getZonedWeekday(date, timeZone);
-      const nextHour = setToHourEnd(date, timeZone);
-      const nextMs = Math.min(nextHour.getTime(), endMs);
-      const minutes = Math.max((nextMs - cursor) / 60000, 0);
-      const share = minutes / totalMinutes;
-      hourTotals[hour] += usage.totalTokens * share;
-      weekdayTotals[weekday] += usage.totalTokens * share;
-      cursor = nextMs + 1;
-    }
   }
 
   const weekdayLabels = [

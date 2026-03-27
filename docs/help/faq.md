@@ -546,8 +546,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="Can I use Claude Max subscription without an API key?">
-    Yes. You can authenticate with a **setup-token**
-    instead of an API key. This is the subscription path.
+    Yes. You can either use a **setup-token** or reuse a local **Claude CLI**
+    login on the gateway host.
 
     Claude Pro/Max subscriptions **do not include an API key**, so this is the
     technical path for subscription accounts. But this is your decision: Anthropic
@@ -572,7 +572,12 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="Do you support Claude subscription auth (Claude Pro or Max)?">
-    Yes - via **setup-token**. OpenClaw no longer reuses Claude Code CLI OAuth tokens; use a setup-token or an Anthropic API key. Generate the token anywhere and paste it on the gateway host. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
+    Yes. You can either:
+
+    - use a **setup-token**
+    - reuse a local **Claude CLI** login on the gateway host with `openclaw models auth login --provider anthropic --method cli --set-default`
+
+    Setup-token is still supported. Claude CLI migration is simpler when the gateway host already runs Claude Code. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
 
     Important: this is technical compatibility, not a policy guarantee. Anthropic
     has blocked some subscription usage outside Claude Code in the past.

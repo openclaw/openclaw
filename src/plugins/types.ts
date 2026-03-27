@@ -21,7 +21,8 @@ import type {
   ChannelStructuredComponents,
 } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ModelProviderConfig } from "../config/types.js";
+import type { CliBackendConfig, ModelProviderConfig } from "../config/types.js";
+import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
@@ -31,7 +32,13 @@ import type { MediaUnderstandingProvider } from "../media-understanding/types.js
 import type { RuntimeEnv } from "../runtime.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import type {
+  SpeechDirectiveTokenParseContext,
+  SpeechDirectiveTokenParseResult,
   SpeechProviderConfiguredContext,
+  SpeechProviderConfig,
+  SpeechProviderResolveConfigContext,
+  SpeechProviderResolveTalkConfigContext,
+  SpeechProviderResolveTalkOverridesContext,
   SpeechListVoicesRequest,
   SpeechProviderId,
   SpeechSynthesisRequest,
@@ -108,6 +115,10 @@ export type OpenClawPluginToolContext = {
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
+  browser?: {
+    sandboxBridgeUrl?: string;
+    allowHostControl?: boolean;
+  };
   messageChannel?: string;
   agentAccountId?: string;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
@@ -934,8 +945,15 @@ export type SpeechProviderPlugin = {
   id: SpeechProviderId;
   label: string;
   aliases?: string[];
+  autoSelectOrder?: number;
   models?: readonly string[];
   voices?: readonly string[];
+  resolveConfig?: (ctx: SpeechProviderResolveConfigContext) => SpeechProviderConfig;
+  parseDirectiveToken?: (ctx: SpeechDirectiveTokenParseContext) => SpeechDirectiveTokenParseResult;
+  resolveTalkConfig?: (ctx: SpeechProviderResolveTalkConfigContext) => SpeechProviderConfig;
+  resolveTalkOverrides?: (
+    ctx: SpeechProviderResolveTalkOverridesContext,
+  ) => SpeechProviderConfig | undefined;
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
   synthesizeTelephony?: (
@@ -1273,6 +1291,12 @@ export type OpenClawPluginCliContext = {
 
 export type OpenClawPluginCliRegistrar = (ctx: OpenClawPluginCliContext) => void | Promise<void>;
 
+export type OpenClawPluginCliCommandDescriptor = {
+  name: string;
+  description: string;
+  hasSubcommands: boolean;
+};
+
 /** Context passed to long-lived plugin services. */
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
@@ -1286,6 +1310,28 @@ export type OpenClawPluginService = {
   id: string;
   start: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
+};
+
+/** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
+export type CliBackendPlugin = {
+  /** Provider id used in model refs, for example `claude-cli/opus`. */
+  id: string;
+  /** Default backend config before user overrides from `agents.defaults.cliBackends`. */
+  config: CliBackendConfig;
+  /**
+   * Whether OpenClaw should inject bundle MCP config for this backend.
+   *
+   * Keep this opt-in. Only backends that explicitly consume an MCP config file
+   * should enable it.
+   */
+  bundleMcp?: boolean;
+  /**
+   * Optional config normalizer applied after user overrides merge.
+   *
+   * Use this for backend-specific compatibility rewrites when old config
+   * shapes need to stay working.
+   */
+  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
 };
 
 export type OpenClawPluginChannelRegistration = {
@@ -1341,9 +1387,21 @@ export type OpenClawPluginApi = {
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
   /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
-  registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
-  registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
+  registerGatewayMethod: (
+    method: string,
+    handler: GatewayRequestHandler,
+    opts?: { scope?: OperatorScope },
+  ) => void;
+  registerCli: (
+    registrar: OpenClawPluginCliRegistrar,
+    opts?: {
+      commands?: string[];
+      descriptors?: OpenClawPluginCliCommandDescriptor[];
+    },
+  ) => void;
   registerService: (service: OpenClawPluginService) => void;
+  /** Register a text-only CLI backend used by the local CLI runner. */
+  registerCliBackend: (backend: CliBackendPlugin) => void;
   /** Register a native model/provider plugin (text inference capability). */
   registerProvider: (provider: ProviderPlugin) => void;
   /** Register a speech synthesis provider (speech capability). */
@@ -1371,7 +1429,15 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register the system prompt section builder for this memory plugin (exclusive slot). */
   registerMemoryPromptSection: (
-    builder: import("../memory/prompt-section.js").MemoryPromptSectionBuilder,
+    builder: import("./memory-state.js").MemoryPromptSectionBuilder,
+  ) => void;
+  /** Register the pre-compaction flush plan resolver for this memory plugin (exclusive slot). */
+  registerMemoryFlushPlan: (resolver: import("./memory-state.js").MemoryFlushPlanResolver) => void;
+  /** Register the active memory runtime adapter for this memory plugin (exclusive slot). */
+  registerMemoryRuntime: (runtime: import("./memory-state.js").MemoryPluginRuntime) => void;
+  /** Register a memory embedding provider adapter. Multiple adapters may coexist. */
+  registerMemoryEmbeddingProvider: (
+    adapter: import("./memory-embedding-providers.js").MemoryEmbeddingProviderAdapter,
   ) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
