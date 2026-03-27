@@ -92,7 +92,7 @@ export function resolveGatewayStartupPluginIds(params: {
       }
       return (
         pluginsConfig.allow.includes(plugin.id) ||
-        pluginsConfig.entries[plugin.id]?.enabled === true ||
+        pluginsConfig.entries[plugin.id] !== undefined ||
         pluginsConfig.slots.memory === plugin.id
       );
     })

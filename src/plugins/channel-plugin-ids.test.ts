@@ -77,4 +77,26 @@ describe("resolveGatewayStartupPluginIds", () => {
       }),
     ).toEqual(["discord", "custom-sidecar"]);
   });
+
+  it("includes bundled non-channel plugins when they have an explicit plugin entry config", () => {
+    const config = {
+      plugins: {
+        entries: {
+          "amazon-bedrock": {
+            config: {
+              region: "us-west-2",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGatewayStartupPluginIds({
+        config,
+        workspaceDir: "/tmp",
+        env: process.env,
+      }),
+    ).toEqual(["discord", "amazon-bedrock", "custom-sidecar"]);
+  });
 });
