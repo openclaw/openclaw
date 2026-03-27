@@ -1,0 +1,7 @@
+{
+  "gateway": {
+    "bind": "custom",
+    "customBindHost": "127.0.0.1",
+    "port": 18789
+  }
+}
