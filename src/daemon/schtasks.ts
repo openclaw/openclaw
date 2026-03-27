@@ -4,6 +4,7 @@ import path from "node:path";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports.js";
+import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
@@ -438,11 +439,7 @@ async function terminateGatewayProcessTree(pid: number, graceMs: number): Promis
     killProcessTree(pid, { graceMs });
     return;
   }
-  const taskkillPath = path.join(
-    process.env.SystemRoot ?? "C:\\Windows",
-    "System32",
-    "taskkill.exe",
-  );
+  const taskkillPath = path.join(getWindowsInstallRoots().systemRoot, "System32", "taskkill.exe");
   spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
     stdio: "ignore",
     timeout: 5_000,
