@@ -334,6 +334,144 @@ describe("config cli", () => {
     });
   });
 
+  describe("config set - denyCommands validation", () => {
+    it("rejects unknown denyCommands leaf writes", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "set", "gateway.nodes.denyCommands", '["sendd"]']),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining('Unknown command "sendd"'));
+    });
+
+    it("rejects parent object writes that smuggle invalid denyCommands", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "set", "gateway.nodes", '{"denyCommands":["sendd"]}']),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining('Unknown command "sendd"'));
+    });
+
+    it("accepts parent object writes when allowCommands makes the command known", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "gateway.nodes",
+        '{"allowCommands":["custom.mycommand"],"denyCommands":["custom.mycommand"]}',
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.gateway?.nodes).toEqual({
+        allowCommands: ["custom.mycommand"],
+        denyCommands: ["custom.mycommand"],
+      });
+    });
+
+    it("rejects allowCommands-only updates that invalidate existing denyCommands", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: {
+          port: 18789,
+          nodes: {
+            allowCommands: ["custom.mycommand"],
+            denyCommands: ["custom.mycommand"],
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "set", "gateway.nodes.allowCommands", "[]"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining('Unknown command "custom.mycommand"'),
+      );
+    });
+
+    it("accepts exact denyCommands entries with punctuation when allowCommands declares them", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "gateway.nodes",
+        '{"allowCommands":["camera.capture(v2)","foo|bar"],"denyCommands":["camera.capture(v2)","foo|bar"]}',
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.gateway?.nodes).toEqual({
+        allowCommands: ["camera.capture(v2)", "foo|bar"],
+        denyCommands: ["camera.capture(v2)", "foo|bar"],
+      });
+    });
+
+    it("rejects unsetting allowCommands when it leaves denyCommands invalid", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: {
+          port: 18789,
+          nodes: {
+            allowCommands: ["camera.capture(v2)"],
+            denyCommands: ["camera.capture(v2)"],
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "unset", "gateway.nodes.allowCommands"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining('Unknown command "camera.capture(v2)"'),
+      );
+    });
+
+    it("does not revalidate denyCommands for unrelated gateway.nodes edits", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: {
+          port: 18789,
+          nodes: {
+            denyCommands: ["sendd"],
+            browser: { mode: "auto" },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "gateway.nodes.browser.mode", '"manual"']);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      expect(mockError).not.toHaveBeenCalledWith(
+        expect.stringContaining('Unknown command "sendd"'),
+      );
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.gateway?.nodes?.browser).toEqual({ mode: "manual" });
+    });
+  });
+
   describe("config get", () => {
     it("redacts sensitive values", async () => {
       const resolved: OpenClawConfig = {
@@ -1251,6 +1389,88 @@ describe("config cli", () => {
       expect(
         payload.errors?.some((entry) => entry.ref?.includes("default:DISCORD_BOT_TOKEN")),
       ).toBe(true);
+    });
+
+    it("emits structured JSON for denyCommands validation failure in --dry-run --json mode", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "gateway.nodes.denyCommands",
+          '["sendd"]',
+          "--dry-run",
+          "--json",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      const raw = mockLog.mock.calls.at(-1)?.[0];
+      expect(typeof raw).toBe("string");
+      const payload = JSON.parse(String(raw)) as {
+        ok: boolean;
+        checks: { schema: boolean };
+        errors?: Array<{ kind: string; message: string }>;
+      };
+      expect(payload.ok).toBe(false);
+      expect(payload.checks.schema).toBe(true);
+      expect(payload.errors?.some((entry) => entry.kind === "schema")).toBe(true);
+      expect(
+        payload.errors?.some((entry) => entry.message.includes('Unknown command "sendd"')),
+      ).toBe(true);
+    });
+
+    it("keeps the value-mode dry-run note for gateway.nodes writes without json-mode validation", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "gateway.nodes",
+        '{"denyCommands":["system.run"]}',
+        "--dry-run",
+      ]);
+
+      expect(mockLog).toHaveBeenCalledWith(
+        expect.stringContaining("value mode does not run schema/resolvability checks"),
+      );
+    });
+
+    it("returns structured schema errors instead of crashing on malformed allowCommands", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "gateway.nodes",
+          '{"allowCommands":42,"denyCommands":["system.run"]}',
+          "--strict-json",
+          "--dry-run",
+          "--json",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      const raw = mockLog.mock.calls.at(-1)?.[0];
+      expect(typeof raw).toBe("string");
+      const payload = JSON.parse(String(raw)) as {
+        ok: boolean;
+        checks: { schema: boolean };
+        errors?: Array<{ kind: string; message: string }>;
+      };
+      expect(payload.ok).toBe(false);
+      expect(payload.checks.schema).toBe(true);
+      expect(payload.errors?.some((entry) => entry.message.includes("allowCommands"))).toBe(true);
+      expect(payload.errors?.some((entry) => entry.message.includes("TypeError"))).toBe(false);
     });
 
     it("fails dry-run when provider updates make existing refs unresolvable", async () => {

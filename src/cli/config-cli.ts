@@ -16,6 +16,7 @@ import {
   type SecretRef,
   type SecretRefSource,
 } from "../config/types.secrets.js";
+import { validateDenyCommandEntries } from "../config/validate-deny-commands.js";
 import { validateConfigObjectRaw } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
@@ -72,6 +73,8 @@ type ConfigSetOperation = {
 const OLLAMA_API_KEY_PATH: PathSegment[] = ["models", "providers", "ollama", "apiKey"];
 const OLLAMA_PROVIDER_PATH: PathSegment[] = ["models", "providers", "ollama"];
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
+const GATEWAY_NODES_ALLOW_COMMANDS_PATH: PathSegment[] = ["gateway", "nodes", "allowCommands"];
+const GATEWAY_NODES_DENY_COMMANDS_PATH: PathSegment[] = ["gateway", "nodes", "denyCommands"];
 const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
 const CONFIG_SET_EXAMPLE_VALUE = formatCliCommand(
   "openclaw config set gateway.port 19001 --strict-json",
@@ -335,6 +338,14 @@ function pathEquals(path: PathSegment[], expected: PathSegment[]): boolean {
   return (
     path.length === expected.length && path.every((segment, index) => segment === expected[index])
   );
+}
+
+function pathStartsWith(path: PathSegment[], prefix: PathSegment[]): boolean {
+  return prefix.every((segment, index) => path[index] === segment);
+}
+
+function pathOverlaps(path: PathSegment[], target: PathSegment[]): boolean {
+  return pathStartsWith(path, target) || pathStartsWith(target, path);
 }
 
 function ensureValidOllamaProviderForApiKeySet(
@@ -932,6 +943,17 @@ function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryRunError
   }));
 }
 
+function collectDenyCommandValidationMessages(config: OpenClawConfig): string[] {
+  return validateDenyCommandEntries(config.gateway?.nodes?.denyCommands, config).errors;
+}
+
+function collectDryRunDenyCommandErrors(config: OpenClawConfig): ConfigSetDryRunError[] {
+  return collectDenyCommandValidationMessages(config).map((message) => ({
+    kind: "schema",
+    message: `gateway.nodes.denyCommands: ${message}`,
+  }));
+}
+
 function formatDryRunFailureMessage(params: {
   errors: ConfigSetDryRunError[];
   skippedExecRefs: number;
@@ -1014,6 +1036,11 @@ export async function runConfigSet(opts: {
       operations,
     });
     const nextConfig = next as OpenClawConfig;
+    const shouldValidateGatewayNodeCommands = operations.some(
+      (operation) =>
+        pathOverlaps(operation.setPath, GATEWAY_NODES_ALLOW_COMMANDS_PATH) ||
+        pathOverlaps(operation.setPath, GATEWAY_NODES_DENY_COMMANDS_PATH),
+    );
 
     if (opts.cliOptions.dryRun) {
       const hasJsonMode = operations.some((operation) => operation.inputMode === "json");
@@ -1032,6 +1059,9 @@ export async function runConfigSet(opts: {
       const errors: ConfigSetDryRunError[] = [];
       if (hasJsonMode) {
         errors.push(...collectDryRunSchemaErrors(nextConfig));
+      }
+      if (shouldValidateGatewayNodeCommands) {
+        errors.push(...collectDryRunDenyCommandErrors(nextConfig));
       }
       if (hasJsonMode || hasBuilderMode) {
         errors.push(
@@ -1097,6 +1127,16 @@ export async function runConfigSet(opts: {
         );
       }
       return;
+    }
+
+    if (shouldValidateGatewayNodeCommands) {
+      const denyCommandErrors = collectDenyCommandValidationMessages(nextConfig);
+      if (denyCommandErrors.length > 0) {
+        throw new Error(
+          "Invalid denyCommands entries:\n" +
+            denyCommandErrors.map((error) => `- ${error}`).join("\n"),
+        );
+      }
     }
 
     await writeConfigFile(next);
@@ -1176,6 +1216,18 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
       runtime.error(danger(`Config path not found: ${opts.path}`));
       runtime.exit(1);
       return;
+    }
+    const shouldValidateGatewayNodeCommands =
+      pathOverlaps(parsedPath, GATEWAY_NODES_ALLOW_COMMANDS_PATH) ||
+      pathOverlaps(parsedPath, GATEWAY_NODES_DENY_COMMANDS_PATH);
+    if (shouldValidateGatewayNodeCommands) {
+      const denyCommandErrors = collectDenyCommandValidationMessages(next as OpenClawConfig);
+      if (denyCommandErrors.length > 0) {
+        throw new Error(
+          "Invalid denyCommands entries:\n" +
+            denyCommandErrors.map((error) => `- ${error}`).join("\n"),
+        );
+      }
     }
     await writeConfigFile(next, { unsetPaths: [parsedPath] });
     runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
