@@ -5,13 +5,13 @@ bind="${OPENCLAW_GATEWAY_BIND:-loopback}"
 port="${OPENCLAW_GATEWAY_PORT:-18789}"
 allowed_origins_json="${OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS:-}"
 workspace_dir="${OPENCLAW_WORKSPACE_DIR:-}"
-sandbox_mode="${OPENCLAW_SANDBOX_MODE:-}"
-tools_profile="${OPENCLAW_TOOLS_PROFILE:-}"
-tools_allow_json="${OPENCLAW_TOOLS_ALLOW_JSON:-}"
-tools_deny_json="${OPENCLAW_TOOLS_DENY_JSON:-}"
-exec_host="${OPENCLAW_EXEC_HOST:-}"
-exec_security="${OPENCLAW_EXEC_SECURITY:-}"
-exec_ask="${OPENCLAW_EXEC_ASK:-}"
+sandbox_mode="${OPENCLAW_SANDBOX_MODE:-off}"
+tools_profile="${OPENCLAW_TOOLS_PROFILE:-full}"
+tools_allow_json="${OPENCLAW_TOOLS_ALLOW_JSON:-[]}"
+tools_deny_json="${OPENCLAW_TOOLS_DENY_JSON:-[]}"
+exec_host="${OPENCLAW_EXEC_HOST:-gateway}"
+exec_security="${OPENCLAW_EXEC_SECURITY:-full}"
+exec_ask="${OPENCLAW_EXEC_ASK:-off}"
 exec_ask_fallback="${OPENCLAW_EXEC_ASK_FALLBACK:-$exec_security}"
 
 if [ -z "${OPENCLAW_CONFIG_PATH:-}" ]; then
@@ -67,7 +67,10 @@ fi
 
 if [ -n "$exec_security" ] || [ -n "$exec_ask" ] || [ -n "$exec_ask_fallback" ]; then
   # Host-side exec approvals can be stricter than tools.exec.*, so keep both in sync.
-  node <<'EOF'
+  OPENCLAW_EXEC_SECURITY="$exec_security" \
+    OPENCLAW_EXEC_ASK="$exec_ask" \
+    OPENCLAW_EXEC_ASK_FALLBACK="$exec_ask_fallback" \
+    node <<'EOF'
 const fs = require("node:fs");
 const path = require("node:path");
 
