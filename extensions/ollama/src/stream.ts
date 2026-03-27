@@ -691,6 +691,26 @@ export function createOllamaStreamFn(
         let finalResponse: OllamaChatResponse | undefined;
         const modelInfo = { api: model.api, provider: model.provider, id: model.id };
         let streamStarted = false;
+        let textBlockClosed = false;
+
+        const closeTextBlock = () => {
+          if (!streamStarted || textBlockClosed) {
+            return;
+          }
+          textBlockClosed = true;
+          const partial = buildStreamAssistantMessage({
+            model: modelInfo,
+            content: [{ type: "text", text: accumulatedContent }],
+            stopReason: "stop",
+            usage: buildUsageWithNoCost({}),
+          });
+          stream.push({
+            type: "text_end",
+            contentIndex: 0,
+            content: accumulatedContent,
+            partial,
+          });
+        };
 
         for await (const chunk of parseNdjsonStream(reader)) {
           if (chunk.message?.content) {
@@ -720,6 +740,7 @@ export function createOllamaStreamFn(
             stream.push({ type: "text_delta", contentIndex: 0, delta, partial });
           }
           if (chunk.message?.tool_calls) {
+            closeTextBlock();
             accumulatedToolCalls.push(...chunk.message.tool_calls);
           }
           if (chunk.done) {
@@ -740,14 +761,7 @@ export function createOllamaStreamFn(
         const assistantMessage = buildAssistantMessage(finalResponse, modelInfo);
 
         // Close the text block if we emitted any text_delta events.
-        if (streamStarted) {
-          stream.push({
-            type: "text_end",
-            contentIndex: 0,
-            content: accumulatedContent,
-            partial: assistantMessage,
-          });
-        }
+        closeTextBlock();
 
         stream.push({
           type: "done",

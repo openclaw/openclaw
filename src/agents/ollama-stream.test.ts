@@ -332,6 +332,40 @@ async function withMockNdjsonFetch(
   }
 }
 
+function createControlledNdjsonFetch(): {
+  fetchMock: ReturnType<typeof vi.fn>;
+  pushLine: (line: string) => void;
+  close: () => void;
+} {
+  const encoder = new TextEncoder();
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const body = new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+    },
+  });
+  return {
+    fetchMock: vi.fn(async () => {
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/x-ndjson" },
+      });
+    }),
+    pushLine(line: string) {
+      if (!controller) {
+        throw new Error("NDJSON controller not initialized");
+      }
+      controller.enqueue(encoder.encode(`${line}\n`));
+    },
+    close() {
+      if (!controller) {
+        throw new Error("NDJSON controller not initialized");
+      }
+      controller.close();
+    },
+  };
+}
+
 async function createOllamaTestStream(params: {
   baseUrl: string;
   defaultHeaders?: Record<string, string>;
@@ -363,6 +397,18 @@ async function collectStreamEvents<T>(stream: AsyncIterable<T>): Promise<T[]> {
     events.push(event);
   }
   return events;
+}
+
+async function nextEventWithin<T>(
+  iterator: AsyncIterator<T>,
+  timeoutMs = 100,
+): Promise<IteratorResult<T> | "timeout"> {
+  return await Promise.race([
+    iterator.next(),
+    new Promise<"timeout">((resolve) => {
+      setTimeout(() => resolve("timeout"), timeoutMs);
+    }),
+  ]);
 }
 
 describe("createOllamaStreamFn streaming events", () => {
@@ -456,6 +502,74 @@ describe("createOllamaStreamFn streaming events", () => {
         }
       },
     );
+  });
+
+  it("emits text_end as soon as Ollama switches from text to tool calls", async () => {
+    const originalFetch = globalThis.fetch;
+    const controlledFetch = createControlledNdjsonFetch();
+    globalThis.fetch = controlledFetch.fetchMock as unknown as typeof fetch;
+
+    try {
+      const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+      const iterator = stream[Symbol.asyncIterator]();
+
+      controlledFetch.pushLine(
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"Let me check."},"done":false}',
+      );
+
+      const startEvent = await nextEventWithin(iterator);
+      const textStartEvent = await nextEventWithin(iterator);
+      const textDeltaEvent = await nextEventWithin(iterator);
+
+      expect(startEvent).not.toBe("timeout");
+      expect(textStartEvent).not.toBe("timeout");
+      expect(textDeltaEvent).not.toBe("timeout");
+      expect(startEvent).toMatchObject({ value: { type: "start" }, done: false });
+      expect(textStartEvent).toMatchObject({ value: { type: "text_start" }, done: false });
+      expect(textDeltaEvent).toMatchObject({
+        value: { type: "text_delta", delta: "Let me check." },
+        done: false,
+      });
+
+      controlledFetch.pushLine(
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
+      );
+
+      const textEndEvent = await nextEventWithin(iterator);
+      expect(textEndEvent).not.toBe("timeout");
+      expect(textEndEvent).toMatchObject({
+        value: {
+          type: "text_end",
+          contentIndex: 0,
+          content: "Let me check.",
+          partial: {
+            content: [{ type: "text", text: "Let me check." }],
+          },
+        },
+        done: false,
+      });
+
+      const nextBeforeDone = await nextEventWithin(iterator, 25);
+      expect(nextBeforeDone).toBe("timeout");
+
+      controlledFetch.pushLine(
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":10,"eval_count":5}',
+      );
+      controlledFetch.close();
+
+      const doneEvent = await nextEventWithin(iterator);
+      expect(doneEvent).not.toBe("timeout");
+      expect(doneEvent).toMatchObject({
+        value: { type: "done", reason: "toolUse" },
+        done: false,
+      });
+
+      const streamEnd = await nextEventWithin(iterator);
+      expect(streamEnd).not.toBe("timeout");
+      expect(streamEnd).toMatchObject({ value: undefined, done: true });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("emits error without text_end when stream fails mid-response", async () => {
