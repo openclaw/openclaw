@@ -356,7 +356,7 @@ describe("test planner", () => {
     expect(manifest.jobs.checkDocs.enabled).toBe(true);
   });
 
-  it("adds push-only compat and release lanes to push manifests", () => {
+  it("adds the push-only compat lane to push manifests", () => {
     const manifest = buildCIExecutionManifest(
       {
         eventName: "push",
@@ -374,7 +374,6 @@ describe("test planner", () => {
       },
     );
 
-    expect(manifest.jobs.releaseCheck.enabled).toBe(true);
     expect(
       manifest.jobs.checks.matrix.include.some((entry) => entry.task === "compat-node22"),
     ).toBe(true);
