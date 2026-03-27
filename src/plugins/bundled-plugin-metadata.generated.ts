@@ -169,7 +169,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       providers: ["anthropic"],
-      mediaUnderstandingProviders: ["anthropic"],
       cliBackends: ["claude-cli"],
       providerAuthEnvVars: {
         anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
@@ -529,7 +528,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
-      mediaUnderstandingProviders: ["deepgram"],
       contracts: {
         mediaUnderstandingProviders: ["deepgram"],
       },
@@ -948,7 +946,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
-      speechProviders: ["elevenlabs"],
       contracts: {
         speechProviders: ["elevenlabs"],
       },
@@ -1021,7 +1018,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       providers: ["fal"],
-      imageGenerationProviders: ["fal"],
       providerAuthEnvVars: {
         fal: ["FAL_KEY"],
       },
@@ -1218,8 +1214,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         },
       },
       providers: ["google", "google-gemini-cli"],
-      mediaUnderstandingProviders: ["google"],
-      imageGenerationProviders: ["google"],
       cliBackends: ["google-gemini-cli"],
       providerAuthEnvVars: {
         google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
@@ -1333,7 +1327,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
-      mediaUnderstandingProviders: ["groq"],
       contracts: {
         mediaUnderstandingProviders: ["groq"],
       },
@@ -1898,7 +1891,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
-      speechProviders: ["microsoft"],
       contracts: {
         speechProviders: ["microsoft"],
       },
@@ -1974,8 +1966,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       providers: ["minimax", "minimax-portal"],
-      mediaUnderstandingProviders: ["minimax", "minimax-portal"],
-      imageGenerationProviders: ["minimax", "minimax-portal"],
       providerAuthEnvVars: {
         minimax: ["MINIMAX_API_KEY"],
         "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
@@ -2057,7 +2047,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       providers: ["mistral"],
-      mediaUnderstandingProviders: ["mistral"],
       providerAuthEnvVars: {
         mistral: ["MISTRAL_API_KEY"],
       },
@@ -2202,7 +2191,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         },
       },
       providers: ["moonshot"],
-      mediaUnderstandingProviders: ["moonshot"],
       providerAuthEnvVars: {
         moonshot: ["MOONSHOT_API_KEY"],
       },
@@ -2498,9 +2486,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       providers: ["openai", "openai-codex"],
-      speechProviders: ["openai"],
-      mediaUnderstandingProviders: ["openai", "openai-codex"],
-      imageGenerationProviders: ["openai"],
       cliBackends: ["codex-cli"],
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
@@ -4255,7 +4240,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       providers: ["zai"],
-      mediaUnderstandingProviders: ["zai"],
       providerAuthEnvVars: {
         zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
       },

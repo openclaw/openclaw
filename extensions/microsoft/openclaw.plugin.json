@@ -1,6 +1,5 @@
 {
   "id": "microsoft",
-  "speechProviders": ["microsoft"],
   "contracts": {
     "speechProviders": ["microsoft"]
   },

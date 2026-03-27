@@ -1,7 +1,6 @@
 {
   "id": "mistral",
   "providers": ["mistral"],
-  "mediaUnderstandingProviders": ["mistral"],
   "providerAuthEnvVars": {
     "mistral": ["MISTRAL_API_KEY"]
   },

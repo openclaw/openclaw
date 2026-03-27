@@ -22,9 +22,6 @@ export type PluginManifest = {
   kind?: PluginKind;
   channels?: string[];
   providers?: string[];
-  speechProviders?: string[];
-  mediaUnderstandingProviders?: string[];
-  imageGenerationProviders?: string[];
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
   cliBackends?: string[];
   /** Cheap provider-auth env lookup without booting plugin runtime. */
@@ -118,23 +115,41 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     return undefined;
   }
 
+  const speechProviders = normalizeStringList(value.speechProviders);
+  const mediaUnderstandingProviders = normalizeStringList(value.mediaUnderstandingProviders);
+  const imageGenerationProviders = normalizeStringList(value.imageGenerationProviders);
+  const webSearchProviders = normalizeStringList(value.webSearchProviders);
+  const tools = normalizeStringList(value.tools);
   const contracts = {
-    ...(normalizeStringList(value.speechProviders)
-      ? { speechProviders: normalizeStringList(value.speechProviders) }
-      : {}),
-    ...(normalizeStringList(value.mediaUnderstandingProviders)
-      ? { mediaUnderstandingProviders: normalizeStringList(value.mediaUnderstandingProviders) }
-      : {}),
-    ...(normalizeStringList(value.imageGenerationProviders)
-      ? { imageGenerationProviders: normalizeStringList(value.imageGenerationProviders) }
-      : {}),
-    ...(normalizeStringList(value.webSearchProviders)
-      ? { webSearchProviders: normalizeStringList(value.webSearchProviders) }
-      : {}),
-    ...(normalizeStringList(value.tools) ? { tools: normalizeStringList(value.tools) } : {}),
+    ...(speechProviders.length > 0 ? { speechProviders } : {}),
+    ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
+    ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
+    ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
+    ...(tools.length > 0 ? { tools } : {}),
   } satisfies PluginManifestContracts;
 
   return Object.keys(contracts).length > 0 ? contracts : undefined;
+}
+
+function normalizeLegacyCapabilityContracts(
+  raw: Record<string, unknown>,
+): PluginManifestContracts | undefined {
+  return normalizeManifestContracts({
+    speechProviders: raw.speechProviders,
+    mediaUnderstandingProviders: raw.mediaUnderstandingProviders,
+    imageGenerationProviders: raw.imageGenerationProviders,
+  });
+}
+
+function mergeManifestContracts(
+  fallback: PluginManifestContracts | undefined,
+  primary: PluginManifestContracts | undefined,
+): PluginManifestContracts | undefined {
+  const merged = {
+    ...fallback,
+    ...primary,
+  } satisfies PluginManifestContracts;
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 function normalizeProviderAuthChoices(
@@ -284,14 +299,14 @@ export function loadPluginManifest(
   const version = typeof raw.version === "string" ? raw.version.trim() : undefined;
   const channels = normalizeStringList(raw.channels);
   const providers = normalizeStringList(raw.providers);
-  const speechProviders = normalizeStringList(raw.speechProviders);
-  const mediaUnderstandingProviders = normalizeStringList(raw.mediaUnderstandingProviders);
-  const imageGenerationProviders = normalizeStringList(raw.imageGenerationProviders);
   const cliBackends = normalizeStringList(raw.cliBackends);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const skills = normalizeStringList(raw.skills);
-  const contracts = normalizeManifestContracts(raw.contracts);
+  const contracts = mergeManifestContracts(
+    normalizeLegacyCapabilityContracts(raw),
+    normalizeManifestContracts(raw.contracts),
+  );
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 
   let uiHints: Record<string, PluginConfigUiHint> | undefined;
@@ -308,9 +323,6 @@ export function loadPluginManifest(
       kind,
       channels,
       providers,
-      speechProviders,
-      mediaUnderstandingProviders,
-      imageGenerationProviders,
       cliBackends,
       providerAuthEnvVars,
       providerAuthChoices,
