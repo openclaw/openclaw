@@ -283,7 +283,7 @@ describe("resolveGatewayListenHosts", () => {
   it("resolves listen hosts for non-loopback and loopback variants", async () => {
     const cases = [
       {
-        name: "non-loopback host passthrough",
+        name: "LAN mode (0.0.0.0) passthrough - already binds all interfaces",
         host: "0.0.0.0",
         canBindToHost: async () => {
           throw new Error("should not be called");
@@ -301,6 +301,24 @@ describe("resolveGatewayListenHosts", () => {
         host: "127.0.0.1",
         canBindToHost: async () => false,
         expected: ["127.0.0.1"],
+      },
+      {
+        name: "tailnet IP also binds loopback for internal calls",
+        host: "100.64.0.1",
+        canBindToHost: async () => true,
+        expected: ["100.64.0.1", "127.0.0.1"],
+      },
+      {
+        name: "custom IP also binds loopback for internal calls",
+        host: "192.168.1.100",
+        canBindToHost: async () => true,
+        expected: ["192.168.1.100", "127.0.0.1"],
+      },
+      {
+        name: "specific IP without loopback available",
+        host: "100.64.0.1",
+        canBindToHost: async () => false,
+        expected: ["100.64.0.1"],
       },
     ] as const;
 
