@@ -38,4 +38,6 @@ export type {
   StickerMetadata,
   TelegramButtonStyle,
   TelegramInlineButtons,
+  TelegramProbe,
+  TelegramTokenResolution,
 } from "../../extensions/telegram/api.js";

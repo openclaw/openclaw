@@ -2,6 +2,8 @@
 export {
   buildFeishuConversationId,
   createFeishuThreadBindingManager,
+  feishuSessionBindingAdapterChannels,
+  feishuThreadBindingTesting,
   parseFeishuDirectConversationId,
   parseFeishuConversationId,
   parseFeishuTargetId,

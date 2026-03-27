@@ -7,9 +7,10 @@ import {
   resolveModelRefFromString,
   type ModelRef,
 } from "../agents/model-selection.js";
-import { normalizeGoogleModelId, normalizeXaiModelId } from "../agents/models-config.providers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeGoogleModelId } from "../plugin-sdk/google.js";
+import { normalizeXaiModelId } from "../plugin-sdk/xai.js";
 
 export type CachedModelPricing = {
   input: number;

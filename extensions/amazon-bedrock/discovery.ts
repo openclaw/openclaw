@@ -3,8 +3,13 @@ import {
   ListFoundationModelsCommand,
   type ListFoundationModelsCommandOutput,
 } from "@aws-sdk/client-bedrock";
-import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
+import { resolveAwsSdkEnvVarName } from "openclaw/plugin-sdk/provider-auth-runtime";
+import type {
+  BedrockDiscoveryConfig,
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+} from "openclaw/plugin-sdk/provider-models";
 
 const log = createSubsystemLogger("bedrock-discovery");
 
@@ -145,6 +150,10 @@ export function resetBedrockDiscoveryCacheForTest(): void {
   hasLoggedBedrockError = false;
 }
 
+export function resolveBedrockConfigApiKey(env: NodeJS.ProcessEnv = process.env): string {
+  return resolveAwsSdkEnvVarName(env) ?? "AWS_PROFILE";
+}
+
 export async function discoverBedrockModels(params: {
   region: string;
   config?: BedrockDiscoveryConfig;
@@ -219,8 +228,60 @@ export async function discoverBedrockModels(params: {
     }
     if (!hasLoggedBedrockError) {
       hasLoggedBedrockError = true;
-      log.warn(`Failed to list models: ${String(error)}`);
+      log.warn("Failed to discover Bedrock models", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
     return [];
   }
+}
+
+export async function resolveImplicitBedrockProvider(params: {
+  config?: { models?: { bedrockDiscovery?: BedrockDiscoveryConfig } };
+  env?: NodeJS.ProcessEnv;
+}): Promise<ModelProviderConfig | null> {
+  const env = params.env ?? process.env;
+  const discoveryConfig = params.config?.models?.bedrockDiscovery;
+  const enabled = discoveryConfig?.enabled;
+  const hasAwsCreds = resolveAwsSdkEnvVarName(env) !== undefined;
+  if (enabled === false) {
+    return null;
+  }
+  if (enabled !== true && !hasAwsCreds) {
+    return null;
+  }
+
+  const region = discoveryConfig?.region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
+  const models = await discoverBedrockModels({
+    region,
+    config: discoveryConfig,
+  });
+  if (models.length === 0) {
+    return null;
+  }
+
+  return {
+    baseUrl: `https://bedrock-runtime.${region}.amazonaws.com`,
+    api: "bedrock-converse-stream",
+    auth: "aws-sdk",
+    models,
+  };
+}
+
+export function mergeImplicitBedrockProvider(params: {
+  existing: ModelProviderConfig | undefined;
+  implicit: ModelProviderConfig;
+}): ModelProviderConfig {
+  const { existing, implicit } = params;
+  if (!existing) {
+    return implicit;
+  }
+  return {
+    ...implicit,
+    ...existing,
+    models:
+      Array.isArray(existing.models) && existing.models.length > 0
+        ? existing.models
+        : implicit.models,
+  };
 }

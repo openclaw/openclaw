@@ -1,4 +1,4 @@
-import { isGoogleGenerativeAiApi } from "../google-generative-ai.js";
+import { isGoogleGenerativeAiApi } from "../../plugin-sdk/google.js";
 import { sanitizeGoogleTurnOrdering } from "./bootstrap.js";
 
 export function isGoogleModelApi(api?: string | null): boolean {

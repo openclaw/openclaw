@@ -24,6 +24,7 @@ export {
   resolveDefaultSlackAccountId,
   resolveSlackAutoThreadId,
   resolveSlackGroupRequireMention,
+  resolveSlackRuntimeGroupPolicy,
   resolveSlackGroupToolPolicy,
   resolveSlackReplyToMode,
   sendSlackMessage,
@@ -34,4 +35,8 @@ export {
   removeSlackReaction,
   unpinSlackMessage,
 } from "../../extensions/slack/api.js";
-export type { InspectedSlackAccount, ResolvedSlackAccount } from "../../extensions/slack/api.js";
+export type {
+  InspectedSlackAccount,
+  ResolvedSlackAccount,
+  SlackProbe,
+} from "../../extensions/slack/api.js";

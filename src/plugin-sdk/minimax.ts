@@ -3,6 +3,8 @@ export {
   buildMinimaxPortalProvider,
   buildMinimaxProvider,
   isMiniMaxModernModelId,
+  MINIMAX_API_BASE_URL,
+  MINIMAX_CN_API_BASE_URL,
   MINIMAX_DEFAULT_MODEL_ID,
   MINIMAX_DEFAULT_MODEL_REF,
   MINIMAX_TEXT_MODEL_CATALOG,

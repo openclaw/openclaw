@@ -3,8 +3,8 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveCloudflareAiGatewayBaseUrl } from "../plugin-sdk/cloudflare-ai-gateway.js";
 import { captureEnv } from "../test-utils/env.js";
-import { resolveCloudflareAiGatewayBaseUrl } from "./cloudflare-ai-gateway.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 

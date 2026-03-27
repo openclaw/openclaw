@@ -1,6 +1,8 @@
 export {
+  applyModelStudioNativeStreamingUsageCompat,
   buildModelStudioDefaultModelDefinition,
   buildModelStudioModelDefinition,
+  isNativeModelStudioBaseUrl,
   MODELSTUDIO_BASE_URL,
   MODELSTUDIO_CN_BASE_URL,
   MODELSTUDIO_DEFAULT_COST,
