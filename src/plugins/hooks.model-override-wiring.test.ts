@@ -70,8 +70,8 @@ describe("model override pipeline wiring", () => {
       const handlerSpy = vi.fn(
         (_event: PluginHookBeforeModelResolveEvent) =>
           ({
-            modelOverride: "llama3.3:8b",
-            providerOverride: "ollama",
+            modelOverride: "demo-local-model",
+            providerOverride: "demo-local-provider",
           }) as PluginHookBeforeModelResolveResult,
       );
 
@@ -81,22 +81,22 @@ describe("model override pipeline wiring", () => {
 
       expect(handlerSpy).toHaveBeenCalledTimes(1);
       expect(handlerSpy).toHaveBeenCalledWith({ prompt: "PII text" }, stubCtx);
-      expect(result?.modelOverride).toBe("llama3.3:8b");
-      expect(result?.providerOverride).toBe("ollama");
+      expect(result?.modelOverride).toBe("demo-local-model");
+      expect(result?.providerOverride).toBe("demo-local-provider");
     });
 
     it("new hook overrides beat legacy before_agent_start fallback", async () => {
       addBeforeModelResolveHook(registry, "new-hook", () => ({
-        modelOverride: "llama3.3:8b",
-        providerOverride: "ollama",
+        modelOverride: "demo-local-model",
+        providerOverride: "demo-local-provider",
       }));
       addTestHook({
         registry,
         pluginId: "legacy-hook",
         hookName: "before_agent_start",
         handler: (() => ({
-          modelOverride: "gpt-5.4",
-          providerOverride: "openai",
+          modelOverride: "demo-legacy-model",
+          providerOverride: "demo-legacy-provider",
         })) as PluginHookRegistration["handler"],
       });
 
@@ -108,8 +108,8 @@ describe("model override pipeline wiring", () => {
         modelOverride: explicit?.modelOverride ?? legacy?.modelOverride,
       };
 
-      expect(merged.providerOverride).toBe("ollama");
-      expect(merged.modelOverride).toBe("llama3.3:8b");
+      expect(merged.providerOverride).toBe("demo-local-provider");
+      expect(merged.modelOverride).toBe("demo-local-model");
     });
   });
 
@@ -178,8 +178,8 @@ describe("model override pipeline wiring", () => {
         registry,
         "router-plugin",
         () => ({
-          modelOverride: "llama3.3:8b",
-          providerOverride: "ollama",
+          modelOverride: "demo-local-model",
+          providerOverride: "demo-local-provider",
         }),
         1,
       );
@@ -187,8 +187,8 @@ describe("model override pipeline wiring", () => {
       const runner = createHookRunner(registry, { catchErrors: true });
       const result = await runner.runBeforeModelResolve({ prompt: "PII data" }, stubCtx);
 
-      expect(result?.modelOverride).toBe("llama3.3:8b");
-      expect(result?.providerOverride).toBe("ollama");
+      expect(result?.modelOverride).toBe("demo-local-model");
+      expect(result?.providerOverride).toBe("demo-local-provider");
     });
 
     it("hasHooks reports new and legacy hooks independently", () => {

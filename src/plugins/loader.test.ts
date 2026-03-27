@@ -2439,10 +2439,10 @@ module.exports = {
   api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
   api.on("before_agent_start", () => ({
     prependContext: "legacy",
-    modelOverride: "gpt-5.4",
-    providerOverride: "anthropic",
+    modelOverride: "demo-legacy-model",
+    providerOverride: "demo-legacy-provider",
   }));
-  api.on("before_model_resolve", () => ({ providerOverride: "openai" }));
+  api.on("before_model_resolve", () => ({ providerOverride: "demo-explicit-provider" }));
 } };`,
     });
 
@@ -2468,8 +2468,8 @@ module.exports = {
     const runner = createHookRunner(registry);
     const legacyResult = await runner.runBeforeAgentStart({ prompt: "hello", messages: [] }, {});
     expect(legacyResult).toEqual({
-      modelOverride: "gpt-5.4",
-      providerOverride: "anthropic",
+      modelOverride: "demo-legacy-model",
+      providerOverride: "demo-legacy-provider",
     });
     const blockedDiagnostics = registry.diagnostics.filter((diag) =>
       String(diag.message).includes(
@@ -2517,7 +2517,7 @@ module.exports = {
       body: `module.exports = { id: "hook-unknown", register(api) {
   api.on("totally_unknown_hook_name", () => ({ foo: "bar" }));
   api.on(123, () => ({ foo: "baz" }));
-  api.on("before_model_resolve", () => ({ providerOverride: "openai" }));
+  api.on("before_model_resolve", () => ({ providerOverride: "demo-provider" }));
 } };`,
     });
 
@@ -2718,13 +2718,13 @@ module.exports = {
       },
       {
         label: "bundled beats auto-discovered global duplicate",
-        pluginId: "feishu",
+        pluginId: "demo-bundled-duplicate",
         bundledFilename: "index.cjs",
         loadRegistry: () => {
           const bundledDir = makeTempDir();
           writePlugin({
-            id: "feishu",
-            body: `module.exports = { id: "feishu", register() {} };`,
+            id: "demo-bundled-duplicate",
+            body: `module.exports = { id: "demo-bundled-duplicate", register() {} };`,
             dir: bundledDir,
             filename: "index.cjs",
           });
@@ -2732,11 +2732,11 @@ module.exports = {
 
           const stateDir = makeTempDir();
           return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
-            const globalDir = path.join(stateDir, "extensions", "feishu");
+            const globalDir = path.join(stateDir, "extensions", "demo-bundled-duplicate");
             mkdirSafe(globalDir);
             writePlugin({
-              id: "feishu",
-              body: `module.exports = { id: "feishu", register() {} };`,
+              id: "demo-bundled-duplicate",
+              body: `module.exports = { id: "demo-bundled-duplicate", register() {} };`,
               dir: globalDir,
               filename: "index.cjs",
             });
@@ -2745,9 +2745,9 @@ module.exports = {
               cache: false,
               config: {
                 plugins: {
-                  allow: ["feishu"],
+                  allow: ["demo-bundled-duplicate"],
                   entries: {
-                    feishu: { enabled: true },
+                    "demo-bundled-duplicate": { enabled: true },
                   },
                 },
               },
@@ -2760,13 +2760,13 @@ module.exports = {
       },
       {
         label: "installed global beats bundled duplicate",
-        pluginId: "zalouser",
+        pluginId: "demo-installed-duplicate",
         bundledFilename: "index.cjs",
         loadRegistry: () => {
           const bundledDir = makeTempDir();
           writePlugin({
-            id: "zalouser",
-            body: `module.exports = { id: "zalouser", register() {} };`,
+            id: "demo-installed-duplicate",
+            body: `module.exports = { id: "demo-installed-duplicate", register() {} };`,
             dir: bundledDir,
             filename: "index.cjs",
           });
@@ -2774,11 +2774,11 @@ module.exports = {
 
           const stateDir = makeTempDir();
           return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
-            const globalDir = path.join(stateDir, "extensions", "zalouser");
+            const globalDir = path.join(stateDir, "extensions", "demo-installed-duplicate");
             mkdirSafe(globalDir);
             writePlugin({
-              id: "zalouser",
-              body: `module.exports = { id: "zalouser", register() {} };`,
+              id: "demo-installed-duplicate",
+              body: `module.exports = { id: "demo-installed-duplicate", register() {} };`,
               dir: globalDir,
               filename: "index.cjs",
             });
@@ -2787,15 +2787,15 @@ module.exports = {
               cache: false,
               config: {
                 plugins: {
-                  allow: ["zalouser"],
+                  allow: ["demo-installed-duplicate"],
                   installs: {
-                    zalouser: {
+                    "demo-installed-duplicate": {
                       source: "npm",
                       installPath: globalDir,
                     },
                   },
                   entries: {
-                    zalouser: { enabled: true },
+                    "demo-installed-duplicate": { enabled: true },
                   },
                 },
               },

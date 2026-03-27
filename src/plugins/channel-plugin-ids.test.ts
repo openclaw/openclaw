@@ -28,7 +28,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           cliBackends: [],
         },
         {
-          id: "amazon-bedrock",
+          id: "demo-default-on-sidecar",
           channels: [],
           origin: "bundled",
           enabledByDefault: true,
@@ -44,7 +44,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           cliBackends: ["demo-cli"],
         },
         {
-          id: "diagnostics-otel",
+          id: "demo-bundled-sidecar",
           channels: [],
           origin: "bundled",
           enabledByDefault: undefined,
@@ -52,7 +52,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           cliBackends: [],
         },
         {
-          id: "custom-sidecar",
+          id: "demo-global-sidecar",
           channels: [],
           origin: "global",
           enabledByDefault: undefined,
@@ -68,7 +68,7 @@ describe("resolveGatewayStartupPluginIds", () => {
     const config = {
       plugins: {
         entries: {
-          "diagnostics-otel": { enabled: true },
+          "demo-bundled-sidecar": { enabled: true },
         },
       },
       agents: {
@@ -87,7 +87,12 @@ describe("resolveGatewayStartupPluginIds", () => {
         workspaceDir: "/tmp",
         env: process.env,
       }),
-    ).toEqual(["demo-channel", "demo-provider-plugin", "diagnostics-otel", "custom-sidecar"]);
+    ).toEqual([
+      "demo-channel",
+      "demo-provider-plugin",
+      "demo-bundled-sidecar",
+      "demo-global-sidecar",
+    ]);
   });
 
   it("does not pull default-on bundled non-channel plugins into startup", () => {
@@ -99,7 +104,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         workspaceDir: "/tmp",
         env: process.env,
       }),
-    ).toEqual(["demo-channel", "custom-sidecar"]);
+    ).toEqual(["demo-channel", "demo-global-sidecar"]);
   });
 
   it("auto-loads bundled plugins referenced by configured provider ids", () => {
@@ -120,6 +125,6 @@ describe("resolveGatewayStartupPluginIds", () => {
         workspaceDir: "/tmp",
         env: process.env,
       }),
-    ).toEqual(["demo-channel", "demo-provider-plugin", "custom-sidecar"]);
+    ).toEqual(["demo-channel", "demo-provider-plugin", "demo-global-sidecar"]);
   });
 });
