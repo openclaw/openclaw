@@ -448,7 +448,7 @@ async function runTinyFishAutomation(
       body: JSON.stringify(requestBody),
     },
     policy: {
-      allowedHostnames: [endpoint.hostname],
+      hostnameAllowlist: [endpoint.hostname],
     },
     timeoutMs: STREAM_TIMEOUT_MS,
     auditContext: "tinyfish-automation-run-sse",

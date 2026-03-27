@@ -11,6 +11,7 @@ const noopLogger = {
 
 type MockFetchRequest = {
   init?: RequestInit;
+  policy?: Record<string, unknown>;
 };
 
 function createApi(pluginConfig: Record<string, unknown> = {}) {
@@ -106,6 +107,36 @@ describe("tinyfish automation tool", () => {
       help_message: null,
       streaming_url: "https://stream.example/run-1",
     });
+  });
+
+  it("keeps the TinyFish API hostname restricted without skipping private-IP checks", async () => {
+    const fetchWithGuard = vi.fn(async () => ({
+      response: sseResponse([
+        'data: {"type":"COMPLETE","run_id":"run-policy","status":"COMPLETED","result":{"ok":true}}\n\n',
+      ]),
+      finalUrl: "https://agent.tinyfish.ai/v1/automation/run-sse",
+      release: async () => {},
+    }));
+
+    const tool = createTinyFishTool(createApi({ apiKey: "config-key" }), {
+      fetchWithGuard,
+      env: {},
+      resolveHostname: allowPublicHostname(),
+    });
+
+    await tool.execute("tool-1", {
+      url: "https://example.com",
+      goal: "Collect the pricing table",
+    });
+
+    const firstCalls = fetchWithGuard.mock.calls as MockFetchRequest[][];
+    const firstRequest = firstCalls[0]?.[0];
+    expect(firstRequest).toMatchObject({
+      policy: {
+        hostnameAllowlist: ["agent.tinyfish.ai"],
+      },
+    });
+    expect(firstRequest?.policy).not.toHaveProperty("allowedHostnames");
   });
 
   it("uses TINYFISH_API_KEY from the environment when plugin config is unset", async () => {
