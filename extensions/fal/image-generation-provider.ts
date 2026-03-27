@@ -2,6 +2,10 @@ import type {
   GeneratedImageAsset,
   ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromAllowPrivateNetwork,
+} from "openclaw/plugin-sdk/infra-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth";
 
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
@@ -175,16 +179,24 @@ function fileExtensionForMimeType(mimeType: string | undefined): string {
 }
 
 async function fetchImageBuffer(url: string): Promise<{ buffer: Buffer; mimeType: string }> {
-  const response = await fetch(url);
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(
-      `fal image download failed (${response.status}): ${text || response.statusText}`,
-    );
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    policy: ssrfPolicyFromAllowPrivateNetwork(false),
+    auditContext: "fal-image-download",
+  });
+  try {
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `fal image download failed (${response.status}): ${text || response.statusText}`,
+      );
+    }
+    const mimeType = response.headers.get("content-type")?.trim() || "image/png";
+    const arrayBuffer = await response.arrayBuffer();
+    return { buffer: Buffer.from(arrayBuffer), mimeType };
+  } finally {
+    await release();
   }
-  const mimeType = response.headers.get("content-type")?.trim() || "image/png";
-  const arrayBuffer = await response.arrayBuffer();
-  return { buffer: Buffer.from(arrayBuffer), mimeType };
 }
 
 export function buildFalImageGenerationProvider(): ImageGenerationProvider {
@@ -253,50 +265,58 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         requestBody.image_url = toDataUri(input.buffer, input.mimeType);
       }
 
-      const response = await fetch(`${resolveFalBaseUrl(req.cfg)}/${model}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Key ${auth.apiKey}`,
-          "Content-Type": "application/json",
+      const { response, release } = await fetchWithSsrFGuard({
+        url: `${resolveFalBaseUrl(req.cfg)}/${model}`,
+        init: {
+          method: "POST",
+          headers: {
+            Authorization: `Key ${auth.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
         },
-        body: JSON.stringify(requestBody),
+        policy: ssrfPolicyFromAllowPrivateNetwork(false),
+        auditContext: "fal-image-generate",
       });
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => "");
-        throw new Error(
-          `fal image generation failed (${response.status}): ${text || response.statusText}`,
-        );
-      }
-
-      const payload = (await response.json()) as FalImageGenerationResponse;
-      const images: GeneratedImageAsset[] = [];
-      let imageIndex = 0;
-      for (const entry of payload.images ?? []) {
-        const url = entry.url?.trim();
-        if (!url) {
-          continue;
+      try {
+        if (!response.ok) {
+          const text = await response.text().catch(() => "");
+          throw new Error(
+            `fal image generation failed (${response.status}): ${text || response.statusText}`,
+          );
         }
-        const downloaded = await fetchImageBuffer(url);
-        imageIndex += 1;
-        images.push({
-          buffer: downloaded.buffer,
-          mimeType: downloaded.mimeType,
-          fileName: `image-${imageIndex}.${fileExtensionForMimeType(
-            downloaded.mimeType || entry.content_type,
-          )}`,
-        });
-      }
 
-      if (images.length === 0) {
-        throw new Error("fal image generation response missing image data");
-      }
+        const payload = (await response.json()) as FalImageGenerationResponse;
+        const images: GeneratedImageAsset[] = [];
+        let imageIndex = 0;
+        for (const entry of payload.images ?? []) {
+          const url = entry.url?.trim();
+          if (!url) {
+            continue;
+          }
+          const downloaded = await fetchImageBuffer(url);
+          imageIndex += 1;
+          images.push({
+            buffer: downloaded.buffer,
+            mimeType: downloaded.mimeType,
+            fileName: `image-${imageIndex}.${fileExtensionForMimeType(
+              downloaded.mimeType || entry.content_type,
+            )}`,
+          });
+        }
 
-      return {
-        images,
-        model,
-        metadata: payload.prompt ? { prompt: payload.prompt } : undefined,
-      };
+        if (images.length === 0) {
+          throw new Error("fal image generation response missing image data");
+        }
+
+        return {
+          images,
+          model,
+          metadata: payload.prompt ? { prompt: payload.prompt } : undefined,
+        };
+      } finally {
+        await release();
+      }
     },
   };
 }
