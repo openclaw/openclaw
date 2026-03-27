@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../../../src/runtime.js";
+import { jsonResponse, requestBodyText, requestUrl } from "../../../src/test-helpers/http.js";
+import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import {
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
-} from "../../extensions/ollama/api.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
+} from "./setup.js";
 
 const upsertAuthProfileWithLock = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("../agents/auth-profiles.js", () => ({
+vi.mock("../../../src/agents/auth-profiles.js", () => ({
   upsertAuthProfileWithLock,
 }));
 

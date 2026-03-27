@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { mistralMediaUnderstandingProvider } from "../../extensions/mistral/media-understanding-provider.js";
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "./audio.test-helpers.js";
+} from "../../src/media-understanding/audio.test-helpers.js";
+import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
 
@@ -20,7 +20,7 @@ describe("mistralMediaUnderstandingProvider", () => {
     const result = await mistralMediaUnderstandingProvider.transcribeAudio!({
       buffer: Buffer.from("audio-bytes"),
       fileName: "voice.ogg",
-      apiKey: "test-mistral-key", // pragma: allowlist secret
+      apiKey: "test-mistral-key",
       timeoutMs: 5000,
       fetchFn,
     });
@@ -35,7 +35,7 @@ describe("mistralMediaUnderstandingProvider", () => {
     await mistralMediaUnderstandingProvider.transcribeAudio!({
       buffer: Buffer.from("audio"),
       fileName: "note.mp3",
-      apiKey: "key", // pragma: allowlist secret
+      apiKey: "key",
       timeoutMs: 1000,
       baseUrl: "https://custom.mistral.example/v1",
       fetchFn,
