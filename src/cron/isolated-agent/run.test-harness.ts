@@ -46,6 +46,7 @@ export const pickLastNonEmptyTextFromPayloadsMock = createMock();
 export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
+export const resolveSessionAuthProfileOverrideMock = createMock();
 
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/agent-scope.js")>();
@@ -111,6 +112,15 @@ vi.mock("../../agents/model-fallback.js", async (importOriginal) => {
   return {
     ...actual,
     runWithModelFallback: runWithModelFallbackMock,
+  };
+});
+
+vi.mock("../../agents/auth-profiles/session-override.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../agents/auth-profiles/session-override.js")>();
+  return {
+    ...actual,
+    resolveSessionAuthProfileOverride: resolveSessionAuthProfileOverrideMock,
   };
 });
 
@@ -418,6 +428,8 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
     accountId: undefined,
     error: undefined,
   });
+  resolveSessionAuthProfileOverrideMock.mockReset();
+  resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
 
   logWarnMock.mockReset();
 }
