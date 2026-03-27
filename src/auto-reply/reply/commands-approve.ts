@@ -1,10 +1,10 @@
-import {
-  isTelegramExecApprovalApprover,
-  isTelegramExecApprovalClientEnabled,
-} from "../../../extensions/telegram/api.js";
 import { callGateway } from "../../gateway/call.js";
 import { ErrorCodes } from "../../gateway/protocol/index.js";
 import { logVerbose } from "../../globals.js";
+import {
+  isTelegramExecApprovalApprover,
+  isTelegramExecApprovalClientEnabled,
+} from "../../plugin-sdk/telegram-runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
