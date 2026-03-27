@@ -22,10 +22,7 @@ export {
   buildKilocodeProvider,
   buildKilocodeProviderWithDiscovery,
 } from "../../extensions/kilocode/api.js";
-export {
-  buildMinimaxPortalProvider,
-  buildMinimaxProvider,
-} from "../../extensions/minimax/api.js";
+export { buildMinimaxPortalProvider, buildMinimaxProvider } from "../../extensions/minimax/api.js";
 export {
   MODELSTUDIO_BASE_URL,
   MODELSTUDIO_DEFAULT_MODEL_ID,
@@ -44,11 +41,5 @@ export { buildSyntheticProvider } from "../../extensions/synthetic/api.js";
 export { buildTogetherProvider } from "../../extensions/together/api.js";
 export { buildVeniceProvider } from "../../extensions/venice/api.js";
 export { buildVercelAiGatewayProvider } from "../../extensions/vercel-ai-gateway/api.js";
-export {
-  buildDoubaoCodingProvider,
-  buildDoubaoProvider,
-} from "../../extensions/volcengine/api.js";
-export {
-  XIAOMI_DEFAULT_MODEL_ID,
-  buildXiaomiProvider,
-} from "../../extensions/xiaomi/api.js";
+export { buildDoubaoCodingProvider, buildDoubaoProvider } from "../../extensions/volcengine/api.js";
+export { XIAOMI_DEFAULT_MODEL_ID, buildXiaomiProvider } from "../../extensions/xiaomi/api.js";

@@ -163,7 +163,7 @@ export {
   resolveMatrixCredentialsPath,
   resolveMatrixLegacyFlatStoragePaths,
 } from "../../extensions/matrix/helper-api.js";
-export { resolveMatrixAccountStringValues } from "../../extensions/matrix/src/auth-precedence.js";
+export { resolveMatrixAccountStringValues } from "../../extensions/matrix/runtime-api.js";
 export { getMatrixScopedEnvVarNames } from "../../extensions/matrix/helper-api.js";
 export {
   requiresExplicitMatrixDefaultAccount,
@@ -173,7 +173,7 @@ export {
   createMatrixThreadBindingManager,
   resetMatrixThreadBindingsForTests,
 } from "../../extensions/matrix/api.js";
-export { setMatrixRuntime } from "../../extensions/matrix/src/runtime.js";
+export { setMatrixRuntime } from "../../extensions/matrix/runtime-api.js";
 
 const matrixSetup = createOptionalChannelSetupSurface({
   channel: "matrix",
