@@ -42,7 +42,7 @@ vi.mock("../../extensions/memory-core/src/memory/index.js", () => ({
   getMemorySearchManager: getMemorySearchManagerMock,
 }));
 
-vi.mock("../../src/plugins/memory-host/read-file.js", () => ({
+vi.mock("../../packages/memory-host-sdk/src/host/read-file.js", () => ({
   readAgentMemoryFile: readAgentMemoryFileMock,
 }));
 

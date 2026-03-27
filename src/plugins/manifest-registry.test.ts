@@ -42,6 +42,8 @@ function createPluginCandidate(params: {
   bundleFormat?: "codex" | "claude" | "cursor";
   packageManifest?: OpenClawPackageManifest;
   packageDir?: string;
+  bundledManifest?: PluginCandidate["bundledManifest"];
+  bundledManifestPath?: string;
 }): PluginCandidate {
   return {
     idHint: params.idHint,
@@ -52,6 +54,8 @@ function createPluginCandidate(params: {
     bundleFormat: params.bundleFormat,
     packageManifest: params.packageManifest,
     packageDir: params.packageDir,
+    bundledManifest: params.bundledManifest,
+    bundledManifestPath: params.bundledManifestPath,
   };
 }
 
@@ -284,6 +288,108 @@ describe("loadPluginManifestRegistry", () => {
     ]);
   });
 
+  it("preserves channel config metadata from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "matrix",
+      channels: ["matrix"],
+      configSchema: { type: "object" },
+      channelConfigs: {
+        matrix: {
+          schema: {
+            type: "object",
+            properties: {
+              homeserver: { type: "string" },
+            },
+          },
+          uiHints: {
+            homeserver: {
+              label: "Homeserver",
+            },
+          },
+          label: "Matrix",
+          description: "Matrix config",
+          preferOver: ["matrix-legacy"],
+        },
+      },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "matrix",
+        rootDir: dir,
+        origin: "workspace",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.channelConfigs).toEqual({
+      matrix: {
+        schema: {
+          type: "object",
+          properties: {
+            homeserver: { type: "string" },
+          },
+        },
+        uiHints: {
+          homeserver: {
+            label: "Homeserver",
+          },
+        },
+        label: "Matrix",
+        description: "Matrix config",
+        preferOver: ["matrix-legacy"],
+      },
+    });
+  });
+
+  it("hydrates bundled channel config metadata onto manifest records", () => {
+    const dir = makeTempDir();
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "telegram",
+        rootDir: dir,
+        origin: "bundled",
+        bundledManifestPath: path.join(dir, "openclaw.plugin.json"),
+        bundledManifest: {
+          id: "telegram",
+          configSchema: { type: "object" },
+          channels: ["telegram"],
+          channelConfigs: {
+            telegram: {
+              schema: { type: "object" },
+            },
+          },
+        },
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.channelConfigs?.telegram).toEqual(
+      expect.objectContaining({
+        schema: expect.objectContaining({
+          type: "object",
+        }),
+      }),
+    );
+  });
+  it("does not promote legacy top-level capability fields into contracts", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openai",
+      providers: ["openai", "openai-codex"],
+      speechProviders: ["openai"],
+      mediaUnderstandingProviders: ["openai", "openai-codex"],
+      imageGenerationProviders: ["openai"],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "openai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.contracts).toBeUndefined();
+  });
   it("skips plugins whose minHostVersion is newer than the current host", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });

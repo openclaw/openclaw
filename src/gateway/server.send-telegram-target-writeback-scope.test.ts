@@ -6,7 +6,7 @@ import {
   sendMessageTelegram,
   sendPollTelegram,
   type TelegramApiOverride,
-} from "../../extensions/telegram/src/send.js";
+} from "../../extensions/telegram/test-api.js";
 import {
   clearConfigCache,
   loadConfig,

@@ -7,14 +7,18 @@ type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>
 
 function createHarness(params?: {
   sendChat?: ReturnType<typeof vi.fn>;
+  patchSession?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
   setSession?: SetSessionMock;
   loadHistory?: LoadHistoryMock;
+  refreshSessionInfo?: ReturnType<typeof vi.fn>;
+  applySessionInfoFromPatch?: ReturnType<typeof vi.fn>;
   setActivityStatus?: SetActivityStatusMock;
   isConnected?: boolean;
   activeChatRunId?: string | null;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
+  const patchSession = params?.patchSession ?? vi.fn().mockResolvedValue({});
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
   const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
   const addUser = vi.fn();
@@ -24,6 +28,8 @@ function createHarness(params?: {
   const noteLocalBtwRunId = vi.fn();
   const loadHistory =
     params?.loadHistory ?? (vi.fn().mockResolvedValue(undefined) as LoadHistoryMock);
+  const refreshSessionInfo = params?.refreshSessionInfo ?? vi.fn().mockResolvedValue(undefined);
+  const applySessionInfoFromPatch = params?.applySessionInfoFromPatch ?? vi.fn();
   const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
   const state = {
     currentSessionKey: "agent:main:main",
@@ -33,7 +39,7 @@ function createHarness(params?: {
   };
 
   const { handleCommand } = createCommandHandlers({
-    client: { sendChat, resetSession } as never,
+    client: { sendChat, patchSession, resetSession } as never,
     chatLog: { addUser, addSystem } as never,
     tui: { requestRender } as never,
     opts: {},
@@ -41,14 +47,14 @@ function createHarness(params?: {
     deliverDefault: false,
     openOverlay: vi.fn(),
     closeOverlay: vi.fn(),
-    refreshSessionInfo: vi.fn(),
+    refreshSessionInfo: refreshSessionInfo as never,
     loadHistory,
     setSession,
     refreshAgents: vi.fn(),
     abortActive: vi.fn(),
     setActivityStatus,
     formatSessionKey: vi.fn(),
-    applySessionInfoFromPatch: vi.fn(),
+    applySessionInfoFromPatch: applySessionInfoFromPatch as never,
     noteLocalRunId,
     noteLocalBtwRunId,
     forgetLocalRunId: vi.fn(),
@@ -59,12 +65,15 @@ function createHarness(params?: {
   return {
     handleCommand,
     sendChat,
+    patchSession,
     resetSession,
     setSession,
     addUser,
     addSystem,
     requestRender,
     loadHistory,
+    refreshSessionInfo,
+    applySessionInfoFromPatch,
     setActivityStatus,
     noteLocalRunId,
     noteLocalBtwRunId,
@@ -201,5 +210,35 @@ describe("tui command handlers", () => {
     expect(addUser).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
+  });
+
+  it("rejects invalid /activation values before patching the session", async () => {
+    const { handleCommand, patchSession, addSystem } = createHarness();
+
+    await handleCommand("/activation sometimes");
+
+    expect(patchSession).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("usage: /activation <mention|always>");
+  });
+
+  it("patches the session for valid /activation values", async () => {
+    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
+    const applySessionInfoFromPatch = vi.fn();
+    const patchSession = vi.fn().mockResolvedValue({ groupActivation: "always" });
+    const { handleCommand, addSystem } = createHarness({
+      patchSession,
+      refreshSessionInfo,
+      applySessionInfoFromPatch,
+    });
+
+    await handleCommand("/activation always");
+
+    expect(patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      groupActivation: "always",
+    });
+    expect(addSystem).toHaveBeenCalledWith("activation set to always");
+    expect(applySessionInfoFromPatch).toHaveBeenCalledWith({ groupActivation: "always" });
+    expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
   });
 });

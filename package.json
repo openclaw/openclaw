@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.3.25",
+  "version": "2026.3.26",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -43,10 +43,6 @@
     "./plugin-sdk/core": {
       "types": "./dist/plugin-sdk/core.d.ts",
       "default": "./dist/plugin-sdk/core.js"
-    },
-    "./plugin-sdk/ollama-setup": {
-      "types": "./dist/plugin-sdk/ollama-setup.d.ts",
-      "default": "./dist/plugin-sdk/ollama-setup.js"
     },
     "./plugin-sdk/provider-setup": {
       "types": "./dist/plugin-sdk/provider-setup.d.ts",
@@ -420,17 +416,53 @@
       "types": "./dist/plugin-sdk/memory-core.d.ts",
       "default": "./dist/plugin-sdk/memory-core.js"
     },
-    "./plugin-sdk/memory-core-host": {
-      "types": "./dist/plugin-sdk/memory-core-host.d.ts",
-      "default": "./dist/plugin-sdk/memory-core-host.js"
+    "./plugin-sdk/memory-core-engine-runtime": {
+      "types": "./dist/plugin-sdk/memory-core-engine-runtime.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-engine-runtime.js"
     },
-    "./plugin-sdk/memory-core-host-engine": {
-      "types": "./dist/plugin-sdk/memory-core-host-engine.d.ts",
-      "default": "./dist/plugin-sdk/memory-core-host-engine.js"
+    "./plugin-sdk/memory-core-host-engine-embeddings": {
+      "types": "./dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-engine-embeddings.js"
     },
-    "./plugin-sdk/memory-core-host-runtime": {
-      "types": "./dist/plugin-sdk/memory-core-host-runtime.d.ts",
-      "default": "./dist/plugin-sdk/memory-core-host-runtime.js"
+    "./plugin-sdk/memory-core-host-engine-foundation": {
+      "types": "./dist/plugin-sdk/memory-core-host-engine-foundation.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-engine-foundation.js"
+    },
+    "./plugin-sdk/memory-core-host-engine-qmd": {
+      "types": "./dist/plugin-sdk/memory-core-host-engine-qmd.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-engine-qmd.js"
+    },
+    "./plugin-sdk/memory-core-host-engine-storage": {
+      "types": "./dist/plugin-sdk/memory-core-host-engine-storage.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-engine-storage.js"
+    },
+    "./plugin-sdk/memory-core-host-multimodal": {
+      "types": "./dist/plugin-sdk/memory-core-host-multimodal.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-multimodal.js"
+    },
+    "./plugin-sdk/memory-core-host-query": {
+      "types": "./dist/plugin-sdk/memory-core-host-query.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-query.js"
+    },
+    "./plugin-sdk/memory-core-host-secret": {
+      "types": "./dist/plugin-sdk/memory-core-host-secret.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-secret.js"
+    },
+    "./plugin-sdk/memory-core-host-status": {
+      "types": "./dist/plugin-sdk/memory-core-host-status.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-status.js"
+    },
+    "./plugin-sdk/memory-core-host-runtime-cli": {
+      "types": "./dist/plugin-sdk/memory-core-host-runtime-cli.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-runtime-cli.js"
+    },
+    "./plugin-sdk/memory-core-host-runtime-core": {
+      "types": "./dist/plugin-sdk/memory-core-host-runtime-core.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-runtime-core.js"
+    },
+    "./plugin-sdk/memory-core-host-runtime-files": {
+      "types": "./dist/plugin-sdk/memory-core-host-runtime-files.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-runtime-files.js"
     },
     "./plugin-sdk/memory-lancedb": {
       "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
@@ -448,6 +480,10 @@
       "types": "./dist/plugin-sdk/nostr.d.ts",
       "default": "./dist/plugin-sdk/nostr.js"
     },
+    "./plugin-sdk/ollama": {
+      "types": "./dist/plugin-sdk/ollama.d.ts",
+      "default": "./dist/plugin-sdk/ollama.js"
+    },
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
@@ -455,6 +491,10 @@
     "./plugin-sdk/provider-auth-api-key": {
       "types": "./dist/plugin-sdk/provider-auth-api-key.d.ts",
       "default": "./dist/plugin-sdk/provider-auth-api-key.js"
+    },
+    "./plugin-sdk/provider-auth-result": {
+      "types": "./dist/plugin-sdk/provider-auth-result.d.ts",
+      "default": "./dist/plugin-sdk/provider-auth-result.js"
     },
     "./plugin-sdk/provider-auth-login": {
       "types": "./dist/plugin-sdk/provider-auth-login.d.ts",
@@ -487,6 +527,10 @@
     "./plugin-sdk/provider-models": {
       "types": "./dist/plugin-sdk/provider-models.d.ts",
       "default": "./dist/plugin-sdk/provider-models.js"
+    },
+    "./plugin-sdk/provider-moonshot": {
+      "types": "./dist/plugin-sdk/provider-moonshot.d.ts",
+      "default": "./dist/plugin-sdk/provider-moonshot.js"
     },
     "./plugin-sdk/provider-onboard": {
       "types": "./dist/plugin-sdk/provider-onboard.d.ts",
@@ -608,6 +652,10 @@
       "types": "./dist/plugin-sdk/zalouser.d.ts",
       "default": "./dist/plugin-sdk/zalouser.js"
     },
+    "./plugin-sdk/zod": {
+      "types": "./dist/plugin-sdk/zod.d.ts",
+      "default": "./dist/plugin-sdk/zod.js"
+    },
     "./extension-api": "./dist/extensionAPI.js",
     "./cli-entry": "./openclaw.mjs"
   },
@@ -634,14 +682,17 @@
     "canon:check:json": "node scripts/canon.mjs check --json",
     "canon:enforce": "node scripts/canon.mjs enforce --json",
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
-    "check": "pnpm check:no-conflict-markers && pnpm check:host-env-policy:swift && pnpm check:base-config-schema && pnpm check:bundled-plugin-metadata && pnpm check:bundled-provider-auth-env-vars && pnpm format:check && pnpm tsgo && pnpm plugin-sdk:check-exports && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:agent:ingress-owner && pnpm lint:plugins:no-register-http-handler && pnpm lint:plugins:no-monolithic-plugin-sdk-entry-imports && pnpm lint:plugins:no-extension-src-imports && pnpm lint:plugins:no-extension-test-core-imports && pnpm lint:plugins:no-extension-imports && pnpm lint:plugins:plugin-sdk-subpaths-exported && pnpm lint:extensions:no-src-outside-plugin-sdk && pnpm lint:extensions:no-plugin-sdk-internal && pnpm lint:extensions:no-relative-outside-package && pnpm lint:web-search-provider-boundaries && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
+    "check": "pnpm check:no-conflict-markers && pnpm check:host-env-policy:swift && pnpm tsgo && pnpm lint && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
     "check:base-config-schema": "node --import tsx scripts/generate-base-config-schema.ts --check",
+    "check:bundled-channel-config-metadata": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "check:bundled-plugin-metadata": "node scripts/generate-bundled-plugin-metadata.mjs --check",
     "check:bundled-provider-auth-env-vars": "node scripts/generate-bundled-provider-auth-env-vars.mjs --check",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-i18n-glossary && pnpm docs:check-links",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500",
     "check:no-conflict-markers": "node scripts/check-no-conflict-markers.mjs",
+    "config:channels:check": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
+    "config:channels:gen": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --write",
     "config:docs:check": "node --import tsx scripts/generate-config-doc-baseline.ts --check",
     "config:docs:gen": "node --import tsx scripts/generate-config-doc-baseline.ts --write",
     "config:schema:check": "node --import tsx scripts/generate-base-config-schema.ts --check",
@@ -724,7 +775,7 @@
     "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/OpenClawProtocol/GatewayModels.swift apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
     "protocol:gen": "node --import tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
-    "release:check": "pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:api:check && node scripts/stage-bundled-plugin-runtime-deps.mjs && pnpm ui:build && node --import tsx scripts/release-check.ts",
+    "release:check": "pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm check:bundled-plugin-metadata && pnpm check:bundled-provider-auth-env-vars && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:api:check && node scripts/stage-bundled-plugin-runtime-deps.mjs && pnpm ui:build && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",
     "release:plugins:npm:check": "node --import tsx scripts/plugin-npm-release-check.ts",
@@ -795,18 +846,18 @@
     "ui:install": "node scripts/ui.js install"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "0.16.1",
+    "@agentclientprotocol/sdk": "0.17.0",
     "@anthropic-ai/vertex-sdk": "^0.14.4",
-    "@aws-sdk/client-bedrock": "^3.1014.0",
+    "@aws-sdk/client-bedrock": "^3.1018.0",
     "@clack/prompts": "^1.1.0",
     "@homebridge/ciao": "^1.3.5",
     "@line/bot-sdk": "^10.6.0",
     "@lydell/node-pty": "1.2.0-beta.3",
-    "@mariozechner/pi-agent-core": "0.61.1",
-    "@mariozechner/pi-ai": "0.61.1",
-    "@mariozechner/pi-coding-agent": "0.61.1",
-    "@mariozechner/pi-tui": "0.61.1",
-    "@modelcontextprotocol/sdk": "1.27.1",
+    "@mariozechner/pi-agent-core": "0.63.0",
+    "@mariozechner/pi-ai": "0.63.0",
+    "@mariozechner/pi-coding-agent": "0.63.0",
+    "@mariozechner/pi-tui": "0.63.0",
+    "@modelcontextprotocol/sdk": "1.28.0",
     "@mozilla/readability": "^0.6.0",
     "@sinclair/typebox": "0.34.48",
     "ajv": "^8.18.0",
@@ -817,9 +868,9 @@
     "croner": "^10.0.1",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
-    "file-type": "21.3.4",
+    "file-type": "22.0.0",
     "gaxios": "7.1.4",
-    "hono": "4.12.8",
+    "hono": "4.12.9",
     "ipaddr.js": "^2.3.0",
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
@@ -834,9 +885,9 @@
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
     "sqlite-vec": "0.1.7",
-    "tar": "7.5.12",
+    "tar": "7.5.13",
     "tslog": "^4.10.2",
-    "undici": "^7.24.5",
+    "undici": "^7.24.6",
     "uuid": "^13.0.0",
     "ws": "^8.20.0",
     "yaml": "^2.8.3",
@@ -851,19 +902,19 @@
     "@types/node": "^25.5.0",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260322.1",
-    "@vitest/coverage-v8": "^4.1.0",
+    "@typescript/native-preview": "7.0.0-dev.20260326.1",
+    "@vitest/coverage-v8": "^4.1.2",
     "jscpd": "4.0.8",
     "jsdom": "^29.0.1",
     "lit": "^3.3.2",
-    "oxfmt": "0.41.0",
-    "oxlint": "^1.56.0",
-    "oxlint-tsgolint": "^0.17.1",
+    "oxfmt": "0.42.0",
+    "oxlint": "^1.57.0",
+    "oxlint-tsgolint": "^0.17.4",
     "signal-utils": "0.21.1",
-    "tsdown": "0.21.4",
+    "tsdown": "0.21.5",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2"
   },
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",
@@ -884,18 +935,18 @@
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {
-      "hono": "4.12.8",
+      "hono": "4.12.9",
       "@hono/node-server": "1.19.10",
       "fast-xml-parser": "5.5.7",
       "request": "npm:@cypress/request@3.0.10",
       "request-promise": "npm:@cypress/request-promise@5.0.0",
-      "file-type": "21.3.4",
+      "file-type": "22.0.0",
       "form-data": "2.5.4",
       "minimatch": "10.2.4",
       "qs": "6.14.2",
       "node-domexception": "npm:@nolyfill/domexception@^1.0.28",
       "@sinclair/typebox": "0.34.48",
-      "tar": "7.5.12",
+      "tar": "7.5.13",
       "tough-cookie": "4.1.3",
       "yauzl": "3.2.1"
     },

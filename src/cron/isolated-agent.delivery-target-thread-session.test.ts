@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { telegramMessagingForTest } from "../infra/outbound/targets.test-helpers.js";
 
 const mockStore: Record<string, Record<string, unknown>> = {};
 
@@ -21,16 +21,7 @@ beforeEach(async () => {
     getChannelPlugin: vi.fn(() => ({
       meta: { label: "Telegram" },
       config: {},
-      messaging: {
-        parseExplicitTarget: ({ raw }: { raw: string }) => {
-          const target = parseTelegramTarget(raw);
-          return {
-            to: target.chatId,
-            threadId: target.messageThreadId,
-            chatType: target.chatType === "unknown" ? undefined : target.chatType,
-          };
-        },
-      },
+      messaging: telegramMessagingForTest,
       outbound: {
         resolveTarget: ({ to }: { to?: string }) =>
           to ? { ok: true, to } : { ok: false, error: new Error("missing") },

@@ -1,7 +1,6 @@
 {
   "id": "moonshot",
   "providers": ["moonshot"],
-  "mediaUnderstandingProviders": ["moonshot"],
   "providerAuthEnvVars": {
     "moonshot": ["MOONSHOT_API_KEY"]
   },
@@ -47,6 +46,10 @@
       "label": "Kimi Search Model",
       "help": "Kimi model override."
     }
+  },
+  "contracts": {
+    "mediaUnderstandingProviders": ["moonshot"],
+    "webSearchProviders": ["kimi"]
   },
   "configSchema": {
     "type": "object",

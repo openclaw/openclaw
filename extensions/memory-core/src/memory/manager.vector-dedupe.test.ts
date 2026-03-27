@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../engine-host-api.js";
 import type { MemoryIndexManager } from "./index.js";
 
 vi.mock("./embeddings.js", () => {
@@ -19,11 +19,11 @@ vi.mock("./embeddings.js", () => {
   };
 });
 
-type MemoryInternalModule = typeof import("./internal.js");
+type MemoryStorageModule = typeof import("openclaw/plugin-sdk/memory-core-host-engine-storage");
 type TestManagerModule = typeof import("./test-manager.js");
 type MemoryIndexModule = typeof import("./index.js");
 
-let buildFileEntry: MemoryInternalModule["buildFileEntry"];
+let buildFileEntry: MemoryStorageModule["buildFileEntry"];
 let createMemoryManagerOrThrow: TestManagerModule["createMemoryManagerOrThrow"];
 let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
 
@@ -55,7 +55,7 @@ describe("memory vector dedupe", () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    ({ buildFileEntry } = await import("./internal.js"));
+    ({ buildFileEntry } = await import("openclaw/plugin-sdk/memory-core-host-engine-storage"));
     ({ createMemoryManagerOrThrow } = await import("./test-manager.js"));
     ({ closeAllMemorySearchManagers } = await import("./index.js"));
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-"));

@@ -16,12 +16,12 @@ import {
   createVoyageEmbeddingProvider,
   hasNonTextEmbeddingParts,
   listMemoryEmbeddingProviders,
-  resolveUserPath,
   runGeminiEmbeddingBatches,
   runOpenAiEmbeddingBatches,
   runVoyageEmbeddingBatches,
   type MemoryEmbeddingProviderAdapter,
-} from "../engine-host-api.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 
 function formatErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -333,6 +333,16 @@ export const builtinMemoryEmbeddingProviderAdapters = [
   mistralAdapter,
   ollamaAdapter,
 ] as const;
+
+const builtinMemoryEmbeddingProviderAdapterById = new Map(
+  builtinMemoryEmbeddingProviderAdapters.map((adapter) => [adapter.id, adapter]),
+);
+
+export function getBuiltinMemoryEmbeddingProviderAdapter(
+  id: string,
+): MemoryEmbeddingProviderAdapter | undefined {
+  return builtinMemoryEmbeddingProviderAdapterById.get(id);
+}
 
 export function registerBuiltInMemoryEmbeddingProviders(register: {
   registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;

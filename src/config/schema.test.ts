@@ -99,7 +99,7 @@ describe("config schema", () => {
     expect(schema.properties?.$schema).toBeUndefined();
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
-    expect(res.uiHints["channels.discord.threadBindings.spawnAcpSessions"]?.label).toBeTruthy();
+    expect(res.uiHints["channels.defaults.groupPolicy"]?.label).toBeTruthy();
     expect(res.version).toBeTruthy();
     expect(res.generatedAt).toBeTruthy();
   });
@@ -142,6 +142,8 @@ describe("config schema", () => {
     const channelSchema = channelsProps?.matrix as Record<string, unknown> | undefined;
     const channelProps = channelSchema?.properties as Record<string, unknown> | undefined;
     expect(channelProps?.accessToken).toBeTruthy();
+    expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
+    expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
   });
 
   it("looks up plugin config paths for slash-delimited plugin ids", () => {
