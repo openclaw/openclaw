@@ -35,11 +35,6 @@ const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 const PREAUTH_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 const PREAUTH_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 const HEALTH_PATH = "/healthz";
-const webhookAuthRateLimiter = createFixedWindowRateLimiter({
-  windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
-  maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
-  maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
-});
 const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> = z.object({
   type: z.enum(["Create", "Update", "Delete"]),
   actor: z.object({
@@ -196,10 +191,6 @@ export function readNextcloudTalkWebhookBody(
   });
 }
 
-export function clearNextcloudTalkWebhookSecurityStateForTest(): void {
-  webhookAuthRateLimiter.clear();
-}
-
 export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServerOptions): {
   server: Server;
   start: () => Promise<void>;
@@ -215,6 +206,11 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   const readBody = opts.readBody ?? readNextcloudTalkWebhookBody;
   const isBackendAllowed = opts.isBackendAllowed;
   const shouldProcessMessage = opts.shouldProcessMessage;
+  const webhookAuthRateLimiter = createFixedWindowRateLimiter({
+    windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
+    maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
+    maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
+  });
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     if (req.url === HEALTH_PATH) {

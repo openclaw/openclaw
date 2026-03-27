@@ -1,18 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createMockIncomingRequest } from "../../../test/helpers/mock-incoming-request.js";
 import { WEBHOOK_RATE_LIMIT_DEFAULTS } from "../runtime-api.js";
-import {
-  clearNextcloudTalkWebhookSecurityStateForTest,
-  readNextcloudTalkWebhookBody,
-} from "./monitor.js";
+import { readNextcloudTalkWebhookBody } from "./monitor.js";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
 import type { NextcloudTalkInboundMessage } from "./types.js";
-
-beforeEach(() => {
-  clearNextcloudTalkWebhookSecurityStateForTest();
-});
 
 describe("readNextcloudTalkWebhookBody", () => {
   it("reads valid body within max bytes", async () => {
@@ -166,15 +159,22 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
       "x-nextcloud-talk-signature": "invalid-signature",
     };
 
+    let firstResponse: Response | undefined;
     let lastResponse: Response | undefined;
     for (let attempt = 0; attempt <= WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests; attempt += 1) {
-      lastResponse = await fetch(harness.webhookUrl, {
+      const response = await fetch(harness.webhookUrl, {
         method: "POST",
         headers: invalidHeaders,
         body,
       });
+      if (attempt === 0) {
+        firstResponse = response;
+      }
+      lastResponse = response;
     }
 
+    expect(firstResponse).toBeDefined();
+    expect(firstResponse?.status).toBe(401);
     expect(lastResponse).toBeDefined();
     expect(lastResponse?.status).toBe(429);
     expect(await lastResponse?.text()).toBe("Too Many Requests");
