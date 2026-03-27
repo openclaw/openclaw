@@ -177,16 +177,25 @@ export const discordOutbound: ChannelOutboundAdapter = {
     channel: "discord",
     sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
       if (!silent) {
-        const webhookResult = await maybeSendDiscordWebhookText({
-          cfg,
-          text,
-          threadId,
-          accountId,
-          identity,
-          replyToId,
-        }).catch(() => null);
-        if (webhookResult) {
-          return webhookResult;
+        // Only attempt webhook delivery when the outbound target is the same
+        // channel as the thread. For cross-channel sends the webhook binding
+        // belongs to a different conversation and must not intercept the send.
+        const toNormalized = to.replace(/^channel:/i, "").trim();
+        const resolvedThreadId = threadId != null ? String(threadId).trim() : null;
+        const isSameChannel =
+          resolvedThreadId != null && resolvedThreadId !== "" && toNormalized === resolvedThreadId;
+        if (isSameChannel) {
+          const webhookResult = await maybeSendDiscordWebhookText({
+            cfg,
+            text,
+            threadId,
+            accountId,
+            identity,
+            replyToId,
+          }).catch(() => null);
+          if (webhookResult) {
+            return webhookResult;
+          }
         }
       }
       const send =

@@ -92,6 +92,29 @@ describe("discordOutbound", () => {
     );
   });
 
+  it("does not use webhook delivery for cross-channel sends from webhook-bound threads", async () => {
+    // The webhook binding belongs to thread-1, but the send targets a different channel.
+    // maybeSendDiscordWebhookText must be skipped entirely so the message goes to
+    // the correct destination and not to the bound thread via webhook.
+    // See: https://github.com/openclaw/openclaw/issues/55841
+    mockDiscordBoundThreadManager(hoisted);
+
+    await discordOutbound.sendText?.({
+      cfg: {},
+      to: "channel:other-channel",
+      text: "cross-channel from webhook-bound thread",
+      accountId: "default",
+      threadId: "thread-1",
+    });
+
+    expect(hoisted.sendWebhookMessageDiscordMock).not.toHaveBeenCalled();
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:other-channel",
+      "cross-channel from webhook-bound thread",
+      expect.objectContaining({ accountId: "default" }),
+    );
+  });
+
   it("uses webhook persona delivery for bound thread text replies", async () => {
     mockDiscordBoundThreadManager(hoisted);
     const cfg = {
