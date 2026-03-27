@@ -330,4 +330,88 @@ describe("mattermost websocket monitor", () => {
     await connected;
     vi.useRealTimers();
   });
+
+  it("keeps polling when the initial getBotUpdateAt call fails", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeWebSocket();
+    const runtime = testRuntime();
+    const responses: Array<number | Error> = [new Error("network error"), 1000, 2000];
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+      getBotUpdateAt: async () => {
+        const next = responses.shift();
+        if (next instanceof Error) {
+          throw next;
+        }
+        return next ?? 2000;
+      },
+      healthCheckIntervalMs: 100,
+    });
+
+    const connected = connectOnce();
+    socket.emitOpen();
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "mattermost: failed to get initial update_at: Error: network error",
+    );
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.terminateCalls).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.terminateCalls).toBe(1);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "mattermost: bot account updated (update_at changed: 1000 → 2000) — reconnecting",
+    );
+
+    socket.emitClose(1006);
+    await connected;
+    vi.useRealTimers();
+  });
+
+  it("does not overlap health checks when a prior poll is still running", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeWebSocket();
+    const resolvers: Array<(value: number) => void> = [];
+    let pollCount = 0;
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+      getBotUpdateAt: async () => {
+        pollCount++;
+        return await new Promise<number>((resolve) => {
+          resolvers.push(resolve);
+        });
+      },
+      healthCheckIntervalMs: 100,
+    });
+
+    const connected = connectOnce();
+    socket.emitOpen();
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pollCount).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(300);
+    expect(pollCount).toBe(1);
+
+    resolvers[0]?.(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(pollCount).toBe(2);
+
+    socket.emitClose(1000);
+    await connected;
+    vi.useRealTimers();
+  });
 });

@@ -140,18 +140,72 @@ export function createMattermostConnectOnce(
     const ws = webSocketFactory(opts.wsUrl);
     const onAbort = () => ws.terminate();
     opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
+    const getBotUpdateAt = opts.getBotUpdateAt;
 
     try {
       return await new Promise<void>((resolve, reject) => {
         let opened = false;
         let settled = false;
-        let healthCheckTimer: ReturnType<typeof setInterval> | undefined;
+        let healthCheckEnabled = getBotUpdateAt != null;
+        let healthCheckInFlight = false;
+        let healthCheckTimer: ReturnType<typeof setTimeout> | undefined;
         let initialUpdateAt: number | undefined;
 
         const clearTimers = () => {
           if (healthCheckTimer !== undefined) {
-            clearInterval(healthCheckTimer);
+            clearTimeout(healthCheckTimer);
             healthCheckTimer = undefined;
+          }
+        };
+
+        const stopHealthChecks = () => {
+          healthCheckEnabled = false;
+          clearTimers();
+        };
+
+        const scheduleHealthCheck = () => {
+          if (!getBotUpdateAt || !healthCheckEnabled || settled || healthCheckInFlight) {
+            return;
+          }
+          healthCheckTimer = setTimeout(() => {
+            healthCheckTimer = undefined;
+            void runHealthCheck();
+          }, healthCheckIntervalMs);
+        };
+
+        const runHealthCheck = async () => {
+          if (!getBotUpdateAt || !healthCheckEnabled || settled || healthCheckInFlight) {
+            return;
+          }
+          healthCheckInFlight = true;
+          try {
+            const current = await getBotUpdateAt();
+            if (!healthCheckEnabled || settled) {
+              return;
+            }
+            if (initialUpdateAt === undefined) {
+              initialUpdateAt = current;
+              return;
+            }
+            if (current !== initialUpdateAt) {
+              opts.runtime.log?.(
+                `mattermost: bot account updated (update_at changed: ${initialUpdateAt} → ${current}) — reconnecting`,
+              );
+              stopHealthChecks();
+              ws.terminate();
+            }
+          } catch (err) {
+            if (!healthCheckEnabled || settled) {
+              return;
+            }
+            const label =
+              initialUpdateAt === undefined
+                ? "mattermost: failed to get initial update_at"
+                : "mattermost: health check error";
+            opts.runtime.error?.(`${label}: ${String(err)}`);
+          } finally {
+            healthCheckInFlight = false;
+            scheduleHealthCheck();
           }
         };
 
@@ -160,7 +214,7 @@ export function createMattermostConnectOnce(
             return;
           }
           settled = true;
-          clearTimers();
+          stopHealthChecks();
           resolve();
         };
         const rejectOnce = (error: Error) => {
@@ -168,7 +222,7 @@ export function createMattermostConnectOnce(
             return;
           }
           settled = true;
-          clearTimers();
+          stopHealthChecks();
           reject(error);
         };
 
@@ -191,31 +245,9 @@ export function createMattermostConnectOnce(
           // After such a cycle the WebSocket silently stops delivering events even
           // though the connection itself stays alive.  Comparing update_at detects
           // this reliably regardless of how quickly the cycle happens.
-          if (opts.getBotUpdateAt) {
-            const getBotUpdateAt = opts.getBotUpdateAt;
-            // Capture initial update_at, then start polling.
-            getBotUpdateAt()
-              .then((ts) => {
-                if (settled) return;
-                initialUpdateAt = ts;
-                healthCheckTimer = setInterval(() => {
-                  getBotUpdateAt()
-                    .then((current) => {
-                      if (initialUpdateAt !== undefined && current !== initialUpdateAt) {
-                        opts.runtime.log?.(
-                          `mattermost: bot account updated (update_at changed: ${initialUpdateAt} → ${current}) — reconnecting`,
-                        );
-                        ws.terminate();
-                      }
-                    })
-                    .catch((err) => {
-                      opts.runtime.error?.(`mattermost: health check error: ${String(err)}`);
-                    });
-                }, healthCheckIntervalMs);
-              })
-              .catch((err) => {
-                opts.runtime.error?.(`mattermost: failed to get initial update_at: ${String(err)}`);
-              });
+          if (getBotUpdateAt) {
+            // Use a recursive timeout so only one REST poll can be in flight at a time.
+            void runHealthCheck();
           }
         });
 
@@ -253,7 +285,7 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("close", (code, reason) => {
-          clearTimers();
+          stopHealthChecks();
           const message = reasonToString(reason);
           opts.statusSink?.({
             connected: false,
