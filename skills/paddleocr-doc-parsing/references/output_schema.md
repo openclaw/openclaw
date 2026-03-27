@@ -70,18 +70,20 @@ Raw fields may vary by model version and endpoint.
 
 ## Important Fields
 
-- `result.layoutParsingResults[n].prunedResult`  
+Paths are relative to the output envelope root.
+
+- `result.result.layoutParsingResults[n].prunedResult`  
   Structured parsing data for page `n` (layout elements, locations, content, confidence, and related metadata).
 
-- `result.layoutParsingResults[n].markdown`  
+- `result.result.layoutParsingResults[n].markdown`  
   Rendered output for page `n`.
 
-- `result.layoutParsingResults[n].markdown.text`  
+- `result.result.layoutParsingResults[n].markdown.text`  
   Full page markdown text.
 
 ## Text Extraction
 
-`vl_caller.py` extracts top-level `text` from `result.layoutParsingResults[n].markdown.text` and joins pages with `\n\n`.
+`vl_caller.py` extracts top-level `text` from `result.result.layoutParsingResults[n].markdown.text` and joins pages with `\n\n`.
 
 ## Command Examples
 

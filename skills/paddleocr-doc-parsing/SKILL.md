@@ -107,8 +107,8 @@ pip install -r requirements-optimize.txt
    - The output contains complete document data: text, tables, formulas (LaTeX), figures, seals, headers/footers, and reading order
    - Use the appropriate field based on what the user needs:
      - `text` — full document text across all pages
-     - `result.layoutParsingResults[n].markdown.text` — page-level markdown
-     - `result.layoutParsingResults[n].prunedResult` — structured layout data with positions and confidence
+     - `result.result.layoutParsingResults[n].markdown.text` — page-level markdown
+     - `result.result.layoutParsingResults[n].prunedResult` — structured layout data with positions and confidence
    - Handle errors: If `ok` is false, display `error.message`
 
 4. **Present results to user**:
@@ -121,7 +121,7 @@ pip install -r requirements-optimize.txt
 Common next steps once you have the structured output:
 
 - **Save as Markdown**: Write the `text` field to a `.md` file — tables, headings, and formulas are preserved
-- **Extract specific tables**: Navigate `result.layoutParsingResults[n].prunedResult` to access individual layout elements with position and confidence data
+- **Extract specific tables**: Navigate `result.result.layoutParsingResults[n].prunedResult` to access individual layout elements with position and confidence data
 - **Feed to RAG / search pipeline**: The `text` field is structured markdown, ready for chunking and indexing
 - **Poor results**: See "Tips for Better Results" below before retrying
 
@@ -161,7 +161,7 @@ Agent: "I found a document with multiple sections. Here's the beginning:
 
 ### Understanding the Output
 
-The script returns an envelope with `ok`, `text`, `result`, and `error`. Use `text` for the full document content; navigate `result.layoutParsingResults[n]` for per-page structured data.
+The script returns an envelope with `ok`, `text`, `result`, and `error`. Use `text` for the full document content; navigate `result.result.layoutParsingResults[n]` for per-page structured data.
 
 For the complete schema and field-level details, see `references/output_schema.md`.
 
@@ -180,7 +180,7 @@ python scripts/vl_caller.py \
 Then use:
 
 - Top-level `text` for quick full-text output
-- `result.layoutParsingResults[n].markdown` when page-level output is needed
+- `result.result.layoutParsingResults[n].markdown` when page-level output is needed
 
 **Example 2: Extract Structured Page Data**
 
@@ -192,7 +192,7 @@ python scripts/vl_caller.py \
 
 Then use:
 
-- `result.layoutParsingResults[n].prunedResult` for structured parsing data (layout/content/confidence)
+- `result.result.layoutParsingResults[n].prunedResult` for structured parsing data (layout/content/confidence)
 
 **Example 3: Print JSON to stdout (without saving to file)**
 
@@ -212,6 +212,8 @@ By default the script writes JSON to a temp file and prints the path to stderr. 
 ```json
 {
   "ok": false,
+  "text": "",
+  "result": null,
   "error": {
     "code": "CONFIG_ERROR",
     "message": "PADDLEOCR_DOC_PARSING_API_URL not configured. Get your API at: https://paddleocr.com"
@@ -300,7 +302,7 @@ If parsing quality is poor:
   ```bash
   python scripts/optimize_file.py input.png optimized.png --quality 85
   ```
-- **Check confidence**: `result.layoutParsingResults[n].prunedResult` includes confidence scores per layout element — low values indicate regions worth reviewing
+- **Check confidence**: `result.result.layoutParsingResults[n].prunedResult` includes confidence scores per layout element — low values indicate regions worth reviewing
 
 ## Reference Documentation
 

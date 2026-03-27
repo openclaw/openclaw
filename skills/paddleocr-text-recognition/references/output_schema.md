@@ -76,18 +76,20 @@ Raw fields may vary by model version and endpoint.
 
 ## Stable Fields for Downstream Use
 
-- `result.ocrResults[n].prunedResult`  
+Paths are relative to the output envelope root.
+
+- `result.result.ocrResults[n].prunedResult`  
   Structured OCR data for page `n`.
 
-- `result.ocrResults[n].prunedResult.rec_texts`  
+- `result.result.ocrResults[n].prunedResult.rec_texts`  
   Recognized text lines for page `n`.
 
-- `result.ocrResults[n].prunedResult.rec_scores`  
+- `result.result.ocrResults[n].prunedResult.rec_scores`  
   Confidence scores for recognized text lines.
 
 ## Text Extraction
 
-`ocr_caller.py` extracts top-level `text` from `result.ocrResults[n].prunedResult.rec_texts`, joins lines with `\n`, and joins pages with `\n\n`.
+`ocr_caller.py` extracts top-level `text` from `result.result.ocrResults[n].prunedResult.rec_texts`, joins lines with `\n`, and joins pages with `\n\n`.
 
 ## Command Examples
 

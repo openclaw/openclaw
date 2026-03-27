@@ -175,6 +175,8 @@ python scripts/ocr_caller.py --file-url "https://example.com/input" --stdout --p
 ```json
 {
   "ok": false,
+  "text": "",
+  "result": null,
   "error": {
     "code": "CONFIG_ERROR",
     "message": "PADDLEOCR_OCR_API_URL not configured. Get your API at: https://paddleocr.com"
@@ -223,7 +225,7 @@ If recognition quality is poor:
 
 - **Low resolution**: Provide a higher resolution image (≥300 DPI works well for most printed text)
 - **Noisy background**: A cleaner scan or screenshot typically yields better results than a phone photo
-- **Check confidence**: The raw JSON (`result.ocrResults[n].prunedResult.rec_scores`) shows per-line confidence scores — low values identify uncertain regions worth reviewing
+- **Check confidence**: The raw JSON (`result.result.ocrResults[n].prunedResult.rec_scores`) shows per-line confidence scores — low values identify uncertain regions worth reviewing
 
 ## Reference Documentation
 
