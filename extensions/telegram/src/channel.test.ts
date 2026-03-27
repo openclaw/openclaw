@@ -345,7 +345,7 @@ describe("telegramPlugin duplicate token guard", () => {
       bot: { username: "runtimebot" },
       elapsedMs: 7,
     }));
-    const moduleProbeTelegram = vi.spyOn(probeModule, "probeTelegram").mockResolvedValue({
+    probeTelegramMock.mockResolvedValue({
       ok: true,
       bot: { username: "modulebot" },
       elapsedMs: 1,
@@ -374,7 +374,7 @@ describe("telegramPlugin duplicate token guard", () => {
       network: undefined,
       apiRoot: undefined,
     });
-    expect(moduleProbeTelegram).not.toHaveBeenCalled();
+    expect(probeTelegramMock).not.toHaveBeenCalled();
   });
 
   it("passes account proxy and network settings into Telegram probes", async () => {
