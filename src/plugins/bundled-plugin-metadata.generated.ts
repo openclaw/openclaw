@@ -22,12 +22,15 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {
           command: {
             type: "string",
+            minLength: 1,
           },
           expectedVersion: {
             type: "string",
+            minLength: 1,
           },
           cwd: {
             type: "string",
+            minLength: 1,
           },
           permissionMode: {
             type: "string",
@@ -55,6 +58,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               properties: {
                 command: {
                   type: "string",
+                  minLength: 1,
                   description: "Command to run the MCP server",
                 },
                 args: {
@@ -11326,25 +11330,35 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         type: "object",
         additionalProperties: false,
         properties: {
+          mode: {
+            type: "string",
+            enum: ["mirror", "remote"],
+          },
           command: {
             type: "string",
+            minLength: 1,
           },
           gateway: {
             type: "string",
+            minLength: 1,
           },
           gatewayEndpoint: {
             type: "string",
+            minLength: 1,
           },
           from: {
             type: "string",
+            minLength: 1,
           },
           policy: {
             type: "string",
+            minLength: 1,
           },
           providers: {
             type: "array",
             items: {
               type: "string",
+              minLength: 1,
             },
           },
           gpu: {
@@ -11355,9 +11369,11 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           },
           remoteWorkspaceDir: {
             type: "string",
+            minLength: 1,
           },
           remoteAgentWorkspaceDir: {
             type: "string",
+            minLength: 1,
           },
           timeoutSeconds: {
             type: "number",
@@ -11369,6 +11385,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       description:
         "Sandbox backend powered by OpenShell with mirrored local workspaces and SSH-based command execution.",
       uiHints: {
+        mode: {
+          label: "Mode",
+          help: "Sandbox mode. Use mirror for the default local-workspace flow or remote for a fully remote workspace.",
+        },
         command: {
           label: "OpenShell Command",
           help: "Path or command name for the openshell CLI.",
