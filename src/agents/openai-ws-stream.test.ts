@@ -587,6 +587,35 @@ describe("convertMessagesToInputItems", () => {
       typeof convertMessagesToInputItems
     >[0]);
     expect(items.map((item) => item.type)).toEqual(["reasoning", "message"]);
+    expect(items[0]).toMatchObject({ type: "reasoning", id: "rs_test" });
+  });
+
+  it("replays reasoning blocks when signature type is reasoning.*", () => {
+    const msg = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "thinking" as const,
+          thinking: "internal reasoning...",
+          thinkingSignature: JSON.stringify({
+            type: "reasoning.summary",
+            id: "rs_summary",
+          }),
+        },
+        { type: "text" as const, text: "Here is my answer." },
+      ],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items.map((item) => item.type)).toEqual(["reasoning", "message"]);
+    expect(items[0]).toMatchObject({ type: "reasoning", id: "rs_summary" });
   });
 
   it("returns empty array for empty messages", () => {
@@ -625,7 +654,7 @@ describe("buildAssistantMessageFromResponse", () => {
     };
     expect(tc).toBeDefined();
     expect(tc.name).toBe("exec");
-    expect(tc.id).toBe("call_abc");
+    expect(tc.id).toBe("call_abc|item_2");
     expect(tc.arguments).toEqual({ arg: "value" });
   });
 
@@ -674,6 +703,106 @@ describe("buildAssistantMessageFromResponse", () => {
     };
     expect(msg.phase).toBe("final_answer");
     expect(msg.content[0]?.text).toBe("Final answer");
+  });
+
+  it("maps reasoning output items to thinking blocks with signature", () => {
+    const response = {
+      id: "resp_reasoning",
+      object: "response",
+      created_at: Date.now(),
+      status: "completed",
+      model: "gpt-5.2",
+      output: [
+        {
+          type: "reasoning",
+          id: "rs_123",
+          summary: [{ text: "Plan step A" }, { text: "Plan step B" }],
+        },
+        {
+          type: "message",
+          id: "item_1",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Final answer" }],
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+    } as unknown as ResponseObject;
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    const thinkingBlock = msg.content.find((c) => c.type === "thinking") as
+      | { type: "thinking"; thinking: string; thinkingSignature?: string }
+      | undefined;
+    expect(thinkingBlock?.thinking).toBe("Plan step A\nPlan step B");
+    expect(thinkingBlock?.thinkingSignature).toBe(
+      JSON.stringify({ id: "rs_123", type: "reasoning" }),
+    );
+  });
+
+  it("maps reasoning.* output items to thinking blocks", () => {
+    const response = {
+      id: "resp_reasoning_kind",
+      object: "response",
+      created_at: Date.now(),
+      status: "completed",
+      model: "gpt-5.2",
+      output: [
+        {
+          type: "reasoning.summary",
+          id: "rs_456",
+          content: "Derived hidden reasoning",
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+    } as unknown as ResponseObject;
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    const thinkingBlock = msg.content[0] as
+      | { type: "thinking"; thinking: string; thinkingSignature?: string }
+      | undefined;
+    expect(thinkingBlock?.type).toBe("thinking");
+    expect(thinkingBlock?.thinking).toBe("Derived hidden reasoning");
+    expect(thinkingBlock?.thinkingSignature).toBe(
+      JSON.stringify({ id: "rs_456", type: "reasoning.summary" }),
+    );
+  });
+
+  it("preserves function call item ids for replay when reasoning is present", () => {
+    const response = {
+      id: "resp_tool_reasoning",
+      object: "response",
+      created_at: Date.now(),
+      status: "completed",
+      model: "gpt-5.2",
+      output: [
+        {
+          type: "reasoning",
+          id: "rs_tool",
+          content: "Thinking before tool call",
+        },
+        {
+          type: "function_call",
+          id: "fc_tool",
+          call_id: "call_tool",
+          name: "exec",
+          arguments: '{"arg":"value"}',
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+    } as ResponseObject;
+
+    const assistant = buildAssistantMessageFromResponse(response, modelInfo);
+    const toolCall = assistant.content.find((item) => item.type === "toolCall") as
+      | { type: "toolCall"; id: string }
+      | undefined;
+    expect(toolCall?.id).toBe("call_tool|fc_tool");
+
+    const replayItems = convertMessagesToInputItems([assistant] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(replayItems.map((item) => item.type)).toEqual(["reasoning", "function_call"]);
+    expect(replayItems[1]).toMatchObject({
+      type: "function_call",
+      call_id: "call_tool",
+      id: "fc_tool",
+    });
   });
 });
 
