@@ -1,5 +1,6 @@
 import { estimateBase64DecodedBytes } from "../media/base64.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import { saveMediaBuffer } from "../media/store.js"; 
 
 export type ChatAttachment = {
   type?: string;
@@ -106,6 +107,7 @@ export async function parseMessageWithAttachments(
   }
 
   const images: ChatImageContent[] = [];
+  let updatedMessage = message; 
 
   for (const [idx, att] of attachments.entries()) {
     if (!att) {
@@ -120,6 +122,7 @@ export async function parseMessageWithAttachments(
 
     const providedMime = normalizeMime(mime);
     const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
+    
     if (sniffedMime && !isImageMime(sniffedMime)) {
       log?.warn(`attachment ${label}: detected non-image (${sniffedMime}), dropping`);
       continue;
@@ -133,15 +136,26 @@ export async function parseMessageWithAttachments(
         `attachment ${label}: mime mismatch (${providedMime} -> ${sniffedMime}), using sniffed`,
       );
     }
+    const finalMime = sniffedMime ?? providedMime ?? mime;
+    try {
+      const buffer = Buffer.from(b64, "base64");
+      const savedMedia = await saveMediaBuffer(buffer, finalMime, "inbound");
+      const mediaId = savedMedia.id || label;
+      updatedMessage += `\n[media attached: inbound/${mediaId}]`;
+      log?.warn(`[Gateway] Intercepted large image payload. Saved to disk: inbound/${mediaId}`);
+      continue; 
+    } catch (err) {
+      log?.warn(`[Gateway Error] Failed to save intercepted media to disk. Falling back to memory payload: ${err}`);
+    }
 
     images.push({
       type: "image",
       data: b64,
-      mimeType: sniffedMime ?? providedMime ?? mime,
+      mimeType: finalMime,
     });
   }
 
-  return { message, images };
+  return { message: updatedMessage.trim(), images };
 }
 
 /**
