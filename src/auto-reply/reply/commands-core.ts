@@ -31,6 +31,44 @@ let HANDLERS: CommandHandler[] | null = null;
 
 export type ResetCommandAction = "new" | "reset";
 
+const RECENT_RESET_HOOK_EMISSION_MAX = 512;
+const recentResetHookEmissions = new Set<string>();
+
+function normalizeResetHookSessionKey(sessionKey?: string): string {
+  const normalized = sessionKey?.trim().toLowerCase();
+  return normalized && normalized.length > 0 ? normalized : "<none>";
+}
+
+function buildResetHookDedupKey(params: {
+  action: ResetCommandAction;
+  sessionKey?: string;
+  previousSessionId?: string;
+}): string | null {
+  const previousSessionId = params.previousSessionId?.trim();
+  if (!previousSessionId) {
+    return null;
+  }
+  return `${params.action}|${normalizeResetHookSessionKey(params.sessionKey)}|${previousSessionId}`;
+}
+
+function markResetHookEmissionSeen(key: string): void {
+  if (recentResetHookEmissions.has(key)) {
+    return;
+  }
+  recentResetHookEmissions.add(key);
+  if (recentResetHookEmissions.size <= RECENT_RESET_HOOK_EMISSION_MAX) {
+    return;
+  }
+  const oldestKey = recentResetHookEmissions.values().next().value;
+  if (oldestKey) {
+    recentResetHookEmissions.delete(oldestKey);
+  }
+}
+
+export function resetRecentResetHookEmissionsForTest(): void {
+  recentResetHookEmissions.clear();
+}
+
 export async function emitResetCommandHooks(params: {
   action: ResetCommandAction;
   ctx: HandleCommandsParams["ctx"];
@@ -44,6 +82,19 @@ export async function emitResetCommandHooks(params: {
   previousSessionEntry?: HandleCommandsParams["previousSessionEntry"];
   workspaceDir: string;
 }): Promise<void> {
+  const dedupKey = buildResetHookDedupKey({
+    action: params.action,
+    sessionKey: params.sessionKey,
+    previousSessionId: params.previousSessionEntry?.sessionId,
+  });
+  if (dedupKey && recentResetHookEmissions.has(dedupKey)) {
+    params.command.resetHookTriggered = true;
+    logVerbose(
+      `Skipping duplicate ${params.action} reset hook emission for prior session ${params.previousSessionEntry?.sessionId ?? "<none>"}`,
+    );
+    return;
+  }
+
   const hookEvent = createInternalHookEvent("command", params.action, params.sessionKey ?? "", {
     sessionEntry: params.sessionEntry,
     previousSessionEntry: params.previousSessionEntry,
@@ -53,6 +104,9 @@ export async function emitResetCommandHooks(params: {
     cfg: params.cfg, // Pass config for LLM slug generation
   });
   await triggerInternalHook(hookEvent);
+  if (dedupKey) {
+    markResetHookEmissionSeen(dedupKey);
+  }
   params.command.resetHookTriggered = true;
 
   // Send hook messages immediately if present
