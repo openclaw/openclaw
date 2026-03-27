@@ -69,7 +69,7 @@ function isTransientNetworkError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : JSON.stringify(error);
   const lower = message.toLowerCase();
   return (
-    lower.includes("network request") ||
+    lower.includes("network request for") ||
     lower.includes("econnreset") ||
     lower.includes("econnrefused") ||
     lower.includes("etimedout") ||
@@ -117,7 +117,7 @@ export function createTelegramSendChatActionHandler({
       const backoffMs = computeBackoff(BACKOFF_POLICY, totalFailures);
       logger(
         `sendChatAction backoff: waiting ${backoffMs}ms before retry ` +
-          `(failure ${totalFailures})`,
+          `(failure ${totalFailures}/${consecutive401Failures > 0 ? maxConsecutive401 : maxConsecutiveTransient})`,
       );
       await sleepWithAbort(backoffMs);
     }
