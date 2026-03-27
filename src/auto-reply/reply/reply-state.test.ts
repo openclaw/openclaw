@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/pi-settings.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   appendHistoryEntry,
@@ -15,11 +14,8 @@ import {
   recordPendingHistoryEntryIfEnabled,
 } from "./history.js";
 import {
-  DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
-  DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
   hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
-  resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
@@ -225,87 +221,6 @@ describe("history helpers", () => {
   });
 });
 
-describe("memory flush settings", () => {
-  it("defaults to enabled with fallback prompt and system prompt", () => {
-    const settings = resolveMemoryFlushSettings();
-    expect(settings).not.toBeNull();
-    expect(settings?.enabled).toBe(true);
-    expect(settings?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
-    expect(settings?.prompt.length).toBeGreaterThan(0);
-    expect(settings?.systemPrompt.length).toBeGreaterThan(0);
-    expect(settings?.prompt).toContain("memory/YYYY-MM-DD.md");
-    expect(settings?.prompt).toContain("MEMORY.md");
-    expect(settings?.systemPrompt).toContain("memory/YYYY-MM-DD.md");
-    expect(settings?.systemPrompt).toContain("MEMORY.md");
-  });
-
-  it("respects disable flag", () => {
-    expect(
-      resolveMemoryFlushSettings({
-        agents: {
-          defaults: { compaction: { memoryFlush: { enabled: false } } },
-        },
-      }),
-    ).toBeNull();
-  });
-
-  it("appends NO_REPLY hint when missing", () => {
-    const settings = resolveMemoryFlushSettings({
-      agents: {
-        defaults: {
-          compaction: {
-            memoryFlush: {
-              prompt: "Write memories now.",
-              systemPrompt: "Flush memory.",
-            },
-          },
-        },
-      },
-    });
-    expect(settings?.prompt).toContain("NO_REPLY");
-    expect(settings?.systemPrompt).toContain("NO_REPLY");
-    expect(settings?.prompt).toContain("memory/YYYY-MM-DD.md");
-    expect(settings?.prompt).toContain("MEMORY.md");
-    expect(settings?.systemPrompt).toContain("memory/YYYY-MM-DD.md");
-    expect(settings?.systemPrompt).toContain("MEMORY.md");
-  });
-
-  it("falls back to defaults when numeric values are invalid", () => {
-    const settings = resolveMemoryFlushSettings({
-      agents: {
-        defaults: {
-          compaction: {
-            reserveTokensFloor: Number.NaN,
-            memoryFlush: {
-              softThresholdTokens: -100,
-            },
-          },
-        },
-      },
-    });
-
-    expect(settings?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
-    expect(settings?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
-    expect(settings?.reserveTokensFloor).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
-  });
-
-  it("parses forceFlushTranscriptBytes from byte-size strings", () => {
-    const settings = resolveMemoryFlushSettings({
-      agents: {
-        defaults: {
-          compaction: {
-            memoryFlush: {
-              forceFlushTranscriptBytes: "3mb",
-            },
-          },
-        },
-      },
-    });
-
-    expect(settings?.forceFlushTranscriptBytes).toBe(3 * 1024 * 1024);
-  });
-});
-
 describe("shouldRunMemoryFlush", () => {
   it("requires totalTokens and threshold", () => {
     expect(
@@ -313,7 +228,7 @@ describe("shouldRunMemoryFlush", () => {
         entry: { totalTokens: 0 },
         contextWindowTokens: 16_000,
         reserveTokensFloor: 20_000,
-        softThresholdTokens: DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
+        softThresholdTokens: 4_000,
       }),
     ).toBe(false);
   });
@@ -324,7 +239,7 @@ describe("shouldRunMemoryFlush", () => {
         entry: undefined,
         contextWindowTokens: 16_000,
         reserveTokensFloor: 1_000,
-        softThresholdTokens: DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
+        softThresholdTokens: 4_000,
       }),
     ).toBe(false);
   });

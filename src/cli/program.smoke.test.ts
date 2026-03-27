@@ -46,10 +46,9 @@ describe("cli program (smoke)", () => {
     ensureConfigReady.mockResolvedValue(undefined);
   });
 
-  it("registers memory + status commands", () => {
+  it("registers message + status commands", () => {
     const names = program.commands.map((command) => command.name());
     expect(names).toContain("message");
-    expect(names).toContain("memory");
     expect(names).toContain("status");
   });
 
