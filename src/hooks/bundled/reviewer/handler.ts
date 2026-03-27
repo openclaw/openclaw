@@ -152,11 +152,29 @@ function sendLangfuseTrace(params: {
   output: string;
   usage: { input?: number; output?: number };
   threadTs: string;
+  channelId?: string;
   action: string;
+  iteration?: number;
+  threadMessageCount?: number;
 }): void {
-  const { langfuse, traceId, model, input, output, usage, threadTs, action } = params;
+  const {
+    langfuse,
+    traceId,
+    model,
+    input,
+    output,
+    usage,
+    threadTs,
+    channelId,
+    action,
+    iteration,
+    threadMessageCount,
+  } = params;
   const auth = Buffer.from(`${langfuse.publicKey}:${langfuse.secretKey}`).toString("base64");
   const now = new Date().toISOString();
+  // sessionId groups all reviews for the same Slack thread in Langfuse
+  const sessionId = `thread-${threadTs}`;
+  const tags = ["reviewer", action, ...(channelId ? [`ch:${channelId}`] : [])];
   const body = {
     batch: [
       {
@@ -166,9 +184,11 @@ function sendLangfuseTrace(params: {
         body: {
           id: traceId,
           name: "reviewer",
+          sessionId,
+          tags,
           input,
           output: { action, message: output },
-          metadata: { threadTs, action, model },
+          metadata: { threadTs, channelId, action, model, iteration, threadMessageCount },
         },
       },
       {
@@ -185,7 +205,7 @@ function sendLangfuseTrace(params: {
           input,
           output,
           usage: { input: usage.input, output: usage.output, unit: "TOKENS" },
-          metadata: { threadTs, action },
+          metadata: { threadTs, channelId, action, iteration, threadMessageCount },
         },
       },
     ],
@@ -350,27 +370,6 @@ function extractToolCallsFromSession(
   }
 }
 
-// ── Truncation: keep first N + last M messages ───────────────────────
-
-function truncateMessages(
-  messages: Array<{ role: string; text: string }>,
-  keepFirst: number,
-  maxTotal: number,
-): Array<{ role: string; text: string }> {
-  if (messages.length <= maxTotal) {
-    return messages;
-  }
-  const keepLast = maxTotal - keepFirst;
-  const head = messages.slice(0, keepFirst);
-  const tail = messages.slice(-keepLast);
-  const omitted = messages.length - keepFirst - keepLast;
-  return [
-    ...head,
-    { role: "System", text: `[... ${omitted} messages omitted for brevity ...]` },
-    ...tail,
-  ];
-}
-
 // ── Hindsight memory pre-fetch ──────────────────────────────────────
 
 async function queryHindsight(query: string): Promise<string[]> {
@@ -407,6 +406,8 @@ async function callReviewer(params: {
   systemPrompt: string;
   threadMessages: Array<{ role: string; text: string }>;
   threadTs: string;
+  channelId?: string;
+  iteration?: number;
   toolCalls?: string[];
   memories?: string[];
 }): Promise<ReviewResult> {
@@ -419,9 +420,8 @@ async function callReviewer(params: {
   const { default: OpenAI } = await import("openai");
   const client = new OpenAI({ apiKey });
 
-  // Truncate: always keep first 30 messages (original context) + recent messages, cap at 100 total
-  const truncated = truncateMessages(params.threadMessages, 30, 100);
-  const transcript = truncated.map((m) => `[${m.role}]: ${m.text}`).join("\n\n");
+  // Send the FULL thread — no truncation. GPT-5.4 has 128k context, use it.
+  const transcript = params.threadMessages.map((m) => `[${m.role}]: ${m.text}`).join("\n\n");
 
   // Build tool activity section if available (calls + results paired)
   let toolSection = "";
@@ -477,7 +477,10 @@ ${params.memories.map((m, i) => `${i + 1}. ${m}`).join("\n")}
         output: response.usage?.completion_tokens,
       },
       threadTs: params.threadTs,
+      channelId: params.channelId,
       action: result.action,
+      iteration: params.iteration,
+      threadMessageCount: params.threadMessages.length,
     });
     log.info(`langfuse trace sent: ${traceId}`);
   } else {
@@ -697,6 +700,8 @@ const handler: HookHandler = async (event: InternalHookEvent) => {
       systemPrompt,
       threadMessages,
       threadTs,
+      channelId,
+      iteration: count + 1,
       toolCalls,
       memories,
     });
