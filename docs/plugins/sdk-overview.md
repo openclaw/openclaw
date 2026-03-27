@@ -66,6 +66,7 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
   <Accordion title="Provider subpaths">
     | Subpath | Key exports |
     | --- | --- |
+    | `plugin-sdk/cli-backend` | CLI backend defaults + watchdog constants |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile` |
     | `plugin-sdk/provider-models` | `normalizeModelCompat` |
     | `plugin-sdk/provider-catalog` | Catalog type re-exports |
@@ -114,6 +115,7 @@ methods:
 | Method                                        | What it registers              |
 | --------------------------------------------- | ------------------------------ |
 | `api.registerProvider(...)`                   | Text inference (LLM)           |
+| `api.registerCliBackend(...)`                 | Local CLI inference backend    |
 | `api.registerChannel(...)`                    | Messaging channel              |
 | `api.registerSpeechProvider(...)`             | Text-to-speech / STT synthesis |
 | `api.registerMediaUnderstandingProvider(...)` | Image/audio/video analysis     |
@@ -138,12 +140,41 @@ methods:
 | `api.registerService(service)`                 | Background service    |
 | `api.registerInteractiveHandler(registration)` | Interactive handler   |
 
+### CLI backend registration
+
+`api.registerCliBackend(...)` lets a plugin own the default config for a local
+AI CLI backend such as `claude-cli` or `codex-cli`.
+
+- The backend `id` becomes the provider prefix in model refs like `claude-cli/opus`.
+- The backend `config` uses the same shape as `agents.defaults.cliBackends.<id>`.
+- User config still wins. OpenClaw merges `agents.defaults.cliBackends.<id>` over the
+  plugin default before running the CLI.
+- Use `normalizeConfig` when a backend needs compatibility rewrites after merge
+  (for example normalizing old flag shapes).
+
 ### Exclusive slots
 
 | Method                                     | What it registers                     |
 | ------------------------------------------ | ------------------------------------- |
 | `api.registerContextEngine(id, factory)`   | Context engine (one active at a time) |
 | `api.registerMemoryPromptSection(builder)` | Memory prompt section builder         |
+| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver            |
+| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                |
+
+### Memory embedding adapters
+
+| Method                                         | What it registers                              |
+| ---------------------------------------------- | ---------------------------------------------- |
+| `api.registerMemoryEmbeddingProvider(adapter)` | Memory embedding adapter for the active plugin |
+
+- `registerMemoryPromptSection`, `registerMemoryFlushPlan`, and
+  `registerMemoryRuntime` are exclusive to memory plugins.
+- `registerMemoryEmbeddingProvider` lets the active memory plugin register one
+  or more embedding adapter ids (for example `openai`, `gemini`, or a custom
+  plugin-defined id).
+- User config such as `agents.defaults.memorySearch.provider` and
+  `agents.defaults.memorySearch.fallback` resolves against those registered
+  adapter ids.
 
 ### Events and lifecycle
 

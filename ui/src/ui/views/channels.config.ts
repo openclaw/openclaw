@@ -142,11 +142,7 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
         >
           ${props.configSaving ? "Saving…" : "Save"}
         </button>
-        <button
-          class="btn"
-          ?disabled=${disabled}
-          @click=${() => props.onConfigReload()}
-        >
+        <button class="btn" ?disabled=${disabled} @click=${() => props.onConfigReload()}>
           Reload
         </button>
       </div>

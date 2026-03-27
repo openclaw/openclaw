@@ -2,6 +2,29 @@ import { describe, expect, it } from "vitest";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 
 describe("schema validator", () => {
+  it("can apply JSON Schema defaults while validating", () => {
+    const res = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.defaults",
+      schema: {
+        type: "object",
+        properties: {
+          mode: {
+            type: "string",
+            default: "auto",
+          },
+        },
+        additionalProperties: false,
+      },
+      value: {},
+      applyDefaults: true,
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.value).toEqual({ mode: "auto" });
+    }
+  });
+
   it("includes allowed values in enum validation errors", () => {
     const res = validateJsonSchemaValue({
       cacheKey: "schema-validator.test.enum",
@@ -206,6 +229,45 @@ describe("schema validator", () => {
       expect(issue?.text).not.toContain("\n");
       expect(issue?.text).not.toContain("\t");
       expect(issue?.text).not.toContain("\x1b");
+    }
+  });
+
+  it("supports uri-formatted string schemas", () => {
+    const valid = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.uri.valid",
+      schema: {
+        type: "object",
+        properties: {
+          apiRoot: {
+            type: "string",
+            format: "uri",
+          },
+        },
+        required: ["apiRoot"],
+      },
+      value: { apiRoot: "https://api.telegram.org" },
+    });
+    expect(valid.ok).toBe(true);
+
+    const invalid = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.uri.invalid",
+      schema: {
+        type: "object",
+        properties: {
+          apiRoot: {
+            type: "string",
+            format: "uri",
+          },
+        },
+        required: ["apiRoot"],
+      },
+      value: { apiRoot: "not a uri" },
+    });
+    expect(invalid.ok).toBe(false);
+    if (!invalid.ok) {
+      expect(invalid.errors.find((entry) => entry.path === "apiRoot")?.message).toContain(
+        "must match format",
+      );
     }
   });
 });

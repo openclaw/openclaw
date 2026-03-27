@@ -56,6 +56,9 @@ When a session is **close to auto-compaction**, OpenClaw triggers a **silent,
 agentic turn** that reminds the model to write durable memory **before** the
 context is compacted. The default prompts explicitly say the model _may reply_,
 but usually `NO_REPLY` is the correct response so the user never sees this turn.
+The active memory plugin owns the prompt/path policy for that flush; the
+default `memory-core` plugin writes to the canonical daily file under
+`memory/YYYY-MM-DD.md`.
 
 This is controlled by `agents.defaults.compaction.memoryFlush`:
 
@@ -97,9 +100,10 @@ semantic queries can find related notes even when wording differs. Hybrid search
 (BM25 + vector) is available for combining semantic matching with exact keyword
 lookups.
 
-Memory search supports multiple embedding providers (OpenAI, Gemini, Voyage,
-Mistral, Ollama, and local GGUF models), an optional QMD sidecar backend for
-advanced retrieval, and post-processing features like MMR diversity re-ranking
+Memory search adapter ids come from the active memory plugin. The default
+`memory-core` plugin ships built-ins for OpenAI, Gemini, Voyage, Mistral,
+Ollama, and local GGUF models, plus an optional QMD sidecar backend for
+advanced retrieval and post-processing features like MMR diversity re-ranking
 and temporal decay.
 
 For the full configuration reference -- including embedding provider setup, QMD

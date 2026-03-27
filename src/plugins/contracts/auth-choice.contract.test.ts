@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
 import { resolvePreferredProviderForAuthChoice } from "../../plugins/provider-auth-choice-preference.js";
 import { buildProviderPluginMethodChoice } from "../provider-wizard.js";
-import { requireProviderContractProvider, uniqueProviderContractProviders } from "./registry.js";
+import type { ProviderPlugin } from "../types.js";
 
 type ResolvePluginProviders =
   typeof import("../../plugins/provider-auth-choice.runtime.js").resolvePluginProviders;
@@ -15,6 +15,7 @@ const resolveProviderPluginChoiceMock = vi.hoisted(() => vi.fn<ResolveProviderPl
 const runProviderModelSelectedHookMock = vi.hoisted(() =>
   vi.fn<RunProviderModelSelectedHook>(async () => {}),
 );
+const runAuthMethodMock = vi.hoisted(() => vi.fn(async () => ({ profiles: [] })));
 
 vi.mock("../../plugins/provider-auth-choice.runtime.js", () => ({
   resolvePluginProviders: resolvePluginProvidersMock,
@@ -25,7 +26,7 @@ vi.mock("../../plugins/provider-auth-choice.runtime.js", () => ({
 describe("provider auth-choice contract", () => {
   beforeEach(() => {
     resolvePluginProvidersMock.mockReset();
-    resolvePluginProvidersMock.mockReturnValue(uniqueProviderContractProviders);
+    resolvePluginProvidersMock.mockReturnValue([]);
     resolveProviderPluginChoiceMock.mockReset();
     resolveProviderPluginChoiceMock.mockImplementation(({ providers, choice }) => {
       const provider = providers.find((entry) =>
@@ -55,24 +56,69 @@ describe("provider auth-choice contract", () => {
   });
 
   it("maps provider-plugin choices through the shared preferred-provider fallback resolver", async () => {
-    const pluginFallbackScenarios = [
-      "github-copilot",
-      "minimax-portal",
-      "modelstudio",
-      "ollama",
-    ].map((providerId) => {
-      const provider = requireProviderContractProvider(providerId);
-      return {
-        authChoice: buildProviderPluginMethodChoice(provider.id, provider.auth[0]?.id ?? "default"),
-        expectedProvider: provider.id,
-      };
-    });
+    const pluginFallbackScenarios: ProviderPlugin[] = [
+      {
+        id: "github-copilot",
+        label: "GitHub Copilot",
+        auth: [
+          {
+            id: "oauth",
+            label: "OAuth",
+            hint: "Browser sign-in",
+            kind: "oauth",
+            run: runAuthMethodMock,
+          },
+        ],
+      },
+      {
+        id: "minimax-portal",
+        label: "MiniMax Portal",
+        auth: [
+          {
+            id: "portal",
+            label: "Portal",
+            hint: "Browser sign-in",
+            kind: "oauth",
+            run: runAuthMethodMock,
+          },
+        ],
+      },
+      {
+        id: "modelstudio",
+        label: "ModelStudio",
+        auth: [
+          {
+            id: "api-key",
+            label: "API key",
+            hint: "Paste key",
+            kind: "api_key",
+            run: runAuthMethodMock,
+          },
+        ],
+      },
+      {
+        id: "ollama",
+        label: "Ollama",
+        auth: [
+          {
+            id: "local",
+            label: "Local",
+            hint: "No auth",
+            kind: "custom",
+            run: runAuthMethodMock,
+          },
+        ],
+      },
+    ];
 
-    for (const scenario of pluginFallbackScenarios) {
+    for (const provider of pluginFallbackScenarios) {
       resolvePluginProvidersMock.mockClear();
+      resolvePluginProvidersMock.mockReturnValue([provider]);
       await expect(
-        resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice }),
-      ).resolves.toBe(scenario.expectedProvider);
+        resolvePreferredProviderForAuthChoice({
+          choice: buildProviderPluginMethodChoice(provider.id, provider.auth[0]?.id ?? "default"),
+        }),
+      ).resolves.toBe(provider.id);
       expect(resolvePluginProvidersMock).toHaveBeenCalled();
     }
 

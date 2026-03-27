@@ -27,14 +27,15 @@ This page covers the internal architecture of the OpenClaw plugin system.
 Capabilities are the public **native plugin** model inside OpenClaw. Every
 native OpenClaw plugin registers against one or more capability types:
 
-| Capability          | Registration method                           | Example plugins           |
-| ------------------- | --------------------------------------------- | ------------------------- |
-| Text inference      | `api.registerProvider(...)`                   | `openai`, `anthropic`     |
-| Speech              | `api.registerSpeechProvider(...)`             | `elevenlabs`, `microsoft` |
-| Media understanding | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`        |
-| Image generation    | `api.registerImageGenerationProvider(...)`    | `openai`, `google`        |
-| Web search          | `api.registerWebSearchProvider(...)`          | `google`                  |
-| Channel / messaging | `api.registerChannel(...)`                    | `msteams`, `matrix`       |
+| Capability            | Registration method                           | Example plugins           |
+| --------------------- | --------------------------------------------- | ------------------------- |
+| Text inference        | `api.registerProvider(...)`                   | `openai`, `anthropic`     |
+| CLI inference backend | `api.registerCliBackend(...)`                 | `openai`, `anthropic`     |
+| Speech                | `api.registerSpeechProvider(...)`             | `elevenlabs`, `microsoft` |
+| Media understanding   | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`        |
+| Image generation      | `api.registerImageGenerationProvider(...)`    | `openai`, `google`        |
+| Web search            | `api.registerWebSearchProvider(...)`          | `google`                  |
+| Channel / messaging   | `api.registerChannel(...)`                    | `msteams`, `matrix`       |
 
 A plugin that registers zero capabilities but provides hooks, tools, or
 services is a **legacy hook-only** plugin. That pattern is still fully supported.

@@ -36,9 +36,10 @@ describe("skills-cli (e2e)", () => {
         skill: {
           name: "peekaboo",
           description: "Capture UI screenshots",
-          source: "openclaw-bundled",
           filePath: path.join(baseDir, "SKILL.md"),
           baseDir,
+          source: "openclaw-bundled",
+          disableModelInvocation: false,
         } as SkillEntry["skill"],
         frontmatter: {},
         metadata: { emoji: "📸" },

@@ -38,15 +38,15 @@ const readAgentMemoryFileMock = vi.fn(
   async (params: MemoryReadParams) => await readFileImpl(params),
 );
 
-vi.mock("../../src/memory/index.js", () => ({
+vi.mock("../../extensions/memory-core/src/memory/index.js", () => ({
   getMemorySearchManager: getMemorySearchManagerMock,
 }));
 
-vi.mock("../../src/memory/read-file.js", () => ({
+vi.mock("../../packages/memory-host-sdk/src/host/read-file.js", () => ({
   readAgentMemoryFile: readAgentMemoryFileMock,
 }));
 
-vi.mock("../../src/agents/tools/memory-tool.runtime.js", () => ({
+vi.mock("../../extensions/memory-core/src/tools.runtime.js", () => ({
   resolveMemoryBackendConfig: ({
     cfg,
   }: {

@@ -1197,117 +1197,136 @@ export function startHeartbeatRunner(opts: {
     const now = startedAt;
     let ran = false;
     let maintenanceBlocked = false;
+    // Track requests-in-flight so we can skip re-arm in finally — the wake
+    // layer handles retry for this case (DEFAULT_RETRY_MS = 1 s).
+    let requestsInFlight = false;
 
-    if (requestedSessionKey || requestedAgentId) {
-      const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
-      const targetAgent = state.agents.get(targetAgentId);
-      if (!targetAgent) {
-        scheduleNext();
-        return { status: "skipped", reason: "disabled" };
-      }
-      if (!isMaintenanceAllowedForAgent(targetAgent.agentId, now)) {
-        enqueueDeferredRun(targetAgent, {
-          reason,
-          sessionKey: requestedSessionKey,
-          queuedAtMs: now,
-        });
-        scheduleNext();
-        return { status: "skipped", reason: MAINTENANCE_BLOCKED_REASON };
-      }
-      const replay = await replayDeferredRuns(targetAgent, now);
-      ran = ran || replay.ran;
-      if (replay.earlyReturn) {
-        scheduleNext();
-        return replay.earlyReturn;
-      }
-      if (replay.blocked) {
-        scheduleNext();
-        return { status: "skipped", reason: MAINTENANCE_BLOCKED_REASON };
-      }
-
-      const res = await executeForAgent({
-        agent: targetAgent,
-        reason,
-        sessionKey: requestedSessionKey,
-      });
-      if (res.status === "skipped" && res.reason === "requests-in-flight") {
-        scheduleNext();
-        return res;
-      }
-      if (shouldAdvanceScheduleAfterResult(res)) {
-        advanceAgentSchedule(targetAgent, now);
-      }
-      if (res.status === "ran") {
-        ran = true;
-      }
-      scheduleNext();
-      return ran ? { status: "ran", durationMs: Date.now() - startedAt } : res;
-    }
-
-    for (const agent of state.agents.values()) {
-      const hasDeferredRuns = agent.deferredRuns.length > 0;
-      const dueByInterval = now >= agent.nextDueMs;
-      if (isInterval && !dueByInterval && !hasDeferredRuns) {
-        continue;
-      }
-
-      const maintenanceAllowed = isMaintenanceAllowedForAgent(agent.agentId, now);
-      if (!maintenanceAllowed) {
-        maintenanceBlocked = true;
-        if (!isInterval || dueByInterval) {
-          enqueueDeferredRun(agent, { reason, queuedAtMs: now });
+    try {
+      if (requestedSessionKey || requestedAgentId) {
+        const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
+        const targetAgent = state.agents.get(targetAgentId);
+        if (!targetAgent) {
+          return { status: "skipped", reason: "disabled" };
         }
-        if (isInterval && dueByInterval) {
-          // The interval wake was due but role-gated; move the schedule forward.
-          // The deferred run queue preserves lossless replay ordering.
-          advanceAgentSchedule(agent, now);
+        if (!isMaintenanceAllowedForAgent(targetAgent.agentId, now)) {
+          enqueueDeferredRun(targetAgent, {
+            reason,
+            sessionKey: requestedSessionKey,
+            queuedAtMs: now,
+          });
+          return { status: "skipped", reason: MAINTENANCE_BLOCKED_REASON };
         }
-        continue;
-      }
 
-      if (hasDeferredRuns) {
-        const replay = await replayDeferredRuns(agent, now);
+        const replay = await replayDeferredRuns(targetAgent, now);
         ran = ran || replay.ran;
         if (replay.earlyReturn) {
+          if (
+            replay.earlyReturn.status === "skipped" &&
+            replay.earlyReturn.reason === "requests-in-flight"
+          ) {
+            requestsInFlight = true;
+          }
           return replay.earlyReturn;
         }
         if (replay.blocked) {
-          maintenanceBlocked = true;
+          return { status: "skipped", reason: MAINTENANCE_BLOCKED_REASON };
+        }
+
+        const res = await executeForAgent({
+          agent: targetAgent,
+          reason,
+          sessionKey: requestedSessionKey,
+        });
+        if (res.status === "skipped" && res.reason === "requests-in-flight") {
+          requestsInFlight = true;
+          return res;
+        }
+        if (shouldAdvanceScheduleAfterResult(res)) {
+          advanceAgentSchedule(targetAgent, now);
+        }
+        if (res.status === "ran") {
+          ran = true;
+        }
+        return ran ? { status: "ran", durationMs: Date.now() - startedAt } : res;
+      }
+
+      for (const agent of state.agents.values()) {
+        const hasDeferredRuns = agent.deferredRuns.length > 0;
+        const dueByInterval = now >= agent.nextDueMs;
+        if (isInterval && !dueByInterval && !hasDeferredRuns) {
           continue;
+        }
+
+        const maintenanceAllowed = isMaintenanceAllowedForAgent(agent.agentId, now);
+        if (!maintenanceAllowed) {
+          maintenanceBlocked = true;
+          if (!isInterval || dueByInterval) {
+            enqueueDeferredRun(agent, { reason, queuedAtMs: now });
+          }
+          if (isInterval && dueByInterval) {
+            // The interval wake was due but role-gated; move the schedule forward.
+            // The deferred run queue preserves lossless replay ordering.
+            advanceAgentSchedule(agent, now);
+          }
+          continue;
+        }
+
+        if (hasDeferredRuns) {
+          const replay = await replayDeferredRuns(agent, now);
+          ran = ran || replay.ran;
+          if (replay.earlyReturn) {
+            if (
+              replay.earlyReturn.status === "skipped" &&
+              replay.earlyReturn.reason === "requests-in-flight"
+            ) {
+              requestsInFlight = true;
+            }
+            return replay.earlyReturn;
+          }
+          if (replay.blocked) {
+            maintenanceBlocked = true;
+            continue;
+          }
+        }
+
+        if (isInterval && now < agent.nextDueMs) {
+          continue;
+        }
+
+        const res = await executeForAgent({
+          agent,
+          reason,
+        });
+        if (res.status === "skipped" && res.reason === "requests-in-flight") {
+          // Do not advance the schedule — the main lane is busy and the wake
+          // layer will retry shortly (DEFAULT_RETRY_MS = 1 s).  Calling
+          // scheduleNext() here would register a 0 ms timer that races with
+          // the wake layer's 1 s retry and wins, bypassing the cooldown.
+          requestsInFlight = true;
+          return res;
+        }
+        if (shouldAdvanceScheduleAfterResult(res)) {
+          advanceAgentSchedule(agent, now);
+        }
+        if (res.status === "ran") {
+          ran = true;
         }
       }
 
-      if (isInterval && now < agent.nextDueMs) {
-        continue;
+      if (ran) {
+        return { status: "ran", durationMs: Date.now() - startedAt };
       }
-
-      const res = await executeForAgent({
-        agent,
-        reason,
-      });
-      if (res.status === "skipped" && res.reason === "requests-in-flight") {
-        // Do not advance the schedule — the main lane is busy and the wake
-        // layer will retry shortly (DEFAULT_RETRY_MS = 1 s).  Calling
-        // scheduleNext() here would register a 0 ms timer that races with
-        // the wake layer's 1 s retry and wins, bypassing the cooldown.
-        return res;
+      if (maintenanceBlocked) {
+        return { status: "skipped", reason: MAINTENANCE_BLOCKED_REASON };
       }
-      if (shouldAdvanceScheduleAfterResult(res)) {
-        advanceAgentSchedule(agent, now);
-      }
-      if (res.status === "ran") {
-        ran = true;
+      return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
+    } finally {
+      // Always re-arm the timer — except for requests-in-flight, where the
+      // wake layer (heartbeat-wake.ts) handles retry via schedule(DEFAULT_RETRY_MS).
+      if (!requestsInFlight) {
+        scheduleNext();
       }
     }
-
-    scheduleNext();
-    if (ran) {
-      return { status: "ran", durationMs: Date.now() - startedAt };
-    }
-    if (maintenanceBlocked) {
-      return { status: "skipped", reason: MAINTENANCE_BLOCKED_REASON };
-    }
-    return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
   };
 
   const wakeHandler: HeartbeatWakeHandler = async (params) =>
