@@ -174,6 +174,22 @@ describe("gateway tool defaults", () => {
     );
   });
 
+  it("allows explicit scope overrides for dynamic callers", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    await callGatewayTool(
+      "node.pair.approve",
+      {},
+      { requestId: "req-1" },
+      { scopes: ["operator.admin"] },
+    );
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "node.pair.approve",
+        scopes: ["operator.admin"],
+      }),
+    );
+  });
+
   it("default-denies unknown methods by sending no scopes", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
     await callGatewayTool("nonexistent.method", {}, {});
