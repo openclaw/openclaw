@@ -7,25 +7,27 @@ import {
 } from "./threading-helpers.js";
 
 describe("createStaticReplyToModeResolver", () => {
-  it("always returns the configured mode", () => {
-    expect(createStaticReplyToModeResolver("off")({ cfg: {} as OpenClawConfig })).toBe("off");
-    expect(createStaticReplyToModeResolver("all")({ cfg: {} as OpenClawConfig })).toBe("all");
+  it.each(["off", "all"] as const)("always returns the configured mode %s", (mode) => {
+    expect(createStaticReplyToModeResolver(mode)({ cfg: {} as OpenClawConfig })).toBe(mode);
   });
 });
 
 describe("createTopLevelChannelReplyToModeResolver", () => {
-  it("reads the top-level channel config", () => {
-    const resolver = createTopLevelChannelReplyToModeResolver("demo-top-level");
-    expect(
-      resolver({
-        cfg: { channels: { "demo-top-level": { replyToMode: "first" } } } as OpenClawConfig,
-      }),
-    ).toBe("first");
-  });
+  const resolver = createTopLevelChannelReplyToModeResolver("demo-top-level");
 
-  it("falls back to off", () => {
-    const resolver = createTopLevelChannelReplyToModeResolver("demo-top-level");
-    expect(resolver({ cfg: {} as OpenClawConfig })).toBe("off");
+  it.each([
+    {
+      name: "reads the top-level channel config",
+      cfg: { channels: { "demo-top-level": { replyToMode: "first" } } } as OpenClawConfig,
+      expected: "first",
+    },
+    {
+      name: "falls back to off",
+      cfg: {} as OpenClawConfig,
+      expected: "off",
+    },
+  ])("$name", ({ cfg, expected }) => {
+    expect(resolver({ cfg })).toBe(expected);
   });
 });
 

@@ -23,6 +23,36 @@ import {
 
 const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 
+function createMergedReaderCfg(
+  channelId: "whatsapp" | "imessage",
+  accountConfig: { allowFrom: string[]; defaultTo: string },
+) {
+  return {
+    channels: {
+      [channelId]: {
+        allowFrom: ["root"],
+        defaultTo: " root:chat ",
+        accounts: {
+          alt: accountConfig,
+        },
+      },
+    },
+  };
+}
+
+function createConfigWritesCfg() {
+  return {
+    channels: {
+      telegram: {
+        configWrites: true,
+        accounts: {
+          Work: { configWrites: false },
+        },
+      },
+    },
+  };
+}
+
 function expectAdapterAllowFromAndDefaultTo(adapter: unknown) {
   const channelAdapter = adapter as {
     resolveAllowFrom?: (params: { cfg: object; accountId: string }) => unknown;
@@ -46,108 +76,92 @@ function expectAdapterAllowFromAndDefaultTo(adapter: unknown) {
 }
 
 describe("mapAllowFromEntries", () => {
-  it("coerces allowFrom entries to strings", () => {
-    expect(mapAllowFromEntries(["user", 42])).toEqual(["user", "42"]);
-  });
-
-  it("returns empty list for missing input", () => {
-    expect(mapAllowFromEntries(undefined)).toEqual([]);
+  it.each([
+    {
+      name: "coerces allowFrom entries to strings",
+      input: ["user", 42],
+      expected: ["user", "42"],
+    },
+    {
+      name: "returns empty list for missing input",
+      input: undefined,
+      expected: [],
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(mapAllowFromEntries(input)).toEqual(expected);
   });
 });
 
 describe("resolveOptionalConfigString", () => {
-  it("trims and returns string values", () => {
-    expect(resolveOptionalConfigString("  room:123  ")).toBe("room:123");
-  });
-
-  it("coerces numeric values", () => {
-    expect(resolveOptionalConfigString(123)).toBe("123");
-  });
-
-  it("returns undefined for empty values", () => {
-    expect(resolveOptionalConfigString("   ")).toBeUndefined();
-    expect(resolveOptionalConfigString(undefined)).toBeUndefined();
+  it.each([
+    {
+      name: "trims and returns string values",
+      input: "  room:123  ",
+      expected: "room:123",
+    },
+    {
+      name: "coerces numeric values",
+      input: 123,
+      expected: "123",
+    },
+    {
+      name: "returns undefined for empty string values",
+      input: "   ",
+      expected: undefined,
+    },
+    {
+      name: "returns undefined for missing values",
+      input: undefined,
+      expected: undefined,
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(resolveOptionalConfigString(input)).toBe(expected);
   });
 });
 
 describe("provider config readers", () => {
-  it("reads merged WhatsApp allowFrom/defaultTo without the channel registry", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          allowFrom: ["root"],
-          defaultTo: " root:chat ",
-          accounts: {
-            alt: {
-              allowFrom: ["49123", "42"],
-              defaultTo: " alt:chat ",
-            },
-          },
-        },
-      },
-    };
-
-    expect(resolveWhatsAppConfigAllowFrom({ cfg, accountId: "alt" })).toEqual(["49123", "42"]);
-    expect(resolveWhatsAppConfigDefaultTo({ cfg, accountId: "alt" })).toBe("alt:chat");
-  });
-
-  it("reads merged iMessage allowFrom/defaultTo without the channel registry", () => {
-    const cfg = {
-      channels: {
-        imessage: {
-          allowFrom: ["root"],
-          defaultTo: " root:chat ",
-          accounts: {
-            alt: {
-              allowFrom: ["chat_id:9", "user@example.com"],
-              defaultTo: " alt:chat ",
-            },
-          },
-        },
-      },
-    };
-
-    expect(resolveIMessageConfigAllowFrom({ cfg, accountId: "alt" })).toEqual([
-      "chat_id:9",
-      "user@example.com",
-    ]);
-    expect(resolveIMessageConfigDefaultTo({ cfg, accountId: "alt" })).toBe("alt:chat");
+  it.each([
+    {
+      name: "reads merged WhatsApp allowFrom/defaultTo without the channel registry",
+      cfg: createMergedReaderCfg("whatsapp", {
+        allowFrom: ["49123", "42"],
+        defaultTo: " alt:chat ",
+      }),
+      resolveAllowFrom: resolveWhatsAppConfigAllowFrom,
+      resolveDefaultTo: resolveWhatsAppConfigDefaultTo,
+      expectedAllowFrom: ["49123", "42"],
+    },
+    {
+      name: "reads merged iMessage allowFrom/defaultTo without the channel registry",
+      cfg: createMergedReaderCfg("imessage", {
+        allowFrom: ["chat_id:9", "user@example.com"],
+        defaultTo: " alt:chat ",
+      }),
+      resolveAllowFrom: resolveIMessageConfigAllowFrom,
+      resolveDefaultTo: resolveIMessageConfigDefaultTo,
+      expectedAllowFrom: ["chat_id:9", "user@example.com"],
+    },
+  ])("$name", ({ cfg, resolveAllowFrom, resolveDefaultTo, expectedAllowFrom }) => {
+    expect(resolveAllowFrom({ cfg, accountId: "alt" })).toEqual(expectedAllowFrom);
+    expect(resolveDefaultTo({ cfg, accountId: "alt" })).toBe("alt:chat");
   });
 });
 
 describe("config write helpers", () => {
   it("matches account ids case-insensitively", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          configWrites: true,
-          accounts: {
-            Work: { configWrites: false },
-          },
-        },
-      },
-    };
-
-    expect(resolveChannelConfigWrites({ cfg, channelId: "telegram", accountId: "work" })).toBe(
-      false,
-    );
+    expect(
+      resolveChannelConfigWrites({
+        cfg: createConfigWritesCfg(),
+        channelId: "telegram",
+        accountId: "work",
+      }),
+    ).toBe(false);
   });
 
   it("blocks account-scoped writes when the configured account key differs only by case", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          configWrites: true,
-          accounts: {
-            Work: { configWrites: false },
-          },
-        },
-      },
-    };
-
     expect(
       authorizeConfigWrite({
-        cfg,
+        cfg: createConfigWritesCfg(),
         target: {
           kind: "account",
           scope: { channelId: "telegram", accountId: "work" },

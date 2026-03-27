@@ -236,6 +236,13 @@ describe("plugin-sdk subpath exports", () => {
       "registerBuiltDiscordComponentMessage",
       "resolveDiscordAccount",
     ]);
+    expectSourceMentions("huggingface", [
+      "buildHuggingfaceModelDefinition",
+      "buildHuggingfaceProvider",
+      "discoverHuggingfaceModels",
+      "HUGGINGFACE_MODEL_CATALOG",
+      "isHuggingfacePolicyLocked",
+    ]);
     expectSourceMentions("conversation-runtime", [
       "recordInboundSession",
       "recordInboundSessionMetaSafe",
@@ -626,6 +633,7 @@ describe("plugin-sdk subpath exports", () => {
       coreSdk,
       channelActionsSdk,
       textRuntimeSdk,
+      huggingfaceSdk,
       pluginEntrySdk,
       channelLifecycleSdk,
       channelPairingSdk,
@@ -635,6 +643,7 @@ describe("plugin-sdk subpath exports", () => {
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/core"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-actions"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/text-runtime"),
+      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/huggingface"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/plugin-entry"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-lifecycle"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-pairing"),
@@ -651,6 +660,9 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof textRuntimeSdk.createScopedExpiringIdCache).toBe("function");
     expect(typeof textRuntimeSdk.resolveGlobalMap).toBe("function");
     expect(typeof textRuntimeSdk.resolveGlobalSingleton).toBe("function");
+    expect(typeof huggingfaceSdk.buildHuggingfaceProvider).toBe("function");
+    expect(typeof huggingfaceSdk.discoverHuggingfaceModels).toBe("function");
+    expect(Array.isArray(huggingfaceSdk.HUGGINGFACE_MODEL_CATALOG)).toBe(true);
 
     expectSourceMentions("infra-runtime", ["createRuntimeOutboundDelegates"]);
     expectSourceContains("infra-runtime", "../infra/outbound/send-deps.js");
