@@ -49,9 +49,9 @@ describe("ensurePluginRegistryLoaded", () => {
   it("uses the auto-enabled config snapshot for configured channel scope", async () => {
     const baseConfig = {
       channels: {
-        slack: {
-          botToken: "xoxb-test",
-          appToken: "xapp-test",
+        "demo-chat": {
+          botToken: "demo-bot-token",
+          appToken: "demo-app-token",
         },
       },
     };
@@ -59,7 +59,7 @@ describe("ensurePluginRegistryLoaded", () => {
       ...baseConfig,
       plugins: {
         entries: {
-          slack: {
+          "demo-chat": {
             enabled: true,
           },
         },
@@ -69,7 +69,7 @@ describe("ensurePluginRegistryLoaded", () => {
     mocks.loadConfig.mockReturnValue(baseConfig);
     mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
     mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "slack", channels: ["slack"] }],
+      plugins: [{ id: "demo-chat", channels: ["demo-chat"] }],
       diagnostics: [],
     });
 
@@ -92,7 +92,7 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
-        onlyPluginIds: ["slack"],
+        onlyPluginIds: ["demo-chat"],
         throwOnLoadError: true,
         workspaceDir: "/tmp/workspace",
       }),
@@ -102,16 +102,16 @@ describe("ensurePluginRegistryLoaded", () => {
   it("reloads when escalating from configured-channels to channels", async () => {
     const config = {
       plugins: { enabled: true },
-      channels: { telegram: { enabled: false } },
+      channels: { "demo-channel-a": { enabled: false } },
     };
 
     mocks.loadConfig.mockReturnValue(config);
     mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [] });
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
-        { id: "telegram", channels: ["telegram"] },
-        { id: "slack", channels: ["slack"] },
-        { id: "openai", channels: [] },
+        { id: "demo-channel-a", channels: ["demo-channel-a"] },
+        { id: "demo-channel-b", channels: ["demo-channel-b"] },
+        { id: "demo-provider", channels: [] },
       ],
       diagnostics: [],
     });
@@ -122,8 +122,8 @@ describe("ensurePluginRegistryLoaded", () => {
         tools: [],
       })
       .mockReturnValue({
-        plugins: [{ id: "telegram" }],
-        channels: [{ plugin: { id: "telegram" } }],
+        plugins: [{ id: "demo-channel-a" }],
+        channels: [{ plugin: { id: "demo-channel-a" } }],
         tools: [],
       });
 
@@ -140,7 +140,7 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        onlyPluginIds: ["telegram", "slack"],
+        onlyPluginIds: ["demo-channel-a", "demo-channel-b"],
         throwOnLoadError: true,
       }),
     );
