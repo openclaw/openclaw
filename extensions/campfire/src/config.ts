@@ -107,8 +107,12 @@ export function resolveCampfireAccount(
 
   const baseUrl = (trimOptionalString(merged.baseUrl) ?? "").replace(/\/+$/, "");
   const botKey = trimOptionalString(merged.botKey) ?? "";
+  const topLevelWebhookPath = trimOptionalString(base.webhookPath);
+  const accountWebhookPath = trimOptionalString(override.webhookPath);
   const webhookPath =
-    trimOptionalString(merged.webhookPath) ?? `/channels/campfire/webhook/${resolvedAccountId}`;
+    accountWebhookPath ??
+    (resolvedAccountId === DEFAULT_ACCOUNT_ID ? topLevelWebhookPath : undefined) ??
+    `/channels/campfire/webhook/${resolvedAccountId}`;
   const textChunkLimit =
     typeof merged.textChunkLimit === "number" &&
     Number.isFinite(merged.textChunkLimit) &&

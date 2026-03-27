@@ -145,6 +145,29 @@ describe("campfire config resolution", () => {
     expect(account.textChunkLimit).toBe(4000);
   });
 
+  it("does not inherit top-level webhookPath into named accounts", () => {
+    const cfg = {
+      channels: {
+        campfire: {
+          baseUrl: "https://campfire.example.com",
+          botKey: "42-AbCdEf",
+          webhookPath: "/channels/campfire/webhook/shared",
+          accounts: {
+            support: {
+              botKey: "support-key",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const defaultAccount = resolveCampfireAccount(cfg, "default");
+    const supportAccount = resolveCampfireAccount(cfg, "support");
+
+    expect(defaultAccount.webhookPath).toBe("/channels/campfire/webhook/shared");
+    expect(supportAccount.webhookPath).toBe("/channels/campfire/webhook/support");
+  });
+
   it("lists multiple account IDs", () => {
     const cfg = {
       channels: {
