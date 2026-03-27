@@ -5,6 +5,7 @@ bind="${OPENCLAW_GATEWAY_BIND:-loopback}"
 port="${OPENCLAW_GATEWAY_PORT:-18789}"
 allowed_origins_json="${OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS:-}"
 workspace_dir="${OPENCLAW_WORKSPACE_DIR:-}"
+sandbox_mode="${OPENCLAW_SANDBOX_MODE:-}"
 
 if [ -z "${OPENCLAW_CONFIG_PATH:-}" ]; then
   state_dir="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
@@ -27,6 +28,10 @@ fi
 if [ -n "$workspace_dir" ]; then
   install -d -m 0755 "$workspace_dir"
   node /app/openclaw.mjs config set agents.defaults.workspace "$workspace_dir" >/dev/null
+fi
+
+if [ -n "$sandbox_mode" ]; then
+  node /app/openclaw.mjs config set agents.defaults.sandbox.mode "$sandbox_mode" >/dev/null
 fi
 
 exec node /app/openclaw.mjs gateway run --allow-unconfigured --bind "$bind" --port "$port"

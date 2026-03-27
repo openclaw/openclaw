@@ -43,6 +43,8 @@ services:
         value: /data/.openclaw
       - key: OPENCLAW_WORKSPACE_DIR
         value: /data/workspace
+      - key: OPENCLAW_SANDBOX_MODE
+        value: off
       - key: OPENCLAW_GATEWAY_TOKEN
         generateValue: true # auto-generates a secure token
     disk:
