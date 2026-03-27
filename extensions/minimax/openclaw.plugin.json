@@ -1,8 +1,6 @@
 {
   "id": "minimax",
   "providers": ["minimax", "minimax-portal"],
-  "mediaUnderstandingProviders": ["minimax", "minimax-portal"],
-  "imageGenerationProviders": ["minimax", "minimax-portal"],
   "providerAuthEnvVars": {
     "minimax": ["MINIMAX_API_KEY"],
     "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"]

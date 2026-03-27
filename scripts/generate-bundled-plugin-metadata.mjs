@@ -55,26 +55,35 @@ function normalizeManifestContracts(raw) {
   if (!contracts) {
     return undefined;
   }
+  const speechProviders = normalizeStringList(contracts.speechProviders);
+  const mediaUnderstandingProviders = normalizeStringList(contracts.mediaUnderstandingProviders);
+  const imageGenerationProviders = normalizeStringList(contracts.imageGenerationProviders);
+  const webSearchProviders = normalizeStringList(contracts.webSearchProviders);
+  const tools = normalizeStringList(contracts.tools);
   const normalized = {
-    ...(normalizeStringList(contracts.speechProviders)
-      ? { speechProviders: normalizeStringList(contracts.speechProviders) }
-      : {}),
-    ...(normalizeStringList(contracts.mediaUnderstandingProviders)
-      ? {
-          mediaUnderstandingProviders: normalizeStringList(contracts.mediaUnderstandingProviders),
-        }
-      : {}),
-    ...(normalizeStringList(contracts.imageGenerationProviders)
-      ? { imageGenerationProviders: normalizeStringList(contracts.imageGenerationProviders) }
-      : {}),
-    ...(normalizeStringList(contracts.webSearchProviders)
-      ? { webSearchProviders: normalizeStringList(contracts.webSearchProviders) }
-      : {}),
-    ...(normalizeStringList(contracts.tools)
-      ? { tools: normalizeStringList(contracts.tools) }
-      : {}),
+    ...(speechProviders?.length ? { speechProviders } : {}),
+    ...(mediaUnderstandingProviders?.length ? { mediaUnderstandingProviders } : {}),
+    ...(imageGenerationProviders?.length ? { imageGenerationProviders } : {}),
+    ...(webSearchProviders?.length ? { webSearchProviders } : {}),
+    ...(tools?.length ? { tools } : {}),
   };
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeLegacyCapabilityContracts(raw) {
+  return normalizeManifestContracts({
+    speechProviders: raw?.speechProviders,
+    mediaUnderstandingProviders: raw?.mediaUnderstandingProviders,
+    imageGenerationProviders: raw?.imageGenerationProviders,
+  });
+}
+
+function mergeManifestContracts(fallback, primary) {
+  const merged = {
+    ...fallback,
+    ...primary,
+  };
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 function normalizeObject(value) {
@@ -118,6 +127,11 @@ function normalizePluginManifest(raw) {
     return null;
   }
 
+  const contracts = mergeManifestContracts(
+    normalizeLegacyCapabilityContracts(raw),
+    normalizeManifestContracts(raw.contracts),
+  );
+
   return {
     id: raw.id.trim(),
     configSchema: raw.configSchema,
@@ -126,15 +140,6 @@ function normalizePluginManifest(raw) {
     ...(normalizeStringList(raw.channels) ? { channels: normalizeStringList(raw.channels) } : {}),
     ...(normalizeStringList(raw.providers)
       ? { providers: normalizeStringList(raw.providers) }
-      : {}),
-    ...(normalizeStringList(raw.speechProviders)
-      ? { speechProviders: normalizeStringList(raw.speechProviders) }
-      : {}),
-    ...(normalizeStringList(raw.mediaUnderstandingProviders)
-      ? { mediaUnderstandingProviders: normalizeStringList(raw.mediaUnderstandingProviders) }
-      : {}),
-    ...(normalizeStringList(raw.imageGenerationProviders)
-      ? { imageGenerationProviders: normalizeStringList(raw.imageGenerationProviders) }
       : {}),
     ...(normalizeStringList(raw.cliBackends)
       ? { cliBackends: normalizeStringList(raw.cliBackends) }
@@ -150,9 +155,7 @@ function normalizePluginManifest(raw) {
     ...(typeof raw.description === "string" ? { description: raw.description.trim() } : {}),
     ...(typeof raw.version === "string" ? { version: raw.version.trim() } : {}),
     ...(normalizeObject(raw.uiHints) ? { uiHints: raw.uiHints } : {}),
-    ...(normalizeManifestContracts(raw.contracts)
-      ? { contracts: normalizeManifestContracts(raw.contracts) }
-      : {}),
+    ...(contracts ? { contracts } : {}),
   };
 }
 
