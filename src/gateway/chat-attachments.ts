@@ -32,7 +32,6 @@ type NormalizedAttachment = {
 };
 
 const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
-const OFFLOAD_BASE_PATH = "/home/node/.openclaw/media/inbound";
 
 function normalizeMime(mime?: string): string | undefined {
   if (!mime) return undefined;
@@ -156,13 +155,21 @@ export async function parseMessageWithAttachments(
       try {
         const buffer = Buffer.from(b64, "base64");
         const savedMedia = await saveMediaBuffer(buffer, finalMime, "inbound");
-        const mediaId = sanitizePathSegment(savedMedia.id || label);
-        const mediaPath = `${OFFLOAD_BASE_PATH}/${mediaId}`;
+        // Use the path returned by the storage layer; fall back to a sanitized id only
+        // if the storage layer does not expose a resolved path.
+        const mediaPath = savedMedia.path ?? sanitizePathSegment(savedMedia.id || label);
 
         updatedMessage += `\n[media attached: ${mediaPath}]`;
         log?.info?.(`[Gateway] Intercepted large image payload. Saved to disk: ${mediaPath}`);
         isOffloaded = true;
       } catch (err) {
+        // Do not fall back to in-memory processing when the file also exceeds the hard
+        // memory limit — that would reintroduce the OOM risk this change is meant to fix.
+        if (sizeBytes > maxBytes) {
+          throw new Error(
+            `attachment ${label}: exceeds size limit and could not be offloaded to disk: ${err}`,
+          );
+        }
         log?.warn(`[Gateway] Failed to save intercepted media to disk, falling back to memory: ${err}`);
       }
     }
