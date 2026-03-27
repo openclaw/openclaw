@@ -1,8 +1,5 @@
-import {
-  discoverVercelAiGatewayModels,
-  VERCEL_AI_GATEWAY_BASE_URL,
-  type ModelProviderConfig,
-} from "openclaw/plugin-sdk/provider-models";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
+import { discoverVercelAiGatewayModels, VERCEL_AI_GATEWAY_BASE_URL } from "./api.js";
 
 export async function buildVercelAiGatewayProvider(): Promise<ModelProviderConfig> {
   return {

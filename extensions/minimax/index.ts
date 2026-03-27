@@ -11,11 +11,8 @@ import {
   listProfilesForProvider,
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
-import {
-  isMiniMaxModernModelId,
-  MINIMAX_DEFAULT_MODEL_ID,
-} from "openclaw/plugin-sdk/provider-models";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
+import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
 import {
   buildMinimaxImageGenerationProvider,
   buildMinimaxPortalImageGenerationProvider,

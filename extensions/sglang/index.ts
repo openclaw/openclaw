@@ -1,14 +1,14 @@
 import {
-  SGLANG_DEFAULT_API_KEY_ENV_VAR,
-  SGLANG_DEFAULT_BASE_URL,
-  SGLANG_MODEL_PLACEHOLDER,
-  SGLANG_PROVIDER_LABEL,
-} from "openclaw/plugin-sdk/agent-runtime";
-import {
   definePluginEntry,
   type OpenClawPluginApi,
   type ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  SGLANG_DEFAULT_API_KEY_ENV_VAR,
+  SGLANG_DEFAULT_BASE_URL,
+  SGLANG_MODEL_PLACEHOLDER,
+  SGLANG_PROVIDER_LABEL,
+} from "./api.js";
 
 const PROVIDER_ID = "sglang";
 
