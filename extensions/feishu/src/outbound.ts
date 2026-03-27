@@ -1,11 +1,19 @@
 import fs from "fs";
 import path from "path";
-import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  attachChannelToResult,
+  createAttachedChannelResultAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { sendMediaFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMarkdownCardFeishu, sendMessageFeishu, sendStructuredCardFeishu } from "./send.js";
+import {
+  sendCardFeishu,
+  sendMarkdownCardFeishu,
+  sendMessageFeishu,
+  sendStructuredCardFeishu,
+} from "./send.js";
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -202,4 +210,31 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       });
     },
   }),
+  sendPayload: async ({ cfg, to, payload, accountId, replyToId, threadId }) => {
+    const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+    // Extract Feishu Interactive Card from channelData if present
+    const feishuData = payload.channelData?.feishu as
+      | { card?: Record<string, unknown> }
+      | undefined;
+    if (feishuData?.card) {
+      const result = await sendCardFeishu({
+        cfg,
+        to,
+        card: feishuData.card,
+        accountId: accountId ?? undefined,
+        replyToMessageId,
+      });
+      return attachChannelToResult("feishu", result);
+    }
+    // Fallback: send as text
+    const text = payload.text ?? "";
+    const result = await sendOutboundText({
+      cfg,
+      to,
+      text,
+      accountId: accountId ?? undefined,
+      replyToMessageId,
+    });
+    return attachChannelToResult("feishu", result);
+  },
 };
