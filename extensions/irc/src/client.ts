@@ -142,7 +142,6 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   }>>();
   let multilineCap = false;
   let batchCounter = 0;
-  let capNegotiationComplete = false;
   let resolveCapComplete: (() => void) | null = null;
   const capCompletePromise = new Promise<void>((resolve) => {
     resolveCapComplete = resolve;
@@ -235,7 +234,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
     if (multilineCap && hasNewlines) {
       // Use BATCH for multiline messages
-      const lines = cleaned.split("\n");
+      const lines = cleaned.split("\n").filter((l) => l.length > 0);
       batchCounter++;
       const batchId = `m${batchCounter}`;
       sendRaw(`BATCH +${batchId} draft/multiline ${normalizedTarget}`);
@@ -371,6 +370,9 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
       if (line.command === "001") {
         ready = true;
+        // Fallback: if CAP negotiation didn't complete, resolve it now
+        // (non-CAP servers won't respond to CAP LS)
+        resolveCapComplete?.();
         const nickParam = line.params[0];
         if (nickParam && nickParam.trim()) {
           currentNick = nickParam.trim();
