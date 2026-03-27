@@ -106,6 +106,22 @@ export type SpawnSubagentResult = {
   };
 };
 
+function canonicalizeRequesterSessionKey(params: {
+  requesterSessionKey: string;
+  requesterAgentId: string;
+  mainKey: string;
+}): string {
+  const raw = params.requesterSessionKey.trim();
+  if (!raw || raw === "global" || raw === "unknown" || raw.startsWith("agent:")) {
+    return raw;
+  }
+  const requesterAgentId = normalizeAgentId(params.requesterAgentId);
+  if (raw === "main" || raw === params.mainKey) {
+    return `agent:${requesterAgentId}:${params.mainKey}`;
+  }
+  return `agent:${requesterAgentId}:${raw}`;
+}
+
 export function splitModelRef(ref?: string) {
   if (!ref) {
     return { provider: undefined, model: undefined };
@@ -362,13 +378,21 @@ export async function spawnSubagentDirect(
         mainKey,
       })
     : alias;
+  const requesterAgentId = normalizeAgentId(
+    ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
+  );
+  const requesterCanonicalSessionKey = canonicalizeRequesterSessionKey({
+    requesterSessionKey: requesterInternalKey,
+    requesterAgentId,
+    mainKey,
+  });
   const requesterDisplayKey = resolveDisplaySessionKey({
-    key: requesterInternalKey,
+    key: requesterCanonicalSessionKey,
     alias,
     mainKey,
   });
 
-  const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
+  const callerDepth = getSubagentDepthFromSessionStore(requesterCanonicalSessionKey, { cfg });
   const maxSpawnDepth =
     cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (callerDepth >= maxSpawnDepth) {
@@ -379,7 +403,7 @@ export async function spawnSubagentDirect(
   }
 
   const maxChildren = cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? 5;
-  const activeChildren = countActiveRunsForSession(requesterInternalKey);
+  const activeChildren = countActiveRunsForSession(requesterCanonicalSessionKey);
   if (activeChildren >= maxChildren) {
     return {
       status: "forbidden",
@@ -387,9 +411,6 @@ export async function spawnSubagentDirect(
     };
   }
 
-  const requesterAgentId = normalizeAgentId(
-    ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
-  );
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
   if (targetAgentId !== requesterAgentId) {
     const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
@@ -411,7 +432,7 @@ export async function spawnSubagentDirect(
   const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg,
-    sessionKey: requesterInternalKey,
+    sessionKey: requesterCanonicalSessionKey,
   });
   const childRuntime = resolveSandboxRuntimeStatus({
     cfg,
@@ -432,7 +453,7 @@ export async function spawnSubagentDirect(
     };
   }
   const childDepth = callerDepth + 1;
-  const spawnedByKey = requesterInternalKey;
+  const spawnedByKey = requesterCanonicalSessionKey;
   const childCapabilities = resolveSubagentCapabilities({
     depth: childDepth,
     maxSpawnDepth,
@@ -526,7 +547,7 @@ export async function spawnSubagentDirect(
       agentId: targetAgentId,
       label: label || undefined,
       mode: spawnMode,
-      requesterSessionKey: requesterInternalKey,
+      requesterSessionKey: requesterCanonicalSessionKey,
       requester: {
         channel: requesterOrigin?.channel,
         accountId: requesterOrigin?.accountId,
@@ -705,7 +726,7 @@ export async function spawnSubagentDirect(
             {
               runId: childRunId,
               childSessionKey,
-              requesterSessionKey: requesterInternalKey,
+              requesterSessionKey: requesterCanonicalSessionKey,
             },
           );
           endedHookEmitted = true;
@@ -743,8 +764,8 @@ export async function spawnSubagentDirect(
     registerSubagentRun({
       runId: childRunId,
       childSessionKey,
-      controllerSessionKey: requesterInternalKey,
-      requesterSessionKey: requesterInternalKey,
+      controllerSessionKey: requesterCanonicalSessionKey,
+      requesterSessionKey: requesterCanonicalSessionKey,
       requesterOrigin,
       requesterDisplayKey,
       task,
@@ -808,7 +829,7 @@ export async function spawnSubagentDirect(
         {
           runId: childRunId,
           childSessionKey,
-          requesterSessionKey: requesterInternalKey,
+          requesterSessionKey: requesterCanonicalSessionKey,
         },
       );
     } catch {
@@ -820,7 +841,7 @@ export async function spawnSubagentDirect(
   emitSessionLifecycleEvent({
     sessionKey: childSessionKey,
     reason: "create",
-    parentSessionKey: requesterInternalKey,
+    parentSessionKey: requesterCanonicalSessionKey,
     label: label || undefined,
   });
 
