@@ -8,6 +8,8 @@ import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 
 describe("message_sending hook runner", () => {
+  const demoChannelCtx = { channelId: "demo-channel" };
+
   it("runMessageSending invokes registered hooks and returns modified content", async () => {
     const handler = vi.fn().mockReturnValue({ content: "modified content" });
     const registry = createMockPluginRegistry([{ hookName: "message_sending", handler }]);
@@ -15,12 +17,12 @@ describe("message_sending hook runner", () => {
 
     const result = await runner.runMessageSending(
       { to: "user-123", content: "original content" },
-      { channelId: "telegram" },
+      demoChannelCtx,
     );
 
     expect(handler).toHaveBeenCalledWith(
       { to: "user-123", content: "original content" },
-      { channelId: "telegram" },
+      demoChannelCtx,
     );
     expect(result?.content).toBe("modified content");
   });
@@ -32,7 +34,7 @@ describe("message_sending hook runner", () => {
 
     const result = await runner.runMessageSending(
       { to: "user-123", content: "blocked" },
-      { channelId: "telegram" },
+      demoChannelCtx,
     );
 
     expect(result?.cancel).toBe(true);
@@ -40,6 +42,8 @@ describe("message_sending hook runner", () => {
 });
 
 describe("message_sent hook runner", () => {
+  const demoChannelCtx = { channelId: "demo-channel" };
+
   it("runMessageSent invokes registered hooks with success=true", async () => {
     const handler = vi.fn();
     const registry = createMockPluginRegistry([{ hookName: "message_sent", handler }]);
@@ -47,12 +51,12 @@ describe("message_sent hook runner", () => {
 
     await runner.runMessageSent(
       { to: "user-123", content: "hello", success: true },
-      { channelId: "telegram" },
+      demoChannelCtx,
     );
 
     expect(handler).toHaveBeenCalledWith(
       { to: "user-123", content: "hello", success: true },
-      { channelId: "telegram" },
+      demoChannelCtx,
     );
   });
 
@@ -63,12 +67,12 @@ describe("message_sent hook runner", () => {
 
     await runner.runMessageSent(
       { to: "user-123", content: "hello", success: false, error: "timeout" },
-      { channelId: "telegram" },
+      demoChannelCtx,
     );
 
     expect(handler).toHaveBeenCalledWith(
       { to: "user-123", content: "hello", success: false, error: "timeout" },
-      { channelId: "telegram" },
+      demoChannelCtx,
     );
   });
 });
