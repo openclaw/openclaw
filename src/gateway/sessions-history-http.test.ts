@@ -111,6 +111,28 @@ async function appendTranscriptMessage(params: {
   return appended.messageId;
 }
 
+async function seedNamedSession(params: { sessionKey: string; sessionId: string; text?: string }) {
+  const storePath = await createSessionStoreFile();
+  await writeSessionStore({
+    entries: {
+      [params.sessionKey]: {
+        sessionId: params.sessionId,
+        updatedAt: Date.now(),
+      },
+    },
+    storePath,
+  });
+  if (params.text) {
+    const appended = await appendAssistantMessageToSessionTranscript({
+      sessionKey: params.sessionKey,
+      text: params.text,
+      storePath,
+    });
+    expect(appended.ok).toBe(true);
+  }
+  return { storePath };
+}
+
 async function fetchSessionHistory(
   port: number,
   sessionKey: string,
@@ -306,6 +328,50 @@ describe("session history HTTP endpoints", () => {
       });
     });
   });
+
+  test.each([
+    {
+      requestSessionKey: "agent:main:subagent:worker",
+      storedSessionKey: "agent:main:subagent:worker",
+      sessionId: "sess-subagent",
+    },
+    {
+      requestSessionKey: "agent:main:cron:daily",
+      storedSessionKey: "agent:main:cron:daily",
+      sessionId: "sess-cron",
+    },
+    {
+      requestSessionKey: "cron:daily",
+      storedSessionKey: "agent:main:cron:daily",
+      sessionId: "sess-cron-raw",
+    },
+    {
+      requestSessionKey: "agent:main:acp:session-1",
+      storedSessionKey: "agent:main:acp:session-1",
+      sessionId: "sess-acp",
+    },
+  ])(
+    "rejects internal session history over HTTP for $requestSessionKey",
+    async ({ requestSessionKey, storedSessionKey, sessionId }) => {
+      await seedNamedSession({
+        sessionKey: storedSessionKey,
+        sessionId,
+        text: "internal session transcript",
+      });
+
+      await withGatewayHarness(async (harness) => {
+        const res = await fetchSessionHistory(harness.port, requestSessionKey);
+        expect(res.status).toBe(403);
+        await expect(res.json()).resolves.toMatchObject({
+          ok: false,
+          error: {
+            type: "forbidden",
+            message: "internal sessions are not available over HTTP history",
+          },
+        });
+      });
+    },
+  );
 
   test("prefers the freshest duplicate row for direct history reads", async () => {
     const storePath = await createSessionStoreFile();

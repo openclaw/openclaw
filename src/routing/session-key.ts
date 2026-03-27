@@ -114,6 +114,24 @@ export function isValidAgentId(value: string | undefined | null): boolean {
   return Boolean(trimmed) && VALID_ID_RE.test(trimmed);
 }
 
+export function isInternalGatewaySessionKey(sessionKey: string | undefined | null): boolean {
+  const raw = (sessionKey ?? "").trim();
+  if (!raw) {
+    return false;
+  }
+  const normalized = raw.toLowerCase();
+  if (
+    normalized.startsWith("subagent:") ||
+    normalized.startsWith("cron:") ||
+    normalized.startsWith("acp:")
+  ) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(raw);
+  const rest = parsed?.rest.toLowerCase() ?? "";
+  return rest.startsWith("subagent:") || rest.startsWith("cron:") || rest.startsWith("acp:");
+}
+
 export function sanitizeAgentId(value: string | undefined | null): string {
   return normalizeAgentId(value);
 }
