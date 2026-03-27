@@ -141,4 +141,33 @@ describe("feishu tool account routing", () => {
 
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
   });
+
+  test("does not silently fall back when the contextual account is real but uses non-env SecretRefs", async () => {
+    const { api, resolveTool } = createToolFactoryHarness({
+      channels: {
+        feishu: {
+          enabled: true,
+          accounts: {
+            a: {
+              appId: "app-a",
+              appSecret: "sec-a", // pragma: allowlist secret
+              tools: { wiki: true },
+            },
+            b: {
+              appId: "app-b",
+              appSecret: { source: "file", provider: "default", id: "feishu/b-secret" },
+              tools: { wiki: true },
+            } as never,
+          },
+        },
+      },
+    } as OpenClawPluginApi["config"]);
+    registerFeishuWikiTools(api);
+
+    const tool = resolveTool("feishu_wiki", { agentAccountId: "b" });
+    const result = await tool.execute("call", { action: "search" });
+
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+    expect(String(result.details.error ?? "")).toContain("unresolved SecretRef");
+  });
 });

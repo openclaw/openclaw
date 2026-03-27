@@ -1,6 +1,10 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { resolveFeishuAccount, resolveFeishuRuntimeAccount } from "./accounts.js";
+import {
+  listFeishuAccountIds,
+  resolveFeishuAccount,
+  resolveFeishuRuntimeAccount,
+} from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveToolsConfig } from "./tools-config.js";
 import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
@@ -41,18 +45,15 @@ function resolveImplicitToolAccountId(params: {
     return undefined;
   }
 
+  if (!listFeishuAccountIds(params.api.config).includes(contextualAccountId)) {
+    return undefined;
+  }
+
   const contextualAccount = resolveFeishuAccount({
     cfg: params.api.config,
     accountId: contextualAccountId,
   });
-  if (contextualAccount.enabled && contextualAccount.configured) {
-    return contextualAccountId;
-  }
-
-  // Tool contexts often pass agent ids here. If that id does not resolve to a
-  // configured Feishu account, fall back to the normal default-account
-  // selection instead of erroring on a synthetic account name.
-  return undefined;
+  return contextualAccount.enabled ? contextualAccountId : undefined;
 }
 
 export function resolveFeishuToolAccount(params: {
