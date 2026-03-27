@@ -33,11 +33,7 @@ export async function findTailscaleBinary(): Promise<string | null> {
       return false;
     }
     try {
-      // Use Promise.race with runExec to implement timeout
-      await Promise.race([
-        runExec(path, ["--version"], { timeoutMs: 3000 }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 3000)),
-      ]);
+      await runExec(path, ["--version"], { timeoutMs: 3000 });
       return true;
     } catch {
       return false;
@@ -244,6 +240,12 @@ type TailscaleWhoisCacheEntry = {
 
 const whoisCache = new Map<string, TailscaleWhoisCacheEntry>();
 
+/**
+ * Maximum number of cached whois entries. Prevents unbounded memory growth
+ * when many unique IPs connect through Tailscale Funnel over time.
+ */
+const WHOIS_CACHE_MAX_SIZE = 4_096;
+
 function extractExecErrorText(err: unknown) {
   const errOutput = err as ExecErrorDetails;
   const stdout = typeof errOutput.stdout === "string" ? errOutput.stdout : "";
@@ -343,7 +345,7 @@ export async function ensureFunnel(
       },
     );
     if (stdout.trim()) {
-      console.log(stdout.trim());
+      runtime.log(stdout.trim());
     }
   } catch (err) {
     const errOutput = err as { stdout?: unknown; stderr?: unknown };
@@ -463,7 +465,33 @@ function readCachedWhois(ip: string, now: number): TailscaleWhoisIdentity | null
 }
 
 function writeCachedWhois(ip: string, value: TailscaleWhoisIdentity | null, ttlMs: number) {
-  whoisCache.set(ip, { value, expiresAt: Date.now() + ttlMs });
+  const now = Date.now();
+  // Delete before set so the key moves to the tail of Map iteration order.
+  // This ensures FIFO eviction targets the least-recently-written entry.
+  whoisCache.delete(ip);
+  whoisCache.set(ip, { value, expiresAt: now + ttlMs });
+
+  if (whoisCache.size > WHOIS_CACHE_MAX_SIZE) {
+    // Prune expired entries first.
+    for (const [key, entry] of whoisCache) {
+      if (entry.expiresAt <= now) {
+        whoisCache.delete(key);
+      }
+    }
+
+    // If still over the cap, evict oldest entries (insertion order).
+    if (whoisCache.size > WHOIS_CACHE_MAX_SIZE) {
+      const excess = whoisCache.size - WHOIS_CACHE_MAX_SIZE;
+      let removed = 0;
+      for (const key of whoisCache.keys()) {
+        if (removed >= excess) {
+          break;
+        }
+        whoisCache.delete(key);
+        removed += 1;
+      }
+    }
+  }
 }
 
 export async function readTailscaleWhoisIdentity(
@@ -498,3 +526,14 @@ export async function readTailscaleWhoisIdentity(
     return null;
   }
 }
+
+export const __testing = {
+  resetWhoisCache() {
+    whoisCache.clear();
+  },
+  whoisCacheSize() {
+    return whoisCache.size;
+  },
+  writeCachedWhois,
+  WHOIS_CACHE_MAX_SIZE,
+};
