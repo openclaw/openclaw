@@ -126,13 +126,13 @@ async function sendResetSessionNotice(params: {
   model: string;
   defaultProvider: string;
   defaultModel: string;
-}): Promise<void> {
+}): Promise<boolean> {
   const route = resolveResetSessionNoticeRoute({
     ctx: params.ctx,
     command: params.command,
   });
   if (!route) {
-    return;
+    return false;
   }
   const { routeReply } = await loadRouteReplyRuntime();
   await routeReply({
@@ -151,6 +151,7 @@ async function sendResetSessionNotice(params: {
     threadId: params.threadId,
     cfg: params.cfg,
   });
+  return true;
 }
 
 type RunPreparedReplyParams = {
@@ -453,8 +454,9 @@ export async function runPreparedReply(
       }
     }
   }
+  let resetNoticeSent = false;
   if (resetTriggered && command.isAuthorizedSender) {
-    await sendResetSessionNotice({
+    resetNoticeSent = await sendResetSessionNotice({
       ctx,
       command,
       sessionKey,
@@ -605,7 +607,7 @@ export async function runPreparedReply(
     agentCfgContextTokens: agentCfg?.contextTokens,
     resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
     isNewSession,
-    resetNoticeSent: resetTriggered && command.isAuthorizedSender,
+    resetNoticeSent,
     blockStreamingEnabled,
     blockReplyChunking,
     resolvedBlockStreamingBreak,
