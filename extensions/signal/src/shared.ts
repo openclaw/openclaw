@@ -9,7 +9,7 @@ import {
   getChatChannelMeta,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/core";
-import { normalizeE164 } from "openclaw/plugin-sdk/setup";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,

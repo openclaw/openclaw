@@ -26,6 +26,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 
+// `node --import tsx` can emit `__name(...)` wrappers for function expressions.
+// Keep a local no-op helper so direct TS loads (used by config-surface tooling) stay stable.
+const __name = <T extends Function>(value: T): T => value;
+
 export {
   authorizeConfigWrite,
   canBypassConfigWritePolicy,

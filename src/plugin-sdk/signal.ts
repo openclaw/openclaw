@@ -11,6 +11,11 @@ export type {
   OpenClawPluginApi,
   PluginRuntime,
 } from "./channel-plugin-common.js";
+export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
+export type {
+  ChannelSetupWizard,
+  ChannelSetupWizardTextInput,
+} from "../channels/plugins/setup-wizard.js";
 export {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
@@ -24,6 +29,10 @@ export {
   normalizeAccountId,
   setAccountEnabledInConfigSection,
 } from "./channel-plugin-common.js";
+export {
+  createPatchedAccountSetupAdapter,
+  createSetupInputPresenceValidator,
+} from "../channels/plugins/setup-helpers.js";
 export { formatCliCommand } from "../cli/command-format.js";
 export { formatDocsLink } from "../terminal/links.js";
 
@@ -42,6 +51,18 @@ export { SignalConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { normalizeE164 } from "../utils.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
+export {
+  createCliPathTextInput,
+  createDelegatedTextInputShouldPrompt,
+} from "../channels/plugins/setup-wizard-binary.js";
+export { createDelegatedSetupWizardProxy } from "../channels/plugins/setup-wizard-proxy.js";
+export {
+  createTopLevelChannelDmPolicy,
+  parseSetupEntriesAllowingWildcard,
+  promptParsedAllowFromForAccount,
+  setAccountAllowFromForChannel,
+  setSetupChannelEnabled,
+} from "../channels/plugins/setup-wizard-helpers.js";
 
 export {
   buildBaseAccountStatusSnapshot,
