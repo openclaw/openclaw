@@ -21,7 +21,14 @@ function makeDoneStreamFn(text: string): StreamFn {
           api: "test",
           provider: "test",
           model: "test",
-          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
+          usage: {
+            input: 1,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
           timestamp: Date.now(),
         },
       });

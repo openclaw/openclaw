@@ -310,16 +310,18 @@ The ReAct fallback intercepts the text stream and injects a hidden system prompt
       ollama: {
         baseUrl: "http://ollama-host:11434",
         apiKey: "ollama-local",
+
+        // ReAct Fallback configuration (applies to all models in this provider)
+        // Set to "react" to force prompt-based tool calling
+        // Set to "auto" (default) to let OpenClaw auto-discover native tool capabilities
+        toolFallback: "react",
+
+        // ReAct prompt size. "minimal" saves tokens, "verbose" is safer for "dumb" models
+        reactProfile: "verbose",
+
         models: [
           {
             id: "tiny-llama:1b",
-            // Set toolFallback to "react" to force prompt-based tool calling
-            // Set to "auto" (default) to let OpenClaw auto-discover native tool capabilities
-            toolFallback: "react",
-
-            // ReAct prompt size. "minimal" saves tokens, "verbose" is safer for "dumb" models
-            reactProfile: "verbose",
-
             contextWindow: 4096,
             maxTokens: 4096,
           },
