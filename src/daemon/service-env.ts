@@ -19,6 +19,7 @@ import {
   resolveNodeSystemdServiceName,
   resolveNodeWindowsTaskName,
 } from "./constants.js";
+import { resolveHomeDir } from "./paths.js";
 
 export { isNodeVersionManagerRuntime, resolveLinuxSystemCaBundle };
 
@@ -234,7 +235,7 @@ export function getMinimalServicePathPartsFromEnv(options: BuildServicePathOptio
   const env = options.env ?? process.env;
   return getMinimalServicePathParts({
     ...options,
-    home: options.home ?? env.HOME,
+    home: options.home ?? resolveServiceHome(env),
     env,
   });
 }
@@ -316,7 +317,7 @@ function buildCommonServiceEnvironment(
   sharedEnv: SharedServiceEnvironmentFields,
 ): Record<string, string | undefined> {
   const serviceEnv: Record<string, string | undefined> = {
-    HOME: env.HOME,
+    HOME: resolveServiceHome(env),
     TMPDIR: sharedEnv.tmpDir,
     ...sharedEnv.proxyEnv,
     NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
@@ -328,6 +329,18 @@ function buildCommonServiceEnvironment(
     serviceEnv.PATH = sharedEnv.minimalPath;
   }
   return serviceEnv;
+}
+
+function resolveServiceHome(env: Record<string, string | undefined>): string | undefined {
+  const configuredHome = env.HOME?.trim() || env.USERPROFILE?.trim();
+  if (!configuredHome) {
+    return undefined;
+  }
+  try {
+    return resolveHomeDir(env);
+  } catch {
+    return configuredHome;
+  }
 }
 
 function resolveSharedServiceEnvironmentFields(

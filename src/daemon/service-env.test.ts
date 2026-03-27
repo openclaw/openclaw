@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildMinimalServicePath,
@@ -11,6 +12,10 @@ import {
   isNodeVersionManagerRuntime,
   resolveLinuxSystemCaBundle,
 } from "./service-env.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("getMinimalServicePathParts - Linux user directories", () => {
   it("includes user bin directories when HOME is set on Linux", () => {
@@ -371,6 +376,27 @@ describe("buildServiceEnvironment", () => {
       "/home/user/.nvm/versions/node/v22.22.0/bin",
     );
   });
+
+  it("repairs a missing HOME snapshot using os.userInfo().homedir", () => {
+    vi.spyOn(fs, "existsSync").mockImplementation((value) => value === "/home/vac");
+    vi.spyOn(os, "homedir").mockReturnValue("/home/node");
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      uid: 1000,
+      gid: 1000,
+      username: "vac",
+      homedir: "/home/vac",
+      shell: "/bin/zsh",
+    });
+
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/node" },
+      port: 18789,
+      platform: "linux",
+    });
+
+    expect(env.HOME).toBe("/home/vac");
+    expect(env.PATH?.split(path.posix.delimiter)).toContain("/home/vac/.local/bin");
+  });
 });
 
 describe("buildNodeServiceEnvironment", () => {
@@ -507,6 +533,22 @@ describe("resolveGatewayStateDir", () => {
   it("expands ~ in OPENCLAW_STATE_DIR", () => {
     const env = { HOME: "/Users/test", OPENCLAW_STATE_DIR: "~/openclaw-state" };
     expect(resolveGatewayStateDir(env)).toBe(path.resolve("/Users/test/openclaw-state"));
+  });
+
+  it("falls back to os.userInfo().homedir when HOME points at a missing path", () => {
+    vi.spyOn(fs, "existsSync").mockImplementation((value) => value === "/home/vac");
+    vi.spyOn(os, "homedir").mockReturnValue("/home/node");
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      uid: 1000,
+      gid: 1000,
+      username: "vac",
+      homedir: "/home/vac",
+      shell: "/bin/zsh",
+    });
+
+    expect(resolveGatewayStateDir({ HOME: "/home/node" })).toBe(
+      path.join("/home/vac", ".openclaw"),
+    );
   });
 
   it("preserves Windows absolute paths without HOME", () => {

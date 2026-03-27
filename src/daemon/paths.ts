@@ -1,11 +1,17 @@
+import os from "node:os";
 import path from "node:path";
+import { resolveEffectiveHomeDir } from "../infra/home-dir.js";
 import { resolveGatewayProfileSuffix } from "./constants.js";
 
 const windowsAbsolutePath = /^[a-zA-Z]:[\\/]/;
 const windowsUncPath = /^\\\\/;
 
 export function resolveHomeDir(env: Record<string, string | undefined>): string {
-  const home = env.HOME?.trim() || env.USERPROFILE?.trim();
+  const configuredHome = env.HOME?.trim() || env.USERPROFILE?.trim();
+  if (!configuredHome) {
+    throw new Error("Missing HOME");
+  }
+  const home = resolveEffectiveHomeDir(env as NodeJS.ProcessEnv, os.homedir);
   if (!home) {
     throw new Error("Missing HOME");
   }

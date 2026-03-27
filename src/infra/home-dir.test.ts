@@ -1,5 +1,7 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   expandHomePrefix,
   resolveEffectiveHomeDir,
@@ -8,6 +10,10 @@ import {
   resolveOsHomeRelativePath,
   resolveRequiredHomeDir,
 } from "./home-dir.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("resolveEffectiveHomeDir", () => {
   it.each([
@@ -56,6 +62,21 @@ describe("resolveEffectiveHomeDir", () => {
     },
   ])("$name", ({ env, homedir, expected }) => {
     expect(resolveEffectiveHomeDir(env, homedir)).toBe(path.resolve(expected));
+  });
+
+  it("falls back to os.userInfo().homedir when HOME points at a missing path", () => {
+    vi.spyOn(fs, "existsSync").mockImplementation((value) => value === "/home/vac");
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      uid: 1000,
+      gid: 1000,
+      username: "vac",
+      homedir: "/home/vac",
+      shell: "/bin/zsh",
+    });
+
+    expect(
+      resolveEffectiveHomeDir({ HOME: "/home/node" } as NodeJS.ProcessEnv, () => "/home/node"),
+    ).toBe(path.resolve("/home/vac"));
   });
 
   it.each([

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -45,15 +46,17 @@ function resolveRawHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): strin
 }
 
 function resolveRawOsHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): string | undefined {
-  const envHome = normalize(env.HOME);
+  const osHome = normalizeSafe(homedir);
+  const userInfoHome = normalizeUserInfoHome();
+  const envHome = repairMissingEnvHome(normalize(env.HOME), osHome, userInfoHome);
   if (envHome) {
     return envHome;
   }
-  const userProfile = normalize(env.USERPROFILE);
+  const userProfile = repairMissingEnvHome(normalize(env.USERPROFILE), osHome, userInfoHome);
   if (userProfile) {
     return userProfile;
   }
-  return normalizeSafe(homedir);
+  return osHome;
 }
 
 function normalizeSafe(homedir: () => string): string | undefined {
@@ -61,6 +64,49 @@ function normalizeSafe(homedir: () => string): string | undefined {
     return normalize(homedir());
   } catch {
     return undefined;
+  }
+}
+
+function normalizeUserInfoHome(): string | undefined {
+  try {
+    return normalize(os.userInfo().homedir);
+  } catch {
+    return undefined;
+  }
+}
+
+function repairMissingEnvHome(
+  candidate: string | undefined,
+  osHome: string | undefined,
+  userInfoHome: string | undefined,
+): string | undefined {
+  if (!candidate) {
+    return undefined;
+  }
+  if (
+    !userInfoHome ||
+    !osHome ||
+    sameResolvedPath(candidate, userInfoHome) ||
+    pathExists(candidate) ||
+    !sameResolvedPath(candidate, osHome)
+  ) {
+    return candidate;
+  }
+  if (pathExists(userInfoHome)) {
+    return userInfoHome;
+  }
+  return candidate;
+}
+
+function sameResolvedPath(left: string, right: string): boolean {
+  return path.resolve(left) === path.resolve(right);
+}
+
+function pathExists(targetPath: string): boolean {
+  try {
+    return fs.existsSync(targetPath);
+  } catch {
+    return false;
   }
 }
 
