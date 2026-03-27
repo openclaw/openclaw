@@ -1399,9 +1399,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         authProfileOverrideSource: overrides.authProfileOverrideSource,
         authProfileOverrideCompactionCount: overrides.authProfileOverrideCompactionCount,
       });
-      expect(result.sessionEntry.cliSessionIds).toBeUndefined();
-      expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
-      expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
+      expect(result.sessionEntry.cliSessionIds).toEqual(overrides.cliSessionIds);
+      expect(result.sessionEntry.cliSessionBindings).toEqual(overrides.cliSessionBindings);
+      expect(result.sessionEntry.claudeCliSessionId).toBe(overrides.claudeCliSessionId);
     }
   });
 
