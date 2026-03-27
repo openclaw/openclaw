@@ -292,6 +292,136 @@ describe("removePluginFromConfig", () => {
     expect(result.plugins?.entries).toBeUndefined();
   });
 
+  it("removes channel config for plugin's channel ids", () => {
+    const config: OpenClawConfig = {
+      channels: {
+        "my-channel": { enabled: true },
+        telegram: { enabled: true },
+      },
+      plugins: {
+        entries: {
+          "my-plugin": { enabled: true },
+        },
+        installs: {
+          "my-plugin": { source: "npm", spec: "my-plugin@1.0.0" },
+        },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "my-plugin", ["my-channel"]);
+
+    expect(result.channels).toEqual({ telegram: { enabled: true } });
+    expect(actions.channelConfig).toBe(true);
+  });
+
+  it("removes channel config using pluginId as fallback when no channelIds provided", () => {
+    const config: OpenClawConfig = {
+      channels: {
+        "my-plugin": { enabled: true },
+        telegram: { enabled: true },
+      },
+      plugins: {
+        entries: {
+          "my-plugin": { enabled: true },
+        },
+        installs: {
+          "my-plugin": { source: "npm", spec: "my-plugin@1.0.0" },
+        },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+
+    expect(result.channels).toEqual({ telegram: { enabled: true } });
+    expect(actions.channelConfig).toBe(true);
+  });
+
+  it("removes channels config entirely when last channel entry is removed", () => {
+    const config: OpenClawConfig = {
+      channels: {
+        "my-plugin": { enabled: true },
+      },
+      plugins: {
+        entries: {
+          "my-plugin": { enabled: true },
+        },
+        installs: {
+          "my-plugin": { source: "npm", spec: "my-plugin@1.0.0" },
+        },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+
+    expect(result.channels).toBeUndefined();
+    expect(actions.channelConfig).toBe(true);
+  });
+
+  it("does not remove channel config for built-in plugin without install record", () => {
+    const config: OpenClawConfig = {
+      channels: {
+        telegram: { enabled: true, botToken: "tok" },
+      },
+      plugins: {
+        entries: {
+          telegram: { enabled: true },
+        },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "telegram");
+
+    expect((result.channels as Record<string, unknown>)?.telegram).toEqual({
+      enabled: true,
+      botToken: "tok",
+    });
+    expect(actions.channelConfig).toBe(false);
+  });
+
+  it("preserves shared channel keys (defaults, modelByChannel)", () => {
+    const config: OpenClawConfig = {
+      channels: {
+        defaults: { groupPolicy: "opt-in" },
+        modelByChannel: { "my-plugin": "gpt-5.4" } as Record<string, string>,
+        "my-plugin": { enabled: true },
+      } as unknown as OpenClawConfig["channels"],
+      plugins: {
+        entries: {
+          "my-plugin": { enabled: true },
+        },
+        installs: {
+          "my-plugin": { source: "npm", spec: "my-plugin@1.0.0" },
+        },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+
+    const ch = result.channels as Record<string, unknown> | undefined;
+    expect(ch?.["my-plugin"]).toBeUndefined();
+    expect(ch?.defaults).toEqual({ groupPolicy: "opt-in" });
+    expect(ch?.modelByChannel).toEqual({ "my-plugin": "gpt-5.4" });
+    expect(actions.channelConfig).toBe(true);
+  });
+
+  it("does not modify channels when plugin has no matching channel config", () => {
+    const config: OpenClawConfig = {
+      channels: {
+        telegram: { enabled: true },
+      },
+      plugins: {
+        entries: {
+          "my-plugin": { enabled: true },
+        },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+
+    expect(result.channels).toEqual({ telegram: { enabled: true } });
+    expect(actions.channelConfig).toBe(false);
+  });
+
   it("preserves other config values", () => {
     const config: OpenClawConfig = {
       plugins: {
