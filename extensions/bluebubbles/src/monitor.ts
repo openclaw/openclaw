@@ -124,10 +124,18 @@ function safeEqualSecret(aRaw: string, bRaw: string): boolean {
   }
   const bufA = Buffer.from(a, "utf8");
   const bufB = Buffer.from(b, "utf8");
-  if (bufA.length !== bufB.length) {
-    return false;
-  }
-  return timingSafeEqual(bufA, bufB);
+  // Pad to equal length before constant-time comparison to prevent
+  // leaking length information via early-return timing.
+  const maxLen = Math.max(bufA.length, bufB.length);
+  const paddedA = Buffer.alloc(maxLen);
+  const paddedB = Buffer.alloc(maxLen);
+  bufA.copy(paddedA);
+  bufB.copy(paddedB);
+
+  // Call timingSafeEqual unconditionally to ensure constant-time execution
+  // regardless of length mismatch (avoids && short-circuit timing leak).
+  const equalContent = timingSafeEqual(paddedA, paddedB);
+  return bufA.length === bufB.length && equalContent;
 }
 
 function collectTrustedProxies(targets: readonly WebhookTarget[]): string[] {
