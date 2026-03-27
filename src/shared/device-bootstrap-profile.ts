@@ -11,17 +11,17 @@ export type DeviceBootstrapProfileInput = {
 };
 
 export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
-  roles: ["operator", "node"],
+  roles: ["node", "operator"],
   scopes: [
-    "operator.read",
-    "operator.write",
-    "operator.talk.secrets",
+    "node.camera",
+    "node.display",
+    "node.exec",
+    "node.voice",
     "operator.approvals",
     "operator.pairing",
-    "node.exec",
-    "node.display",
-    "node.camera",
-    "node.voice",
+    "operator.read",
+    "operator.talk.secrets",
+    "operator.write",
   ],
 };
 
@@ -57,5 +57,19 @@ export function sameDeviceBootstrapProfile(
     left.scopes.length === right.scopes.length &&
     left.roles.every((value, index) => value === right.roles[index]) &&
     left.scopes.every((value, index) => value === right.scopes[index])
+  );
+}
+
+/**
+ * Checks if the requested profile is satisfied by the allowed profile.
+ * A requested profile is satisfied if all its roles and scopes are present in the allowed profile.
+ */
+export function satisfiesDeviceBootstrapProfile(
+  requested: DeviceBootstrapProfile,
+  allowed: DeviceBootstrapProfile,
+): boolean {
+  return (
+    requested.roles.every((role) => allowed.roles.includes(role)) &&
+    requested.scopes.every((scope) => allowed.scopes.includes(scope))
   );
 }

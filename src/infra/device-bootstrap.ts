@@ -2,7 +2,7 @@ import path from "node:path";
 import {
   normalizeDeviceBootstrapProfile,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  sameDeviceBootstrapProfile,
+  satisfiesDeviceBootstrapProfile,
   type DeviceBootstrapProfile,
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
@@ -188,10 +188,10 @@ export async function verifyDeviceBootstrapToken(params: {
     });
     const allowedProfile = resolvePersistedBootstrapProfile(record);
     // Fail closed for unbound legacy setup codes and for any attempt to redeem
-    // the token outside the exact role/scope profile it was issued for.
+    // the token outside the roles/scopes profile it was issued for.
     if (
       allowedProfile.roles.length === 0 ||
-      !sameDeviceBootstrapProfile(requestedProfile, allowedProfile)
+      !satisfiesDeviceBootstrapProfile(requestedProfile, allowedProfile)
     ) {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }

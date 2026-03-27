@@ -64,8 +64,18 @@ describe("device bootstrap tokens", () => {
       ts: Date.now(),
       issuedAtMs: Date.now(),
       profile: {
-        roles: ["node"],
-        scopes: [],
+        roles: ["node", "operator"],
+        scopes: [
+          "node.camera",
+          "node.display",
+          "node.exec",
+          "node.voice",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
       },
     });
   });
@@ -74,7 +84,9 @@ describe("device bootstrap tokens", () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });
 
-    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, { role: "operator" }),
+    ).resolves.toEqual({ ok: true });
 
     await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({
       ok: false,
@@ -145,7 +157,9 @@ describe("device bootstrap tokens", () => {
       "utf8",
     );
 
-    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, { role: "node", scopes: [] }),
+    ).resolves.toEqual({ ok: true });
 
     await expect(fs.readFile(bootstrapPath, "utf8")).resolves.toBe("{}");
   });
