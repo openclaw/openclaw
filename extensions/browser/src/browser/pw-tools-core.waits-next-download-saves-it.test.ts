@@ -48,23 +48,22 @@ const clientFetchMocks = vi.hoisted(() => ({
 vi.mock("./pw-session.js", () => sessionMocks);
 vi.mock("./chrome.js", () => chromeMocks);
 vi.mock("./client-fetch.js", () => clientFetchMocks);
-vi.mock("../infra/tmp-openclaw-dir.js", () => ({
-  resolvePreferredOpenClawTmpDir: tmpDirMocks.resolvePreferredOpenClawTmpDir,
-}));
 let mod: Pick<
   typeof import("./pw-tools-core.downloads.js"),
   "downloadViaPlaywright" | "waitForDownloadViaPlaywright"
 > &
   Pick<typeof import("./pw-tools-core.responses.js"), "responseBodyViaPlaywright">;
+let tmpDirModule: typeof import("../infra/tmp-openclaw-dir.js");
 
 describe("pw-tools-core", () => {
   beforeAll(async () => {
     vi.resetModules();
     vi.doMock("./pw-session.js", () => sessionMocks);
     vi.doMock("./chrome.js", () => chromeMocks);
-    vi.doMock("../infra/tmp-openclaw-dir.js", () => ({
-      resolvePreferredOpenClawTmpDir: tmpDirMocks.resolvePreferredOpenClawTmpDir,
-    }));
+    tmpDirModule = await import("../infra/tmp-openclaw-dir.js");
+    vi.spyOn(tmpDirModule, "resolvePreferredOpenClawTmpDir").mockImplementation(
+      tmpDirMocks.resolvePreferredOpenClawTmpDir,
+    );
     const [downloads, responses] = await Promise.all([
       import("./pw-tools-core.downloads.js"),
       import("./pw-tools-core.responses.js"),
