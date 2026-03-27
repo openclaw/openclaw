@@ -227,8 +227,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
     }
 
     const contentLower = content.toLowerCase();
-    const isUrgentCommand = URGENT_COMMANDS.some((cmd) =>
-      contentLower.startsWith(cmd.toLowerCase()),
+    const isUrgentCommand = URGENT_COMMANDS.some(
+      (cmd) =>
+        contentLower === cmd.toLowerCase() || contentLower.startsWith(cmd.toLowerCase() + " "),
     );
     if (isUrgentCommand) {
       log?.info(
@@ -248,6 +249,16 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
     const receivedAt = Date.now();
     const peerId = msgQueue.getMessagePeerId(msg);
 
+    // Compute authorization for slash commands that require it.
+    const slashAllowFromList = account.config?.allowFrom ?? [];
+    const slashAllowAll =
+      slashAllowFromList.length === 0 || slashAllowFromList.some((entry: string) => entry === "*");
+    const slashCommandAuthorized =
+      slashAllowAll ||
+      slashAllowFromList.some(
+        (entry: string) => entry.toUpperCase() === msg.senderId.toUpperCase(),
+      );
+
     const cmdCtx: SlashCommandContext = {
       type: msg.type,
       senderId: msg.senderId,
@@ -262,6 +273,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
       accountId: account.accountId,
       appId: account.appId,
       accountConfig: account.config,
+      commandAuthorized: slashCommandAuthorized,
       queueSnapshot: msgQueue.getSnapshot(peerId),
     };
 

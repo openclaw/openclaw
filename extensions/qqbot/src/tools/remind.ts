@@ -96,7 +96,9 @@ function parseRelativeTime(timeStr: string): number | null {
 
 function isCronExpression(timeStr: string): boolean {
   const parts = timeStr.trim().split(/\s+/);
-  return parts.length >= 3 && parts.length <= 6;
+  if (parts.length < 3 || parts.length > 6) return false;
+  // Each cron field must start with a digit, *, or a cron-special character.
+  return parts.every((p) => /^[0-9*?/,LW#-]/.test(p));
 }
 
 function generateJobName(content: string): string {

@@ -46,10 +46,6 @@
           "appId": { "type": "string" },
           "clientSecret": { "$ref": "#/$defs/secretInput" },
           "clientSecretFile": { "type": "string" },
-          "dmPolicy": {
-            "type": "string",
-            "enum": ["open", "pairing", "allowlist"]
-          },
           "allowFrom": {
             "type": "array",
             "items": { "type": "string" }
@@ -76,10 +72,6 @@
       "appId": { "type": "string" },
       "clientSecret": { "$ref": "#/$defs/secretInput" },
       "clientSecretFile": { "type": "string" },
-      "dmPolicy": {
-        "type": "string",
-        "enum": ["open", "pairing", "allowlist"]
-      },
       "allowFrom": {
         "type": "array",
         "items": { "type": "string" }

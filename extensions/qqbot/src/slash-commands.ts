@@ -58,6 +58,8 @@ export interface SlashCommandContext {
   appId: string;
   /** Account config available to the command handler. */
   accountConfig?: QQBotAccountConfig;
+  /** Whether the sender is authorized per the allowFrom config. */
+  commandAuthorized: boolean;
   /** Queue snapshot for the current sender. */
   queueSnapshot: QueueSnapshot;
 }
@@ -92,6 +94,8 @@ interface SlashCommand {
   description: string;
   /** Detailed usage text shown by `/command ?`. */
   usage?: string;
+  /** When true, the command requires the sender to pass the allowFrom authorization check. */
+  requireAuth?: boolean;
   /** Command handler. */
   handler: (ctx: SlashCommandContext) => SlashCommandResult | Promise<SlashCommandResult>;
 }
@@ -340,6 +344,7 @@ function collectRecentLogFiles(logDirs: string[]): LogCandidate[] {
 registerCommand({
   name: "bot-logs",
   description: "导出本地日志文件",
+  requireAuth: true,
   usage: [
     `/bot-logs`,
     ``,
@@ -445,6 +450,14 @@ export async function matchSlashCommand(ctx: SlashCommandContext): Promise<Slash
 
   const cmd = commands.get(cmdName);
   if (!cmd) return null;
+
+  // Gate sensitive commands behind the allowFrom authorization check.
+  if (cmd.requireAuth && !ctx.commandAuthorized) {
+    debugLog(
+      `[qqbot] Slash command /${cmd.name} rejected: sender ${ctx.senderId} is not authorized`,
+    );
+    return `⛔ 权限不足：/${cmd.name} 需要管理员权限。`;
+  }
 
   // `/command ?` returns usage help.
   if (args === "?") {

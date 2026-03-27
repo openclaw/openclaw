@@ -29,7 +29,6 @@ export interface QQBotAccountConfig {
   appId?: string;
   clientSecret?: SecretInput;
   clientSecretFile?: string;
-  dmPolicy?: "open" | "pairing" | "allowlist";
   allowFrom?: string[];
   /** Optional system prompt prepended to user messages. */
   systemPrompt?: string;

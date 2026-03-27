@@ -104,7 +104,15 @@ export const qqbotSetupPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         if (colonIdx > 0) {
           appId = input.token.slice(0, colonIdx);
           clientSecret = input.token.slice(colonIdx + 1);
+        } else {
+          // Token must be in appId:clientSecret format; skip config write if malformed.
+          return cfg;
         }
+      }
+
+      if (!appId && !input.tokenFile) {
+        // No valid credentials provided; skip config write.
+        return cfg;
       }
 
       return applyQQBotAccountConfig(cfg, accountId, {

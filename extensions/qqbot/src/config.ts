@@ -51,7 +51,7 @@ export function listQQBotAccountIds(cfg: OpenClawConfig): string[] {
 /** Resolve the default QQBot account ID. */
 export function resolveDefaultQQBotAccountId(cfg: OpenClawConfig): string {
   const qqbot = cfg.channels?.qqbot as QQBotChannelConfig | undefined;
-  if (qqbot?.appId) {
+  if (qqbot?.appId || process.env.QQBOT_APP_ID) {
     return DEFAULT_ACCOUNT_ID;
   }
   if (qqbot?.accounts) {
@@ -158,9 +158,9 @@ export function applyQQBotAccountConfig(
         allowFrom,
         ...(input.appId ? { appId: input.appId } : {}),
         ...(input.clientSecret
-          ? { clientSecret: input.clientSecret }
+          ? { clientSecret: input.clientSecret, clientSecretFile: undefined }
           : input.clientSecretFile
-            ? { clientSecretFile: input.clientSecretFile }
+            ? { clientSecretFile: input.clientSecretFile, clientSecret: undefined }
             : {}),
         ...(input.name ? { name: input.name } : {}),
       },
@@ -184,9 +184,9 @@ export function applyQQBotAccountConfig(
             allowFrom,
             ...(input.appId ? { appId: input.appId } : {}),
             ...(input.clientSecret
-              ? { clientSecret: input.clientSecret }
+              ? { clientSecret: input.clientSecret, clientSecretFile: undefined }
               : input.clientSecretFile
-                ? { clientSecretFile: input.clientSecretFile }
+                ? { clientSecretFile: input.clientSecretFile, clientSecret: undefined }
                 : {}),
             ...(input.name ? { name: input.name } : {}),
           },

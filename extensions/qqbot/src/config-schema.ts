@@ -2,7 +2,6 @@ import {
   AllowFromListSchema,
   buildCatchallMultiAccountChannelSchema,
   buildChannelConfigSchema,
-  DmPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
@@ -21,7 +20,6 @@ const QQBotAccountSchema = z.object({
   appId: z.string().optional(),
   clientSecret: buildSecretInputSchema().optional(),
   clientSecretFile: z.string().optional(),
-  dmPolicy: DmPolicySchema.optional(),
   allowFrom: AllowFromListSchema,
   systemPrompt: z.string().optional(),
   markdownSupport: z.boolean().optional(),

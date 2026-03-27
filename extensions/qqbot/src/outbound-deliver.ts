@@ -293,6 +293,15 @@ export async function sendPlainReply(
 
   let textWithoutImages = filterInternalMarkers(replyText);
 
+  // Strip markdown image tags that are neither HTTP URLs nor collected local paths
+  // to prevent leaking unresolvable paths (e.g. relative paths) to the user.
+  for (const m of mdMatches) {
+    const url = m[2]?.trim();
+    if (url && !url.startsWith("http://") && !url.startsWith("https://") && !isLocalFilePath(url)) {
+      textWithoutImages = textWithoutImages.replace(m[0], "").trim();
+    }
+  }
+
   if (useMarkdown) {
     await sendMarkdownReply(
       textWithoutImages,

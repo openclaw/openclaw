@@ -31,7 +31,8 @@ export interface AdminResolverContext {
 // File paths.
 
 function getAdminMarkerFile(accountId: string): string {
-  return path.join(getQQBotDataDir("data"), `admin-${accountId}.json`);
+  const safeAccountId = accountId.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return path.join(getQQBotDataDir("data"), `admin-${safeAccountId}.json`);
 }
 
 function getUpgradeGreetingTargetFile(accountId: string, appId: string): string {
