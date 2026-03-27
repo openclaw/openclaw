@@ -73,6 +73,7 @@ export default defineConfig({
     include: [
       "src/**/*.test.ts",
       "extensions/**/*.test.ts",
+      "packages/**/*.test.ts",
       "test/**/*.test.ts",
       "ui/src/ui/app-chat.test.ts",
       "ui/src/ui/chat/**/*.test.ts",

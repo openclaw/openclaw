@@ -55,6 +55,7 @@ export function loadTestCatalog() {
     ...new Set([
       ...walkTestFiles("src"),
       ...walkTestFiles("extensions"),
+      ...walkTestFiles("packages"),
       ...walkTestFiles("test"),
       ...walkTestFiles(path.join("ui", "src", "ui")),
     ]),
