@@ -165,6 +165,25 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
   return lookup.fallbackDefaultAgentId;
 }
 
+function resolveImplicitAccountAgentId(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  accountId: string;
+}): string | null {
+  // Keep scope narrow: this fallback is currently expected for Discord multi-account routing.
+  if (params.channel !== "discord") {
+    return null;
+  }
+  if (!params.accountId || params.accountId === DEFAULT_ACCOUNT_ID) {
+    return null;
+  }
+  const candidate = pickFirstExistingAgentId(params.cfg, params.accountId);
+  if (normalizeAgentId(candidate) !== normalizeAgentId(params.accountId)) {
+    return null;
+  }
+  return candidate;
+}
+
 type NormalizedPeerConstraint =
   | { state: "none" }
   | { state: "invalid" }
@@ -798,6 +817,18 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       }
       return choose(matched.binding.agentId, tier.matchedBy);
     }
+  }
+
+  const implicitAccountAgentId = resolveImplicitAccountAgentId({
+    cfg: input.cfg,
+    channel,
+    accountId,
+  });
+  if (implicitAccountAgentId) {
+    if (shouldLogDebug) {
+      logDebug(`[routing] match: matchedBy=binding.account agentId=${implicitAccountAgentId}`);
+    }
+    return choose(implicitAccountAgentId, "binding.account");
   }
 
   return choose(resolveDefaultAgentId(input.cfg), "default");
