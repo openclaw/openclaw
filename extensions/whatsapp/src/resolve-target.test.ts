@@ -6,6 +6,21 @@ import {
   normalizeWhatsAppTarget,
 } from "./normalize-target.js";
 
+vi.mock("openclaw/plugin-sdk/runtime-env", () => {
+  const logger = {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    child: () => logger,
+  };
+  return {
+    createSubsystemLogger: () => logger,
+    danger: (value: unknown) => String(value),
+    logVerbose: vi.fn(),
+  };
+});
+
 vi.mock("./runtime-api.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
   const normalizeWhatsAppTarget = (value: string) => {

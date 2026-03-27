@@ -660,7 +660,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
     const apiKey = requestAuth.apiKey;
-    const headers = requestAuth.headers;
+    const headers =
+      requestAuth.headers || model.headers
+        ? { ...model.headers, ...requestAuth.headers }
+        : undefined;
     if (!apiKey && !headers) {
       log.warn(
         "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",

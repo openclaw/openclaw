@@ -15,6 +15,22 @@ vi.mock("./bot-message-dispatch.js", () => ({
   dispatchTelegramMessage,
 }));
 
+vi.mock("openclaw/plugin-sdk/runtime-env", () => {
+  const logger = {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    child: () => logger,
+  };
+  return {
+    createSubsystemLogger: () => logger,
+    danger: (value: unknown) => String(value),
+    logVerbose: vi.fn(),
+    shouldLogVerbose: () => false,
+  };
+});
+
 let createTelegramMessageProcessor: typeof import("./bot-message.js").createTelegramMessageProcessor;
 
 describe("telegram bot message processor", () => {
