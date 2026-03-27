@@ -634,7 +634,7 @@ describe("gateway agent handler", () => {
         role: "operator",
         scopes: ["operator.admin"],
       },
-    } as unknown as Parameters<typeof invokeAgent>[1]["client"];
+    } as AgentHandlerArgs["client"];
     const resetDeferred = createDeferred<
       | {
           ok: true;

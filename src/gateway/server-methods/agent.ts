@@ -698,7 +698,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           const persisted = await updateSessionStore(storePath, (store) => {
             const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
               cfg,
-              key: requestedSessionKey,
+              key: canonicalKey,
               store,
             });
             const merged = mergeSessionEntry(store[primaryKey], nextEntryPatch);

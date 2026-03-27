@@ -301,7 +301,15 @@ async function runNonStreamingChatSend(params: {
       return undefined;
     }
     await waitForAssertion(() => {
-      expect(params.context.dedupe.has(`chat:${params.idempotencyKey}`)).toBe(true);
+      const dedupeEntry = params.context.dedupe.get(`chat:${params.idempotencyKey}`);
+      const status =
+        dedupeEntry &&
+        typeof dedupeEntry.payload === "object" &&
+        dedupeEntry.payload !== null &&
+        "status" in dedupeEntry.payload
+          ? (dedupeEntry.payload as { status?: unknown }).status
+          : undefined;
+      expect(status === "ok" || status === "error").toBe(true);
     });
     return undefined;
   }
@@ -394,6 +402,97 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
     expect(register).not.toHaveBeenCalled();
+  });
+
+  it("returns cached in-flight for active chat sends tracked in chat dedupe", async () => {
+    createTranscriptFixture("openclaw-chat-send-inflight-dedupe-");
+    mockState.finalText = "ok";
+    let releaseSave = () => {};
+    mockState.saveMediaWait = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    const firstRespond = vi.fn();
+    const retryRespond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond: firstRespond,
+      idempotencyKey: "idem-chat-inflight",
+      message: "hold this send open",
+      requestParams: {
+        attachments: [
+          {
+            mimeType: "image/png",
+            content:
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYoYAAAAASUVORK5CYII=",
+          },
+        ],
+      },
+      expectBroadcast: false,
+      waitForCompletion: false,
+    });
+
+    await runNonStreamingChatSend({
+      context,
+      respond: retryRespond,
+      idempotencyKey: "idem-chat-inflight",
+      expectBroadcast: false,
+      waitForCompletion: false,
+    });
+
+    const [ok, payload, _error, meta] = retryRespond.mock.calls.at(-1) ?? [];
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({
+      runId: "idem-chat-inflight",
+      status: "in_flight",
+    });
+    expect(meta).toMatchObject({
+      cached: true,
+    });
+
+    releaseSave();
+    await waitForAssertion(() => {
+      expect(context.dedupe.get("chat:idem-chat-inflight")?.payload).toMatchObject({
+        runId: "idem-chat-inflight",
+        status: "ok",
+      });
+    });
+  });
+
+  it("rejects non-chat active runIds instead of treating them as chat in-flight", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-collision-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+    context.chatAbortControllers.set("idem-chat-agent-collision", {
+      controller: new AbortController(),
+      sessionId: "sess-agent",
+      sessionKey: "main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 10_000,
+      ownerConnId: "agent-conn",
+    });
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-chat-agent-collision",
+      expectBroadcast: false,
+      waitForCompletion: false,
+    });
+
+    const [ok, payload, error, meta] = respond.mock.calls.at(-1) ?? [];
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error).toMatchObject({
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "runId already in use by another active operation",
+    });
+    expect(meta).toMatchObject({
+      runId: "idem-chat-agent-collision",
+    });
+    expect(mockState.lastDispatchCtx).toBeUndefined();
   });
 
   it("chat.inject keeps message defined when directive tag is the only content", async () => {
