@@ -109,9 +109,8 @@ function renderCronFilterIcon(hiddenCount: number) {
         <circle cx="12" cy="12" r="10"></circle>
         <polyline points="12 6 12 12 16 14"></polyline>
       </svg>
-      ${
-        hiddenCount > 0
-          ? html`<span
+      ${hiddenCount > 0
+        ? html`<span
             style="
               position: absolute;
               top: -5px;
@@ -126,8 +125,7 @@ function renderCronFilterIcon(hiddenCount: number) {
             "
             >${hiddenCount}</span
           >`
-          : ""
-      }
+        : ""}
     </span>
   `;
 }
@@ -313,13 +311,11 @@ export function renderChatControls(state: AppViewState) {
           state.sessionsHideCron = !hideCron;
         }}
         aria-pressed=${hideCron}
-        title=${
-          hideCron
-            ? hiddenCronCount > 0
-              ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
-              : t("chat.showCronSessions")
-            : t("chat.hideCronSessions")
-        }
+        title=${hideCron
+          ? hiddenCronCount > 0
+            ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+            : t("chat.showCronSessions")
+          : t("chat.hideCronSessions")}
       >
         ${renderCronFilterIcon(hiddenCronCount)}
       </button>
@@ -945,9 +941,9 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
         (opt) => html`
           <button
             type="button"
-            class="topbar-theme-mode__btn ${
-              opt.id === state.themeMode ? "topbar-theme-mode__btn--active" : ""
-            }"
+            class="topbar-theme-mode__btn ${opt.id === state.themeMode
+              ? "topbar-theme-mode__btn--active"
+              : ""}"
             title=${opt.label}
             aria-label="Color mode: ${opt.label}"
             aria-pressed=${opt.id === state.themeMode}

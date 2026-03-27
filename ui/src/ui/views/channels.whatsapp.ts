@@ -43,18 +43,14 @@ export function renderWhatsAppCard(params: {
     ],
     lastError: whatsapp?.lastError,
     extraContent: html`
-      ${
-        props.whatsappMessage
-          ? html`<div class="callout" style="margin-top: 12px;">${props.whatsappMessage}</div>`
-          : nothing
-      }
-      ${
-        props.whatsappQrDataUrl
-          ? html`<div class="qr-wrap">
+      ${props.whatsappMessage
+        ? html`<div class="callout" style="margin-top: 12px;">${props.whatsappMessage}</div>`
+        : nothing}
+      ${props.whatsappQrDataUrl
+        ? html`<div class="qr-wrap">
             <img src=${props.whatsappQrDataUrl} alt="WhatsApp QR" />
           </div>`
-          : nothing
-      }
+        : nothing}
     `,
     configSection: renderChannelConfigSection({ channelId: "whatsapp", props }),
     footer: html`<div class="row" style="margin-top: 14px; flex-wrap: wrap;">
