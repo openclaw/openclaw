@@ -365,20 +365,23 @@ export function createExecTool(
       }
 
       const inheritedBaseEnv = coerceEnv(process.env);
-      const workspaceEnv = await loadWorkspaceDotEnvForExec({
-        workspaceDir: workdir,
-        baseEnv: inheritedBaseEnv,
-      });
+      const workspaceEnv =
+        host === "gateway"
+          ? await loadWorkspaceDotEnvForExec({
+              workspaceDir: workdir,
+              baseEnv: inheritedBaseEnv,
+            })
+          : {};
       const workspaceEnvOverrideDiagnostics =
-        host === "sandbox"
+        host !== "gateway"
           ? null
           : inspectHostExecEnvOverrides({
               overrides: workspaceEnv,
               blockPathOverrides: true,
             });
       const safeWorkspaceEnv =
-        host === "sandbox"
-          ? workspaceEnv
+        host !== "gateway"
+          ? {}
           : Object.fromEntries(
               Object.entries(workspaceEnv).filter(
                 ([key]) =>
