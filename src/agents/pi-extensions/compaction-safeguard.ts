@@ -614,8 +614,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (!auth.ok || (!auth.apiKey && !auth.headers)) {
+    const apiKey = (await ctx.modelRegistry.getApiKey(model)) ?? "";
+    const headers = model.headers;
+    if (!apiKey && !headers) {
       log.warn(
         "Compaction safeguard: no request auth available; cancelling compaction to preserve history.",
       );
@@ -625,8 +626,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       );
       return { cancel: true };
     }
-    const apiKey = auth.apiKey ?? "";
-    const headers = auth.headers;
 
     try {
       const modelContextWindow = resolveContextWindowTokens(model);
