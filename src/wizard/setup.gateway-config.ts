@@ -297,7 +297,6 @@ export async function configureGatewayForSetup(
   if (
     flow === "quickstart" &&
     bind === "loopback" &&
-    !quickstartGateway.hasExisting &&
     nextConfig.gateway?.controlUi?.allowInsecureAuth === undefined
   ) {
     nextConfig = {
