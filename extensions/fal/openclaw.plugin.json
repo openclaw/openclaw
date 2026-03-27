@@ -1,7 +1,6 @@
 {
   "id": "fal",
   "providers": ["fal"],
-  "imageGenerationProviders": ["fal"],
   "providerAuthEnvVars": {
     "fal": ["FAL_KEY"]
   },
@@ -21,6 +20,9 @@
       "cliDescription": "fal API key"
     }
   ],
+  "contracts": {
+    "imageGenerationProviders": ["fal"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

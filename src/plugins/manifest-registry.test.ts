@@ -284,6 +284,103 @@ describe("loadPluginManifestRegistry", () => {
     ]);
   });
 
+  it("preserves channel config metadata from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "matrix",
+      channels: ["matrix"],
+      configSchema: { type: "object" },
+      channelConfigs: {
+        matrix: {
+          schema: {
+            type: "object",
+            properties: {
+              homeserver: { type: "string" },
+            },
+          },
+          uiHints: {
+            homeserver: {
+              label: "Homeserver",
+            },
+          },
+          label: "Matrix",
+          description: "Matrix config",
+        },
+      },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "matrix",
+        rootDir: dir,
+        origin: "workspace",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.channelConfigs).toEqual({
+      matrix: {
+        schema: {
+          type: "object",
+          properties: {
+            homeserver: { type: "string" },
+          },
+        },
+        uiHints: {
+          homeserver: {
+            label: "Homeserver",
+          },
+        },
+        label: "Matrix",
+        description: "Matrix config",
+      },
+    });
+  });
+
+  it("hydrates bundled channel config metadata onto manifest records", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "telegram",
+      channels: ["telegram"],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "telegram",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.channelConfigs?.telegram).toEqual(
+      expect.objectContaining({
+        schema: expect.objectContaining({
+          type: "object",
+        }),
+      }),
+    );
+  });
+  it("normalizes legacy top-level capability fields into contracts", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openai",
+      providers: ["openai", "openai-codex"],
+      speechProviders: ["openai"],
+      mediaUnderstandingProviders: ["openai", "openai-codex"],
+      imageGenerationProviders: ["openai"],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "openai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.contracts).toEqual({
+      speechProviders: ["openai"],
+      mediaUnderstandingProviders: ["openai", "openai-codex"],
+      imageGenerationProviders: ["openai"],
+    });
+  });
   it("skips plugins whose minHostVersion is newer than the current host", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
