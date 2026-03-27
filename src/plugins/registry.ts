@@ -2,18 +2,27 @@ import path from "node:path";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { registerContextEngineForOwner } from "../context-engine/registry.js";
+import type { OperatorScope } from "../gateway/method-scopes.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
 } from "../gateway/server-methods/types.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
-import { registerMemoryPromptSection } from "../memory/prompt-section.js";
 import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { registerPluginInteractiveHandler } from "./interactive.js";
+import {
+  getRegisteredMemoryEmbeddingProvider,
+  registerMemoryEmbeddingProvider,
+} from "./memory-embedding-providers.js";
+import {
+  registerMemoryFlushPlanResolver,
+  registerMemoryPromptSection,
+  registerMemoryRuntime,
+} from "./memory-state.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
@@ -25,9 +34,11 @@ import {
   stripPromptMutationFieldsFromLegacyHookResult,
 } from "./types.js";
 import type {
+  CliBackendPlugin,
   ImageGenerationProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
+  OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliRegistrar,
   OpenClawPluginCommandDefinition,
   PluginConversationBindingResolvedEvent,
@@ -71,6 +82,7 @@ export type PluginCliRegistration = {
   pluginName?: string;
   register: OpenClawPluginCliRegistrar;
   commands: string[];
+  descriptors: OpenClawPluginCliCommandDescriptor[];
   source: string;
   rootDir?: string;
 };
@@ -105,6 +117,14 @@ export type PluginProviderRegistration = {
   pluginId: string;
   pluginName?: string;
   provider: ProviderPlugin;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginCliBackendRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  backend: CliBackendPlugin;
   source: string;
   rootDir?: string;
 };
@@ -178,6 +198,7 @@ export type PluginRecord = {
   toolNames: string[];
   hookNames: string[];
   channelIds: string[];
+  cliBackendIds: string[];
   providerIds: string[];
   speechProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
@@ -202,11 +223,13 @@ export type PluginRegistry = {
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
+  cliBackends?: PluginCliBackendRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
   mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
   imageGenerationProviders: PluginImageGenerationProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
+  gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
   httpRoutes: PluginHttpRouteRegistration[];
   cliRegistrars: PluginCliRegistration[];
   services: PluginServiceRegistration[];
@@ -365,6 +388,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     method: string,
     handler: GatewayRequestHandler,
+    opts?: { scope?: OperatorScope },
   ) => {
     const trimmed = method.trim();
     if (!trimmed) {
@@ -380,6 +404,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     registry.gatewayHandlers[trimmed] = handler;
+    if (opts?.scope) {
+      registry.gatewayMethodScopes ??= {};
+      registry.gatewayMethodScopes[trimmed] = opts.scope;
+    }
     record.gatewayMethods.push(trimmed);
   };
 
@@ -565,6 +593,40 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerCliBackend = (record: PluginRecord, backend: CliBackendPlugin) => {
+    const id = backend.id.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "cli backend registration missing id",
+      });
+      return;
+    }
+    const existing = (registry.cliBackends ?? []).find((entry) => entry.backend.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `cli backend already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    (registry.cliBackends ??= []).push({
+      pluginId: record.id,
+      pluginName: record.name,
+      backend: {
+        ...backend,
+        id,
+      },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+    record.cliBackendIds.push(id);
+  };
+
   const registerUniqueProviderLike = <
     T extends { id: string },
     R extends PluginOwnedProviderRegistration<T>,
@@ -657,9 +719,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registerCli = (
     record: PluginRecord,
     registrar: OpenClawPluginCliRegistrar,
-    opts?: { commands?: string[] },
+    opts?: { commands?: string[]; descriptors?: OpenClawPluginCliCommandDescriptor[] },
   ) => {
-    const commands = (opts?.commands ?? []).map((cmd) => cmd.trim()).filter(Boolean);
+    const descriptors = (opts?.descriptors ?? [])
+      .map((descriptor) => ({
+        name: descriptor.name.trim(),
+        description: descriptor.description.trim(),
+        hasSubcommands: descriptor.hasSubcommands,
+      }))
+      .filter((descriptor) => descriptor.name && descriptor.description);
+    const commands = [
+      ...(opts?.commands ?? []),
+      ...descriptors.map((descriptor) => descriptor.name),
+    ]
+      .map((cmd) => cmd.trim())
+      .filter(Boolean);
     if (commands.length === 0) {
       pushDiagnostic({
         level: "error",
@@ -688,6 +762,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginName: record.name,
       register: registrar,
       commands,
+      descriptors,
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -924,7 +999,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           : () => {},
       registerGatewayMethod:
         registrationMode === "full"
-          ? (method, handler) => registerGatewayMethod(record, method, handler)
+          ? (method, handler, opts) => registerGatewayMethod(record, method, handler, opts)
           : () => {},
       registerCli:
         registrationMode === "full"
@@ -932,6 +1007,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           : () => {},
       registerService:
         registrationMode === "full" ? (service) => registerService(record, service) : () => {},
+      registerCliBackend:
+        registrationMode === "full" ? (backend) => registerCliBackend(record, backend) : () => {},
       registerInteractiveHandler:
         registrationMode === "full"
           ? (registration) => {
@@ -995,6 +1072,64 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         }
         registerMemoryPromptSection(builder);
       },
+      registerMemoryFlushPlan: (resolver) => {
+        if (registrationMode !== "full") {
+          return;
+        }
+        if (record.kind !== "memory") {
+          pushDiagnostic({
+            level: "error",
+            pluginId: record.id,
+            source: record.source,
+            message: "only memory plugins can register a memory flush plan",
+          });
+          return;
+        }
+        registerMemoryFlushPlanResolver(resolver);
+      },
+      registerMemoryRuntime: (runtime) => {
+        if (registrationMode !== "full") {
+          return;
+        }
+        if (record.kind !== "memory") {
+          pushDiagnostic({
+            level: "error",
+            pluginId: record.id,
+            source: record.source,
+            message: "only memory plugins can register a memory runtime",
+          });
+          return;
+        }
+        registerMemoryRuntime(runtime);
+      },
+      registerMemoryEmbeddingProvider: (adapter) => {
+        if (registrationMode !== "full") {
+          return;
+        }
+        if (record.kind !== "memory") {
+          pushDiagnostic({
+            level: "error",
+            pluginId: record.id,
+            source: record.source,
+            message: "only memory plugins can register memory embedding providers",
+          });
+          return;
+        }
+        const existing = getRegisteredMemoryEmbeddingProvider(adapter.id);
+        if (existing) {
+          const ownerDetail = existing.ownerPluginId ? ` (owner: ${existing.ownerPluginId})` : "";
+          pushDiagnostic({
+            level: "error",
+            pluginId: record.id,
+            source: record.source,
+            message: `memory embedding provider already registered: ${adapter.id}${ownerDetail}`,
+          });
+          return;
+        }
+        registerMemoryEmbeddingProvider(adapter, {
+          ownerPluginId: record.id,
+        });
+      },
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>
         registrationMode === "full"
@@ -1010,6 +1145,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerTool,
     registerChannel,
     registerProvider,
+    registerCliBackend,
     registerSpeechProvider,
     registerMediaUnderstandingProvider,
     registerImageGenerationProvider,

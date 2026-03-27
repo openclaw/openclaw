@@ -396,7 +396,7 @@ Interactive configuration wizard (models, channels, skills, gateway).
 
 ### `config`
 
-Non-interactive config helpers (get/set/unset/file/validate). Running `openclaw config` with no
+Non-interactive config helpers (get/set/unset/file/schema/validate). Running `openclaw config` with no
 subcommand launches the wizard.
 
 Subcommands:
@@ -413,6 +413,7 @@ Subcommands:
 - `config set --strict-json`: require JSON5 parsing for path/value input. `--json` remains a legacy alias for strict parsing outside dry-run output mode.
 - `config unset <path>`: remove a value.
 - `config file`: print the active config file path.
+- `config schema`: print the generated JSON schema for `openclaw.json`.
 - `config validate`: validate the current config against the schema without starting the gateway.
 - `config validate --json`: emit machine-readable JSON output.
 
@@ -779,7 +780,8 @@ Options:
 - `--reset` (reset dev config + credentials + sessions + workspace)
 - `--force` (kill existing listener on port)
 - `--verbose`
-- `--claude-cli-logs`
+- `--cli-backend-logs`
+- `--claude-cli-logs` (deprecated alias)
 - `--ws-log <auto|full|compact>`
 - `--compact` (alias for `--ws-log compact`)
 - `--raw-stream`
@@ -869,6 +871,13 @@ openclaw models status
 Policy note: this is technical compatibility. Anthropic has blocked some
 subscription usage outside Claude Code in the past; verify current Anthropic
 terms before relying on setup-token in production.
+
+Anthropic Claude CLI migration:
+
+```bash
+openclaw models auth login --provider anthropic --method cli --set-default
+openclaw onboard --auth-choice anthropic-cli
+```
 
 ### `models` (root)
 

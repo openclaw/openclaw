@@ -587,7 +587,10 @@ export async function dispatchReplyFromConfig(params: {
       }
     }
 
-    const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
+    // Forum topics are threaded conversations within a group — verbose tool
+    // summaries should be delivered into the topic thread, same as DMs.
+    const shouldSendToolSummaries =
+      (ctx.ChatType !== "group" || ctx.IsForum === true) && ctx.CommandSource !== "native";
     const acpDispatch = await dispatchAcpRuntime.tryDispatchAcpReply({
       ctx,
       cfg,

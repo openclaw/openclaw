@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectPairingReplyText } from "../../../test/helpers/pairing-reply.js";
 import {
   defaultSlackTestConfig,
   getSlackTestState,
@@ -564,12 +565,11 @@ describe("monitorSlackProvider tool results", () => {
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    const pairingReply = String(sendMock.mock.calls[0]?.[1] ?? "");
-    expect(pairingReply).toContain("OpenClaw: access not configured.");
-    expect(pairingReply).toContain("Your Slack user id: U1");
-    expect(pairingReply).toContain("Pairing code:");
-    expect(pairingReply).toContain("```\nPAIRCODE\n```");
-    expect(pairingReply).toContain("pairing approve slack PAIRCODE");
+    expectPairingReplyText(String(sendMock.mock.calls[0]?.[1] ?? ""), {
+      channel: "slack",
+      idLine: "Your Slack user id: U1",
+      code: "PAIRCODE",
+    });
   });
 
   it("does not resend pairing code when a request is already pending", async () => {

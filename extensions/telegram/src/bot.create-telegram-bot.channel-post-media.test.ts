@@ -10,6 +10,8 @@ const {
   telegramBotDepsForTest,
   telegramBotRuntimeForTest,
 } = harness;
+const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+  await import("./bot.js");
 
 let createTelegramBot: (
   opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
@@ -136,10 +138,7 @@ async function queueChannelPostAlbum(
 }
 
 describe("createTelegramBot channel_post media", () => {
-  beforeAll(async () => {
-    vi.resetModules();
-    const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
-      await import("./bot.js");
+  beforeAll(() => {
     createTelegramBot = (opts) =>
       createTelegramBotBase({
         ...opts,
@@ -150,8 +149,7 @@ describe("createTelegramBot channel_post media", () => {
     );
   });
 
-  beforeEach(async () => {
-    const { setTelegramBotRuntimeForTest } = await import("./bot.js");
+  beforeEach(() => {
     setTelegramBotRuntimeForTest(
       telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
     );

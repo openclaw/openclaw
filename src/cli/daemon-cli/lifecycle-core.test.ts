@@ -233,10 +233,23 @@ describe("runServiceRestart token drift", () => {
       opts: { json: true },
     });
 
-    const payload = readJsonLog<{ ok?: boolean; result?: string; hints?: string[] }>();
+    const payload = readJsonLog<{
+      ok?: boolean;
+      result?: string;
+      hints?: string[];
+      hintItems?: Array<{ kind: string; text: string }>;
+    }>();
     expect(payload.ok).toBe(true);
     expect(payload.result).toBe("not-loaded");
     expect(payload.hints).toEqual(expect.arrayContaining(["openclaw gateway install"]));
+    expect(payload.hintItems).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "install",
+          text: "openclaw gateway install",
+        }),
+      ]),
+    );
     expect(service.restart).not.toHaveBeenCalled();
   });
 });

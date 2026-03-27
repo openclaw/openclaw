@@ -29,7 +29,7 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { getAgentScopedMediaLocalRootsForSources } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -130,6 +130,7 @@ type ChannelHandlerParams = {
   forceDocument?: boolean;
   silent?: boolean;
   mediaLocalRoots?: readonly string[];
+  gatewayClientScopes?: readonly string[];
 };
 
 // Channel docking: outbound delivery delegates to plugin.outbound adapters.
@@ -250,6 +251,7 @@ function createChannelOutboundContextBase(
     deps: params.deps,
     silent: params.silent,
     mediaLocalRoots: params.mediaLocalRoots,
+    gatewayClientScopes: params.gatewayClientScopes,
   };
 }
 
@@ -275,7 +277,16 @@ type DeliverOutboundPayloadsCoreParams = {
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
   silent?: boolean;
+  gatewayClientScopes?: readonly string[];
 };
+
+function collectPayloadMediaSources(payloads: ReplyPayload[]): string[] {
+  const mediaSources: string[] = [];
+  for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
+    mediaSources.push(...resolveSendableOutboundReplyParts(payload).mediaUrls);
+  }
+  return mediaSources;
+}
 
 export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
@@ -500,6 +511,7 @@ export async function deliverOutboundPayloads(
         forceDocument: params.forceDocument,
         silent: params.silent,
         mirror: params.mirror,
+        gatewayClientScopes: params.gatewayClientScopes,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
   // Wrap onError to detect partial failures under bestEffort mode.
@@ -549,10 +561,11 @@ async function deliverOutboundPayloadsCore(
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
+  const mediaLocalRoots = getAgentScopedMediaLocalRootsForSources({
     cfg,
-    params.session?.agentId ?? params.mirror?.agentId,
-  );
+    agentId: params.session?.agentId ?? params.mirror?.agentId,
+    mediaSources: collectPayloadMediaSources(payloads),
+  });
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
     cfg,
@@ -567,6 +580,7 @@ async function deliverOutboundPayloadsCore(
     forceDocument: params.forceDocument,
     silent: params.silent,
     mediaLocalRoots,
+    gatewayClientScopes: params.gatewayClientScopes,
   });
   const configuredTextLimit = handler.chunker
     ? resolveTextChunkLimit(cfg, channel, accountId, {

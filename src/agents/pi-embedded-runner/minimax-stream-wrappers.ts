@@ -2,8 +2,6 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 
 const MINIMAX_FAST_MODEL_IDS = new Map<string, string>([
-  ["MiniMax-M2.1", "MiniMax-M2.1-highspeed"],
-  ["MiniMax-M2.5", "MiniMax-M2.5-highspeed"],
   ["MiniMax-M2.7", "MiniMax-M2.7-highspeed"],
 ]);
 

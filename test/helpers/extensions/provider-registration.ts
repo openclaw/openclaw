@@ -1,10 +1,16 @@
+import type {
+  ImageGenerationProviderPlugin,
+  MediaUnderstandingProviderPlugin,
+  ProviderPlugin,
+  SpeechProviderPlugin,
+} from "../../../src/plugins/types.js";
 import { createTestPluginApi } from "./plugin-api.js";
 
 type RegisteredProviderCollections = {
-  providers: unknown[];
-  speechProviders: unknown[];
-  mediaProviders: unknown[];
-  imageProviders: unknown[];
+  providers: ProviderPlugin[];
+  speechProviders: SpeechProviderPlugin[];
+  mediaProviders: MediaUnderstandingProviderPlugin[];
+  imageProviders: ImageGenerationProviderPlugin[];
 };
 
 type ProviderPluginModule = {
@@ -16,10 +22,10 @@ export function registerProviderPlugin(params: {
   id: string;
   name: string;
 }): RegisteredProviderCollections {
-  const providers: unknown[] = [];
-  const speechProviders: unknown[] = [];
-  const mediaProviders: unknown[] = [];
-  const imageProviders: unknown[] = [];
+  const providers: ProviderPlugin[] = [];
+  const speechProviders: SpeechProviderPlugin[] = [];
+  const mediaProviders: MediaUnderstandingProviderPlugin[] = [];
+  const imageProviders: ImageGenerationProviderPlugin[] = [];
 
   params.plugin.register(
     createTestPluginApi({
@@ -46,18 +52,14 @@ export function registerProviderPlugin(params: {
   return { providers, speechProviders, mediaProviders, imageProviders };
 }
 
-export function requireRegisteredProvider<T = unknown>(
-  entries: unknown[],
+export function requireRegisteredProvider<T extends { id: string }>(
+  entries: T[],
   id: string,
   label = "provider",
 ): T {
-  const entry = entries.find(
-    (candidate) =>
-      // oxlint-disable-next-line typescript/no-explicit-any
-      (candidate as any).id === id,
-  );
+  const entry = entries.find((candidate) => candidate.id === id);
   if (!entry) {
     throw new Error(`${label} ${id} was not registered`);
   }
-  return entry as T;
+  return entry;
 }

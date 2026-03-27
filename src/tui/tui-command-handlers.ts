@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Component, SelectItem, TUI } from "@mariozechner/pi-tui";
+import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
   normalizeUsageDisplay,
@@ -440,12 +441,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem("usage: /activation <mention|always>");
           break;
         }
+        const activation = normalizeGroupActivation(args);
+        if (!activation) {
+          chatLog.addSystem("usage: /activation <mention|always>");
+          break;
+        }
         try {
           const result = await client.patchSession({
             key: state.currentSessionKey,
-            groupActivation: args === "always" ? "always" : "mention",
+            groupActivation: activation,
           });
-          chatLog.addSystem(`activation set to ${args}`);
+          chatLog.addSystem(`activation set to ${activation}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {

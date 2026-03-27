@@ -1,5 +1,20 @@
-import { findCatalogTemplate } from "openclaw/plugin-sdk/provider-catalog";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-models";
+
+export function findCatalogTemplate(params: {
+  entries: ReadonlyArray<{ provider: string; id: string }>;
+  providerId: string;
+  templateIds: readonly string[];
+}) {
+  return params.templateIds
+    .map((templateId) =>
+      params.entries.find(
+        (entry) =>
+          entry.provider.toLowerCase() === params.providerId.toLowerCase() &&
+          entry.id.toLowerCase() === templateId.toLowerCase(),
+      ),
+    )
+    .find((entry) => entry !== undefined);
+}
 
 export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 
@@ -20,4 +35,3 @@ export function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
 }
 
 export { cloneFirstTemplateModel };
-export { findCatalogTemplate };

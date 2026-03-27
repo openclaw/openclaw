@@ -6,6 +6,8 @@ import {
 import { parseMattermostTarget, sendMessageMattermost } from "./send.js";
 import { resetMattermostOpaqueTargetCacheForTests } from "./target-resolution.js";
 
+type SendMessageMattermostOptions = NonNullable<Parameters<typeof sendMessageMattermost>[2]>;
+
 const mockState = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
   loadOutboundMediaFromUrl: vi.fn(),
@@ -118,9 +120,13 @@ describe("sendMessageMattermost", () => {
       config: {},
     });
 
-    await sendMessageMattermost("channel:town-square", "hello", {
-      cfg: providedCfg as any,
+    const options: SendMessageMattermostOptions = {
+      cfg: providedCfg,
       accountId: "work",
+    };
+
+    await sendMessageMattermost("channel:town-square", "hello", {
+      ...options,
     });
 
     expectProvidedCfgSkipsRuntimeLoad({
