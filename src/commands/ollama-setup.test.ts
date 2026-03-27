@@ -3,7 +3,7 @@ import {
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
-} from "../../extensions/ollama/src/setup.js";
+} from "../../extensions/ollama/api.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
