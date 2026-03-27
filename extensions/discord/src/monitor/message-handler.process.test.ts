@@ -32,6 +32,10 @@ const deliveryMocks = vi.hoisted(() => ({
   deliverDiscordReply: vi.fn<(params: unknown) => Promise<void>>(async () => {}),
   createDiscordDraftStream: vi.fn(() => createMockDraftStream()),
 }));
+const dispatcherLifecycleMocks = vi.hoisted(() => ({
+  markDispatchIdle: vi.fn(() => {}),
+  markRunComplete: vi.fn(() => {}),
+}));
 const editMessageDiscord = deliveryMocks.editMessageDiscord;
 const deliverDiscordReply = deliveryMocks.deliverDiscordReply;
 const createDiscordDraftStream = deliveryMocks.createDiscordDraftStream;
@@ -152,8 +156,8 @@ vi.spyOn(replyRuntimeModule, "createReplyDispatcherWithTyping").mockImplementati
     markComplete: vi.fn(),
   },
   replyOptions: {},
-  markDispatchIdle: vi.fn(),
-  markRunComplete: vi.fn(),
+  markDispatchIdle: dispatcherLifecycleMocks.markDispatchIdle,
+  markRunComplete: dispatcherLifecycleMocks.markRunComplete,
 })) as never);
 
 const conversationRuntimeModule = await import("openclaw/plugin-sdk/conversation-runtime");
@@ -228,6 +232,8 @@ beforeEach(() => {
   deliverDiscordReply.mockReset();
   deliverDiscordReply.mockResolvedValue(undefined);
   createDiscordDraftStream.mockClear();
+  dispatcherLifecycleMocks.markDispatchIdle.mockClear();
+  dispatcherLifecycleMocks.markRunComplete.mockClear();
   dispatchInboundMessage.mockClear();
   recordInboundSession.mockClear();
   readSessionUpdatedAt.mockClear();
@@ -781,6 +787,28 @@ describe("processDiscordMessage draft streaming", () => {
       "tool 12",
       "Note: 1 additional tool update was suppressed to keep Discord delivery bounded.",
     ]);
+  });
+
+  it("marks dispatch idle only after deferred summaries finish flushing", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendToolResult({ text: "deferred tool" });
+      await params?.dispatcher.sendFinalReply({ text: "final first" });
+      return { queuedFinal: true, counts: { final: 1, tool: 1, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      ...createDirectMessageContextOverrides(),
+      discordConfig: { streamMode: "off" },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    const deliveryCallOrder = deliverDiscordReply.mock.invocationCallOrder;
+    const idleCallOrder = dispatcherLifecycleMocks.markDispatchIdle.mock.invocationCallOrder;
+    expect(deliveryCallOrder).toHaveLength(2);
+    expect(idleCallOrder).toHaveLength(1);
+    expect(idleCallOrder[0]).toBeGreaterThan(deliveryCallOrder[1] ?? 0);
   });
 
   it("streams block previews using draft chunking", async () => {

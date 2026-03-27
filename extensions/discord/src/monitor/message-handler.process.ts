@@ -927,11 +927,14 @@ export async function processDiscordMessage(
       logVerbose(`discord: draft cleanup failed: ${String(err)}`);
     } finally {
       markRunComplete();
-      markDispatchIdle();
-      if (dispatchError || dispatchAborted) {
-        clearDeferredToolSummaries();
-      } else {
-        await flushDeferredToolSummaries();
+      try {
+        if (dispatchError || dispatchAborted) {
+          clearDeferredToolSummaries();
+        } else {
+          await flushDeferredToolSummaries();
+        }
+      } finally {
+        markDispatchIdle();
       }
     }
     if (statusReactionsEnabled) {
