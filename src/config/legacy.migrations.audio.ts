@@ -1,8 +1,9 @@
 import {
+  defineLegacyConfigMigration,
   ensureRecord,
   getRecord,
-  type LegacyConfigMigration,
   mapLegacyAudioTranscription,
+  type LegacyConfigMigrationSpec,
 } from "./legacy.shared.js";
 
 function applyLegacyAudioTranscriptionModel(params: {
@@ -31,8 +32,8 @@ function applyLegacyAudioTranscriptionModel(params: {
   params.changes.push(params.alreadySetMessage);
 }
 
-export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
-  {
+export const LEGACY_CONFIG_MIGRATIONS_AUDIO: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
     id: "audio.transcription-v2",
     describe: "Move audio.transcription to tools.media.audio.models",
     apply: (raw, changes) => {
@@ -56,5 +57,5 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
         raw.audio = audio;
       }
     },
-  },
+  }),
 ];

@@ -6,14 +6,30 @@ import {
   resolveSlackStreamingMode,
   resolveTelegramPreviewStreamMode,
 } from "./discord-preview-streaming.js";
-import { getRecord, type LegacyConfigMigration } from "./legacy.shared.js";
+import {
+  defineLegacyConfigMigration,
+  getRecord,
+  type LegacyConfigMigrationSpec,
+  type LegacyConfigRule,
+} from "./legacy.shared.js";
 
 function hasOwnKey(target: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(target, key);
 }
 
-function escapeControlForLog(value: string): string {
-  return value.replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
+function hasLegacyThreadBindingTtl(value: unknown): boolean {
+  const threadBindings = getRecord(value);
+  return Boolean(threadBindings && hasOwnKey(threadBindings, "ttlHours"));
+}
+
+function hasLegacyThreadBindingTtlInAccounts(value: unknown): boolean {
+  const accounts = getRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((entry) =>
+    hasLegacyThreadBindingTtl(getRecord(entry)?.threadBindings),
+  );
 }
 
 function migrateThreadBindingsTtlHoursForPath(params: {
@@ -45,11 +61,33 @@ function migrateThreadBindingsTtlHoursForPath(params: {
   return true;
 }
 
-export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
+const THREAD_BINDING_RULES: LegacyConfigRule[] = [
   {
+    path: ["session", "threadBindings"],
+    message:
+      "session.threadBindings.ttlHours was renamed to session.threadBindings.idleHours (auto-migrated on load).",
+    match: (value) => hasLegacyThreadBindingTtl(value),
+  },
+  {
+    path: ["channels", "discord", "threadBindings"],
+    message:
+      "channels.discord.threadBindings.ttlHours was renamed to channels.discord.threadBindings.idleHours (auto-migrated on load).",
+    match: (value) => hasLegacyThreadBindingTtl(value),
+  },
+  {
+    path: ["channels", "discord", "accounts"],
+    message:
+      "channels.discord.accounts.<id>.threadBindings.ttlHours was renamed to channels.discord.accounts.<id>.threadBindings.idleHours (auto-migrated on load).",
+    match: (value) => hasLegacyThreadBindingTtlInAccounts(value),
+  },
+];
+
+export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
     id: "thread-bindings.ttlHours->idleHours",
     describe:
       "Move legacy threadBindings.ttlHours keys to threadBindings.idleHours (session + channels.discord)",
+    legacyRules: THREAD_BINDING_RULES,
     apply: (raw, changes) => {
       const session = getRecord(raw.session);
       if (session) {
@@ -93,8 +131,8 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
       channels.discord = discord;
       raw.channels = channels;
     },
-  },
-  {
+  }),
+  defineLegacyConfigMigration({
     id: "channels.streaming-keys->channels.streaming",
     describe:
       "Normalize legacy streaming keys to channels.<provider>.streaming (Telegram/Discord/Slack)",
@@ -196,45 +234,5 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
       migrateProvider("discord");
       migrateProvider("slack");
     },
-  },
-  {
-    id: "gateway.bind.host-alias->bind-mode",
-    describe: "Normalize gateway.bind host aliases to supported bind modes",
-    apply: (raw, changes) => {
-      const gateway = getRecord(raw.gateway);
-      if (!gateway) {
-        return;
-      }
-      const bindRaw = gateway.bind;
-      if (typeof bindRaw !== "string") {
-        return;
-      }
-
-      const normalized = bindRaw.trim().toLowerCase();
-      let mapped: "lan" | "loopback" | undefined;
-      if (
-        normalized === "0.0.0.0" ||
-        normalized === "::" ||
-        normalized === "[::]" ||
-        normalized === "*"
-      ) {
-        mapped = "lan";
-      } else if (
-        normalized === "127.0.0.1" ||
-        normalized === "localhost" ||
-        normalized === "::1" ||
-        normalized === "[::1]"
-      ) {
-        mapped = "loopback";
-      }
-
-      if (!mapped || normalized === mapped) {
-        return;
-      }
-
-      gateway.bind = mapped;
-      raw.gateway = gateway;
-      changes.push(`Normalized gateway.bind "${escapeControlForLog(bindRaw)}" → "${mapped}".`);
-    },
-  },
+  }),
 ];

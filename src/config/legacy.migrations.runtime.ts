@@ -5,10 +5,12 @@ import {
   resolveGatewayPortWithDefault,
 } from "./gateway-control-ui-origins.js";
 import {
+  defineLegacyConfigMigration,
   ensureRecord,
   getRecord,
-  type LegacyConfigMigration,
   mergeMissing,
+  type LegacyConfigMigrationSpec,
+  type LegacyConfigRule,
 } from "./legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
@@ -31,6 +33,39 @@ const AGENT_HEARTBEAT_KEYS = new Set([
 ]);
 
 const CHANNEL_HEARTBEAT_KEYS = new Set(["showOk", "showAlerts", "useIndicator"]);
+
+function isLegacyGatewayBindHostAlias(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    normalized === "auto" ||
+    normalized === "loopback" ||
+    normalized === "lan" ||
+    normalized === "tailnet" ||
+    normalized === "custom"
+  ) {
+    return false;
+  }
+  return (
+    normalized === "0.0.0.0" ||
+    normalized === "::" ||
+    normalized === "[::]" ||
+    normalized === "*" ||
+    normalized === "127.0.0.1" ||
+    normalized === "localhost" ||
+    normalized === "::1" ||
+    normalized === "[::1]"
+  );
+}
+
+function escapeControlForLog(value: string): string {
+  return value.replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
+}
 
 function splitLegacyHeartbeat(legacyHeartbeat: Record<string, unknown>): {
   agentHeartbeat: Record<string, unknown> | null;
@@ -140,12 +175,28 @@ function migrateLegacyTtsConfig(
   }
 }
 
-// NOTE: tools.alsoAllow was introduced after legacy migrations; no legacy migration needed.
+const MEMORY_SEARCH_RULE: LegacyConfigRule = {
+  path: ["memorySearch"],
+  message:
+    "top-level memorySearch was moved; use agents.defaults.memorySearch instead (auto-migrated on load).",
+};
 
-// tools.alsoAllow legacy migration intentionally omitted (field not shipped in prod).
+const GATEWAY_BIND_RULE: LegacyConfigRule = {
+  path: ["gateway", "bind"],
+  message:
+    "gateway.bind host aliases (for example 0.0.0.0/localhost) are legacy; use bind modes (lan/loopback/custom/tailnet/auto) instead (auto-migrated on load).",
+  match: (value) => isLegacyGatewayBindHostAlias(value),
+  requireSourceLiteral: true,
+};
 
-export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
-  {
+const HEARTBEAT_RULE: LegacyConfigRule = {
+  path: ["heartbeat"],
+  message:
+    "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
+};
+
+export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
     // v2026.2.26 added a startup guard requiring gateway.controlUi.allowedOrigins (or the
     // host-header fallback flag) for any non-loopback bind. The setup wizard was updated
     // to seed this for new installs, but existing bind=lan/bind=custom installs that upgrade
@@ -188,10 +239,11 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
           "Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.",
       );
     },
-  },
-  {
+  }),
+  defineLegacyConfigMigration({
     id: "memorySearch->agents.defaults.memorySearch",
     describe: "Move top-level memorySearch to agents.defaults.memorySearch",
+    legacyRules: [MEMORY_SEARCH_RULE],
     apply: (raw, changes) => {
       const legacyMemorySearch = getRecord(raw.memorySearch);
       if (!legacyMemorySearch) {
@@ -210,8 +262,49 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       });
       delete raw.memorySearch;
     },
-  },
-  {
+  }),
+  defineLegacyConfigMigration({
+    id: "gateway.bind.host-alias->bind-mode",
+    describe: "Normalize gateway.bind host aliases to supported bind modes",
+    legacyRules: [GATEWAY_BIND_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway) {
+        return;
+      }
+      const bindRaw = gateway.bind;
+      if (typeof bindRaw !== "string") {
+        return;
+      }
+
+      const normalized = bindRaw.trim().toLowerCase();
+      let mapped: "lan" | "loopback" | undefined;
+      if (
+        normalized === "0.0.0.0" ||
+        normalized === "::" ||
+        normalized === "[::]" ||
+        normalized === "*"
+      ) {
+        mapped = "lan";
+      } else if (
+        normalized === "127.0.0.1" ||
+        normalized === "localhost" ||
+        normalized === "::1" ||
+        normalized === "[::1]"
+      ) {
+        mapped = "loopback";
+      }
+
+      if (!mapped || normalized === mapped) {
+        return;
+      }
+
+      gateway.bind = mapped;
+      raw.gateway = gateway;
+      changes.push(`Normalized gateway.bind "${escapeControlForLog(bindRaw)}" → "${mapped}".`);
+    },
+  }),
+  defineLegacyConfigMigration({
     id: "tts.providers-generic-shape",
     describe: "Move legacy bundled TTS config keys into messages.tts.providers",
     apply: (raw, changes) => {
@@ -240,10 +333,11 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
         );
       }
     },
-  },
-  {
+  }),
+  defineLegacyConfigMigration({
     id: "heartbeat->agents.defaults.heartbeat",
     describe: "Move top-level heartbeat to agents.defaults.heartbeat/channels.defaults.heartbeat",
+    legacyRules: [HEARTBEAT_RULE],
     apply: (raw, changes) => {
       const legacyHeartbeat = getRecord(raw.heartbeat);
       if (!legacyHeartbeat) {
@@ -283,5 +377,5 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       }
       delete raw.heartbeat;
     },
-  },
+  }),
 ];
