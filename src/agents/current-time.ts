@@ -1,3 +1,4 @@
+import { formatTimestamp } from "../logging/timestamps.js";
 import {
   type TimeFormatPreference,
   formatUserTime,
@@ -23,10 +24,11 @@ type TimeConfigLike = {
 export function resolveCronStyleNow(cfg: TimeConfigLike, nowMs: number): CronStyleNow {
   const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
   const userTimeFormat = resolveUserTimeFormat(cfg.agents?.defaults?.timeFormat);
-  const formattedTime =
-    formatUserTime(new Date(nowMs), userTimezone, userTimeFormat) ?? new Date(nowMs).toISOString();
-  const utcTime = new Date(nowMs).toISOString().replace("T", " ").slice(0, 16) + " UTC";
-  const timeLine = `Current time: ${formattedTime} (${userTimezone}) / ${utcTime}`;
+  const date = new Date(nowMs);
+  const formattedTime = formatUserTime(date, userTimezone, userTimeFormat) ?? date.toISOString();
+  const localIsoTime = formatTimestamp(date, { style: "long", timeZone: userTimezone });
+  const utcTime = date.toISOString();
+  const timeLine = `Current time: ${localIsoTime} (${userTimezone}) / ${utcTime}`;
   return { userTimezone, formattedTime, timeLine };
 }
 

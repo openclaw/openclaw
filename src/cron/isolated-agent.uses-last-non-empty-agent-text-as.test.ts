@@ -206,7 +206,9 @@ describe("runCronIsolatedAgentTurn", () => {
       const lines = call?.prompt?.split("\n") ?? [];
       expect(lines[0]).toContain("[cron:job-1");
       expect(lines[0]).toContain("do it");
-      expect(lines[1]).toMatch(/^Current time: .+ \(.+\) \/ \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/);
+      expect(lines[1]).toMatch(
+        /^Current time: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2} \(.+\) \/ \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+      );
     });
   });
 

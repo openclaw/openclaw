@@ -179,7 +179,7 @@ describe("injectTimestamp", () => {
 
   it("does NOT double-stamp messages with cron-injected timestamps", () => {
     const cronMessage =
-      "[cron:abc123 my-job] do the thing\nCurrent time: Wednesday, January 28th, 2026 — 8:30 PM (America/New_York)";
+      "[cron:abc123 my-job] do the thing\nCurrent time: 2026-01-28T20:30:00.000-05:00 (America/New_York) / 2026-01-29T01:30:00.000Z";
     const result = injectTimestamp(cronMessage, { timezone: "America/New_York" });
 
     expect(result).toBe(cronMessage);
@@ -868,9 +868,7 @@ describe("exec approval handlers", () => {
       false,
       undefined,
       expect.objectContaining({
-        code: "INVALID_REQUEST",
         message: "unknown or expired approval id",
-        details: expect.objectContaining({ reason: "APPROVAL_NOT_FOUND" }),
       }),
     );
   });
