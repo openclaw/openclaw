@@ -292,7 +292,9 @@ export function planTurnInput(params: {
 }): PlannedTurnInput {
   if (params.previousResponseId && params.lastContextLength > 0) {
     const newMessages = params.context.messages.slice(params.lastContextLength);
-    const toolResults = newMessages.filter((message) => (message as AnyMessage).role === "toolResult");
+    const toolResults = newMessages.filter(
+      (message) => (message as AnyMessage).role === "toolResult",
+    );
     if (toolResults.length > 0) {
       return {
         mode: "incremental_tool_results",
