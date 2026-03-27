@@ -363,9 +363,6 @@ export class RealtimeCallHandler {
       ws.close(1011, "Failed to connect");
     });
 
-    // Acknowledge the stream connection (mirrors Twilio Media Streams protocol)
-    ws.send(JSON.stringify({ event: "connected", protocol: "Call", version: "1.0.0" }));
-
     return bridge;
   }
 
