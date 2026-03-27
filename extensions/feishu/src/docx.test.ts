@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createToolFactoryHarness, type ToolLike } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
+const resolveFeishuToolAccountMock = vi.hoisted(() => vi.fn());
 const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 const convertMock = vi.hoisted(() => vi.fn());
@@ -15,25 +16,44 @@ const driveUploadAllMock = vi.hoisted(() => vi.fn());
 const permissionMemberCreateMock = vi.hoisted(() => vi.fn());
 const blockPatchMock = vi.hoisted(() => vi.fn());
 const scopeListMock = vi.hoisted(() => vi.fn());
+const toolAccountModule = await import("./tool-account.js");
+const runtimeModule = await import("./runtime.js");
 
-vi.mock("./client.js", () => ({
-  createFeishuClient: createFeishuClientMock,
-}));
-
-vi.mock("./runtime.js", () => ({
-  getFeishuRuntime: () => ({
-    channel: {
-      media: {
-        fetchRemoteMedia: fetchRemoteMediaMock,
+vi.spyOn(toolAccountModule, "createFeishuToolClient").mockImplementation(() =>
+  createFeishuClientMock(),
+);
+vi.spyOn(toolAccountModule, "resolveAnyEnabledFeishuToolsConfig").mockReturnValue({
+  doc: true,
+  chat: false,
+  wiki: false,
+  drive: false,
+  perm: false,
+  scopes: false,
+});
+vi.spyOn(toolAccountModule, "resolveFeishuToolAccount").mockImplementation((...args) =>
+  resolveFeishuToolAccountMock(...args),
+);
+vi.spyOn(runtimeModule, "getFeishuRuntime").mockImplementation(
+  () =>
+    ({
+      channel: {
+        media: {
+          fetchRemoteMedia: fetchRemoteMediaMock,
+          saveMediaBuffer: vi.fn(),
+        },
       },
-    },
-    media: {
-      loadWebMedia: loadWebMediaMock,
-    },
-  }),
-}));
+      media: {
+        loadWebMedia: loadWebMediaMock,
+        detectMime: vi.fn(async () => "application/octet-stream"),
+        mediaKindFromMime: vi.fn(() => "image"),
+        isVoiceCompatibleAudio: vi.fn(() => false),
+        getImageMetadata: vi.fn(async () => null),
+        resizeToJpeg: vi.fn(async () => Buffer.alloc(0)),
+      },
+    }) as unknown as ReturnType<typeof runtimeModule.getFeishuRuntime>,
+);
 
-import { registerFeishuDocTools } from "./docx.js";
+const { registerFeishuDocTools } = await import("./docx.js");
 
 type ToolResultWithDetails = {
   details: Record<string, unknown>;
@@ -75,6 +95,9 @@ describe("feishu_doc image fetch hardening", () => {
           list: scopeListMock,
         },
       },
+    });
+    resolveFeishuToolAccountMock.mockReturnValue({
+      config: { mediaMaxMb: 30 },
     });
 
     convertMock.mockResolvedValue({
