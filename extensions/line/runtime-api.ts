@@ -23,15 +23,9 @@ export {
   setSetupChannelEnabled,
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-// Pre-export all symbols that src/plugin-sdk/line-runtime.ts re-exports from this
-// extension's source files. These named exports register the symbols in jiti's
-// _exportNames map at transform time. The star re-export below then skips them
-// via the hasOwnProperty guard, preventing a second Object.defineProperty call
-// with configurable:false that would throw TypeError: Cannot redefine property.
-//
-// If src/plugin-sdk/line-runtime.ts gains new re-exports from extension source
-// files, add matching named exports here to keep the two files in sync.
-// See: src/plugin-sdk/line-runtime.ts for the authoritative list.
+// Keep named exports explicit here so the runtime barrel stays self-contained
+// and plugin-sdk can re-export this file directly without reaching into
+// extension internals.
 export {
   firstDefined,
   isSenderAllowed,
@@ -51,7 +45,7 @@ export {
   pushTextMessageWithQuickReplies,
   sendMessageLine,
 } from "./src/send.js";
-export * from "openclaw/plugin-sdk/line-runtime";
+export { monitorLineProvider } from "./src/monitor.js";
 
 export * from "./src/accounts.js";
 export * from "./src/bot-access.js";
