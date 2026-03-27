@@ -208,7 +208,22 @@ export function createSubagentRunManager(params: {
         : archiveAfterMs
           ? now + archiveAfterMs
           : undefined;
-    const runTimeoutSeconds = replaceParams.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
+    // Apply config default for subagent timeout when not explicitly set,
+    // preserving "0 means no timeout" semantic.
+    const cfgSubagentTimeout =
+      typeof cfg?.agents?.defaults?.subagents?.runTimeoutSeconds === "number" &&
+      Number.isFinite(cfg.agents.defaults.subagents.runTimeoutSeconds)
+        ? Math.max(0, Math.floor(cfg.agents.defaults.subagents.runTimeoutSeconds))
+        : 0;
+    const runTimeoutSeconds =
+      typeof replaceParams.runTimeoutSeconds === "number" &&
+      Number.isFinite(replaceParams.runTimeoutSeconds)
+        ? Math.max(0, Math.floor(replaceParams.runTimeoutSeconds))
+        : source.runTimeoutSeconds !== undefined &&
+            typeof source.runTimeoutSeconds === "number" &&
+            Number.isFinite(source.runTimeoutSeconds)
+          ? Math.max(0, Math.floor(source.runTimeoutSeconds))
+          : cfgSubagentTimeout;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const preserveFrozenResultFallback = replaceParams.preserveFrozenResultFallback === true;
     const sessionStartedAt = getSubagentSessionStartedAt(source) ?? now;
@@ -285,7 +300,18 @@ export function createSubagentRunManager(params: {
         : archiveAfterMs
           ? now + archiveAfterMs
           : undefined;
-    const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
+    // Apply config default for subagent timeout when not explicitly set,
+    // preserving "0 means no timeout" semantic.
+    const cfgSubagentTimeout =
+      typeof cfg?.agents?.defaults?.subagents?.runTimeoutSeconds === "number" &&
+      Number.isFinite(cfg.agents.defaults.subagents.runTimeoutSeconds)
+        ? Math.max(0, Math.floor(cfg.agents.defaults.subagents.runTimeoutSeconds))
+        : 0;
+    const runTimeoutSeconds =
+      typeof registerParams.runTimeoutSeconds === "number" &&
+      Number.isFinite(registerParams.runTimeoutSeconds)
+        ? Math.max(0, Math.floor(registerParams.runTimeoutSeconds))
+        : cfgSubagentTimeout;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
     params.runs.set(registerParams.runId, {
