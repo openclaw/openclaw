@@ -8,7 +8,7 @@ import * as auditModule from "./audit.js";
 import { telegramPlugin } from "./channel.js";
 import * as monitorModule from "./monitor.js";
 import * as probeModule from "./probe.js";
-import { setTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 
 const probeTelegramMock = vi.hoisted(() => vi.fn());
 const collectTelegramUnmentionedGroupIdsMock = vi.hoisted(() => vi.fn());
@@ -290,6 +290,29 @@ describe("telegramPlugin duplicate token guard", () => {
     );
     expect(probeTelegram).toHaveBeenCalled();
     expect(monitorTelegramProvider).toHaveBeenCalled();
+  });
+
+  it("falls back to direct probe helpers when Telegram runtime is uninitialized", async () => {
+    try {
+      clearTelegramRuntime();
+      const cfg = createCfg();
+      const account = resolveAccount(cfg, "ops");
+
+      await expect(
+        telegramPlugin.status!.probeAccount!({
+          account,
+          timeoutMs: 1234,
+          cfg,
+        }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          ok: expect.any(Boolean),
+          elapsedMs: expect.any(Number),
+        }),
+      );
+    } finally {
+      installTelegramRuntime();
+    }
   });
 
   it("passes account proxy and network settings into Telegram probes", async () => {
