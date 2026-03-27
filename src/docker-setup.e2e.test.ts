@@ -520,6 +520,39 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.stderr).toContain("OPENCLAW_TZ must match a timezone in /usr/share/zoneinfo");
   });
 
+  it("skips onboarding when OPENCLAW_SKIP_ONBOARDING is set", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_SKIP_ONBOARDING: "1",
+    });
+
+    expect(result.status).toBe(0);
+    const log = await readDockerLog(activeSandbox);
+    expect(log).not.toContain("onboard");
+    // Gateway defaults (config set) and control UI allowlist should still run.
+    expect(log).toContain("config set gateway.mode local");
+    expect(log).toContain("config set gateway.bind lan");
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_SKIP_ONBOARDING=1");
+  });
+
+  it("treats OPENCLAW_SKIP_ONBOARDING=0 as disabled and runs onboarding", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_SKIP_ONBOARDING: "0",
+    });
+
+    expect(result.status).toBe(0);
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain("onboard --mode local --no-install-daemon");
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_SKIP_ONBOARDING=");
+  });
+
   it("avoids associative arrays so the script remains Bash 3.2-compatible", async () => {
     const script = await readFile(join(repoRoot, "scripts", "docker", "setup.sh"), "utf8");
     expect(script).not.toMatch(/^\s*declare -A\b/m);
