@@ -5,7 +5,7 @@ import {
   SILENT_REPLY_TOKEN,
   type MemoryFlushPlan,
   type OpenClawConfig,
-} from "./api.js";
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 
 export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
 export const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;

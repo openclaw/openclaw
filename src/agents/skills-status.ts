@@ -17,6 +17,7 @@ import {
   type SkillsInstallPreferences,
 } from "./skills.js";
 import { resolveBundledSkillsContext } from "./skills/bundled-context.js";
+import { resolveSkillSource } from "./skills/source.js";
 
 export type SkillStatusConfigCheck = RequirementConfigCheck;
 
@@ -186,10 +187,11 @@ function buildSkillStatus(
       (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
     );
   const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
+  const skillSource = resolveSkillSource(entry.skill);
   const bundled =
     bundledNames && bundledNames.size > 0
       ? bundledNames.has(entry.skill.name)
-      : entry.skill.source === "openclaw-bundled";
+      : skillSource === "openclaw-bundled";
 
   const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
     evaluateEntryRequirementsForCurrentPlatform({
@@ -205,7 +207,7 @@ function buildSkillStatus(
   return {
     name: entry.skill.name,
     description: entry.skill.description,
-    source: entry.skill.source,
+    source: skillSource,
     bundled,
     filePath: entry.skill.filePath,
     baseDir: entry.skill.baseDir,

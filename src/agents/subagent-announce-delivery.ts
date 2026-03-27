@@ -382,7 +382,7 @@ async function maybeQueueSubagentAnnounce(params: {
 
   const queueSettings = resolveQueueSettings({
     cfg,
-    channel: entry?.channel ?? entry?.lastChannel,
+    channel: entry?.channel ?? entry?.lastChannel ?? entry?.origin?.provider,
     sessionEntry: entry,
   });
   const isActive = isEmbeddedPiRunActive(sessionId);

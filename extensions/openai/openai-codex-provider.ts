@@ -28,7 +28,6 @@ import {
   isOpenAIApiBaseUrl,
   matchesExactOrPrefix,
 } from "./shared.js";
-import { refreshOpenAICodexOAuthCredential as refreshOpenAICodexOAuthCredentialRuntime } from "./openai-codex-provider.runtime.js";
 
 const PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
@@ -140,7 +139,8 @@ function resolveCodexForwardCompatModel(
 
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   try {
-    const refreshed = await refreshOpenAICodexOAuthCredentialRuntime(cred);
+    const { refreshOpenAICodexToken } = await import("./openai-codex-provider.runtime.js");
+    const refreshed = await refreshOpenAICodexToken(cred.refresh);
     return {
       ...cred,
       ...refreshed,
@@ -170,7 +170,7 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
       runtime: ctx.runtime,
       isRemote: ctx.isRemote,
       openUrl: ctx.openUrl,
-      localBrowserMessage: "Complete sign-in in browser…",
+      localBrowserMessage: "Complete sign-in in browser...",
     });
   } catch {
     return { profiles: [] };

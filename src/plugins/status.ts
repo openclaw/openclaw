@@ -3,7 +3,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { normalizePluginsConfig } from "./config-state.js";
@@ -125,7 +125,7 @@ function resolveReportedPluginVersion(
     return plugin.version;
   }
   return (
-    normalizeOpenClawVersionBase(resolveRuntimeServiceVersion(env)) ??
+    normalizeOpenClawVersionBase(resolveCompatibilityHostVersion(env)) ??
     normalizeOpenClawVersionBase(plugin.version) ??
     plugin.version
   );

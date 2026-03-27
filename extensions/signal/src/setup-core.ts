@@ -3,6 +3,7 @@ import {
   createDelegatedSetupWizardProxy,
   createDelegatedTextInputShouldPrompt,
   createPatchedAccountSetupAdapter,
+  createSetupInputPresenceValidator,
   createTopLevelChannelDmPolicy,
   normalizeE164,
   parseSetupEntriesAllowingWildcard,
@@ -184,18 +185,20 @@ export const signalCompletionNote = {
 
 export const signalSetupAdapter: ChannelSetupAdapter = createPatchedAccountSetupAdapter({
   channelKey: channel,
-  validateInput: ({ input }) => {
-    if (
-      !input.signalNumber &&
-      !input.httpUrl &&
-      !input.httpHost &&
-      !input.httpPort &&
-      !input.cliPath
-    ) {
-      return "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.";
-    }
-    return null;
-  },
+  validateInput: createSetupInputPresenceValidator({
+    validate: ({ input }) => {
+      if (
+        !input.signalNumber &&
+        !input.httpUrl &&
+        !input.httpHost &&
+        !input.httpPort &&
+        !input.cliPath
+      ) {
+        return "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.";
+      }
+      return null;
+    },
+  }),
   buildPatch: (input) => buildSignalSetupPatch(input),
 });
 

@@ -44,6 +44,7 @@ export type {
   ProviderAuthResult,
   ProviderAugmentModelCatalogContext,
   ProviderBuildMissingAuthMessageContext,
+  ProviderBuildUnknownModelHintContext,
   ProviderBuiltInModelSuppressionContext,
   ProviderBuiltInModelSuppressionResult,
   ProviderCacheTtlEligibilityContext,
@@ -83,7 +84,8 @@ export type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 export type { ChannelConfigUiHint, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 
-export { emptyPluginConfigSchema, definePluginEntry } from "./plugin-entry.js";
+export { definePluginEntry } from "./plugin-entry.js";
+export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { KeyedAsyncQueue, enqueueKeyedTask } from "./keyed-async-queue.js";
 export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";

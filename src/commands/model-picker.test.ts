@@ -168,7 +168,7 @@ describe("promptDefaultModel", () => {
       {
         id: "provider:model-picker:ollama",
         kind: "provider",
-        surface: "models",
+        surface: "model-picker",
         option: {
           value: "ollama",
           label: "Ollama",

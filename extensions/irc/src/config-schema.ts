@@ -8,7 +8,7 @@ import {
   ToolPolicySchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 import { ircChannelConfigUiHints } from "./config-ui-hints.js";
 
 const IrcReplyRuntimeConfigSchemaShape = {

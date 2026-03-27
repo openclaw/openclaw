@@ -5298,7 +5298,7 @@
         "advanced"
       ],
       "label": "Agent ACP Harness Agent",
-      "help": "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude).",
+      "help": "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude, cursor, gemini, openclaw).",
       "hasChildren": false
     },
     {
@@ -52671,6 +52671,24 @@
       ],
       "label": "GPU",
       "help": "Request GPU resources when creating the sandbox.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openshell.config.mode",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "mirror",
+        "remote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Mode",
+      "help": "Sandbox mode. Use mirror for the default local-workspace flow or remote for a fully remote workspace.",
       "hasChildren": false
     },
     {

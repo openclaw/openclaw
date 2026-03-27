@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import {
   loadPluginManifest,
+  type OpenClawPackageManifest,
   type PluginManifest,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
@@ -127,7 +127,7 @@ function buildCacheKey(params: {
   const workspaceKey = roots.workspace ?? "";
   const configExtensionsRoot = roots.global;
   const bundledRoot = roots.stock ?? "";
-  const runtimeServiceVersion = resolveRuntimeServiceVersion(params.env);
+  const runtimeServiceVersion = resolveCompatibilityHostVersion(params.env);
   // The manifest registry only depends on where plugins are discovered from (workspace + load paths).
   // It does not depend on allow/deny/entries enable-state, so exclude those for higher cache hit rates.
   return `${workspaceKey}::${configExtensionsRoot}::${bundledRoot}::${runtimeServiceVersion}::${JSON.stringify(loadPaths)}`;
@@ -144,6 +144,46 @@ function safeStatMtimeMs(filePath: string): number | null {
 function normalizeManifestLabel(raw: string | undefined): string | undefined {
   const trimmed = raw?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function normalizePreferredPluginIds(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const values = raw
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
+  return values.length > 0 ? values : undefined;
+}
+
+function mergePackageChannelMetaIntoChannelConfigs(params: {
+  channelConfigs?: Record<string, PluginManifestChannelConfig>;
+  packageChannel?: OpenClawPackageManifest["channel"];
+}): Record<string, PluginManifestChannelConfig> | undefined {
+  const channelId = params.packageChannel?.id?.trim();
+  if (!channelId || !params.channelConfigs?.[channelId]) {
+    return params.channelConfigs;
+  }
+
+  const existing = params.channelConfigs[channelId];
+  const label =
+    existing.label ??
+    (typeof params.packageChannel?.label === "string" ? params.packageChannel.label.trim() : "");
+  const description =
+    existing.description ??
+    (typeof params.packageChannel?.blurb === "string" ? params.packageChannel.blurb.trim() : "");
+  const preferOver =
+    existing.preferOver ?? normalizePreferredPluginIds(params.packageChannel?.preferOver);
+
+  return {
+    ...params.channelConfigs,
+    [channelId]: {
+      ...existing,
+      ...(label ? { label } : {}),
+      ...(description ? { description } : {}),
+      ...(preferOver?.length ? { preferOver } : {}),
+    },
+  };
 }
 
 function isCompatiblePluginIdHint(idHint: string | undefined, manifestId: string): boolean {
@@ -169,7 +209,10 @@ function buildRecord(params: {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
 }): PluginManifestRecord {
-  const bundledChannelConfigs = resolveBundledChannelConfigs(params.manifest.id);
+  const channelConfigs = mergePackageChannelMetaIntoChannelConfigs({
+    channelConfigs: params.manifest.channelConfigs,
+    packageChannel: params.candidate.packageManifest?.channel,
+  });
   return {
     id: params.manifest.id,
     name: normalizeManifestLabel(params.manifest.name) ?? params.candidate.packageName,
@@ -201,7 +244,7 @@ function buildRecord(params: {
     configSchema: params.configSchema,
     configUiHints: params.manifest.uiHints,
     contracts: params.manifest.contracts,
-    channelConfigs: mergeChannelConfigs(bundledChannelConfigs, params.manifest.channelConfigs),
+    channelConfigs,
     ...(params.candidate.packageManifest?.channel?.id
       ? {
           channelCatalogMeta: {
@@ -219,40 +262,6 @@ function buildRecord(params: {
         }
       : {}),
   };
-}
-
-function resolveBundledChannelConfigs(
-  pluginId: string,
-): Record<string, PluginManifestChannelConfig> | undefined {
-  const entries = BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.pluginId === pluginId);
-  if (entries.length === 0) {
-    return undefined;
-  }
-
-  return Object.fromEntries(
-    entries.map((entry) => [
-      entry.channelId,
-      {
-        schema: entry.schema,
-        ...(entry.uiHints ? { uiHints: entry.uiHints } : {}),
-        ...(entry.label ? { label: entry.label } : {}),
-        ...(entry.description ? { description: entry.description } : {}),
-      },
-    ]),
-  );
-}
-
-function mergeChannelConfigs(
-  generated: Record<string, PluginManifestChannelConfig> | undefined,
-  manifest: Record<string, PluginManifestChannelConfig> | undefined,
-): Record<string, PluginManifestChannelConfig> | undefined {
-  if (!generated) {
-    return manifest;
-  }
-  if (!manifest) {
-    return generated;
-  }
-  return { ...generated, ...manifest };
 }
 
 function buildBundleRecord(params: {
@@ -388,7 +397,7 @@ export function loadPluginManifestRegistry(
   const records: PluginManifestRecord[] = [];
   const seenIds = new Map<string, SeenIdEntry>();
   const realpathCache = new Map<string, string>();
-  const currentHostVersion = resolveRuntimeServiceVersion(env);
+  const currentHostVersion = resolveCompatibilityHostVersion(env);
 
   for (const candidate of candidates) {
     const rejectHardlinks = candidate.origin !== "bundled";

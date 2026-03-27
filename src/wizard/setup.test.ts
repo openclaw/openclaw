@@ -9,10 +9,21 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
 
+type ResolveProviderPluginChoice =
+  typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
+type ResolvePluginProvidersRuntime =
+  typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders;
+
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
 const applyAuthChoice = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => "openai"));
+const resolveProviderPluginChoice = vi.hoisted(() =>
+  vi.fn<ResolveProviderPluginChoice>(() => null),
+);
+const resolvePluginProvidersRuntime = vi.hoisted(() =>
+  vi.fn<ResolvePluginProvidersRuntime>(() => []),
+);
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
 const promptDefaultModel = vi.hoisted(() => vi.fn(async () => ({ config: null, model: null })));
@@ -120,6 +131,11 @@ vi.mock("../commands/auth-choice.js", () => ({
   applyAuthChoice,
   resolvePreferredProviderForAuthChoice,
   warnIfModelConfigLooksOff,
+}));
+
+vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
+  resolveProviderPluginChoice,
+  resolvePluginProviders: resolvePluginProvidersRuntime,
 }));
 
 vi.mock("../commands/model-picker.js", () => ({
@@ -416,6 +432,33 @@ describe("runSetupWizard", () => {
 
   it("prompts for a model during explicit interactive Ollama setup", async () => {
     promptDefaultModel.mockClear();
+    resolveProviderPluginChoice.mockReturnValue({
+      provider: {
+        id: "ollama",
+        label: "Ollama",
+        auth: [],
+        wizard: {
+          setup: {
+            modelSelection: {
+              promptWhenAuthChoiceProvided: true,
+              allowKeepCurrent: false,
+            },
+          },
+        },
+      },
+      method: {
+        id: "local",
+        label: "Ollama",
+        kind: "custom",
+        run: vi.fn(async () => ({ profiles: [] })),
+      },
+      wizard: {
+        modelSelection: {
+          promptWhenAuthChoiceProvided: true,
+          allowKeepCurrent: false,
+        },
+      },
+    });
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime();
 

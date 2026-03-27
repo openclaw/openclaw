@@ -92,8 +92,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - `pnpm test:max` exposes that same planner profile for a full local run.
   - On supported local Node versions, including Node 25, the normal profile can use top-level lane parallelism. `pnpm test:max` still pushes the planner harder when you want a more aggressive local run.
   - The base Vitest config marks the wrapper manifests/config files as `forceRerunTriggers` so changed-mode reruns stay correct when scheduler inputs change.
-  - Vitest's filesystem module cache is now enabled by default for Node-side test reruns.
-  - Opt out with `OPENCLAW_VITEST_FS_MODULE_CACHE=0` or `OPENCLAW_VITEST_FS_MODULE_CACHE=false` if you suspect stale transform cache behavior.
+  - The wrapper keeps `OPENCLAW_VITEST_FS_MODULE_CACHE` enabled on supported hosts, but assigns a lane-local `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH` so concurrent Vitest processes do not race on one shared experimental cache directory.
+  - Set `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/abs/path` if you want one explicit cache location for direct single-run profiling.
 - Perf-debug note:
   - `pnpm test:perf:imports` enables Vitest import-duration reporting plus import-breakdown output.
   - `pnpm test:perf:imports:changed` scopes the same profiling view to files changed since `origin/main`.

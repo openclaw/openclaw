@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Breaking
 
 - Providers/Qwen: remove the deprecated `qwen-portal-auth` OAuth integration for `portal.qwen.ai`; migrate to Model Studio with `openclaw onboard --auth-choice modelstudio-api-key`. (#52709) Thanks @pomelo-nwu.
+- Config/Doctor: drop automatic config migrations older than two months; very old legacy keys now fail validation instead of being rewritten on load or by `openclaw doctor`.
 
 ### Changes
 
@@ -27,6 +28,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- ACP/ACPX agent registry: align OpenClaw's ACPX built-in agent mirror with the latest `openclaw/acpx` command defaults and built-in aliases, pin versioned `npx` built-ins to exact versions, and stop unknown ACP agent ids from falling through to raw `--agent` command execution on the MCP-proxy path. (#28321) Thanks @m0nkmaster and @vincentkoc.
 - Control UI/config: keep sensitive raw config hidden by default, replace the blank blocked editor with an explicit reveal-to-edit state, and restore raw JSON editing without auto-exposing secrets. Fixes #55322.
 - WhatsApp: fix infinite echo loop in self-chat DM mode where the bot's own outbound replies were re-processed as new inbound user messages. (#54570) Thanks @joelnishanth
 - OpenAI Codex/image tools: register Codex for media understanding and route image prompts through Codex instructions so image analysis no longer fails on missing provider registration or missing `instructions`. (#54829) Thanks @neeravmakwana.
@@ -73,6 +75,9 @@ Docs: https://docs.openclaw.ai
 - GitHub Copilot/auth refresh: treat large `expires_at` values as seconds epochs and clamp far-future runtime auth refresh timers so Copilot token refresh cannot fall into a `setTimeout` overflow hot loop. (#55360) Thanks @michael-abdo.
 - Agents/status: use the persisted runtime session model in `session_status` when no explicit override exists, and honor per-agent `thinkingDefault` in both `session_status` and `/status`. (#55425) Thanks @scoootscooob, @xaeon2026, and @ysfbsf.
 - Heartbeat/runner: guarantee the interval timer is re-armed after heartbeat runs and unexpected runner errors so scheduled heartbeats do not silently stop after an interrupted cycle. (#52270) Thanks @MiloStack.
+- Config/Doctor: rewrite stale bundled plugin load paths from legacy `extensions/*` locations to the packaged bundled path, including directory-name mismatches and slash-suffixed config entries. (#55054) Thanks @SnowSky1.
+- WhatsApp/mentions: stop treating mentions embedded in quoted messages as direct mentions so replying to a message that @mentioned the bot no longer falsely triggers mention gating. (#52711) Thanks @lurebat.
+- Agents/ollama fallback: surface non-2xx Ollama HTTP errors with a leading status code so HTTP 503 responses trigger model fallback again. (#55214) Thanks @bugkill3r.
 
 ## 2026.3.24
 
