@@ -1,1 +1,1 @@
-export * from "../../../../../extensions/discord/api.js";
+export * from "../../../../plugin-sdk/discord.js";

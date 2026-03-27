@@ -81,7 +81,10 @@ export {
 export { withTempDownloadPath } from "./temp-path.js";
 export {
   buildFeishuConversationId,
+  createFeishuThreadBindingManager,
+  parseFeishuDirectConversationId,
   parseFeishuConversationId,
+  parseFeishuTargetId,
 } from "../../extensions/feishu/api.js";
 export {
   createWebhookAnomalyTracker,

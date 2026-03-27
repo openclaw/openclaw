@@ -1,14 +1,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { parseExplicitTargetForChannel } from "./target-parsing.js";
 
 describe("parseExplicitTargetForChannel", () => {
   beforeEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
+    setDefaultChannelPluginRegistryForTests();
   });
 
-  it("parses bundled Telegram targets without an active Telegram registry entry", () => {
+  it("parses Telegram targets via the registered channel plugin contract", () => {
     expect(parseExplicitTargetForChannel("telegram", "telegram:group:-100123:topic:77")).toEqual({
       to: "-100123",
       threadId: 77,
