@@ -967,7 +967,9 @@ export function verifyPlivoWebhook(
         reason: "Invalid Plivo V2 signature",
       };
     }
-    const replayKey = `plivo:v2:${sha256Hex(`${verificationUrl}\n${nonceV2}`)}`;
+    // Use baseUrl (without query string) to match V2 signature validation
+    const baseUrl = getBaseUrlNoQuery(verificationUrl);
+    const replayKey = `plivo:v2:${sha256Hex(`${baseUrl}\n${nonceV2}`)}`;
     const isReplay = markReplay(plivoReplayCache, replayKey);
     return { ok: true, version: "v2", verificationUrl, isReplay, verifiedRequestKey: replayKey };
   }
