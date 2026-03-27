@@ -1027,8 +1027,8 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       enabledByDefault: true,
-      autoEnableWhenConfiguredProviders: ["copilot-proxy"],
       providers: ["copilot-proxy"],
+      autoEnableWhenConfiguredProviders: ["copilot-proxy"],
       providerAuthChoices: [
         {
           provider: "copilot-proxy",
@@ -5487,8 +5487,8 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         },
       },
       enabledByDefault: true,
-      autoEnableWhenConfiguredProviders: ["google-gemini-cli"],
       providers: ["google", "google-gemini-cli"],
+      autoEnableWhenConfiguredProviders: ["google-gemini-cli"],
       cliBackends: ["google-gemini-cli"],
       providerAuthEnvVars: {
         google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
@@ -9586,9 +9586,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       enabledByDefault: true,
-      legacyPluginIds: ["minimax-portal-auth"],
-      autoEnableWhenConfiguredProviders: ["minimax-portal"],
       providers: ["minimax", "minimax-portal"],
+      autoEnableWhenConfiguredProviders: ["minimax-portal"],
+      legacyPluginIds: ["minimax-portal-auth"],
       providerAuthEnvVars: {
         minimax: ["MINIMAX_API_KEY"],
         "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],

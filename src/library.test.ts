@@ -1,43 +1,58 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
+import { describe, expect, it } from "vitest";
+
+const libraryPath = resolve(dirname(fileURLToPath(import.meta.url)), "library.ts");
+const lazyRuntimeSpecifiers = [
+  "./auto-reply/reply.runtime.js",
+  "./cli/prompt.js",
+  "./infra/binaries.js",
+  "./process/exec.js",
+  "./plugins/runtime/runtime-whatsapp-boundary.js",
+] as const;
+
+function readLibraryModuleImports() {
+  const sourceText = readFileSync(libraryPath, "utf8");
+  const sourceFile = ts.createSourceFile(libraryPath, sourceText, ts.ScriptTarget.Latest, true);
+  const staticImports = new Set<string>();
+  const dynamicImports = new Set<string>();
+
+  function visit(node: ts.Node) {
+    if (
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      !node.importClause?.isTypeOnly
+    ) {
+      staticImports.add(node.moduleSpecifier.text);
+    }
+
+    if (
+      ts.isCallExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      node.arguments.length === 1 &&
+      ts.isStringLiteral(node.arguments[0])
+    ) {
+      dynamicImports.add(node.arguments[0].text);
+    }
+
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return { dynamicImports, staticImports };
+}
 
 describe("library module imports", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
+  it("keeps lazy runtime boundaries on dynamic imports", () => {
+    const { dynamicImports, staticImports } = readLibraryModuleImports();
 
-  it("does not load lazy runtimes on module import", async () => {
-    const replyRuntimeLoads = vi.fn();
-    const promptRuntimeLoads = vi.fn();
-    const binariesRuntimeLoads = vi.fn();
-    const whatsappRuntimeLoads = vi.fn();
-    vi.doMock("./auto-reply/reply.runtime.js", async (importOriginal) => {
-      replyRuntimeLoads();
-      return await importOriginal<typeof import("./auto-reply/reply.runtime.js")>();
-    });
-    vi.doMock("./cli/prompt.runtime.js", async (importOriginal) => {
-      promptRuntimeLoads();
-      return await importOriginal<typeof import("./cli/prompt.runtime.js")>();
-    });
-    vi.doMock("./infra/binaries.runtime.js", async (importOriginal) => {
-      binariesRuntimeLoads();
-      return await importOriginal<typeof import("./infra/binaries.runtime.js")>();
-    });
-    vi.doMock("./plugins/runtime/runtime-whatsapp-boundary.js", async (importOriginal) => {
-      whatsappRuntimeLoads();
-      return await importOriginal<
-        typeof import("./plugins/runtime/runtime-whatsapp-boundary.js")
-      >();
-    });
-
-    await import("./library.js");
-
-    expect(replyRuntimeLoads).not.toHaveBeenCalled();
-    // Vitest eagerly resolves some manual mocks for runtime-boundary modules
-    // even when the lazy wrapper is not invoked. Keep the assertion on the
-    // reply runtime, which is the stable import-time contract this test cares about.
-    vi.doUnmock("./auto-reply/reply.runtime.js");
-    vi.doUnmock("./cli/prompt.runtime.js");
-    vi.doUnmock("./infra/binaries.runtime.js");
-    vi.doUnmock("./plugins/runtime/runtime-whatsapp-boundary.js");
+    for (const specifier of lazyRuntimeSpecifiers) {
+      expect(staticImports.has(specifier), `${specifier} should stay lazy`).toBe(false);
+      expect(dynamicImports.has(specifier), `${specifier} should remain dynamically imported`).toBe(
+        true,
+      );
+    }
   });
 });
