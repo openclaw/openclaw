@@ -48,6 +48,7 @@ type AcpDispatchDeliveryState = {
   blockCount: number;
   deliveredFinalReply: boolean;
   deliveredVisibleText: boolean;
+  deliveredRoutedVisibleBlockText: boolean;
   failedVisibleTextDelivery: boolean;
   queuedDirectVisibleTextDeliveries: number;
   settledDirectVisibleText: boolean;
@@ -67,6 +68,7 @@ export type AcpDispatchDeliveryCoordinator = {
   settleVisibleText: () => Promise<void>;
   hasDeliveredFinalReply: () => boolean;
   hasDeliveredVisibleText: () => boolean;
+  hasDeliveredRoutedVisibleBlockText: () => boolean;
   hasFailedVisibleTextDelivery: () => boolean;
   getRoutedCounts: () => Record<ReplyDispatchKind, number>;
   applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
@@ -90,6 +92,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     blockCount: 0,
     deliveredFinalReply: false,
     deliveredVisibleText: false,
+    deliveredRoutedVisibleBlockText: false,
     failedVisibleTextDelivery: false,
     queuedDirectVisibleTextDeliveries: 0,
     settledDirectVisibleText: false,
@@ -241,6 +244,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       }
       if (tracksVisibleText) {
         state.deliveredVisibleText = true;
+        if (kind === "block") {
+          state.deliveredRoutedVisibleBlockText = true;
+        }
       }
       state.routedCounts[kind] += 1;
       return true;
@@ -277,6 +283,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     settleVisibleText: settleDirectVisibleText,
     hasDeliveredFinalReply: () => state.deliveredFinalReply,
     hasDeliveredVisibleText: () => state.deliveredVisibleText,
+    hasDeliveredRoutedVisibleBlockText: () => state.deliveredRoutedVisibleBlockText,
     hasFailedVisibleTextDelivery: () => state.failedVisibleTextDelivery,
     getRoutedCounts: () => ({ ...state.routedCounts }),
     applyRoutedCounts: (counts) => {

@@ -234,6 +234,7 @@ async function finalizeAcpTurnOutput(params: {
   const shouldDeliverTextFallback =
     ttsMode !== "all" &&
     hasAccumulatedBlockText &&
+    !params.delivery.hasDeliveredRoutedVisibleBlockText() &&
     !finalMediaDelivered &&
     !params.delivery.hasDeliveredFinalReply() &&
     (!params.delivery.hasDeliveredVisibleText() || params.delivery.hasFailedVisibleTextDelivery());

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -13,6 +13,14 @@ const ttsMocks = vi.hoisted(() => ({
 
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+}));
+
+const routeReplyMocks = vi.hoisted(() => ({
+  routeReply: vi.fn(async (_params: unknown) => ({ ok: true as const, messageId: "mock" })),
+}));
+
+vi.mock("./route-reply.js", () => ({
+  routeReply: (params: unknown) => routeReplyMocks.routeReply(params),
 }));
 
 function createDispatcher(): ReplyDispatcher {
@@ -43,6 +51,36 @@ function createCoordinator(onReplyStart?: (...args: unknown[]) => Promise<void>)
 }
 
 describe("createAcpDispatchDeliveryCoordinator", () => {
+  beforeEach(() => {
+    routeReplyMocks.routeReply.mockClear();
+    ttsMocks.maybeApplyTtsToPayload.mockClear();
+  });
+
+  it("tracks routed telegram block text separately from final replies", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:thread-1",
+    });
+
+    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+    expect(coordinator.hasDeliveredFinalReply()).toBe(false);
+    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
+    expect(coordinator.hasDeliveredRoutedVisibleBlockText()).toBe(true);
+    expect(routeReplyMocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
   it("bypasses TTS when skipTts is requested", async () => {
     const dispatcher = createDispatcher();
     const coordinator = createAcpDispatchDeliveryCoordinator({
@@ -62,6 +100,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "hello" });
+    expect(coordinator.hasDeliveredRoutedVisibleBlockText()).toBe(false);
   });
 
   it("tracks successful final delivery separately from routed counters", async () => {
