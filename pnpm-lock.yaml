@@ -385,6 +385,8 @@ importers:
 
   extensions/huggingface: {}
 
+  extensions/image-generation-core: {}
+
   extensions/imessage: {}
 
   extensions/irc: {}
@@ -398,6 +400,8 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+
+  extensions/litellm: {}
 
   extensions/llm-task:
     dependencies:
@@ -448,6 +452,8 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+
+  extensions/media-understanding-core: {}
 
   extensions/memory-core:
     devDependencies:
@@ -547,6 +553,8 @@ importers:
       '@slack/web-api':
         specifier: ^7.15.0
         version: 7.15.0
+
+  extensions/speech-core: {}
 
   extensions/synology-chat: {}
 

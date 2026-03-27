@@ -26,24 +26,6 @@ async function loadExecApprovalSurfaceModule() {
     getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
     listChannelPlugins: (...args: unknown[]) => listChannelPluginsMock(...args),
   }));
-  vi.doMock("../../extensions/discord/src/channel.js", () => ({
-    discordPlugin: {},
-  }));
-  vi.doMock("../../extensions/telegram/src/channel.js", () => ({
-    telegramPlugin: {},
-  }));
-  vi.doMock("../../extensions/slack/src/channel.js", () => ({
-    slackPlugin: {},
-  }));
-  vi.doMock("../../extensions/whatsapp/src/channel.js", () => ({
-    whatsappPlugin: {},
-  }));
-  vi.doMock("../../extensions/signal/src/channel.js", () => ({
-    signalPlugin: {},
-  }));
-  vi.doMock("../../extensions/imessage/src/channel.js", () => ({
-    imessagePlugin: {},
-  }));
   vi.doMock("../utils/message-channel.js", () => ({
     INTERNAL_MESSAGE_CHANNEL: "web",
     normalizeMessageChannel: (...args: unknown[]) => normalizeMessageChannelMock(...args),

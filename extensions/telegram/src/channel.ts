@@ -7,6 +7,7 @@ import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { buildPluginApprovalRequestMessage } from "openclaw/plugin-sdk/infra-runtime";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
@@ -39,6 +40,7 @@ import {
   type ResolvedTelegramAccount,
 } from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
+import { buildTelegramExecApprovalButtons } from "./approval-buttons.js";
 import { auditTelegramGroupMembership, collectTelegramUnmentionedGroupIds } from "./audit.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import {
@@ -364,12 +366,12 @@ export const telegramPlugin = createChatChannelPlugin({
         const previousToken = resolveTelegramAccount({ cfg: prevCfg, accountId }).token.trim();
         const nextToken = resolveTelegramAccount({ cfg: nextCfg, accountId }).token.trim();
         if (previousToken !== nextToken) {
-          const { deleteTelegramUpdateOffset } = await import("./update-offset-store.js");
+          const { deleteTelegramUpdateOffset } = await import("../update-offset-runtime-api.js");
           await deleteTelegramUpdateOffset({ accountId });
         }
       },
       onAccountRemoved: async ({ accountId }) => {
-        const { deleteTelegramUpdateOffset } = await import("./update-offset-store.js");
+        const { deleteTelegramUpdateOffset } = await import("../update-offset-runtime-api.js");
         await deleteTelegramUpdateOffset({ accountId });
       },
     },
@@ -403,6 +405,32 @@ export const telegramPlugin = createChatChannelPlugin({
           accountId: target.accountId ?? undefined,
           ...(Number.isFinite(threadId) ? { messageThreadId: threadId } : {}),
         }).catch(() => {});
+      },
+      buildPluginPendingPayload: ({ request, nowMs }) => {
+        const text = buildPluginApprovalRequestMessage(request, nowMs);
+        const buttons = buildTelegramExecApprovalButtons(request.id);
+        const execApproval = {
+          approvalId: request.id,
+          approvalSlug: request.id,
+          allowedDecisions: ["allow-once", "allow-always", "deny"] as const,
+        };
+        if (!buttons) {
+          return {
+            text,
+            channelData: {
+              execApproval,
+            },
+          };
+        }
+        return {
+          text,
+          channelData: {
+            execApproval,
+            telegram: {
+              buttons,
+            },
+          },
+        };
       },
     },
     directory: createChannelDirectoryAdapter({

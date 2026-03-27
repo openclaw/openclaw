@@ -28,7 +28,7 @@ export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export {
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
-} from "../../extensions/bluebubbles/runtime-api.js";
+} from "../../extensions/bluebubbles/api.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export {
@@ -85,6 +85,7 @@ export {
   buildComputedAccountStatusSnapshot,
   buildProbeChannelStatusSummary,
 } from "./status-helpers.js";
+export { isAllowedBlueBubblesSender } from "../../extensions/bluebubbles/api.js";
 export { extractToolSend } from "./tool-send.js";
 export {
   WEBHOOK_RATE_LIMIT_DEFAULTS,

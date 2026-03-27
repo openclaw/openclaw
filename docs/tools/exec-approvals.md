@@ -361,6 +361,35 @@ Reply in chat:
 /approve <id> deny
 ```
 
+The `/approve` command handles both exec approvals and plugin approvals. If the ID does not match a pending exec approval, it automatically checks plugin approvals.
+
+### Plugin approval forwarding
+
+Plugin approval forwarding uses the same delivery pipeline as exec approvals but has its own
+independent config under `approvals.plugin`. Enabling or disabling one does not affect the other.
+
+```json5
+{
+  approvals: {
+    plugin: {
+      enabled: true,
+      mode: "targets",
+      agentFilter: ["main"],
+      targets: [
+        { channel: "slack", to: "U12345678" },
+        { channel: "telegram", to: "123456789" },
+      ],
+    },
+  },
+}
+```
+
+The config shape is identical to `approvals.exec`: `enabled`, `mode`, `agentFilter`,
+`sessionFilter`, and `targets` work the same way.
+
+Channels that support interactive exec approval buttons (such as Telegram) also render buttons for
+plugin approvals. Channels without adapter support fall back to plain text with `/approve` instructions.
+
 ### Built-in chat approval clients
 
 Discord and Telegram can also act as explicit exec approval clients with channel-specific config.
@@ -384,8 +413,8 @@ topics, OpenClaw preserves the topic for the approval prompt and the post-approv
 
 See:
 
-- [Discord](/channels/discord#exec-approvals-in-discord)
-- [Telegram](/channels/telegram#exec-approvals-in-telegram)
+- [Discord](/channels/discord)
+- [Telegram](/channels/telegram)
 
 ### macOS IPC flow
 
