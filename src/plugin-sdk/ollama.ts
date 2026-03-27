@@ -13,4 +13,4 @@ export {
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "../../extensions/ollama/src/stream.js";
+} from "../../extensions/ollama/runtime-api.js";

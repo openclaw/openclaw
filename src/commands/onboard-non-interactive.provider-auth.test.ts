@@ -37,6 +37,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     { default: volcenginePlugin },
     { default: byteplusPlugin },
     { default: anthropicPlugin },
+    { default: litellmPlugin },
     { default: mistralPlugin },
     { default: togetherPlugin },
     { default: qianfanPlugin },
@@ -45,6 +46,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     { default: openrouterPlugin },
     { default: opencodePlugin },
     { default: sglangPlugin },
+    { default: cloudflareAiGatewayPlugin },
     { default: vercelAiGatewayPlugin },
     { default: vllmPlugin },
   ] = await Promise.all([
@@ -57,6 +59,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     import("../../extensions/volcengine/index.ts"),
     import("../../extensions/byteplus/index.ts"),
     import("../../extensions/anthropic/index.ts"),
+    import("../../extensions/litellm/index.ts"),
     import("../../extensions/mistral/index.ts"),
     import("../../extensions/together/index.ts"),
     import("../../extensions/qianfan/index.ts"),
@@ -65,6 +68,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     import("../../extensions/openrouter/index.ts"),
     import("../../extensions/opencode/index.ts"),
     import("../../extensions/sglang/index.ts"),
+    import("../../extensions/cloudflare-ai-gateway/index.ts"),
     import("../../extensions/vercel-ai-gateway/index.ts"),
     import("../../extensions/vllm/index.ts"),
   ]);
@@ -100,6 +104,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     volcenginePlugin,
     byteplusPlugin,
     anthropicPlugin,
+    litellmPlugin,
     mistralPlugin,
     togetherPlugin,
     qianfanPlugin,
@@ -108,6 +113,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     openrouterPlugin,
     opencodePlugin,
     sglangPlugin,
+    cloudflareAiGatewayPlugin,
     vercelAiGatewayPlugin,
     vllmPlugin,
   ]) {

@@ -53,6 +53,7 @@ export {
 } from "openclaw/plugin-sdk/telegram-core";
 export type { TelegramProbe } from "./src/probe.js";
 export { auditTelegramGroupMembership, collectTelegramUnmentionedGroupIds } from "./src/audit.js";
+export { resolveTelegramRuntimeGroupPolicy } from "./src/group-access.js";
 export {
   buildTelegramExecApprovalPendingPayload,
   shouldSuppressTelegramExecApprovalForwardingFallback,
@@ -60,6 +61,8 @@ export {
 export { telegramMessageActions } from "./src/channel-actions.js";
 export { monitorTelegramProvider } from "./src/monitor.js";
 export { probeTelegram } from "./src/probe.js";
+export { resolveTelegramTransport, shouldRetryTelegramTransportFallback } from "./src/fetch.js";
+export { makeProxyFetch } from "./src/proxy.js";
 export {
   createForumTopicTelegram,
   deleteMessageTelegram,
@@ -82,3 +85,5 @@ export {
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "./src/thread-bindings.js";
 export { resolveTelegramToken } from "./src/token.js";
+
+export const telegramSessionBindingAdapterChannels = ["telegram"] as const;

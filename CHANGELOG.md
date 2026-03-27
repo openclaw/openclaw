@@ -84,6 +84,7 @@ Docs: https://docs.openclaw.ai
 - TUI/chat log: keep system messages as single logical entries and prune overflow at whole-message boundaries so wrapped system spacing stays intact. (#55732) Thanks @shakkernerd.
 - TUI/activation: validate `/activation` arguments in the TUI and reject invalid values instead of silently coercing them to `mention`. (#55733) Thanks @shakkernerd.
 - Agents/model switching: apply `/model` changes to active embedded runs at the next safe retry boundary, so overloaded or retrying turns switch to the newly selected model instead of staying pinned to the old provider.
+- Agents/Codex fallback: classify Codex `server_error` payloads as failoverable, sanitize `Codex error:` payloads before they reach chat, preserve context-overflow guidance for prefixed `invalid_request_error` payloads, and omit provider `request_id` values from user-facing UI copy. (#42892) Thanks @xaeon2026.
 
 ## 2026.3.24
 
@@ -206,6 +207,7 @@ Docs: https://docs.openclaw.ai
 - Discord/config types: add missing `autoArchiveDuration` to `DiscordGuildChannelConfig` so TypeScript config definitions match the existing schema and runtime support. (#43427) Thanks @davidguttman.
 - Docs/IRC: fix five `json55` code-fence typos in the IRC channel examples so Mintlify applies JSON5 syntax highlighting correctly. (#50842) Thanks @Hollychou924.
 - Discord/commands: trim overlong slash-command descriptions to Discord's 100-character limit and map rejected deploy indexes from Discord validation payloads back to command names/descriptions, so deploys stop failing on long descriptions and startup logs identify the rejected commands. (#54118) thanks @huntharo
+- Media/store: enforce the intended media file mode after writes and redirect downloads so restrictive umasks do not silently narrow saved media permissions.
 
 ## 2026.3.23
 
