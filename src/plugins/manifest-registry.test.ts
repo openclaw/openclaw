@@ -309,6 +309,7 @@ describe("loadPluginManifestRegistry", () => {
           },
           label: "Matrix",
           description: "Matrix config",
+          preferOver: ["matrix-legacy"],
         },
       },
     });
@@ -336,6 +337,7 @@ describe("loadPluginManifestRegistry", () => {
         },
         label: "Matrix",
         description: "Matrix config",
+        preferOver: ["matrix-legacy"],
       },
     });
   });

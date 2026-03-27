@@ -114,6 +114,7 @@ describe("bundled plugin metadata", () => {
           id: "alpha",
           label: "Alpha Root Label",
           blurb: "Alpha Root Description",
+          preferOver: ["alpha-legacy"],
         },
       },
     });
@@ -169,6 +170,7 @@ describe("bundled plugin metadata", () => {
       },
       label: "Manifest Label",
       description: "Alpha Root Description",
+      preferOver: ["alpha-legacy"],
       uiHints: {
         "channels.alpha.generatedOnly": { help: "generated hint" },
         "channels.alpha.explicitOnly": { help: "manifest hint" },
