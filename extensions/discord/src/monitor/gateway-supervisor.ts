@@ -74,11 +74,14 @@ export function classifyDiscordGatewayEvent(params: {
 }
 
 export function createDiscordGatewaySupervisor(params: {
+  /** Carbon Client — used by provider.ts; emitter is derived internally. */
+  client?: unknown;
+  /** Raw gateway object — used by tests. Takes precedence over client. */
   gateway?: unknown;
   isDisallowedIntentsError: (err: unknown) => boolean;
   runtime: RuntimeEnv;
 }): DiscordGatewaySupervisor {
-  const emitter = getDiscordGatewayEmitter(params.gateway);
+  const emitter = getDiscordGatewayEmitter(params.gateway ?? params.client);
   const pending: DiscordGatewayEvent[] = [];
   if (!emitter) {
     return {
