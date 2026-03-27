@@ -190,7 +190,10 @@ function resolveBindingConversationFromCommand(params: {
     return {
       channel: "discord",
       accountId,
-      conversationId: target.conversationId,
+      conversationId:
+        "conversationId" in target
+          ? target.conversationId
+          : `${target.chatType === "group" ? "channel" : "user"}:${target.to}`,
     };
   }
   return null;
