@@ -182,6 +182,55 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("allows non-workspace pdf paths when tools.fs.roots includes the file", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-ws-"));
+      const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-root-"));
+      try {
+        const cfg = withPdfModel(OPENAI_PDF_MODEL);
+        await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
+        const extractModule = await import("../../media/pdf-extract.js");
+        const extractSpy = vi.spyOn(extractModule, "extractPdfContent").mockResolvedValue({
+          text: "Extracted content",
+          images: [],
+        });
+        completeMock.mockResolvedValue({
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "rooted fallback summary" }],
+        } as never);
+        const outsidePdf = path.join(outsideDir, "rooted.pdf");
+        await fs.writeFile(outsidePdf, "%PDF-1.4 fake");
+
+        const tool = requirePdfTool(
+          createPdfTool({
+            config: cfg,
+            agentDir,
+            workspaceDir,
+            fsPolicy: {
+              workspaceOnly: true,
+              roots: [{ path: outsidePdf, kind: "file", access: "ro" }],
+            },
+          }),
+        );
+
+        const result = await tool.execute("t1", { prompt: "test", pdf: outsidePdf });
+        expect(extractSpy).toHaveBeenCalledTimes(1);
+        expect(result).toMatchObject({
+          content: [{ type: "text", text: "rooted fallback summary" }],
+          details: {
+            pdf: outsidePdf,
+            native: false,
+            model: OPENAI_PDF_MODEL,
+          },
+        });
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("rejects unsupported scheme references", async () => {
     await withConfiguredPdfTool(async (tool) => {
       const result = await tool.execute("t1", {

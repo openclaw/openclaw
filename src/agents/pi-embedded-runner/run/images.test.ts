@@ -371,4 +371,91 @@ describe("detectAndLoadPromptImages", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("still blocks prompt image refs outside workspace when sandbox workspaceOnly and roots are both set", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-sandbox-"));
+    const sandboxRoot = path.join(stateDir, "sandbox");
+    const agentRoot = path.join(stateDir, "agent");
+    await fs.mkdir(sandboxRoot, { recursive: true });
+    await fs.mkdir(agentRoot, { recursive: true });
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    await fs.writeFile(path.join(agentRoot, "secret.png"), Buffer.from(pngB64, "base64"));
+    const sandbox = createUnsafeMountedSandbox({ sandboxRoot, agentRoot });
+    const bridge = sandbox.fsBridge;
+    if (!bridge) {
+      throw new Error("sandbox fs bridge missing");
+    }
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: "Inspect /agent/secret.png",
+        workspaceDir: sandboxRoot,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+        roots: [{ path: agentRoot, kind: "dir", access: "ro" }],
+        sandbox: { root: sandbox.workspaceDir, bridge },
+      });
+
+      expect(result.detectedRefs).toHaveLength(1);
+      expect(result.loadedCount).toBe(0);
+      expect(result.skippedCount).toBe(1);
+      expect(result.images).toHaveLength(0);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows prompt image refs outside workspace when roots explicitly allow the file", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-ws-"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-root-"));
+    const imagePath = path.join(outsideDir, "rooted.png");
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: `Inspect ${imagePath}`,
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+        roots: [{ path: imagePath, kind: "file", access: "ro" }],
+      });
+
+      expect(result.detectedRefs).toHaveLength(1);
+      expect(result.loadedCount).toBe(1);
+      expect(result.skippedCount).toBe(0);
+      expect(result.images).toHaveLength(1);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not widen prompt-image access when a file root points at a directory", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-ws-"));
+    const rootedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-root-"));
+    const imagePath = path.join(rootedDir, "nested.png");
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: `Inspect ${imagePath}`,
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        roots: [{ path: rootedDir, kind: "file", access: "ro" }],
+      });
+
+      expect(result.detectedRefs).toHaveLength(1);
+      expect(result.loadedCount).toBe(0);
+      expect(result.skippedCount).toBe(1);
+      expect(result.images).toHaveLength(0);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      await fs.rm(rootedDir, { recursive: true, force: true });
+    }
+  });
 });

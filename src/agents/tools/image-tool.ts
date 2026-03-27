@@ -473,6 +473,7 @@ export function createImageTool(options?: {
           options?.workspaceDir,
           {
             workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+            roots: options?.fsPolicy?.roots,
           },
           resolvedPath ? [resolvedPath] : undefined,
         );

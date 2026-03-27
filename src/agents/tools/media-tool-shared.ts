@@ -1,6 +1,9 @@
 import { type Api, type Model } from "@mariozechner/pi-ai";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { FsRoot } from "../../config/types.tools.js";
+import type { LocalMediaRoot } from "../../media/local-media-access.js";
+import { appendLocalMediaParentRoots } from "../../media/local-roots.js";
 import { getDefaultLocalRoots } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import {
@@ -356,15 +359,21 @@ export function buildTaskRunDetails(
 
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
-  options?: { workspaceOnly?: boolean },
-  _mediaSources?: readonly string[],
-): string[] {
+  options?: { workspaceOnly?: boolean; roots?: FsRoot[] },
+  mediaSources?: readonly string[],
+): LocalMediaRoot[] {
+  // Roots take precedence, including kind="file" exact-match roots.
+  // Empty roots array is a valid deny-all policy — return empty to block all media reads.
+  if (options?.roots) {
+    return [...options.roots];
+  }
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
   if (options?.workspaceOnly) {
     return workspaceDir ? [workspaceDir] : [];
   }
   const roots = getDefaultLocalRoots();
-  return workspaceDir ? Array.from(new Set([...roots, workspaceDir])) : [...roots];
+  const scopedRoots = workspaceDir ? Array.from(new Set([...roots, workspaceDir])) : [...roots];
+  return appendLocalMediaParentRoots(scopedRoots, mediaSources);
 }
 
 export function resolvePromptAndModelOverride(

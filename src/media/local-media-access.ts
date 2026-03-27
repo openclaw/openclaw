@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { FsRoot, FsRootKind } from "../config/types.tools.js";
 import { assertNoWindowsNetworkPath } from "../infra/local-file-access.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 
@@ -27,9 +28,18 @@ export function getDefaultLocalRoots(): readonly string[] {
   return getDefaultMediaLocalRoots();
 }
 
+export type LocalMediaRoot = string | FsRoot;
+
+function resolveLocalMediaRoot(root: LocalMediaRoot): { path: string; kind: FsRootKind } {
+  if (typeof root === "string") {
+    return { path: root, kind: "dir" };
+  }
+  return { path: root.path, kind: root.kind };
+}
+
 export async function assertLocalMediaAllowed(
   mediaPath: string,
-  localRoots: readonly string[] | "any" | undefined,
+  localRoots: readonly LocalMediaRoot[] | "any" | undefined,
 ): Promise<void> {
   if (localRoots === "any") {
     return;
@@ -50,9 +60,11 @@ export async function assertLocalMediaAllowed(
   }
 
   if (localRoots === undefined) {
-    const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
+    const workspaceRoot = roots.find(
+      (root) => path.basename(resolveLocalMediaRoot(root).path) === "workspace",
+    );
     if (workspaceRoot) {
-      const stateDir = path.dirname(workspaceRoot);
+      const stateDir = path.dirname(resolveLocalMediaRoot(workspaceRoot).path);
       const rel = path.relative(stateDir, resolved);
       if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
         const firstSegment = rel.split(path.sep)[0] ?? "";
@@ -67,19 +79,23 @@ export async function assertLocalMediaAllowed(
   }
 
   for (const root of roots) {
+    const { path: rootPath, kind } = resolveLocalMediaRoot(root);
     let resolvedRoot: string;
     try {
-      resolvedRoot = await fs.realpath(root);
+      resolvedRoot = await fs.realpath(rootPath);
     } catch {
-      resolvedRoot = path.resolve(root);
+      resolvedRoot = path.resolve(rootPath);
     }
     if (resolvedRoot === path.parse(resolvedRoot).root) {
       throw new LocalMediaAccessError(
         "invalid-root",
-        `Invalid localRoots entry (refuses filesystem root): ${root}. Pass a narrower directory.`,
+        `Invalid localRoots entry (refuses filesystem root): ${rootPath}. Pass a narrower directory.`,
       );
     }
-    if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) {
+    if (
+      resolved === resolvedRoot ||
+      (kind === "dir" && resolved.startsWith(resolvedRoot + path.sep))
+    ) {
       return;
     }
   }

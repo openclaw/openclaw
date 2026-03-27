@@ -1105,6 +1105,34 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("allows non-workspace local image paths when tools.fs.roots includes the file", async () => {
+    const fetch = stubMinimaxOkFetch();
+    await withTempAgentDir(async (agentDir) => {
+      const cfg = createMinimaxImageConfig();
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-ws-"));
+      const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-root-"));
+      const outsideImage = path.join(outsideDir, "rooted.png");
+      await fs.writeFile(outsideImage, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+      try {
+        const tool = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          workspaceDir,
+          fsPolicy: {
+            workspaceOnly: true,
+            roots: [{ path: outsideImage, kind: "file", access: "ro" }],
+          },
+        });
+
+        await expectImageToolExecOk(tool, outsideImage);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("allows workspace images via createOpenClawCodingTools when workspace root is explicit", async () => {
     await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
       const fetch = stubMinimaxOkFetch();

@@ -240,6 +240,7 @@ async function loadReferenceImages(params: {
   imageInputs: string[];
   maxBytes?: number;
   workspaceDir?: string;
+  fsRoots?: ToolFsPolicy["roots"];
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
 }): Promise<
   Array<{
@@ -303,6 +304,7 @@ async function loadReferenceImages(params: {
       params.workspaceDir,
       {
         workspaceOnly: params.sandboxConfig?.workspaceOnly === true,
+        roots: params.fsRoots,
       },
       resolvedPath ? [resolvedPath] : undefined,
     );
@@ -469,6 +471,7 @@ export function createImageGenerateTool(options?: {
         imageInputs,
         maxBytes: configuredMediaMaxBytes,
         workspaceDir: options?.workspaceDir,
+        fsRoots: options?.fsPolicy?.roots,
         sandboxConfig,
       });
       const inputImages = loadedReferenceImages.map((entry) => entry.sourceImage);
