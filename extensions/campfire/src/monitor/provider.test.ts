@@ -229,6 +229,53 @@ describe("campfire gateway", () => {
     await startPromise;
   });
 
+  it("authorizes command messages when allowFrom includes wildcard", async () => {
+    const registerRoute = vi.fn().mockReturnValue(() => {});
+    const sendText = vi.fn().mockResolvedValue(undefined);
+    let finalizedCtx: Record<string, unknown> | undefined;
+
+    const gateway = createCampfireGateway({ registerRoute, sendText });
+    const abort = new AbortController();
+    const startPromise = gateway.startAccount({
+      cfg: {},
+      accountId: "default",
+      account: createAccount({ allowFrom: ["*"] }),
+      runtime: {
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+      },
+      abortSignal: abort.signal,
+      getStatus: () => ({ accountId: "default" }),
+      setStatus: () => {},
+      channelRuntime: {
+        reply: {
+          finalizeInboundContext: vi.fn((ctx: Record<string, unknown>) => {
+            finalizedCtx = ctx;
+            return ctx;
+          }),
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn().mockResolvedValue(undefined),
+        },
+      },
+    });
+
+    const registered = registerRoute.mock.calls[0]?.[0];
+    await registered.onInbound({
+      ...validPayload,
+      message: {
+        ...validPayload.message,
+        body: {
+          plain: "!status",
+        },
+      },
+    });
+
+    expect(finalizedCtx?.CommandAuthorized).toBe(true);
+
+    abort.abort();
+    await startPromise;
+  });
+
   it("honors commands.useAccessGroups=false for command authorization", async () => {
     const registerRoute = vi.fn().mockReturnValue(() => {});
     const sendText = vi.fn().mockResolvedValue(undefined);

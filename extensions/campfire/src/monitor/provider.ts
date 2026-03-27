@@ -33,7 +33,7 @@ function resolveCampfireCommandAuthorized(params: {
   }
 
   const allowFrom = params.allowFrom.map((entry) => entry.trim()).filter(Boolean);
-  const senderAllowedForCommands = allowFrom.includes(params.senderId);
+  const senderAllowedForCommands = allowFrom.includes("*") || allowFrom.includes(params.senderId);
 
   return resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups: params.cfg.commands?.useAccessGroups !== false,

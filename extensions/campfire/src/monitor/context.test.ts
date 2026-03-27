@@ -45,6 +45,16 @@ describe("buildCampfireInboundContext", () => {
     expect(context.replyUrl).toBe("https://campfire.example.com/rooms/7/42-AbCdEf/messages");
   });
 
+  it("allows all users when allowFrom contains wildcard", () => {
+    const context = buildCampfireInboundContext({
+      payload: createPayload(),
+      allowFrom: ["*"],
+      baseUrl: "https://campfire.example.com",
+    });
+
+    expect(context.isAllowed).toBe(true);
+  });
+
   it("treats allowFrom entries as sender IDs only", () => {
     const context = buildCampfireInboundContext({
       payload: createPayload(),
