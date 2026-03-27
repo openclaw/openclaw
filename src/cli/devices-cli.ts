@@ -196,6 +196,9 @@ function latestTokenUsedAtMs(tokens: DeviceTokenSummary[] | undefined): number |
   }
   let latest: number | undefined;
   for (const t of tokens) {
+    if (t.revokedAtMs != null) {
+      continue;
+    }
     if (typeof t.lastUsedAtMs === "number" && (latest == null || t.lastUsedAtMs > latest)) {
       latest = t.lastUsedAtMs;
     }
@@ -315,7 +318,10 @@ export function registerDevicesCli(program: Command) {
                 Scopes: device.scopes?.length ? device.scopes.join(", ") : "",
                 Tokens: formatTokenSummary(device.tokens),
                 IP: device.remoteIp ?? "",
-                Created: formatRelativeTimestamp(device.createdAtMs, { dateFallback: true }),
+                Created: formatRelativeTimestamp(device.createdAtMs, {
+                  dateFallback: true,
+                  fallback: "",
+                }),
                 "Last Used": formatRelativeTimestamp(latestTokenUsedAtMs(device.tokens), {
                   dateFallback: true,
                   fallback: "",
