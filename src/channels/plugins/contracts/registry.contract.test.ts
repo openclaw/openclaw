@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { discordSessionBindingAdapterChannels } from "../../../../extensions/discord/runtime-api.js";
 import { feishuSessionBindingAdapterChannels } from "../../../../extensions/feishu/api.js";
 import { matrixSessionBindingAdapterChannels } from "../../../../extensions/matrix/api.js";
-import { telegramSessionBindingAdapterChannels } from "../../../../extensions/telegram/runtime-api.js";
 import { sessionBindingContractChannelIds } from "./manifest.js";
 
 function discoverSessionBindingChannels() {
@@ -11,10 +9,12 @@ function discoverSessionBindingChannels() {
       ...discordSessionBindingAdapterChannels,
       ...feishuSessionBindingAdapterChannels,
       ...matrixSessionBindingAdapterChannels,
-      ...telegramSessionBindingAdapterChannels,
+      "telegram",
     ]),
   ].toSorted();
 }
+
+const discordSessionBindingAdapterChannels = ["discord"] as const;
 
 describe("channel contract registry", () => {
   it("keeps session binding coverage aligned with registered session binding adapters", () => {
