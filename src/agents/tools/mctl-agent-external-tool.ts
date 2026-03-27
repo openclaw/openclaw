@@ -19,6 +19,10 @@ const MctlAgentExternalToolSchema = Type.Object({
   status: Type.Optional(stringEnum(MctlAgentResultStatuses)),
   summary: Type.Optional(Type.String()),
   prUrl: Type.Optional(Type.String()),
+  prNumber: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+  prRepo: Type.Optional(Type.String()),
+  prBranch: Type.Optional(Type.String()),
+  prCommitSha: Type.Optional(Type.String()),
   logsUrl: Type.Optional(Type.String()),
   messageTemplate: Type.Optional(Type.String()),
 });
@@ -89,12 +93,30 @@ export function createMctlAgentExternalTool(): AnyAgentTool {
         const status = readStringParam(params, "status", { required: true, label: "status" });
         const summary = readStringParam(params, "summary") ?? "";
         const prUrl = readStringParam(params, "prUrl");
+        const prNumber = params.prNumber;
+        const prRepo = readStringParam(params, "prRepo");
+        const prBranch = readStringParam(params, "prBranch");
+        const prCommitSha = readStringParam(params, "prCommitSha");
         const logsUrl = readStringParam(params, "logsUrl");
         const messageTemplate = readStringParam(params, "messageTemplate");
 
         const artifacts: Record<string, string> = {};
         if (prUrl) {
           artifacts.pr_url = prUrl;
+        }
+        if (typeof prNumber === "string" && prNumber.trim() !== "") {
+          artifacts.pr_number = prNumber.trim();
+        } else if (typeof prNumber === "number" && Number.isFinite(prNumber)) {
+          artifacts.pr_number = String(prNumber);
+        }
+        if (prRepo) {
+          artifacts.repo = prRepo;
+        }
+        if (prBranch) {
+          artifacts.branch = prBranch;
+        }
+        if (prCommitSha) {
+          artifacts.commit_sha = prCommitSha;
         }
         if (logsUrl) {
           artifacts.logs_url = logsUrl;

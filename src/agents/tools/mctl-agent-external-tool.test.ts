@@ -55,6 +55,10 @@ describe("mctl agent external tool", () => {
       status: "needs_human",
       summary: "Need operator review",
       prUrl: "https://github.com/mctlhq/mctl-gitops/pull/123",
+      prNumber: 123,
+      prRepo: "mctlhq/mctl-gitops",
+      prBranch: "openclaw/ticket-123",
+      prCommitSha: "deadbeef123",
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -70,6 +74,10 @@ describe("mctl agent external tool", () => {
     expect(String(request?.body ?? "")).toContain(
       '"pr_url":"https://github.com/mctlhq/mctl-gitops/pull/123"',
     );
+    expect(String(request?.body ?? "")).toContain('"pr_number":"123"');
+    expect(String(request?.body ?? "")).toContain('"repo":"mctlhq/mctl-gitops"');
+    expect(String(request?.body ?? "")).toContain('"branch":"openclaw/ticket-123"');
+    expect(String(request?.body ?? "")).toContain('"commit_sha":"deadbeef123"');
     expect(JSON.stringify(result)).toContain('"ok":true');
   });
 });
