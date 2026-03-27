@@ -179,4 +179,24 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
     expect(lastResponse?.status).toBe(429);
     expect(await lastResponse?.text()).toBe("Too Many Requests");
   });
+
+  it("does not rate limit valid signed webhook bursts from the same source", async () => {
+    const harness = await startWebhookServer({
+      path: "/nextcloud-auth-rate-limit-valid",
+      onMessage: vi.fn(),
+    });
+    const { body, headers } = createSignedCreateMessageRequest();
+
+    let lastResponse: Response | undefined;
+    for (let attempt = 0; attempt <= WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests; attempt += 1) {
+      lastResponse = await fetch(harness.webhookUrl, {
+        method: "POST",
+        headers,
+        body,
+      });
+    }
+
+    expect(lastResponse).toBeDefined();
+    expect(lastResponse?.status).toBe(200);
+  });
 });
