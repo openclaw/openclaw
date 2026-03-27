@@ -60,13 +60,14 @@ export function resolveEffectivePromptTokens(
   basePromptTokens?: number,
   lastOutputTokens?: number,
   promptTokenEstimate?: number,
+  baseIncludesOutput?: boolean,
 ): number {
   const base = Math.max(0, basePromptTokens ?? 0);
   const output = Math.max(0, lastOutputTokens ?? 0);
   const estimate = Math.max(0, promptTokenEstimate ?? 0);
   // Flush gating projects the next input context by adding the previous
   // completion and the current user prompt estimate.
-  return base + output + estimate;
+  return base + (baseIncludesOutput ? 0 : output) + estimate;
 }
 
 export type SessionTranscriptUsageSnapshot = {
@@ -360,7 +361,7 @@ export async function runPreflightCompactionIfNeeded(params: {
         });
   const projectedTokenCount =
     typeof transcriptPromptTokens === "number"
-      ? resolveEffectivePromptTokens(transcriptPromptTokens, undefined, promptTokenEstimate)
+      ? resolveEffectivePromptTokens(transcriptPromptTokens, undefined, promptTokenEstimate, false)
       : undefined;
   const tokenCountForCompaction =
     typeof projectedTokenCount === "number" &&
@@ -604,6 +605,7 @@ export async function runMemoryFlushIfNeeded(params: {
         promptTokensSnapshot,
         transcriptOutputTokens,
         promptTokenEstimate,
+        entry?.totalTokensFresh,
       )
     : undefined;
   const tokenCountForFlush =
