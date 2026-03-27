@@ -384,7 +384,7 @@ export async function processDiscordMessage(
     GroupChannel: groupChannel,
     UntrustedContext: untrustedContext,
     GroupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
-    GroupSpace: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
+    GroupSpace: isGuildMessage ? (guildSlug || guildInfo?.id) || undefined : undefined,
     OwnerAllowFrom: ownerAllowFrom,
     Provider: "discord" as const,
     Surface: "discord" as const,
