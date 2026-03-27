@@ -51,8 +51,12 @@ export function extractToolCards(message: unknown): ToolCard[] {
   return cards;
 }
 
-export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: string) => void) {
-  const display = resolveToolDisplay({ name: card.name, args: card.args });
+export function renderToolCardSidebar(
+  card: ToolCard,
+  onOpenSidebar?: (content: string) => void,
+  execDetailMaxLength?: number,
+) {
+  const display = resolveToolDisplay({ name: card.name, args: card.args, execDetailMaxLength });
   const detail = formatToolDetail(display);
   const hasText = Boolean(card.text?.trim());
 

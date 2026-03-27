@@ -493,6 +493,7 @@ async function agentCommandInternal(
       registerAgentRunContext(runId, {
         sessionKey,
         verboseLevel: resolvedVerboseLevel,
+        verboseLimit: sessionEntry?.verboseLimit,
       });
     }
 

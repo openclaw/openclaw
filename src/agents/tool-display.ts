@@ -59,6 +59,7 @@ export function resolveToolDisplay(params: {
   name?: string;
   args?: unknown;
   meta?: string;
+  execDetailMaxLength?: number;
 }): ToolDisplay {
   const name = normalizeToolName(params.name);
   const key = name.toLowerCase();
@@ -75,6 +76,7 @@ export function resolveToolDisplay(params: {
     detailMode: "summary",
     detailMaxEntries: MAX_DETAIL_ENTRIES,
     detailFormatKey: (raw) => formatDetailKey(raw, DETAIL_LABEL_OVERRIDES),
+    execDetailMaxLength: params.execDetailMaxLength,
   });
 
   if (detail) {

@@ -177,6 +177,10 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.verboseLevel !== undefined) {
       next.verboseLevel = entry.verboseLevel;
     }
+    if (entry?.verboseLimit !== undefined) {
+      next.verboseLimit = entry.verboseLimit;
+      chatLog.setVerboseLimit(entry.verboseLimit);
+    }
     if (entry?.reasoningLevel !== undefined) {
       next.reasoningLevel = entry.reasoningLevel;
     }
@@ -297,11 +301,14 @@ export function createSessionActions(context: SessionActionContext) {
         thinkingLevel?: string;
         fastMode?: boolean;
         verboseLevel?: string;
+        verboseLimit?: number;
       };
       state.currentSessionId = typeof record.sessionId === "string" ? record.sessionId : null;
       state.sessionInfo.thinkingLevel = record.thinkingLevel ?? state.sessionInfo.thinkingLevel;
       state.sessionInfo.fastMode = record.fastMode ?? state.sessionInfo.fastMode;
       state.sessionInfo.verboseLevel = record.verboseLevel ?? state.sessionInfo.verboseLevel;
+      state.sessionInfo.verboseLimit = record.verboseLimit ?? state.sessionInfo.verboseLimit;
+      chatLog.setVerboseLimit(state.sessionInfo.verboseLimit);
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
       chatLog.clearAll();
       btw.clear();

@@ -18,8 +18,8 @@ type ToolResult = {
 
 const PREVIEW_LINES = 12;
 
-function formatArgs(toolName: string, args: unknown): string {
-  const display = resolveToolDisplay({ name: toolName, args });
+function formatArgs(toolName: string, args: unknown, verboseLimit?: number): string {
+  const display = resolveToolDisplay({ name: toolName, args, execDetailMaxLength: verboseLimit });
   const detail = formatToolDetail(display);
   if (detail) {
     return sanitizeRenderableText(detail);
@@ -63,6 +63,7 @@ export class ToolExecutionComponent extends Container {
   private expanded = false;
   private isError = false;
   private isPartial = true;
+  private verboseLimit?: number;
 
   constructor(toolName: string, args: unknown) {
     super();
@@ -92,6 +93,11 @@ export class ToolExecutionComponent extends Container {
     this.refresh();
   }
 
+  setVerboseLimit(limit: number | undefined) {
+    this.verboseLimit = limit;
+    this.refresh();
+  }
+
   setResult(result: ToolResult | undefined, opts?: { isError?: boolean }) {
     this.result = result;
     this.isPartial = false;
@@ -116,11 +122,12 @@ export class ToolExecutionComponent extends Container {
     const display = resolveToolDisplay({
       name: this.toolName,
       args: this.args,
+      execDetailMaxLength: this.verboseLimit,
     });
     const title = `${display.emoji} ${display.label}${this.isPartial ? " (running)" : ""}`;
     this.header.setText(theme.toolTitle(theme.bold(title)));
 
-    const argLine = formatArgs(this.toolName, this.args);
+    const argLine = formatArgs(this.toolName, this.args, this.verboseLimit);
     this.argsLine.setText(argLine ? theme.dim(argLine) : theme.dim(" "));
 
     const raw = extractText(this.result);

@@ -275,6 +275,15 @@ export async function applySessionsPatchToStore(params: {
     applyVerboseOverride(next, parsed.value);
   }
 
+  if ("verboseLimit" in patch) {
+    const raw = patch.verboseLimit;
+    if (raw === null) {
+      delete next.verboseLimit;
+    } else if (raw !== undefined) {
+      next.verboseLimit = raw;
+    }
+  }
+
   if ("reasoningLevel" in patch) {
     const raw = patch.reasoningLevel;
     if (raw === null) {

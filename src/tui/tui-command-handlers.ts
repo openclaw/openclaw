@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Component, SelectItem, TUI } from "@mariozechner/pi-tui";
+import { DEFAULT_VERBOSE_LIMIT } from "../agents/tool-display-exec.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -339,7 +340,31 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "verbose":
         if (!args) {
-          chatLog.addSystem("usage: /verbose <on|off>");
+          chatLog.addSystem("usage: /verbose <on|off|limit <n>>");
+          break;
+        }
+        if (args.startsWith("limit")) {
+          const limitArg = args.slice("limit".length).trim();
+          if (!limitArg) {
+            const cur = state.sessionInfo.verboseLimit ?? DEFAULT_VERBOSE_LIMIT;
+            chatLog.addSystem(`verbose limit: ${cur}`);
+            break;
+          }
+          const n = Number(limitArg);
+          if (!Number.isInteger(n) || n < 1) {
+            chatLog.addSystem("usage: /verbose limit <n> (integer >= 1)");
+            break;
+          }
+          try {
+            const result = await client.patchSession({
+              key: state.currentSessionKey,
+              verboseLimit: n,
+            });
+            chatLog.addSystem(`verbose limit set to ${n}`);
+            applySessionInfoFromPatch(result);
+          } catch (err) {
+            chatLog.addSystem(`verbose limit failed: ${String(err)}`);
+          }
           break;
         }
         try {

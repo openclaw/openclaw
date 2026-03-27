@@ -1,5 +1,5 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, getAgentRunContext } from "../infra/agent-events.js";
 import {
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
@@ -362,7 +362,8 @@ export async function handleToolExecutionStart(
     }
   }
 
-  const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
+  const verboseLimit = getAgentRunContext(ctx.params.runId)?.verboseLimit;
+  const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args, verboseLimit));
   ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta));
   ctx.log.debug(
     `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,

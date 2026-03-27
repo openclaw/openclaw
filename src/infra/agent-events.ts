@@ -16,6 +16,7 @@ export type AgentEventPayload = {
 export type AgentRunContext = {
   sessionKey?: string;
   verboseLevel?: VerboseLevel;
+  verboseLimit?: number;
   isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
@@ -52,6 +53,9 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
   if (context.verboseLevel && existing.verboseLevel !== context.verboseLevel) {
     existing.verboseLevel = context.verboseLevel;
+  }
+  if (context.verboseLimit !== undefined && existing.verboseLimit !== context.verboseLimit) {
+    existing.verboseLimit = context.verboseLimit;
   }
   if (context.isControlUiVisible !== undefined) {
     existing.isControlUiVisible = context.isControlUiVisible;

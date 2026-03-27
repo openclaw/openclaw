@@ -118,6 +118,7 @@ export function resolveToolDisplay(params: {
   name?: string;
   args?: unknown;
   meta?: string;
+  execDetailMaxLength?: number;
 }): ToolDisplay {
   const name = normalizeToolName(params.name);
   const key = name.toLowerCase();
@@ -133,6 +134,7 @@ export function resolveToolDisplay(params: {
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "first",
     detailCoerce: { includeFalse: true, includeZero: true },
+    execDetailMaxLength: params.execDetailMaxLength,
   });
 
   if (detail) {

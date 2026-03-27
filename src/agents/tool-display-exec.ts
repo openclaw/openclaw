@@ -379,7 +379,9 @@ function isGenericSummary(summary: string): boolean {
   return false;
 }
 
-function compactRawCommand(raw: string, maxLength = 120): string {
+export const DEFAULT_VERBOSE_LIMIT = 120;
+
+function compactRawCommand(raw: string, maxLength = DEFAULT_VERBOSE_LIMIT): string {
   const oneLine = raw
     .replace(/\s*\n\s*/g, " ")
     .replace(/\s{2,}/g, " ")
@@ -390,7 +392,7 @@ function compactRawCommand(raw: string, maxLength = 120): string {
   return `${oneLine.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
-export function resolveExecDetail(args: unknown): string | undefined {
+export function resolveExecDetail(args: unknown, maxLength?: number): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
@@ -413,7 +415,7 @@ export function resolveExecDetail(args: unknown): string | undefined {
         : undefined;
   const cwd = cwdRaw?.trim() || result?.chdirPath || undefined;
 
-  const compact = compactRawCommand(unwrapped);
+  const compact = compactRawCommand(unwrapped, maxLength ?? DEFAULT_VERBOSE_LIMIT);
   if (result?.allGeneric !== false && isGenericSummary(summary)) {
     return cwd ? `${compact} (in ${cwd})` : compact;
   }

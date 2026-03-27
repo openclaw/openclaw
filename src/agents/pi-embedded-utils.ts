@@ -449,7 +449,11 @@ export function extractThinkingFromTaggedStream(text: string): string {
   return text.slice(start).trim();
 }
 
-export function inferToolMetaFromArgs(toolName: string, args: unknown): string | undefined {
-  const display = resolveToolDisplay({ name: toolName, args });
+export function inferToolMetaFromArgs(
+  toolName: string,
+  args: unknown,
+  execDetailMaxLength?: number,
+): string | undefined {
+  const display = resolveToolDisplay({ name: toolName, args, execDetailMaxLength });
   return formatToolDetail(display);
 }

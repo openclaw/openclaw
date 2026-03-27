@@ -1212,6 +1212,7 @@ export function buildGatewaySessionRow(params: {
     thinkingLevel: entry?.thinkingLevel,
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
+    verboseLimit: entry?.verboseLimit,
     reasoningLevel: entry?.reasoningLevel,
     elevatedLevel: entry?.elevatedLevel,
     sendPolicy: entry?.sendPolicy,

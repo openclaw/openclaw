@@ -36,6 +36,7 @@ export type GatewaySessionRow = {
   thinkingLevel?: string;
   fastMode?: boolean;
   verboseLevel?: string;
+  verboseLimit?: number;
   reasoningLevel?: string;
   elevatedLevel?: string;
   sendPolicy?: "allow" | "deny";

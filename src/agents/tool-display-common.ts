@@ -75,6 +75,7 @@ export function resolveToolVerbAndDetailForArgs(params: {
   detailCoerce?: CoerceDisplayValueOptions;
   detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
+  execDetailMaxLength?: number;
 }): { verb?: string; detail?: string } {
   return resolveToolVerbAndDetail({
     toolKey: params.toolKey,
@@ -87,6 +88,7 @@ export function resolveToolVerbAndDetailForArgs(params: {
     detailCoerce: params.detailCoerce,
     detailMaxEntries: params.detailMaxEntries,
     detailFormatKey: params.detailFormatKey,
+    execDetailMaxLength: params.execDetailMaxLength,
   });
 }
 
@@ -385,6 +387,7 @@ export function resolveToolVerbAndDetail(params: {
   detailCoerce?: CoerceDisplayValueOptions;
   detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
+  execDetailMaxLength?: number;
 }): { verb?: string; detail?: string } {
   const actionSpec = resolveActionSpec(params.spec, params.action);
   const fallbackVerb =
@@ -397,7 +400,7 @@ export function resolveToolVerbAndDetail(params: {
 
   let detail: string | undefined;
   if (params.toolKey === "exec") {
-    detail = resolveExecDetail(params.args);
+    detail = resolveExecDetail(params.args, params.execDetailMaxLength);
   }
   if (!detail && params.toolKey === "read") {
     detail = resolveReadDetail(params.args);

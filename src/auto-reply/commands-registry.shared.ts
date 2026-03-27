@@ -649,9 +649,9 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       args: [
         {
           name: "mode",
-          description: "on or off",
+          description: "on, off, or limit <n>",
           type: "string",
-          choices: ["on", "off"],
+          choices: ["on", "off", "limit"],
         },
       ],
       argsMenu: "auto",

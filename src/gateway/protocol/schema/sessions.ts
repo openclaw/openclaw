@@ -101,6 +101,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    verboseLimit: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
     reasoningLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     responseUsage: Type.Optional(
       Type.Union([

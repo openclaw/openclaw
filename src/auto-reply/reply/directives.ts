@@ -22,6 +22,7 @@ type ExtractedLevel<T> = {
 const matchLevelDirective = (
   body: string,
   names: string[],
+  opts?: { numericSuffixWords?: string[] },
 ): { start: number; end: number; rawLevel?: string } | null => {
   const namePattern = names.map(escapeRegExp).join("|");
   const match = body.match(new RegExp(`(?:^|\\s)\\/(?:${namePattern})(?=$|\\s|:)`, "i"));
@@ -44,7 +45,22 @@ const matchLevelDirective = (
   while (i < body.length && /[A-Za-z-]/.test(body[i])) {
     i += 1;
   }
-  const rawLevel = i > argStart ? body.slice(argStart, i) : undefined;
+  let rawLevel = i > argStart ? body.slice(argStart, i) : undefined;
+  // Optionally consume a numeric suffix (e.g. "limit 50") for specified words
+  if (rawLevel && opts?.numericSuffixWords?.includes(rawLevel.toLowerCase())) {
+    let j = i;
+    while (j < body.length && body[j] === " ") {
+      j += 1;
+    }
+    const digitStart = j;
+    while (j < body.length && /\d/.test(body[j])) {
+      j += 1;
+    }
+    if (j > digitStart) {
+      rawLevel = rawLevel + " " + body.slice(digitStart, j);
+      i = j;
+    }
+  }
   end = i;
   return { start, end, rawLevel };
 };
@@ -53,8 +69,9 @@ const extractLevelDirective = <T>(
   body: string,
   names: string[],
   normalize: (raw?: string) => T | undefined,
+  opts?: { numericSuffixWords?: string[] },
 ): ExtractedLevel<T> => {
-  const match = matchLevelDirective(body, names);
+  const match = matchLevelDirective(body, names, opts);
   if (!match) {
     return { cleaned: body.trim(), hasDirective: false };
   }
@@ -116,7 +133,9 @@ export function extractVerboseDirective(body?: string): {
   if (!body) {
     return { cleaned: "", hasDirective: false };
   }
-  const extracted = extractLevelDirective(body, ["verbose", "v"], normalizeVerboseLevel);
+  const extracted = extractLevelDirective(body, ["verbose", "v"], normalizeVerboseLevel, {
+    numericSuffixWords: ["limit"],
+  });
   return {
     cleaned: extracted.cleaned,
     verboseLevel: extracted.level,

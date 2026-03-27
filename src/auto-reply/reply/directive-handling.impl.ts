@@ -6,6 +6,7 @@ import {
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { requestLiveSessionModelSwitch } from "../../agents/live-model-switch.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { DEFAULT_VERBOSE_LIMIT } from "../../agents/tool-display-exec.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
@@ -170,6 +171,28 @@ export async function handleDirectiveOnly(
       return {
         text: withOptions(`Current verbose level: ${level}.`, "on, full, off"),
       };
+    }
+    if (directives.rawVerboseLevel.startsWith("limit")) {
+      const limitArg = directives.rawVerboseLevel.slice("limit".length).trim();
+      if (!limitArg) {
+        const cur = sessionEntry?.verboseLimit ?? DEFAULT_VERBOSE_LIMIT;
+        return { text: `Verbose limit: ${cur}` };
+      }
+      const n = Number(limitArg);
+      if (!Number.isInteger(n) || n < 1) {
+        return { text: `Invalid verbose limit "${limitArg}". Use a positive integer >= 1.` };
+      }
+      if (sessionEntry) {
+        sessionEntry.verboseLimit = n;
+        sessionEntry.updatedAt = Date.now();
+        sessionStore[sessionKey] = sessionEntry;
+        if (storePath) {
+          await updateSessionStore(storePath, (store) => {
+            store[sessionKey] = sessionEntry;
+          });
+        }
+      }
+      return { text: `Verbose limit set to ${n}.` };
     }
     return {
       text: `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on, full.`,

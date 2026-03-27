@@ -12,6 +12,7 @@ export class ChatLog extends Container {
   private streamingRuns = new Map<string, AssistantMessageComponent>();
   private btwMessage: BtwInlineMessage | null = null;
   private toolsExpanded = false;
+  private verboseLimit?: number;
 
   constructor(maxComponents = 180) {
     super();
@@ -155,6 +156,7 @@ export class ChatLog extends Container {
     }
     const component = new ToolExecutionComponent(toolName, args);
     component.setExpanded(this.toolsExpanded);
+    component.setVerboseLimit(this.verboseLimit);
     this.toolById.set(toolCallId, component);
     this.append(component);
     return component;
@@ -190,6 +192,13 @@ export class ChatLog extends Container {
     this.toolsExpanded = expanded;
     for (const tool of this.toolById.values()) {
       tool.setExpanded(expanded);
+    }
+  }
+
+  setVerboseLimit(limit: number | undefined) {
+    this.verboseLimit = limit;
+    for (const tool of this.toolById.values()) {
+      tool.setVerboseLimit(limit);
     }
   }
 }

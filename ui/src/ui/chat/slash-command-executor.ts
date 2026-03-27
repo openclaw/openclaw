@@ -3,6 +3,7 @@
  * Calls gateway RPC methods and returns formatted results.
  */
 
+import { DEFAULT_VERBOSE_LIMIT } from "../../../../src/agents/tool-display-exec.js";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
@@ -244,6 +245,31 @@ async function executeVerbose(
       };
     } catch (err) {
       return { content: `Failed to get verbose level: ${String(err)}` };
+    }
+  }
+
+  if (rawLevel.startsWith("limit")) {
+    const limitArg = rawLevel.slice("limit".length).trim();
+    if (!limitArg) {
+      try {
+        const session = await loadCurrentSession(client, sessionKey);
+        const cur = session?.verboseLimit ?? DEFAULT_VERBOSE_LIMIT;
+        return { content: `Verbose limit: **${cur}**` };
+      } catch (err) {
+        return { content: `Failed to get verbose limit: ${String(err)}` };
+      }
+    }
+    const n = Number(limitArg);
+    if (!Number.isInteger(n) || n < 1) {
+      return {
+        content: `Invalid verbose limit "${limitArg}". Use a positive integer, e.g. \`/verbose limit 300\`.`,
+      };
+    }
+    try {
+      await client.request("sessions.patch", { key: sessionKey, verboseLimit: n });
+      return { content: `Verbose limit set to **${n}**.` };
+    } catch (err) {
+      return { content: `Failed to set verbose limit: ${String(err)}` };
     }
   }
 
