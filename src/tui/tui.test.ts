@@ -1,14 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
+  dispatchNextQueuedPrompt,
   isIgnorableTuiStopError,
   resolveCtrlCAction,
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
   resolveInitialTuiAgentId,
   resolveTuiSessionKey,
+  shouldQueuePromptBehindActiveRun,
   stopTuiSafely,
 } from "./tui.js";
 
@@ -166,6 +168,86 @@ describe("resolveGatewayDisconnectState", () => {
     expect(state.connectionStatus).toBe("gateway disconnected: network timeout");
     expect(state.activityStatus).toBe("idle");
     expect(state.pairingHint).toBeUndefined();
+  });
+});
+
+describe("queued prompt recovery", () => {
+  it("queues behind a recently active busy run", () => {
+    expect(
+      shouldQueuePromptBehindActiveRun({
+        activeChatRunId: "run-1",
+        activityStatus: "waiting",
+        isConnected: true,
+        activeRunLastProgressAt: 10_000,
+        now: 25_000,
+        stallMs: 30_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not queue behind a stale active run", () => {
+    expect(
+      shouldQueuePromptBehindActiveRun({
+        activeChatRunId: "run-1",
+        activityStatus: "waiting",
+        isConnected: true,
+        activeRunLastProgressAt: 10_000,
+        now: 40_001,
+        stallMs: 30_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not queue when disconnected or not busy", () => {
+    expect(
+      shouldQueuePromptBehindActiveRun({
+        activeChatRunId: "run-1",
+        activityStatus: "idle",
+        isConnected: true,
+        activeRunLastProgressAt: 10_000,
+        now: 10_001,
+      }),
+    ).toBe(false);
+    expect(
+      shouldQueuePromptBehindActiveRun({
+        activeChatRunId: "run-1",
+        activityStatus: "waiting",
+        isConnected: false,
+        activeRunLastProgressAt: 10_000,
+        now: 10_001,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps the next queued prompt when dispatch cannot start a run", async () => {
+    const queuedChatMessages = ["first", "second"];
+    const dispatchQueuedMessage = vi.fn().mockResolvedValue(false);
+
+    await expect(
+      dispatchNextQueuedPrompt({
+        queuedChatMessages,
+        activeChatRunId: null,
+        dispatchQueuedMessage,
+      }),
+    ).resolves.toBe(false);
+
+    expect(dispatchQueuedMessage).toHaveBeenCalledWith("first");
+    expect(queuedChatMessages).toEqual(["first", "second"]);
+  });
+
+  it("removes the next queued prompt after dispatch starts a run", async () => {
+    const queuedChatMessages = ["first", "second"];
+    const dispatchQueuedMessage = vi.fn().mockResolvedValue(true);
+
+    await expect(
+      dispatchNextQueuedPrompt({
+        queuedChatMessages,
+        activeChatRunId: null,
+        dispatchQueuedMessage,
+      }),
+    ).resolves.toBe(true);
+
+    expect(queuedChatMessages).toEqual(["second"]);
   });
 });
 

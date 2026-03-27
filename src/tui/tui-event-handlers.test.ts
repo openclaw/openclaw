@@ -82,6 +82,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const setActivityStatus = vi.fn();
     const loadHistory = vi.fn();
     const flushQueuedMessage = vi.fn().mockResolvedValue(false);
+    const noteActiveChatRunProgress = vi.fn();
     const localRunIds = new Set<string>();
     const localBtwRunIds = new Set<string>();
     const noteLocalRunId = (runId: string) => {
@@ -105,6 +106,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       setActivityStatus,
       loadHistory,
       flushQueuedMessage,
+      noteActiveChatRunProgress,
       noteLocalRunId,
       noteLocalBtwRunId,
       forgetLocalRunId,
@@ -131,6 +133,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       state,
       setActivityStatus: context.setActivityStatus,
       loadHistory: context.loadHistory,
+      noteActiveChatRunProgress: context.noteActiveChatRunProgress,
       flushQueuedMessage: context.flushQueuedMessage,
       isLocalRunId: context.isLocalRunId,
       forgetLocalRunId: context.forgetLocalRunId,
@@ -231,6 +234,28 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     handleAgentEvent(agentEvt);
 
     expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", undefined);
+  });
+
+  it("records progress timestamps for active chat and agent events", () => {
+    const { state, noteActiveChatRunProgress, handleChatEvent, handleAgentEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: "run-progress" },
+      });
+
+    handleChatEvent({
+      runId: "run-progress",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    });
+    handleAgentEvent({
+      runId: "run-progress",
+      stream: "lifecycle",
+      data: { phase: "start" },
+    });
+
+    expect(noteActiveChatRunProgress).toHaveBeenNthCalledWith(1, "run-progress");
+    expect(noteActiveChatRunProgress).toHaveBeenNthCalledWith(2, "run-progress");
   });
 
   it("accepts chat events when session key is an alias of the active canonical key", () => {

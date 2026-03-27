@@ -5,6 +5,9 @@ type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
 type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
 type EnqueueQueuedMessageMock = ReturnType<typeof vi.fn> & ((text: string) => number);
+type GetQueuedMessageCountMock = ReturnType<typeof vi.fn> & (() => number);
+type ShouldQueuePromptMock = ReturnType<typeof vi.fn> & (() => boolean);
+type FlushQueuedMessageMock = ReturnType<typeof vi.fn> & (() => Promise<boolean>);
 
 function createHarness(params?: {
   sendChat?: ReturnType<typeof vi.fn>;
@@ -13,6 +16,9 @@ function createHarness(params?: {
   loadHistory?: LoadHistoryMock;
   setActivityStatus?: SetActivityStatusMock;
   enqueueQueuedMessage?: EnqueueQueuedMessageMock;
+  getQueuedMessageCount?: GetQueuedMessageCountMock;
+  shouldQueuePrompt?: ShouldQueuePromptMock;
+  flushQueuedMessage?: FlushQueuedMessageMock;
   isConnected?: boolean;
   activeChatRunId?: string | null;
 }) {
@@ -26,6 +32,13 @@ function createHarness(params?: {
   const noteLocalBtwRunId = vi.fn();
   const enqueueQueuedMessage =
     params?.enqueueQueuedMessage ?? (vi.fn().mockReturnValue(1) as EnqueueQueuedMessageMock);
+  const getQueuedMessageCount =
+    params?.getQueuedMessageCount ?? (vi.fn().mockReturnValue(0) as GetQueuedMessageCountMock);
+  const shouldQueuePrompt =
+    params?.shouldQueuePrompt ?? (vi.fn().mockReturnValue(false) as ShouldQueuePromptMock);
+  const flushQueuedMessage =
+    params?.flushQueuedMessage ??
+    (vi.fn().mockResolvedValue(false) as FlushQueuedMessageMock);
   const loadHistory =
     params?.loadHistory ?? (vi.fn().mockResolvedValue(undefined) as LoadHistoryMock);
   const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
@@ -55,7 +68,10 @@ function createHarness(params?: {
     applySessionInfoFromPatch: vi.fn(),
     noteLocalRunId,
     noteLocalBtwRunId,
+    getQueuedMessageCount,
     enqueueQueuedMessage,
+    shouldQueuePrompt,
+    flushQueuedMessage,
     forgetLocalRunId: vi.fn(),
     forgetLocalBtwRunId: vi.fn(),
     requestExit: vi.fn(),
@@ -73,7 +89,10 @@ function createHarness(params?: {
     setActivityStatus,
     noteLocalRunId,
     noteLocalBtwRunId,
+    getQueuedMessageCount,
     enqueueQueuedMessage,
+    shouldQueuePrompt,
+    flushQueuedMessage,
     state,
   };
 }
@@ -148,9 +167,11 @@ describe("tui command handlers", () => {
 
   it("queues normal prompts while another run is active", async () => {
     const enqueueQueuedMessage = vi.fn().mockReturnValue(2);
+    const shouldQueuePrompt = vi.fn().mockReturnValue(true);
     const { handleCommand, sendChat, addUser, addSystem, state } = createHarness({
       activeChatRunId: "run-active",
       enqueueQueuedMessage,
+      shouldQueuePrompt,
     });
 
     await handleCommand("/context");
@@ -160,6 +181,50 @@ describe("tui command handlers", () => {
     expect(addUser).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("queued prompt (2 pending)");
     expect(state.activeChatRunId).toBe("run-active");
+  });
+
+  it("sends immediately when the tracked active run is stale", async () => {
+    const shouldQueuePrompt = vi.fn().mockReturnValue(false);
+    const { handleCommand, sendChat, addUser, addSystem, enqueueQueuedMessage, state } =
+      createHarness({
+        activeChatRunId: "run-stale",
+        shouldQueuePrompt,
+      });
+
+    await handleCommand("/context");
+
+    expect(enqueueQueuedMessage).not.toHaveBeenCalled();
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        message: "/context",
+      }),
+    );
+    expect(addUser).toHaveBeenCalledWith("/context");
+    expect(addSystem).not.toHaveBeenCalledWith(expect.stringContaining("queued prompt"));
+    expect(state.activeChatRunId).not.toBe("run-stale");
+  });
+
+  it("flushes queued backlog before sending behind a stale active run", async () => {
+    const enqueueQueuedMessage = vi.fn().mockReturnValue(3);
+    const shouldQueuePrompt = vi.fn().mockReturnValue(false);
+    const flushQueuedMessage = vi.fn().mockResolvedValue(true);
+    const { handleCommand, sendChat, addUser, addSystem, state } = createHarness({
+      activeChatRunId: "run-stale",
+      enqueueQueuedMessage,
+      getQueuedMessageCount: vi.fn().mockReturnValue(2),
+      shouldQueuePrompt,
+      flushQueuedMessage,
+    });
+
+    await handleCommand("/context");
+
+    expect(enqueueQueuedMessage).toHaveBeenCalledWith("/context");
+    expect(flushQueuedMessage).toHaveBeenCalledTimes(1);
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("queued prompt (3 pending)");
+    expect(state.activeChatRunId).toBeNull();
   });
 
   it("creates unique session for /new and resets shared session for /reset", async () => {

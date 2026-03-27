@@ -44,7 +44,10 @@ type CommandHandlerContext = {
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
   noteLocalRunId: (runId: string) => void;
   noteLocalBtwRunId?: (runId: string) => void;
+  getQueuedMessageCount?: () => number;
   enqueueQueuedMessage?: (text: string) => number;
+  shouldQueuePrompt?: () => boolean;
+  flushQueuedMessage?: () => Promise<boolean>;
   forgetLocalRunId?: (runId: string) => void;
   forgetLocalBtwRunId?: (runId: string) => void;
   requestExit: () => void;
@@ -74,7 +77,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     applySessionInfoFromPatch,
     noteLocalRunId,
     noteLocalBtwRunId,
+    getQueuedMessageCount,
     enqueueQueuedMessage,
+    shouldQueuePrompt,
+    flushQueuedMessage,
     forgetLocalRunId,
     forgetLocalBtwRunId,
     requestExit,
@@ -504,27 +510,56 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     tui.requestRender();
   };
 
-  const sendMessage = async (text: string) => {
+  const queuePrompt = (text: string) => {
+    const pending = enqueueQueuedMessage?.(text) ?? 0;
+    const pendingSuffix = pending > 0 ? ` (${pending} pending)` : "";
+    chatLog.addSystem(`queued prompt${pendingSuffix}`);
+    tui.requestRender();
+    return pending;
+  };
+
+  const sendMessageInternal = async (
+    text: string,
+    sendOpts?: { allowQueue?: boolean },
+  ): Promise<boolean> => {
+    const allowQueue = sendOpts?.allowQueue ?? true;
     if (!state.isConnected) {
       chatLog.addSystem("not connected to gateway — message not sent");
       setActivityStatus("disconnected");
       tui.requestRender();
-      return;
+      return false;
     }
     const isBtw = isBtwCommand(text);
-    if (!isBtw && state.activeChatRunId && enqueueQueuedMessage) {
-      const pending = enqueueQueuedMessage(text);
-      const pendingSuffix = pending > 0 ? ` (${pending} pending)` : "";
-      chatLog.addSystem(`queued prompt${pendingSuffix}`);
-      tui.requestRender();
-      return;
+    if (!isBtw && allowQueue && state.activeChatRunId && enqueueQueuedMessage) {
+      if (shouldQueuePrompt?.() ?? true) {
+        queuePrompt(text);
+        return false;
+      }
+
+      state.activeChatRunId = null;
+      if ((getQueuedMessageCount?.() ?? 0) > 0 && flushQueuedMessage) {
+        queuePrompt(text);
+        return await flushQueuedMessage();
+      }
+    }
+    if (
+      !isBtw &&
+      allowQueue &&
+      enqueueQueuedMessage &&
+      (getQueuedMessageCount?.() ?? 0) > 0 &&
+      flushQueuedMessage
+    ) {
+      queuePrompt(text);
+      return await flushQueuedMessage();
     }
     const runId = randomUUID();
+    let startedRun = false;
     try {
       if (!isBtw) {
         chatLog.addUser(text);
         noteLocalRunId(runId);
         state.activeChatRunId = runId;
+        startedRun = true;
         setActivityStatus("sending");
       } else {
         noteLocalBtwRunId?.(runId);
@@ -542,27 +577,34 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         setActivityStatus("waiting");
         tui.requestRender();
       }
+      return true;
     } catch (err) {
       if (isBtw) {
         forgetLocalBtwRunId?.(runId);
       }
-      if (!isBtw && state.activeChatRunId) {
-        forgetLocalRunId?.(state.activeChatRunId);
-      }
       if (!isBtw) {
-        state.activeChatRunId = null;
+        forgetLocalRunId?.(runId);
+        if (state.activeChatRunId === runId) {
+          state.activeChatRunId = null;
+        }
       }
       chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);
       if (!isBtw) {
         setActivityStatus("error");
       }
       tui.requestRender();
+      return startedRun;
     }
+  };
+
+  const sendMessage = async (text: string) => {
+    await sendMessageInternal(text);
   };
 
   return {
     handleCommand,
     sendMessage,
+    sendMessageInternal,
     openModelSelector,
     openAgentSelector,
     openSessionSelector,

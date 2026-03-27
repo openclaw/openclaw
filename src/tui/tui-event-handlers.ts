@@ -40,6 +40,7 @@ type EventHandlerContext = {
   isLocalBtwRunId?: (runId: string) => boolean;
   forgetLocalBtwRunId?: (runId: string) => void;
   clearLocalBtwRunIds?: () => void;
+  noteActiveChatRunProgress?: (runId: string) => void;
   flushQueuedMessage?: () => Promise<boolean>;
 };
 
@@ -58,6 +59,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     isLocalBtwRunId,
     forgetLocalBtwRunId,
     clearLocalBtwRunIds,
+    noteActiveChatRunProgress,
     flushQueuedMessage,
   } = context;
   const finalizedRuns = new Map<string, number>();
@@ -271,6 +273,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
       return;
     }
+    if (evt.runId === state.activeChatRunId) {
+      noteActiveChatRunProgress?.(evt.runId);
+    }
     if (finalizedRuns.has(evt.runId)) {
       if (evt.state === "delta") {
         return;
@@ -373,6 +378,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     // active chat run id, not the session id. Tool results can arrive after the chat
     // final event, so accept finalized runs for tool updates.
     const isActiveRun = evt.runId === state.activeChatRunId;
+    if (isActiveRun) {
+      noteActiveChatRunProgress?.(evt.runId);
+    }
     const isKnownRun = isActiveRun || sessionRuns.has(evt.runId) || finalizedRuns.has(evt.runId);
     if (!isKnownRun) {
       return;

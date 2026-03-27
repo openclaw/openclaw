@@ -185,6 +185,50 @@ export function resolveCtrlCAction(params: {
   };
 }
 
+const queuedPromptBusyStates = new Set(["sending", "waiting", "streaming", "running"]);
+const defaultActiveChatRunStallMs = 30_000;
+
+export function shouldQueuePromptBehindActiveRun(params: {
+  activeChatRunId: string | null;
+  activityStatus: string;
+  isConnected: boolean;
+  activeRunLastProgressAt: number | null;
+  now?: number;
+  stallMs?: number;
+}): boolean {
+  if (!params.isConnected || !params.activeChatRunId) {
+    return false;
+  }
+  if (!queuedPromptBusyStates.has(params.activityStatus)) {
+    return false;
+  }
+  if (params.activeRunLastProgressAt == null) {
+    return false;
+  }
+  const now = params.now ?? Date.now();
+  const stallMs = Math.max(0, Math.floor(params.stallMs ?? defaultActiveChatRunStallMs));
+  return now - params.activeRunLastProgressAt <= stallMs;
+}
+
+export async function dispatchNextQueuedPrompt(params: {
+  queuedChatMessages: string[];
+  activeChatRunId: string | null;
+  dispatchQueuedMessage?: (text: string) => Promise<boolean>;
+}): Promise<boolean> {
+  if (params.activeChatRunId || !params.dispatchQueuedMessage) {
+    return false;
+  }
+  const next = params.queuedChatMessages[0];
+  if (!next) {
+    return false;
+  }
+  const started = await params.dispatchQueuedMessage(next);
+  if (started) {
+    params.queuedChatMessages.shift();
+  }
+  return started;
+}
+
 export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
   const initialSessionInput = (opts.session ?? "").trim();
@@ -203,6 +247,7 @@ export async function runTui(opts: TuiOptions) {
   let initialSessionApplied = false;
   let currentSessionId: string | null = null;
   let activeChatRunId: string | null = null;
+  let activeChatRunLastProgressAt: number | null = null;
   let historyLoaded = false;
   let isConnected = false;
   let wasDisconnected = false;
@@ -275,6 +320,7 @@ export async function runTui(opts: TuiOptions) {
     },
     set activeChatRunId(value) {
       activeChatRunId = value;
+      activeChatRunLastProgressAt = value ? Date.now() : null;
     },
     get historyLoaded() {
       return historyLoaded;
@@ -394,28 +440,40 @@ export async function runTui(opts: TuiOptions) {
     queuedChatMessages.length = 0;
   };
 
+  const getQueuedMessageCount = () => queuedChatMessages.length;
+
   const enqueueQueuedMessage = (text: string) => {
     queuedChatMessages.push(text);
     return queuedChatMessages.length;
   };
 
-  let dispatchQueuedMessage: ((text: string) => Promise<void>) | undefined;
+  const noteActiveChatRunProgress = (runId: string) => {
+    if (!runId || runId !== activeChatRunId) {
+      return;
+    }
+    activeChatRunLastProgressAt = Date.now();
+  };
+
+  const shouldQueuePrompt = () =>
+    shouldQueuePromptBehindActiveRun({
+      activeChatRunId: state.activeChatRunId,
+      activityStatus: state.activityStatus,
+      isConnected: state.isConnected,
+      activeRunLastProgressAt: activeChatRunLastProgressAt,
+    });
+
+  let dispatchQueuedMessage: ((text: string) => Promise<boolean>) | undefined;
 
   const flushQueuedMessage = async (): Promise<boolean> => {
     if (flushQueuedMessagePromise) {
       return await flushQueuedMessagePromise;
     }
-    const run = async () => {
-      if (state.activeChatRunId || !dispatchQueuedMessage) {
-        return false;
-      }
-      const next = queuedChatMessages.shift();
-      if (!next) {
-        return false;
-      }
-      await dispatchQueuedMessage(next);
-      return true;
-    };
+    const run = async () =>
+      await dispatchNextQueuedPrompt({
+        queuedChatMessages,
+        activeChatRunId: state.activeChatRunId,
+        dispatchQueuedMessage,
+      });
     flushQueuedMessagePromise = run().finally(() => {
       flushQueuedMessagePromise = null;
     });
@@ -754,6 +812,7 @@ export async function runTui(opts: TuiOptions) {
     isLocalBtwRunId,
     forgetLocalBtwRunId,
     clearLocalBtwRunIds,
+    noteActiveChatRunProgress,
     flushQueuedMessage,
   });
 
@@ -767,31 +826,40 @@ export async function runTui(opts: TuiOptions) {
     process.exit(0);
   };
 
-  const { handleCommand, sendMessage, openModelSelector, openAgentSelector, openSessionSelector } =
-    createCommandHandlers({
-      client,
-      chatLog,
-      tui,
-      opts,
-      state,
-      deliverDefault,
-      openOverlay,
-      closeOverlay,
-      refreshSessionInfo,
-      applySessionInfoFromPatch,
-      loadHistory,
-      setSession,
-      refreshAgents,
-      abortActive,
-      setActivityStatus,
-      formatSessionKey,
-      noteLocalRunId,
-      noteLocalBtwRunId,
-      enqueueQueuedMessage,
-      forgetLocalRunId,
-      forgetLocalBtwRunId,
-      requestExit,
-    });
+  const {
+    handleCommand,
+    sendMessage,
+    sendMessageInternal,
+    openModelSelector,
+    openAgentSelector,
+    openSessionSelector,
+  } = createCommandHandlers({
+    client,
+    chatLog,
+    tui,
+    opts,
+    state,
+    deliverDefault,
+    openOverlay,
+    closeOverlay,
+    refreshSessionInfo,
+    applySessionInfoFromPatch,
+    loadHistory,
+    setSession,
+    refreshAgents,
+    abortActive,
+    setActivityStatus,
+    formatSessionKey,
+    noteLocalRunId,
+    noteLocalBtwRunId,
+    getQueuedMessageCount,
+    enqueueQueuedMessage,
+    shouldQueuePrompt,
+    flushQueuedMessage,
+    forgetLocalRunId,
+    forgetLocalBtwRunId,
+    requestExit,
+  });
 
   const { runLocalShellLine } = createLocalShellRunner({
     chatLog,
@@ -799,7 +867,7 @@ export async function runTui(opts: TuiOptions) {
     openOverlay,
     closeOverlay,
   });
-  dispatchQueuedMessage = sendMessage;
+  dispatchQueuedMessage = (text) => sendMessageInternal(text, { allowQueue: false });
   updateAutocompleteProvider();
   const submitHandler = createEditorSubmitHandler({
     editor,
