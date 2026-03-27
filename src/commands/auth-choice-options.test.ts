@@ -271,6 +271,25 @@ describe("buildAuthChoiceOptions", () => {
   });
 
   it("can include legacy aliases in cli help choices", () => {
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "anthropic",
+        providerId: "anthropic",
+        methodId: "cli",
+        choiceId: "anthropic-cli",
+        choiceLabel: "Anthropic Claude CLI",
+        deprecatedChoiceIds: ["claude-cli"],
+      },
+      {
+        pluginId: "openai",
+        providerId: "openai-codex",
+        methodId: "oauth",
+        choiceId: "openai-codex",
+        choiceLabel: "OpenAI Codex (ChatGPT OAuth)",
+        deprecatedChoiceIds: ["codex-cli"],
+      },
+    ]);
+
     const cliChoices = formatAuthChoiceChoicesForCli({
       includeLegacyAliases: true,
       includeSkip: true,

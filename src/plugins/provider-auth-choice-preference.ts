@@ -3,11 +3,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 
 const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<string, string>> = {
+  chutes: "chutes",
   "custom-api-key": "custom",
 };
 
 function normalizeLegacyAuthChoice(choice: string): string {
-  return normalizeLegacyOnboardAuthChoice(choice) ?? choice;
+  return normalizeLegacyOnboardAuthChoice(choice, { env: process.env }) ?? choice;
 }
 
 export async function resolvePreferredProviderForAuthChoice(params: {
