@@ -1,5 +1,6 @@
 {
   "id": "sambanova",
+  "enabledByDefault": true,
   "providers": ["sambanova"],
   "providerAuthEnvVars": {
     "sambanova": ["SAMBANOVA_API_KEY"]
