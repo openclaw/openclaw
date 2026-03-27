@@ -128,7 +128,7 @@
    **Plans:** 3 plans
    Plans:
 
-- [ ] 06-01-PLAN.md — Checkpoint JSON sidecar module with CheckpointData type and CRUD functions (TDD)
+- [x] 06-01-PLAN.md — Checkpoint JSON sidecar module with CheckpointData type and CRUD functions (TDD)
 - [ ] 06-02-PLAN.md — HeartbeatScanner with scanAndClaimTask: queue scan, claim, resume, deps, priority (TDD)
 - [ ] 06-03-PLAN.md — Wire scanner into heartbeat runner, barrel exports, integration test
       **Estimated complexity**: L

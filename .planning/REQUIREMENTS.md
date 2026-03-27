@@ -51,7 +51,7 @@ Requirements for Phase 1 release. Each maps to roadmap phases.
 - [x] **AGNT-04**: Capability tags in agent IDENTITY.md (e.g., `capabilities: [code, git, testing, ui]`) are used for task matching
 - [ ] **AGNT-05**: On heartbeat, agents scan queue.md of assigned projects for Available tasks matching their capabilities
 - [ ] **AGNT-06**: Agents claim tasks by updating queue.md (moving from Available to Claimed) with lock protection
-- [ ] **AGNT-07**: Task files include checkpoint and log sections for interruption/resume across context compactions
+- [x] **AGNT-07**: Task files include checkpoint and log sections for interruption/resume across context compactions
 - [ ] **AGNT-08**: Agent with an active claimed task skips queue scanning on heartbeat (short-circuit)
 - [ ] **AGNT-09**: Task dependencies are checked during claim -- tasks with unfinished `depends_on` are skipped
 
@@ -162,7 +162,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AGNT-04     | Phase 5  | Complete |
 | AGNT-05     | Phase 6  | Pending  |
 | AGNT-06     | Phase 6  | Pending  |
-| AGNT-07     | Phase 6  | Pending  |
+| AGNT-07     | Phase 6  | Complete |
 | AGNT-08     | Phase 6  | Pending  |
 | AGNT-09     | Phase 6  | Pending  |
 | GATE-01     | Phase 7  | Pending  |
