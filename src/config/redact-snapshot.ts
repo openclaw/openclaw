@@ -602,6 +602,29 @@ function restoreGuessingArray(
 }
 
 /**
+ * Attempts to re-map a SecretRef shape safely from original.
+ */
+function tryRestoreSecretRef(
+  incoming: unknown,
+  orig: Record<string, unknown>,
+  prefix: string,
+): Record<string, unknown> | undefined {
+  if (isSecretRefShape(incoming as Record<string, unknown>)) {
+    const incomingRef = incoming as Record<string, unknown>;
+    if (incomingRef.id === REDACTED_SENTINEL) {
+      if (!("id" in orig)) {
+        throw new RedactionError(prefix ? `${prefix}.id` : "id");
+      }
+      return {
+        ...incomingRef,
+        id: orig.id,
+      };
+    }
+  }
+  return undefined;
+}
+
+/**
  * Worker for restoreRedactedValues().
  * Used when there are ConfigUiHints available.
  */
@@ -644,6 +667,10 @@ function restoreRedactedValuesWithLookup(
     });
   }
   const orig = toObjectRecord(original);
+
+  const restoredSecretRef = tryRestoreSecretRef(incoming, orig, prefix);
+  if (restoredSecretRef) return restoredSecretRef;
+
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(incoming as Record<string, unknown>)) {
     result[key] = value;
@@ -704,6 +731,10 @@ function restoreRedactedValuesGuessing(
     return restoreGuessingArray(incomingArray, original, path, hints);
   }
   const orig = toObjectRecord(original);
+
+  const restoredSecretRef = tryRestoreSecretRef(incoming, orig, prefix);
+  if (restoredSecretRef) return restoredSecretRef;
+
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(incoming as Record<string, unknown>)) {
     const path = prefix ? `${prefix}.${key}` : key;
