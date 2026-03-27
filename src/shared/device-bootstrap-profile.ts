@@ -70,6 +70,7 @@ export function satisfiesDeviceBootstrapProfile(
   allowed: DeviceBootstrapProfile,
 ): boolean {
   return (
+    requested.roles.length > 0 &&
     requested.roles.every((role) => allowed.roles.includes(role)) &&
     requested.scopes.every((scope) => allowed.scopes.includes(scope))
   );
