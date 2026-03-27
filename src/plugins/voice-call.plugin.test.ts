@@ -53,7 +53,6 @@ function captureStdout() {
     restore: () => writeSpy.mockRestore(),
   };
 }
-
 function setup(config: Record<string, unknown>): Registered {
   const methods = new Map<string, unknown>();
   const tools: unknown[] = [];
@@ -213,6 +212,7 @@ describe("voice-call plugin", () => {
       });
 
       const printed = stdout.output();
+      const printed = stdout.output();
       expect(printed).toContain('"recordsScanned": 2');
       expect(printed).toContain('"p50Ms": 100');
       expect(printed).toContain('"p95Ms": 200');
@@ -227,10 +227,13 @@ describe("voice-call plugin", () => {
     const stdout = captureStdout();
     await registerVoiceCallCli(program);
 
-    await program.parseAsync(["voicecall", "start", "--to", "+1", "--message", "Hello"], {
-      from: "user",
-    });
-    expect(stdout.output()).toContain('"callId": "call-1"');
-    stdout.restore();
+    try {
+      await program.parseAsync(["voicecall", "start", "--to", "+1", "--message", "Hello"], {
+        from: "user",
+      });
+      expect(stdout.output()).toContain('"callId": "call-1"');
+    } finally {
+      stdout.restore();
+    }
   });
 });
