@@ -37,6 +37,14 @@ const deliverDiscordReply = deliveryMocks.deliverDiscordReply;
 const createDiscordDraftStream = deliveryMocks.createDiscordDraftStream;
 type DispatchInboundParams = {
   dispatcher: {
+    sendToolResult: (payload: {
+      text?: string;
+      isReasoning?: boolean;
+      channelData?: unknown;
+      isError?: boolean;
+      mediaUrl?: string;
+      mediaUrls?: string[];
+    }) => boolean | Promise<boolean>;
     sendBlockReply: (payload: {
       text?: string;
       isReasoning?: boolean;
@@ -127,7 +135,10 @@ vi.spyOn(replyRuntimeModule, "createReplyDispatcherWithTyping").mockImplementati
   deliver: (payload: unknown, info: { kind: string }) => Promise<void> | void;
 }) => ({
   dispatcher: {
-    sendToolResult: vi.fn(() => true),
+    sendToolResult: vi.fn((payload: unknown) => {
+      void opts.deliver(payload as never, { kind: "tool" });
+      return true;
+    }),
     sendBlockReply: vi.fn((payload: unknown) => {
       void opts.deliver(payload as never, { kind: "block" });
       return true;
@@ -276,6 +287,13 @@ function createMockDraftStreamForTest() {
   const draftStream = createMockDraftStream();
   createDiscordDraftStream.mockReturnValueOnce(draftStream);
   return draftStream;
+}
+
+function getDeliveredReplyTexts(): Array<string | undefined> {
+  return deliveryMocks.deliverDiscordReply.mock.calls.map((call) => {
+    const params = call[0] as { replies?: Array<{ text?: string }> } | undefined;
+    return params?.replies?.[0]?.text;
+  });
 }
 
 function expectSinglePreviewEdit() {
@@ -667,6 +685,24 @@ describe("processDiscordMessage draft streaming", () => {
     await processStreamOffDiscordMessage();
 
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers the final reply before deferred text-only tool summaries", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendToolResult({ text: "🔧 exec: rate lookup" });
+      await params?.dispatcher.sendFinalReply({ text: "USD/KRW is 1400" });
+      return { queuedFinal: true, counts: { final: 1, tool: 1, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      ...createDirectMessageContextOverrides(),
+      discordConfig: { streamMode: "off" },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(getDeliveredReplyTexts()).toEqual(["USD/KRW is 1400", "🔧 exec: rate lookup"]);
   });
 
   it("streams block previews using draft chunking", async () => {

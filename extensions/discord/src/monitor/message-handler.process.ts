@@ -502,6 +502,7 @@ export async function processDiscordMessage(
   let draftText = "";
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
+  const deferredToolSummaries: ReplyPayload[] = [];
 
   const resolvePreviewFinalText = (text?: string) => {
     if (typeof text !== "string") {
@@ -608,6 +609,61 @@ export async function processDiscordMessage(
     await draftStream.flush();
   };
 
+  const shouldDeferToolSummary = (payload: ReplyPayload, kind: "tool" | "block" | "final") => {
+    if (kind !== "tool" || payload.isError) {
+      return false;
+    }
+    const execApproval =
+      payload.channelData &&
+      typeof payload.channelData === "object" &&
+      !Array.isArray(payload.channelData)
+        ? payload.channelData.execApproval
+        : undefined;
+    if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
+      return false;
+    }
+    return !resolveSendableOutboundReplyParts(payload).hasMedia;
+  };
+
+  const deliverImmediatePayload = async (payload: ReplyPayload, isFinal: boolean) => {
+    const replyToId = replyReference.use();
+    if (isFinal) {
+      notifyFinalReplyStart();
+    }
+    await deliverDiscordReply({
+      cfg,
+      replies: [payload],
+      target: deliverTarget,
+      token,
+      accountId,
+      rest: client.rest,
+      runtime,
+      replyToId,
+      replyToMode,
+      textLimit,
+      maxLinesPerMessage,
+      tableMode,
+      chunkMode,
+      sessionKey: ctxPayload.SessionKey,
+      threadBindings,
+      mediaLocalRoots,
+    });
+    replyReference.markSent();
+    if (isFinal) {
+      observer?.onFinalReplyDelivered?.();
+    }
+  };
+
+  const flushDeferredToolSummaries = async () => {
+    if (deferredToolSummaries.length === 0 || isProcessAborted(abortSignal)) {
+      return;
+    }
+    const pendingPayloads = deferredToolSummaries.splice(0);
+    for (const payload of pendingPayloads) {
+      await deliverImmediatePayload(payload, false);
+    }
+  };
+
   // When draft streaming is active, suppress block streaming to avoid double-streaming.
   const disableBlockStreamingForDraft = draftStream ? true : undefined;
   let finalReplyStartNotified = false;
@@ -630,6 +686,10 @@ export async function processDiscordMessage(
         const isFinal = info.kind === "final";
         if (payload.isReasoning) {
           // Reasoning/thinking payloads should not be delivered to Discord.
+          return;
+        }
+        if (shouldDeferToolSummary(payload, info.kind)) {
+          deferredToolSummaries.push(payload);
           return;
         }
         if (draftStream && isFinal) {
@@ -713,33 +773,7 @@ export async function processDiscordMessage(
         if (isProcessAborted(abortSignal)) {
           return;
         }
-
-        const replyToId = replyReference.use();
-        if (isFinal) {
-          notifyFinalReplyStart();
-        }
-        await deliverDiscordReply({
-          cfg,
-          replies: [payload],
-          target: deliverTarget,
-          token,
-          accountId,
-          rest: client.rest,
-          runtime,
-          replyToId,
-          replyToMode,
-          textLimit,
-          maxLinesPerMessage,
-          tableMode,
-          chunkMode,
-          sessionKey: ctxPayload.SessionKey,
-          threadBindings,
-          mediaLocalRoots,
-        });
-        replyReference.markSent();
-        if (isFinal) {
-          observer?.onFinalReplyDelivered?.();
-        }
+        await deliverImmediatePayload(payload, isFinal);
       },
       onError: (err, info) => {
         runtime.error?.(danger(`discord ${info.kind} reply failed: ${String(err)}`));
@@ -846,6 +880,11 @@ export async function processDiscordMessage(
     } finally {
       markRunComplete();
       markDispatchIdle();
+      try {
+        await flushDeferredToolSummaries();
+      } catch (err) {
+        logVerbose(`discord: deferred tool summary delivery failed: ${String(err)}`);
+      }
     }
     if (statusReactionsEnabled) {
       if (dispatchAborted) {
