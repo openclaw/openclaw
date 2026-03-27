@@ -252,6 +252,12 @@ const DISCORD_ACCOUNTS_TTS_RULE: LegacyConfigRule = {
     if (!accounts) {
       return false;
     }
+    const LEGACY_TTS_PROVIDER_KEYS = new Set([
+      "openai",
+      "elevenlabs",
+      "microsoft",
+      "edge",
+    ]);
     for (const [accountId, accountValue] of Object.entries(accounts)) {
       if (isBlockedObjectKey(accountId)) {
         continue;
@@ -262,9 +268,9 @@ const DISCORD_ACCOUNTS_TTS_RULE: LegacyConfigRule = {
       if (!tts) {
         continue;
       }
-      // Check if this account has any legacy TTS keys (not in providers)
+      // Check if this account has any legacy TTS provider keys
       for (const key of Object.keys(tts)) {
-        if (key !== "providers" && !isBlockedObjectKey(key)) {
+        if (LEGACY_TTS_PROVIDER_KEYS.has(key)) {
           return true;
         }
       }

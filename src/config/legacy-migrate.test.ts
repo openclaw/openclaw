@@ -736,4 +736,34 @@ describe("legacy migrate TTS config", () => {
     expect(res.config).toBeNull();
     expect(res.changes).toHaveLength(0);
   });
+
+  it("does not flag valid TTS config fields as legacy keys", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          accounts: {
+            work: {
+              voice: {
+                tts: {
+                  enabled: true,
+                  auto: true,
+                  mode: "fallback",
+                  provider: "microsoft",
+                  providers: {
+                    microsoft: {
+                      enabled: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    // Should return null (no changes) since enabled, auto, mode, provider are valid TTS config fields
+    expect(res.config).toBeNull();
+    expect(res.changes).toHaveLength(0);
+  });
 });
