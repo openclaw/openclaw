@@ -2,11 +2,27 @@ import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
+import type { SlackMessageChangedEvent } from "../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMessageHandler } from "../message-handler.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
+
+function isSelfAuthoredSlackMessageEvent(message: SlackMessageEvent, botUserId: string): boolean {
+  if (!botUserId) {
+    return false;
+  }
+  if (message.subtype !== "message_changed") {
+    return message.user === botUserId;
+  }
+  const changed = message as SlackMessageChangedEvent & {
+    message?: { edited?: { user?: string } };
+    previous_message?: { edited?: { user?: string } };
+  };
+  const editorUserId = changed.message?.edited?.user ?? changed.previous_message?.edited?.user;
+  return editorUserId ? editorUserId === botUserId : message.user === botUserId;
+}
 
 export function registerSlackMessageEvents(params: {
   ctx: SlackMonitorContext;
@@ -21,6 +37,9 @@ export function registerSlackMessageEvents(params: {
       }
 
       const message = event as SlackMessageEvent;
+      if (isSelfAuthoredSlackMessageEvent(message, ctx.botUserId)) {
+        return;
+      }
       const subtypeHandler = resolveSlackMessageSubtypeHandler(message);
       if (subtypeHandler) {
         const channelId = subtypeHandler.resolveChannelId(message);

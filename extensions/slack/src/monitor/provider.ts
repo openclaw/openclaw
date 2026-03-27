@@ -310,11 +310,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           token: botToken,
           appToken,
           socketMode: true,
+          ignoreSelf: false,
           clientOptions,
         }
       : {
           token: botToken,
           receiver: receiver ?? undefined,
+          ignoreSelf: false,
           clientOptions,
         },
   );

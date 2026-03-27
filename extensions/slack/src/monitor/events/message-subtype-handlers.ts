@@ -29,8 +29,13 @@ const changedHandler: SlackMessageSubtypeHandler = {
     return `slack:message:changed:${channelId}:${messageId}`;
   },
   resolveSenderId: (event) => {
-    const changed = event as SlackMessageChangedEvent;
+    const changed = event as SlackMessageChangedEvent & {
+      message?: { edited?: { user?: string } };
+      previous_message?: { edited?: { user?: string } };
+    };
     return (
+      changed.message?.edited?.user ??
+      changed.previous_message?.edited?.user ??
       changed.message?.user ??
       changed.previous_message?.user ??
       changed.message?.bot_id ??
