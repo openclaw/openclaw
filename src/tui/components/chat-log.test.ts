@@ -53,6 +53,22 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(20);
   });
 
+  it("prunes system messages atomically when a non-system entry overflows the log", () => {
+    const chatLog = new ChatLog(20);
+    for (let i = 1; i <= 20; i++) {
+      chatLog.addSystem(`system-${i}`);
+    }
+
+    chatLog.addUser("hello");
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).not.toMatch(/\bsystem-1\b/);
+    expect(rendered).toMatch(/\bsystem-2\b/);
+    expect(rendered).toMatch(/\bsystem-20\b/);
+    expect(rendered).toContain("hello");
+    expect(chatLog.children.length).toBe(20);
+  });
+
   it("renders BTW inline and removes it when dismissed", () => {
     const chatLog = new ChatLog(40);
 
