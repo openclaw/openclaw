@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   createExecutionArtifacts,
   resolvePnpmCommandInvocation,
+  resolveVitestFsModuleCachePath,
 } from "../../scripts/test-planner/executor.mjs";
 import {
   buildCIExecutionManifest,
@@ -283,10 +284,10 @@ describe("test planner", () => {
     expect(manifest.jobs.buildArtifacts.enabled).toBe(true);
     expect(manifest.shardCounts.unit).toBe(4);
     expect(manifest.shardCounts.channels).toBe(3);
-    expect(manifest.shardCounts.windows).toBe(9);
+    expect(manifest.shardCounts.windows).toBe(6);
     expect(manifest.shardCounts.macosNode).toBe(9);
     expect(manifest.jobs.checks.matrix.include).toHaveLength(7);
-    expect(manifest.jobs.checksWindows.matrix.include).toHaveLength(9);
+    expect(manifest.jobs.checksWindows.matrix.include).toHaveLength(6);
     expect(manifest.jobs.macosNode.matrix.include).toHaveLength(9);
     expect(manifest.jobs.macosSwift.enabled).toBe(true);
     expect(manifest.requiredCheckNames).toContain("macos-swift");
@@ -373,5 +374,44 @@ describe("resolvePnpmCommandInvocation", () => {
       command: "C:\\Windows\\System32\\cmd.exe",
       args: ["/d", "/s", "/c", "pnpm.cmd"],
     });
+  });
+});
+
+describe("resolveVitestFsModuleCachePath", () => {
+  it("uses a lane-local cache path by default on non-Windows hosts", () => {
+    expect(
+      resolveVitestFsModuleCachePath({
+        cwd: "/repo",
+        env: {},
+        platform: "linux",
+        unitId: "unit-fast-1",
+      }),
+    ).toBe("/repo/node_modules/.experimental-vitest-cache/unit-fast-1");
+  });
+
+  it("respects an explicit cache path override", () => {
+    expect(
+      resolveVitestFsModuleCachePath({
+        cwd: "/repo",
+        env: {
+          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/custom-vitest-cache",
+        },
+        platform: "linux",
+        unitId: "unit-fast-1",
+      }),
+    ).toBe("/tmp/custom-vitest-cache");
+  });
+
+  it("does not force a cache path when the cache is disabled", () => {
+    expect(
+      resolveVitestFsModuleCachePath({
+        cwd: "/repo",
+        env: {
+          OPENCLAW_VITEST_FS_MODULE_CACHE: "0",
+        },
+        platform: "linux",
+        unitId: "unit-fast-1",
+      }),
+    ).toBeUndefined();
   });
 });

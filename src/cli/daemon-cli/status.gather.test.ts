@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { captureEnv } from "../../test-utils/env.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 
@@ -100,19 +101,12 @@ vi.mock("../../daemon/service-audit.js", () => ({
 }));
 
 vi.mock("../../daemon/service.js", () => ({
-  resolveGatewayService: () => ({
-    label: "LaunchAgent",
-    loadedText: "loaded",
-    notLoadedText: "not loaded",
-    stage: vi.fn(async () => {}),
-    install: vi.fn(async () => {}),
-    uninstall: vi.fn(async () => {}),
-    stop: vi.fn(async () => {}),
-    restart: vi.fn(async () => ({ outcome: "completed" as const })),
-    isLoaded: serviceIsLoaded,
-    readCommand: serviceReadCommand,
-    readRuntime: serviceReadRuntime,
-  }),
+  resolveGatewayService: () =>
+    createMockGatewayService({
+      isLoaded: serviceIsLoaded,
+      readCommand: serviceReadCommand,
+      readRuntime: serviceReadRuntime,
+    }),
 }));
 
 vi.mock("../../gateway/net.js", () => ({

@@ -207,3 +207,9 @@ export type SlackConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & SlackAccountConfig;
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    slack?: SlackConfig;
+  }
+}

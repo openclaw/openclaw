@@ -378,21 +378,20 @@ export const MarkdownConfigSchema = z
 export const TtsProviderSchema = z.string().min(1);
 export const TtsModeSchema = z.enum(["final", "all"]);
 export const TtsAutoSchema = z.enum(["off", "always", "inbound", "tagged"]);
-const TtsMicrosoftConfigSchema = z
+const TtsProviderConfigSchema = z
   .object({
-    enabled: z.boolean().optional(),
-    voice: z.string().optional(),
-    lang: z.string().optional(),
-    outputFormat: z.string().optional(),
-    pitch: z.string().optional(),
-    rate: z.string().optional(),
-    volume: z.string().optional(),
-    saveSubtitles: z.boolean().optional(),
-    proxy: z.string().optional(),
-    timeoutMs: z.number().int().min(1000).max(120000).optional(),
+    apiKey: SecretInputSchema.optional().register(sensitive),
   })
-  .strict()
-  .optional();
+  .catchall(
+    z.union([
+      z.string(),
+      z.number(),
+      z.boolean(),
+      z.null(),
+      z.array(z.unknown()),
+      z.record(z.string(), z.unknown()),
+    ]),
+  );
 export const TtsConfigSchema = z
   .object({
     auto: TtsAutoSchema.optional(),

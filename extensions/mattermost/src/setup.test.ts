@@ -20,9 +20,13 @@ vi.mock("./mattermost/accounts.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./mattermost/client.js", () => ({
-  normalizeMattermostBaseUrl,
-}));
+vi.mock("./mattermost/client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./mattermost/client.js")>();
+  return {
+    ...actual,
+    normalizeMattermostBaseUrl,
+  };
+});
 
 vi.mock("./secret-input.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./secret-input.js")>();
