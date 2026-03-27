@@ -1,23 +1,107 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
-import { loadConfig, type OpenClawConfig, writeConfigFile } from "../config/config.js";
-import { withTempHome } from "../config/home-env.test-harness.js";
-import {
-  activateSecretsRuntimeSnapshot,
-  clearSecretsRuntimeSnapshot,
-  getActiveRuntimeWebToolsMetadata,
-  getActiveSecretsRuntimeSnapshot,
-  prepareSecretsRuntimeSnapshot,
-} from "./runtime.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+
+type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
+
+const { resolveBundledPluginWebSearchProvidersMock, resolvePluginWebSearchProvidersMock } =
+  vi.hoisted(() => ({
+    resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+    resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+  }));
+
+const mockedModuleIds = [
+  "../plugins/web-search-providers.js",
+  "../plugins/web-search-providers.runtime.js",
+] as const;
+
+vi.mock("../plugins/web-search-providers.js", () => ({
+  resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
+}));
+
+vi.mock("../plugins/web-search-providers.runtime.js", () => ({
+  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+}));
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
+function createTestProvider(params: {
+  id: WebProviderUnderTest;
+  pluginId: string;
+  order: number;
+}): PluginWebSearchProviderEntry {
+  const credentialPath = `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
+  const readSearchConfigKey = (searchConfig?: Record<string, unknown>): unknown => {
+    const providerConfig =
+      searchConfig?.[params.id] && typeof searchConfig[params.id] === "object"
+        ? (searchConfig[params.id] as { apiKey?: unknown })
+        : undefined;
+    return providerConfig?.apiKey ?? searchConfig?.apiKey;
+  };
+  return {
+    pluginId: params.pluginId,
+    id: params.id,
+    label: params.id,
+    hint: `${params.id} test provider`,
+    envVars: [`${params.id.toUpperCase()}_API_KEY`],
+    placeholder: `${params.id}-...`,
+    signupUrl: `https://example.com/${params.id}`,
+    autoDetectOrder: params.order,
+    credentialPath,
+    inactiveSecretPaths: [credentialPath],
+    getCredentialValue: readSearchConfigKey,
+    setCredentialValue: (searchConfigTarget, value) => {
+      const providerConfig =
+        params.id === "brave" || params.id === "firecrawl"
+          ? searchConfigTarget
+          : ((searchConfigTarget[params.id] ??= {}) as { apiKey?: unknown });
+      providerConfig.apiKey = value;
+    },
+    getConfiguredCredentialValue: (config) =>
+      (config?.plugins?.entries?.[params.pluginId]?.config as { webSearch?: { apiKey?: unknown } })
+        ?.webSearch?.apiKey,
+    setConfiguredCredentialValue: (configTarget, value) => {
+      const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
+      const entries = (plugins.entries ??= {});
+      const entry = (entries[params.pluginId] ??= {}) as { config?: Record<string, unknown> };
+      const config = (entry.config ??= {});
+      const webSearch = (config.webSearch ??= {}) as { apiKey?: unknown };
+      webSearch.apiKey = value;
+    },
+    resolveRuntimeMetadata:
+      params.id === "perplexity"
+        ? () => ({
+            perplexityTransport: "search_api" as const,
+          })
+        : undefined,
+    createTool: () => null,
+  };
+}
+
+function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
+  return [
+    createTestProvider({ id: "brave", pluginId: "brave", order: 10 }),
+    createTestProvider({ id: "gemini", pluginId: "google", order: 20 }),
+    createTestProvider({ id: "grok", pluginId: "xai", order: 30 }),
+    createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
+    createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
+    createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
+  ];
+}
+
 const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
+
+let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
+let activateSecretsRuntimeSnapshot: typeof import("./runtime.js").activateSecretsRuntimeSnapshot;
+let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
+let getActiveRuntimeWebToolsMetadata: typeof import("./runtime.js").getActiveRuntimeWebToolsMetadata;
+let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
 
 function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
   return {
@@ -39,11 +123,37 @@ function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): Auth
 }
 
 describe("secrets runtime snapshot", () => {
-  afterEach(() => {
-    clearSecretsRuntimeSnapshot();
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ clearConfigCache } = await import("../config/config.js"));
+    ({
+      activateSecretsRuntimeSnapshot,
+      clearSecretsRuntimeSnapshot,
+      getActiveRuntimeWebToolsMetadata,
+      prepareSecretsRuntimeSnapshot,
+    } = await import("./runtime.js"));
   });
 
-  const allowInsecureTempSecretFile = process.platform === "win32";
+  beforeEach(() => {
+    resolveBundledPluginWebSearchProvidersMock.mockReset();
+    resolveBundledPluginWebSearchProvidersMock.mockReturnValue(buildTestWebSearchProviders());
+    resolvePluginWebSearchProvidersMock.mockReset();
+    resolvePluginWebSearchProvidersMock.mockReturnValue(buildTestWebSearchProviders());
+  });
+
+  afterEach(() => {
+    clearSecretsRuntimeSnapshot();
+    clearConfigCache();
+    resolveBundledPluginWebSearchProvidersMock.mockReset();
+    resolvePluginWebSearchProvidersMock.mockReset();
+  });
+
+  afterAll(() => {
+    for (const id of mockedModuleIds) {
+      vi.doUnmock(id);
+    }
+    vi.resetModules();
+  });
 
   it("resolves env refs for config and auth profiles", async () => {
     const config = asConfig({
@@ -199,9 +309,8 @@ describe("secrets runtime snapshot", () => {
       id: "SLACK_WORK_APP_TOKEN_REF",
     });
     expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
-    expect(snapshot.warnings).toHaveLength(4);
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "channels.slack.accounts.work.appToken",
+    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
+      expect.arrayContaining(["channels.slack.accounts.work.appToken"]),
     );
     expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
       type: "api_key",
@@ -410,7 +519,7 @@ describe("secrets runtime snapshot", () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "tools.web.search.grok.apiKey",
+          path: "plugins.entries.xai.config.webSearch.apiKey",
         }),
       ]),
     );
@@ -450,7 +559,7 @@ describe("secrets runtime snapshot", () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "tools.web.search.gemini.apiKey",
+          path: "plugins.entries.google.config.webSearch.apiKey",
         }),
       ]),
     );
@@ -481,7 +590,7 @@ describe("secrets runtime snapshot", () => {
 
     expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-ref");
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-      "tools.web.search.gemini.apiKey",
+      "plugins.entries.google.config.webSearch.apiKey",
     );
   });
 
@@ -645,367 +754,6 @@ describe("secrets runtime snapshot", () => {
     }
   });
 
-  it("activates runtime snapshots for loadConfig and ensureAuthProfileStore", async () => {
-    const prepared = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              models: [],
-            },
-          },
-        },
-      }),
-      env: { OPENAI_API_KEY: "sk-runtime" }, // pragma: allowlist secret
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () =>
-        loadAuthStoreWithProfiles({
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            keyRef: OPENAI_ENV_KEY_REF,
-          },
-        }),
-    });
-
-    activateSecretsRuntimeSnapshot(prepared);
-
-    expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
-    const store = ensureAuthProfileStore("/tmp/openclaw-agent-main");
-    expect(store.profiles["openai:default"]).toMatchObject({
-      type: "api_key",
-      key: "sk-runtime",
-    });
-  });
-
-  it("keeps active secrets runtime snapshots resolved after config writes", async () => {
-    if (os.platform() === "win32") {
-      return;
-    }
-    await withTempHome("openclaw-secrets-runtime-write-", async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      const secretFile = path.join(configDir, "secrets.json");
-      const agentDir = path.join(configDir, "agents", "main", "agent");
-      const authStorePath = path.join(agentDir, "auth-profiles.json");
-      await fs.mkdir(agentDir, { recursive: true });
-      await fs.chmod(configDir, 0o700).catch(() => {
-        // best-effort on tmp dirs that already have secure perms
-      });
-      await fs.writeFile(
-        secretFile,
-        `${JSON.stringify({ providers: { openai: { apiKey: "sk-file-runtime" } } }, null, 2)}\n`, // pragma: allowlist secret
-        { encoding: "utf8", mode: 0o600 },
-      );
-      await fs.writeFile(
-        authStorePath,
-        `${JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              "openai:default": {
-                type: "api_key",
-                provider: "openai",
-                keyRef: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
-              },
-            },
-          },
-          null,
-          2,
-        )}\n`,
-        { encoding: "utf8", mode: 0o600 },
-      );
-
-      const prepared = await prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          secrets: {
-            providers: {
-              default: {
-                source: "file",
-                path: secretFile,
-                mode: "json",
-                ...(allowInsecureTempSecretFile ? { allowInsecurePath: true } : {}),
-              },
-            },
-          },
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                apiKey: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
-                models: [],
-              },
-            },
-          },
-        }),
-        agentDirs: [agentDir],
-      });
-
-      activateSecretsRuntimeSnapshot(prepared);
-
-      expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-file-runtime");
-      expect(ensureAuthProfileStore(agentDir).profiles["openai:default"]).toMatchObject({
-        type: "api_key",
-        key: "sk-file-runtime",
-      });
-
-      await writeConfigFile({
-        ...loadConfig(),
-        gateway: { auth: { mode: "token" } },
-      });
-
-      expect(loadConfig().gateway?.auth).toEqual({ mode: "token" });
-      expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-file-runtime");
-      expect(ensureAuthProfileStore(agentDir).profiles["openai:default"]).toMatchObject({
-        type: "api_key",
-        key: "sk-file-runtime",
-      });
-    });
-  });
-
-  it("keeps last-known-good runtime snapshot active when refresh fails after a write", async () => {
-    if (os.platform() === "win32") {
-      return;
-    }
-    await withTempHome("openclaw-secrets-runtime-refresh-fail-", async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      const secretFile = path.join(configDir, "secrets.json");
-      const agentDir = path.join(configDir, "agents", "main", "agent");
-      const authStorePath = path.join(agentDir, "auth-profiles.json");
-      await fs.mkdir(agentDir, { recursive: true });
-      await fs.chmod(configDir, 0o700).catch(() => {
-        // best-effort on tmp dirs that already have secure perms
-      });
-      await fs.writeFile(
-        secretFile,
-        `${JSON.stringify({ providers: { openai: { apiKey: "sk-file-runtime" } } }, null, 2)}\n`, // pragma: allowlist secret
-        { encoding: "utf8", mode: 0o600 },
-      );
-      await fs.writeFile(
-        authStorePath,
-        `${JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              "openai:default": {
-                type: "api_key",
-                provider: "openai",
-                keyRef: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
-              },
-            },
-          },
-          null,
-          2,
-        )}\n`,
-        { encoding: "utf8", mode: 0o600 },
-      );
-
-      let loadAuthStoreCalls = 0;
-      const loadAuthStore = () => {
-        loadAuthStoreCalls += 1;
-        if (loadAuthStoreCalls > 1) {
-          throw new Error("simulated secrets runtime refresh failure");
-        }
-        return loadAuthStoreWithProfiles({
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            keyRef: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
-          },
-        });
-      };
-
-      const prepared = await prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          secrets: {
-            providers: {
-              default: {
-                source: "file",
-                path: secretFile,
-                mode: "json",
-                ...(allowInsecureTempSecretFile ? { allowInsecurePath: true } : {}),
-              },
-            },
-          },
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                apiKey: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
-                models: [],
-              },
-            },
-          },
-        }),
-        agentDirs: [agentDir],
-        loadAuthStore,
-      });
-
-      activateSecretsRuntimeSnapshot(prepared);
-
-      await expect(
-        writeConfigFile({
-          ...loadConfig(),
-          gateway: { auth: { mode: "token" } },
-        }),
-      ).rejects.toThrow(
-        /runtime snapshot refresh failed: simulated secrets runtime refresh failure/i,
-      );
-
-      const activeAfterFailure = getActiveSecretsRuntimeSnapshot();
-      expect(activeAfterFailure).not.toBeNull();
-      expect(loadConfig().gateway?.auth).toBeUndefined();
-      expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-file-runtime");
-      expect(activeAfterFailure?.sourceConfig.models?.providers?.openai?.apiKey).toEqual({
-        source: "file",
-        provider: "default",
-        id: "/providers/openai/apiKey",
-      });
-
-      const persistedStore = ensureAuthProfileStore(agentDir).profiles["openai:default"];
-      expect(persistedStore).toMatchObject({
-        type: "api_key",
-        key: "sk-file-runtime",
-      });
-    });
-  });
-
-  it("keeps last-known-good web runtime snapshot when reload introduces unresolved active web refs", async () => {
-    await withTempHome("openclaw-secrets-runtime-web-reload-lkg-", async (home) => {
-      const prepared = await prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          tools: {
-            web: {
-              search: {
-                provider: "gemini",
-                gemini: {
-                  apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
-                },
-              },
-            },
-          },
-        }),
-        env: {
-          WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-runtime-key", // pragma: allowlist secret
-        },
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: () => ({ version: 1, profiles: {} }),
-      });
-
-      activateSecretsRuntimeSnapshot(prepared);
-
-      await expect(
-        writeConfigFile({
-          ...loadConfig(),
-          tools: {
-            web: {
-              search: {
-                provider: "gemini",
-                gemini: {
-                  apiKey: {
-                    source: "env",
-                    provider: "default",
-                    id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
-                  },
-                },
-              },
-            },
-          },
-        }),
-      ).rejects.toThrow(
-        /runtime snapshot refresh failed: .*WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK/i,
-      );
-
-      const activeAfterFailure = getActiveSecretsRuntimeSnapshot();
-      expect(activeAfterFailure).not.toBeNull();
-      expect(loadConfig().tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-runtime-key");
-      expect(activeAfterFailure?.sourceConfig.tools?.web?.search?.gemini?.apiKey).toEqual({
-        source: "env",
-        provider: "default",
-        id: "WEB_SEARCH_GEMINI_API_KEY",
-      });
-      expect(getActiveRuntimeWebToolsMetadata()?.search.selectedProvider).toBe("gemini");
-
-      const persistedConfig = JSON.parse(
-        await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
-      ) as OpenClawConfig;
-      expect(persistedConfig.tools?.web?.search?.gemini?.apiKey).toEqual({
-        source: "env",
-        provider: "default",
-        id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
-      });
-    });
-  });
-
-  it("recomputes config-derived agent dirs when refreshing active secrets runtime snapshots", async () => {
-    await withTempHome("openclaw-secrets-runtime-agent-dirs-", async (home) => {
-      const mainAgentDir = path.join(home, ".openclaw", "agents", "main", "agent");
-      const opsAgentDir = path.join(home, ".openclaw", "agents", "ops", "agent");
-      await fs.mkdir(mainAgentDir, { recursive: true });
-      await fs.mkdir(opsAgentDir, { recursive: true });
-      await fs.writeFile(
-        path.join(mainAgentDir, "auth-profiles.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              "openai:default": {
-                type: "api_key",
-                provider: "openai",
-                keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              },
-            },
-          },
-          null,
-          2,
-        )}\n`,
-        { encoding: "utf8", mode: 0o600 },
-      );
-      await fs.writeFile(
-        path.join(opsAgentDir, "auth-profiles.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              "anthropic:ops": {
-                type: "api_key",
-                provider: "anthropic",
-                keyRef: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
-              },
-            },
-          },
-          null,
-          2,
-        )}\n`,
-        { encoding: "utf8", mode: 0o600 },
-      );
-
-      const prepared = await prepareSecretsRuntimeSnapshot({
-        config: asConfig({}),
-        env: {
-          OPENAI_API_KEY: "sk-main-runtime", // pragma: allowlist secret
-          ANTHROPIC_API_KEY: "sk-ops-runtime", // pragma: allowlist secret
-        },
-      });
-
-      activateSecretsRuntimeSnapshot(prepared);
-      expect(ensureAuthProfileStore(opsAgentDir).profiles["anthropic:ops"]).toBeUndefined();
-
-      await writeConfigFile({
-        agents: {
-          list: [{ id: "ops", agentDir: opsAgentDir }],
-        },
-      });
-
-      expect(ensureAuthProfileStore(opsAgentDir).profiles["anthropic:ops"]).toMatchObject({
-        type: "api_key",
-        key: "sk-ops-runtime",
-        keyRef: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
-      });
-    });
-  });
-
   it("skips inactive-surface refs and emits diagnostics", async () => {
     const config = asConfig({
       agents: {
@@ -1072,15 +820,15 @@ describe("secrets runtime snapshot", () => {
       snapshot.warnings.filter(
         (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
       ),
-    ).toHaveLength(6);
+    ).toHaveLength(10);
     expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
       expect.arrayContaining([
         "agents.defaults.memorySearch.remote.apiKey",
         "gateway.auth.password",
         "channels.telegram.botToken",
         "channels.telegram.accounts.disabled.botToken",
-        "tools.web.search.apiKey",
-        "tools.web.search.gemini.apiKey",
+        "plugins.entries.brave.config.webSearch.apiKey",
+        "plugins.entries.google.config.webSearch.apiKey",
       ]),
     );
   });

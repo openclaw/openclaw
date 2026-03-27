@@ -1,6 +1,5 @@
 ---
 title: CI Pipeline
-description: How the OpenClaw CI pipeline works
 summary: "CI job graph, scope gates, and local command equivalents"
 read_when:
   - You need to understand why a CI job did or did not run
@@ -13,20 +12,21 @@ The CI runs on every push to `main` and every pull request. It uses smart scopin
 
 ## Job Overview
 
-| Job               | Purpose                                                 | When it runs                       |
-| ----------------- | ------------------------------------------------------- | ---------------------------------- |
-| `docs-scope`      | Detect docs-only changes                                | Always                             |
-| `changed-scope`   | Detect which areas changed (node/macos/android/windows) | Non-doc changes                    |
-| `check`           | TypeScript types, lint, format                          | Non-docs, node changes             |
-| `check-docs`      | Markdown lint + broken link check                       | Docs changed                       |
-| `secrets`         | Detect leaked secrets                                   | Always                             |
-| `build-artifacts` | Build dist once, share with `release-check`             | Pushes to `main`, node changes     |
-| `release-check`   | Validate npm pack contents                              | Pushes to `main` after build       |
-| `checks`          | Node tests + protocol check on PRs; Bun compat on push  | Non-docs, node changes             |
-| `compat-node22`   | Minimum supported Node runtime compatibility            | Pushes to `main`, node changes     |
-| `checks-windows`  | Windows-specific tests                                  | Non-docs, windows-relevant changes |
-| `macos`           | Swift lint/build/test + TS tests                        | PRs with macos changes             |
-| `android`         | Gradle build + tests                                    | Non-docs, android changes          |
+| Job               | Purpose                                                                   | When it runs                                     |
+| ----------------- | ------------------------------------------------------------------------- | ------------------------------------------------ |
+| `preflight`       | Docs scope, change scope, key scan, workflow audit, prod dependency audit | Always; node-based audit only on non-doc changes |
+| `docs-scope`      | Detect docs-only changes                                                  | Always                                           |
+| `changed-scope`   | Detect which areas changed (node/macos/android/windows)                   | Non-doc changes                                  |
+| `check`           | TypeScript types, lint, format                                            | Non-docs, node changes                           |
+| `check-docs`      | Markdown lint + broken link check                                         | Docs changed                                     |
+| `secrets`         | Detect leaked secrets                                                     | Always                                           |
+| `build-artifacts` | Build dist once, share with `release-check`                               | Pushes to `main`, node changes                   |
+| `release-check`   | Validate npm pack contents                                                | Pushes to `main` after build                     |
+| `checks`          | Node tests + protocol check on PRs; Bun compat on push                    | Non-docs, node changes                           |
+| `compat-node22`   | Minimum supported Node runtime compatibility                              | Pushes to `main`, node changes                   |
+| `checks-windows`  | Windows-specific tests                                                    | Non-docs, windows-relevant changes               |
+| `macos`           | Swift lint/build/test + TS tests                                          | PRs with macos changes                           |
+| `android`         | Gradle build + tests                                                      | Non-docs, android changes                        |
 
 ## Fail-Fast Order
 
@@ -37,6 +37,7 @@ Jobs are ordered so cheap checks fail before expensive ones run:
 3. Pushes to `main`: `build-artifacts` + `release-check` + Bun compat + `compat-node22`
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`.
+The same shared scope module also drives the separate `install-smoke` workflow through a narrower `changed-smoke` gate, so Docker/install smoke only runs for install, packaging, and container-relevant changes.
 
 ## Runners
 

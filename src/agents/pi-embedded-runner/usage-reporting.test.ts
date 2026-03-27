@@ -1,22 +1,20 @@
-import "./run.overflow-compaction.mocks.shared.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  loadRunOverflowCompactionHarness,
+  mockedEnsureRuntimePluginsLoaded,
+  mockedRunEmbeddedAttempt,
+} from "./run.overflow-compaction.harness.js";
 
-const runtimePluginMocks = vi.hoisted(() => ({
-  ensureRuntimePluginsLoaded: vi.fn(),
-}));
-
-vi.mock("../runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
-}));
-
-import { runEmbeddedPiAgent } from "./run.js";
-import { runEmbeddedAttempt } from "./run/attempt.js";
-
-const mockedRunEmbeddedAttempt = vi.mocked(runEmbeddedAttempt);
+let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 
 describe("runEmbeddedPiAgent usage reporting", () => {
+  beforeAll(async () => {
+    ({ runEmbeddedPiAgent } = await loadRunOverflowCompactionHarness());
+  });
+
   beforeEach(() => {
-    vi.clearAllMocks();
+    mockedEnsureRuntimePluginsLoaded.mockReset();
+    mockedRunEmbeddedAttempt.mockReset();
   });
 
   it("bootstraps runtime plugins with the resolved workspace before running", async () => {
@@ -39,7 +37,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       runId: "run-plugin-bootstrap",
     });
 
-    expect(runtimePluginMocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+    expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
       config: undefined,
       workspaceDir: "/tmp/workspace",
     });
@@ -66,7 +64,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       allowGatewaySubagentBinding: true,
     });
 
-    expect(runtimePluginMocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+    expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
       config: undefined,
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,

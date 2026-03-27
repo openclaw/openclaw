@@ -3,7 +3,7 @@ summary: "Brave Search API setup for web_search"
 read_when:
   - You want to use Brave Search for web_search
   - You need a BRAVE_API_KEY or plan details
-title: "Brave Search"
+title: "Brave Search (legacy path)"
 ---
 
 # Brave Search API
@@ -20,11 +20,21 @@ OpenClaw supports Brave Search API as a `web_search` provider.
 
 ```json5
 {
+  plugins: {
+    entries: {
+      brave: {
+        config: {
+          webSearch: {
+            apiKey: "BRAVE_API_KEY_HERE",
+          },
+        },
+      },
+    },
+  },
   tools: {
     web: {
       search: {
         provider: "brave",
-        apiKey: "BRAVE_API_KEY_HERE",
         maxResults: 5,
         timeoutSeconds: 30,
       },
@@ -32,6 +42,9 @@ OpenClaw supports Brave Search API as a `web_search` provider.
   },
 }
 ```
+
+Provider-specific Brave search settings now live under `plugins.entries.brave.config.webSearch.*`.
+Legacy `tools.web.search.apiKey` still loads through the compatibility shim, but it is no longer the canonical config path.
 
 ## Tool parameters
 

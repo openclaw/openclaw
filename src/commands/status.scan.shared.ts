@@ -58,7 +58,7 @@ export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStat
 
 export async function resolveGatewayProbeSnapshot(params: {
   cfg: OpenClawConfig;
-  opts: { timeoutMs?: number; all?: boolean };
+  opts: { timeoutMs?: number; all?: boolean; skipProbe?: boolean };
 }): Promise<GatewayProbeSnapshot> {
   const gatewayConnection = buildGatewayConnectionDetails({ config: params.cfg });
   const isRemoteMode = params.cfg.gateway?.mode === "remote";
@@ -66,16 +66,18 @@ export async function resolveGatewayProbeSnapshot(params: {
     typeof params.cfg.gateway?.remote?.url === "string" ? params.cfg.gateway.remote.url : "";
   const remoteUrlMissing = isRemoteMode && !remoteUrlRaw.trim();
   const gatewayMode = isRemoteMode ? "remote" : "local";
-  const gatewayProbeAuthResolution = resolveGatewayProbeAuthResolution(params.cfg);
+  const gatewayProbeAuthResolution = await resolveGatewayProbeAuthResolution(params.cfg);
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
   const gatewayProbe = remoteUrlMissing
     ? null
-    : await probeGateway({
-        url: gatewayConnection.url,
-        auth: gatewayProbeAuthResolution.auth,
-        timeoutMs: Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000),
-        detailLevel: "presence",
-      }).catch(() => null);
+    : params.opts.skipProbe
+      ? null
+      : await probeGateway({
+          url: gatewayConnection.url,
+          auth: gatewayProbeAuthResolution.auth,
+          timeoutMs: Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000),
+          detailLevel: "presence",
+        }).catch(() => null);
   if (gatewayProbeAuthWarning && gatewayProbe?.ok === false) {
     gatewayProbe.error = gatewayProbe.error
       ? `${gatewayProbe.error}; ${gatewayProbeAuthWarning}`

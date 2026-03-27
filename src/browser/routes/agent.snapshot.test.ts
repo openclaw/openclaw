@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTargetIdAfterNavigate } from "./agent.snapshot.js";
 
 type Tab = { targetId: string; url: string };
@@ -8,6 +8,10 @@ function staticListTabs(tabs: Tab[]): () => Promise<Tab[]> {
 }
 
 describe("resolveTargetIdAfterNavigate", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("returns original targetId when old target still exists (no swap)", async () => {
     const result = await resolveTargetIdAfterNavigate({
       oldTargetId: "old-123",

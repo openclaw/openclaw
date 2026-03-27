@@ -1,5 +1,8 @@
 import { Command } from "commander";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+
+const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn(async () => ({
@@ -47,11 +50,6 @@ vi.mock("./browser-cli-shared.js", () => ({
   callBrowserRequest: sharedMocks.callBrowserRequest,
 }));
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
 vi.mock("../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
@@ -85,6 +83,7 @@ describe("browser cli snapshot defaults", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    resetRuntimeCapture();
     configMocks.loadConfig.mockReturnValue({ browser: {} });
   });
 

@@ -221,7 +221,7 @@ export const FeishuConfigSchema = z
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     reactionNotifications: ReactionNotificationModeSchema.optional().default("own"),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-    requireMention: z.boolean().optional().default(true),
+    requireMention: z.boolean().optional(),
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
     // Dynamic agent creation for DM users

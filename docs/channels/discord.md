@@ -92,12 +92,14 @@ You will need to create a new application with a bot, add the bot to your server
 
   </Step>
 
-  <Step title="Step 0: Set your bot token securely (do not send it in chat)">
+  <Step title="Set your bot token securely (do not send it in chat)">
     Your Discord bot token is a secret (like a password). Set it on the machine running OpenClaw before messaging your agent.
 
 ```bash
-openclaw config set channels.discord.token '"YOUR_BOT_TOKEN"' --json
-openclaw config set channels.discord.enabled true --json
+export DISCORD_BOT_TOKEN="YOUR_BOT_TOKEN"
+openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN --dry-run
+openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN
+openclaw config set channels.discord.enabled true --strict-json
 openclaw gateway
 ```
 
@@ -121,7 +123,11 @@ openclaw gateway
   channels: {
     discord: {
       enabled: true,
-      token: "YOUR_BOT_TOKEN",
+      token: {
+        source: "env",
+        provider: "default",
+        id: "DISCORD_BOT_TOKEN",
+      },
     },
   },
 }
@@ -133,7 +139,7 @@ openclaw gateway
 DISCORD_BOT_TOKEN=...
 ```
 
-        SecretRef values are also supported for `channels.discord.token` (env/file/exec providers). See [Secrets Management](/gateway/secrets).
+        Plaintext `token` values are supported. SecretRef values are also supported for `channels.discord.token` across env/file/exec providers. See [Secrets Management](/gateway/secrets).
 
       </Tab>
     </Tabs>
@@ -576,6 +582,7 @@ Default slash command settings:
     OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives.
 
     - `channels.discord.streaming` controls preview streaming (`off` | `partial` | `block` | `progress`, default: `off`).
+    - Default stays `off` because Discord preview edits can hit rate limits quickly, especially when multiple bots or gateways share the same account or guild traffic.
     - `progress` is accepted for cross-channel consistency and maps to `partial` on Discord.
     - `channels.discord.streamMode` is a legacy alias and is auto-migrated.
     - `partial` edits a single preview message as tokens arrive.

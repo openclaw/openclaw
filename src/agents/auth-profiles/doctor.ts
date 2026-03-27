@@ -1,15 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { buildProviderAuthDoctorHintWithPlugin } from "../../plugins/provider-runtime.runtime.js";
 import { normalizeProviderId } from "../model-selection.js";
 import type { AuthProfileStore } from "./types.js";
-
-let providerRuntimePromise:
-  | Promise<typeof import("../../plugins/provider-runtime.runtime.js")>
-  | undefined;
-
-function loadProviderRuntime() {
-  providerRuntimePromise ??= import("../../plugins/provider-runtime.runtime.js");
-  return providerRuntimePromise;
-}
 
 export async function formatAuthDoctorHint(params: {
   cfg?: OpenClawConfig;
@@ -18,7 +10,6 @@ export async function formatAuthDoctorHint(params: {
   profileId?: string;
 }): Promise<string> {
   const normalizedProvider = normalizeProviderId(params.provider);
-  const { buildProviderAuthDoctorHintWithPlugin } = await loadProviderRuntime();
   const pluginHint = await buildProviderAuthDoctorHintWithPlugin({
     provider: normalizedProvider,
     context: {

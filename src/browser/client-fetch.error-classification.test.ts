@@ -1,45 +1,42 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({
-    gateway: {
-      auth: {
-        token: "loopback-token",
-      },
-    },
-  })),
-  startBrowserControlServiceFromConfig: vi.fn(async () => true),
-  createBrowserControlContext: vi.fn(() => ({})),
-  dispatch: vi.fn(async () => ({ status: 200, body: { ok: true } })),
-}));
-
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: mocks.loadConfig,
-  };
-});
-
-vi.mock("./control-service.js", () => ({
-  createBrowserControlContext: mocks.createBrowserControlContext,
-  startBrowserControlServiceFromConfig: mocks.startBrowserControlServiceFromConfig,
-}));
-
-vi.mock("./routes/dispatcher.js", () => ({
-  createBrowserRouteDispatcher: vi.fn(() => ({
-    dispatch: mocks.dispatch,
-  })),
-}));
-
+import * as configModule from "../config/config.js";
 import { fetchBrowserJson } from "./client-fetch.js";
+import * as controlServiceModule from "./control-service.js";
+import * as routeDispatcherModule from "./routes/dispatcher.js";
+
+type MockDispatchResult = { status: number; body: unknown };
+
+const mocks = {
+  dispatch: vi.fn<() => Promise<MockDispatchResult>>(async () => ({
+    status: 200,
+    body: { ok: true },
+  })),
+};
 
 describe("fetchBrowserJson error classification", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    mocks.loadConfig.mockClear();
-    mocks.startBrowserControlServiceFromConfig.mockClear();
-    mocks.createBrowserControlContext.mockClear();
+    vi.spyOn(configModule, "loadConfig").mockImplementation(
+      () =>
+        ({
+          gateway: {
+            auth: {
+              token: "loopback-token",
+            },
+          },
+        }) as ReturnType<typeof configModule.loadConfig>,
+    );
+    vi.spyOn(controlServiceModule, "startBrowserControlServiceFromConfig").mockResolvedValue(
+      true as unknown as Awaited<
+        ReturnType<typeof controlServiceModule.startBrowserControlServiceFromConfig>
+      >,
+    );
+    vi.spyOn(controlServiceModule, "createBrowserControlContext").mockReturnValue(
+      {} as ReturnType<typeof controlServiceModule.createBrowserControlContext>,
+    );
+    vi.spyOn(routeDispatcherModule, "createBrowserRouteDispatcher").mockReturnValue({
+      dispatch: mocks.dispatch,
+    } as ReturnType<typeof routeDispatcherModule.createBrowserRouteDispatcher>);
     mocks.dispatch.mockReset();
     mocks.dispatch.mockResolvedValue({ status: 200, body: { ok: true } });
   });

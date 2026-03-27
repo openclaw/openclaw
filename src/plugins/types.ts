@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { TopLevelComponents } from "@buape/carbon";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
@@ -16,7 +15,11 @@ import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
+import type {
+  ChannelId,
+  ChannelPlugin,
+  ChannelStructuredComponents,
+} from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
@@ -52,6 +55,7 @@ export type ProviderAuthOptionBag = {
   [key: string]: unknown;
 };
 
+/** Logger passed into plugin registration, services, and CLI surfaces. */
 export type PluginLogger = {
   debug?: (message: string) => void;
   info: (message: string) => void;
@@ -74,6 +78,13 @@ export type PluginConfigValidation =
   | { ok: true; value?: unknown }
   | { ok: false; errors: string[] };
 
+/**
+ * Config schema contract accepted by plugin manifests and runtime registration.
+ *
+ * Plugins can provide a Zod-like parser, a lightweight `validate(...)`
+ * function, or both. `uiHints` and `jsonSchema` are optional extras for docs,
+ * forms, and config UIs.
+ */
 export type OpenClawPluginConfigSchema = {
   safeParse?: (value: unknown) => {
     success: boolean;
@@ -88,6 +99,7 @@ export type OpenClawPluginConfigSchema = {
   jsonSchema?: Record<string, unknown>;
 };
 
+/** Trusted execution context passed to plugin-owned agent tool factories. */
 export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -124,6 +136,7 @@ export type OpenClawPluginHookOptions = {
 
 export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
 
+/** Standard result payload returned by provider auth methods. */
 export type ProviderAuthResult = {
   profiles: Array<{ profileId: string; credential: AuthProfileCredential }>;
   /**
@@ -138,6 +151,7 @@ export type ProviderAuthResult = {
   notes?: string[];
 };
 
+/** Interactive auth context passed to provider login/setup methods. */
 export type ProviderAuthContext = {
   config: OpenClawConfig;
   agentDir?: string;
@@ -591,6 +605,11 @@ export type ProviderPluginWizardSetup = {
   groupHint?: string;
   methodId?: string;
   /**
+   * Interactive onboarding surfaces where this auth choice should appear.
+   * Defaults to `["text-inference"]` when omitted.
+   */
+  onboardingScopes?: Array<"text-inference" | "image-generation">;
+  /**
    * Optional model-allowlist prompt policy applied after this auth choice is
    * selected in configure/onboarding flows.
    *
@@ -604,12 +623,14 @@ export type ProviderPluginWizardSetup = {
   };
 };
 
+/** Optional model-picker metadata shown in interactive provider selection flows. */
 export type ProviderPluginWizardModelPicker = {
   label?: string;
   hint?: string;
   methodId?: string;
 };
 
+/** UI metadata that lets provider plugins appear in onboarding and configure flows. */
 export type ProviderPluginWizard = {
   setup?: ProviderPluginWizardSetup;
   modelPicker?: ProviderPluginWizardModelPicker;
@@ -623,6 +644,7 @@ export type ProviderModelSelectedContext = {
   workspaceDir?: string;
 };
 
+/** Text-inference provider capability registered by a plugin. */
 export type ProviderPlugin = {
   id: string;
   pluginId?: string;
@@ -866,17 +888,40 @@ export type WebSearchProviderContext = {
   runtimeMetadata?: RuntimeWebSearchMetadata;
 };
 
+export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
+
+export type WebSearchRuntimeMetadataContext = {
+  config?: OpenClawConfig;
+  searchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebSearchMetadata;
+  resolvedCredential?: {
+    value?: string;
+    source: WebSearchCredentialResolutionSource;
+    fallbackEnvVar?: string;
+  };
+};
+
 export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
+  requiresCredential?: boolean;
+  credentialLabel?: string;
   envVars: string[];
   placeholder: string;
   signupUrl: string;
   docsUrl?: string;
   autoDetectOrder?: number;
+  credentialPath: string;
+  inactiveSecretPaths?: string[];
   getCredentialValue: (searchConfig?: Record<string, unknown>) => unknown;
   setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => void;
+  getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
+  setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
+  applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+  resolveRuntimeMetadata?: (
+    ctx: WebSearchRuntimeMetadataContext,
+  ) => Partial<RuntimeWebSearchMetadata> | Promise<Partial<RuntimeWebSearchMetadata>>;
   createTool: (ctx: WebSearchProviderContext) => WebSearchProviderToolDefinition | null;
 };
 
@@ -884,6 +929,7 @@ export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
   pluginId: string;
 };
 
+/** Speech capability registered by a plugin. */
 export type SpeechProviderPlugin = {
   id: SpeechProviderId;
   label: string;
@@ -926,6 +972,8 @@ export type PluginCommandContext = {
   channelId?: ChannelId;
   /** Whether the sender is on the allowlist */
   isAuthorizedSender: boolean;
+  /** Gateway client scopes for internal control-plane callers */
+  gatewayClientScopes?: string[];
   /** Raw command arguments after the command name */
   args?: string;
   /** The full normalized command body */
@@ -939,7 +987,7 @@ export type PluginCommandContext = {
   /** Account id for multi-account channels */
   accountId?: string;
   /** Thread/topic id if available */
-  messageThreadId?: number;
+  messageThreadId?: string | number;
   requestConversationBinding: (
     params?: PluginConversationBindingRequestParams,
   ) => Promise<PluginConversationBindingRequestResult>;
@@ -1111,7 +1159,10 @@ export type PluginInteractiveDiscordHandlerContext = {
     acknowledge: () => Promise<void>;
     reply: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
     followUp: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
-    editMessage: (params: { text?: string; components?: TopLevelComponents[] }) => Promise<void>;
+    editMessage: (params: {
+      text?: string;
+      components?: ChannelStructuredComponents;
+    }) => Promise<void>;
     clearComponents: (params?: { text?: string }) => Promise<void>;
   };
   requestConversationBinding: (
@@ -1222,6 +1273,7 @@ export type OpenClawPluginCliContext = {
 
 export type OpenClawPluginCliRegistrar = (ctx: OpenClawPluginCliContext) => void | Promise<void>;
 
+/** Context passed to long-lived plugin services. */
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
   workspaceDir?: string;
@@ -1229,6 +1281,7 @@ export type OpenClawPluginServiceContext = {
   logger: PluginLogger;
 };
 
+/** Background service registered by a plugin during `register(api)`. */
 export type OpenClawPluginService = {
   id: string;
   start: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
@@ -1239,6 +1292,7 @@ export type OpenClawPluginChannelRegistration = {
   plugin: ChannelPlugin;
 };
 
+/** Module-level plugin definition loaded from a native plugin entry file. */
 export type OpenClawPluginDefinition = {
   id?: string;
   name?: string;
@@ -1256,6 +1310,7 @@ export type OpenClawPluginModule =
 
 export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime";
 
+/** Main registration API injected into native plugin entry files. */
 export type OpenClawPluginApi = {
   id: string;
   name: string;
@@ -1314,6 +1369,10 @@ export type OpenClawPluginApi = {
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
   ) => void;
+  /** Register the system prompt section builder for this memory plugin (exclusive slot). */
+  registerMemoryPromptSection: (
+    builder: import("../memory/prompt-section.js").MemoryPromptSectionBuilder,
+  ) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
@@ -1365,7 +1424,8 @@ export type PluginHookName =
   | "subagent_spawned"
   | "subagent_ended"
   | "gateway_start"
-  | "gateway_stop";
+  | "gateway_stop"
+  | "before_dispatch";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -1393,6 +1453,7 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_ended",
   "gateway_start",
   "gateway_stop",
+  "before_dispatch",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -1615,6 +1676,39 @@ export type PluginHookInboundClaimEvent = {
 
 export type PluginHookInboundClaimResult = {
   handled: boolean;
+};
+
+// before_dispatch hook
+export type PluginHookBeforeDispatchEvent = {
+  /** Message text content. */
+  content: string;
+  /** Body text prepared for agent (after command parsing). */
+  body?: string;
+  /** Channel identifier (e.g. "telegram", "discord"). */
+  channel?: string;
+  /** Session key for this message. */
+  sessionKey?: string;
+  /** Sender identifier. */
+  senderId?: string;
+  /** Whether this is a group message. */
+  isGroup?: boolean;
+  /** Message timestamp. */
+  timestamp?: number;
+};
+
+export type PluginHookBeforeDispatchContext = {
+  channelId?: string;
+  accountId?: string;
+  conversationId?: string;
+  sessionKey?: string;
+  senderId?: string;
+};
+
+export type PluginHookBeforeDispatchResult = {
+  /** Whether the plugin handled this message (skips default dispatch). */
+  handled: boolean;
+  /** Plugin-defined reply text (used when handled=true). */
+  text?: string;
 };
 
 // message_received hook
@@ -1877,6 +1971,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookInboundClaimEvent,
     ctx: PluginHookInboundClaimContext,
   ) => Promise<PluginHookInboundClaimResult | void> | PluginHookInboundClaimResult | void;
+  before_dispatch: (
+    event: PluginHookBeforeDispatchEvent,
+    ctx: PluginHookBeforeDispatchContext,
+  ) => Promise<PluginHookBeforeDispatchResult | void> | PluginHookBeforeDispatchResult | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,

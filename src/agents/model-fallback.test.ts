@@ -197,13 +197,13 @@ describe("runWithModelFallback", () => {
     const result = await runWithModelFallback({
       cfg,
       provider: "openai",
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
       run,
     });
 
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai", "gpt-5.3-codex");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-5.4");
   });
 
   it("falls back on unrecognized errors when candidates remain", async () => {

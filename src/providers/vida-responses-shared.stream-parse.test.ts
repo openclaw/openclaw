@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, expect, it } from "vitest";
 import { processResponsesStream } from "./vida-responses-shared.js";
 
@@ -34,7 +35,7 @@ describe("vida-responses shared stream parser", () => {
       api: "vida-responses",
       input: ["text"],
     };
-    const malformedArgs = "{\"command\":\"node -e \"const now=1;\"\"}";
+    const malformedArgs = '{"command":"node -e "const now=1;""}';
     const events = [
       {
         type: "response.output_item.added",
@@ -62,7 +63,9 @@ describe("vida-responses shared stream parser", () => {
       },
     ];
 
-    await expect(processResponsesStream(makeStream(events), output, stream, model)).resolves.toBeUndefined();
+    await expect(
+      processResponsesStream(makeStream(events), output, stream, model),
+    ).resolves.toBeUndefined();
 
     const toolEnd = stream.find((evt) => evt?.type === "toolcall_end");
     expect(toolEnd).toBeTruthy();

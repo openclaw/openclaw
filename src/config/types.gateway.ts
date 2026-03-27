@@ -283,10 +283,7 @@ export type GatewayHttpResponsesConfig = {
   files?: GatewayHttpResponsesFilesConfig;
   /** Image inputs (input_image). */
   images?: GatewayHttpResponsesImagesConfig;
-  /**
-   * Optional max decoded bytes to include for base64 data in tool results.
-   * When omitted or <= 0, tool result data is stripped (default behavior).
-   */
+  /** Max decoded bytes retained for tool-result base64 payloads. */
   toolResultMaxDataBytes?: number;
 };
 

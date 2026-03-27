@@ -724,6 +724,10 @@ function getBaseUrlNoQuery(url: string): string {
   return `${u.protocol}//${u.host}${u.pathname}`;
 }
 
+function createPlivoV2ReplayKey(url: string, nonce: string): string {
+  return `plivo:v2:${sha256Hex(`${getBaseUrlNoQuery(url)}\n${nonce}`)}`;
+}
+
 function timingSafeEqualString(a: string, b: string): boolean {
   if (a.length !== b.length) {
     const dummy = Buffer.from(a);
@@ -967,7 +971,7 @@ export function verifyPlivoWebhook(
         reason: "Invalid Plivo V2 signature",
       };
     }
-    const replayKey = `plivo:v2:${sha256Hex(`${verificationUrl}\n${nonceV2}`)}`;
+    const replayKey = createPlivoV2ReplayKey(verificationUrl, nonceV2);
     const isReplay = markReplay(plivoReplayCache, replayKey);
     return { ok: true, version: "v2", verificationUrl, isReplay, verifiedRequestKey: replayKey };
   }

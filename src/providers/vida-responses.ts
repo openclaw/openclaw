@@ -1,3 +1,8 @@
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import type { AssistantMessageEventStream } from "@mariozechner/pi-ai";
 import {
   createAssistantMessageEventStream,
@@ -5,10 +10,6 @@ import {
   registerApiProvider,
   supportsXhigh,
 } from "@mariozechner/pi-ai";
-import fs from "node:fs";
-import { createRequire } from "node:module";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   convertResponsesMessages,
   convertResponsesTools,
@@ -44,7 +45,7 @@ export const streamVidaResponses = (
   options?: any,
 ): AssistantMessageEventStream => {
   const stream = createAssistantMessageEventStream();
-  (async () => {
+  void (async () => {
     const output: any = {
       role: "assistant",
       content: [],
@@ -85,7 +86,9 @@ export const streamVidaResponses = (
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
-      for (const block of output.content) {delete block.index;}
+      for (const block of output.content) {
+        delete block.index;
+      }
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
       output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
       stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -162,7 +165,9 @@ async function createClient(
 
 async function loadOpenAIClient(): Promise<any> {
   const require = createRequire(import.meta.url);
-  const resolved = await resolveOpenAIClientPath(require, (specifier) => import.meta.resolve(specifier));
+  const resolved = await resolveOpenAIClientPath(require, (specifier) =>
+    import.meta.resolve(specifier),
+  );
   const mod = await import(resolved);
   return mod.default ?? mod;
 }
@@ -299,7 +304,9 @@ function getServiceTierCostMultiplier(serviceTier?: string): number {
 
 function applyServiceTierPricing(usage: any, serviceTier?: string): void {
   const multiplier = getServiceTierCostMultiplier(serviceTier);
-  if (multiplier === 1) {return;}
+  if (multiplier === 1) {
+    return;
+  }
   usage.cost.input *= multiplier;
   usage.cost.output *= multiplier;
   usage.cost.cacheRead *= multiplier;
@@ -334,13 +341,20 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function normalizeReasoningEffort(value: unknown): string | undefined {
-  if (typeof value !== "string") {return undefined;}
+  if (typeof value !== "string") {
+    return undefined;
+  }
   const normalized = value.trim().toLowerCase();
-  if (!VALID_REASONING_EFFORTS.has(normalized)) {return undefined;}
+  if (!VALID_REASONING_EFFORTS.has(normalized)) {
+    return undefined;
+  }
   return normalized;
 }
 
-function resolveRelayProviderMetadata(context: any, options?: any): Record<string, unknown> | undefined {
+function resolveRelayProviderMetadata(
+  context: any,
+  options?: any,
+): Record<string, unknown> | undefined {
   const explicit = asRecord(options?.providerMetadata);
   if (explicit && Object.keys(explicit).length > 0) {
     return explicit;
@@ -366,7 +380,9 @@ function resolveRelayProviderMetadata(context: any, options?: any): Record<strin
 
 function hasVidaRelayFlag(metadata: Record<string, unknown>): boolean {
   const direct = metadata["vida.ignoreOnProviderRelay"];
-  if (direct === true || direct === "true" || direct === 1 || direct === "1") {return true;}
+  if (direct === true || direct === "true" || direct === 1 || direct === "1") {
+    return true;
+  }
   const vida = asRecord(metadata.vida);
   const nested = vida?.ignoreOnProviderRelay;
   return nested === true || nested === "true" || nested === 1 || nested === "1";
@@ -378,7 +394,9 @@ function resolveRelayReasoningEffort(
 ): string | undefined {
   const vida = asRecord(metadata?.vida);
   const rawEffort = normalizeReasoningEffort(vida?.reasoningEffort);
-  if (!rawEffort) {return undefined;}
+  if (!rawEffort) {
+    return undefined;
+  }
   if (supportsXhigh(model)) {
     return rawEffort;
   }
@@ -388,7 +406,9 @@ function resolveRelayReasoningEffort(
 let registered = false;
 
 export function registerVidaResponsesProvider(): void {
-  if (registered) {return;}
+  if (registered) {
+    return;
+  }
   registerApiProvider(
     {
       api: "vida-responses",

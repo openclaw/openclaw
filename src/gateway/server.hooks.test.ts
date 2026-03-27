@@ -119,8 +119,10 @@ describe("gateway server hooks", () => {
       expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
       const firstCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         deliveryContract?: string;
+        job?: { payload?: { externalContentSource?: string } };
       };
       expect(firstCall?.deliveryContract).toBe("shared");
+      expect(firstCall?.job?.payload?.externalContentSource).toBe("webhook");
       drainSystemEvents(resolveMainKey());
 
       mockIsolatedRunOkOnce();
@@ -205,6 +207,40 @@ describe("gateway server hooks", () => {
 
       const resBadJson = await postHook(port, "/hooks/wake", "{");
       expect(resBadJson.status).toBe(400);
+    });
+  });
+
+  test("preserves mapped hook provenance across async dispatch", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      mappings: [
+        {
+          match: { path: "gmail" },
+          action: "agent",
+          messageTemplate: "New email from {{messages[0].from}}",
+          sessionKey: "main",
+        },
+      ],
+    };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const response = await postHook(port, "/hooks/gmail", {
+        source: "gmail",
+        messages: [{ id: "msg-1", from: "Ada", subject: "Hello", snippet: "Hi", body: "Body" }],
+      });
+      expect(response.status).toBe(200);
+      await waitForSystemEvent();
+
+      const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        sessionKey?: string;
+        job?: { payload?: { externalContentSource?: string } };
+      };
+      expect(call?.sessionKey).toBe("main");
+      expect(call?.job?.payload?.externalContentSource).toBe("gmail");
+      drainSystemEvents(resolveMainKey());
     });
   });
 

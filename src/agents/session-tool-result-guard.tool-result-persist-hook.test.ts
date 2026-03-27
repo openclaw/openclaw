@@ -178,4 +178,46 @@ describe("before_message_write hook", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]?.role).toBe("user");
   });
+
+  it("merges providerMetadata onto persisted messages", () => {
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+      providerMetadata: {
+        vida: {
+          traceId: "trace-123",
+        },
+        relay: {
+          requestId: "req-456",
+        },
+      },
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "hello" }],
+      providerMetadata: {
+        existing: true,
+      },
+    } as unknown as AgentMessage);
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: "assistant",
+      providerMetadata: {
+        existing: true,
+        vida: {
+          traceId: "trace-123",
+        },
+        relay: {
+          requestId: "req-456",
+        },
+      },
+    });
+  });
 });

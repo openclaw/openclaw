@@ -1,9 +1,9 @@
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
-import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { mediaKindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { resolveFeishuAccount } from "./accounts.js";
+import { withTempDownloadPath, type ClawdbotConfig } from "../runtime-api.js";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -24,10 +24,10 @@ export type DownloadMessageResourceResult = {
 };
 
 function createConfiguredFeishuMediaClient(params: { cfg: ClawdbotConfig; accountId?: string }): {
-  account: ReturnType<typeof resolveFeishuAccount>;
+  account: ReturnType<typeof resolveFeishuRuntimeAccount>;
   client: ReturnType<typeof createFeishuClient>;
 } {
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
@@ -547,7 +547,7 @@ export async function sendMediaFeishu(params: {
     accountId,
     mediaLocalRoots,
   } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }

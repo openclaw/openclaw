@@ -49,7 +49,7 @@ Model note: while many providers/models are supported, for the best experience a
 
 ## Install (recommended)
 
-Runtime: **Node ≥22**.
+Runtime: **Node 24 (recommended) or Node 22.16+**.
 
 ```bash
 npm install -g openclaw@latest
@@ -62,7 +62,7 @@ OpenClaw Onboard installs the Gateway daemon (launchd/systemd user service) so i
 
 ## Quick start (TL;DR)
 
-Runtime: **Node ≥22**.
+Runtime: **Node 24 (recommended) or Node 22.16+**.
 
 Full beginner guide (auth, pairing, channels): [Getting started](https://docs.openclaw.ai/start/getting-started)
 
@@ -111,31 +111,46 @@ Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` pro
 
 ## Vida Fork Deltas
 
-This repository tracks `upstream/main` and keeps a small set of Vida-specific patches.
+This repository tracks upstream OpenClaw releases and keeps a small set of Vida-specific patches.
+Treat this section as the preservation contract for future upstream merges and release-tag syncs.
 
-- Full historical fork-only commit list: `git log --oneline upstream/main..main`
-- Diff vs upstream tip: `git diff upstream/main...main`
+- Release-tag sync rule:
+  merge the target upstream release tag first, preserve the deltas below on that tag line, validate them, and only then sync the resolved release line back into `main`.
+- Audit note (2026-03-27):
+  this section was historically incomplete and omitted at least some substantive older Vida deltas from prior release tags.
+  Until the next corrected fork release lands, do not use this section by itself as the preservation inventory for upstream merges.
+  Cross-check the historical `vida-v*` tags, substantive fork-only commits, and the current `v2026.3.24` merge plan before deciding a fork behavior can be dropped.
+- Full historical fork-only commit list:
+  `git log --oneline upstream/main..main`
+- Diff vs upstream tip:
+  `git diff upstream/main...main`
 
 ### Product/runtime deltas
 
-- Added a `vida-responses` model provider for Vida backend routing and auth integration.
+- `vida-responses` provider/runtime:
   Why: Vida runs OpenClaw behind a separate control plane, so upstream provider auth/config did not cover Vida's backend-issued credentials, routing rules, and OpenAI-compatible response surface.
-  Files: `src/providers/vida-responses.ts`, `src/providers/vida-responses-shared.ts`, `src/config/types.models.ts`, `src/config/zod-schema.ts`, `src/agents/pi-embedded-runner/run/attempt.ts`.
-- Extended OpenResponses relay paths to carry the extra fields Vida depends on when brokering hosted agent runs.
+  Runtime files: `src/providers/vida-responses.ts`, `src/providers/vida-responses-shared.ts`, `src/config/types.models.ts`, `src/config/zod-schema.ts`, `src/agents/pi-embedded-runner/run/attempt.ts`.
+  Direct tests: `src/providers/vida-responses.test.ts`, `src/providers/vida-responses-shared.stream-parse.test.ts`, `src/config/schema.test.ts`.
+- OpenResponses and embedded-runner hosted-run parity:
   Why: Vida needs provider metadata, streamed reasoning, client tool definitions, and bounded tool-result payloads to survive the hop from the OpenResponses HTTP layer into embedded agent execution without losing parity.
-  Files: `src/gateway/openresponses-http.ts`, `src/gateway/open-responses.schema.ts`, `src/agents/agent-command.ts`, `src/agents/command/types.ts`, `src/agents/pi-embedded-runner/run.ts`, `src/agents/pi-embedded-runner/run/params.ts`, `src/agents/pi-embedded-subscribe.ts`, `src/agents/pi-embedded-subscribe.handlers.tools.ts`.
-- Fixed the reasoning-stream pass-through path for OpenResponses-driven runs.
-  Why: Vida surfaces intermediate reasoning in its own control-plane UX, so dropping `reasoningLevel` or `onReasoningStream` at the command boundary regresses product behavior even when the underlying model/provider supports it.
-  Files: `src/agents/agent-command.ts`, `src/agents/command/types.ts`, `src/gateway/openresponses-http.ts`.
-- Hardened tool-call argument parsing for malformed streamed JSON in Vida responses flows.
-  Why: Vida receives streamed tool-call payloads from heterogeneous upstream providers and relays; malformed partial JSON should degrade gracefully instead of breaking the whole response pipeline.
-  Files: `src/providers/vida-responses-shared.ts`, `src/providers/vida-responses-shared.stream-parse.test.ts`.
-- Added browser-client timeout classification and cold-start resilience fixes.
+  Runtime files: `src/gateway/openresponses-http.ts`, `src/gateway/open-responses.schema.ts`, `src/agents/agent-command.ts`, `src/agents/command/types.ts`, `src/agents/pi-embedded-runner/run.ts`, `src/agents/pi-embedded-runner/run/params.ts`, `src/agents/pi-embedded-runner/run/attempt.ts`, `src/agents/pi-embedded-subscribe.ts`, `src/agents/pi-embedded-subscribe.handlers.tools.ts`.
+  Direct tests: `src/gateway/openresponses-http.test.ts`, `src/gateway/openresponses-parity.test.ts`, `src/commands/agent.test.ts`, `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.subscribeembeddedpisession.test.ts`.
+- Browser reliability patches carried on top of upstream browser internals:
   Why: Vida routes browser-dependent hosted workflows through long-lived gateway processes, so indefinite reads or poorly classified transient failures create visible control-plane stalls and retries in production.
-  Files: `src/browser/client.ts`, `src/browser/client-fetch.ts`, `src/browser/client-fetch.error-classification.test.ts`, `src/agents/tools/browser-tool.ts`, `src/agents/tools/browser-tool.actions.ts`, `src/agents/tools/browser-tool.test.ts`.
-- Added transcript/tool-result guard handling that preserves provider metadata on streamed tool output.
+  Runtime files: `src/browser/client.ts`, `src/browser/client-fetch.ts`.
+  Direct tests: `src/browser/client.test.ts`, `src/browser/client-fetch.error-classification.test.ts`.
+- Plugin request attribution for plugin-owned Vida OpenAI traffic:
+  Why: Vida plugins such as `memory-lancedb` still create their own OpenAI SDK clients inside lifecycle hooks, and those requests must carry `x-openclaw-agent-id` / `x-openclaw-session-key` when they traverse `${VIDA_API_BASE_URL}/openai/v1`.
+  Runtime files: `src/plugins/hook-runner-global.ts`, `src/plugins/hooks.ts`, `src/plugins/runtime/request-attribution-fetch.ts`, `src/plugins/runtime/request-attribution-scope.ts`.
+  Direct tests: `src/plugins/hooks.request-attribution.test.ts`, `src/plugins/runtime/request-attribution-fetch.test.ts`, `src/plugins/runtime/request-attribution-scope.test.ts`.
+- WhatsApp/Vida-specific session defaults and disconnect status extraction:
+  Why: Vida relies on the WhatsApp browser identity and nested disconnect status handling staying stable across upstream WhatsApp channel refactors.
+  Runtime files: `extensions/whatsapp/src/session.ts`, `extensions/whatsapp/src/session-errors.ts`.
+  Direct tests: `extensions/whatsapp/src/session.test.ts`, `extensions/whatsapp/src/session-errors.test.ts`.
+- Transcript/tool-result metadata preservation:
   Why: Vida needs downstream transcripts and relay metadata to stay correlated across the OpenResponses, provider, and audit surfaces even when tool output is chunked or sanitized.
-  Files: `src/agents/session-tool-result-guard-wrapper.ts`, `src/web/session.ts`, `src/web/session.test.ts`.
+  Runtime files: `src/agents/session-tool-result-guard-wrapper.ts`.
+  Direct tests: `src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts`, `src/agents/session-tool-result-guard.transcript-events.test.ts`.
 
 ### Fork operations deltas
 
@@ -148,6 +163,17 @@ This repository tracks `upstream/main` and keeps a small set of Vida-specific pa
 - Why these scripts exist:
   Vida ships downstream Docker/provisioner integrations that consume fork tags directly, so release sync cannot be a generic upstream merge; it must preserve fork patches, emit predictable `vida-*` tags, and verify Docker ref/date-tag compatibility before publish.
 
+### Downstream coupling that must be revalidated on every release-tag merge
+
+- `openclaw-docker`
+  carries the Docker/browser patch layer for Vida deployment, including the custom `sandbox-browser-entrypoint.sh` patching, lazy browser supervisor, and noVNC asset patching.
+- `vida-openclaw-provisioner`
+  owns browser profile assignment, slot routing, external CDP URLs, and the path-bound noVNC ticket contract.
+- `vida.live`
+  issues signed browser access tickets and builds launch URLs from provisioner-published browser profile metadata.
+
+Do not treat the fork as self-contained. A release-tag merge is incomplete until these downstream contracts are revalidated.
+
 ### Historical fork-only milestones
 
 - `410fc35db`: New Vida LLM provider integration.
@@ -156,6 +182,8 @@ This repository tracks `upstream/main` and keeps a small set of Vida-specific pa
 - `a4b7a208f`: Reasoning-summary mapping in OpenResponses output.
 - `cfe0917f2`: Vida provider metadata/reasoning-effort passthrough.
 - `cca004332`: Malformed JSON hardening for Vida tool-call args.
+- `5c78c4d31`: Plugin request attribution for plugin-owned Vida OpenAI traffic.
+- `5059f9c83`: WhatsApp Vida browser identity + nested disconnect status handling.
 - `097bcb056`, `b2bf2bd4a`, `44be49c89`, `0408c7f7d`: Vida sync/release script stack.
 
 Update this section whenever a new fork-only patch is merged to `main`.
@@ -344,7 +372,7 @@ If you plan to build/run companion apps, follow the platform runbooks below.
 - WebChat + debug tools.
 - Remote gateway control over SSH.
 
-Note: signed builds required for macOS permissions to stick across rebuilds (see `docs/mac/permissions.md`).
+Note: signed builds required for macOS permissions to stick across rebuilds (see [macOS Permissions](https://docs.openclaw.ai/platforms/mac/permissions)).
 
 ### iOS node (optional)
 
@@ -415,7 +443,7 @@ Details: [Security guide](https://docs.openclaw.ai/gateway/security) · [Docker 
 
 ### [Discord](https://docs.openclaw.ai/channels/discord)
 
-- Set `DISCORD_BOT_TOKEN` or `channels.discord.token` (env wins).
+- Set `DISCORD_BOT_TOKEN` or `channels.discord.token`.
 - Optional: set `commands.native`, `commands.text`, or `commands.useAccessGroups`, plus `channels.discord.allowFrom`, `channels.discord.guilds`, or `channels.discord.mediaMaxMb` as needed.
 
 ```json5

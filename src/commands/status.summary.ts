@@ -1,6 +1,5 @@
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
@@ -36,78 +35,6 @@ const loadStatusSummaryRuntimeModule = createLazyRuntimeSurface(
 function loadConfigIoModule() {
   configIoModulePromise ??= import("../config/io.js");
   return configIoModulePromise;
-}
-
-function parseStatusModelRef(
-  raw: string,
-  defaultProvider: string,
-): { provider: string; model: string } | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash === -1) {
-    return { provider: defaultProvider, model: trimmed };
-  }
-  const provider = trimmed.slice(0, slash).trim();
-  const model = trimmed.slice(slash + 1).trim();
-  if (!provider || !model) {
-    return null;
-  }
-  return { provider, model };
-}
-
-function resolveConfiguredStatusModelRef(params: {
-  cfg: OpenClawConfig;
-  defaultProvider: string;
-  defaultModel: string;
-}): { provider: string; model: string } {
-  const rawModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
-  if (rawModel) {
-    const trimmed = rawModel.trim();
-    const configuredModels = params.cfg.agents?.defaults?.models ?? {};
-    if (!trimmed.includes("/")) {
-      const aliasKey = trimmed.toLowerCase();
-      for (const [modelKey, entry] of Object.entries(configuredModels)) {
-        const aliasValue = (entry as { alias?: unknown } | undefined)?.alias;
-        const alias = typeof aliasValue === "string" ? aliasValue.trim() : "";
-        if (!alias || alias.toLowerCase() !== aliasKey) {
-          continue;
-        }
-        const parsed = parseStatusModelRef(modelKey, params.defaultProvider);
-        if (parsed) {
-          return parsed;
-        }
-      }
-      return { provider: "anthropic", model: trimmed };
-    }
-    const parsed = parseStatusModelRef(trimmed, params.defaultProvider);
-    if (parsed) {
-      return parsed;
-    }
-  }
-
-  const configuredProviders = params.cfg.models?.providers;
-  if (configuredProviders && typeof configuredProviders === "object") {
-    const hasDefaultProvider = Boolean(configuredProviders[params.defaultProvider]);
-    if (!hasDefaultProvider) {
-      const availableProvider = Object.entries(configuredProviders).find(
-        ([, providerCfg]) =>
-          providerCfg &&
-          Array.isArray(providerCfg.models) &&
-          providerCfg.models.length > 0 &&
-          providerCfg.models[0]?.id,
-      );
-      if (availableProvider) {
-        const [providerName, providerCfg] = availableProvider;
-        const firstModel = providerCfg.models[0];
-        return { provider: providerName, model: firstModel.id };
-      }
-    }
-  }
-
-  return { provider: params.defaultProvider, model: params.defaultModel };
 }
 
 const buildFlags = (entry?: SessionEntry): string[] => {
@@ -175,8 +102,12 @@ export async function getStatusSummary(
   } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true } = options;
-  const { classifySessionKey, resolveContextTokensForModel, resolveSessionModelRef } =
-    await loadStatusSummaryRuntimeModule();
+  const {
+    classifySessionKey,
+    resolveConfiguredStatusModelRef,
+    resolveContextTokensForModel,
+    resolveSessionModelRef,
+  } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? (await loadConfigIoModule()).loadConfig();
   const needsChannelPlugins = hasPotentialConfiguredChannels(cfg);
   const linkContext = needsChannelPlugins
@@ -219,6 +150,9 @@ export async function getStatusSummary(
       model: configModel,
       contextTokensOverride: cfg.agents?.defaults?.contextTokens,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      // Keep `status`/`status --json` startup read-only. These summary lookups
+      // should not kick off background provider discovery or plugin scans.
+      allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
   const now = Date.now();
@@ -250,6 +184,7 @@ export async function getStatusSummary(
             model,
             contextTokensOverride: entry?.contextTokens,
             fallbackContextTokens: configContextTokens ?? undefined,
+            allowAsyncLoad: false,
           }) ?? null;
         const total = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh =

@@ -20,7 +20,7 @@ import {
   waitForActiveTasks,
 } from "../../process/command-queue.js";
 import { createRestartIterationHook } from "../../process/restart-recovery.js";
-import type { defaultRuntime } from "../../runtime.js";
+import type { RuntimeEnv } from "../../runtime.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 
@@ -28,7 +28,7 @@ type GatewayRunSignalAction = "stop" | "restart";
 
 export async function runGatewayLoop(params: {
   start: () => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
-  runtime: typeof defaultRuntime;
+  runtime: RuntimeEnv;
   lockPort?: number;
 }) {
   let lock = await acquireGatewayLock({ port: params.lockPort });
@@ -97,7 +97,8 @@ export async function runGatewayLoop(params: {
   };
 
   const DRAIN_TIMEOUT_MS = 90_000;
-  const SHUTDOWN_TIMEOUT_MS = 5_000;
+  const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
+  const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
 
   const request = (action: GatewayRunSignalAction, signal: string) => {
     if (shuttingDown) {
@@ -112,10 +113,10 @@ export async function runGatewayLoop(params: {
     const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
-      // Exit non-zero on restart timeout so launchd/systemd treats it as a
-      // failure and triggers a clean process restart instead of assuming the
-      // shutdown was intentional. Stop-timeout stays at 0 (graceful). (#36822)
-      exitProcess(isRestart ? 1 : 0);
+      // Keep the in-process watchdog below the supervisor stop budget so this
+      // path wins before launchd/systemd escalates to a hard kill. Exit
+      // non-zero on any timeout so supervised installs restart cleanly.
+      exitProcess(1);
     }, forceExitMs);
 
     void (async () => {

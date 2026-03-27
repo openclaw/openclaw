@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const browserClientMocks = vi.hoisted(() => ({
   browserCloseTab: vi.fn(async (..._args: unknown[]) => ({})),
@@ -133,7 +133,8 @@ vi.mock("./common.js", async () => {
 });
 
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
-import { createBrowserTool } from "./browser-tool.js";
+import { __testing as browserToolActionsTesting } from "./browser-tool.actions.js";
+import { __testing as browserToolTesting, createBrowserTool } from "./browser-tool.js";
 
 function mockSingleBrowserProxyNode() {
   nodesUtilsMocks.listNodes.mockResolvedValue([
@@ -157,6 +158,35 @@ function resetBrowserToolMocks() {
     defaultProfile: "openclaw",
   });
   nodesUtilsMocks.listNodes.mockResolvedValue([]);
+  browserToolTesting.setDepsForTest({
+    browserAct: browserActionsMocks.browserAct as never,
+    browserArmDialog: browserActionsMocks.browserArmDialog as never,
+    browserArmFileChooser: browserActionsMocks.browserArmFileChooser as never,
+    browserCloseTab: browserClientMocks.browserCloseTab as never,
+    browserFocusTab: browserClientMocks.browserFocusTab as never,
+    browserNavigate: browserActionsMocks.browserNavigate as never,
+    browserOpenTab: browserClientMocks.browserOpenTab as never,
+    browserPdfSave: browserActionsMocks.browserPdfSave as never,
+    browserProfiles: browserClientMocks.browserProfiles as never,
+    browserScreenshotAction: browserActionsMocks.browserScreenshotAction as never,
+    browserStart: browserClientMocks.browserStart as never,
+    browserStatus: browserClientMocks.browserStatus as never,
+    browserStop: browserClientMocks.browserStop as never,
+    imageResultFromFile: toolCommonMocks.imageResultFromFile as never,
+    loadConfig: configMocks.loadConfig as never,
+    listNodes: nodesUtilsMocks.listNodes as never,
+    callGatewayTool: gatewayMocks.callGatewayTool as never,
+    trackSessionBrowserTab: sessionTabRegistryMocks.trackSessionBrowserTab as never,
+    untrackSessionBrowserTab: sessionTabRegistryMocks.untrackSessionBrowserTab as never,
+  });
+  browserToolActionsTesting.setDepsForTest({
+    browserAct: browserActionsMocks.browserAct as never,
+    browserConsoleMessages: browserActionsMocks.browserConsoleMessages as never,
+    browserSnapshot: browserClientMocks.browserSnapshot as never,
+    browserTabs: browserClientMocks.browserTabs as never,
+    loadConfig: configMocks.loadConfig as never,
+    imageResultFromFile: toolCommonMocks.imageResultFromFile as never,
+  });
 }
 
 function setResolvedBrowserProfiles(
@@ -172,8 +202,13 @@ function setResolvedBrowserProfiles(
 }
 
 function registerBrowserToolAfterEachReset() {
+  beforeEach(() => {
+    resetBrowserToolMocks();
+  });
   afterEach(() => {
     resetBrowserToolMocks();
+    browserToolActionsTesting.setDepsForTest(null);
+    browserToolTesting.setDepsForTest(null);
   });
 }
 
@@ -184,7 +219,7 @@ async function runSnapshotToolCall(params: {
   profile?: string;
 }) {
   const tool = createBrowserTool();
-  await tool.execute?.("call-1", { action: "snapshot", ...params });
+  await tool.execute?.("call-1", { action: "snapshot", target: "host", ...params });
 }
 
 describe("browser tool snapshot maxChars", () => {
@@ -207,6 +242,7 @@ describe("browser tool snapshot maxChars", () => {
     const override = 2_000;
     await tool.execute?.("call-1", {
       action: "snapshot",
+      target: "host",
       snapshotFormat: "ai",
       maxChars: override,
     });
@@ -223,6 +259,7 @@ describe("browser tool snapshot maxChars", () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", {
       action: "snapshot",
+      target: "host",
       snapshotFormat: "ai",
       maxChars: 0,
     });
@@ -264,7 +301,12 @@ describe("browser tool snapshot maxChars", () => {
 
   it("passes refs mode through to browser snapshot", async () => {
     const tool = createBrowserTool();
-    await tool.execute?.("call-1", { action: "snapshot", snapshotFormat: "ai", refs: "aria" });
+    await tool.execute?.("call-1", {
+      action: "snapshot",
+      target: "host",
+      snapshotFormat: "ai",
+      refs: "aria",
+    });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
       undefined,
@@ -294,7 +336,11 @@ describe("browser tool snapshot maxChars", () => {
       browser: { snapshotDefaults: { mode: "efficient" } },
     });
     const tool = createBrowserTool();
-    await tool.execute?.("call-1", { action: "snapshot", snapshotFormat: "aria" });
+    await tool.execute?.("call-1", {
+      action: "snapshot",
+      target: "host",
+      snapshotFormat: "aria",
+    });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalled();
     const opts = browserClientMocks.browserSnapshot.mock.calls.at(-1)?.[1] as
@@ -310,6 +356,7 @@ describe("browser tool snapshot maxChars", () => {
     const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
     await tool.execute?.("call-1", {
       action: "snapshot",
+      target: "host",
       profile: "user",
       snapshotFormat: "ai",
     });
@@ -329,6 +376,7 @@ describe("browser tool snapshot maxChars", () => {
     const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
     await tool.execute?.("call-1", {
       action: "snapshot",
+      target: "host",
       profile: "chrome-live",
       snapshotFormat: "ai",
     });
@@ -359,7 +407,7 @@ describe("browser tool snapshot maxChars", () => {
 
   it("lets the server choose snapshot format when the user does not request one", async () => {
     const tool = createBrowserTool();
-    await tool.execute?.("call-1", { action: "snapshot", profile: "user" });
+    await tool.execute?.("call-1", { action: "snapshot", target: "host", profile: "user" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
       undefined,

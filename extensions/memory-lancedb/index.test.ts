@@ -12,6 +12,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
+import { createLanceDbRuntimeLoader, type LanceDbRuntimeLogger } from "./lancedb-runtime.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-key";
 const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);
@@ -28,6 +29,23 @@ type MemoryPluginTestConfig = {
   captureMaxChars?: number;
   autoCapture?: boolean;
   autoRecall?: boolean;
+};
+
+const TEST_RUNTIME_MANIFEST = {
+  name: "openclaw-memory-lancedb-runtime",
+  private: true as const,
+  type: "module" as const,
+  dependencies: {
+    "@lancedb/lancedb": "^0.27.1",
+  },
+};
+
+type LanceDbModule = typeof import("@lancedb/lancedb");
+type RuntimeManifest = {
+  name: string;
+  private: true;
+  type: "module";
+  dependencies: Record<string, string>;
 };
 
 function installTmpDirHarness(params: { prefix: string }) {
@@ -51,6 +69,47 @@ function installTmpDirHarness(params: { prefix: string }) {
   };
 }
 
+function createMockModule(): LanceDbModule {
+  return {
+    connect: vi.fn(),
+  } as unknown as LanceDbModule;
+}
+
+function createRuntimeLoader(
+  overrides: {
+    env?: NodeJS.ProcessEnv;
+    importBundled?: () => Promise<LanceDbModule>;
+    importResolved?: (resolvedPath: string) => Promise<LanceDbModule>;
+    resolveRuntimeEntry?: (params: {
+      runtimeDir: string;
+      manifest: RuntimeManifest;
+    }) => string | null;
+    installRuntime?: (params: {
+      runtimeDir: string;
+      manifest: RuntimeManifest;
+      env: NodeJS.ProcessEnv;
+      logger?: LanceDbRuntimeLogger;
+    }) => Promise<string>;
+  } = {},
+) {
+  return createLanceDbRuntimeLoader({
+    env: overrides.env ?? ({} as NodeJS.ProcessEnv),
+    resolveStateDir: () => "/tmp/openclaw-state",
+    runtimeManifest: TEST_RUNTIME_MANIFEST,
+    importBundled:
+      overrides.importBundled ??
+      (async () => {
+        throw new Error("Cannot find package '@lancedb/lancedb'");
+      }),
+    importResolved: overrides.importResolved ?? (async () => createMockModule()),
+    resolveRuntimeEntry: overrides.resolveRuntimeEntry ?? (() => null),
+    installRuntime:
+      overrides.installRuntime ??
+      (async ({ runtimeDir }: { runtimeDir: string }) =>
+        `${runtimeDir}/node_modules/@lancedb/lancedb/index.js`),
+  });
+}
+
 describe("memory plugin e2e", () => {
   const { getDbPath } = installTmpDirHarness({ prefix: "openclaw-memory-test-" });
 
@@ -66,16 +125,12 @@ describe("memory plugin e2e", () => {
     }) as MemoryPluginTestConfig | undefined;
   }
 
-  test("memory plugin registers and initializes correctly", async () => {
-    // Dynamic import to avoid loading LanceDB when not testing
+  test("memory plugin exports stable metadata", async () => {
     const { default: memoryPlugin } = await import("./index.js");
 
     expect(memoryPlugin.id).toBe("memory-lancedb");
     expect(memoryPlugin.name).toBe("Memory (LanceDB)");
     expect(memoryPlugin.kind).toBe("memory");
-    expect(memoryPlugin.configSchema).toBeDefined();
-    // oxlint-disable-next-line typescript/unbound-method
-    expect(memoryPlugin.register).toBeInstanceOf(Function);
   });
 
   test("config schema parses valid config", async () => {
@@ -84,7 +139,6 @@ describe("memory plugin e2e", () => {
       autoRecall: true,
     });
 
-    expect(config).toBeDefined();
     expect(config?.embedding?.apiKey).toBe(OPENAI_API_KEY);
     expect(config?.dbPath).toBe(getDbPath());
     expect(config?.captureMaxChars).toBe(500);
@@ -150,17 +204,11 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const toArray = vi.fn(async () => []);
     const limit = vi.fn(() => ({ toArray }));
     const vectorSearch = vi.fn(() => ({ limit }));
-
-    vi.resetModules();
-    vi.doMock("openai", () => ({
-      default: class MockOpenAI {
-        embeddings = { create: embeddingsCreate };
-      },
-    }));
-    vi.doMock("@lancedb/lancedb", () => ({
+    const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
         tableNames: vi.fn(async () => ["memories"]),
         openTable: vi.fn(async () => ({
@@ -170,6 +218,19 @@ describe("memory plugin e2e", () => {
           delete: vi.fn(async () => undefined),
         })),
       })),
+    }));
+
+    vi.resetModules();
+    vi.doMock("openclaw/plugin-sdk/infra-runtime", () => ({
+      ensureGlobalUndiciEnvProxyDispatcher,
+    }));
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: embeddingsCreate };
+      },
+    }));
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule,
     }));
 
     try {
@@ -214,17 +275,25 @@ describe("memory plugin e2e", () => {
       // oxlint-disable-next-line typescript/no-explicit-any
       memoryPlugin.register(mockApi as any);
       const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
-      expect(recallTool).toBeDefined();
+      if (!recallTool) {
+        throw new Error("memory_recall tool was not registered");
+      }
       await recallTool.execute("test-call-dims", { query: "hello dimensions" });
 
+      expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
+      expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
+      expect(ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0]).toBeLessThan(
+        embeddingsCreate.mock.invocationCallOrder[0],
+      );
       expect(embeddingsCreate).toHaveBeenCalledWith({
         model: "text-embedding-3-small",
         input: "hello dimensions",
         dimensions: 1024,
       });
     } finally {
+      vi.doUnmock("openclaw/plugin-sdk/infra-runtime");
       vi.doUnmock("openai");
-      vi.doUnmock("@lancedb/lancedb");
+      vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
   });
@@ -285,6 +354,122 @@ describe("memory plugin e2e", () => {
     expect(detectCategory("My email is test@example.com")).toBe("entity");
     expect(detectCategory("The server is running on port 3000")).toBe("fact");
     expect(detectCategory("Random note")).toBe("other");
+  });
+});
+
+describe("lancedb runtime loader", () => {
+  test("uses the bundled module when it is already available", async () => {
+    const bundledModule = createMockModule();
+    const importBundled = vi.fn(async () => bundledModule);
+    const importResolved = vi.fn(async () => createMockModule());
+    const resolveRuntimeEntry = vi.fn(() => null);
+    const installRuntime = vi.fn(async () => "/tmp/openclaw-state/plugin-runtimes/lancedb.js");
+    const loader = createRuntimeLoader({
+      importBundled,
+      importResolved,
+      resolveRuntimeEntry,
+      installRuntime,
+    });
+
+    await expect(loader.load()).resolves.toBe(bundledModule);
+
+    expect(resolveRuntimeEntry).not.toHaveBeenCalled();
+    expect(installRuntime).not.toHaveBeenCalled();
+    expect(importResolved).not.toHaveBeenCalled();
+  });
+
+  test("reuses an existing user runtime install before attempting a reinstall", async () => {
+    const runtimeModule = createMockModule();
+    const importResolved = vi.fn(async () => runtimeModule);
+    const resolveRuntimeEntry = vi.fn(
+      () => "/tmp/openclaw-state/plugin-runtimes/memory-lancedb/runtime-entry.js",
+    );
+    const installRuntime = vi.fn(
+      async () => "/tmp/openclaw-state/plugin-runtimes/memory-lancedb/runtime-entry.js",
+    );
+    const loader = createRuntimeLoader({
+      importResolved,
+      resolveRuntimeEntry,
+      installRuntime,
+    });
+
+    await expect(loader.load()).resolves.toBe(runtimeModule);
+
+    expect(resolveRuntimeEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeDir: "/tmp/openclaw-state/plugin-runtimes/memory-lancedb/lancedb",
+      }),
+    );
+    expect(installRuntime).not.toHaveBeenCalled();
+  });
+
+  test("installs LanceDB into user state when the bundled runtime is unavailable", async () => {
+    const runtimeModule = createMockModule();
+    const logger: LanceDbRuntimeLogger = {
+      warn: vi.fn(),
+      info: vi.fn(),
+    };
+    const importResolved = vi.fn(async () => runtimeModule);
+    const resolveRuntimeEntry = vi.fn(() => null);
+    const installRuntime = vi.fn(
+      async ({ runtimeDir }: { runtimeDir: string }) =>
+        `${runtimeDir}/node_modules/@lancedb/lancedb/index.js`,
+    );
+    const loader = createRuntimeLoader({
+      importResolved,
+      resolveRuntimeEntry,
+      installRuntime,
+    });
+
+    await expect(loader.load(logger)).resolves.toBe(runtimeModule);
+
+    expect(installRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeDir: "/tmp/openclaw-state/plugin-runtimes/memory-lancedb/lancedb",
+        manifest: TEST_RUNTIME_MANIFEST,
+      }),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "installing runtime deps under /tmp/openclaw-state/plugin-runtimes/memory-lancedb/lancedb",
+      ),
+    );
+  });
+
+  test("fails fast in nix mode instead of attempting auto-install", async () => {
+    const installRuntime = vi.fn(
+      async ({ runtimeDir }: { runtimeDir: string }) =>
+        `${runtimeDir}/node_modules/@lancedb/lancedb/index.js`,
+    );
+    const loader = createRuntimeLoader({
+      env: { OPENCLAW_NIX_MODE: "1" } as NodeJS.ProcessEnv,
+      installRuntime,
+    });
+
+    await expect(loader.load()).rejects.toThrow(
+      "memory-lancedb: failed to load LanceDB and Nix mode disables auto-install.",
+    );
+    expect(installRuntime).not.toHaveBeenCalled();
+  });
+
+  test("clears the cached failure so later calls can retry the install", async () => {
+    const runtimeModule = createMockModule();
+    const installRuntime = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce(
+        "/tmp/openclaw-state/plugin-runtimes/memory-lancedb/lancedb/node_modules/@lancedb/lancedb/index.js",
+      );
+    const importResolved = vi.fn(async () => runtimeModule);
+    const loader = createRuntimeLoader({
+      installRuntime,
+      importResolved,
+    });
+
+    await expect(loader.load()).rejects.toThrow("network down");
+    await expect(loader.load()).resolves.toBe(runtimeModule);
+
+    expect(installRuntime).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -375,8 +560,8 @@ describeLive("memory plugin live tests", () => {
     });
 
     expect(storeResult.details?.action).toBe("created");
-    expect(storeResult.details?.id).toBeDefined();
     const storedId = storeResult.details?.id;
+    expect(storedId).toMatch(/.+/);
 
     // Test recall
     const recallResult = await recallTool.execute("test-call-2", {

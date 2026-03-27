@@ -88,7 +88,6 @@ describe("resolveGatewayConnection", () => {
       "OPENCLAW_GATEWAY_URL",
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
-      "CLAWDBOT_GATEWAY_URL",
     ]);
     loadConfig.mockClear();
     resolveGatewayPort.mockClear();
@@ -96,7 +95,6 @@ describe("resolveGatewayConnection", () => {
     delete process.env.OPENCLAW_GATEWAY_URL;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-    delete process.env.CLAWDBOT_GATEWAY_URL;
   });
 
   afterEach(() => {

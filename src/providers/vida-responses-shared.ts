@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { calculateCost, parseStreamingJson } from "@mariozechner/pi-ai";
 
 // =============================================================================
@@ -78,16 +79,24 @@ function transformMessages(
         assistantMsg.model === model.id;
       const transformedContent = assistantMsg.content.flatMap((block: any) => {
         if (block.type === "thinking") {
-          if (isSameModel && block.thinkingSignature) return block;
-          if (!block.thinking || block.thinking.trim() === "") return [];
-          if (isSameModel) return block;
+          if (isSameModel && block.thinkingSignature) {
+            return block;
+          }
+          if (!block.thinking || block.thinking.trim() === "") {
+            return [];
+          }
+          if (isSameModel) {
+            return block;
+          }
           return {
             type: "text",
             text: block.thinking,
           };
         }
         if (block.type === "text") {
-          if (isSameModel) return block;
+          if (isSameModel) {
+            return block;
+          }
           return {
             type: "text",
             text: block.text,
@@ -186,8 +195,12 @@ export function convertResponsesMessages(
 ): any[] {
   const messages: any[] = [];
   const normalizeToolCallId = (id: string): string => {
-    if (!allowedToolCallProviders.has(model.provider)) return id;
-    if (!id.includes("|")) return id;
+    if (!allowedToolCallProviders.has(model.provider)) {
+      return id;
+    }
+    if (!id.includes("|")) {
+      return id;
+    }
     const [callId, itemId] = id.split("|");
     const sanitizedCallId = callId.replace(/[^a-zA-Z0-9_-]/g, "_");
     let sanitizedItemId = itemId.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -236,7 +249,9 @@ export function convertResponsesMessages(
         const filteredContent = !model.input.includes("image")
           ? content.filter((c: any) => c.type !== "input_image")
           : content;
-        if (filteredContent.length === 0) continue;
+        if (filteredContent.length === 0) {
+          continue;
+        }
         messages.push({
           role: "user",
           content: filteredContent,
@@ -277,7 +292,7 @@ export function convertResponsesMessages(
             id: msgId,
           });
         } else if (block.type === "toolCall") {
-          const toolCall = block as any;
+          const toolCall = block;
           const [callId, itemIdRaw] = toolCall.id.split("|");
           let itemId = itemIdRaw;
           if (isDifferentModel && itemId?.startsWith("fc_")) {
@@ -297,7 +312,9 @@ export function convertResponsesMessages(
           output.push(functionCallItem);
         }
       }
-      if (output.length === 0) continue;
+      if (output.length === 0) {
+        continue;
+      }
       messages.push(...output);
     } else if (msg.role === "toolResult") {
       const textResult = msg.content
@@ -568,7 +585,11 @@ export async function processResponsesStream(
         output.stopReason = "toolUse";
       }
     } else if (event.type === "error") {
-      throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
+      const errorMessage =
+        event && typeof event.message === "string" && event.message.length > 0
+          ? event.message
+          : "Unknown error";
+      throw new Error(`Error Code ${String(event.code)}: ${errorMessage}`);
     } else if (event.type === "response.failed") {
       throw new Error("Unknown error");
     }
@@ -576,7 +597,9 @@ export async function processResponsesStream(
 }
 
 function mapStopReason(status?: string): string {
-  if (!status) return "stop";
+  if (!status) {
+    return "stop";
+  }
   switch (status) {
     case "completed":
       return "stop";
@@ -590,7 +613,7 @@ function mapStopReason(status?: string): string {
       return "stop";
     default: {
       const _exhaustive: never = status as never;
-      throw new Error(`Unhandled stop reason: ${_exhaustive}`);
+      throw new Error(`Unhandled stop reason: ${String(_exhaustive)}`);
     }
   }
 }

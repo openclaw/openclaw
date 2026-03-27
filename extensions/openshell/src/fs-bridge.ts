@@ -6,6 +6,7 @@ import type {
   SandboxFsStat,
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
+import { resolveWritableRenameTargetsForBridge } from "openclaw/plugin-sdk/sandbox";
 import type { OpenShellSandboxBackend } from "./backend.js";
 import { movePathWithCopyFallback } from "./mirror.js";
 
@@ -27,6 +28,14 @@ class OpenShellFsBridge implements SandboxFsBridge {
     private readonly sandbox: SandboxContext,
     private readonly backend: OpenShellSandboxBackend,
   ) {}
+
+  private resolveRenameTargets(params: { from: string; to: string; cwd?: string }) {
+    return resolveWritableRenameTargetsForBridge(
+      params,
+      (target) => this.resolveTarget(target),
+      (target, action) => this.ensureWritable(target, action),
+    );
+  }
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
     const target = this.resolveTarget(params);
@@ -140,12 +149,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
     cwd?: string;
     signal?: AbortSignal;
   }): Promise<void> {
-    const from = this.resolveTarget({ filePath: params.from, cwd: params.cwd });
-    const to = this.resolveTarget({ filePath: params.to, cwd: params.cwd });
+    const { from, to } = this.resolveRenameTargets(params);
     const fromHostPath = this.requireHostPath(from);
     const toHostPath = this.requireHostPath(to);
-    this.ensureWritable(from, "rename files");
-    this.ensureWritable(to, "rename files");
     await assertLocalPathSafety({
       target: from,
       root: from.mountHostRoot,

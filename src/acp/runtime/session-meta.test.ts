@@ -22,9 +22,7 @@ vi.mock("../../config/sessions.js", async () => {
   };
 });
 
-type SessionMetaModule = typeof import("./session-meta.js");
-
-let listAcpSessionEntries: SessionMetaModule["listAcpSessionEntries"];
+let listAcpSessionEntries: typeof import("./session-meta.js").listAcpSessionEntries;
 
 describe("listAcpSessionEntries", () => {
   beforeEach(async () => {

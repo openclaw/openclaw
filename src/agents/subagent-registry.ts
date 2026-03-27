@@ -6,6 +6,7 @@ import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
+  updateSessionStore,
   type SessionEntry,
 } from "../config/sessions.js";
 import { ensureContextEnginesInitialized } from "../context-engine/init.js";
@@ -15,6 +16,7 @@ import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
@@ -150,6 +152,78 @@ function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: 
   return undefined;
 }
 
+export function resolveSubagentSessionStatus(
+  entry: Pick<SubagentRunRecord, "endedAt" | "endedReason" | "outcome"> | null | undefined,
+): SessionEntry["status"] {
+  if (!entry) {
+    return undefined;
+  }
+  if (!entry.endedAt) {
+    return "running";
+  }
+  if (entry.endedReason === SUBAGENT_ENDED_REASON_KILLED) {
+    return "killed";
+  }
+  const status = entry.outcome?.status;
+  if (status === "error") {
+    return "failed";
+  }
+  if (status === "timeout") {
+    return "timeout";
+  }
+  return "done";
+}
+
+async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
+  const childSessionKey = entry.childSessionKey?.trim();
+  if (!childSessionKey) {
+    return;
+  }
+
+  const cfg = loadConfig();
+  const agentId = resolveAgentIdFromSessionKey(childSessionKey);
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const startedAt = getSubagentSessionStartedAt(entry);
+  const endedAt =
+    typeof entry.endedAt === "number" && Number.isFinite(entry.endedAt) ? entry.endedAt : undefined;
+  const runtimeMs =
+    endedAt !== undefined
+      ? getSubagentSessionRuntimeMs(entry, endedAt)
+      : getSubagentSessionRuntimeMs(entry);
+  const status = resolveSubagentSessionStatus(entry);
+
+  await updateSessionStore(storePath, (store) => {
+    const sessionEntry = findSessionEntryByKey(store, childSessionKey);
+    if (!sessionEntry) {
+      return;
+    }
+
+    if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
+      sessionEntry.startedAt = startedAt;
+    } else {
+      delete sessionEntry.startedAt;
+    }
+
+    if (typeof endedAt === "number" && Number.isFinite(endedAt)) {
+      sessionEntry.endedAt = endedAt;
+    } else {
+      delete sessionEntry.endedAt;
+    }
+
+    if (typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
+      sessionEntry.runtimeMs = runtimeMs;
+    } else {
+      delete sessionEntry.runtimeMs;
+    }
+
+    if (status) {
+      sessionEntry.status = status;
+    } else {
+      delete sessionEntry.status;
+    }
+  });
+}
+
 function resolveSubagentRunOrphanReason(params: {
   entry: SubagentRunRecord;
   storeCache?: Map<string, Record<string, SessionEntry>>;
@@ -212,6 +286,11 @@ function reconcileOrphanedRun(params: {
   if (typeof params.entry.cleanupCompletedAt !== "number") {
     params.entry.cleanupCompletedAt = now;
     changed = true;
+  }
+  const shouldDeleteAttachments =
+    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
+  if (shouldDeleteAttachments) {
+    void safeRemoveAttachmentsDir(params.entry);
   }
   const removed = subagentRuns.delete(params.runId);
   resumedRuns.delete(params.runId);
@@ -362,6 +441,12 @@ async function emitSubagentEndedHookForRun(params: {
   sendFarewell?: boolean;
   accountId?: string;
 }) {
+  const cfg = loadConfig();
+  ensureRuntimePluginsLoaded({
+    config: cfg,
+    workspaceDir: params.entry.workspaceDir,
+    allowGatewaySubagentBinding: true,
+  });
   const reason = params.reason ?? params.entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
   const outcome = resolveLifecycleOutcomeFromRunOutcome(params.entry.outcome);
   const error = params.entry.outcome?.status === "error" ? params.entry.outcome.error : undefined;
@@ -500,7 +585,33 @@ async function completeSubagentRun(params: {
     persistSubagentRuns();
   }
 
+  try {
+    await persistSubagentSessionTiming(entry);
+  } catch (err) {
+    log.warn("failed to persist subagent session timing", {
+      err,
+      runId: entry.runId,
+      childSessionKey: entry.childSessionKey,
+    });
+  }
+
   const suppressedForSteerRestart = suppressAnnounceForSteerRestart(entry);
+  if (mutated && !suppressedForSteerRestart) {
+    // The gateway also emits sessions.changed directly from raw lifecycle
+    // events, but for subagent sessions the visible status comes from this
+    // registry. When a restarted follow-up run ends, the raw lifecycle `end`
+    // event can reach websocket subscribers before this registry records
+    // endedAt/outcome, leaving the dashboard stuck on the stale "running"
+    // snapshot. Emit a follow-up lifecycle change after persisting the
+    // registry update so subscribers receive the authoritative completed
+    // status.
+    emitSessionLifecycleEvent({
+      sessionKey: entry.childSessionKey,
+      reason: "subagent-status",
+      parentSessionKey: entry.requesterSessionKey,
+      label: entry.label,
+    });
+  }
   const shouldEmitEndedHook =
     !suppressedForSteerRestart &&
     shouldEmitEndedHookForRun({
@@ -606,9 +717,11 @@ function resumeSubagentRun(runId: string) {
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
   if ((entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT) {
-    logAnnounceGiveUp(entry, "retry-limit");
-    entry.cleanupCompletedAt = Date.now();
-    persistSubagentRuns();
+    void finalizeResumedAnnounceGiveUp({
+      runId,
+      entry,
+      reason: "retry-limit",
+    });
     return;
   }
   if (
@@ -616,9 +729,11 @@ function resumeSubagentRun(runId: string) {
     typeof entry.endedAt === "number" &&
     Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS
   ) {
-    logAnnounceGiveUp(entry, "expiry");
-    entry.cleanupCompletedAt = Date.now();
-    persistSubagentRuns();
+    void finalizeResumedAnnounceGiveUp({
+      runId,
+      entry,
+      reason: "expiry",
+    });
     return;
   }
 
@@ -706,7 +821,10 @@ function restoreSubagentRunsOnce() {
 function resolveArchiveAfterMs(cfg?: ReturnType<typeof loadConfig>) {
   const config = cfg ?? loadConfig();
   const minutes = config.agents?.defaults?.subagents?.archiveAfterMinutes ?? 60;
-  if (!Number.isFinite(minutes) || minutes <= 0) {
+  if (!Number.isFinite(minutes) || minutes < 0) {
+    return undefined;
+  }
+  if (minutes === 0) {
     return undefined;
   }
   return Math.max(1, Math.floor(minutes)) * 60_000;
@@ -799,6 +917,9 @@ function ensureListener() {
         const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
         if (startedAt) {
           entry.startedAt = startedAt;
+          if (typeof entry.sessionStartedAt !== "number") {
+            entry.sessionStartedAt = startedAt;
+          }
           persistSubagentRuns();
         }
         return;
@@ -948,7 +1069,7 @@ async function finalizeSubagentCleanup(
     completeCleanupBookkeeping({
       runId,
       entry,
-      cleanup: "keep",
+      cleanup,
       completedAt: now,
     });
     return;
@@ -966,6 +1087,30 @@ async function finalizeSubagentCleanup(
   setTimeout(() => {
     resumeSubagentRun(runId);
   }, deferredDecision.resumeDelayMs).unref?.();
+}
+
+async function finalizeResumedAnnounceGiveUp(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  reason: "retry-limit" | "expiry";
+}) {
+  params.entry.wakeOnDescendantSettle = undefined;
+  params.entry.fallbackFrozenResultText = undefined;
+  params.entry.fallbackFrozenResultCapturedAt = undefined;
+  const shouldDeleteAttachments =
+    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
+  if (shouldDeleteAttachments) {
+    await safeRemoveAttachmentsDir(params.entry);
+  }
+  const completionReason = resolveCleanupCompletionReason(params.entry);
+  await emitCompletionEndedHookIfNeeded(params.entry, completionReason);
+  logAnnounceGiveUp(params.entry, params.reason);
+  completeCleanupBookkeeping({
+    runId: params.runId,
+    entry: params.entry,
+    cleanup: params.entry.cleanup,
+    completedAt: Date.now(),
+  });
 }
 
 async function emitCompletionEndedHookIfNeeded(
@@ -1034,9 +1179,24 @@ function retryDeferredCompletedAnnounces(excludeRunId?: string) {
     // stay pending while descendants run for a long time.
     const endedAgo = now - (entry.endedAt ?? now);
     if (entry.expectsCompletionMessage !== true && endedAgo > ANNOUNCE_EXPIRY_MS) {
-      logAnnounceGiveUp(entry, "expiry");
-      entry.cleanupCompletedAt = now;
-      persistSubagentRuns();
+      if (!beginSubagentCleanup(runId)) {
+        continue;
+      }
+      void finalizeResumedAnnounceGiveUp({
+        runId,
+        entry,
+        reason: "expiry",
+      }).catch((error) => {
+        defaultRuntime.log(
+          `[warn] Subagent expiry finalize failed during deferred retry for run ${runId}: ${String(error)}`,
+        );
+        const current = subagentRuns.get(runId);
+        if (!current || current.cleanupCompletedAt) {
+          return;
+        }
+        current.cleanupHandled = false;
+        persistSubagentRuns();
+      });
       continue;
     }
     resumedRuns.delete(runId);
@@ -1100,6 +1260,51 @@ export function clearSubagentRunSteerRestart(runId: string) {
   return true;
 }
 
+function resolveSubagentSessionStartedAt(
+  entry: Pick<SubagentRunRecord, "sessionStartedAt" | "startedAt" | "createdAt">,
+): number | undefined {
+  if (typeof entry.sessionStartedAt === "number" && Number.isFinite(entry.sessionStartedAt)) {
+    return entry.sessionStartedAt;
+  }
+  if (typeof entry.startedAt === "number" && Number.isFinite(entry.startedAt)) {
+    return entry.startedAt;
+  }
+  return typeof entry.createdAt === "number" && Number.isFinite(entry.createdAt)
+    ? entry.createdAt
+    : undefined;
+}
+
+export function getSubagentSessionStartedAt(
+  entry: Pick<SubagentRunRecord, "sessionStartedAt" | "startedAt" | "createdAt"> | null | undefined,
+): number | undefined {
+  return entry ? resolveSubagentSessionStartedAt(entry) : undefined;
+}
+
+export function getSubagentSessionRuntimeMs(
+  entry:
+    | Pick<SubagentRunRecord, "startedAt" | "endedAt" | "accumulatedRuntimeMs">
+    | null
+    | undefined,
+  now = Date.now(),
+): number | undefined {
+  if (!entry) {
+    return undefined;
+  }
+
+  const accumulatedRuntimeMs =
+    typeof entry.accumulatedRuntimeMs === "number" && Number.isFinite(entry.accumulatedRuntimeMs)
+      ? Math.max(0, entry.accumulatedRuntimeMs)
+      : 0;
+
+  if (typeof entry.startedAt !== "number" || !Number.isFinite(entry.startedAt)) {
+    return entry.accumulatedRuntimeMs != null ? accumulatedRuntimeMs : undefined;
+  }
+
+  const currentRunEndedAt =
+    typeof entry.endedAt === "number" && Number.isFinite(entry.endedAt) ? entry.endedAt : now;
+  return Math.max(0, accumulatedRuntimeMs + Math.max(0, currentRunEndedAt - entry.startedAt));
+}
+
 export function replaceSubagentRunAfterSteer(params: {
   previousRunId: string;
   nextRunId: string;
@@ -1121,6 +1326,10 @@ export function replaceSubagentRunAfterSteer(params: {
 
   if (previousRunId !== nextRunId) {
     clearPendingLifecycleError(previousRunId);
+    const shouldDeleteAttachments = source.cleanup === "delete" || !source.retainAttachmentsOnKeep;
+    if (shouldDeleteAttachments) {
+      void safeRemoveAttachmentsDir(source);
+    }
     subagentRuns.delete(previousRunId);
     resumedRuns.delete(previousRunId);
   }
@@ -1130,15 +1339,28 @@ export function replaceSubagentRunAfterSteer(params: {
   const archiveAfterMs = resolveArchiveAfterMs(cfg);
   const spawnMode = source.spawnMode === "session" ? "session" : "run";
   const archiveAtMs =
-    spawnMode === "session" ? undefined : archiveAfterMs ? now + archiveAfterMs : undefined;
+    spawnMode === "session" || source.cleanup === "keep"
+      ? undefined
+      : archiveAfterMs
+        ? now + archiveAfterMs
+        : undefined;
   const runTimeoutSeconds = params.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
   const preserveFrozenResultFallback = params.preserveFrozenResultFallback === true;
+  const sessionStartedAt = resolveSubagentSessionStartedAt(source) ?? now;
+  const accumulatedRuntimeMs =
+    getSubagentSessionRuntimeMs(
+      source,
+      typeof source.endedAt === "number" ? source.endedAt : now,
+    ) ?? 0;
 
   const next: SubagentRunRecord = {
     ...source,
     runId: nextRunId,
+    createdAt: now,
     startedAt: now,
+    sessionStartedAt,
+    accumulatedRuntimeMs,
     endedAt: undefined,
     endedReason: undefined,
     endedHookEmittedAt: undefined,
@@ -1194,7 +1416,11 @@ export function registerSubagentRun(params: {
   const archiveAfterMs = resolveArchiveAfterMs(cfg);
   const spawnMode = params.spawnMode === "session" ? "session" : "run";
   const archiveAtMs =
-    spawnMode === "session" ? undefined : archiveAfterMs ? now + archiveAfterMs : undefined;
+    spawnMode === "session" || params.cleanup === "keep"
+      ? undefined
+      : archiveAfterMs
+        ? now + archiveAfterMs
+        : undefined;
   const runTimeoutSeconds = params.runTimeoutSeconds ?? 0;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
@@ -1215,6 +1441,8 @@ export function registerSubagentRun(params: {
     runTimeoutSeconds,
     createdAt: now,
     startedAt: now,
+    sessionStartedAt: now,
+    accumulatedRuntimeMs: 0,
     archiveAtMs,
     cleanupHandled: false,
     wakeOnDescendantSettle: undefined,
@@ -1258,6 +1486,9 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
     let mutated = false;
     if (typeof wait.startedAt === "number") {
       entry.startedAt = wait.startedAt;
+      if (typeof entry.sessionStartedAt !== "number") {
+        entry.sessionStartedAt = wait.startedAt;
+      }
       mutated = true;
     }
     if (typeof wait.endedAt === "number") {
@@ -1323,6 +1554,10 @@ export function releaseSubagentRun(runId: string) {
   clearPendingLifecycleError(runId);
   const entry = subagentRuns.get(runId);
   if (entry) {
+    const shouldDeleteAttachments = entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+    if (shouldDeleteAttachments) {
+      void safeRemoveAttachmentsDir(entry);
+    }
     void notifyContextEngineSubagentEnded({
       childSessionKey: entry.childSessionKey,
       reason: "released",
@@ -1361,16 +1596,17 @@ export function resolveRequesterForChildSession(childSessionKey: string): {
 
 export function isSubagentSessionRunActive(childSessionKey: string): boolean {
   const runIds = findRunIdsByChildSessionKey(childSessionKey);
+  let latest: SubagentRunRecord | undefined;
   for (const runId of runIds) {
     const entry = subagentRuns.get(runId);
     if (!entry) {
       continue;
     }
-    if (typeof entry.endedAt !== "number") {
-      return true;
+    if (!latest || entry.createdAt > latest.createdAt) {
+      latest = entry;
     }
   }
-  return false;
+  return Boolean(latest && typeof latest.endedAt !== "number");
 }
 
 export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: string): boolean {
@@ -1425,10 +1661,34 @@ export function markSubagentRunTerminated(params: {
   if (updated > 0) {
     persistSubagentRuns();
     for (const entry of entriesByChildSessionKey.values()) {
+      void persistSubagentSessionTiming(entry).catch((err) => {
+        log.warn("failed to persist killed subagent session timing", {
+          err,
+          runId: entry.runId,
+          childSessionKey: entry.childSessionKey,
+        });
+      });
+      const shouldDeleteAttachments = entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+      if (shouldDeleteAttachments) {
+        void safeRemoveAttachmentsDir(entry);
+      }
+      completeCleanupBookkeeping({
+        runId: entry.runId,
+        entry,
+        cleanup: entry.cleanup,
+        completedAt: now,
+      });
+      const cfg = loadConfig();
+      ensureRuntimePluginsLoaded({
+        config: cfg,
+        workspaceDir: entry.workspaceDir,
+        allowGatewaySubagentBinding: true,
+      });
       void emitSubagentEndedHookOnce({
         entry,
         reason: SUBAGENT_ENDED_REASON_KILLED,
         sendFarewell: true,
+        accountId: entry.requesterOrigin?.accountId,
         outcome: SUBAGENT_ENDED_OUTCOME_KILLED,
         error: reason,
         inFlightRunIds: endedHookInFlightRunIds,
@@ -1492,6 +1752,53 @@ export function listDescendantRunsForRequester(rootSessionKey: string): Subagent
     getSubagentRunsSnapshotForRead(subagentRuns),
     rootSessionKey,
   );
+}
+
+export function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return null;
+  }
+
+  let latestActive: SubagentRunRecord | null = null;
+  let latestEnded: SubagentRunRecord | null = null;
+  for (const entry of getSubagentRunsSnapshotForRead(subagentRuns).values()) {
+    if (entry.childSessionKey !== key) {
+      continue;
+    }
+    if (typeof entry.endedAt !== "number") {
+      if (!latestActive || entry.createdAt > latestActive.createdAt) {
+        latestActive = entry;
+      }
+      continue;
+    }
+    if (!latestEnded || entry.createdAt > latestEnded.createdAt) {
+      latestEnded = entry;
+    }
+  }
+
+  return latestActive ?? latestEnded;
+}
+
+export function getLatestSubagentRunByChildSessionKey(
+  childSessionKey: string,
+): SubagentRunRecord | null {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return null;
+  }
+
+  let latest: SubagentRunRecord | null = null;
+  for (const entry of getSubagentRunsSnapshotForRead(subagentRuns).values()) {
+    if (entry.childSessionKey !== key) {
+      continue;
+    }
+    if (!latest || entry.createdAt > latest.createdAt) {
+      latest = entry;
+    }
+  }
+
+  return latest;
 }
 
 export function initSubagentRegistry() {

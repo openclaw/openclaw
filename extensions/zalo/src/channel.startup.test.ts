@@ -1,8 +1,9 @@
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/zalo";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  expectLifecyclePatch,
   expectPendingUntilAbort,
   startAccountAndTrackLifecycle,
+  waitForStartedMocks,
 } from "../../../test/helpers/extensions/start-account-lifecycle.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
 
@@ -66,21 +67,13 @@ describe("zaloPlugin gateway.startAccount", () => {
     });
 
     await expectPendingUntilAbort({
-      waitForStarted: () =>
-        vi.waitFor(() => {
-          expect(hoisted.probeZalo).toHaveBeenCalledOnce();
-          expect(hoisted.monitorZaloProvider).toHaveBeenCalledOnce();
-        }),
+      waitForStarted: waitForStartedMocks(hoisted.probeZalo, hoisted.monitorZaloProvider),
       isSettled,
       abort,
       task,
     });
 
-    expect(patches).toContainEqual(
-      expect.objectContaining({
-        accountId: "default",
-      }),
-    );
+    expectLifecyclePatch(patches, { accountId: "default" });
     expect(isSettled()).toBe(true);
     expect(hoisted.monitorZaloProvider).toHaveBeenCalledWith(
       expect.objectContaining({

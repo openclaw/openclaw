@@ -1,9 +1,16 @@
-import { describe, expect, test } from "vitest";
-import { applyToolPolicyPipeline } from "./tool-policy-pipeline.js";
+import { beforeEach, describe, expect, test } from "vitest";
+import {
+  applyToolPolicyPipeline,
+  resetToolPolicyWarningCacheForTest,
+} from "./tool-policy-pipeline.js";
 
 type DummyTool = { name: string };
 
 describe("tool-policy-pipeline", () => {
+  beforeEach(() => {
+    resetToolPolicyWarningCacheForTest();
+  });
+
   test("strips allowlists that would otherwise disable core tools", () => {
     const tools = [{ name: "exec" }, { name: "plugin_tool" }] as unknown as DummyTool[];
     const filtered = applyToolPolicyPipeline({
@@ -68,6 +75,69 @@ describe("tool-policy-pipeline", () => {
       "shipped core tools but unavailable in the current runtime/provider/model/config",
     );
     expect(warnings[0]).not.toContain("unless the plugin is enabled");
+  });
+
+  test("dedupes identical unknown-allowlist warnings across repeated runs", () => {
+    const warnings: string[] = [];
+    const tools = [{ name: "exec" }] as unknown as DummyTool[];
+    const params = {
+      // oxlint-disable-next-line typescript/no-explicit-any
+      tools: tools as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      toolMeta: () => undefined,
+      warn: (msg: string) => warnings.push(msg),
+      steps: [
+        {
+          policy: { allow: ["apply_patch"] },
+          label: "tools.profile (coding)",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    };
+
+    applyToolPolicyPipeline(params);
+    applyToolPolicyPipeline(params);
+
+    expect(warnings).toHaveLength(1);
+  });
+
+  test("bounds the warning dedupe cache so new warnings still surface", () => {
+    const warnings: string[] = [];
+    const tools = [{ name: "exec" }] as unknown as DummyTool[];
+
+    for (let i = 0; i < 257; i += 1) {
+      applyToolPolicyPipeline({
+        // oxlint-disable-next-line typescript/no-explicit-any
+        tools: tools as any,
+        // oxlint-disable-next-line typescript/no-explicit-any
+        toolMeta: () => undefined,
+        warn: (msg: string) => warnings.push(msg),
+        steps: [
+          {
+            policy: { allow: [`unknown_${i}`] },
+            label: "tools.profile (coding)",
+            stripPluginOnlyAllowlist: true,
+          },
+        ],
+      });
+    }
+
+    applyToolPolicyPipeline({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      tools: tools as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      toolMeta: () => undefined,
+      warn: (msg: string) => warnings.push(msg),
+      steps: [
+        {
+          policy: { allow: ["unknown_0"] },
+          label: "tools.profile (coding)",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+
+    expect(warnings).toHaveLength(258);
   });
 
   test("applies allowlist filtering when core tools are explicitly listed", () => {

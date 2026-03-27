@@ -15,7 +15,7 @@ import {
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolvePluginProviders } from "../plugins/providers.js";
+import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
@@ -153,7 +153,7 @@ export async function maybeRemoveDeprecatedCliAuthProfiles(
   }
   note(lines.join("\n"), "Auth profiles");
 
-  const shouldRemove = await prompter.confirmRepair({
+  const shouldRemove = await prompter.confirmAutoFix({
     message: "Remove deprecated CLI auth profiles now?",
     initialValue: true,
   });
@@ -316,7 +316,7 @@ export async function noteAuthProfileHealth(params: {
     return;
   }
 
-  const shouldRefresh = await params.prompter.confirmRepair({
+  const shouldRefresh = await params.prompter.confirmAutoFix({
     message: "Refresh expiring OAuth tokens now? (static tokens need re-auth)",
     initialValue: true,
   });

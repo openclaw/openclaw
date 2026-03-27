@@ -5,31 +5,37 @@ type TargetResolverModule = typeof import("./target-resolver.js");
 
 let resetDirectoryCache: TargetResolverModule["resetDirectoryCache"];
 let resolveMessagingTarget: TargetResolverModule["resolveMessagingTarget"];
+let formatTargetDisplay: TargetResolverModule["formatTargetDisplay"];
 
 const mocks = vi.hoisted(() => ({
+  listPeers: vi.fn(),
+  listPeersLive: vi.fn(),
   listGroups: vi.fn(),
   listGroupsLive: vi.fn(),
   resolveTarget: vi.fn(),
   getChannelPlugin: vi.fn(),
-  getActivePluginRegistryVersion: vi.fn(() => 1),
+  getActivePluginChannelRegistryVersion: vi.fn(() => 1),
 }));
 
 beforeEach(async () => {
   vi.resetModules();
+  mocks.listPeers.mockReset();
+  mocks.listPeersLive.mockReset();
   mocks.listGroups.mockReset();
   mocks.listGroupsLive.mockReset();
   mocks.resolveTarget.mockReset();
   mocks.getChannelPlugin.mockReset();
-  mocks.getActivePluginRegistryVersion.mockReset();
-  mocks.getActivePluginRegistryVersion.mockReturnValue(1);
+  mocks.getActivePluginChannelRegistryVersion.mockReset();
+  mocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
   vi.doMock("../../channels/plugins/index.js", () => ({
     getChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
     normalizeChannelId: (value: string) => value,
   }));
   vi.doMock("../../plugins/runtime.js", () => ({
-    getActivePluginRegistryVersion: () => mocks.getActivePluginRegistryVersion(),
+    getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),
   }));
-  ({ resetDirectoryCache, resolveMessagingTarget } = await import("./target-resolver.js"));
+  ({ resetDirectoryCache, resolveMessagingTarget, formatTargetDisplay } =
+    await import("./target-resolver.js"));
 });
 
 describe("resolveMessagingTarget (directory fallback)", () => {
@@ -39,6 +45,8 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     resetDirectoryCache();
     mocks.getChannelPlugin.mockReturnValue({
       directory: {
+        listPeers: mocks.listPeers,
+        listPeersLive: mocks.listPeersLive,
         listGroups: mocks.listGroups,
         listGroupsLive: mocks.listGroupsLive,
       },
@@ -133,5 +141,90 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     );
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
+  });
+
+  it("uses plugin chat-type inference for directory lookups and plugin fallback on miss", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      directory: {
+        listPeers: mocks.listPeers,
+        listPeersLive: mocks.listPeersLive,
+      },
+      messaging: {
+        inferTargetChatType: () => "direct",
+        targetResolver: {
+          looksLikeId: () => false,
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    mocks.listPeers.mockResolvedValue([]);
+    mocks.listPeersLive.mockResolvedValue([]);
+    mocks.resolveTarget.mockResolvedValue({
+      to: "+15551234567",
+      kind: "user",
+      source: "normalized",
+    });
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "imessage",
+      input: "+15551234567",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.target).toEqual({
+        to: "+15551234567",
+        kind: "user",
+        source: "normalized",
+        display: undefined,
+      });
+    }
+    expect(mocks.listPeers).toHaveBeenCalledTimes(1);
+    expect(mocks.listPeersLive).toHaveBeenCalledTimes(1);
+    expect(mocks.listGroups).not.toHaveBeenCalled();
+    expect(mocks.resolveTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: "+15551234567",
+      }),
+    );
+  });
+
+  it("keeps plugin-owned id casing when resolver returns a normalized target", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => true,
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    mocks.resolveTarget.mockResolvedValue({
+      to: "channel:C123ABC",
+      kind: "group",
+      source: "normalized",
+    });
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "slack",
+      input: "#C123ABC",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.target.to).toBe("channel:C123ABC");
+      expect(result.target.display).toBeUndefined();
+    }
+  });
+
+  it("defers target display formatting to the plugin when available", () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        formatTargetDisplay: ({ target }: { target: string }) => target.replace(/^telegram:/i, ""),
+      },
+    });
+
+    expect(formatTargetDisplay({ channel: "telegram", target: "telegram:12345" })).toBe("12345");
   });
 });

@@ -31,7 +31,7 @@ You can optionally specify a different model for compaction summarization via `a
   "agents": {
     "defaults": {
       "compaction": {
-        "model": "openrouter/anthropic/claude-sonnet-4-5"
+        "model": "openrouter/anthropic/claude-sonnet-4-6"
       }
     }
   }
@@ -107,6 +107,14 @@ summaries, vector retrieval, incremental condensation, etc.
 
 When a plugin engine sets `ownsCompaction: true`, OpenClaw delegates all
 compaction decisions to the engine and does not run built-in auto-compaction.
+
+When `ownsCompaction` is `false` or unset, OpenClaw may still use Pi's
+built-in in-attempt auto-compaction, but the active engine's `compact()` method
+still handles `/compact` and overflow recovery. There is no automatic fallback
+to the legacy engine's compaction path.
+
+If you are building a non-owning context engine, implement `compact()` by
+calling `delegateCompactionToRuntime(...)` from `openclaw/plugin-sdk/core`.
 
 ## Tips
 

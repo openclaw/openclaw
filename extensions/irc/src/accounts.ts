@@ -1,10 +1,9 @@
+import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
+import { parseOptionalDelimitedEntries } from "openclaw/plugin-sdk/core";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
-import {
-  createAccountListHelpers,
-  normalizeResolvedSecretInputString,
-  parseOptionalDelimitedEntries,
-} from "openclaw/plugin-sdk/irc";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);
@@ -47,38 +46,15 @@ const { listAccountIds: listIrcAccountIds, resolveDefaultAccountId: resolveDefau
   createAccountListHelpers("irc", { normalizeAccountId });
 export { listIrcAccountIds, resolveDefaultIrcAccountId };
 
-function resolveAccountConfig(cfg: CoreConfig, accountId: string): IrcAccountConfig | undefined {
-  const accounts = cfg.channels?.irc?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  const direct = accounts[accountId] as IrcAccountConfig | undefined;
-  if (direct) {
-    return direct;
-  }
-  const normalized = normalizeAccountId(accountId);
-  const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === normalized);
-  return matchKey ? (accounts[matchKey] as IrcAccountConfig | undefined) : undefined;
-}
-
 function mergeIrcAccountConfig(cfg: CoreConfig, accountId: string): IrcAccountConfig {
-  const {
-    accounts: _ignored,
-    defaultAccount: _ignoredDefaultAccount,
-    ...base
-  } = (cfg.channels?.irc ?? {}) as IrcAccountConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-  const merged: IrcAccountConfig = { ...base, ...account };
-  if (base.nickserv || account.nickserv) {
-    merged.nickserv = {
-      ...base.nickserv,
-      ...account.nickserv,
-    };
-  }
-  return merged;
+  return resolveMergedAccountConfig<IrcAccountConfig>({
+    channelConfig: cfg.channels?.irc as IrcAccountConfig | undefined,
+    accounts: cfg.channels?.irc?.accounts as Record<string, Partial<IrcAccountConfig>> | undefined,
+    accountId,
+    omitKeys: ["defaultAccount"],
+    normalizeAccountId,
+    nestedObjectKeys: ["nickserv"],
+  });
 }
 
 function resolvePassword(accountId: string, merged: IrcAccountConfig) {

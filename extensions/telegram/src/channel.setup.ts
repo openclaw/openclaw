@@ -1,8 +1,4 @@
-import {
-  buildChannelConfigSchema,
-  TelegramConfigSchema,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/telegram";
+import { type ChannelPlugin } from "../runtime-api.js";
 import { type ResolvedTelegramAccount } from "./accounts.js";
 import type { TelegramProbe } from "./probe.js";
 import { telegramSetupAdapter } from "./setup-core.js";
@@ -11,7 +7,6 @@ import { createTelegramPluginBase } from "./shared.js";
 
 export const telegramSetupPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> = {
   ...createTelegramPluginBase({
-    configSchema: buildChannelConfigSchema(TelegramConfigSchema),
     setupWizard: telegramSetupWizard,
     setup: telegramSetupAdapter,
   }),

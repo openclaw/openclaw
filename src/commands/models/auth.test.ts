@@ -50,7 +50,7 @@ vi.mock("../../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: mocks.resolveDefaultAgentWorkspaceDir,
 }));
 
-vi.mock("../../plugins/providers.js", () => ({
+vi.mock("../../plugins/providers.runtime.js", () => ({
   resolvePluginProviders: mocks.resolvePluginProviders,
 }));
 
@@ -313,6 +313,23 @@ describe("modelsAuthLoginCommand", () => {
     } finally {
       exitSpy.mockRestore();
     }
+  });
+
+  it("writes pasted tokens to the resolved agent store", async () => {
+    const runtime = createRuntime();
+    mocks.clackText.mockResolvedValue("tok-fresh");
+
+    await modelsAuthPasteTokenCommand({ provider: "openai" }, runtime);
+
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "openai:manual",
+      credential: {
+        type: "token",
+        provider: "openai",
+        token: "tok-fresh",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
   });
 
   it("runs token auth for any token-capable provider plugin", async () => {

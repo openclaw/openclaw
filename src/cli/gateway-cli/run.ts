@@ -19,6 +19,7 @@ import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
+import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -81,6 +82,8 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
   "compact",
   "rawStream",
 ] as const;
+
+const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
 
 const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
   "none",
@@ -314,7 +317,8 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const snapshot = await readConfigFileSnapshot().catch(() => null);
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
   const configAuditPath = path.join(resolveStateDir(process.env), "logs", "config-audit.jsonl");
-  const mode = cfg.gateway?.mode;
+  const effectiveCfg = snapshot?.valid ? snapshot.config : cfg;
+  const mode = effectiveCfg.gateway?.mode;
   if (!opts.allowUnconfigured && mode !== "local") {
     if (!configExists) {
       defaultRuntime.error(
@@ -418,7 +422,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         }
       : undefined;
 
-  try {
+  const startLoop = async () =>
     await runGatewayLoop({
       runtime: defaultRuntime,
       lockPort: port,
@@ -429,6 +433,27 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
           tailscale: tailscaleOverride,
         }),
     });
+
+  try {
+    const supervisor = detectRespawnSupervisor(process.env);
+    while (true) {
+      try {
+        await startLoop();
+        break;
+      } catch (err) {
+        const isGatewayAlreadyRunning =
+          err instanceof GatewayLockError &&
+          typeof err.message === "string" &&
+          err.message.includes("gateway already running");
+        if (!supervisor || !isGatewayAlreadyRunning) {
+          throw err;
+        }
+        gatewayLog.warn(
+          `gateway already running under ${supervisor}; waiting ${SUPERVISED_GATEWAY_LOCK_RETRY_MS}ms before retrying startup`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, SUPERVISED_GATEWAY_LOCK_RETRY_MS));
+      }
+    }
   } catch (err) {
     if (
       err instanceof GatewayLockError ||

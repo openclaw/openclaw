@@ -5,6 +5,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
+const convertMock = vi.hoisted(() => vi.fn());
+const documentCreateMock = vi.hoisted(() => vi.fn());
+const blockListMock = vi.hoisted(() => vi.fn());
+const blockChildrenCreateMock = vi.hoisted(() => vi.fn());
+const blockChildrenGetMock = vi.hoisted(() => vi.fn());
+const blockChildrenBatchDeleteMock = vi.hoisted(() => vi.fn());
+const blockDescendantCreateMock = vi.hoisted(() => vi.fn());
+const driveUploadAllMock = vi.hoisted(() => vi.fn());
+const permissionMemberCreateMock = vi.hoisted(() => vi.fn());
+const blockPatchMock = vi.hoisted(() => vi.fn());
+const scopeListMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
@@ -23,18 +34,6 @@ vi.mock("./runtime.js", () => ({
 import { registerFeishuDocTools } from "./docx.js";
 
 describe("feishu_doc image fetch hardening", () => {
-  const convertMock = vi.hoisted(() => vi.fn());
-  const documentCreateMock = vi.hoisted(() => vi.fn());
-  const blockListMock = vi.hoisted(() => vi.fn());
-  const blockChildrenCreateMock = vi.hoisted(() => vi.fn());
-  const blockChildrenGetMock = vi.hoisted(() => vi.fn());
-  const blockChildrenBatchDeleteMock = vi.hoisted(() => vi.fn());
-  const blockDescendantCreateMock = vi.hoisted(() => vi.fn());
-  const driveUploadAllMock = vi.hoisted(() => vi.fn());
-  const permissionMemberCreateMock = vi.hoisted(() => vi.fn());
-  const blockPatchMock = vi.hoisted(() => vi.fn());
-  const scopeListMock = vi.hoisted(() => vi.fn());
-
   beforeEach(() => {
     vi.clearAllMocks();
 
@@ -173,6 +172,50 @@ describe("feishu_doc image fetch hardening", () => {
     expect(call?.data.descendants.length).toBeGreaterThanOrEqual(3);
 
     expect(result.details.blocks_added).toBe(3);
+  });
+
+  it("reorders convert output by document tree instead of raw block array order", async () => {
+    const blocks = [
+      { block_type: 13, block_id: "li2", parent_id: "list1" },
+      { block_type: 4, block_id: "h2" },
+      { block_type: 13, block_id: "li1", parent_id: "list1" },
+      { block_type: 3, block_id: "h1" },
+      { block_type: 12, block_id: "list1", children: ["li1", "li2"] },
+      { block_type: 2, block_id: "p1" },
+    ];
+    convertMock.mockResolvedValue({
+      code: 0,
+      data: {
+        blocks,
+        first_level_block_ids: ["h1", "p1", "h2", "list1"],
+      },
+    });
+
+    blockDescendantCreateMock.mockImplementationOnce(async ({ data }) => ({
+      code: 0,
+      data: {
+        children: (data.children_id as string[]).map((id) => ({ block_id: id })),
+      },
+    }));
+
+    const feishuDocTool = resolveFeishuDocTool();
+
+    await feishuDocTool.execute("tool-call", {
+      action: "append",
+      doc_token: "doc_1",
+      content: "tree reorder",
+    });
+
+    const call = blockDescendantCreateMock.mock.calls[0]?.[0];
+    expect(call?.data.children_id).toEqual(["h1", "p1", "h2", "list1"]);
+    expect((call?.data.descendants as Array<{ block_id: string }>).map((b) => b.block_id)).toEqual([
+      "h1",
+      "p1",
+      "h2",
+      "list1",
+      "li1",
+      "li2",
+    ]);
   });
 
   it("falls back to size-based convert chunking for long no-heading markdown", async () => {

@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildVidaResponsesParamsForTest, resolveVidaResponsesOpenAIPathForTest } from "./vida-responses.js";
+import {
+  buildVidaResponsesParamsForTest,
+  resolveVidaResponsesOpenAIPathForTest,
+} from "./vida-responses.js";
 
 function makeModel(overrides?: Record<string, unknown>) {
   return {
@@ -167,11 +170,15 @@ describe("vida-responses OpenAI client resolution", () => {
       }),
       "utf8",
     );
-    await writeFile(path.join(nestedOpenAiRoot, "index.js"), "export default class OpenAI {}\n", "utf8");
+    await writeFile(
+      path.join(nestedOpenAiRoot, "index.js"),
+      "export default class OpenAI {}\n",
+      "utf8",
+    );
 
     const resolved = await resolveVidaResponsesOpenAIPathForTest(
       {
-        resolve: (specifier, options) => {
+        resolve: ((specifier: string, options?: { paths?: string[] }) => {
           if (specifier === "openai" && !options) {
             throw new Error("module not found");
           }
@@ -179,7 +186,7 @@ describe("vida-responses OpenAI client resolution", () => {
             return path.join(nestedOpenAiRoot, "index.js");
           }
           throw new Error(`unexpected require.resolve: ${specifier}`);
-        },
+        }) as unknown as (typeof require)["resolve"],
       },
       (specifier) => {
         if (specifier === "@mariozechner/pi-ai") {

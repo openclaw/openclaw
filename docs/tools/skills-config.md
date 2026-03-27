@@ -42,6 +42,15 @@ For built-in image generation/editing, prefer `agents.defaults.imageGenerationMo
 plus the core `image_generate` tool. `skills.entries.*` is only for custom or
 third-party skill workflows.
 
+If you select a specific image provider/model, also configure that provider's
+auth/API key. Typical examples: `GEMINI_API_KEY` or `GOOGLE_API_KEY` for
+`google/*`, `OPENAI_API_KEY` for `openai/*`, and `FAL_KEY` for `fal/*`.
+
+Examples:
+
+- Native Nano Banana-style setup: `agents.defaults.imageGenerationModel.primary: "google/gemini-3-pro-image-preview"`
+- Native fal setup: `agents.defaults.imageGenerationModel.primary: "fal/fal-ai/flux/dev"`
+
 ## Fields
 
 - `allowBundled`: optional allowlist for **bundled** skills only. When set, only

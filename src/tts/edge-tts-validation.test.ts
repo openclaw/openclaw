@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+let edgeTTS: typeof import("./tts-core.js").edgeTTS;
+
 let mockTtsPromise = vi.fn<(text: string, filePath: string) => Promise<void>>();
 
 vi.mock("node-edge-tts", () => ({
@@ -12,10 +14,6 @@ vi.mock("node-edge-tts", () => ({
     }
   },
 }));
-
-type TtsCoreModule = typeof import("./tts-core.js");
-
-let edgeTTS: TtsCoreModule["edgeTTS"];
 
 const baseEdgeConfig = {
   enabled: true,
@@ -27,15 +25,25 @@ const baseEdgeConfig = {
 };
 
 describe("edgeTTS – empty audio validation", () => {
-  let tempDir: string;
+  let tempDir: string | undefined;
 
   beforeEach(async () => {
     vi.resetModules();
+    vi.doMock("node-edge-tts", () => ({
+      EdgeTTS: class {
+        ttsPromise(text: string, filePath: string) {
+          return mockTtsPromise(text, filePath);
+        }
+      },
+    }));
     ({ edgeTTS } = await import("./tts-core.js"));
   });
 
   afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
+    if (tempDir) {
+      rmSync(tempDir, { recursive: true, force: true });
+      tempDir = undefined;
+    }
   });
 
   it("throws when the output file is 0 bytes", async () => {

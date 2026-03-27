@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { getMediaUnderstandingProvider } from "./providers/index.js";
+import { getMediaUnderstandingProvider } from "./provider-registry.js";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,

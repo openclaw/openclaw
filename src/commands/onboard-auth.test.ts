@@ -7,6 +7,7 @@ import {
   applyMinimaxApiConfig,
   applyMinimaxApiProviderConfig,
 } from "../../extensions/minimax/onboard.js";
+import { buildMistralModelDefinition as buildBundledMistralModelDefinition } from "../../extensions/mistral/model-definitions.js";
 import {
   applyMistralConfig,
   applyMistralProviderConfig,
@@ -42,17 +43,18 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { ModelApi } from "../config/types.models.js";
-import {
-  MISTRAL_DEFAULT_MODEL_REF,
-  ZAI_CODING_CN_BASE_URL,
-  ZAI_GLOBAL_BASE_URL,
-} from "../plugin-sdk/provider-models.js";
 import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 import {
   OPENROUTER_DEFAULT_MODEL_REF,
   setMinimaxApiKey,
   writeOAuthCredentials,
 } from "../plugins/provider-auth-storage.js";
+import {
+  MISTRAL_DEFAULT_MODEL_REF,
+  buildMistralModelDefinition as buildCoreMistralModelDefinition,
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_GLOBAL_BASE_URL,
+} from "../plugins/provider-model-definitions.js";
 import { applyLitellmProviderConfig } from "./onboard-auth.config-litellm.js";
 import {
   createAuthTestLifecycle,
@@ -374,6 +376,24 @@ describe("applyAuthProfileConfig", () => {
 
     expect(next.auth?.order).toBeUndefined();
   });
+
+  it("stores display metadata without overloading email", () => {
+    const next = applyAuthProfileConfig(
+      {},
+      {
+        profileId: "openai-codex:id-abc",
+        provider: "openai-codex",
+        mode: "oauth",
+        displayName: "Work account",
+      },
+    );
+
+    expect(next.auth?.profiles?.["openai-codex:id-abc"]).toEqual({
+      provider: "openai-codex",
+      mode: "oauth",
+      displayName: "Work account",
+    });
+  });
 });
 
 describe("applyMinimaxApiConfig", () => {
@@ -386,8 +406,8 @@ describe("applyMinimaxApiConfig", () => {
     });
   });
 
-  it("keeps reasoning enabled for MiniMax-M2.5", () => {
-    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.5");
+  it("keeps reasoning enabled for MiniMax-M2.7", () => {
+    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.7");
     expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(true);
   });
 
@@ -397,7 +417,7 @@ describe("applyMinimaxApiConfig", () => {
         agents: {
           defaults: {
             models: {
-              "minimax/MiniMax-M2.5": {
+              "minimax/MiniMax-M2.7": {
                 alias: "MiniMax",
                 params: { custom: "value" },
               },
@@ -405,9 +425,9 @@ describe("applyMinimaxApiConfig", () => {
           },
         },
       },
-      "MiniMax-M2.5",
+      "MiniMax-M2.7",
     );
-    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.5"]).toMatchObject({
+    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.7"]).toMatchObject({
       alias: "Minimax",
       params: { custom: "value" },
     });
@@ -426,7 +446,7 @@ describe("applyMinimaxApiConfig", () => {
     expect(cfg.models?.providers?.minimax?.apiKey).toBe("old-key");
     expect(cfg.models?.providers?.minimax?.models.map((m) => m.id)).toEqual([
       "old-model",
-      "MiniMax-M2.5",
+      "MiniMax-M2.7",
     ]);
   });
 
@@ -531,8 +551,8 @@ describe("primary model defaults", () => {
   it("sets correct primary model", () => {
     const configCases = [
       {
-        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.5-highspeed"),
-        primaryModel: "minimax/MiniMax-M2.5-highspeed",
+        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.7-highspeed"),
+        primaryModel: "minimax/MiniMax-M2.7-highspeed",
       },
       {
         getConfig: () => applyZaiConfig({}, { modelId: "glm-5" }),
@@ -554,9 +574,14 @@ describe("applyXiaomiConfig", () => {
   it("adds Xiaomi provider with correct settings", () => {
     const cfg = applyXiaomiConfig({});
     expect(cfg.models?.providers?.xiaomi).toMatchObject({
-      baseUrl: "https://api.xiaomimimo.com/anthropic",
-      api: "anthropic-messages",
+      baseUrl: "https://api.xiaomimimo.com/v1",
+      api: "openai-completions",
     });
+    expect(cfg.models?.providers?.xiaomi?.models.map((m) => m.id)).toEqual([
+      "mimo-v2-flash",
+      "mimo-v2-pro",
+      "mimo-v2-omni",
+    ]);
     expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe("xiaomi/mimo-v2-flash");
   });
 
@@ -570,12 +595,14 @@ describe("applyXiaomiConfig", () => {
       }),
     );
 
-    expect(cfg.models?.providers?.xiaomi?.baseUrl).toBe("https://api.xiaomimimo.com/anthropic");
-    expect(cfg.models?.providers?.xiaomi?.api).toBe("anthropic-messages");
+    expect(cfg.models?.providers?.xiaomi?.baseUrl).toBe("https://api.xiaomimimo.com/v1");
+    expect(cfg.models?.providers?.xiaomi?.api).toBe("openai-completions");
     expect(cfg.models?.providers?.xiaomi?.apiKey).toBe("old-key");
     expect(cfg.models?.providers?.xiaomi?.models.map((m) => m.id)).toEqual([
       "custom-model",
       "mimo-v2-flash",
+      "mimo-v2-pro",
+      "mimo-v2-omni",
     ]);
   });
 });
@@ -605,7 +632,15 @@ describe("applyXaiProviderConfig", () => {
     expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
     expect(cfg.models?.providers?.xai?.api).toBe("openai-completions");
     expect(cfg.models?.providers?.xai?.apiKey).toBe("old-key");
-    expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual(["custom-model", "grok-4"]);
+    expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual(
+      expect.arrayContaining([
+        "custom-model",
+        "grok-4",
+        "grok-4-1-fast",
+        "grok-4.20-beta-latest-reasoning",
+        "grok-code-fast-1",
+      ]),
+    );
   });
 });
 
@@ -644,7 +679,18 @@ describe("applyMistralProviderConfig", () => {
       (model) => model.id === "mistral-large-latest",
     );
     expect(mistralDefault?.contextWindow).toBe(262144);
-    expect(mistralDefault?.maxTokens).toBe(262144);
+    expect(mistralDefault?.maxTokens).toBe(16384);
+  });
+
+  it("keeps the core and bundled mistral defaults aligned", () => {
+    const bundled = buildBundledMistralModelDefinition();
+    const core = buildCoreMistralModelDefinition();
+
+    expect(core).toMatchObject({
+      id: bundled.id,
+      contextWindow: bundled.contextWindow,
+      maxTokens: bundled.maxTokens,
+    });
   });
 });
 
@@ -662,8 +708,8 @@ describe("provider alias defaults", () => {
   it("adds expected alias for provider defaults", () => {
     const aliasCases = [
       {
-        applyConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.5"),
-        modelRef: "minimax/MiniMax-M2.5",
+        applyConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.7"),
+        modelRef: "minimax/MiniMax-M2.7",
         alias: "Minimax",
       },
       {

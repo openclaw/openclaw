@@ -339,6 +339,11 @@ describe("runReplyAgent auto-compaction token update", () => {
     );
   }
 
+  async function normalizeComparablePath(filePath: string): Promise<string> {
+    const parent = await fs.realpath(path.dirname(filePath)).catch(() => path.dirname(filePath));
+    return path.join(parent, path.basename(filePath));
+  }
+
   function createBaseRun(params: {
     storePath: string;
     sessionEntry: Record<string, unknown>;
@@ -387,6 +392,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     const sessionKey = "main";
     const sessionEntry = {
       sessionId: "session",
+      sessionFile: path.join(tmp, "session.jsonl"),
       updatedAt: Date.now(),
       totalTokens: 181_000,
       compactionCount: 0,
@@ -475,6 +481,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       payloads: [{ text: "done" }],
       meta: {
         agentMeta: {
+          sessionId: "session-rotated",
           usage: { input: 190_000, output: 8_000, total: 198_000 },
           lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
           compactionCount: 2,
@@ -519,6 +526,10 @@ describe("runReplyAgent auto-compaction token update", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(10_000);
     expect(stored[sessionKey].compactionCount).toBe(2);
+    expect(stored[sessionKey].sessionId).toBe("session-rotated");
+    expect(await normalizeComparablePath(stored[sessionKey].sessionFile)).toBe(
+      await normalizeComparablePath(path.join(tmp, "session-rotated.jsonl")),
+    );
   });
 
   it("accumulates compactions across fallback attempts without double-counting a single attempt", async () => {

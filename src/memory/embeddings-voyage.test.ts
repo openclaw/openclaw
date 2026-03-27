@@ -23,6 +23,8 @@ let createVoyageEmbeddingProvider: typeof import("./embeddings-voyage.js").creat
 let normalizeVoyageModel: typeof import("./embeddings-voyage.js").normalizeVoyageModel;
 
 beforeEach(async () => {
+  vi.useRealTimers();
+  vi.doUnmock("undici");
   vi.resetModules();
   authModule = await import("../agents/model-auth.js");
   ({ createVoyageEmbeddingProvider, normalizeVoyageModel } =
@@ -54,6 +56,7 @@ async function createDefaultVoyageProvider(
 
 describe("voyage embedding provider", () => {
   afterEach(() => {
+    vi.doUnmock("undici");
     vi.resetAllMocks();
     vi.unstubAllGlobals();
   });

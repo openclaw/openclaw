@@ -121,14 +121,14 @@ export function renderNostrCard(params: {
     const hasAnyProfileData = name || displayName || about || picture || nip05;
 
     return html`
-      <div style="margin-top: 16px; padding: 12px; background: var(--bg-secondary); border-radius: 8px;">
+      <div style="margin-top: 16px; padding: 12px; background: var(--bg-secondary); border-radius: var(--radius-md);">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
           <div style="font-weight: 500;">Profile</div>
           ${
             summaryConfigured
               ? html`
                 <button
-                  class="btn btn-sm"
+                  class="btn btn--sm"
                   @click=${onEditProfile}
                   style="font-size: 12px; padding: 4px 8px;"
                 >

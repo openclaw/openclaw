@@ -5,6 +5,7 @@ import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import {
   chunkMarkdownTextWithMode,
   resolveChunkMode,
@@ -19,14 +20,15 @@ import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
-
-const SLACK_TEXT_LIMIT = 4000;
 const SLACK_UPLOAD_SSRF_POLICY = {
   allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
   allowRfc2544BenchmarkRange: true,
 };
+const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
+const slackDmChannelCache = new Map<string, string>();
 
 type SlackRecipient =
   | {
@@ -167,10 +169,31 @@ function parseRecipient(raw: string): SlackRecipient {
   return { kind: target.kind, id: target.id };
 }
 
+function createSlackDmCacheKey(params: {
+  accountId?: string;
+  token: string;
+  recipientId: string;
+}): string {
+  return `${params.accountId ?? "default"}:${params.token}:${params.recipientId}`;
+}
+
+function setSlackDmChannelCache(key: string, channelId: string): void {
+  if (slackDmChannelCache.has(key)) {
+    slackDmChannelCache.delete(key);
+  } else if (slackDmChannelCache.size >= SLACK_DM_CHANNEL_CACHE_MAX) {
+    const oldest = slackDmChannelCache.keys().next().value;
+    if (oldest) {
+      slackDmChannelCache.delete(oldest);
+    }
+  }
+  slackDmChannelCache.set(key, channelId);
+}
+
 async function resolveChannelId(
   client: WebClient,
   recipient: SlackRecipient,
-): Promise<{ channelId: string; isDm?: boolean }> {
+  params: { accountId?: string; token: string },
+): Promise<{ channelId: string; isDm?: boolean; cacheHit?: boolean }> {
   // Bare Slack user IDs (U-prefix) may arrive with kind="channel" when the
   // target string had no explicit prefix (parseSlackTarget defaults bare IDs
   // to "channel"). chat.postMessage tolerates user IDs directly, but
@@ -181,12 +204,26 @@ async function resolveChannelId(
   if (!isUserId) {
     return { channelId: recipient.id };
   }
+  const cacheKey = createSlackDmCacheKey({
+    accountId: params.accountId,
+    token: params.token,
+    recipientId: recipient.id,
+  });
+  const cachedChannelId = slackDmChannelCache.get(cacheKey);
+  if (cachedChannelId) {
+    return { channelId: cachedChannelId, isDm: true, cacheHit: true };
+  }
   const response = await client.conversations.open({ users: recipient.id });
   const channelId = response.channel?.id;
   if (!channelId) {
     throw new Error("Failed to open Slack DM channel");
   }
-  return { channelId, isDm: true };
+  setSlackDmChannelCache(cacheKey, channelId);
+  return { channelId, isDm: true, cacheHit: false };
+}
+
+export function clearSlackDmChannelCache(): void {
+  slackDmChannelCache.clear();
 }
 
 async function uploadSlackFile(params: {
@@ -276,7 +313,10 @@ export async function sendMessageSlack(
   });
   const client = opts.client ?? createSlackWebClient(token);
   const recipient = parseRecipient(to);
-  const { channelId } = await resolveChannelId(client, recipient);
+  const { channelId } = await resolveChannelId(client, recipient, {
+    accountId: account.accountId,
+    token,
+  });
   if (blocks) {
     if (opts.mediaUrl) {
       throw new Error("Slack send does not support blocks with mediaUrl");
@@ -295,7 +335,9 @@ export async function sendMessageSlack(
       channelId,
     };
   }
-  const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);
+  const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId, {
+    fallbackLimit: SLACK_TEXT_LIMIT,
+  });
   const chunkLimit = Math.min(textLimit, SLACK_TEXT_LIMIT);
   const tableMode = resolveMarkdownTableMode({
     cfg,
@@ -310,9 +352,7 @@ export async function sendMessageSlack(
   const chunks = markdownChunks.flatMap((markdown) =>
     markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }),
   );
-  if (!chunks.length && trimmedMessage) {
-    chunks.push(trimmedMessage);
-  }
+  const resolvedChunks = resolveTextChunksWithFallback(trimmedMessage, chunks);
   const mediaMaxBytes =
     typeof account.config.mediaMaxMb === "number"
       ? account.config.mediaMaxMb * 1024 * 1024
@@ -320,7 +360,7 @@ export async function sendMessageSlack(
 
   let lastMessageId = "";
   if (opts.mediaUrl) {
-    const [firstChunk, ...rest] = chunks;
+    const [firstChunk, ...rest] = resolvedChunks;
     lastMessageId = await uploadSlackFile({
       client,
       channelId,
@@ -341,7 +381,7 @@ export async function sendMessageSlack(
       lastMessageId = response.ts ?? lastMessageId;
     }
   } else {
-    for (const chunk of chunks.length ? chunks : [""]) {
+    for (const chunk of resolvedChunks.length ? resolvedChunks : [""]) {
       const response = await postSlackMessageBestEffort({
         client,
         channelId,
