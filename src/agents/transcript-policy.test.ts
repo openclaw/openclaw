@@ -180,7 +180,7 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 
-  it("keeps OpenRouter on its existing turn-validation path", () => {
+  it("enables dangling-tool-use stripping for OpenRouter openai-completions", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openrouter",
       modelId: "openai/gpt-4.1",
@@ -188,7 +188,10 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.applyGoogleTurnOrdering).toBe(false);
     expect(policy.validateGeminiTurns).toBe(false);
-    expect(policy.validateAnthropicTurns).toBe(false);
+    // validateAnthropicTurns is enabled for all openai-completions providers
+    // to strip dangling tool_use blocks; user-turn merging is gated at
+    // runtime by a block-form content check so string transcripts are safe.
+    expect(policy.validateAnthropicTurns).toBe(true);
   });
 
   it.each([

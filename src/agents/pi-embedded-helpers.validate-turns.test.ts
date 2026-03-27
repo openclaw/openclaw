@@ -511,4 +511,50 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     const result = validateAnthropicTurns(msgs);
     expect(result).toHaveLength(3);
   });
+
+  it("skips user-turn merging when transcript has string-form content", () => {
+    // openai-completions providers that are not Anthropic-compatible may
+    // use plain string content.  Merging would convert to block-form arrays
+    // that downstream providers cannot interpret.
+    const msgs = asMessages([
+      { role: "user", content: "First question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Answer" }],
+      },
+      { role: "user", content: "Follow-up" },
+      { role: "user", content: "Another follow-up" },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    // Consecutive user messages should NOT be merged when content is string-form
+    expect(result).toHaveLength(4);
+    // Content must remain as plain strings, not converted to block arrays
+    expect((result[2] as { content: unknown }).content).toBe("Follow-up");
+    expect((result[3] as { content: unknown }).content).toBe("Another follow-up");
+  });
+
+  it("still strips dangling tool_use blocks with string-form user content", () => {
+    // Even when user messages are string-form, dangling tool_use blocks in
+    // assistant messages should still be stripped.
+    const msgs = [
+      { role: "user", content: "Use tool" },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "tool-1", name: "test", input: {} },
+          { type: "text", text: "I'll check that" },
+        ],
+      },
+      { role: "user", content: "Hello" },
+    ] as unknown as AgentMessage[];
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(3);
+    // The dangling tool_use should be stripped even with string-form user content
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual([{ type: "text", text: "I'll check that" }]);
+  });
 });

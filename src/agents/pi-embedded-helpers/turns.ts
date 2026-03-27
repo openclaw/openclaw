@@ -190,14 +190,49 @@ export function mergeConsecutiveUserTurns(
 }
 
 /**
+ * Returns true when every user message in the transcript uses block-form
+ * (array) `content`.  When any user message carries a plain string, the
+ * transcript is considered "string-form" and consecutive-user merging must
+ * be skipped — merging would convert the content to an array of Anthropic
+ * content blocks that non-Anthropic providers cannot interpret.
+ */
+function transcriptUsesBlockFormContent(messages: AgentMessage[]): boolean {
+  for (const msg of messages) {
+    if (
+      msg &&
+      typeof msg === "object" &&
+      (msg as { role?: string }).role === "user" &&
+      !Array.isArray((msg as { content?: unknown }).content)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
  * Validates and fixes conversation turn sequences for Anthropic API.
  * Anthropic requires strict alternating user→assistant pattern.
  * Merges consecutive user messages together.
  * Also strips dangling tool_use blocks that lack corresponding tool_result blocks.
+ *
+ * When the transcript contains string-form user content (plain strings rather
+ * than Anthropic content-block arrays), consecutive-user merging is skipped to
+ * avoid converting content into a format that non-Anthropic providers cannot
+ * consume.  Dangling tool_use stripping still runs unconditionally.
  */
 export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[] {
   // First, strip dangling tool_use blocks from assistant messages
   const stripped = stripDanglingAnthropicToolUses(messages);
+
+  // Only merge consecutive user turns when the transcript uses block-form
+  // content.  String-form transcripts (from openai-completions providers that
+  // are not strictly Anthropic-compatible) would have their content silently
+  // converted to Anthropic content-block arrays, which downstream providers
+  // cannot interpret.  (#55670)
+  if (!transcriptUsesBlockFormContent(stripped)) {
+    return stripped;
+  }
 
   return validateTurnsWithConsecutiveMerge({
     messages: stripped,
