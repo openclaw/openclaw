@@ -619,6 +619,23 @@ $0 \\"$1\\"" touch {marker}`,
     });
   });
 
+  it("prevents allow-always bypass for script wrapper chains", () => {
+    if (process.platform !== "darwin" && process.platform !== "freebsd") {
+      return;
+    }
+    const dir = makeTempDir();
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "/usr/bin/script -q /dev/null /bin/sh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/script -q /dev/null /bin/sh -lc 'id > marker'",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
   it("does not persist comment-tailed payload paths that never execute", () => {
     if (process.platform === "win32") {
       return;
