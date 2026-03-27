@@ -72,6 +72,7 @@ describe("deleteSessionsAndRefresh", () => {
       includeGlobal: true,
       includeUnknown: true,
       includeDerivedTitles: true,
+      includeLastMessage: true,
     });
     expect(state.sessionsLoading).toBe(false);
   });

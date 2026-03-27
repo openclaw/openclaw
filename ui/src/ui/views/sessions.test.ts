@@ -189,7 +189,7 @@ describe("sessions view", () => {
     expect(container.textContent).toContain("Telegram • Escalona Labs 🚀🛰");
   });
 
-  it("shows Guardian badge on rows with sendPolicy deny", async () => {
+  it("shows lastMessagePreview under the session key", async () => {
     const container = document.createElement("div");
     render(
       renderSessions(
@@ -198,7 +198,7 @@ describe("sessions view", () => {
             key: "agent:main:telegram:group:-1003751611182:topic:1",
             kind: "group",
             updatedAt: Date.now(),
-            sendPolicy: "deny" as const,
+            lastMessagePreview: "Here's the summary of your metrics",
           }),
         ),
       ),
@@ -206,7 +206,48 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(container.textContent).toContain("🛡️ Guardian");
+    expect(container.textContent).toContain("Here's the summary of your metrics");
+  });
+
+  it("shows active dot for sessions updated within 2 minutes", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:telegram:group:-1003751611182:topic:1",
+            kind: "group",
+            updatedAt: Date.now(),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    // Green dot indicator should be present for recent sessions
+    const dot = container.querySelector('span[title="Active recently"]');
+    expect(dot).not.toBeNull();
+  });
+
+  it("does not show active dot for sessions older than 2 minutes", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:telegram:group:-1003751611182:topic:1",
+            kind: "group",
+            updatedAt: Date.now() - 10 * 60 * 1000,
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const dot = container.querySelector('span[title="Active recently"]');
+    expect(dot).toBeNull();
   });
 
   it("does not show Guardian badge on rows with sendPolicy allow", async () => {

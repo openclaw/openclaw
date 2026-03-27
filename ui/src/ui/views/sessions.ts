@@ -505,6 +505,8 @@ function renderRow(
   onNavigateToChat?: (sessionKey: string) => void,
 ) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
+  const isRecent =
+    row.updatedAt != null && row.updatedAt > 0 && Date.now() - row.updatedAt < 2 * 60 * 1000;
   const rawThinking = row.thinkingLevel ?? "";
   const isBinaryThinking = isBinaryThinkingProvider(row.modelProvider);
   const thinking = resolveThinkLevelDisplay(rawThinking, isBinaryThinking);
@@ -576,6 +578,11 @@ function renderRow(
               ? html`<span class="muted session-key-display-name">${contextMeta}</span>`
               : nothing
           }
+          ${
+            row.lastMessagePreview
+              ? html`<span class="muted session-key-display-name" style="font-style:italic;">${row.lastMessagePreview}</span>`
+              : nothing
+          }
         </div>
       </td>
       <td>
@@ -606,7 +613,28 @@ function renderRow(
           }
         </div>
       </td>
-      <td>${updated}</td>
+      <td>
+        <div style="display:flex; align-items:center; gap:6px;">
+          ${
+            isRecent
+              ? html`
+                  <span
+                    title="Active recently"
+                    style="
+                      display: inline-block;
+                      width: 8px;
+                      height: 8px;
+                      border-radius: 50%;
+                      background: #4caf50;
+                      box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.3);
+                    "
+                  ></span>
+                `
+              : nothing
+          }
+          <span class="${isRecent ? "muted" : ""}">${updated}</span>
+        </div>
+      </td>
       <td>${formatSessionTokens(row)}</td>
       <td>
         <select
