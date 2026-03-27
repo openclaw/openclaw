@@ -282,7 +282,10 @@ export function truncateUtf16Safe(input: string, maxLen: number): string {
   return sliceUtf16Safe(input, 0, limit);
 }
 
-export function resolveUserPath(input: string): string {
+export function resolveUserPath(input: string | null | undefined): string {
+  if (input == null) {
+    return "";
+  }
   if (!input) {
     return "";
   }
