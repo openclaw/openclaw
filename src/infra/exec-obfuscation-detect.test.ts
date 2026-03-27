@@ -221,6 +221,7 @@ describe("detectCommandObfuscation", () => {
       expect(defaultResult.matchedPatterns).toContain("command-too-long");
 
       const disabledResult = detectCommandObfuscation(command, { maxCommandChars: 0 });
+      expect(disabledResult.detected).toBe(false);
       expect(disabledResult.matchedPatterns).not.toContain("command-too-long");
     });
 
