@@ -28,6 +28,8 @@ export const FIELD_LABELS: Record<string, string> = {
   cli: "CLI",
   "cli.banner": "CLI Banner",
   "cli.banner.taglineMode": "CLI Banner Tagline Mode",
+  tui: "TUI",
+  "tui.viMode": "TUI Vi Mode",
   update: "Updates",
   "update.channel": "Update Channel",
   "update.checkOnStart": "Update Check on Start",

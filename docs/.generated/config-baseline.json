@@ -14521,7 +14521,7 @@
         "network"
       ],
       "label": "Feishu",
-      "help": "飞书/Lark enterprise messaging with doc/wiki/drive tools.",
+      "help": "\u98de\u4e66/Lark enterprise messaging with doc/wiki/drive tools.",
       "hasChildren": true
     },
     {
@@ -30540,7 +30540,7 @@
         "network"
       ],
       "label": "Telegram",
-      "help": "simplest way to get started — register a bot with @BotFather and get going.",
+      "help": "simplest way to get started \u2014 register a bot with @BotFather and get going.",
       "hasChildren": true
     },
     {
@@ -43270,7 +43270,7 @@
         "advanced"
       ],
       "label": "Queue Mode by Channel",
-      "help": "Per-channel queue mode overrides keyed by provider id (for example telegram, discord, slack). Use this when one channel’s traffic pattern needs different queue behavior than global defaults.",
+      "help": "Per-channel queue mode overrides keyed by provider id (for example telegram, discord, slack). Use this when one channel\u2019s traffic pattern needs different queue behavior than global defaults.",
       "hasChildren": true
     },
     {
@@ -43492,7 +43492,7 @@
         "advanced"
       ],
       "label": "Status Reactions",
-      "help": "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued → thinking → tool → done/error).",
+      "help": "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued \u2192 thinking \u2192 tool \u2192 done/error).",
       "hasChildren": true
     },
     {
@@ -43688,7 +43688,7 @@
         "advanced"
       ],
       "label": "Suppress Tool Error Warnings",
-      "help": "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
+      "help": "When true, suppress \u26a0\ufe0f tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
       "hasChildren": false
     },
     {
@@ -60925,7 +60925,7 @@
         "tools"
       ],
       "label": "Transcript Echo Format",
-      "help": "Format string for the echoed transcript message. Use `{transcript}` as a placeholder for the transcribed text. Default: '📝 \"{transcript}\"'.",
+      "help": "Format string for the echoed transcript message. Use `{transcript}` as a placeholder for the transcribed text. Default: '\ud83d\udcdd \"{transcript}\"'.",
       "hasChildren": false
     },
     {
@@ -64410,6 +64410,34 @@
       ],
       "label": "Web Search Timeout (sec)",
       "help": "Timeout in seconds for web_search requests.",
+      "hasChildren": false
+    },
+    {
+      "path": "tui",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "TUI",
+      "help": "Terminal UI controls for TUI input editor behavior and keybinding preferences.",
+      "hasChildren": true
+    },
+    {
+      "path": "tui.viMode",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "TUI Vi Mode",
+      "help": "Enable vi/vim keybinding mode for the TUI input editor. When enabled, the editor starts in insert mode; press Escape to enter normal mode for vi-style cursor movement and editing. Can also be enabled via the OPENCLAW_TUI_VI_MODE=1 environment variable.",
       "hasChildren": false
     },
     {

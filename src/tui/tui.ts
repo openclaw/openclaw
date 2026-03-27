@@ -407,7 +407,9 @@ export async function runTui(opts: TuiOptions) {
   const statusContainer = new Container();
   const footer = new Text("", 1, 0);
   const chatLog = new ChatLog();
-  const editor = new CustomEditor(tui, editorTheme);
+  const editor = new CustomEditor(tui, editorTheme, {
+    viMode: config.tui?.viMode,
+  });
   const root = new Container();
   root.addChild(header);
   root.addChild(chatLog);

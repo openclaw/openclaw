@@ -321,6 +321,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
         },
         additionalProperties: false,
       },
+      tui: {
+        type: "object",
+        properties: {
+          viMode: {
+            type: "boolean",
+          },
+        },
+        additionalProperties: false,
+      },
       update: {
         type: "object",
         properties: {
@@ -11370,6 +11379,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "CLI presentation controls for local command output behavior such as banner and tagline style. Use this section to keep startup output aligned with operator preference without changing runtime behavior.",
       tags: ["advanced"],
     },
+    tui: {
+      label: "TUI",
+      group: "TUI",
+      order: 26.5,
+      help: "Terminal UI controls for TUI input editor behavior and keybinding preferences.",
+      tags: ["advanced"],
+    },
     diagnostics: {
       label: "Diagnostics",
       group: "Diagnostics",
@@ -11641,6 +11657,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "cli.banner.taglineMode": {
       label: "CLI Banner Tagline Mode",
       help: 'Controls tagline style in the CLI startup banner: "random" (default) picks from the rotating tagline pool, "default" always shows the neutral default tagline, and "off" hides tagline text while keeping the banner version line.',
+      tags: ["advanced"],
+    },
+    "tui.viMode": {
+      label: "TUI Vi Mode",
+      help: "Enable vi/vim keybinding mode for the TUI input editor. When enabled, the editor starts in insert mode; press Escape to enter normal mode for vi-style cursor movement and editing. Can also be enabled via the OPENCLAW_TUI_VI_MODE=1 environment variable.",
       tags: ["advanced"],
     },
     "update.channel": {

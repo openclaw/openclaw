@@ -335,6 +335,12 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    tui: z
+      .object({
+        viMode: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     update: z
       .object({
         channel: z.union([z.literal("stable"), z.literal("beta"), z.literal("dev")]).optional(),
