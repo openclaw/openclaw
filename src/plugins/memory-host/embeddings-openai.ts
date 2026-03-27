@@ -12,6 +12,7 @@ export type OpenAiEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
+  outputDimensionality?: number;
 };
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -22,12 +23,50 @@ const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-ada-002": 8191,
 };
 
+const OPENAI_EMBEDDING3_SMALL_DIMENSIONS = [256, 512, 768, 1024, 1536] as const;
+const OPENAI_EMBEDDING3_LARGE_DIMENSIONS = [256, 512, 768, 1024, 1536, 2048, 3072] as const;
+const OPENAI_EMBEDDING3_DIMENSION_DEFAULTS: Record<string, number> = {
+  "text-embedding-3-small": 1536,
+  "text-embedding-3-large": 3072,
+};
+
 export function normalizeOpenAiModel(model: string): string {
   return normalizeEmbeddingModelWithPrefixes({
     model,
     defaultModel: DEFAULT_OPENAI_EMBEDDING_MODEL,
     prefixes: ["openai/"],
   });
+}
+
+export function isOpenAiEmbedding3Model(model: string): boolean {
+  return model === "text-embedding-3-small" || model === "text-embedding-3-large";
+}
+
+export function resolveOpenAiOutputDimensionality(
+  model: string,
+  dimensionality: number | undefined,
+): number | undefined {
+  if (!isOpenAiEmbedding3Model(model)) {
+    return undefined;
+  }
+
+  if (dimensionality === undefined) {
+    return OPENAI_EMBEDDING3_DIMENSION_DEFAULTS[model];
+  }
+
+  const validDimensions =
+    model === "text-embedding-3-small"
+      ? (OPENAI_EMBEDDING3_SMALL_DIMENSIONS as readonly number[])
+      : (OPENAI_EMBEDDING3_LARGE_DIMENSIONS as readonly number[]);
+
+  if (!validDimensions.includes(dimensionality)) {
+    throw new Error(
+      `Invalid output dimensionality ${dimensionality} for ${model}. ` +
+        `Supported dimensions: ${validDimensions.join(", ")}`,
+    );
+  }
+
+  return dimensionality;
 }
 
 export async function createOpenAiEmbeddingProvider(
@@ -49,10 +88,16 @@ export async function createOpenAiEmbeddingProvider(
 export async function resolveOpenAiEmbeddingClient(
   options: EmbeddingProviderOptions,
 ): Promise<OpenAiEmbeddingClient> {
+  const model = normalizeOpenAiModel(options.model);
+  const outputDimensionality = resolveOpenAiOutputDimensionality(
+    model,
+    options.outputDimensionality,
+  );
   return await resolveRemoteEmbeddingClient({
     provider: "openai",
     options,
     defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
     normalizeModel: normalizeOpenAiModel,
+    outputDimensionality,
   });
 }
