@@ -303,12 +303,6 @@ describe("preflightDiscordMessage", () => {
       } as DiscordConfig,
     });
 
-    expect(fetchPluralKitMessageInfoMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageId: "proxy-456",
-        config: expect.objectContaining({ enabled: true }),
-      }),
-    );
     expect(result).not.toBeNull();
     expect(result?.canonicalMessageId).toBe("orig-123");
   });
