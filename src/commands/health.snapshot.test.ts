@@ -42,7 +42,7 @@ async function loadFreshHealthModulesForTest() {
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
     updateLastRoute: vi.fn().mockResolvedValue(undefined),
   }));
-  vi.doMock("../../extensions/whatsapp/runtime-api.js", () => ({
+  vi.doMock("../plugins/runtime/runtime-whatsapp-boundary.js", () => ({
     webAuthExists: vi.fn(async () => true),
     getWebAuthAgeMs: vi.fn(() => 1234),
     readWebSelfId: vi.fn(() => ({ e164: null, jid: null })),
