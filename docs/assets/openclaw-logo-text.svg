@@ -19,13 +19,9 @@
   <defs
      id="defs1">
     <style>
-      :root {
-        --text-color: #1b1f23; /* Light mode default */
-      }
+      path[style*="fill:#ffffff"] { fill: #1b1f23 !important; }
       @media (prefers-color-scheme: dark) {
-        :root {
-          --text-color: #ffffff; /* Dark mode */
-        }
+        path[style*="fill:#ffffff"] { fill: #ffffff !important; }
       }
     </style>
   </defs>
