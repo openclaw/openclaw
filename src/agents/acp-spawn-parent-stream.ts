@@ -13,6 +13,7 @@ const DEFAULT_NO_OUTPUT_POLL_MS = 15_000;
 const DEFAULT_MAX_RELAY_LIFETIME_MS = 6 * 60 * 60 * 1000;
 const STREAM_BUFFER_MAX_CHARS = 4_000;
 const STREAM_SNIPPET_MAX_CHARS = 220;
+const SUPPRESSED_INTERMEDIATE_EVENT_SUFFIXES = [":progress", ":stall", ":resumed"] as const;
 
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -84,6 +85,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   noOutputPollMs?: number;
   maxRelayLifetimeMs?: number;
   emitStartNotice?: boolean;
+  suppressIntermediateEvents?: boolean;
 }): AcpSpawnParentRelayHandle {
   const runId = params.runId.trim();
   const parentSessionKey = params.parentSessionKey.trim();
@@ -114,6 +116,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   const relayLabel = truncate(compactWhitespace(params.agentId), 40) || "ACP child";
   const contextPrefix = `acp-spawn:${runId}`;
   const logPath = toTrimmedString(params.logPath);
+  const suppressIntermediateEvents = params.suppressIntermediateEvents === true;
   let logDirReady = false;
   let pendingLogLines = "";
   let logFlushScheduled = false;
@@ -185,12 +188,18 @@ export function startAcpSpawnParentStreamRelay(params: {
       }),
     );
   };
+  const shouldSuppressSystemEvent = (contextKey: string) =>
+    suppressIntermediateEvents &&
+    SUPPRESSED_INTERMEDIATE_EVENT_SUFFIXES.some((suffix) => contextKey.endsWith(suffix));
   const emit = (text: string, contextKey: string) => {
     const cleaned = text.trim();
     if (!cleaned) {
       return;
     }
     logEvent("system_event", { contextKey, text: cleaned });
+    if (shouldSuppressSystemEvent(contextKey)) {
+      return;
+    }
     enqueueSystemEvent(cleaned, { sessionKey: parentSessionKey, contextKey });
     wake();
   };
