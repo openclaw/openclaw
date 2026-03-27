@@ -3713,6 +3713,70 @@ description: test skill
         },
       },
       {
+        name: "flags open dmPolicy when tools.elevated is enabled",
+        cfg: {
+          tools: { elevated: { enabled: true, allowFrom: { feishu: ["user1"] } } },
+          channels: { feishu: { dmPolicy: "open" } },
+        } satisfies OpenClawConfig,
+        assert: (res: SecurityAuditReport) => {
+          expect(res.findings).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                checkId: "security.exposure.open_groups_with_elevated",
+                severity: "critical",
+              }),
+            ]),
+          );
+          const finding = res.findings.find(
+            (f) => f.checkId === "security.exposure.open_groups_with_elevated",
+          );
+          expect(finding?.detail).toContain("channels.feishu.dmPolicy");
+        },
+      },
+      {
+        name: "flags open dmPolicy when runtime/filesystem tools are exposed without guards",
+        cfg: {
+          channels: { feishu: { dmPolicy: "open" } },
+          tools: { elevated: { enabled: false } },
+        } satisfies OpenClawConfig,
+        assert: (res: SecurityAuditReport) => {
+          expect(res.findings).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                checkId: "security.exposure.open_groups_with_runtime_or_fs",
+                severity: "critical",
+              }),
+            ]),
+          );
+          const finding = res.findings.find(
+            (f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs",
+          );
+          expect(finding?.detail).toContain("channels.feishu.dmPolicy");
+        },
+      },
+      {
+        name: "does not flag exposure for dmPolicy when sandbox mode is all",
+        cfg: {
+          channels: { feishu: { dmPolicy: "open" } },
+          tools: {
+            elevated: { enabled: false },
+            profile: "coding",
+          },
+          agents: {
+            defaults: {
+              sandbox: { mode: "all" },
+            },
+          },
+        } satisfies OpenClawConfig,
+        assert: (res: SecurityAuditReport) => {
+          expect(
+            res.findings.some(
+              (f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs",
+            ),
+          ).toBe(false);
+        },
+      },
+      {
         name: "warns when config heuristics suggest a likely multi-user setup",
         cfg: {
           channels: {
