@@ -193,7 +193,7 @@ function resolveBindingConversationFromCommand(params: {
       conversationId:
         "conversationId" in target
           ? target.conversationId
-          : `${target.chatType === "group" ? "channel" : "user"}:${target.to}`,
+          : `${target.chatType === "direct" ? "user" : "channel"}:${target.to}`,
     };
   }
   return null;
