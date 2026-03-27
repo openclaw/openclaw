@@ -1,19 +1,14 @@
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchWithSsrFGuardMock, ssrfPolicyFromAllowPrivateNetworkMock } = vi.hoisted(() => ({
+const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
-  ssrfPolicyFromAllowPrivateNetworkMock: vi.fn((allowPrivateNetwork: boolean | null | undefined) =>
-    allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
-  ),
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-  ssrfPolicyFromAllowPrivateNetwork: ssrfPolicyFromAllowPrivateNetworkMock,
-}));
-
-import { buildFalImageGenerationProvider } from "./image-generation-provider.js";
+import {
+  _setFalFetchGuardForTesting,
+  buildFalImageGenerationProvider,
+} from "./image-generation-provider.js";
 
 function expectFalJsonPost(params: { call: number; url: string; body: Record<string, unknown> }) {
   expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
@@ -42,6 +37,7 @@ describe("fal image-generation provider", () => {
   });
 
   afterEach(() => {
+    _setFalFetchGuardForTesting(null);
     vi.restoreAllMocks();
   });
 
@@ -51,6 +47,7 @@ describe("fal image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
+    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     const releaseRequest = vi.fn(async () => {});
     const releaseDownload = vi.fn(async () => {});
     fetchWithSsrFGuardMock
@@ -128,6 +125,7 @@ describe("fal image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
+    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -184,6 +182,7 @@ describe("fal image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
+    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -232,6 +231,7 @@ describe("fal image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
+    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -323,6 +323,7 @@ describe("fal image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
+    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     const blocked = new Error("Blocked: resolves to private/internal/special-use IP address");
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
@@ -356,6 +357,5 @@ describe("fal image-generation provider", () => {
         auditContext: "fal-image-download",
       }),
     );
-    expect(ssrfPolicyFromAllowPrivateNetworkMock).toHaveBeenCalledWith(false);
   });
 });

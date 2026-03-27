@@ -33,6 +33,12 @@ type FalImageGenerationResponse = {
 
 type FalImageSize = string | { width: number; height: number };
 
+let falFetchGuard = fetchWithSsrFGuard;
+
+export function _setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+  falFetchGuard = impl ?? fetchWithSsrFGuard;
+}
+
 function resolveFalBaseUrl(cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"]): string {
   const direct = cfg?.models?.providers?.fal?.baseUrl?.trim();
   return (direct || DEFAULT_FAL_BASE_URL).replace(/\/+$/u, "");
@@ -179,7 +185,7 @@ function fileExtensionForMimeType(mimeType: string | undefined): string {
 }
 
 async function fetchImageBuffer(url: string): Promise<{ buffer: Buffer; mimeType: string }> {
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await falFetchGuard({
     url,
     policy: ssrfPolicyFromAllowPrivateNetwork(false),
     auditContext: "fal-image-download",
@@ -265,7 +271,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         requestBody.image_url = toDataUri(input.buffer, input.mimeType);
       }
 
-      const { response, release } = await fetchWithSsrFGuard({
+      const { response, release } = await falFetchGuard({
         url: `${resolveFalBaseUrl(req.cfg)}/${model}`,
         init: {
           method: "POST",
