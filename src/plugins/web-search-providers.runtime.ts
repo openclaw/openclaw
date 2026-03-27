@@ -44,7 +44,6 @@ function buildWebSearchSnapshotCacheKey(params: {
   onlyPluginIds?: readonly string[];
   env: NodeJS.ProcessEnv;
 }): string {
-  const effectiveVitest = params.env.VITEST ?? process.env.VITEST ?? "";
   return JSON.stringify({
     workspaceDir: params.workspaceDir ?? "",
     bundledAllowlistCompat: params.bundledAllowlistCompat === true,
@@ -52,9 +51,7 @@ function buildWebSearchSnapshotCacheKey(params: {
       left.localeCompare(right),
     ),
     config: params.config ?? null,
-    env: buildPluginSnapshotCacheEnvKey(params.env, {
-      includeProcessVitestFallback: effectiveVitest !== (params.env.VITEST ?? ""),
-    }),
+    env: buildPluginSnapshotCacheEnvKey(params.env),
   });
 }
 
