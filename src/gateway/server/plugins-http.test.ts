@@ -137,6 +137,72 @@ async function invokeSecureGatewayRoute(params: { gatewayAuthSatisfied: boolean 
   return { handled, exactPluginHandler, prefixGatewayHandler };
 }
 
+function mockOperatorAdminScopeFailure() {
+  loadOpenClawPlugins.mockReset();
+  handleGatewayRequest.mockReset();
+  handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
+    const scopes = opts.client?.connect.scopes ?? [];
+    if (opts.req.method === "sessions.delete" && !scopes.includes("operator.admin")) {
+      opts.respond(false, undefined, {
+        code: "invalid_request",
+        message: "missing scope: operator.admin",
+      });
+      return;
+    }
+    opts.respond(true, {});
+  });
+}
+
+async function invokeLeastPrivilegeDeleteRoute(params: {
+  path: string;
+  auth: "gateway" | "plugin";
+  gatewayAuthSatisfied: boolean;
+}) {
+  mockOperatorAdminScopeFailure();
+
+  const subagent = await createSubagentRuntime();
+  const log = createPluginLog();
+  const handler = createGatewayPluginRequestHandler({
+    registry: createTestRegistry({
+      httpRoutes: [
+        createRoute({
+          path: params.path,
+          auth: params.auth,
+          handler: async () => {
+            await subagent.deleteSession({ sessionKey: "agent:main:subagent:child" });
+            return true;
+          },
+        }),
+      ],
+    }),
+    log,
+  });
+
+  const response = makeMockHttpResponse();
+  const handled = await handler({ url: params.path } as IncomingMessage, response.res, undefined, {
+    gatewayAuthSatisfied: params.gatewayAuthSatisfied,
+  });
+  return { handled, log, ...response };
+}
+
+function expectLeastPrivilegeDeleteRouteFailure(params: {
+  handled: boolean;
+  setHeader: ReturnType<typeof makeMockHttpResponse>["setHeader"];
+  end: ReturnType<typeof makeMockHttpResponse>["end"];
+  log: ReturnType<typeof createPluginLog>;
+}) {
+  expect(params.handled).toBe(true);
+  expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+  expect(handleGatewayRequest.mock.calls[0]?.[0]?.client?.connect.scopes).toEqual([
+    "operator.write",
+  ]);
+  expect(params.setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
+  expect(params.end).toHaveBeenCalledWith("Internal Server Error");
+  expect(params.log.warn).toHaveBeenCalledWith(
+    expect.stringContaining("missing scope: operator.admin"),
+  );
+}
+
 describe("createGatewayPluginRequestHandler", () => {
   afterEach(() => {
     releasePinnedPluginHttpRouteRegistry();
@@ -144,52 +210,25 @@ describe("createGatewayPluginRequestHandler", () => {
   });
 
   it("caps unauthenticated plugin routes to non-admin subagent scopes", async () => {
-    loadOpenClawPlugins.mockReset();
-    handleGatewayRequest.mockReset();
-    handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
-      const scopes = opts.client?.connect.scopes ?? [];
-      if (opts.req.method === "sessions.delete" && !scopes.includes("operator.admin")) {
-        opts.respond(false, undefined, {
-          code: "invalid_request",
-          message: "missing scope: operator.admin",
-        });
-        return;
-      }
-      opts.respond(true, {});
-    });
-
-    const subagent = await createSubagentRuntime();
-    const log = createPluginLog();
-    const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          createRoute({
-            path: "/hook",
-            auth: "plugin",
-            handler: async (_req, _res) => {
-              await subagent.deleteSession({ sessionKey: "agent:main:subagent:child" });
-              return true;
-            },
-          }),
-        ],
-      }),
-      log,
-    });
-
-    const { res, setHeader, end } = makeMockHttpResponse();
-    const handled = await handler({ url: "/hook" } as IncomingMessage, res, undefined, {
+    const { handled, res, setHeader, end, log } = await invokeLeastPrivilegeDeleteRoute({
+      path: "/hook",
+      auth: "plugin",
       gatewayAuthSatisfied: false,
     });
 
-    expect(handled).toBe(true);
-    expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
-    expect(handleGatewayRequest.mock.calls[0]?.[0]?.client?.connect.scopes).toEqual([
-      "operator.write",
-    ]);
     expect(res.statusCode).toBe(500);
-    expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
-    expect(end).toHaveBeenCalledWith("Internal Server Error");
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("missing scope: operator.admin"));
+    expectLeastPrivilegeDeleteRouteFailure({ handled, setHeader, end, log });
+  });
+
+  it("keeps gateway-authenticated plugin routes on least-privilege runtime scopes", async () => {
+    const { handled, res, setHeader, end, log } = await invokeLeastPrivilegeDeleteRoute({
+      path: "/secure-hook",
+      auth: "gateway",
+      gatewayAuthSatisfied: true,
+    });
+
+    expect(res.statusCode).toBe(500);
+    expectLeastPrivilegeDeleteRouteFailure({ handled, setHeader, end, log });
   });
 
   it("returns false when no routes are registered", async () => {

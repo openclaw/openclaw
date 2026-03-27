@@ -55,6 +55,24 @@ function makeMockMessage(role: "user" | "assistant" = "user", text = "hello"): A
   return { role, content: text, timestamp: Date.now() } as AgentMessage;
 }
 
+function registerPromptTrackingEngine(engineId: string) {
+  const calls: Array<Record<string, unknown>> = [];
+  registerContextEngine(engineId, () => ({
+    info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
+    async ingest() {
+      return { ingested: false };
+    },
+    async assemble(params) {
+      calls.push({ ...params });
+      return { messages: params.messages, estimatedTokens: 0 };
+    },
+    async compact() {
+      return { ok: true, compacted: false };
+    },
+  }));
+  return calls;
+}
+
 /** A minimal mock engine that satisfies the ContextEngine interface. */
 class MockContextEngine implements ContextEngine {
   readonly info: ContextEngineInfo = {
@@ -700,20 +718,7 @@ describe("LegacyContextEngine parity", () => {
 describe("assemble() prompt forwarding", () => {
   it("forwards prompt to the underlying engine", async () => {
     const engineId = `prompt-fwd-${Date.now().toString(36)}`;
-    const calls: Array<Record<string, unknown>> = [];
-    registerContextEngine(engineId, () => ({
-      info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
-      async ingest() {
-        return { ingested: false };
-      },
-      async assemble(params) {
-        calls.push({ ...params });
-        return { messages: params.messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
-    }));
+    const calls = registerPromptTrackingEngine(engineId);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
     await engine.assemble({
@@ -728,20 +733,7 @@ describe("assemble() prompt forwarding", () => {
 
   it("omits prompt when not provided", async () => {
     const engineId = `prompt-omit-${Date.now().toString(36)}`;
-    const calls: Array<Record<string, unknown>> = [];
-    registerContextEngine(engineId, () => ({
-      info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
-      async ingest() {
-        return { ingested: false };
-      },
-      async assemble(params) {
-        calls.push({ ...params });
-        return { messages: params.messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
-    }));
+    const calls = registerPromptTrackingEngine(engineId);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
     await engine.assemble({
@@ -758,20 +750,7 @@ describe("assemble() prompt forwarding", () => {
     // is undefined — JavaScript keeps the key present with value undefined,
     // which breaks engines that guard with `'prompt' in params`.
     const engineId = `prompt-undef-${Date.now().toString(36)}`;
-    const calls: Array<Record<string, unknown>> = [];
-    registerContextEngine(engineId, () => ({
-      info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
-      async ingest() {
-        return { ingested: false };
-      },
-      async assemble(params) {
-        calls.push({ ...params });
-        return { messages: params.messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
-    }));
+    const calls = registerPromptTrackingEngine(engineId);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
     // Simulate the attempt.ts call-site pattern: conditional spread
