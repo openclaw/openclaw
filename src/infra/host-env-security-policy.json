@@ -29,8 +29,7 @@
     "MAVEN_OPTS",
     "SBT_OPTS",
     "GRADLE_OPTS",
-    "ANT_OPTS",
-    "AWS_CONFIG_FILE"
+    "ANT_OPTS"
   ],
   "blockedOverrideKeys": [
     "HOME",
@@ -74,7 +73,8 @@
     "GEM_PATH",
     "BUNDLE_GEMFILE",
     "COMPOSER_HOME",
-    "XDG_CONFIG_HOME"
+    "XDG_CONFIG_HOME",
+    "AWS_CONFIG_FILE"
   ],
   "blockedOverridePrefixes": ["GIT_CONFIG_", "NPM_CONFIG_"],
   "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_"]

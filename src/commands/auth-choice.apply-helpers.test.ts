@@ -53,6 +53,7 @@ function createPromptAndCredentialSpies(params?: { confirmResult?: boolean; text
 
 async function ensureMinimaxApiKey(params: {
   config?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["config"];
+  env?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["env"];
   confirm: WizardPrompter["confirm"];
   note?: WizardPrompter["note"];
   select?: WizardPrompter["select"];
@@ -62,6 +63,7 @@ async function ensureMinimaxApiKey(params: {
 }) {
   return await ensureMinimaxApiKeyInternal({
     config: params.config,
+    env: params.env,
     prompter: createPrompter({
       confirm: params.confirm,
       note: params.note,
@@ -75,12 +77,14 @@ async function ensureMinimaxApiKey(params: {
 
 async function ensureMinimaxApiKeyInternal(params: {
   config?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["config"];
+  env?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["env"];
   prompter: WizardPrompter;
   secretInputMode?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["secretInputMode"];
   setCredential: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["setCredential"];
 }) {
   return await ensureApiKeyFromEnvOrPrompt({
     config: params.config ?? {},
+    env: params.env,
     provider: "minimax",
     envLabel: "MINIMAX_API_KEY",
     promptMessage: "Enter key",
@@ -94,6 +98,7 @@ async function ensureMinimaxApiKeyInternal(params: {
 
 async function ensureMinimaxApiKeyWithEnvRefPrompter(params: {
   config?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["config"];
+  env?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["env"];
   note: WizardPrompter["note"];
   select: WizardPrompter["select"];
   setCredential: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["setCredential"];
@@ -101,6 +106,7 @@ async function ensureMinimaxApiKeyWithEnvRefPrompter(params: {
 }) {
   return await ensureMinimaxApiKeyInternal({
     config: params.config,
+    env: params.env,
     prompter: createPrompter({ select: params.select, text: params.text, note: params.note }),
     secretInputMode: "ref", // pragma: allowlist secret
     setCredential: params.setCredential,
@@ -125,12 +131,12 @@ async function runEnsureMinimaxApiKeyFlow(params: { confirmResult: boolean; text
   return { result, setCredential, confirm, text };
 }
 
-async function runMaybeApplyHuggingFaceToken(tokenProvider: string) {
+async function runMaybeApplyDemoToken(tokenProvider: string) {
   const setCredential = vi.fn(async () => undefined);
   const result = await maybeApplyApiKeyFromOption({
     token: "  opt-key  ",
     tokenProvider,
-    expectedProviders: ["huggingface"],
+    expectedProviders: ["demo-provider"],
     normalize: (value) => value.trim(),
     setCredential,
   });
@@ -181,21 +187,21 @@ afterEach(() => {
 
 describe("normalizeTokenProviderInput", () => {
   it("trims and lowercases non-empty values", () => {
-    expect(normalizeTokenProviderInput("  HuGgInGfAcE  ")).toBe("huggingface");
+    expect(normalizeTokenProviderInput("  DeMo-PrOvIdEr  ")).toBe("demo-provider");
     expect(normalizeTokenProviderInput("")).toBeUndefined();
   });
 });
 
 describe("maybeApplyApiKeyFromOption", () => {
   it("stores normalized token when provider matches", async () => {
-    const { result, setCredential } = await runMaybeApplyHuggingFaceToken("huggingface");
+    const { result, setCredential } = await runMaybeApplyDemoToken("demo-provider");
 
     expect(result).toBe("opt-key");
     expect(setCredential).toHaveBeenCalledWith("opt-key", undefined);
   });
 
   it("matches provider with whitespace/case normalization", async () => {
-    const { result, setCredential } = await runMaybeApplyHuggingFaceToken("  HuGgInGfAcE  ");
+    const { result, setCredential } = await runMaybeApplyDemoToken("  DeMo-PrOvIdEr  ");
 
     expect(result).toBe("opt-key");
     expect(setCredential).toHaveBeenCalledWith("opt-key", undefined);
@@ -206,8 +212,8 @@ describe("maybeApplyApiKeyFromOption", () => {
 
     const result = await maybeApplyApiKeyFromOption({
       token: "opt-key",
-      tokenProvider: "openai",
-      expectedProviders: ["huggingface"],
+      tokenProvider: "other-provider",
+      expectedProviders: ["demo-provider"],
       normalize: (value) => value.trim(),
       setCredential,
     });
@@ -287,6 +293,28 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     expect(setCredential).not.toHaveBeenCalled();
   });
 
+  it("uses explicit env for ref fallback instead of host process env", async () => {
+    process.env.MINIMAX_API_KEY = "host-key"; // pragma: allowlist secret
+    delete process.env.MINIMAX_OAUTH_TOKEN;
+    const env = { MINIMAX_API_KEY: "explicit-key" } as NodeJS.ProcessEnv;
+
+    const { confirm, text, setCredential } = createPromptAndCredentialSpies({
+      confirmResult: true,
+      textResult: "prompt-key",
+    });
+
+    const result = await ensureMinimaxApiKey({
+      confirm,
+      text,
+      env,
+      secretInputMode: "ref", // pragma: allowlist secret
+      setCredential,
+    });
+
+    expect(result).toBe("explicit-key");
+    expectMinimaxEnvRefCredentialStored(setCredential);
+  });
+
   it("re-prompts after provider ref validation failure and succeeds with env ref", async () => {
     process.env.MINIMAX_API_KEY = "env-key"; // pragma: allowlist secret
     delete process.env.MINIMAX_OAUTH_TOKEN;
@@ -359,14 +387,14 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
 
     const result = await ensureWithOptionEnvOrPrompt({
       token: "  opts-key  ",
-      tokenProvider: " HUGGINGFACE ",
-      expectedProviders: ["huggingface"],
-      provider: "huggingface",
-      envLabel: "HF_TOKEN",
+      tokenProvider: " DEMO-PROVIDER ",
+      expectedProviders: ["demo-provider"],
+      provider: "demo-provider",
+      envLabel: "DEMO_TOKEN",
       confirm,
       note,
-      noteMessage: "Hugging Face note",
-      noteTitle: "Hugging Face",
+      noteMessage: "Demo note",
+      noteTitle: "Demo",
       setCredential,
       text,
     });
@@ -389,20 +417,20 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
 
     const result = await ensureWithOptionEnvOrPrompt({
       token: "opts-key",
-      tokenProvider: "openai",
+      tokenProvider: "other-provider",
       expectedProviders: ["minimax"],
       provider: "minimax",
       envLabel: "MINIMAX_API_KEY",
       confirm,
       note,
-      noteMessage: "MiniMax note",
-      noteTitle: "MiniMax",
+      noteMessage: "Demo provider note",
+      noteTitle: "Demo provider",
       setCredential,
       text,
     });
 
     expect(result).toBe("env-key");
-    expect(note).toHaveBeenCalledWith("MiniMax note", "MiniMax");
+    expect(note).toHaveBeenCalledWith("Demo provider note", "Demo provider");
     expect(confirm).toHaveBeenCalled();
     expect(text).not.toHaveBeenCalled();
     expect(setCredential).toHaveBeenCalledWith("env-key", "plaintext");

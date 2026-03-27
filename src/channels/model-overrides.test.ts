@@ -10,16 +10,16 @@ describe("resolveChannelModelOverride", () => {
         cfg: {
           channels: {
             modelByChannel: {
-              telegram: {
-                "-100123": "openai/gpt-5.4",
+              "demo-group": {
+                "-100123": "demo-provider/demo-parent-model",
               },
             },
           },
         } as unknown as OpenClawConfig,
-        channel: "telegram",
+        channel: "demo-group",
         groupId: "-100123:topic:99",
       },
-      expected: { model: "openai/gpt-5.4", matchKey: "-100123" },
+      expected: { model: "demo-provider/demo-parent-model", matchKey: "-100123" },
     },
     {
       name: "prefers topic-specific match over parent group id",
@@ -27,17 +27,17 @@ describe("resolveChannelModelOverride", () => {
         cfg: {
           channels: {
             modelByChannel: {
-              telegram: {
-                "-100123": "openai/gpt-5.4",
-                "-100123:topic:99": "anthropic/claude-sonnet-4-6",
+              "demo-group": {
+                "-100123": "demo-provider/demo-parent-model",
+                "-100123:topic:99": "demo-provider/demo-topic-model",
               },
             },
           },
         } as unknown as OpenClawConfig,
-        channel: "telegram",
+        channel: "demo-group",
         groupId: "-100123:topic:99",
       },
-      expected: { model: "anthropic/claude-sonnet-4-6", matchKey: "-100123:topic:99" },
+      expected: { model: "demo-provider/demo-topic-model", matchKey: "-100123:topic:99" },
     },
     {
       name: "falls back to parent session key when thread id does not match",
@@ -45,17 +45,17 @@ describe("resolveChannelModelOverride", () => {
         cfg: {
           channels: {
             modelByChannel: {
-              discord: {
-                "123": "openai/gpt-5.4",
+              "demo-thread": {
+                "123": "demo-provider/demo-parent-model",
               },
             },
           },
         } as unknown as OpenClawConfig,
-        channel: "discord",
+        channel: "demo-thread",
         groupId: "999",
-        parentSessionKey: "agent:main:discord:channel:123:thread:456",
+        parentSessionKey: "agent:main:demo-thread:channel:123:thread:456",
       },
-      expected: { model: "openai/gpt-5.4", matchKey: "123" },
+      expected: { model: "demo-provider/demo-parent-model", matchKey: "123" },
     },
   ] as const;
 

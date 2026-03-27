@@ -77,6 +77,13 @@ function shouldRetryViaIsolatedCopy(error: unknown): boolean {
   return code === "ERR_MODULE_NOT_FOUND" && message.includes(`${path.sep}node_modules${path.sep}`);
 }
 
+function isMissingExecutableError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  return "code" in error && error.code === "ENOENT";
+}
+
 const SOURCE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 
 function resolveImportCandidates(basePath: string): string[] {
@@ -232,6 +239,12 @@ export async function loadChannelConfigSurfaceModule(
         OPENCLAW_CONFIG_SURFACE_MODULE: path.resolve(candidatePath),
       },
     });
+    if (result.error) {
+      if (isMissingExecutableError(result.error)) {
+        return null;
+      }
+      throw result.error;
+    }
     if (result.status !== 0) {
       throw new Error(result.stderr || result.stdout || `bun loader failed for ${candidatePath}`);
     }
@@ -264,14 +277,25 @@ export async function loadChannelConfigSurfaceModule(
     });
     return jiti(resolvedPath) as Record<string, unknown>;
   };
+  const loadFromPath = (
+    candidatePath: string,
+  ): { schema: Record<string, unknown>; uiHints?: Record<string, unknown> } | null => {
+    try {
+      const bunLoaded = loadViaBun(candidatePath);
+      if (bunLoaded && isBuiltChannelConfigSchema(bunLoaded)) {
+        return bunLoaded;
+      }
+    } catch {
+      // Bun is the fastest happy path, but some plugin config modules only load
+      // correctly through the source-aware Jiti alias setup.
+    }
+
+    const imported = loadViaJiti(candidatePath);
+    return resolveConfigSchemaExport(imported);
+  };
 
   try {
-    const bunLoaded = loadViaBun(modulePath);
-    if (bunLoaded && isBuiltChannelConfigSchema(bunLoaded)) {
-      return bunLoaded;
-    }
-    const imported = loadViaJiti(modulePath);
-    return resolveConfigSchemaExport(imported);
+    return loadFromPath(modulePath);
   } catch (error) {
     if (!shouldRetryViaIsolatedCopy(error)) {
       throw error;
@@ -279,12 +303,7 @@ export async function loadChannelConfigSurfaceModule(
 
     const isolatedCopy = copyModuleImportGraphWithoutNodeModules({ modulePath, repoRoot });
     try {
-      const bunLoaded = loadViaBun(isolatedCopy.copiedModulePath);
-      if (bunLoaded && isBuiltChannelConfigSchema(bunLoaded)) {
-        return bunLoaded;
-      }
-      const imported = loadViaJiti(isolatedCopy.copiedModulePath);
-      return resolveConfigSchemaExport(imported);
+      return loadFromPath(isolatedCopy.copiedModulePath);
     } finally {
       isolatedCopy.cleanup();
     }

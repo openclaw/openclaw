@@ -123,7 +123,6 @@ describe("plugin-sdk subpath exports", () => {
       "acpx",
       "compat",
       "device-pair",
-      "google",
       "lobster",
       "pairing-access",
       "provider-model-definitions",
@@ -332,7 +331,6 @@ describe("plugin-sdk subpath exports", () => {
       "canonicalizeAllowlistWithResolvedIds",
       "mergeAllowlist",
       "patchAllowlistUsersInConfigEntries",
-      "resolveChannelConfigWrites",
       "resolvePayloadMediaUrls",
       "resolveScopedChannelMediaMaxBytes",
       "sendPayloadMediaSequenceAndFinalize",
@@ -432,7 +430,7 @@ describe("plugin-sdk subpath exports", () => {
       "resolveChannelMatchConfig",
       "resolveTargetsWithOptionalToken",
     ]);
-    expectSourceMentions("channel-config-helpers", [
+    expectSourceMentions("channel-config-writes", [
       "authorizeConfigWrite",
       "canBypassConfigWritePolicy",
       "formatConfigWriteDeniedMessage",

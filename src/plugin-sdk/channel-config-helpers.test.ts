@@ -3,6 +3,7 @@ import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import {
   adaptScopedAccountAccessor,
+  authorizeConfigWrite,
   createScopedAccountConfigAccessors,
   createScopedChannelConfigAdapter,
   createScopedChannelConfigBase,
@@ -12,7 +13,12 @@ import {
   createTopLevelChannelConfigBase,
   createHybridChannelConfigBase,
   mapAllowFromEntries,
+  resolveChannelConfigWrites,
+  resolveIMessageConfigAllowFrom,
+  resolveIMessageConfigDefaultTo,
   resolveOptionalConfigString,
+  resolveWhatsAppConfigAllowFrom,
+  resolveWhatsAppConfigDefaultTo,
 } from "./channel-config-helpers.js";
 
 const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
@@ -61,6 +67,100 @@ describe("resolveOptionalConfigString", () => {
   it("returns undefined for empty values", () => {
     expect(resolveOptionalConfigString("   ")).toBeUndefined();
     expect(resolveOptionalConfigString(undefined)).toBeUndefined();
+  });
+});
+
+describe("provider config readers", () => {
+  it("reads merged WhatsApp allowFrom/defaultTo without the channel registry", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          allowFrom: ["root"],
+          defaultTo: " root:chat ",
+          accounts: {
+            alt: {
+              allowFrom: ["49123", "42"],
+              defaultTo: " alt:chat ",
+            },
+          },
+        },
+      },
+    };
+
+    expect(resolveWhatsAppConfigAllowFrom({ cfg, accountId: "alt" })).toEqual(["49123", "42"]);
+    expect(resolveWhatsAppConfigDefaultTo({ cfg, accountId: "alt" })).toBe("alt:chat");
+  });
+
+  it("reads merged iMessage allowFrom/defaultTo without the channel registry", () => {
+    const cfg = {
+      channels: {
+        imessage: {
+          allowFrom: ["root"],
+          defaultTo: " root:chat ",
+          accounts: {
+            alt: {
+              allowFrom: ["chat_id:9", "user@example.com"],
+              defaultTo: " alt:chat ",
+            },
+          },
+        },
+      },
+    };
+
+    expect(resolveIMessageConfigAllowFrom({ cfg, accountId: "alt" })).toEqual([
+      "chat_id:9",
+      "user@example.com",
+    ]);
+    expect(resolveIMessageConfigDefaultTo({ cfg, accountId: "alt" })).toBe("alt:chat");
+  });
+});
+
+describe("config write helpers", () => {
+  it("matches account ids case-insensitively", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          configWrites: true,
+          accounts: {
+            Work: { configWrites: false },
+          },
+        },
+      },
+    };
+
+    expect(resolveChannelConfigWrites({ cfg, channelId: "telegram", accountId: "work" })).toBe(
+      false,
+    );
+  });
+
+  it("blocks account-scoped writes when the configured account key differs only by case", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          configWrites: true,
+          accounts: {
+            Work: { configWrites: false },
+          },
+        },
+      },
+    };
+
+    expect(
+      authorizeConfigWrite({
+        cfg,
+        target: {
+          kind: "account",
+          scope: { channelId: "telegram", accountId: "work" },
+        },
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: "target-disabled",
+      blockedScope: {
+        kind: "target",
+        scope: { channelId: "telegram", accountId: "work" },
+      },
+    });
   });
 });
 

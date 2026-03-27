@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
@@ -12,6 +13,63 @@ import {
 } from "./models-config.e2e-harness.js";
 import type { ProviderConfig as ModelsProviderConfig } from "./models-config.providers.js";
 
+function createModel(id: string): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+  };
+}
+
+function buildDeepSeekProvider(): ModelsProviderConfig {
+  return {
+    baseUrl: "https://api.deepseek.com/v1",
+    api: "openai-completions",
+    models: [createModel("deepseek-chat")],
+  };
+}
+
+function buildMinimaxProvider(): ModelsProviderConfig {
+  return {
+    baseUrl: "https://api.minimax.io/anthropic",
+    api: "anthropic-messages",
+    models: [createModel("MiniMax-M2.7")],
+  };
+}
+
+function buildMistralProvider(): ModelsProviderConfig {
+  return {
+    baseUrl: "https://api.mistral.ai/v1",
+    api: "openai-completions",
+    models: [createModel("mistral-medium-latest")],
+  };
+}
+
+function buildSyntheticProvider(): ModelsProviderConfig {
+  return {
+    baseUrl: "https://api.synthetic.new/anthropic",
+    api: "anthropic-messages",
+    models: [createModel("hf:MiniMaxAI/MiniMax-M2.5")],
+  };
+}
+
+function buildXaiProvider(): ModelsProviderConfig {
+  return {
+    baseUrl: "https://api.x.ai/v1",
+    api: "openai-completions",
+    models: [createModel("grok-4-fast")],
+  };
+}
+
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   syncExternalCliCredentials: () => false,
 }));
@@ -20,19 +78,6 @@ vi.mock("./models-config.providers.js", async () => {
   const actual = await vi.importActual<typeof import("./models-config.providers.js")>(
     "./models-config.providers.js",
   );
-  const [
-    { buildDeepSeekProvider },
-    { buildMinimaxProvider },
-    { buildMistralProvider },
-    { buildSyntheticProvider },
-    { buildXaiProvider },
-  ] = await Promise.all([
-    import("../../extensions/deepseek/provider-catalog.js"),
-    import("../../extensions/minimax/provider-catalog.js"),
-    import("../../extensions/mistral/provider-catalog.js"),
-    import("../../extensions/synthetic/provider-catalog.js"),
-    import("../../extensions/xai/provider-catalog.js"),
-  ]);
   return {
     ...actual,
     resolveImplicitProviders: async ({ env }: { env?: NodeJS.ProcessEnv }) => {

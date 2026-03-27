@@ -76,6 +76,7 @@ Docs: https://docs.openclaw.ai
 - Talk/macOS: stop direct system-voice failures from replaying system speech, use app-locale fallback for shared watchdog timing, and add regression coverage for the macOS fallback route and language-aware timeout policy. (#53511) thanks @hongsw.
 - Discord/gateway cleanup: keep late Carbon reconnect-exhausted errors suppressed through startup/dispose cleanup so Discord monitor shutdown no longer crashes on late gateway close events. (#55373) Thanks @Takhoffman.
 - Discord/gateway shutdown: treat expected reconnect-exhausted events during intentional lifecycle stop as clean shutdowns so startup-abort cleanup no longer surfaces false gateway failures. (#55324) Thanks @joelnishanth.
+- Discord/gateway shutdown: suppress reconnect-exhausted events that were already buffered before teardown flips `lifecycleStopping`, so stale-socket Discord restarts no longer crash the whole gateway. Fixes #55403 and #55421. Thanks @lml2468 and @vincentkoc.
 - GitHub Copilot/auth refresh: treat large `expires_at` values as seconds epochs and clamp far-future runtime auth refresh timers so Copilot token refresh cannot fall into a `setTimeout` overflow hot loop. (#55360) Thanks @michael-abdo.
 - Agents/status: use the persisted runtime session model in `session_status` when no explicit override exists, and honor per-agent `thinkingDefault` in both `session_status` and `/status`. (#55425) Thanks @scoootscooob, @xaeon2026, and @ysfbsf.
 - Heartbeat/runner: guarantee the interval timer is re-armed after heartbeat runs and unexpected runner errors so scheduled heartbeats do not silently stop after an interrupted cycle. (#52270) Thanks @MiloStack.
@@ -90,6 +91,8 @@ Docs: https://docs.openclaw.ai
 - Agents/model switching: apply `/model` changes to active embedded runs at the next safe retry boundary, so overloaded or retrying turns switch to the newly selected model instead of staying pinned to the old provider.
 - Agents/Codex fallback: classify Codex `server_error` payloads as failoverable, sanitize `Codex error:` payloads before they reach chat, preserve context-overflow guidance for prefixed `invalid_request_error` payloads, and omit provider `request_id` values from user-facing UI copy. (#42892) Thanks @xaeon2026.
 - Memory/search: share memory embedding provider registrations across split plugin runtimes so memory search no longer fails with unknown provider errors after memory-core registers built-in adapters. (#55945) Thanks @glitch418x.
+- Discord/Carbon beta: update `@buape/carbon` to the latest beta and pass the new `RateLimitError` request argument so Discord stays compatible with the upstream beta constructor change. (#55980) Thanks @ngutman.
+- Plugins/inbound claims: pass full inbound attachment arrays through `inbound_claim` hook metadata while keeping the legacy singular media attachment fields for compatibility. (#55452) Thanks @huntharo.
 
 ## 2026.3.24
 
