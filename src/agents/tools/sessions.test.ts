@@ -432,6 +432,38 @@ describe("sessions_list transcriptPath resolution", () => {
   });
 });
 
+describe("sessions_list channel derivation", () => {
+  beforeEach(() => {
+    callGatewayMock.mockClear();
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+    });
+  });
+
+  it("falls back to origin.provider when the legacy top-level channel field is missing", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      path: "/tmp/sessions.json",
+      sessions: [
+        {
+          key: "agent:main:discord:group:ops",
+          kind: "group",
+          origin: { provider: "discord" },
+        },
+      ],
+    });
+
+    const result = await executeMainSessionsList();
+
+    expect(result.details).toMatchObject({
+      sessions: [{ key: "agent:main:discord:group:ops", channel: "discord" }],
+    });
+  });
+});
+
 describe("sessions_send gating", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
