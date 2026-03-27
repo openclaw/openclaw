@@ -1,7 +1,7 @@
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
-} from "openclaw/plugin-sdk/provider-models";
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   MINIMAX_DEFAULT_MODEL_ID,
   MINIMAX_TEXT_MODEL_CATALOG,

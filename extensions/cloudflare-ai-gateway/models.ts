@@ -1,4 +1,4 @@
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-models";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const CLOUDFLARE_AI_GATEWAY_PROVIDER_ID = "cloudflare-ai-gateway";
 export const CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_ID = "claude-sonnet-4-5";

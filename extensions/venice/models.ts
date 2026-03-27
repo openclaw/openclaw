@@ -1,5 +1,5 @@
 import { retryAsync } from "openclaw/plugin-sdk/infra-runtime";
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-models";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 
 const log = createSubsystemLogger("venice-models");

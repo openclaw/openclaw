@@ -1,4 +1,4 @@
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-models";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 type VolcModelCatalogEntry = {
   id: string;

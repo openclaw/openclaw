@@ -9,4 +9,4 @@ export {
   KILOCODE_MODEL_CATALOG,
 } from "./provider-models.js";
 
-export type { KilocodeModelCatalogEntry } from "openclaw/plugin-sdk/provider-models";
+export type { KilocodeModelCatalogEntry } from "openclaw/plugin-sdk/provider-model-shared";

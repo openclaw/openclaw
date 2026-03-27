@@ -148,6 +148,10 @@
       "types": "./dist/plugin-sdk/thread-bindings-runtime.d.ts",
       "default": "./dist/plugin-sdk/thread-bindings-runtime.js"
     },
+    "./plugin-sdk/together": {
+      "types": "./dist/plugin-sdk/together.d.ts",
+      "default": "./dist/plugin-sdk/together.js"
+    },
     "./plugin-sdk/text-runtime": {
       "types": "./dist/plugin-sdk/text-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-runtime.js"
@@ -711,6 +715,10 @@
     "./plugin-sdk/provider-google": {
       "types": "./dist/plugin-sdk/provider-google.d.ts",
       "default": "./dist/plugin-sdk/provider-google.js"
+    },
+    "./plugin-sdk/provider-model-shared": {
+      "types": "./dist/plugin-sdk/provider-model-shared.d.ts",
+      "default": "./dist/plugin-sdk/provider-model-shared.js"
     },
     "./plugin-sdk/provider-models": {
       "types": "./dist/plugin-sdk/provider-models.d.ts",

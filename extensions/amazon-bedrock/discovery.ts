@@ -9,7 +9,7 @@ import type {
   BedrockDiscoveryConfig,
   ModelDefinitionConfig,
   ModelProviderConfig,
-} from "openclaw/plugin-sdk/provider-models";
+} from "openclaw/plugin-sdk/provider-model-shared";
 
 const log = createSubsystemLogger("bedrock-discovery");
 

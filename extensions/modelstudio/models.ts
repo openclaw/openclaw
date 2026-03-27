@@ -1,7 +1,7 @@
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
-} from "openclaw/plugin-sdk/provider-models";
+} from "openclaw/plugin-sdk/provider-model-shared";
 
 export const MODELSTUDIO_BASE_URL = "https://coding-intl.dashscope.aliyuncs.com/v1";
 export const MODELSTUDIO_GLOBAL_BASE_URL = MODELSTUDIO_BASE_URL;
