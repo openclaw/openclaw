@@ -173,7 +173,6 @@ def _make_api_request(api_url: str, token: str, params: dict) -> dict:
     except Exception:
         raise RuntimeError(f"Invalid JSON response: {resp.text[:200]}")
 
-    # Distinguish API-level error (in JSON body) from HTTP-level errors above
     if result.get("errorCode", 0) != 0:
         raise RuntimeError(f"API error: {result.get('errorMsg', 'Unknown error')}")
 
