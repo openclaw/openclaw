@@ -696,18 +696,22 @@ public struct AgentWaitParams: Codable, Sendable {
 public struct WakeParams: Codable, Sendable {
     public let mode: AnyCodable
     public let text: String
+    public let agentid: String?
 
     public init(
         mode: AnyCodable,
-        text: String)
+        text: String,
+        agentid: String?)
     {
         self.mode = mode
         self.text = text
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case mode
         case text
+        case agentid = "agentId"
     }
 }
 
