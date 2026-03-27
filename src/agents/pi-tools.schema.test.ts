@@ -95,7 +95,7 @@ describe("normalizeToolParameters", () => {
     });
 
     const params = result.parameters as { required?: string[] };
-    // All required fields are missing from properties — required should be absent or empty
-    expect(params.required ?? []).toEqual([]);
+    // All required fields are missing from properties — required should be absent entirely
+    expect(params.required).toBeUndefined();
   });
 });

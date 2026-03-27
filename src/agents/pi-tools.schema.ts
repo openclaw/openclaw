@@ -189,7 +189,10 @@ export function normalizeToolParameters(
   const finalProperties =
     Object.keys(mergedProperties).length > 0 ? mergedProperties : (schema.properties ?? {});
   const validRequired =
-    mergedRequired && mergedRequired.length > 0
+    mergedRequired &&
+    mergedRequired.length > 0 &&
+    typeof finalProperties === "object" &&
+    finalProperties !== null
       ? mergedRequired.filter((key) => key in (finalProperties as Record<string, unknown>))
       : mergedRequired;
   const flattenedSchema = {
