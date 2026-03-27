@@ -1,16 +1,14 @@
-// Public Ollama provider helpers.
-
 export {
-  OLLAMA_NATIVE_BASE_URL,
   buildAssistantMessage,
   convertToOllamaMessages,
   createConfiguredOllamaCompatNumCtxWrapper,
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
   isOllamaCompatProvider,
+  OLLAMA_NATIVE_BASE_URL,
   parseNdjsonStream,
   resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "../../extensions/ollama/runtime-api.js";
+} from "./src/stream.js";
