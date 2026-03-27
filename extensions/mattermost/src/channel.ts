@@ -51,6 +51,7 @@ import { getMattermostRuntime } from "./runtime.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 import { mattermostSetupAdapter } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
+import type { MattermostConfig } from "./types.js";
 
 const mattermostSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedMattermostAccount>({
   channelKey: "mattermost",
@@ -112,14 +113,11 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "react") {
-      // Check reactions gate: per-account config takes precedence over base config
-      const mmBase = cfg?.channels?.mattermost as Record<string, unknown> | undefined;
-      const accounts = mmBase?.accounts as Record<string, Record<string, unknown>> | undefined;
       const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
-      const acctConfig = accounts?.[resolvedAccountId];
-      const acctActions = acctConfig?.actions as { reactions?: boolean } | undefined;
-      const baseActions = mmBase?.actions as { reactions?: boolean } | undefined;
-      const reactionsEnabled = acctActions?.reactions ?? baseActions?.reactions ?? true;
+      const mattermostConfig = cfg.channels?.mattermost as MattermostConfig | undefined;
+      const account = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
+      const reactionsEnabled =
+        account.config.actions?.reactions ?? mattermostConfig?.actions?.reactions ?? true;
       if (!reactionsEnabled) {
         throw new Error("Mattermost reactions are disabled in config");
       }
