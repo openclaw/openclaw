@@ -87,6 +87,23 @@ function getChannelConfig(
     : undefined;
 }
 
+/** Resolves the first agent ID whose identity.discordRoleIds includes the given Discord role ID. */
+export function resolveAgentIdByDiscordRoleId(
+  cfg: OpenClawConfig,
+  roleId: string,
+): string | undefined {
+  const agents = cfg.agents?.list;
+  if (!Array.isArray(agents)) {
+    return undefined;
+  }
+  for (const agent of agents) {
+    if (agent.identity?.discordRoleIds?.includes(roleId)) {
+      return agent.id;
+    }
+  }
+  return undefined;
+}
+
 export function resolveResponsePrefix(
   cfg: OpenClawConfig,
   agentId: string,

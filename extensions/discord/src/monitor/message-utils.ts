@@ -647,14 +647,25 @@ function resolveDiscordMentions(text: string, message: Message): string {
   if (!text.includes("<")) {
     return text;
   }
-  const mentions = message.mentionedUsers ?? [];
-  if (!Array.isArray(mentions) || mentions.length === 0) {
-    return text;
-  }
   let out = text;
-  for (const user of mentions) {
-    const label = user.globalName || user.username;
-    out = out.replace(new RegExp(`<@!?${user.id}>`, "g"), `@${label}`);
+  // Resolve user mentions: <@USER_ID> or <@!USER_ID> → @username
+  const mentions = message.mentionedUsers ?? [];
+  if (Array.isArray(mentions) && mentions.length > 0) {
+    for (const user of mentions) {
+      const label = user.globalName || user.username;
+      out = out.replace(new RegExp(`<@!?${user.id}>`, "g"), `@${label}`);
+    }
+  }
+  // Resolve role mentions: <@&ROLE_ID> → @roleName
+  const roles = message.mentionedRoles ?? [];
+  if (Array.isArray(roles) && roles.length > 0) {
+    for (const role of roles) {
+      // role.name is undefined on partial roles (Gateway sends IDs only); preserve markup rather than producing "@undefined"
+      out = out.replace(
+        new RegExp(`<@&${role.id}>`, "g"),
+        role.name ? `@${role.name}` : `<@&${role.id}>`,
+      );
+    }
   }
   return out;
 }

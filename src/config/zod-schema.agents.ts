@@ -39,6 +39,8 @@ const RouteBindingSchema = z
   .object({
     type: z.literal("route").optional(),
     agentId: z.string(),
+    /** When the bot is @mentioned, route to this agent instead of agentId. */
+    mentionAgentId: z.string().optional(),
     comment: z.string().optional(),
     match: BindingMatchSchema,
   })

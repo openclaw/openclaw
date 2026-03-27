@@ -41,6 +41,10 @@ export type ResolveAgentRouteInput = {
   teamId?: string | null;
   /** Discord member role IDs — used for role-based agent routing. */
   memberRoleIds?: string[];
+  /** When true and the matched binding has mentionAgentId set, route to mentionAgentId instead. */
+  wasBotMentioned?: boolean;
+  /** When set, routes directly to this agent regardless of channel binding (role-mention override). */
+  mentionedRoleAgentId?: string;
 };
 
 export type ResolvedAgentRoute = {
@@ -64,6 +68,8 @@ export type ResolvedAgentRoute = {
     | "binding.account"
     | "binding.channel"
     | "default";
+  /** True when the route was re-routed because the bot was @mentioned and the binding has mentionAgentId. */
+  isMentionRoute?: boolean;
 };
 
 export { DEFAULT_ACCOUNT_ID, DEFAULT_AGENT_ID } from "./session-key.js";
@@ -570,8 +576,10 @@ function buildResolvedRouteCacheKey(params: {
   teamId: string;
   memberRoleIds: string[];
   dmScope: string;
+  wasBotMentioned: boolean;
+  mentionedRoleAgentId: string;
 }): string {
-  return `${params.channel}\t${params.accountId}\t${formatRouteCachePeer(params.peer)}\t${formatRouteCachePeer(params.parentPeer)}\t${params.guildId || "-"}\t${params.teamId || "-"}\t${formatRoleIdsCacheKey(params.memberRoleIds)}\t${params.dmScope}`;
+  return `${params.channel}\t${params.accountId}\t${formatRouteCachePeer(params.peer)}\t${formatRouteCachePeer(params.parentPeer)}\t${params.guildId || "-"}\t${params.teamId || "-"}\t${formatRoleIdsCacheKey(params.memberRoleIds)}\t${params.dmScope}\t${params.wasBotMentioned ? "1" : "0"}\t${params.mentionedRoleAgentId || "-"}`;
 }
 
 function hasGuildConstraint(match: NormalizedBindingMatch): boolean {
@@ -642,6 +650,8 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
         teamId,
         memberRoleIds,
         dmScope,
+        wasBotMentioned: input.wasBotMentioned === true,
+        mentionedRoleAgentId: input.mentionedRoleAgentId ?? "",
       })
     : "";
   if (routeCache && routeCacheKey) {
@@ -790,6 +800,16 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     },
   ];
 
+  // Role-mention override: explicit @role mention routes to that agent regardless of channel binding.
+  if (input.mentionedRoleAgentId) {
+    if (shouldLogDebug) {
+      logDebug(
+        `[routing] role-mention override: mentionedRoleAgentId=${input.mentionedRoleAgentId}`,
+      );
+    }
+    return { ...choose(input.mentionedRoleAgentId, "binding.channel"), isMentionRoute: true };
+  }
+
   for (const tier of tiers) {
     if (!tier.enabled) {
       continue;
@@ -805,6 +825,17 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     if (matched) {
       if (shouldLogDebug) {
         logDebug(`[routing] match: matchedBy=${tier.matchedBy} agentId=${matched.binding.agentId}`);
+      }
+      // When the bot is @mentioned and the binding declares a mentionAgentId, re-route to that agent.
+      const effectiveMentionAgentId =
+        input.wasBotMentioned === true && matched.binding.mentionAgentId != null
+          ? matched.binding.mentionAgentId
+          : undefined;
+      if (effectiveMentionAgentId) {
+        if (shouldLogDebug) {
+          logDebug(`[routing] mention re-route: mentionAgentId=${effectiveMentionAgentId}`);
+        }
+        return { ...choose(effectiveMentionAgentId, tier.matchedBy), isMentionRoute: true };
       }
       return choose(matched.binding.agentId, tier.matchedBy);
     }

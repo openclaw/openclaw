@@ -1079,6 +1079,20 @@ export async function preflightDiscordMessage(
     }
   }
 
+  // Resolve role-mention override: first matching role ID wins, DMs excluded.
+  const mentionedRoleAgentId = (() => {
+    if (isDirectMessage) return undefined;
+    const agents = freshCfg.agents?.list;
+    if (!Array.isArray(agents)) return undefined;
+    for (const role of message.mentionedRoles ?? []) {
+      const roleId = String((role as { id?: unknown }).id ?? "");
+      for (const agent of agents) {
+        if (agent.identity?.discordRoleIds?.includes(roleId)) return agent.id;
+      }
+    }
+    return undefined;
+  })();
+
   logDebug(
     `[discord-preflight] success: route=${effectiveRoute.agentId} sessionKey=${effectiveRoute.sessionKey}`,
   );
@@ -1113,6 +1127,8 @@ export async function preflightDiscordMessage(
     baseText,
     messageText,
     wasMentioned,
+    wasBotMentioned: !isDirectMessage && wasMentioned,
+    mentionedRoleAgentId,
     route: effectiveRoute,
     threadBinding,
     boundSessionKey: boundSessionKey || undefined,
