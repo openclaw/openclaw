@@ -433,7 +433,7 @@
           "exportName": "PluginRuntime",
           "kind": "type",
           "source": {
-            "line": 54,
+            "line": 65,
             "path": "src/plugins/runtime/types.ts"
           }
         },
@@ -3522,7 +3522,7 @@
           "exportName": "PluginRuntime",
           "kind": "type",
           "source": {
-            "line": 54,
+            "line": 65,
             "path": "src/plugins/runtime/types.ts"
           }
         },
@@ -4772,7 +4772,7 @@
           "exportName": "PluginRuntime",
           "kind": "type",
           "source": {
-            "line": 54,
+            "line": 65,
             "path": "src/plugins/runtime/types.ts"
           }
         }
@@ -4810,7 +4810,7 @@
           "exportName": "buildSecretInputSchema",
           "kind": "function",
           "source": {
-            "line": 54,
+            "line": 11,
             "path": "src/plugin-sdk/secret-input-schema.ts"
           }
         },
@@ -4947,7 +4947,7 @@
           "exportName": "PluginRuntime",
           "kind": "type",
           "source": {
-            "line": 54,
+            "line": 65,
             "path": "src/plugins/runtime/types.ts"
           }
         },

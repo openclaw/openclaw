@@ -129,6 +129,41 @@ export function clearGatewaySubagentRuntime(): void {
   gatewaySubagentState.subagent = undefined;
 }
 
+// ── Process-global gateway agent abort runtime ──────────────────────
+// Mirrors the subagent pattern: the gateway sets the real agent.abort
+// implementation at startup; plugin runtimes that opt in resolve it
+// dynamically via late binding.
+
+const GATEWAY_AGENT_ABORT_SYMBOL: unique symbol = Symbol.for(
+  "openclaw.plugin.gatewayAgentAbortRuntime",
+) as unknown as typeof GATEWAY_AGENT_ABORT_SYMBOL;
+
+type GatewayAgentAbortState = {
+  abort: PluginRuntime["agent"]["abort"] | undefined;
+};
+
+const gatewayAgentAbortState = resolveGlobalSingleton<GatewayAgentAbortState>(
+  GATEWAY_AGENT_ABORT_SYMBOL,
+  () => ({ abort: undefined }),
+);
+
+/**
+ * Set the process-global gateway agent abort runtime.
+ * Called during gateway startup so that gateway-bindable plugin runtimes can
+ * resolve agent.abort dynamically.
+ */
+export function setGatewayAgentAbort(abort: PluginRuntime["agent"]["abort"]): void {
+  gatewayAgentAbortState.abort = abort;
+}
+
+/**
+ * Reset the process-global gateway agent abort runtime.
+ * Used by tests to avoid leaking gateway state across module reloads.
+ */
+export function clearGatewayAgentAbort(): void {
+  gatewayAgentAbortState.abort = undefined;
+}
+
 /**
  * Create a late-binding subagent that resolves to:
  * 1. An explicitly provided subagent (from runtimeOptions), OR
@@ -163,12 +198,23 @@ export type CreatePluginRuntimeOptions = {
 
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
+  const baseAgent = createRuntimeAgent();
+  const agentWithAbort: PluginRuntime["agent"] = {
+    ...baseAgent,
+    abort:
+      _options.allowGatewaySubagentBinding === true
+        ? (params) => {
+            const resolved = gatewayAgentAbortState.abort ?? baseAgent.abort;
+            return resolved(params);
+          }
+        : baseAgent.abort,
+  };
   const runtime = {
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
     config: createRuntimeConfig(),
-    agent: createRuntimeAgent(),
+    agent: agentWithAbort,
     subagent: createLateBindingSubagent(
       _options.subagent,
       _options.allowGatewaySubagentBinding === true,
