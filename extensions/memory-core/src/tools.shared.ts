@@ -107,7 +107,6 @@ export function createMemoryTool(params: {
   };
 }
 
-
 /**
  * Detect the kind of embedding error from an error message.
  * Shared utility to prevent drift between tool and CLI error handling.
