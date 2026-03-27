@@ -299,6 +299,11 @@ function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]): bool
   );
 }
 
+function canInjectSystemProvenance(client: GatewayRequestHandlerOptions["client"]): boolean {
+  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  return scopes.includes(ADMIN_SCOPE);
+}
+
 async function persistChatSendImages(params: {
   images: ChatImageContent[];
   client: GatewayRequestHandlerOptions["client"];
@@ -1265,14 +1270,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       systemProvenanceReceipt?: string;
       idempotencyKey: string;
     };
-    if ((p.systemInputProvenance || p.systemProvenanceReceipt) && !isAcpBridgeClient(client)) {
+    if (
+      (p.systemInputProvenance || p.systemProvenanceReceipt) &&
+      !canInjectSystemProvenance(client)
+    ) {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "system provenance fields are reserved for the ACP bridge",
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, "system provenance fields require admin scope"),
       );
       return;
     }
