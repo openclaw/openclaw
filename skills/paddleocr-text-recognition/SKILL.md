@@ -160,7 +160,7 @@ python scripts/ocr_caller.py --file-url "https://example.com/input" --file-type 
 
 - `--file-type 0`: PDF
 - `--file-type 1`: image
-- If omitted, the service can infer file type from input.
+- If omitted, the type is auto-detected from the file extension. For local files, a recognized extension (`.pdf`, `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tiff`, `.tif`, `.webp`) is required; otherwise pass `--file-type` explicitly. For URLs with unrecognized extensions, the service attempts inference.
 
 **Example 4: Print JSON Without Saving**
 

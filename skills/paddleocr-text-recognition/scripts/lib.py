@@ -1,17 +1,3 @@
-# Copyright (c) 2025 PaddlePaddle Authors. All Rights Reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """
 PaddleOCR Text Recognition Library
 
@@ -45,7 +31,7 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp")
 
 
 def _get_env(key: str) -> str:
-    """Get environment variable."""
+    """Get environment variable, defaulting to empty string with whitespace stripped."""
     return os.getenv(key, "").strip()
 
 
@@ -57,7 +43,8 @@ def get_config() -> tuple[str, str]:
         tuple of (api_url, token)
 
     Raises:
-        ValueError: If not configured
+        ValueError: If required env vars are missing or API URL doesn't end
+            with /ocr
     """
     api_url = _get_env("PADDLEOCR_OCR_API_URL")
     token = _get_env("PADDLEOCR_ACCESS_TOKEN")
@@ -71,7 +58,6 @@ def get_config() -> tuple[str, str]:
             f"PADDLEOCR_ACCESS_TOKEN not configured. Get your API at: {API_GUIDE_URL}"
         )
 
-    # Normalize URL
     if not api_url.startswith("https://"):
         api_url = f"https://{api_url}"
     api_path = urlparse(api_url).path.rstrip("/")
@@ -154,7 +140,6 @@ def _make_api_request(api_url: str, token: str, params: dict) -> dict:
     except httpx.RequestError as e:
         raise RuntimeError(f"API request failed: {e}")
 
-    # Handle HTTP errors
     if resp.status_code != 200:
         error_detail = ""
         try:
@@ -178,13 +163,12 @@ def _make_api_request(api_url: str, token: str, params: dict) -> dict:
         else:
             raise RuntimeError(f"API error ({resp.status_code}): {error_detail}")
 
-    # Parse response
     try:
         result = resp.json()
     except Exception:
         raise RuntimeError(f"Invalid JSON response: {resp.text[:200]}")
 
-    # Check API-level error
+    # Distinguish API-level error (in JSON body) from HTTP-level errors above
     if result.get("errorCode", 0) != 0:
         raise RuntimeError(f"API error: {result.get('errorMsg', 'Unknown error')}")
 
@@ -226,13 +210,11 @@ def ocr(
             "error": {"code": "...", "message": "..."}
         }
     """
-    # Validate input
     if not file_path and not file_url:
         return _error("INPUT_ERROR", "file_path or file_url required")
     if file_type is not None and file_type not in (FILE_TYPE_PDF, FILE_TYPE_IMAGE):
         return _error("INPUT_ERROR", "file_type must be 0 (PDF) or 1 (Image)")
 
-    # Get config
     try:
         api_url, token = get_config()
     except ValueError as e:
@@ -251,28 +233,28 @@ def ocr(
                 except ValueError:
                     resolved_file_type = None
         else:
-            params = {"file": _load_file_as_base64(file_path)}
             resolved_file_type = (
                 file_type if file_type is not None else _detect_file_type(file_path)
             )
+            params = {"file": _load_file_as_base64(file_path)}
 
-        params["visualize"] = False
+        params["visualize"] = (
+            False  # reduce response payload; callers can override via options
+        )
         params.update(options)
         if resolved_file_type is not None:
             params["fileType"] = resolved_file_type
         else:
             params.pop("fileType", None)
 
-    except (ValueError, FileNotFoundError) as e:
+    except (ValueError, OSError) as e:
         return _error("INPUT_ERROR", str(e))
 
-    # Call API
     try:
         result = _make_api_request(api_url, token, params)
     except RuntimeError as e:
         return _error("API_ERROR", str(e))
 
-    # Extract text
     try:
         text = _extract_text(result)
     except ValueError as e:

@@ -35,7 +35,7 @@ On error:
 
 | Code           | Description                                                                |
 | -------------- | -------------------------------------------------------------------------- |
-| `INPUT_ERROR`  | Invalid input (missing file, unsupported format)                           |
+| `INPUT_ERROR`  | Invalid input (missing file, unsupported format, invalid file type)        |
 | `CONFIG_ERROR` | API not configured                                                         |
 | `API_ERROR`    | API call failed (auth, timeout, service error, or invalid response schema) |
 
@@ -93,6 +93,9 @@ python scripts/vl_caller.py --file-url "URL" --pretty
 
 # Parse local file (result auto-saves to the system temp directory)
 python scripts/vl_caller.py --file-path "doc.pdf" --pretty
+
+# Parse with explicit file type
+python scripts/vl_caller.py --file-url "URL" --file-type 1 --pretty
 
 # Save result to a custom file path
 python scripts/vl_caller.py --file-url "URL" --output "./result.json" --pretty

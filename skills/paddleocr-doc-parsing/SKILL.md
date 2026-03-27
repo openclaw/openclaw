@@ -89,7 +89,7 @@ pip install -r requirements-optimize.txt
 
    - `--file-type 0`: PDF
    - `--file-type 1`: image
-   - If omitted, the service can infer file type from input.
+   - If omitted, the type is auto-detected from the file extension. For local files, a recognized extension (`.pdf`, `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tiff`, `.tif`, `.webp`) is required; otherwise pass `--file-type` explicitly. For URLs with unrecognized extensions, the service attempts inference.
 
    > **Performance note**: Parsing time scales with document complexity. Single-page images typically complete in 1-5 seconds; large PDFs (50+ pages) may take several minutes. Allow adequate time before assuming a timeout.
 
@@ -244,9 +244,11 @@ For PDFs, the maximum is 100 pages per request.
 For large image files, compress before uploading — this reduces upload time and can improve processing stability:
 
 ```bash
-python scripts/optimize_file.py input.png output.png --quality 85
-python scripts/vl_caller.py --file-path "output.png" --pretty
+python scripts/optimize_file.py input.png output.jpg --quality 85
+python scripts/vl_caller.py --file-path "output.jpg" --pretty
 ```
+
+`--quality` controls JPEG/WebP lossy compression (1-100, default 85); it has no effect on PNG output. Use `--target-size` (in MB, default 20) to set the max file size — the script iteratively downscales until the target is met.
 
 Requires optional dependencies: `pip install -r requirements-optimize.txt`
 
@@ -300,7 +302,7 @@ If parsing quality is poor:
 
 - **Large or high-resolution images**: Compress with `optimize_file.py` before parsing — oversized inputs can degrade layout detection:
   ```bash
-  python scripts/optimize_file.py input.png optimized.png --quality 85
+  python scripts/optimize_file.py input.png optimized.jpg --quality 85
   ```
 - **Check confidence**: `result.result.layoutParsingResults[n].prunedResult` includes confidence scores per layout element — low values indicate regions worth reviewing
 
