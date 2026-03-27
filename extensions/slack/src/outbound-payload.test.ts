@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ReplyPayload } from "../../../auto-reply/types.js";
-import { createSlackOutboundPayloadHarness } from "../contracts/suites.js";
+import type { ReplyPayload } from "../../../src/auto-reply/types.js";
+import { createSlackOutboundPayloadHarness } from "../../../src/channels/plugins/contracts/suites.js";
 
 function createHarness(params: {
   payload: ReplyPayload;
