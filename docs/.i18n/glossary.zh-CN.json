@@ -298,5 +298,33 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "Baidu",
+    "target": "Baidu"
+  },
+  {
+    "source": "Baidu Search",
+    "target": "Baidu 搜索"
+  },
+  {
+    "source": "Baidu AI Search",
+    "target": "Baidu AI 搜索"
+  },
+  {
+    "source": "Baidu AppBuilder",
+    "target": "Baidu AppBuilder"
+  },
+  {
+    "source": "Web Search overview",
+    "target": "Web Search 概览"
+  },
+  {
+    "source": "Gemini Search",
+    "target": "Gemini Search"
+  },
+  {
+    "source": "Kimi Search",
+    "target": "Kimi Search"
   }
 ]

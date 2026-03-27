@@ -1,17 +1,17 @@
 ---
-summary: "Baidu AppBuilder intelligent web search generation for web_search"
+summary: "Baidu AppBuilder intelligent search generation for AI-synthesized web answers in web_search"
 read_when:
   - You want to use Baidu for web_search
   - You need an APPBUILDER_API_KEY
-  - You want Baidu Search grounded answers with citations
-title: "Baidu Search"
+  - You want AI-synthesized answers grounded in live Baidu web results
+title: "Baidu AI Search"
 ---
 
-# Baidu Search
+# Baidu AI Search
 
-OpenClaw supports Baidu AppBuilder as a `web_search` provider using Baidu's
-intelligent search generation API. It returns AI-synthesized answers grounded
-in live Baidu Search results, plus citation metadata for the referenced pages.
+OpenClaw supports Baidu AppBuilder intelligent search generation as a
+`web_search` provider. The provider retrieves live Baidu web results, then
+returns an AI-synthesized answer with citations and follow-up query metadata.
 
 ## Get an API key
 
@@ -64,8 +64,9 @@ gateway install, put it in `~/.openclaw/.env`.
 ## How it works
 
 OpenClaw uses Baidu AppBuilder's `chat/completions` AI Search API with
-`search_source: "baidu_search_v2"` so the model can synthesize an answer from
-live web results.
+`search_source: "baidu_search_v2"` so the model can retrieve real-time web
+results and synthesize an answer from them. The primary result shape is the
+generated answer plus citations, not a raw ranked search-results list.
 
 - `count` maps to the number of grounded web references (`resource_type_filter`)
 - `freshness` maps to Baidu's `search_recency_filter`
@@ -75,7 +76,7 @@ live web results.
 
 ## Supported parameters
 
-Baidu search supports:
+Baidu AI Search supports:
 
 - `query`
 - `count`
@@ -97,6 +98,6 @@ different supported search-generation model enabled, override it with
 
 ## Related
 
-- [Web Search overview](/tools/web) -- all providers and auto-detection
+- [Web Search overview](/tools/web) -- structured search results and AI answer providers
 - [Gemini Search](/tools/gemini-search) -- AI-synthesized answers via Google grounding
 - [Kimi Search](/tools/kimi-search) -- AI-synthesized answers via Moonshot web search

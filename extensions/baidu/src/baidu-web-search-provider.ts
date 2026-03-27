@@ -292,7 +292,6 @@ async function runBaiduSearchGeneration(params: {
         headers: {
           Accept: "application/json",
           Authorization: `Bearer ${params.apiKey}`,
-          "X-Appbuilder-Authorization": `Bearer ${params.apiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
@@ -306,8 +305,11 @@ async function runBaiduSearchGeneration(params: {
       const data = (await res.json()) as BaiduSearchGenerationResponse;
       const errorCode = data.error?.code ?? data.code;
       const errorMessage = data.error?.message ?? data.message;
+      const hasStructuredError =
+        data.error !== undefined &&
+        (data.error.code !== undefined || data.error.message !== undefined);
       if (
-        data.error ||
+        hasStructuredError ||
         (errorCode !== undefined &&
           String(errorCode).trim().length > 0 &&
           String(errorCode).trim() !== "0")
@@ -349,7 +351,7 @@ function createBaiduToolDefinition(
 ): WebSearchProviderToolDefinition {
   return {
     description:
-      "Search the web using Baidu AppBuilder intelligent search generation. Returns AI-synthesized answers with citations from live Baidu Search results.",
+      "Use Baidu AppBuilder intelligent search generation to retrieve live web results and return an AI-synthesized answer with citations.",
     parameters: BaiduSearchSchema,
     execute: async (args) => {
       const params = args as Record<string, unknown>;
@@ -405,10 +407,12 @@ function createBaiduToolDefinition(
       const { dateAfter, dateBefore } = parsedDateRange;
 
       const model = resolveBaiduModel(baiduConfig);
+      const resolvedBaseUrl = resolveBaiduBaseUrl(baiduConfig);
       const enableDeepSearch = resolveBaiduEnableDeepSearch(baiduConfig);
       const resolvedCount = resolveSearchCount(count, DEFAULT_SEARCH_COUNT);
       const cacheKey = buildSearchCacheKey([
         "baidu",
+        resolvedBaseUrl,
         query,
         resolvedCount,
         model,
@@ -427,7 +431,7 @@ function createBaiduToolDefinition(
         query,
         count: resolvedCount,
         apiKey,
-        baseUrl: resolveBaiduBaseUrl(baiduConfig),
+        baseUrl: resolvedBaseUrl,
         model,
         timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
         enableDeepSearch,
@@ -461,7 +465,7 @@ export function createBaiduWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "baidu",
     label: "Baidu AI Search",
-    hint: "AppBuilder intelligent search generation with Baidu Search grounding",
+    hint: "AppBuilder intelligent search generation over live Baidu Search results",
     credentialLabel: "Baidu AppBuilder API key",
     envVars: [...BAIDU_ENV_VARS],
     placeholder: "appbuilder_...",

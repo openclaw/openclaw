@@ -1,9 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { withFetchPreconnect } from "../../../src/test-utils/fetch-mock.js";
 import { withEnv } from "../../../test/helpers/extensions/env.js";
 import plugin from "../index.js";
 import { __testing, createBaiduWebSearchProvider } from "./baidu-web-search-provider.js";
 
 describe("baidu web search provider", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = priorFetch;
+  });
+
+  function installMockFetch(payloadFactory: (input?: unknown, init?: RequestInit) => unknown) {
+    const mockFetch = vi.fn((input?: unknown, init?: RequestInit) =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(payloadFactory(input, init)),
+      } as Response),
+    );
+    global.fetch = withFetchPreconnect(mockFetch as unknown as typeof global.fetch);
+    return mockFetch;
+  }
+
   it("registers the Baidu web search provider", () => {
     const registrations: { webSearchProviders: unknown[] } = { webSearchProviders: [] };
 
@@ -193,5 +211,79 @@ describe("baidu web search provider", () => {
     ).resolves.toMatchObject({
       error: "invalid_date_range",
     });
+  });
+
+  it("accepts successful payloads with empty error objects and only sends Authorization", async () => {
+    const mockFetch = installMockFetch(() => ({
+      choices: [{ message: { content: "Baidu intelligent search answer" } }],
+      references: [],
+      followup_queries: [],
+      error: {},
+    }));
+
+    const provider = createBaiduWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        baidu: {
+          apiKey: "appbuilder-test-key",
+        },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const result = await tool.execute({ query: "baidu-empty-error-object" });
+    expect(result).toMatchObject({
+      provider: "baidu",
+    });
+    expect(String((result as { content?: string }).content)).toContain(
+      "Baidu intelligent search answer",
+    );
+
+    const headers = (mockFetch.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as
+      | Record<string, string>
+      | undefined;
+    expect(headers?.Authorization).toBe("Bearer appbuilder-test-key");
+    expect(headers?.["X-Appbuilder-Authorization"]).toBeUndefined();
+  });
+
+  it("scopes cache entries to the resolved base url", async () => {
+    const mockFetch = installMockFetch((input) => ({
+      choices: [{ message: { content: `answer from ${String(input)}` } }],
+      references: [],
+      followup_queries: [],
+    }));
+
+    const provider = createBaiduWebSearchProvider();
+    const toolA = provider.createTool({
+      config: {},
+      searchConfig: {
+        baidu: {
+          apiKey: "appbuilder-test-key",
+          baseUrl: "https://example.com/v2/ai_search",
+        },
+      },
+    });
+    const toolB = provider.createTool({
+      config: {},
+      searchConfig: {
+        baidu: {
+          apiKey: "appbuilder-test-key",
+          baseUrl: "https://example.org/v2/ai_search",
+        },
+      },
+    });
+    if (!toolA || !toolB) {
+      throw new Error("Expected tool definition");
+    }
+
+    await toolA.execute({ query: "same-query-across-baseurls" });
+    await toolB.execute({ query: "same-query-across-baseurls" });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("example.com");
+    expect(String(mockFetch.mock.calls[1]?.[0])).toContain("example.org");
   });
 });

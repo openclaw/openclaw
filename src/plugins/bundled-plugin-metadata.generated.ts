@@ -271,8 +271,8 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "Baidu AppBuilder AI Search API base URL override.",
         },
         "webSearch.model": {
-          label: "Baidu Search Model",
-          help: "Model used for Baidu intelligent search generation. Default: ernie-4.5-turbo-32k.",
+          label: "Baidu AI Search Model",
+          help: "Model used for Baidu intelligent search generation over live web results. Default: ernie-4.5-turbo-32k.",
         },
         "webSearch.enableDeepSearch": {
           label: "Enable Deep Search",

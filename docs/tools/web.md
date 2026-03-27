@@ -1,5 +1,5 @@
 ---
-summary: "web_search tool -- search the web with Baidu, Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity, or Tavily"
+summary: "web_search tool -- retrieve structured web results or AI-synthesized answers with Baidu AI Search, Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity, or Tavily"
 read_when:
   - You want to enable or configure web_search
   - You need to choose a search provider
@@ -10,8 +10,9 @@ sidebarTitle: "Web Search"
 
 # Web Search
 
-The `web_search` tool searches the web using your configured provider and
-returns results. Results are cached by query for 15 minutes (configurable).
+The `web_search` tool uses your configured provider to retrieve either
+structured web results or AI-synthesized answers, depending on the provider.
+Results are cached by query for 15 minutes (configurable).
 
 <Info>
   `web_search` is a lightweight HTTP tool, not browser automation. For
@@ -46,8 +47,8 @@ returns results. Results are cached by query for 15 minutes (configurable).
 ## Choosing a provider
 
 <CardGroup cols={2}>
-  <Card title="Baidu" icon="globe" href="/tools/baidu-search">
-    AI-synthesized answers with citations via Baidu AppBuilder intelligent search generation.
+  <Card title="Baidu AI Search" icon="globe" href="/tools/baidu-search">
+    AI-synthesized answers with citations via Baidu AppBuilder intelligent search generation over live Baidu results.
   </Card>
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
     Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
@@ -82,7 +83,7 @@ returns results. Results are cached by query for 15 minutes (configurable).
 
 | Provider                               | Result style               | Filters                                          | API key                                     |
 | -------------------------------------- | -------------------------- | ------------------------------------------------ | ------------------------------------------- |
-| [Baidu](/tools/baidu-search)           | AI-synthesized + citations | Time, date range                                 | `APPBUILDER_API_KEY`                        |
+| [Baidu AI Search](/tools/baidu-search) | AI-synthesized + citations | Time, date range                                 | `APPBUILDER_API_KEY`                        |
 | [Brave](/tools/brave-search)           | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                             |
 | [DuckDuckGo](/tools/duckduckgo-search) | Structured snippets        | --                                               | None (key-free)                             |
 | [Exa](/tools/exa-search)               | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                               |
@@ -197,7 +198,8 @@ examples.
 <Warning>
   Not all parameters work with all providers. Brave `llm-context` mode
   rejects `ui_lang`, `freshness`, `date_after`, and `date_before`.
-  Baidu supports `freshness` and date ranges but rejects `country` and `language`.
+  Baidu supports `freshness` and date ranges but rejects the shared `country`
+  and `language` filters.
   Firecrawl and Tavily only support `query` and `count` through `web_search`
   -- use their dedicated tools for advanced options.
 </Warning>
