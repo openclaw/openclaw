@@ -49,11 +49,11 @@ Requirements for Phase 1 release. Each maps to roadmap phases.
 - [x] **AGNT-02**: Agents receive PROJECT.md context via `agent:bootstrap` channel hook for project-scoped channels
 - [x] **AGNT-03**: Context injection is additive -- existing AGENTS.md loading is not modified
 - [x] **AGNT-04**: Capability tags in agent IDENTITY.md (e.g., `capabilities: [code, git, testing, ui]`) are used for task matching
-- [ ] **AGNT-05**: On heartbeat, agents scan queue.md of assigned projects for Available tasks matching their capabilities
-- [ ] **AGNT-06**: Agents claim tasks by updating queue.md (moving from Available to Claimed) with lock protection
-- [x] **AGNT-07**: Task files include checkpoint and log sections for interruption/resume across context compactions
-- [ ] **AGNT-08**: Agent with an active claimed task skips queue scanning on heartbeat (short-circuit)
-- [ ] **AGNT-09**: Task dependencies are checked during claim -- tasks with unfinished `depends_on` are skipped
+- [x] **AGNT-05**: On heartbeat, agents scan queue.md of assigned projects for Available tasks matching their capabilities
+- [x] **AGNT-06**: Agents claim tasks by updating queue.md (moving from Available to Claimed) with lock protection
+- [ ] **AGNT-07**: Task files include checkpoint and log sections for interruption/resume across context compactions
+- [x] **AGNT-08**: Agent with an active claimed task skips queue scanning on heartbeat (short-circuit)
+- [x] **AGNT-09**: Task dependencies are checked during claim -- tasks with unfinished `depends_on` are skipped
 
 ### Gateway
 
@@ -160,11 +160,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AGNT-02     | Phase 5  | Complete |
 | AGNT-03     | Phase 5  | Complete |
 | AGNT-04     | Phase 5  | Complete |
-| AGNT-05     | Phase 6  | Pending  |
-| AGNT-06     | Phase 6  | Pending  |
-| AGNT-07     | Phase 6  | Complete |
-| AGNT-08     | Phase 6  | Pending  |
-| AGNT-09     | Phase 6  | Pending  |
+| AGNT-05     | Phase 6  | Complete |
+| AGNT-06     | Phase 6  | Complete |
+| AGNT-07     | Phase 6  | Pending  |
+| AGNT-08     | Phase 6  | Complete |
+| AGNT-09     | Phase 6  | Complete |
 | GATE-01     | Phase 7  | Pending  |
 | GATE-02     | Phase 7  | Pending  |
 | GATE-03     | Phase 7  | Pending  |
