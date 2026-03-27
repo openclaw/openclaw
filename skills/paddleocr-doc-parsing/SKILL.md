@@ -100,7 +100,6 @@ pip install -r requirements-optimize.txt
    - If `--stdout` is provided, JSON is printed to stdout and no file is saved
    - In save mode, the script prints the absolute saved path on stderr: `Result saved to: /absolute/path/...`
    - In default/custom save mode, read and parse the saved JSON file before responding
-   - In save mode, always tell the user the saved file path and that full raw JSON is available there
    - Use `--stdout` only when you explicitly want to skip file persistence
 
 3. **Parse JSON response**:

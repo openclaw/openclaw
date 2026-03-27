@@ -3,8 +3,7 @@ name: paddleocr-text-recognition
 description: >-
   Use this skill whenever the user wants text extracted from images, photos, scans, screenshots,
   or scanned PDFs. Returns exact machine-readable strings with line-level text and optional bbox
-  coordinates. Strong accuracy for CJK, small print, and handwritten text. Supports batch/multi-image
-  runs.
+  coordinates. Strong accuracy for CJK, small print, and handwritten text.
   Trigger terms: OCR, 文字识别, 图片转文字, 截图识字, 提取图中文字, 扫描识字, 识字, 纯文字,
   plain text extraction, 坐标, 检测框, bbox, bounding box, image to text, screenshot, photo scan,
   recognize text.
@@ -112,7 +111,7 @@ Always display the COMPLETE recognized text to the user. The user typically need
 
 - Display the entire `text` field, no matter how long
 - Do not use phrases like "Here's a summary" or "The text begins with..."
-- Do not truncate with "..." unless the text truly exceeds reasonable display limits
+- Do not truncate with "..." unless the text truly exceeds reasonable display limits (>10,000 chars)
 
 **Example - Correct**:
 
