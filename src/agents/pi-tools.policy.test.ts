@@ -30,8 +30,12 @@ describe("pi-tools.policy", () => {
     expect(isToolAllowedByPolicyName("web_search", { deny: ["web_*"] })).toBe(false);
   });
 
-  it("keeps apply_patch when exec is allowlisted", () => {
-    expect(isToolAllowedByPolicyName("apply_patch", { allow: ["exec"] })).toBe(true);
+  it("keeps apply_patch when write is allowlisted", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { allow: ["write"] })).toBe(true);
+  });
+
+  it("blocks apply_patch when write is denylisted", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(false);
   });
 });
 

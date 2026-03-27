@@ -21,21 +21,6 @@ export type AuthChoiceGroup = {
 
 export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
-    value: "chutes",
-    label: "Chutes (OAuth)",
-    groupId: "chutes",
-    groupLabel: "Chutes",
-    groupHint: "OAuth",
-  },
-  {
-    value: "litellm-api-key",
-    label: "LiteLLM API key",
-    hint: "Unified gateway for 100+ LLM providers",
-    groupId: "litellm",
-    groupLabel: "LiteLLM",
-    groupHint: "Unified LLM gateway (100+ providers)",
-  },
-  {
     value: "custom-api-key",
     label: "Custom Provider",
     hint: "Any OpenAI or Anthropic compatible endpoint",

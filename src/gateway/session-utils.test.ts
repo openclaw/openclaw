@@ -1985,6 +1985,33 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(child?.parentSessionKey).toBe("agent:main:main");
   });
 
+  test("returns dashboard child sessions when filtering by parentSessionKey owner", () => {
+    resetSubagentRegistryForTests({ persist: false });
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now,
+      } as SessionEntry,
+      "agent:main:dashboard:child": {
+        sessionId: "sess-dashboard-child",
+        updatedAt: now - 1_000,
+        parentSessionKey: "agent:main:main",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {
+        spawnedBy: "agent:main:main",
+      },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:dashboard:child"]);
+  });
+
   test("falls back to persisted subagent timing after run archival", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {

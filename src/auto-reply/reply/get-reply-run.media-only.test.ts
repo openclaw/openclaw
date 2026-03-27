@@ -20,9 +20,15 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
 }));
 
-vi.mock("../../config/sessions/store.js", () => ({
-  updateSessionStore: vi.fn(),
-}));
+const storeRuntimeLoads = vi.hoisted(() => vi.fn());
+const updateSessionStore = vi.hoisted(() => vi.fn());
+
+vi.mock("../../config/sessions/store.runtime.js", () => {
+  storeRuntimeLoads();
+  return {
+    updateSessionStore,
+  };
+});
 
 vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
@@ -181,8 +187,16 @@ function baseParams(
 
 describe("runPreparedReply media-only handling", () => {
   beforeEach(async () => {
+    storeRuntimeLoads.mockClear();
+    updateSessionStore.mockReset();
     vi.clearAllMocks();
     await loadFreshGetReplyRunModuleForTest();
+  });
+
+  it("does not load session store runtime on module import", async () => {
+    await loadFreshGetReplyRunModuleForTest();
+
+    expect(storeRuntimeLoads).not.toHaveBeenCalled();
   });
 
   it("allows media-only prompts and preserves thread context in queued followups", async () => {

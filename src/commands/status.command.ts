@@ -12,7 +12,7 @@ import {
   resolveMemoryFtsState,
   resolveMemoryVectorState,
   type Tone,
-} from "../memory/status-format.js";
+} from "../plugin-sdk/memory-core-host-status.js";
 import {
   formatPluginCompatibilityNotice,
   summarizePluginCompatibility,
@@ -378,10 +378,6 @@ export async function statusCommand(
     }
     if (!memory) {
       const slot = memoryPlugin.slot ? `plugin ${memoryPlugin.slot}` : "plugin";
-      // Custom (non-built-in) memory plugins can't be probed — show enabled, not unavailable
-      if (memoryPlugin.slot && memoryPlugin.slot !== "memory-core") {
-        return `enabled (${slot})`;
-      }
       return muted(`enabled (${slot}) · unavailable`);
     }
     const parts: string[] = [];
