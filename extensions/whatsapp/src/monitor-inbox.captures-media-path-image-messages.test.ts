@@ -5,6 +5,7 @@ import {
   getAuthDir,
   getMonitorWebInbox,
   getSock,
+  getWaitForCredsSaveQueueWithTimeoutMock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
 } from "./monitor-inbox.test-harness.js";
@@ -133,6 +134,30 @@ describe("web monitor inbox", () => {
     expect(sock.ev.listenerCount("messages.upsert")).toBe(0);
     expect(sock.ev.listenerCount("connection.update")).toBe(0);
     expect(sock.ws.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for pending creds flush before close() resolves", async () => {
+    let releaseFlush: (() => void) | null = null;
+    const flushGate = new Promise<void>((resolve) => {
+      releaseFlush = resolve;
+    });
+    const waitForCredsSaveQueueWithTimeoutMock = getWaitForCredsSaveQueueWithTimeoutMock();
+    waitForCredsSaveQueueWithTimeoutMock.mockReturnValueOnce(flushGate);
+
+    const listener = await openMonitor(vi.fn());
+    const closePromise = listener.close();
+    let closed = false;
+    void closePromise.then(() => {
+      closed = true;
+    });
+
+    await Promise.resolve();
+    expect(waitForCredsSaveQueueWithTimeoutMock).toHaveBeenCalledWith(getAuthDir());
+    expect(closed).toBe(false);
+
+    releaseFlush?.();
+    await closePromise;
+    expect(closed).toBe(true);
   });
 
   it("logs inbound bodies through the inbound child logger", async () => {

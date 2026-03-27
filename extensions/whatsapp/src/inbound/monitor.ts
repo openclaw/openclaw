@@ -9,7 +9,12 @@ import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { resolveJidToE164 } from "openclaw/plugin-sdk/text-runtime";
 import { readWebSelfIdentity } from "../auth-store.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
-import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
+import {
+  createWaSocket,
+  getStatusCode,
+  waitForCredsSaveQueueWithTimeout,
+  waitForWaConnection,
+} from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import {
   isRecentInboundMessage,
@@ -545,6 +550,7 @@ export async function monitorWebInbox(options: {
         detachMessagesUpsert();
         detachConnectionUpdate();
         closeInboundMonitorSocket(sock);
+        await waitForCredsSaveQueueWithTimeout(options.authDir);
       } catch (err) {
         logVerbose(`Socket close failed: ${String(err)}`);
       }

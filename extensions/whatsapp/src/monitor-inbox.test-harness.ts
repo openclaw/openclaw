@@ -51,6 +51,7 @@ export type MockSock = {
 
 const sessionState = vi.hoisted(() => ({
   sock: undefined as MockSock | undefined,
+  waitForCredsSaveQueueWithTimeout: vi.fn().mockResolvedValue(undefined),
 }));
 
 function createResolvedMock() {
@@ -100,6 +101,7 @@ vi.mock("./session.js", async () => {
       return sessionState.sock;
     }),
     waitForWaConnection: vi.fn().mockResolvedValue(undefined),
+    waitForCredsSaveQueueWithTimeout: sessionState.waitForCredsSaveQueueWithTimeout,
     getStatusCode: vi.fn(() => 500),
   };
 });
@@ -109,6 +111,10 @@ export function getSock(): MockSock {
     throw new Error("mock WhatsApp socket not initialized");
   }
   return sessionState.sock;
+}
+
+export function getWaitForCredsSaveQueueWithTimeoutMock() {
+  return sessionState.waitForCredsSaveQueueWithTimeout;
 }
 
 type MonitorWebInbox = typeof import("./inbound.js").monitorWebInbox;
@@ -225,6 +231,7 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
     vi.resetModules();
     vi.clearAllMocks();
     sessionState.sock = createMockSock();
+    sessionState.waitForCredsSaveQueueWithTimeout.mockReset().mockResolvedValue(undefined);
     resetPairingSecurityMocks(DEFAULT_WEB_INBOX_CONFIG);
     const inboundModule = await import("./inbound.js");
     monitorWebInbox = inboundModule.monitorWebInbox;
