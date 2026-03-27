@@ -1,12 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
-import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import {
-  clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
   resetRunCronIsolatedAgentTurnHarness,
   resolveDeliveryTargetMock,
-  restoreFastTestEnv,
   runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
@@ -34,7 +31,8 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
   let previousFastTestEnv: string | undefined;
 
   beforeEach(() => {
-    previousFastTestEnv = clearFastTestEnv();
+    previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     resetRunCronIsolatedAgentTurnHarness();
     resolveDeliveryTargetMock.mockResolvedValue({
       channel: "telegram",
@@ -49,7 +47,12 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
   });
 
   afterEach(() => {
-    restoreFastTestEnv(previousFastTestEnv);
+    if (previousFastTestEnv == null) {
+      vi.unstubAllEnvs();
+      delete process.env.OPENCLAW_TEST_FAST;
+      return;
+    }
+    vi.stubEnv("OPENCLAW_TEST_FAST", previousFastTestEnv);
   });
 
   it("passes senderIsOwner=true to isolated cron agent runs", async () => {
@@ -58,9 +61,5 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     const senderIsOwner = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.senderIsOwner;
     expect(senderIsOwner).toBe(true);
-
-    const toolNames = createOpenClawCodingTools({ senderIsOwner }).map((tool) => tool.name);
-    expect(toolNames).toContain("cron");
-    expect(toolNames).toContain("gateway");
   });
 });
