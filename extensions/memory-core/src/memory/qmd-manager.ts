@@ -25,6 +25,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   isFileMissingError,
+  requireNodeSqlite,
   statRegularFile,
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
@@ -36,7 +37,6 @@ import {
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { requireNodeSqlite } from "./sqlite.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
 
