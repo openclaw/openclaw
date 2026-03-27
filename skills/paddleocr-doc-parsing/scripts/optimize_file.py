@@ -15,6 +15,10 @@ from pathlib import Path
 
 DEFAULT_QUALITY = 85
 DEFAULT_TARGET_SIZE_MB = 20
+SUPPORTED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp")
+SUPPORTED_FORMATS_DISPLAY = ", ".join(
+    e.lstrip(".").upper() for e in SUPPORTED_EXTENSIONS
+)
 
 
 def optimize_image(
@@ -87,7 +91,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Optimize files for PaddleOCR document parsing",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
 Examples:
   # Optimize image with default quality
   python scripts/optimize_file.py input.png output.png
@@ -96,7 +100,7 @@ Examples:
   python scripts/optimize_file.py input.jpg output.jpg --quality 70
 
 Supported formats:
-  - Images: PNG, JPG, JPEG, BMP, TIFF, TIF, WEBP
+  - Images: {SUPPORTED_FORMATS_DISPLAY}
         """,
     )
 
@@ -126,11 +130,15 @@ Supported formats:
 
     ext = input_path.suffix.lower()
 
-    if ext in [".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"]:
-        optimize_image(input_path, output_path, args.quality, args.target_size)
+    if ext in SUPPORTED_EXTENSIONS:
+        try:
+            optimize_image(input_path, output_path, args.quality, args.target_size)
+        except ValueError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
     else:
         print(f"ERROR: Unsupported file format: {ext}")
-        print("Supported: PNG, JPG, JPEG, BMP, TIFF, TIF, WEBP")
+        print(f"Supported: {SUPPORTED_FORMATS_DISPLAY}")
         sys.exit(1)
 
     print(f"\nOptimized file saved to: {output_path}")
