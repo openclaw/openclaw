@@ -170,11 +170,63 @@ import sys
 VALID = {"loopback", "lan", "auto", "custom", "tailnet"}
 raw = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore")
 
-key_match = re.search(r'["\']?gateway["\']?\s*:\s*\{', raw)
+
+def strip_comments(text: str) -> str:
+    out: list[str] = []
+    i = 0
+    in_string = False
+    quote = ""
+    escaped = False
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if in_string:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                in_string = False
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            in_string = True
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            out.extend("  ")
+            i += 2
+            while i < len(text) and text[i] not in "\r\n":
+                out.append(" ")
+                i += 1
+            continue
+        if ch == "/" and nxt == "*":
+            out.extend("  ")
+            i += 2
+            while i < len(text):
+                ch = text[i]
+                nxt = text[i + 1] if i + 1 < len(text) else ""
+                if ch == "*" and nxt == "/":
+                    out.extend("  ")
+                    i += 2
+                    break
+                out.append("\n" if ch == "\n" else ("\r" if ch == "\r" else " "))
+                i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+sanitized = strip_comments(raw)
+key_match = re.search(r'["\']?gateway["\']?\s*:\s*\{', sanitized)
 if not key_match:
     raise SystemExit(0)
 
-start = raw.find("{", key_match.start())
+start = sanitized.find("{", key_match.start())
 if start < 0:
     raise SystemExit(0)
 
@@ -183,8 +235,8 @@ in_string = False
 quote = ""
 escaped = False
 end = -1
-for idx in range(start, len(raw)):
-    ch = raw[idx]
+for idx in range(start, len(sanitized)):
+    ch = sanitized[idx]
     if in_string:
         if escaped:
             escaped = False
@@ -207,7 +259,7 @@ for idx in range(start, len(raw)):
 if end < 0:
     raise SystemExit(0)
 
-gateway_block = raw[start + 1:end]
+gateway_block = sanitized[start + 1:end]
 match = re.search(r'["\']?bind["\']?\s*:\s*["\'](loopback|lan|auto|custom|tailnet)["\']', gateway_block)
 if match and match.group(1) in VALID:
     print(match.group(1))
