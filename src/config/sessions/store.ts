@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
+import {
+  acquireSessionWriteLock,
+  resolveSessionLockMaxHoldFromTimeout,
+} from "../../agents/session-write-lock.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -616,6 +619,9 @@ type SessionStoreLockOptions = {
   staleMs?: number;
 };
 
+const SESSION_STORE_LOCK_MIN_HOLD_MS = 5_000;
+const SESSION_STORE_LOCK_TIMEOUT_GRACE_MS = 5_000;
+
 type SessionStoreLockTask = {
   fn: () => Promise<unknown>;
   resolve: (value: unknown) => void;
@@ -708,6 +714,17 @@ function lockTimeoutError(storePath: string): Error {
   return new Error(`timeout waiting for session store lock: ${storePath}`);
 }
 
+function resolveSessionStoreLockMaxHoldMs(timeoutMs: number | undefined): number | undefined {
+  if (timeoutMs == null || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return undefined;
+  }
+  return resolveSessionLockMaxHoldFromTimeout({
+    timeoutMs,
+    graceMs: SESSION_STORE_LOCK_TIMEOUT_GRACE_MS,
+    minMs: SESSION_STORE_LOCK_MIN_HOLD_MS,
+  });
+}
+
 function getOrCreateLockQueue(storePath: string): SessionStoreLockQueue {
   const existing = LOCK_QUEUES.get(storePath);
   if (existing) {
@@ -751,6 +768,7 @@ async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
             sessionFile: storePath,
             timeoutMs: remainingTimeoutMs,
             staleMs: task.staleMs,
+            maxHoldMs: resolveSessionStoreLockMaxHoldMs(task.timeoutMs),
           });
           result = await task.fn();
         } catch (err) {
