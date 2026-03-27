@@ -11790,7 +11790,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "agents.list[].runtime.acp.agent": {
       label: "Agent ACP Harness Agent",
-      help: "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude).",
+      help: "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude, cursor, gemini, openclaw).",
       tags: ["advanced"],
     },
     "agents.list[].runtime.acp.backend": {

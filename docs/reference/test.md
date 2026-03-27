@@ -40,7 +40,7 @@ For local PR land/gate checks, run:
 If `pnpm test` flakes on a loaded host, rerun once before treating it as a regression, then isolate with `pnpm vitest run <path/to/test>`. For memory-constrained hosts, use:
 
 - `OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test`
-- `OPENCLAW_VITEST_FS_MODULE_CACHE=0 pnpm test:changed`
+- `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/tmp/openclaw-vitest-cache pnpm test:changed`
 
 ## Model latency bench (local keys)
 

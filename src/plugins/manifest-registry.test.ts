@@ -42,6 +42,8 @@ function createPluginCandidate(params: {
   bundleFormat?: "codex" | "claude" | "cursor";
   packageManifest?: OpenClawPackageManifest;
   packageDir?: string;
+  bundledManifest?: PluginCandidate["bundledManifest"];
+  bundledManifestPath?: string;
 }): PluginCandidate {
   return {
     idHint: params.idHint,
@@ -52,6 +54,8 @@ function createPluginCandidate(params: {
     bundleFormat: params.bundleFormat,
     packageManifest: params.packageManifest,
     packageDir: params.packageDir,
+    bundledManifest: params.bundledManifest,
+    bundledManifestPath: params.bundledManifestPath,
   };
 }
 
@@ -338,17 +342,24 @@ describe("loadPluginManifestRegistry", () => {
 
   it("hydrates bundled channel config metadata onto manifest records", () => {
     const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "telegram",
-      channels: ["telegram"],
-      configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "telegram",
-      rootDir: dir,
-      origin: "bundled",
-    });
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "telegram",
+        rootDir: dir,
+        origin: "bundled",
+        bundledManifestPath: path.join(dir, "openclaw.plugin.json"),
+        bundledManifest: {
+          id: "telegram",
+          configSchema: { type: "object" },
+          channels: ["telegram"],
+          channelConfigs: {
+            telegram: {
+              schema: { type: "object" },
+            },
+          },
+        },
+      }),
+    ]);
 
     expect(registry.plugins[0]?.channelConfigs?.telegram).toEqual(
       expect.objectContaining({
