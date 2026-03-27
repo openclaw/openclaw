@@ -28,7 +28,9 @@ function createHarness(params?: {
   dmEnabled?: boolean;
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
   storeAllowFrom?: string[];
+  accountDataByType?: Record<string, unknown>;
   joinedMembersByRoom?: Record<string, string[]>;
+  memberStateByRoomUser?: Record<string, Record<string, { is_direct?: boolean }>>;
   verifications?: Array<{
     id: string;
     transactionId?: string;
@@ -88,7 +90,20 @@ function createHarness(params?: {
       async (roomId: string) =>
         params?.joinedMembersByRoom?.[roomId] ?? ["@bot:example.org", "@alice:example.org"],
     ),
-    getJoinedRooms: vi.fn(async () => Object.keys(params?.joinedMembersByRoom ?? {})),
+    getJoinedRooms: vi.fn(async () =>
+      Object.keys(params?.joinedMembersByRoom ?? {}).length > 0
+        ? Object.keys(params?.joinedMembersByRoom ?? {})
+        : ["!room:example.org"],
+    ),
+    getAccountData: vi.fn(
+      async (eventType: string) =>
+        (params?.accountDataByType?.[eventType] as Record<string, unknown> | undefined) ??
+        undefined,
+    ),
+    getRoomStateEvent: vi.fn(
+      async (roomId: string, _eventType: string, stateKey: string) =>
+        params?.memberStateByRoomUser?.[roomId]?.[stateKey] ?? {},
+    ),
     ...(params?.cryptoAvailable === false
       ? {}
       : {
@@ -849,6 +864,53 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     await vi.waitFor(() => {
       expect(sendMessage).toHaveBeenCalledTimes(0);
     });
+  });
+
+  it("routes unmapped verification summaries to the room marked direct in member state", async () => {
+    const { sendMessage, verificationSummaryListener } = createHarness({
+      joinedMembersByRoom: {
+        "!fallback:example.org": ["@alice:example.org", "@bot:example.org"],
+        "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
+      },
+      memberStateByRoomUser: {
+        "!dm:example.org": {
+          "@alice:example.org": { is_direct: true },
+        },
+      },
+    });
+    if (!verificationSummaryListener) {
+      throw new Error("verification.summary listener was not registered");
+    }
+
+    verificationSummaryListener({
+      id: "verification-explicit-room",
+      otherUserId: "@alice:example.org",
+      isSelfVerification: false,
+      initiatedByMe: false,
+      phase: 3,
+      phaseName: "started",
+      pending: true,
+      methods: ["m.sas.v1"],
+      canAccept: false,
+      hasSas: true,
+      sas: {
+        decimal: [6158, 1986, 3513],
+        emoji: [
+          ["🎁", "Gift"],
+          ["🌍", "Globe"],
+          ["🐴", "Horse"],
+        ],
+      },
+      hasReciprocateQr: false,
+      completed: false,
+      createdAt: new Date("2026-02-25T21:42:54.000Z").toISOString(),
+      updatedAt: new Date("2026-02-25T21:42:55.000Z").toISOString(),
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+    expect((sendMessage.mock.calls as unknown[][])[0]?.[0]).toBe("!dm:example.org");
   });
 
   it("does not emit duplicate SAS notices for the same verification payload", async () => {
