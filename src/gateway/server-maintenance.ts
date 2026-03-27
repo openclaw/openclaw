@@ -1,6 +1,7 @@
 import type { HealthSummary } from "../commands/health.js";
 import { cleanOldMedia } from "../media/store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import type { ChannelRuntimeSnapshot } from "./server-channels.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import {
   DEDUPE_MAX,
@@ -10,7 +11,7 @@ import {
 } from "./server-constants.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
-import { setBroadcastHealthUpdate } from "./server/health-state.js";
+import { setBroadcastHealthUpdate, setRuntimeSnapshotGetter } from "./server/health-state.js";
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -39,6 +40,7 @@ export function startGatewayMaintenanceTimers(params: {
   ) => ChatRunEntry | undefined;
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  getRuntimeSnapshot?: () => ChannelRuntimeSnapshot | undefined;
   mediaCleanupTtlMs?: number;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
@@ -55,6 +57,13 @@ export function startGatewayMaintenanceTimers(params: {
     });
     params.nodeSendToAllSubscribed("health", snap);
   });
+
+  // Lazily capture runtime snapshot inside the health refresh cycle,
+  // not at every timer tick. Call this after the broadcast fn so the
+  // getter is ready before the first timer fires.
+  if (params.getRuntimeSnapshot) {
+    setRuntimeSnapshotGetter(params.getRuntimeSnapshot);
+  }
 
   // periodic keepalive
   const tickInterval = setInterval(() => {

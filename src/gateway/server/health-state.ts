@@ -73,12 +73,21 @@ export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | n
   broadcastHealthUpdate = fn;
 }
 
+/** Set once at startup — used to lazily capture runtime snapshot inside the refresh cycle. */
+let getRuntimeSnapshot: (() => ChannelRuntimeSnapshot | undefined) | undefined = undefined;
+
+export function setRuntimeSnapshotGetter(fn: () => ChannelRuntimeSnapshot | undefined) {
+  getRuntimeSnapshot = fn;
+}
+
 /** @internal Reset module-level state between tests only. */
 export function __resetHealthStateForTest() {
   healthCache = null;
   healthRefresh = null;
   pendingRuntimeSnapshot = undefined;
   pendingProbe = undefined;
+  // Note: getRuntimeSnapshot is intentionally NOT reset here — it is set once
+  // at startup via setRuntimeSnapshotGetter and should persist across test cases.
   healthVersion = 1;
   presenceVersion = 1;
   broadcastHealthUpdate = null;
@@ -90,14 +99,18 @@ export async function refreshGatewayHealthSnapshot(opts?: {
 }) {
   // Always track the newest runtimeSnapshot so it is not silently discarded when
   // a refresh is already in-flight and a second caller provides a fresher snapshot.
+  // Only record a pending snapshot — the actual capture of getRuntimeSnapshot()
+  // happens lazily inside the refresh cycle, after dedupe decides to proceed.
+  // This avoids calling getRuntimeSnapshot() eagerly on every timer tick.
   if (opts?.runtimeSnapshot !== undefined) {
     pendingRuntimeSnapshot = opts.runtimeSnapshot;
   }
 
   // Track the latest probe intent so the finally block uses the most recent caller's preference.
-  // Only set when probe is true — false is the default, so storing it would trigger needless
-  // follow-up refreshes (hadPendingProbe would be true even though nothing changed).
-  if (opts?.probe) {
+  // Only set when explicitly provided (true or false). This matters because an explicit
+  // probe:false must be distinguishable from "not provided" — if a caller explicitly
+  // requests a non-probe snapshot, we must NOT kick off a follow-up that resets it.
+  if (opts?.probe !== undefined) {
     pendingProbe = opts.probe;
   }
 
@@ -107,11 +120,17 @@ export async function refreshGatewayHealthSnapshot(opts?: {
     pendingRuntimeSnapshot = undefined;
     const probeForRefresh = pendingProbe ?? false;
     pendingProbe = undefined; // must be cleared so finally block only fires for NEW callers
+    // Note: getRuntimeSnapshot is intentionally NOT reset here — it is set once
+    // at startup via setRuntimeSnapshotGetter and should persist across test cases.
 
     healthRefresh = (async () => {
+      // Lazily capture runtime snapshot here (after dedupe has decided to proceed),
+      // not at the call site. This avoids calling getRuntimeSnapshot() on every
+      // timer tick when dedupe might skip the refresh anyway.
+      const runtimeSnapshot = snapshotForRefresh ?? getRuntimeSnapshot?.() ?? undefined;
       const snap = await getHealthSnapshot({
         probe: probeForRefresh,
-        runtimeSnapshot: snapshotForRefresh,
+        runtimeSnapshot,
       });
       healthCache = snap;
       healthVersion += 1;
@@ -126,6 +145,8 @@ export async function refreshGatewayHealthSnapshot(opts?: {
       const followUpProbe = pendingProbe ?? false;
       const hadPendingProbe = pendingProbe !== undefined;
       pendingProbe = undefined;
+      // Note: getRuntimeSnapshot is intentionally NOT reset here — it is set once
+      // at startup via setRuntimeSnapshotGetter and should persist across test cases.
       // If a newer runtimeSnapshot or probe intent arrived while the refresh was
       // in-flight, kick off a follow-up so the latest state is reflected.
       if (pendingRuntimeSnapshot !== undefined || hadPendingProbe) {

@@ -125,6 +125,7 @@ import {
   getPresenceVersion,
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
+  setRuntimeSnapshotGetter,
 } from "./server/health-state.js";
 import { resolveHookClientIpConfig } from "./server/hooks.js";
 import { createReadinessChecker } from "./server/readiness.js";
@@ -833,6 +834,10 @@ export async function startGatewayServer(
     }
   };
 
+  // Register the lazy getter so health refresh captures the snapshot inside
+  // the refresh cycle, not at the timer tick (after dedupe decides to proceed).
+  setRuntimeSnapshotGetter(safeGetRuntimeSnapshot);
+
   let agentUnsub: (() => void) | null = null;
   let heartbeatUnsub: (() => void) | null = null;
   let transcriptUnsub: (() => void) | null = null;
@@ -885,9 +890,9 @@ export async function startGatewayServer(
           nodeSendToAllSubscribed,
           getPresenceVersion,
           getHealthVersion,
-          refreshGatewayHealthSnapshot: (opts) =>
-            refreshGatewayHealthSnapshot({ ...opts, runtimeSnapshot: safeGetRuntimeSnapshot() }),
+          refreshGatewayHealthSnapshot,
           logHealth,
+          getRuntimeSnapshot: safeGetRuntimeSnapshot,
           dedupe,
           chatAbortControllers,
           chatRunState,
@@ -1181,8 +1186,7 @@ export async function startGatewayServer(
       pluginApprovalManager,
       loadGatewayModelCatalog,
       getHealthCache,
-      refreshHealthSnapshot: (opts) =>
-        refreshGatewayHealthSnapshot({ ...opts, runtimeSnapshot: safeGetRuntimeSnapshot() }),
+      refreshHealthSnapshot: refreshGatewayHealthSnapshot,
       logHealth,
       logGateway: log,
       incrementPresenceVersion,
