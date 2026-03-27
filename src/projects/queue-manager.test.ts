@@ -224,3 +224,92 @@ describe("QUEUE_LOCK_OPTIONS", () => {
     expect(QUEUE_LOCK_OPTIONS.stale).toBe(60_000);
   });
 });
+
+describe("concurrent access", () => {
+  /** Write a queue.md with specific tasks in the Available section. */
+  async function writeQueueWithTasks(dir: string, taskIds: string[]): Promise<void> {
+    const entries = taskIds.map((id) => `- ${id}`).join("\n");
+    const content = `---\nupdated: "2026-01-01"\n---\n\n## Available\n\n${entries}\n\n## Claimed\n\n## Done\n\n## Blocked\n`;
+    await fs.writeFile(path.join(dir, "queue.md"), content, "utf8");
+  }
+
+  it("two agents claiming different tasks simultaneously both succeed", async () => {
+    await writeQueueWithTasks(tmpDir, ["TASK-001", "TASK-002"]);
+    const mgr1 = new QueueManager(tmpDir);
+    const mgr2 = new QueueManager(tmpDir);
+
+    const [r1, r2] = await Promise.allSettled([
+      mgr1.claimTask("TASK-001", "agent-a"),
+      mgr2.claimTask("TASK-002", "agent-b"),
+    ]);
+
+    expect(r1.status).toBe("fulfilled");
+    expect(r2.status).toBe("fulfilled");
+
+    // Re-read and verify queue integrity
+    const raw = await fs.readFile(path.join(tmpDir, "queue.md"), "utf8");
+    const parsed = parseQueue(raw, "queue.md");
+    expect(parsed.available).toHaveLength(0);
+    expect(parsed.claimed).toHaveLength(2);
+    expect(parsed.claimed.some((e) => e.taskId === "TASK-001")).toBe(true);
+    expect(parsed.claimed.some((e) => e.taskId === "TASK-002")).toBe(true);
+  });
+
+  it("two agents claiming same task: one succeeds, one gets QueueValidationError", async () => {
+    await writeQueueWithTasks(tmpDir, ["TASK-001"]);
+    const mgr1 = new QueueManager(tmpDir);
+    const mgr2 = new QueueManager(tmpDir);
+
+    const [r1, r2] = await Promise.allSettled([
+      mgr1.claimTask("TASK-001", "agent-a"),
+      mgr2.claimTask("TASK-001", "agent-b"),
+    ]);
+
+    const fulfilled = [r1, r2].filter((r) => r.status === "fulfilled");
+    const rejected = [r1, r2].filter((r) => r.status === "rejected");
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+
+    // The rejected one should be a QueueValidationError (task no longer in Available)
+    const rejectedResult = rejected[0] as PromiseRejectedResult;
+    expect(rejectedResult.reason).toBeInstanceOf(QueueValidationError);
+
+    // Verify TASK-001 is in claimed exactly once
+    const raw = await fs.readFile(path.join(tmpDir, "queue.md"), "utf8");
+    const parsed = parseQueue(raw, "queue.md");
+    expect(parsed.claimed.filter((e) => e.taskId === "TASK-001")).toHaveLength(1);
+    expect(parsed.available.filter((e) => e.taskId === "TASK-001")).toHaveLength(0);
+  });
+
+  it("lock hold time under 100ms", async () => {
+    await writeQueueWithTasks(tmpDir, ["TASK-001"]);
+    const mgr = new QueueManager(tmpDir);
+
+    const start = performance.now();
+    await mgr.claimTask("TASK-001", "agent-a");
+    const elapsed = performance.now() - start;
+
+    expect(elapsed).toBeLessThan(100);
+  });
+
+  it("queue.md not corrupted after 5 sequential claim-release cycles", async () => {
+    await writeQueueWithTasks(tmpDir, ["TASK-001"]);
+    const mgr = new QueueManager(tmpDir);
+
+    for (let i = 0; i < 5; i++) {
+      await mgr.claimTask("TASK-001", `agent-cycle-${i}`);
+      await mgr.releaseTask("TASK-001");
+    }
+
+    // Final state: TASK-001 back in available, claimed empty
+    const result = await mgr.readQueue();
+    expect(result.available.some((e) => e.taskId === "TASK-001")).toBe(true);
+    expect(result.claimed).toHaveLength(0);
+
+    // Verify raw file parses without error (no corruption)
+    const raw = await fs.readFile(path.join(tmpDir, "queue.md"), "utf8");
+    const parsed = parseQueue(raw, "queue.md");
+    expect(parsed.available.some((e) => e.taskId === "TASK-001")).toBe(true);
+  });
+});
