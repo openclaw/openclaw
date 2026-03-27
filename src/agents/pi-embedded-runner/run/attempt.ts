@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -210,6 +210,51 @@ export {
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
+
+/**
+ * Wraps a base StreamFn so that every invocation carries the resolved
+ * API key and auth/model headers.  This prevents downstream streamFn
+ * overrides (provider-specific, cache-trace, ollama-compat, etc.) from
+ * silently dropping credentials that were resolved once at attempt start.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/55672
+ * @see https://github.com/openclaw/openclaw/issues/55760
+ */
+export function wrapStreamFnWithModelRegistryAuth(
+  streamFn: StreamFn,
+  resolvedApiKey: string | undefined,
+  resolvedAuthHeaders?: Record<string, string>,
+): StreamFn {
+  return (model, context, options) => {
+    const modelHeaders =
+      model.headers && typeof model.headers === "object" && !Array.isArray(model.headers)
+        ? model.headers
+        : undefined;
+
+    const needsHeaderMerge =
+      modelHeaders != null || resolvedAuthHeaders != null || options?.headers != null;
+
+    // Fast path: nothing to inject
+    if (!resolvedApiKey && !needsHeaderMerge) {
+      return streamFn(model, context, options);
+    }
+
+    return streamFn(model, context, {
+      ...options,
+      // Only inject apiKey when the caller hasn't already provided one
+      ...(resolvedApiKey && options?.apiKey === undefined ? { apiKey: resolvedApiKey } : {}),
+      ...(needsHeaderMerge
+        ? {
+            headers: {
+              ...resolvedAuthHeaders,
+              ...modelHeaders,
+              ...options?.headers,
+            },
+          }
+        : {}),
+    });
+  };
+}
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
@@ -844,6 +889,21 @@ export async function runEmbeddedAttempt(
       });
 
       const defaultSessionStreamFn = activeSession.agent.streamFn;
+
+      // Resolve auth once per attempt so every streamFn override carries credentials.
+      const resolvedAuth = await params.modelRegistry
+        .getApiKeyAndHeaders(params.model)
+        .then((auth) => (auth.ok ? { apiKey: auth.apiKey, headers: auth.headers } : undefined))
+        .catch(() => undefined);
+
+      const setBaseStreamFn = (fn: StreamFn) => {
+        activeSession.agent.streamFn = wrapStreamFnWithModelRegistryAuth(
+          fn,
+          resolvedAuth?.apiKey,
+          resolvedAuth?.headers,
+        );
+      };
+
       const providerStreamFn = registerProviderStreamForModel({
         model: params.model,
         cfg: params.config,
@@ -851,7 +911,7 @@ export async function runEmbeddedAttempt(
         workspaceDir: effectiveWorkspace,
       });
       if (providerStreamFn) {
-        activeSession.agent.streamFn = providerStreamFn;
+        setBaseStreamFn(providerStreamFn);
       } else if (
         shouldUseOpenAIWebSocketTransport({
           provider: params.provider,
@@ -860,19 +920,22 @@ export async function runEmbeddedAttempt(
       ) {
         const wsApiKey = await params.authStorage.getApiKey(params.provider);
         if (wsApiKey) {
+          // WebSocket transport already closes over its own apiKey; skip the
+          // auth wrapper to avoid injecting a potentially different key from
+          // the model registry into options.apiKey.
           activeSession.agent.streamFn = createOpenAIWebSocketStreamFn(wsApiKey, params.sessionId, {
             signal: runAbortController.signal,
           });
         } else {
           log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
-          activeSession.agent.streamFn = defaultSessionStreamFn;
+          setBaseStreamFn(defaultSessionStreamFn);
         }
       } else if (params.model.provider === "anthropic-vertex") {
         // Anthropic Vertex AI: inject AnthropicVertex client into pi-ai's
         // streamAnthropic for GCP IAM auth instead of Anthropic API keys.
-        activeSession.agent.streamFn = createAnthropicVertexStreamFnForModel(params.model);
+        setBaseStreamFn(createAnthropicVertexStreamFnForModel(params.model));
       } else {
-        activeSession.agent.streamFn = defaultSessionStreamFn;
+        setBaseStreamFn(defaultSessionStreamFn);
       }
 
       const { effectiveExtraParams } = applyExtraParamsToAgent(

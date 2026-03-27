@@ -31,7 +31,7 @@ import {
   resolveAwsSdkEnvVarName,
   type ResolvedProviderAuth,
 } from "./model-auth-runtime-shared.js";
-import { normalizeProviderId } from "./model-selection.js";
+import { normalizeProviderId, normalizeProviderIdForAuth } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 export { requireApiKey, resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
@@ -48,16 +48,32 @@ function resolveProviderConfig(
     return direct;
   }
   const normalized = normalizeProviderId(provider);
-  if (normalized === provider) {
-    const matched = Object.entries(providers).find(
-      ([key]) => normalizeProviderId(key) === normalized,
-    );
-    return matched?.[1];
+  const normalizedForAuth = normalizeProviderIdForAuth(provider);
+
+  // Try exact match with normalized provider id
+  if (providers[normalized]) {
+    return providers[normalized];
   }
-  return (
-    (providers[normalized] as ModelProviderConfig | undefined) ??
-    Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1]
+
+  // Try match with auth-normalized provider id (handles -plan variants etc.)
+  if (normalizedForAuth !== normalized && providers[normalizedForAuth]) {
+    return providers[normalizedForAuth];
+  }
+
+  // Fuzzy match: find any key whose normalized form matches
+  const matched = Object.entries(providers).find(
+    ([key]) =>
+      normalizeProviderId(key) === normalized ||
+      // Only apply auth-normalization when the lookup provider itself is a
+      // plan variant (normalizedForAuth !== normalized) to avoid the reverse
+      // direction (base provider matching a plan-variant config key).
+      (normalizedForAuth !== normalized && normalizeProviderIdForAuth(key) === normalizedForAuth),
   );
+  if (matched) {
+    return matched[1];
+  }
+
+  return undefined;
 }
 
 export function getCustomProviderApiKey(

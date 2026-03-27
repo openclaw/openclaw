@@ -27,6 +27,7 @@ import {
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
+  wrapStreamFnWithModelRegistryAuth,
 } from "./attempt.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 
@@ -302,6 +303,62 @@ describe("composeSystemPromptWithHookContext", () => {
     expect(turns[2]?.prompt.startsWith("hello once more")).toBe(true);
     expect(turns[0]?.prompt).toContain("[Bootstrap truncation warning]");
     expect(turns[2]?.prompt).toContain("[Bootstrap truncation warning]");
+  });
+});
+
+describe("wrapStreamFnWithModelRegistryAuth", () => {
+  it("injects resolved apiKey and merges model + auth headers into options", () => {
+    const baseStreamFn = vi.fn((_model: never, _context: never, _options?: never) => {
+      return createFakeStream({ events: [], resultMessage: {} });
+    });
+    const wrapped = wrapStreamFnWithModelRegistryAuth(baseStreamFn as never, "sk-test-key", {
+      "x-auth": "bearer-token",
+    });
+    const model = { headers: { "x-model": "custom" } };
+    void wrapped(model as never, {} as never, { headers: { "x-caller": "yes" } } as never);
+    expect(baseStreamFn).toHaveBeenCalledWith(
+      model,
+      {},
+      {
+        apiKey: "sk-test-key",
+        headers: {
+          "x-auth": "bearer-token",
+          "x-model": "custom",
+          "x-caller": "yes",
+        },
+      },
+    );
+  });
+
+  it("preserves caller-supplied apiKey and passes caller headers through", () => {
+    const baseStreamFn = vi.fn((_model: never, _context: never, _options?: never) => {
+      return createFakeStream({ events: [], resultMessage: {} });
+    });
+    const wrapped = wrapStreamFnWithModelRegistryAuth(baseStreamFn as never, "sk-resolved");
+    void wrapped(
+      {} as never,
+      {} as never,
+      { apiKey: "sk-caller", headers: { "x-caller": "yes" } } as never,
+    );
+    expect(baseStreamFn).toHaveBeenCalledWith(
+      {},
+      {},
+      {
+        apiKey: "sk-caller",
+        headers: { "x-caller": "yes" },
+      },
+    );
+  });
+
+  it("takes the fast path when no auth and no headers are present", () => {
+    const baseStreamFn = vi.fn((_model: never, _context: never, _options?: never) => {
+      return createFakeStream({ events: [], resultMessage: {} });
+    });
+    const wrapped = wrapStreamFnWithModelRegistryAuth(baseStreamFn as never, undefined, undefined);
+    const opts = { temperature: 0.5 };
+    void wrapped({} as never, {} as never, opts as never);
+    // Fast path: options object should be passed through as-is
+    expect(baseStreamFn).toHaveBeenCalledWith({}, {}, opts);
   });
 });
 
