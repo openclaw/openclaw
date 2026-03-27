@@ -410,6 +410,12 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     daemonLifecycle.stop();
   };
   opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
+  const pendingEventHandlers = new Set<Promise<void>>();
+  const waitForPendingEventHandlers = async () => {
+    while (pendingEventHandlers.size > 0) {
+      await Promise.allSettled(Array.from(pendingEventHandlers));
+    }
+  };
 
   try {
     if (daemonHandle) {
@@ -456,8 +462,6 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       shouldEmitSignalReactionNotification,
       buildSignalReactionSystemEventText,
     });
-    const pendingEventHandlers = new Set<Promise<void>>();
-
     const trackEventHandler = (event: { event?: string; data?: string }) => {
       let task!: Promise<void>;
       task = handleEvent(event)
@@ -468,12 +472,6 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
           pendingEventHandlers.delete(task);
         });
       pendingEventHandlers.add(task);
-    };
-
-    const waitForPendingEventHandlers = async () => {
-      while (pendingEventHandlers.size > 0) {
-        await Promise.allSettled(Array.from(pendingEventHandlers));
-      }
     };
 
     await runSignalSseLoop({
