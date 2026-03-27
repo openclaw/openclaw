@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config/config.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { loadGatewaySessionRow } from "./session-utils.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 
@@ -33,6 +34,14 @@ vi.mock("../infra/heartbeat-visibility.js", () => ({
   })),
 }));
 
+vi.mock("./session-utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-utils.js")>();
+  return {
+    ...actual,
+    loadGatewaySessionRow: vi.fn(),
+  };
+});
+
 describe("agent event handler", () => {
   beforeEach(() => {
     vi.mocked(loadConfig).mockReturnValue({});
@@ -41,6 +50,7 @@ describe("agent event handler", () => {
       showAlerts: true,
       useIndicator: true,
     });
+    vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
     resetAgentRunContextForTest();
   });
@@ -487,6 +497,46 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("drops stale events that arrive after lifecycle completion", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 2_500,
+    });
+    chatRunState.registry.add("run-stale-tail", {
+      sessionKey: "session-stale-tail",
+      clientRunId: "client-stale-tail",
+    });
+
+    handler({
+      runId: "run-stale-tail",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "done" },
+    });
+    emitLifecycleEnd(handler, "run-stale-tail");
+    const errorCallsBeforeStaleEvent = broadcast.mock.calls.filter(
+      ([event, payload]) =>
+        event === "agent" && (payload as { stream?: string }).stream === "error",
+    ).length;
+    const sessionChatCallsBeforeStaleEvent = sessionChatCalls(nodeSendToSession).length;
+
+    handler({
+      runId: "run-stale-tail",
+      seq: 3,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "late tail" },
+    });
+
+    const errorCalls = broadcast.mock.calls.filter(
+      ([event, payload]) =>
+        event === "agent" && (payload as { stream?: string }).stream === "error",
+    );
+    expect(errorCalls).toHaveLength(errorCallsBeforeStaleEvent);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(sessionChatCallsBeforeStaleEvent);
+    nowSpy?.mockRestore();
+  });
+
   it("flushes buffered chat delta before tool start events", () => {
     let now = 12_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -699,6 +749,66 @@ describe("agent event handler", () => {
       }),
     });
     resetAgentRunContextForTest();
+  });
+
+  it("keeps live session setting metadata at the top level for lifecycle updates", () => {
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-finished",
+      kind: "direct",
+      updatedAt: 1_650,
+      fastMode: true,
+      sendPolicy: "deny",
+      verboseLevel: "on",
+      responseUsage: "full",
+      totalTokens: 42,
+      totalTokensFresh: true,
+      contextTokens: 21,
+      estimatedCostUsd: 0.12,
+      status: "running",
+      startedAt: 900,
+      runtimeMs: 750,
+      abortedLastRun: false,
+    });
+
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-finished",
+    });
+
+    sessionEventSubscribers.subscribe("conn-session");
+    registerAgentRunContext("run-finished", {
+      sessionKey: "session-finished",
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-finished",
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_800,
+      data: {
+        phase: "end",
+        startedAt: 900,
+        endedAt: 1_700,
+      },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "session-finished",
+        phase: "end",
+        fastMode: true,
+        sendPolicy: "deny",
+        verboseLevel: "on",
+        responseUsage: "full",
+        totalTokens: 42,
+        totalTokensFresh: true,
+        contextTokens: 21,
+        estimatedCostUsd: 0.12,
+      }),
+      new Set(["conn-session"]),
+      { dropIfSlow: true },
+    );
   });
 
   it("strips tool output when verbose is on", () => {

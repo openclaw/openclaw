@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 
 const catalog = [
   {
@@ -26,17 +28,29 @@ vi.mock("../agents/model-catalog.js", async () => {
 let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
 let createMediaAttachmentCache: typeof import("./runner.js").createMediaAttachmentCache;
 let normalizeMediaAttachments: typeof import("./runner.js").normalizeMediaAttachments;
+let resolveAutoImageModel: typeof import("./runner.js").resolveAutoImageModel;
 let runCapability: typeof import("./runner.js").runCapability;
 
 describe("runCapability image skip", () => {
   beforeEach(async () => {
     vi.resetModules();
+    vi.doMock("../agents/model-catalog.js", async () => {
+      const actual = await vi.importActual<typeof import("../agents/model-catalog.js")>(
+        "../agents/model-catalog.js",
+      );
+      return {
+        ...actual,
+        loadModelCatalog,
+      };
+    });
     ({
       buildProviderRegistry,
       createMediaAttachmentCache,
       normalizeMediaAttachments,
+      resolveAutoImageModel,
       runCapability,
     } = await import("./runner.js"));
+    loadModelCatalog.mockClear();
   });
 
   it("skips image understanding when the active model supports vision", async () => {
@@ -66,6 +80,36 @@ describe("runCapability image skip", () => {
       );
     } finally {
       await cache.cleanup();
+    }
+  });
+
+  it("uses active OpenRouter image models for auto image resolution", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "test-openrouter-key");
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "openrouter",
+      pluginName: "OpenRouter Provider",
+      source: "test",
+      provider: {
+        id: "openrouter",
+        capabilities: ["image"],
+        describeImage: async () => ({ text: "ok" }),
+      },
+    });
+    setActivePluginRegistry(pluginRegistry);
+    try {
+      await expect(
+        resolveAutoImageModel({
+          cfg: {} as OpenClawConfig,
+          activeModel: { provider: "openrouter", model: "google/gemini-2.5-flash" },
+        }),
+      ).resolves.toEqual({
+        provider: "openrouter",
+        model: "google/gemini-2.5-flash",
+      });
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      vi.unstubAllEnvs();
     }
   });
 });

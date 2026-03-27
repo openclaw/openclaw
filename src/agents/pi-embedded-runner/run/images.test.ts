@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import {
@@ -189,6 +189,22 @@ what is this?`);
 
     // Only 1 ref - the local path (example.com URLs are skipped)
     expect(ref?.resolved).toContain("ChatGPT Image Apr 21, 2025.png");
+  });
+
+  it("ignores remote-host file URLs", () => {
+    expectNoImageReferences("See file://attacker/share/evil.png");
+  });
+
+  it("ignores Windows network paths from attachment-style references", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      expectNoImageReferences(
+        "[media attached: \\\\attacker\\share\\photo.png (image/png)] what is this?",
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 });
 

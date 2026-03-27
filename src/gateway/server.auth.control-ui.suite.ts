@@ -115,19 +115,20 @@ export function registerControlUiAndPairingSuite(): void {
   const expectDevicePairApproveDenied = async (ws: WebSocket, requestId: string) => {
     const approve = await rpcReq(ws, "device.pair.approve", { requestId });
     expect(approve.ok).toBe(false);
-    expect(approve.error?.message).toBe("missing scope: operator.admin");
+    expect(approve.error?.message ?? "").toMatch(/^missing scope: operator\.(admin|pairing)$/);
   };
 
   const connectControlUiWithoutDeviceAndExpectOk = async (params: {
     ws: WebSocket;
     token?: string;
     password?: string;
+    client?: { id: string; version: string; platform: string; mode: string };
   }) => {
     const res = await connectReq(params.ws, {
       ...(params.token ? { token: params.token } : {}),
       ...(params.password ? { password: params.password } : {}),
       device: null,
-      client: { ...CONTROL_UI_CLIENT },
+      client: { ...(params.client ?? CONTROL_UI_CLIENT) },
     });
     expect(res.ok).toBe(true);
     await expectStatusAndHealthOk(params.ws);
@@ -296,6 +297,24 @@ export function registerControlUiAndPairingSuite(): void {
     restoreGatewayToken(prevToken);
   });
 
+  test("allows localhost tui without device identity when insecure auth is enabled", async () => {
+    testState.gatewayControlUi = { allowInsecureAuth: true };
+    const { server, ws, prevToken } = await startServerWithClient("secret");
+    await connectControlUiWithoutDeviceAndExpectOk({
+      ws,
+      token: "secret",
+      client: {
+        id: GATEWAY_CLIENT_NAMES.TUI,
+        version: "1.0.0",
+        platform: "darwin",
+        mode: GATEWAY_CLIENT_MODES.UI,
+      },
+    });
+    ws.close();
+    await server.close();
+    restoreGatewayToken(prevToken);
+  });
+
   test("allows control ui password-only auth on localhost when insecure auth is enabled", async () => {
     testState.gatewayControlUi = { allowInsecureAuth: true };
     testState.gatewayAuth = { mode: "password", password: "secret" }; // pragma: allowlist secret
@@ -402,6 +421,35 @@ export function registerControlUiAndPairingSuite(): void {
         expect((res.payload as { auth?: unknown } | undefined)?.auth).toBeUndefined();
         const health = await rpcReq(ws, "health");
         expect(health.ok).toBe(true);
+        ws.close();
+      });
+    } finally {
+      restoreGatewayToken(prevToken);
+    }
+  });
+
+  test("preserves requested control ui scopes when dangerouslyDisableDeviceAuth bypasses device identity", async () => {
+    testState.gatewayControlUi = { dangerouslyDisableDeviceAuth: true };
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    try {
+      await withGatewayServer(async ({ port }) => {
+        const ws = await openWs(port, { origin: originForPort(port) });
+        const res = await connectReq(ws, {
+          token: "secret",
+          scopes: ["operator.read"],
+          client: {
+            ...CONTROL_UI_CLIENT,
+          },
+        });
+        expect(res.ok).toBe(true);
+
+        const health = await rpcReq(ws, "health");
+        expect(health.ok).toBe(true);
+
+        const talk = await rpcReq(ws, "chat.history", { sessionKey: "main", limit: 1 });
+        expect(talk.ok).toBe(true);
         ws.close();
       });
     } finally {

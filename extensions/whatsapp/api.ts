@@ -7,4 +7,11 @@ export {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
 } from "./src/directory-config.js";
-export { resolveWhatsAppGroupIntroHint } from "openclaw/plugin-sdk/whatsapp-core";
+export { resolveWhatsAppOutboundTarget } from "./src/resolve-outbound-target.js";
+export {
+  isWhatsAppGroupJid,
+  isWhatsAppUserTarget,
+  normalizeWhatsAppTarget,
+} from "./src/normalize-target.js";
+export { resolveWhatsAppGroupIntroHint } from "./src/runtime-api.js";
+export { __testing as whatsappAccessControlTesting } from "./src/inbound/access-control.js";

@@ -31,3 +31,12 @@ vi.mock("../../extensions/telegram/api.js", async (importOriginal) => {
     deleteTelegramUpdateOffset: offsetMocks.deleteTelegramUpdateOffset,
   };
 });
+
+vi.mock("../../extensions/telegram/update-offset-runtime-api.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../extensions/telegram/update-offset-runtime-api.js")>();
+  return {
+    ...actual,
+    deleteTelegramUpdateOffset: offsetMocks.deleteTelegramUpdateOffset,
+  };
+});

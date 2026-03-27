@@ -33,6 +33,7 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "anthropic",
   "byteplus",
   "cloudflare-ai-gateway",
+  "deepseek",
   "device-pair",
   "github-copilot",
   "google",
@@ -51,7 +52,6 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "openrouter",
   "phone-control",
   "qianfan",
-  "qwen-portal-auth",
   "sglang",
   "synthetic",
   "talk-voice",
@@ -71,7 +71,7 @@ const PLUGIN_ID_ALIASES: Readonly<Record<string, string>> = {
   "minimax-portal-auth": "minimax",
 };
 
-function normalizePluginId(id: string): string {
+export function normalizePluginId(id: string): string {
   const trimmed = id.trim();
   return PLUGIN_ID_ALIASES[trimmed] ?? trimmed;
 }
@@ -193,7 +193,7 @@ const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
 const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
   Boolean(plugins?.entries && Object.prototype.hasOwnProperty.call(plugins.entries, "memory-core"));
 
-const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) => {
+export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) => {
   if (!plugins) {
     return false;
   }

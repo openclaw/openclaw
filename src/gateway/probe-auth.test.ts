@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveGatewayProbeAuthSafe,
+  resolveGatewayProbeAuthSafeWithSecretInputs,
   resolveGatewayProbeAuthWithSecretInputs,
 } from "./probe-auth.js";
 
@@ -104,6 +105,60 @@ describe("resolveGatewayProbeAuthSafe", () => {
         password: undefined,
       },
     });
+  });
+});
+
+describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
+  it("resolves env SecretRef token via async secret-inputs path", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      } as OpenClawConfig,
+      mode: "local",
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "test-token-from-env",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.warning).toBeUndefined();
+    expect(result.auth).toEqual({
+      token: "test-token-from-env",
+      password: undefined,
+    });
+  });
+
+  it("returns warning and empty auth when SecretRef cannot be resolved via async path", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "MISSING_TOKEN_XYZ" },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      } as OpenClawConfig,
+      mode: "local",
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(result.auth).toEqual({});
+    expect(result.warning).toContain("gateway.auth.token");
+    expect(result.warning).toContain("unresolved");
   });
 });
 

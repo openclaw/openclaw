@@ -1,22 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
-import { registerSlackMemberEvents } from "./members.js";
-import {
-  createSlackSystemEventTestHarness as initSlackHarness,
-  type SlackSystemEventTestOverrides as MemberOverrides,
-} from "./system-event-test-harness.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const memberMocks = vi.hoisted(() => ({
   enqueue: vi.fn(),
-  readAllow: vi.fn(),
 }));
+let registerSlackMemberEvents: typeof import("./members.js").registerSlackMemberEvents;
+let initSlackHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
+type MemberOverrides = import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
-vi.mock("../../../../../src/infra/system-events.js", () => ({
-  enqueueSystemEvent: memberMocks.enqueue,
-}));
-
-vi.mock("../../../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: memberMocks.readAllow,
-}));
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return { ...actual, enqueueSystemEvent: memberMocks.enqueue };
+});
 
 type MemberHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
@@ -56,7 +50,6 @@ function getMemberHandlers(params: {
 
 async function runMemberCase(args: MemberCaseArgs = {}): Promise<void> {
   memberMocks.enqueue.mockClear();
-  memberMocks.readAllow.mockReset().mockResolvedValue([]);
   const handlers = getMemberHandlers({
     overrides: args.overrides,
     trackEvent: args.trackEvent,
@@ -72,6 +65,16 @@ async function runMemberCase(args: MemberCaseArgs = {}): Promise<void> {
 }
 
 describe("registerSlackMemberEvents", () => {
+  beforeAll(async () => {
+    ({ registerSlackMemberEvents } = await import("./members.js"));
+    ({ createSlackSystemEventTestHarness: initSlackHarness } =
+      await import("./system-event-test-harness.js"));
+  });
+
+  beforeEach(() => {
+    memberMocks.enqueue.mockClear();
+  });
+
   const cases: Array<{ name: string; args: MemberCaseArgs; calls: number }> = [
     {
       name: "enqueues DM member events when dmPolicy is open",

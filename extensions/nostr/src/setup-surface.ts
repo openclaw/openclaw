@@ -1,27 +1,23 @@
-import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
-  createTopLevelChannelAllowFromSetter,
+  createTopLevelChannelParsedAllowFromPrompt,
   createTopLevelChannelDmPolicy,
+  createStandardChannelSetupStatus,
   mergeAllowFromEntries,
   parseSetupEntriesWithParser,
   patchTopLevelChannelConfigSection,
-  promptParsedAllowFromForAccount,
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup";
-import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-bus.js";
 import { resolveNostrAccount } from "./types.js";
 
 const channel = "nostr" as const;
-const setNostrAllowFrom = createTopLevelChannelAllowFromSetter({
-  channel,
-});
 
 const NOSTR_SETUP_HELP_LINES = [
   "Use a Nostr private key in nsec or 64-character hex format.",
@@ -68,24 +64,16 @@ function parseNostrAllowFrom(raw: string): { entries: string[]; error?: string }
   });
 }
 
-async function promptNostrAllowFrom(params: {
-  cfg: OpenClawConfig;
-  prompter: WizardPrompter;
-}): Promise<OpenClawConfig> {
-  return await promptParsedAllowFromForAccount({
-    cfg: params.cfg,
-    defaultAccountId: DEFAULT_ACCOUNT_ID,
-    prompter: params.prompter,
-    noteTitle: "Nostr allowlist",
-    noteLines: NOSTR_ALLOW_FROM_HELP_LINES,
-    message: "Nostr allowFrom",
-    placeholder: "npub1..., 0123abcd...",
-    parseEntries: parseNostrAllowFrom,
-    getExistingAllowFrom: ({ cfg }) => cfg.channels?.nostr?.allowFrom ?? [],
-    mergeEntries: ({ existing, parsed }) => mergeAllowFromEntries(existing, parsed),
-    applyAllowFrom: ({ cfg, allowFrom }) => setNostrAllowFrom(cfg, allowFrom),
-  });
-}
+const promptNostrAllowFrom = createTopLevelChannelParsedAllowFromPrompt({
+  channel,
+  defaultAccountId: DEFAULT_ACCOUNT_ID,
+  noteTitle: "Nostr allowlist",
+  noteLines: NOSTR_ALLOW_FROM_HELP_LINES,
+  message: "Nostr allowFrom",
+  placeholder: "npub1..., 0123abcd...",
+  parseEntries: parseNostrAllowFrom,
+  mergeEntries: ({ existing, parsed }) => mergeAllowFromEntries(existing, parsed),
+});
 
 const nostrDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
   label: "Nostr",
@@ -152,22 +140,21 @@ export const nostrSetupWizard: ChannelSetupWizard = {
   channel,
   resolveAccountIdForConfigure: () => DEFAULT_ACCOUNT_ID,
   resolveShouldPromptAccountIds: () => false,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "Nostr",
     configuredLabel: "configured",
     unconfiguredLabel: "needs private key",
     configuredHint: "configured",
     unconfiguredHint: "needs private key",
     configuredScore: 1,
     unconfiguredScore: 0,
+    includeStatusLine: true,
     resolveConfigured: ({ cfg }) => resolveNostrAccount({ cfg }).configured,
-    resolveStatusLines: ({ cfg, configured }) => {
+    resolveExtraStatusLines: ({ cfg }) => {
       const account = resolveNostrAccount({ cfg });
-      return [
-        `Nostr: ${configured ? "configured" : "needs private key"}`,
-        `Relays: ${account.relays.length || DEFAULT_RELAYS.length}`,
-      ];
+      return [`Relays: ${account.relays.length || DEFAULT_RELAYS.length}`];
     },
-  },
+  }),
   introNote: {
     title: "Nostr setup",
     lines: NOSTR_SETUP_HELP_LINES,

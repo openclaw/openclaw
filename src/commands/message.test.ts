@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChannelMessageActionAdapter,
   ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../channels/plugins/types.js";
 import type { CliDeps } from "../cli/deps.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -36,60 +37,33 @@ vi.mock("../gateway/call.js", () => ({
   randomIdempotencyKey: () => "idem-1",
 }));
 
-const webAuthExists = vi.hoisted(() => vi.fn(async () => false));
-vi.mock("../../extensions/whatsapp/src/session.js", () => ({
-  webAuthExists,
-}));
-
 const handleDiscordAction = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } })),
 );
-vi.mock("../../extensions/discord/src/actions/runtime.js", () => ({
-  handleDiscordAction,
-}));
-
-const handleSlackAction = vi.hoisted(() =>
-  vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } })),
-);
-vi.mock("../../extensions/slack/runtime-api.js", () => ({
-  handleSlackAction,
-}));
 
 const handleTelegramAction = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } })),
 );
-vi.mock("../../extensions/telegram/src/action-runtime.js", () => ({
-  handleTelegramAction,
-}));
 
-const handleWhatsAppAction = vi.hoisted(() =>
-  vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } })),
-);
-vi.mock("../../extensions/whatsapp/runtime-api.js", () => ({
-  handleWhatsAppAction,
-}));
+let messageCommand: typeof import("./message.js").messageCommand;
 
 let envSnapshot: ReturnType<typeof captureEnv>;
+const EMPTY_TEST_REGISTRY = createTestRegistry([]);
 
-const setRegistry = async (registry: ReturnType<typeof createTestRegistry>) => {
-  const { setActivePluginRegistry } = await import("../plugins/runtime.js");
-  setActivePluginRegistry(registry);
-};
-
-beforeEach(async () => {
+beforeAll(async () => {
   vi.resetModules();
+  ({ messageCommand } = await import("./message.js"));
+});
+
+beforeEach(() => {
   envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN"]);
   process.env.TELEGRAM_BOT_TOKEN = "";
   process.env.DISCORD_BOT_TOKEN = "";
   testConfig = {};
-  ({ messageCommand } = await import("./message.js"));
-  await setRegistry(createTestRegistry([]));
+  setActivePluginRegistry(EMPTY_TEST_REGISTRY);
   callGatewayMock.mockClear();
-  webAuthExists.mockClear().mockResolvedValue(false);
   handleDiscordAction.mockClear();
-  handleSlackAction.mockClear();
   handleTelegramAction.mockClear();
-  handleWhatsAppAction.mockClear();
   resolveCommandSecretRefsViaGateway.mockClear();
 });
 
@@ -197,8 +171,6 @@ const createTelegramPollPluginRegistration = () => ({
   }),
 });
 
-let messageCommand: typeof import("./message.js").messageCommand;
-
 function createTelegramSecretRawConfig() {
   return {
     channels: {
@@ -247,7 +219,7 @@ async function runTelegramDirectOutboundSend(params: {
     messageId: "msg-2",
     chatId: "123456",
   }));
-  await setRegistry(
+  setActivePluginRegistry(
     createTestRegistry([
       {
         pluginId: "telegram",
@@ -288,7 +260,7 @@ describe("messageCommand", () => {
       rawConfig: rawConfig as unknown as Record<string, unknown>,
       resolvedConfig: resolvedConfig as unknown as Record<string, unknown>,
     });
-    await setRegistry(
+    setActivePluginRegistry(
       createTestRegistry([
         {
           ...createTelegramSendPluginRegistration(),
@@ -379,7 +351,7 @@ describe("messageCommand", () => {
 
   it("defaults channel when only one configured", async () => {
     process.env.TELEGRAM_BOT_TOKEN = "token-abc";
-    await setRegistry(
+    setActivePluginRegistry(
       createTestRegistry([
         {
           ...createTelegramSendPluginRegistration(),
@@ -401,7 +373,7 @@ describe("messageCommand", () => {
   it("requires channel when multiple configured", async () => {
     process.env.TELEGRAM_BOT_TOKEN = "token-abc";
     process.env.DISCORD_BOT_TOKEN = "token-discord";
-    await setRegistry(
+    setActivePluginRegistry(
       createTestRegistry([
         {
           ...createTelegramSendPluginRegistration(),
@@ -426,7 +398,7 @@ describe("messageCommand", () => {
 
   it("sends via gateway for WhatsApp", async () => {
     callGatewayMock.mockResolvedValueOnce({ messageId: "g1" });
-    await setRegistry(
+    setActivePluginRegistry(
       createTestRegistry([
         {
           pluginId: "whatsapp",
@@ -456,7 +428,7 @@ describe("messageCommand", () => {
   });
 
   it("routes discord polls through message action", async () => {
-    await setRegistry(
+    setActivePluginRegistry(
       createTestRegistry([
         {
           ...createDiscordPollPluginRegistration(),
@@ -485,7 +457,7 @@ describe("messageCommand", () => {
   });
 
   it("routes telegram polls through message action", async () => {
-    await setRegistry(
+    setActivePluginRegistry(
       createTestRegistry([
         {
           ...createTelegramPollPluginRegistration(),

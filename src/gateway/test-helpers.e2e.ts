@@ -2,6 +2,8 @@ import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { WebSocket } from "ws";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import {
   type DeviceIdentity,
   loadOrCreateDeviceIdentity,
@@ -41,7 +43,7 @@ export async function connectGatewayClient(params: {
   instanceId?: string;
   deviceIdentity?: DeviceIdentity;
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
-  connectDelayMs?: number;
+  connectChallengeTimeoutMs?: number;
   timeoutMs?: number;
   timeoutMessage?: string;
 }) {
@@ -76,7 +78,7 @@ export async function connectGatewayClient(params: {
     const client = new GatewayClient({
       url: params.url,
       token: params.token,
-      connectDelayMs: params.connectDelayMs ?? 0,
+      connectChallengeTimeoutMs: params.connectChallengeTimeoutMs ?? 0,
       clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.TEST,
       clientDisplayName: params.clientDisplayName ?? "vitest",
       clientVersion: params.clientVersion ?? "dev",
@@ -233,6 +235,9 @@ export async function startGatewayWithClient(params: {
 }) {
   await writeFile(params.configPath, `${JSON.stringify(params.cfg, null, 2)}\n`);
   process.env.OPENCLAW_CONFIG_PATH = params.configPath;
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+  clearSessionStoreCacheForTest();
 
   const port = await getFreeGatewayPort();
   const server = await startGatewayServer(port, {

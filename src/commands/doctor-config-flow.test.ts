@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resolveMatrixAccountStorageRoot } from "../../extensions/matrix/runtime-api.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
+import { resolveMatrixAccountStorageRoot } from "../plugin-sdk/matrix.js";
 import * as noteModule from "../terminal/note.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import { runDoctorConfigWithInput } from "./doctor-config-flow.test-utils.js";
@@ -33,6 +33,28 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
   } finally {
     noteSpy.mockRestore();
   }
+}
+
+type DoctorFlowDeps = {
+  noteModule: typeof import("../terminal/note.js");
+  loadAndMaybeMigrateDoctorConfig: typeof import("./doctor-config-flow.js").loadAndMaybeMigrateDoctorConfig;
+};
+
+let cachedDoctorFlowDeps: Promise<DoctorFlowDeps> | undefined;
+
+async function loadFreshDoctorFlowDeps(): Promise<DoctorFlowDeps> {
+  if (!cachedDoctorFlowDeps) {
+    vi.resetModules();
+    cachedDoctorFlowDeps = (async () => {
+      const freshNoteModule = await import("../terminal/note.js");
+      const doctorFlowModule = await import("./doctor-config-flow.js");
+      return {
+        noteModule: freshNoteModule,
+        loadAndMaybeMigrateDoctorConfig: doctorFlowModule.loadAndMaybeMigrateDoctorConfig,
+      };
+    })();
+  }
+  return await cachedDoctorFlowDeps;
 }
 
 type DiscordGuildRule = {
@@ -106,6 +128,66 @@ describe("doctor config flow", () => {
         (line) => line.includes('groupPolicy is "allowlist"') && line.includes("groupAllowFrom"),
       ),
     ).toBe(false);
+  });
+
+  it("shows first-time Telegram guidance without the old groupAllowFrom warning", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          botToken: "123:abc",
+          groupPolicy: "allowlist",
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.telegram.groupPolicy is "allowlist"') &&
+          line.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes("channels.telegram: Telegram is in first-time setup mode.") &&
+          line.includes("DMs use pairing mode") &&
+          line.includes("channels.telegram.groups"),
+      ),
+    ).toBe(true);
+  });
+
+  it("shows account-scoped first-time Telegram guidance without the old groupAllowFrom warning", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              botToken: "123:abc",
+              groupPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.telegram.accounts.default.groupPolicy is "allowlist"') &&
+          line.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes(
+            "channels.telegram.accounts.default: Telegram is in first-time setup mode.",
+          ) &&
+          line.includes("DMs use pairing mode") &&
+          line.includes("channels.telegram.accounts.default.groups"),
+      ),
+    ).toBe(true);
   });
 
   it("warns on mutable Zalouser group entries when dangerous name matching is disabled", async () => {
@@ -512,128 +594,92 @@ describe("doctor config flow", () => {
     };
     expect(cfg.channels.discord.streaming).toBe("partial");
     expect(cfg.channels.discord.streamMode).toBeUndefined();
-    expect(cfg.channels.discord.lifecycle).toBeUndefined();
+    expect(cfg.channels.discord.lifecycle).toEqual({
+      enabled: true,
+      reactions: {
+        queued: "⏳",
+        thinking: "🧠",
+        tool: "🔧",
+        done: "✅",
+        error: "❌",
+      },
+    });
   });
 
-  it("resolves Telegram @username allowFrom entries to numeric IDs on repair", async () => {
-    const fetchSpy = vi.fn(async (url: string) => {
-      const u = String(url);
-      const chatId = new URL(u).searchParams.get("chat_id") ?? "";
-      const id =
-        chatId.toLowerCase() === "@testuser"
-          ? 111
-          : chatId.toLowerCase() === "@groupuser"
-            ? 222
-            : chatId.toLowerCase() === "@topicuser"
-              ? 333
-              : chatId.toLowerCase() === "@accountuser"
-                ? 444
-                : null;
-      return {
-        ok: id != null,
-        json: async () => (id != null ? { ok: true, result: { id } } : { ok: false }),
-      } as unknown as Response;
-    });
-    vi.stubGlobal("fetch", fetchSpy);
+  it("sanitizes config-derived doctor warnings and changes before logging", async () => {
+    const { noteModule: freshNoteModule, loadAndMaybeMigrateDoctorConfig: loadDoctorFlowFresh } =
+      await loadFreshDoctorFlowDeps();
+    const noteSpy = vi.spyOn(freshNoteModule, "note").mockImplementation(() => {});
     try {
-      const result = await runDoctorConfigWithInput({
+      await runDoctorConfigWithInput({
         repair: true,
         config: {
           channels: {
             telegram: {
-              botToken: "123:abc",
-              allowFrom: ["@testuser"],
-              groupAllowFrom: ["groupUser"],
-              groups: {
-                "-100123": {
-                  allowFrom: ["tg:@topicUser"],
-                  topics: { "99": { allowFrom: ["@accountUser"] } },
+              accounts: {
+                work: {
+                  botToken: "tok",
+                  allowFrom: ["@\u001b[31mtestuser"],
                 },
               },
+            },
+            slack: {
               accounts: {
-                alerts: { botToken: "456:def", allowFrom: ["@accountUser"] },
+                work: {
+                  allowFrom: ["alice\u001b[31m\nforged"],
+                },
+                "ops\u001b[31m\nopen": {
+                  dmPolicy: "open",
+                },
+              },
+            },
+            whatsapp: {
+              accounts: {
+                "ops\u001b[31m\nempty": {
+                  groupPolicy: "allowlist",
+                },
               },
             },
           },
         },
-        run: loadAndMaybeMigrateDoctorConfig,
+        run: loadDoctorFlowFresh,
       });
 
-      const cfg = result.cfg as unknown as {
-        channels: {
-          telegram: {
-            allowFrom?: string[];
-            groupAllowFrom?: string[];
-            groups: Record<
-              string,
-              { allowFrom: string[]; topics: Record<string, { allowFrom: string[] }> }
-            >;
-            accounts: Record<string, { allowFrom?: string[]; groupAllowFrom?: string[] }>;
-          };
-        };
-      };
-      expect(cfg.channels.telegram.allowFrom).toBeUndefined();
-      expect(cfg.channels.telegram.groupAllowFrom).toBeUndefined();
-      expect(cfg.channels.telegram.groups["-100123"].allowFrom).toEqual(["333"]);
-      expect(cfg.channels.telegram.groups["-100123"].topics["99"].allowFrom).toEqual(["444"]);
-      expect(cfg.channels.telegram.accounts.alerts.allowFrom).toEqual(["444"]);
-      expect(cfg.channels.telegram.accounts.default.allowFrom).toEqual(["111"]);
-      expect(cfg.channels.telegram.accounts.default.groupAllowFrom).toEqual(["222"]);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("does not crash when Telegram allowFrom repair sees unavailable SecretRef-backed credentials", async () => {
-    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
-    try {
-      const result = await runDoctorConfigWithInput({
-        repair: true,
-        config: {
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
-          },
-          channels: {
-            telegram: {
-              botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
-              allowFrom: ["@testuser"],
-            },
-          },
-        },
-        run: loadAndMaybeMigrateDoctorConfig,
-      });
-
-      const cfg = result.cfg as {
-        channels?: {
-          telegram?: {
-            allowFrom?: string[];
-            accounts?: Record<string, { allowFrom?: string[] }>;
-          };
-        };
-      };
-      const retainedAllowFrom =
-        cfg.channels?.telegram?.accounts?.default?.allowFrom ?? cfg.channels?.telegram?.allowFrom;
-      expect(retainedAllowFrom).toEqual(["@testuser"]);
-      expect(fetchSpy).not.toHaveBeenCalled();
+      const outputs = noteSpy.mock.calls
+        .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
+        .map((call) => String(call[0]));
+      expect(outputs.filter((line) => line.includes("\u001b"))).toEqual([]);
+      expect(outputs.filter((line) => line.includes("\nforged"))).toEqual([]);
       expect(
-        noteSpy.mock.calls.some((call) =>
-          String(call[0]).includes(
-            "configured Telegram bot credentials are unavailable in this command path",
-          ),
+        outputs.some(
+          (line) =>
+            line.includes("channels.slack.accounts.work.allowFrom: aliceforged") &&
+            line.includes("mutable allowlist"),
+        ),
+      ).toBe(true);
+      expect(
+        outputs.some(
+          (line) =>
+            line.includes('channels.slack.accounts.opsopen.allowFrom: set to ["*"]') &&
+            line.includes('required by dmPolicy="open"'),
+        ),
+      ).toBe(true);
+      expect(
+        outputs.some(
+          (line) =>
+            line.includes('channels.whatsapp.accounts.opsempty.groupPolicy is "allowlist"') &&
+            line.includes("groupAllowFrom"),
         ),
       ).toBe(true);
     } finally {
       noteSpy.mockRestore();
-      vi.unstubAllGlobals();
     }
   });
 
   it("warns and continues when Telegram account inspection hits inactive SecretRef surfaces", async () => {
-    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const { noteModule: freshNoteModule, loadAndMaybeMigrateDoctorConfig: loadDoctorFlowFresh } =
+      await loadFreshDoctorFlowDeps();
+    const noteSpy = vi.spyOn(freshNoteModule, "note").mockImplementation(() => {});
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     try {
@@ -657,7 +703,7 @@ describe("doctor config flow", () => {
             },
           },
         },
-        run: loadAndMaybeMigrateDoctorConfig,
+        run: loadDoctorFlowFresh,
       });
 
       const cfg = result.cfg as {
@@ -1151,7 +1197,15 @@ describe("doctor config flow", () => {
       },
       run: loadAndMaybeMigrateDoctorConfig,
     });
-
-    expectGoogleChatDmAllowFromRepaired(result.cfg);
+    const cfg = result.cfg as {
+      channels: {
+        googlechat: {
+          dm: { allowFrom: string[] };
+          allowFrom?: string[];
+        };
+      };
+    };
+    expect(cfg.channels.googlechat.dm.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.googlechat.allowFrom).toEqual(["*"]);
   });
 });

@@ -1,10 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveProviderCapabilitiesWithPlugin } from "../plugins/provider-runtime.js";
+import { resolveProviderCapabilitiesWithPlugin as resolveProviderCapabilitiesWithPluginRuntime } from "../plugins/provider-runtime.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export type ProviderCapabilities = {
   anthropicToolSchemaMode: "native" | "openai-functions";
   anthropicToolChoiceMode: "native" | "openai-string-modes";
+  openAiPayloadNormalizationMode: "default" | "moonshot-thinking";
   providerFamily: "default" | "openai" | "anthropic";
   preserveAnthropicThinkingSignatures: boolean;
   openAiCompatTurnValidation: boolean;
@@ -24,6 +25,7 @@ export type ProviderCapabilityLookupOptions = {
 const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   anthropicToolSchemaMode: "native",
   anthropicToolChoiceMode: "native",
+  openAiPayloadNormalizationMode: "default",
   providerFamily: "default",
   preserveAnthropicThinkingSignatures: true,
   openAiCompatTurnValidation: true,
@@ -35,6 +37,10 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
 };
 
 const CORE_PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
+  "anthropic-vertex": {
+    providerFamily: "anthropic",
+    dropThinkingBlockModelHints: ["claude"],
+  },
   "amazon-bedrock": {
     providerFamily: "anthropic",
     dropThinkingBlockModelHints: ["claude"],
@@ -58,6 +64,12 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
       "mistralai",
     ],
   },
+  moonshot: {
+    openAiPayloadNormalizationMode: "moonshot-thinking",
+  },
+  kimi: {
+    openAiPayloadNormalizationMode: "moonshot-thinking",
+  },
   opencode: {
     openAiCompatTurnValidation: false,
     geminiThoughtSignatureSanitization: true,
@@ -73,13 +85,31 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
   },
 };
 
+const defaultResolveProviderCapabilitiesWithPlugin = resolveProviderCapabilitiesWithPluginRuntime;
+const providerCapabilityDeps = {
+  resolveProviderCapabilitiesWithPlugin: defaultResolveProviderCapabilitiesWithPlugin,
+};
+
+export const __testing = {
+  setResolveProviderCapabilitiesWithPluginForTest(
+    resolveProviderCapabilitiesWithPlugin?: typeof defaultResolveProviderCapabilitiesWithPlugin,
+  ): void {
+    providerCapabilityDeps.resolveProviderCapabilitiesWithPlugin =
+      resolveProviderCapabilitiesWithPlugin ?? defaultResolveProviderCapabilitiesWithPlugin;
+  },
+  resetDepsForTests(): void {
+    providerCapabilityDeps.resolveProviderCapabilitiesWithPlugin =
+      defaultResolveProviderCapabilitiesWithPlugin;
+  },
+};
+
 export function resolveProviderCapabilities(
   provider?: string | null,
   options?: ProviderCapabilityLookupOptions,
 ): ProviderCapabilities {
   const normalized = normalizeProviderId(provider ?? "");
   const pluginCapabilities = normalized
-    ? resolveProviderCapabilitiesWithPlugin({
+    ? providerCapabilityDeps.resolveProviderCapabilitiesWithPlugin({
         provider: normalized,
         config: options?.config,
         workspaceDir: options?.workspaceDir,
@@ -134,6 +164,16 @@ export function supportsOpenAiCompatTurnValidation(
   options?: ProviderCapabilityLookupOptions,
 ): boolean {
   return resolveProviderCapabilities(provider, options).openAiCompatTurnValidation;
+}
+
+export function usesMoonshotThinkingPayloadCompat(
+  provider?: string | null,
+  options?: ProviderCapabilityLookupOptions,
+): boolean {
+  return (
+    resolveProviderCapabilities(provider, options).openAiPayloadNormalizationMode ===
+    "moonshot-thinking"
+  );
 }
 
 export function sanitizesGeminiThoughtSignatures(

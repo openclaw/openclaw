@@ -29,6 +29,7 @@ type SupportedOpenAICompatFields = Pick<
 
 type SupportedThinkingFormat =
   | NonNullable<OpenAICompletionsCompat["thinkingFormat"]>
+  | "openrouter"
   | "qwen-chat-template";
 
 export type ModelCompatConfig = SupportedOpenAICompatFields & {

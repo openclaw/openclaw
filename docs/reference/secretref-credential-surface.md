@@ -29,8 +29,7 @@ Scope intent:
 - `agents.list[].memorySearch.remote.apiKey`
 - `talk.apiKey`
 - `talk.providers.*.apiKey`
-- `messages.tts.elevenlabs.apiKey`
-- `messages.tts.openai.apiKey`
+- `messages.tts.providers.*.apiKey`
 - `tools.web.fetch.firecrawl.apiKey`
 - `plugins.entries.brave.config.webSearch.apiKey`
 - `plugins.entries.google.config.webSearch.apiKey`
@@ -38,6 +37,7 @@ Scope intent:
 - `plugins.entries.moonshot.config.webSearch.apiKey`
 - `plugins.entries.perplexity.config.webSearch.apiKey`
 - `plugins.entries.firecrawl.config.webSearch.apiKey`
+- `plugins.entries.tavily.config.webSearch.apiKey`
 - `tools.web.search.apiKey`
 - `tools.web.search.gemini.apiKey`
 - `tools.web.search.grok.apiKey`
@@ -62,12 +62,10 @@ Scope intent:
 - `channels.slack.accounts.*.signingSecret`
 - `channels.discord.token`
 - `channels.discord.pluralkit.token`
-- `channels.discord.voice.tts.elevenlabs.apiKey`
-- `channels.discord.voice.tts.openai.apiKey`
+- `channels.discord.voice.tts.providers.*.apiKey`
 - `channels.discord.accounts.*.token`
 - `channels.discord.accounts.*.pluralkit.token`
-- `channels.discord.accounts.*.voice.tts.elevenlabs.apiKey`
-- `channels.discord.accounts.*.voice.tts.openai.apiKey`
+- `channels.discord.accounts.*.voice.tts.providers.*.apiKey`
 - `channels.irc.password`
 - `channels.irc.nickserv.password`
 - `channels.irc.accounts.*.password`

@@ -23,8 +23,8 @@ enum TalkModeGatewayConfigParser {
         defaultSilenceTimeoutMs: Int,
         envVoice: String?,
         sagVoice: String?,
-        envApiKey: String?
-    ) -> TalkModeGatewayConfigState {
+        envApiKey: String?) -> TalkModeGatewayConfigState
+    {
         let talk = snapshot.config?["talk"]?.dictionaryValue
         let selection = TalkConfigParsing.selectProviderConfig(talk, defaultProvider: defaultProvider)
         let activeProvider = selection?.provider ?? defaultProvider
@@ -81,8 +81,8 @@ enum TalkModeGatewayConfigParser {
         defaultSilenceTimeoutMs: Int,
         envVoice: String?,
         sagVoice: String?,
-        envApiKey: String?
-    ) -> TalkModeGatewayConfigState {
+        envApiKey: String?) -> TalkModeGatewayConfigState
+    {
         let resolvedVoice =
             (envVoice?.isEmpty == false ? envVoice : nil) ??
             (sagVoice?.isEmpty == false ? sagVoice : nil)

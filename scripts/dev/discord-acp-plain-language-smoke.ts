@@ -7,6 +7,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
+function writeStdoutLine(message: string): void {
+  process.stdout.write(`${message}\n`);
+}
+
+function writeStdoutJson(value: unknown): void {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function writeStderrLine(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
 type ThreadBindingRecord = {
   accountId?: string;
   channelId?: string;
@@ -121,7 +133,7 @@ function parseNumber(value: string | undefined, fallback: number): number {
 }
 
 function resolveStateDir(): string {
-  const override = process.env.OPENCLAW_STATE_DIR?.trim() || process.env.CLAWDBOT_STATE_DIR?.trim();
+  const override = process.env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
     return override.startsWith("~")
       ? path.resolve(process.env.HOME || "", override.slice(1))
@@ -188,16 +200,9 @@ function usage(): string {
 }
 
 function parseArgs(): Args {
-  const channelId =
-    resolveArg("--channel") ||
-    process.env.OPENCLAW_DISCORD_SMOKE_CHANNEL_ID ||
-    process.env.CLAWDBOT_DISCORD_SMOKE_CHANNEL_ID ||
-    "";
+  const channelId = resolveArg("--channel") || process.env.OPENCLAW_DISCORD_SMOKE_CHANNEL_ID || "";
   const driverModeRaw =
-    resolveArg("--driver") ||
-    process.env.OPENCLAW_DISCORD_SMOKE_DRIVER ||
-    process.env.CLAWDBOT_DISCORD_SMOKE_DRIVER ||
-    "token";
+    resolveArg("--driver") || process.env.OPENCLAW_DISCORD_SMOKE_DRIVER || "token";
   const normalizedDriverMode = driverModeRaw.trim().toLowerCase();
   const driverMode: DriverMode =
     normalizedDriverMode === "webhook"
@@ -208,37 +213,23 @@ function parseArgs(): Args {
           ? "token"
           : "token";
   const driverToken =
-    resolveArg("--token") ||
-    process.env.OPENCLAW_DISCORD_SMOKE_DRIVER_TOKEN ||
-    process.env.CLAWDBOT_DISCORD_SMOKE_DRIVER_TOKEN ||
-    "";
+    resolveArg("--token") || process.env.OPENCLAW_DISCORD_SMOKE_DRIVER_TOKEN || "";
   const driverTokenPrefix =
     resolveArg("--token-prefix") || process.env.OPENCLAW_DISCORD_SMOKE_DRIVER_TOKEN_PREFIX || "Bot";
   const botToken =
     resolveArg("--bot-token") ||
     process.env.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN ||
-    process.env.CLAWDBOT_DISCORD_SMOKE_BOT_TOKEN ||
     process.env.DISCORD_BOT_TOKEN ||
     "";
   const botTokenPrefix =
     resolveArg("--bot-token-prefix") ||
     process.env.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN_PREFIX ||
     "Bot";
-  const targetAgent =
-    resolveArg("--agent") ||
-    process.env.OPENCLAW_DISCORD_SMOKE_AGENT ||
-    process.env.CLAWDBOT_DISCORD_SMOKE_AGENT ||
-    "codex";
+  const targetAgent = resolveArg("--agent") || process.env.OPENCLAW_DISCORD_SMOKE_AGENT || "codex";
   const mentionUserId =
-    resolveArg("--mention") ||
-    process.env.OPENCLAW_DISCORD_SMOKE_MENTION_USER_ID ||
-    process.env.CLAWDBOT_DISCORD_SMOKE_MENTION_USER_ID ||
-    undefined;
+    resolveArg("--mention") || process.env.OPENCLAW_DISCORD_SMOKE_MENTION_USER_ID || undefined;
   const instruction =
-    resolveArg("--instruction") ||
-    process.env.OPENCLAW_DISCORD_SMOKE_INSTRUCTION ||
-    process.env.CLAWDBOT_DISCORD_SMOKE_INSTRUCTION ||
-    undefined;
+    resolveArg("--instruction") || process.env.OPENCLAW_DISCORD_SMOKE_INSTRUCTION || undefined;
   const timeoutMs = parseNumber(
     resolveArg("--timeout-ms") || process.env.OPENCLAW_DISCORD_SMOKE_TIMEOUT_MS,
     240_000,
@@ -503,55 +494,39 @@ async function loadParentRecentMessages(params: {
 
 function printOutput(params: { json: boolean; payload: SuccessResult | FailureResult }) {
   if (params.json) {
-    // eslint-disable-next-line no-console
-    console.log(JSON.stringify(params.payload, null, 2));
+    writeStdoutJson(params.payload);
     return;
   }
   if (params.payload.ok) {
     const success = params.payload;
-    // eslint-disable-next-line no-console
-    console.log("PASS");
-    // eslint-disable-next-line no-console
-    console.log(`smokeId: ${success.smokeId}`);
-    // eslint-disable-next-line no-console
-    console.log(`sentMessageId: ${success.sentMessageId}`);
-    // eslint-disable-next-line no-console
-    console.log(`threadId: ${success.binding.threadId}`);
-    // eslint-disable-next-line no-console
-    console.log(`sessionKey: ${success.binding.targetSessionKey}`);
-    // eslint-disable-next-line no-console
-    console.log(`ackMessageId: ${success.ackMessage.id}`);
-    // eslint-disable-next-line no-console
-    console.log(
+    writeStdoutLine("PASS");
+    writeStdoutLine(`smokeId: ${success.smokeId}`);
+    writeStdoutLine(`sentMessageId: ${success.sentMessageId}`);
+    writeStdoutLine(`threadId: ${success.binding.threadId}`);
+    writeStdoutLine(`sessionKey: ${success.binding.targetSessionKey}`);
+    writeStdoutLine(`ackMessageId: ${success.ackMessage.id}`);
+    writeStdoutLine(
       `ackAuthor: ${success.ackMessage.authorUsername || success.ackMessage.authorId || "unknown"}`,
     );
     return;
   }
   const failure = params.payload;
-  // eslint-disable-next-line no-console
-  console.error("FAIL");
-  // eslint-disable-next-line no-console
-  console.error(`stage: ${failure.stage}`);
-  // eslint-disable-next-line no-console
-  console.error(`smokeId: ${failure.smokeId}`);
-  // eslint-disable-next-line no-console
-  console.error(`error: ${failure.error}`);
+  writeStderrLine("FAIL");
+  writeStderrLine(`stage: ${failure.stage}`);
+  writeStderrLine(`smokeId: ${failure.smokeId}`);
+  writeStderrLine(`error: ${failure.error}`);
   if (failure.diagnostics?.bindingCandidates?.length) {
-    // eslint-disable-next-line no-console
-    console.error("binding candidates:");
+    writeStderrLine("binding candidates:");
     for (const candidate of failure.diagnostics.bindingCandidates) {
-      // eslint-disable-next-line no-console
-      console.error(
+      writeStderrLine(
         `  thread=${candidate.threadId} kind=${candidate.targetKind || "?"} agent=${candidate.agentId || "?"} boundAt=${candidate.boundAt || 0} session=${candidate.targetSessionKey}`,
       );
     }
   }
   if (failure.diagnostics?.parentChannelRecent?.length) {
-    // eslint-disable-next-line no-console
-    console.error("recent parent channel messages:");
+    writeStderrLine("recent parent channel messages:");
     for (const row of failure.diagnostics.parentChannelRecent) {
-      // eslint-disable-next-line no-console
-      console.error(`  ${row.id} ${row.author}${row.bot ? " [bot]" : ""}: ${row.content || ""}`);
+      writeStderrLine(`  ${row.id} ${row.author}${row.bot ? " [bot]" : ""}: ${row.content || ""}`);
     }
   }
 }
@@ -846,8 +821,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
 }
 
 if (hasFlag("--help") || hasFlag("-h")) {
-  // eslint-disable-next-line no-console
-  console.log(usage());
+  writeStdoutLine(usage());
   process.exit(0);
 }
 

@@ -44,7 +44,9 @@ export function createVoiceCallBaseConfig(params?: {
     stt: { provider: "openai", model: "whisper-1" },
     tts: {
       provider: "openai",
-      openai: { model: "gpt-4o-mini-tts", voice: "coral" },
+      providers: {
+        openai: { model: "gpt-4o-mini-tts", voice: "coral" },
+      },
     },
     responseModel: "openai/gpt-4o-mini",
     responseTimeoutMs: 30000,

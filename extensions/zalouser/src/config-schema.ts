@@ -4,7 +4,7 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 import { MarkdownConfigSchema, ToolPolicySchema } from "../runtime-api.js";
 
 const groupConfigSchema = z.object({

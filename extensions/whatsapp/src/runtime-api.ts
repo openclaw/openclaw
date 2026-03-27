@@ -9,7 +9,8 @@ export {
   readReactionParams,
   readStringParam,
   resolveWhatsAppGroupIntroHint,
-  resolveWhatsAppOutboundTarget,
+  resolveWhatsAppGroupRequireMention,
+  resolveWhatsAppGroupToolPolicy,
   ToolAuthorizationError,
   WhatsAppConfigSchema,
   type ChannelPlugin,
@@ -18,8 +19,9 @@ export {
 
 export {
   createWhatsAppOutboundBase,
-  isWhatsAppGroupJid,
-  normalizeWhatsAppTarget,
+  looksLikeWhatsAppTargetId,
+  normalizeWhatsAppAllowFromEntries,
+  normalizeWhatsAppMessagingTarget,
   resolveWhatsAppHeartbeatRecipients,
   resolveWhatsAppMentionStripRegexes,
   type ChannelMessageActionName,
@@ -27,5 +29,24 @@ export {
   type GroupPolicy,
   type WhatsAppAccountConfig,
 } from "openclaw/plugin-sdk/whatsapp-shared";
+export {
+  isWhatsAppGroupJid,
+  isWhatsAppUserTarget,
+  normalizeWhatsAppTarget,
+} from "./normalize-target.js";
+export { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
+type MonitorWebChannel = typeof import("./channel.runtime.js").monitorWebChannel;
 
-export { monitorWebChannel } from "./channel.runtime.js";
+let channelRuntimePromise: Promise<typeof import("./channel.runtime.js")> | null = null;
+
+function loadChannelRuntime() {
+  channelRuntimePromise ??= import("./channel.runtime.js");
+  return channelRuntimePromise;
+}
+
+export async function monitorWebChannel(
+  ...args: Parameters<MonitorWebChannel>
+): ReturnType<MonitorWebChannel> {
+  const { monitorWebChannel } = await loadChannelRuntime();
+  return await monitorWebChannel(...args);
+}

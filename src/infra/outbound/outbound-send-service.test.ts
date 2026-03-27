@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   dispatchChannelMessageAction: vi.fn(),
   sendMessage: vi.fn(),
   sendPoll: vi.fn(),
-  getAgentScopedMediaLocalRoots: vi.fn(() => ["/tmp/agent-roots"]),
+  getAgentScopedMediaLocalRootsForSources: vi.fn(() => ["/tmp/agent-roots"]),
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
 }));
 
@@ -24,7 +24,7 @@ vi.mock("../../media/local-roots.js", async (importOriginal) => {
   return {
     ...actual,
     getDefaultMediaLocalRoots: mocks.getDefaultMediaLocalRoots,
-    getAgentScopedMediaLocalRoots: mocks.getAgentScopedMediaLocalRoots,
+    getAgentScopedMediaLocalRootsForSources: mocks.getAgentScopedMediaLocalRootsForSources,
   };
 });
 
@@ -45,7 +45,7 @@ describe("executeSendAction", () => {
       continuePrompt: "",
       output: "",
       sessionId: "s1",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
     };
   }
@@ -98,7 +98,7 @@ describe("executeSendAction", () => {
     mocks.sendMessage.mockClear();
     mocks.sendPoll.mockClear();
     mocks.getDefaultMediaLocalRoots.mockClear();
-    mocks.getAgentScopedMediaLocalRoots.mockClear();
+    mocks.getAgentScopedMediaLocalRootsForSources.mockClear();
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
   });
 
@@ -196,12 +196,43 @@ describe("executeSendAction", () => {
       message: "hello",
     });
 
-    expect(mocks.getAgentScopedMediaLocalRoots).toHaveBeenCalledWith({}, "agent-1");
+    expect(mocks.getAgentScopedMediaLocalRootsForSources).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "agent-1",
+      mediaSources: [],
+    });
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaLocalRoots: ["/tmp/agent-roots"],
       }),
     );
+  });
+
+  it("passes concrete media sources when widening plugin dispatch roots", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: {
+          to: "channel:123",
+          message: "hello",
+          media: "/Users/peter/Pictures/photo.png",
+        },
+        agentId: "agent-1",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+      mediaUrl: "/Users/peter/Pictures/photo.png",
+    });
+
+    expect(mocks.getAgentScopedMediaLocalRootsForSources).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "agent-1",
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
   });
 
   it("passes mirror idempotency keys through plugin-handled sends", async () => {

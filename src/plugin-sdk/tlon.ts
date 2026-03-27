@@ -1,4 +1,4 @@
-// Narrow plugin-sdk surface for the bundled tlon plugin.
+// Private helper surface for the bundled tlon plugin.
 // Keep this list additive and scoped to symbols used under extensions/tlon.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
@@ -26,6 +26,7 @@ export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export type { RuntimeEnv } from "../runtime.js";
+export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { createLoggerBackedRuntime } from "./runtime.js";

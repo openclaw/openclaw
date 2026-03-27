@@ -1,6 +1,5 @@
 import type { Bot } from "grammy";
-import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveGlobalSingleton } from "openclaw/plugin-sdk/text-runtime";
+import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
 
@@ -27,15 +26,25 @@ type TelegramSendMessageDraft = (
  * lanes do not accidentally reuse draft ids when code-split entries coexist.
  */
 const TELEGRAM_DRAFT_STREAM_STATE_KEY = Symbol.for("openclaw.telegramDraftStreamState");
+let draftStreamState: { nextDraftId: number } | undefined;
 
-const draftStreamState = resolveGlobalSingleton(TELEGRAM_DRAFT_STREAM_STATE_KEY, () => ({
-  nextDraftId: 0,
-}));
+function getDraftStreamState(): { nextDraftId: number } {
+  if (!draftStreamState) {
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    draftStreamState = (globalStore[TELEGRAM_DRAFT_STREAM_STATE_KEY] as
+      | { nextDraftId: number }
+      | undefined) ?? {
+      nextDraftId: 0,
+    };
+    globalStore[TELEGRAM_DRAFT_STREAM_STATE_KEY] = draftStreamState;
+  }
+  return draftStreamState;
+}
 
 function allocateTelegramDraftId(): number {
-  draftStreamState.nextDraftId =
-    draftStreamState.nextDraftId >= TELEGRAM_DRAFT_ID_MAX ? 1 : draftStreamState.nextDraftId + 1;
-  return draftStreamState.nextDraftId;
+  const state = getDraftStreamState();
+  state.nextDraftId = state.nextDraftId >= TELEGRAM_DRAFT_ID_MAX ? 1 : state.nextDraftId + 1;
+  return state.nextDraftId;
 }
 
 function resolveSendMessageDraftApi(api: Bot["api"]): TelegramSendMessageDraft | undefined {
@@ -126,7 +135,11 @@ export function createTelegramDraftStream(params: {
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyParams =
     params.replyToMessageId != null
-      ? { ...threadParams, reply_to_message_id: params.replyToMessageId }
+      ? {
+          ...threadParams,
+          reply_to_message_id: params.replyToMessageId,
+          allow_sending_without_reply: true,
+        }
       : threadParams;
   const resolvedDraftApi = prefersDraftTransport
     ? resolveSendMessageDraftApi(params.api)
@@ -454,6 +467,6 @@ export function createTelegramDraftStream(params: {
 
 export const __testing = {
   resetTelegramDraftStreamForTests() {
-    draftStreamState.nextDraftId = 0;
+    getDraftStreamState().nextDraftId = 0;
   },
 };

@@ -1,7 +1,7 @@
 ---
 summary: "Microsoft Teams bot support status, capabilities, and configuration"
 read_when:
-  - Working on MS Teams channel features
+  - Working on Microsoft Teams channel features
 title: "Microsoft Teams"
 ---
 
@@ -11,15 +11,15 @@ title: "Microsoft Teams"
 
 Updated: 2026-01-21
 
-Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls are sent via Adaptive Cards.
+Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls are sent via Adaptive Cards. Message actions expose explicit `upload-file` for file-first sends.
 
 ## Plugin required
 
 Microsoft Teams ships as a plugin and is not bundled with the core install.
 
-**Breaking change (2026.1.15):** MS Teams moved out of core. If you use it, you must install the plugin.
+**Breaking change (2026.1.15):** Microsoft Teams moved out of core. If you use it, you must install the plugin.
 
-Explainable: keeps core installs lighter and lets MS Teams dependencies update independently.
+Explainable: keeps core installs lighter and lets Microsoft Teams dependencies update independently.
 
 Install via CLI (npm registry):
 
@@ -527,6 +527,7 @@ Teams recently introduced two channel UI styles over the same underlying data mo
 
 - **DMs:** Images and file attachments work via Teams bot file APIs.
 - **Channels/groups:** Attachments live in M365 storage (SharePoint/OneDrive). The webhook payload only includes an HTML stub, not the actual file bytes. **Graph API permissions are required** to download channel attachments.
+- For explicit file-first sends, use `action=upload-file` with `media` / `filePath` / `path`; optional `message` becomes the accompanying text/comment, and `filename` overrides the uploaded name.
 
 Without Graph permissions, channel messages with images will be received as text-only (the image content is not accessible to the bot).
 By default, OpenClaw only downloads media from Microsoft/Teams hostnames. Override with `channels.msteams.mediaAllowHosts` (use `["*"]` to allow any host).

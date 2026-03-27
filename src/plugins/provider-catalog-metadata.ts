@@ -1,5 +1,4 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
-import { findCatalogTemplate } from "./provider-catalog.js";
 import type {
   ProviderAugmentModelCatalogContext,
   ProviderBuiltInModelSuppressionContext,
@@ -9,6 +8,22 @@ const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const OPENAI_DIRECT_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const SUPPRESSED_SPARK_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
+
+function findCatalogTemplate(params: {
+  entries: ReadonlyArray<{ provider: string; id: string }>;
+  providerId: string;
+  templateIds: readonly string[];
+}) {
+  return params.templateIds
+    .map((templateId) =>
+      params.entries.find(
+        (entry) =>
+          entry.provider.toLowerCase() === params.providerId.toLowerCase() &&
+          entry.id.toLowerCase() === templateId.toLowerCase(),
+      ),
+    )
+    .find((entry) => entry !== undefined);
+}
 
 export function resolveBundledProviderBuiltInModelSuppression(
   context: ProviderBuiltInModelSuppressionContext,
@@ -51,12 +66,12 @@ export function augmentBundledProviderCatalog(
   const openAiCodexGpt54Template = findCatalogTemplate({
     entries: context.entries,
     providerId: OPENAI_CODEX_PROVIDER_ID,
-    templateIds: ["gpt-5.3-codex", "gpt-5.2-codex"],
+    templateIds: ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"],
   });
   const openAiCodexSparkTemplate = findCatalogTemplate({
     entries: context.entries,
     providerId: OPENAI_CODEX_PROVIDER_ID,
-    templateIds: ["gpt-5.3-codex", "gpt-5.2-codex"],
+    templateIds: ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"],
   });
 
   return [

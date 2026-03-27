@@ -1,9 +1,10 @@
+import { callGateway } from "../../gateway/call.js";
+import { ErrorCodes } from "../../gateway/protocol/index.js";
+import { logVerbose } from "../../globals.js";
 import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
-} from "openclaw/plugin-sdk/telegram";
-import { callGateway } from "../../gateway/call.js";
-import { logVerbose } from "../../globals.js";
+} from "../../plugin-sdk/telegram-runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -72,6 +73,39 @@ function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
   return `${channel}:${sender}`;
 }
 
+function readErrorCode(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function readApprovalNotFoundDetailsReason(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const reason = (value as { reason?: unknown }).reason;
+  return typeof reason === "string" && reason.trim() ? reason : null;
+}
+
+function isApprovalNotFoundError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const gatewayCode = readErrorCode((err as { gatewayCode?: unknown }).gatewayCode);
+  if (gatewayCode === ErrorCodes.APPROVAL_NOT_FOUND) {
+    return true;
+  }
+
+  const detailsReason = readApprovalNotFoundDetailsReason((err as { details?: unknown }).details);
+  if (
+    gatewayCode === ErrorCodes.INVALID_REQUEST &&
+    detailsReason === ErrorCodes.APPROVAL_NOT_FOUND
+  ) {
+    return true;
+  }
+
+  // Legacy server/client combinations may only include the message text.
+  return /unknown or expired approval id/i.test(err.message);
+}
+
 export const handleApproveCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -91,26 +125,39 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   if (!parsed.ok) {
     return { shouldContinue: false, reply: { text: parsed.error } };
   }
+  const isPluginId = parsed.id.startsWith("plugin:");
 
   if (params.command.channel === "telegram") {
-    if (
-      !isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })
-    ) {
-      return {
-        shouldContinue: false,
-        reply: { text: "❌ Telegram exec approvals are not enabled for this bot account." },
-      };
+    const telegramApproverContext = {
+      cfg: params.cfg,
+      accountId: params.ctx.AccountId,
+      senderId: params.command.senderId,
+    };
+
+    if (!isPluginId) {
+      if (
+        !isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })
+      ) {
+        return {
+          shouldContinue: false,
+          reply: { text: "❌ Telegram exec approvals are not enabled for this bot account." },
+        };
+      }
+      if (!isTelegramExecApprovalApprover(telegramApproverContext)) {
+        return {
+          shouldContinue: false,
+          reply: { text: "❌ You are not authorized to approve exec requests on Telegram." },
+        };
+      }
     }
-    if (
-      !isTelegramExecApprovalApprover({
-        cfg: params.cfg,
-        accountId: params.ctx.AccountId,
-        senderId: params.command.senderId,
-      })
-    ) {
+
+    // Keep plugin-ID routing independent from exec approval client enablement so
+    // forwarded plugin approvals remain resolvable, but still require explicit
+    // Telegram approver membership for security parity.
+    if (isPluginId && !isTelegramExecApprovalApprover(telegramApproverContext)) {
       return {
         shouldContinue: false,
-        reply: { text: "❌ You are not authorized to approve exec requests on Telegram." },
+        reply: { text: "❌ You are not authorized to approve plugin requests on Telegram." },
       };
     }
   }
@@ -125,25 +172,51 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   }
 
   const resolvedBy = buildResolvedByLabel(params);
-  try {
+  const callApprovalMethod = async (method: string): Promise<void> => {
     await callGateway({
-      method: "exec.approval.resolve",
+      method,
       params: { id: parsed.id, decision: parsed.decision },
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: `Chat approval (${resolvedBy})`,
       mode: GATEWAY_CLIENT_MODES.BACKEND,
     });
-  } catch (err) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text: `❌ Failed to submit approval: ${String(err)}`,
-      },
-    };
+  };
+
+  // Plugin approval IDs are kind-prefixed (`plugin:<uuid>`); route directly when detected.
+  // Unprefixed IDs try exec first, then fall back to plugin for backward compat.
+  if (isPluginId) {
+    try {
+      await callApprovalMethod("plugin.approval.resolve");
+    } catch (err) {
+      return {
+        shouldContinue: false,
+        reply: { text: `❌ Failed to submit approval: ${String(err)}` },
+      };
+    }
+  } else {
+    try {
+      await callApprovalMethod("exec.approval.resolve");
+    } catch (err) {
+      if (isApprovalNotFoundError(err)) {
+        try {
+          await callApprovalMethod("plugin.approval.resolve");
+        } catch (pluginErr) {
+          return {
+            shouldContinue: false,
+            reply: { text: `❌ Failed to submit approval: ${String(pluginErr)}` },
+          };
+        }
+      } else {
+        return {
+          shouldContinue: false,
+          reply: { text: `❌ Failed to submit approval: ${String(err)}` },
+        };
+      }
+    }
   }
 
   return {
     shouldContinue: false,
-    reply: { text: `✅ Exec approval ${parsed.decision} submitted for ${parsed.id}.` },
+    reply: { text: `✅ Approval ${parsed.decision} submitted for ${parsed.id}.` },
   };
 };

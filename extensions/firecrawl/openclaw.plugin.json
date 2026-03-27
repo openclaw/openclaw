@@ -1,5 +1,8 @@
 {
   "id": "firecrawl",
+  "providerAuthEnvVars": {
+    "firecrawl": ["FIRECRAWL_API_KEY"]
+  },
   "uiHints": {
     "webSearch.apiKey": {
       "label": "Firecrawl Search API Key",
@@ -11,6 +14,10 @@
       "label": "Firecrawl Search Base URL",
       "help": "Firecrawl Search base URL override."
     }
+  },
+  "contracts": {
+    "webSearchProviders": ["firecrawl"],
+    "tools": ["firecrawl_search", "firecrawl_scrape"]
   },
   "configSchema": {
     "type": "object",

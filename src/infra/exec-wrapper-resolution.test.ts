@@ -7,11 +7,15 @@ import {
   isDispatchWrapperExecutable,
   isShellWrapperExecutable,
   normalizeExecutableToken,
-  resolveDispatchWrapperExecutionPlan,
+  resolveDispatchWrapperTrustPlan,
   unwrapEnvInvocation,
   unwrapKnownDispatchWrapperInvocation,
   unwrapKnownShellMultiplexerInvocation,
 } from "./exec-wrapper-resolution.js";
+
+function supportsScriptPositionalCommandForTests(): boolean {
+  return process.platform === "darwin" || process.platform === "freebsd";
+}
 
 describe("basenameLower", () => {
   test.each([
@@ -40,6 +44,8 @@ describe("normalizeExecutableToken", () => {
 describe("wrapper classification", () => {
   test.each([
     { token: "sudo", dispatch: true, shell: false },
+    { token: "script", dispatch: true, shell: false },
+    { token: "time", dispatch: true, shell: false },
     { token: "timeout.exe", dispatch: true, shell: false },
     { token: "bash", dispatch: false, shell: true },
     { token: "pwsh.exe", dispatch: false, shell: true },
@@ -107,6 +113,10 @@ describe("unwrapEnvInvocation", () => {
 describe("unwrapKnownDispatchWrapperInvocation", () => {
   test.each([
     {
+      argv: ["env", "--", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "env", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
       argv: ["nice", "-n", "5", "bash", "-lc", "echo hi"],
       expected: { kind: "unwrapped", wrapper: "nice", argv: ["bash", "-lc", "echo hi"] },
     },
@@ -115,12 +125,30 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
       expected: { kind: "unwrapped", wrapper: "nohup", argv: ["bash", "-lc", "echo hi"] },
     },
     {
+      argv: ["script", "-q", "/dev/null", "bash", "-lc", "echo hi"],
+      expected: supportsScriptPositionalCommandForTests()
+        ? { kind: "unwrapped", wrapper: "script", argv: ["bash", "-lc", "echo hi"] }
+        : { kind: "blocked", wrapper: "script" },
+    },
+    {
+      argv: ["script", "-E", "always", "/dev/null", "bash", "-lc", "echo hi"],
+      expected: { kind: "blocked", wrapper: "script" },
+    },
+    {
       argv: ["stdbuf", "-o", "L", "bash", "-lc", "echo hi"],
       expected: { kind: "unwrapped", wrapper: "stdbuf", argv: ["bash", "-lc", "echo hi"] },
     },
     {
+      argv: ["time", "-p", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "time", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
       argv: ["timeout", "--signal=TERM", "5s", "bash", "-lc", "echo hi"],
       expected: { kind: "unwrapped", wrapper: "timeout", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
+      argv: ["script", "-q", "/dev/null"],
+      expected: { kind: "blocked", wrapper: "script" },
     },
     {
       argv: ["sudo", "bash", "-lc", "echo hi"],
@@ -133,12 +161,70 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
   ])("unwraps known dispatch wrappers for %j", ({ argv, expected }) => {
     expect(unwrapKnownDispatchWrapperInvocation(argv)).toEqual(expected);
   });
+
+  test.each(["chrt", "doas", "ionice", "setsid", "sudo", "taskset"])(
+    "fails closed for blocked dispatch wrapper %s",
+    (wrapper) => {
+      expect(unwrapKnownDispatchWrapperInvocation([wrapper, "bash", "-lc", "echo hi"])).toEqual({
+        kind: "blocked",
+        wrapper,
+      });
+    },
+  );
 });
 
-describe("resolveDispatchWrapperExecutionPlan", () => {
+describe("resolveDispatchWrapperTrustPlan", () => {
+  test("allows non-semantic env passthrough", () => {
+    expect(resolveDispatchWrapperTrustPlan(["env", "--", "bash", "-lc", "echo hi"])).toEqual({
+      argv: ["bash", "-lc", "echo hi"],
+      wrappers: ["env"],
+      policyBlocked: false,
+    });
+  });
+
+  test.each([
+    {
+      argv: ["nice", "-n", "5", "bash", "-lc", "echo hi"],
+      wrapper: "nice",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
+    {
+      argv: ["nohup", "--", "bash", "-lc", "echo hi"],
+      wrapper: "nohup",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
+    {
+      argv: ["stdbuf", "-o", "L", "bash", "-lc", "echo hi"],
+      wrapper: "stdbuf",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
+    {
+      argv: ["time", "-p", "bash", "-lc", "echo hi"],
+      wrapper: "time",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
+    {
+      argv: ["timeout", "--signal=TERM", "5s", "bash", "-lc", "echo hi"],
+      wrapper: "timeout",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
+  ])("keeps transparent wrapper handling in sync for %s", ({ argv, wrapper, effectiveArgv }) => {
+    expect(isDispatchWrapperExecutable(wrapper)).toBe(true);
+    expect(unwrapKnownDispatchWrapperInvocation(argv)).toEqual({
+      kind: "unwrapped",
+      wrapper,
+      argv: effectiveArgv,
+    });
+    expect(resolveDispatchWrapperTrustPlan(argv)).toEqual({
+      argv: effectiveArgv,
+      wrappers: [wrapper],
+      policyBlocked: false,
+    });
+  });
+
   test("unwraps transparent wrapper chains", () => {
     expect(
-      resolveDispatchWrapperExecutionPlan(["nohup", "nice", "-n", "5", "bash", "-lc", "echo hi"]),
+      resolveDispatchWrapperTrustPlan(["nohup", "nice", "-n", "5", "bash", "-lc", "echo hi"]),
     ).toEqual({
       argv: ["bash", "-lc", "echo hi"],
       wrappers: ["nohup", "nice"],
@@ -147,9 +233,7 @@ describe("resolveDispatchWrapperExecutionPlan", () => {
   });
 
   test("blocks semantic env usage even when it reaches a shell wrapper", () => {
-    expect(
-      resolveDispatchWrapperExecutionPlan(["env", "FOO=bar", "bash", "-lc", "echo hi"]),
-    ).toEqual({
+    expect(resolveDispatchWrapperTrustPlan(["env", "FOO=bar", "bash", "-lc", "echo hi"])).toEqual({
       argv: ["env", "FOO=bar", "bash", "-lc", "echo hi"],
       wrappers: ["env"],
       policyBlocked: true,
@@ -159,7 +243,7 @@ describe("resolveDispatchWrapperExecutionPlan", () => {
 
   test("blocks wrapper overflow beyond the configured depth", () => {
     expect(
-      resolveDispatchWrapperExecutionPlan(["nohup", "timeout", "5s", "bash", "-lc", "echo hi"], 1),
+      resolveDispatchWrapperTrustPlan(["nohup", "timeout", "5s", "bash", "-lc", "echo hi"], 1),
     ).toEqual({
       argv: ["timeout", "5s", "bash", "-lc", "echo hi"],
       wrappers: ["nohup"],

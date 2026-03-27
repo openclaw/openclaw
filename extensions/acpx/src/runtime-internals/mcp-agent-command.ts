@@ -2,12 +2,22 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnAndCollect, type SpawnCommandOptions } from "./process.js";
 
+// Keep this mirror aligned with openclaw/acpx src/agent-registry.ts built-ins.
 const ACPX_BUILTIN_AGENT_COMMANDS: Record<string, string> = {
-  codex: "npx @zed-industries/codex-acp",
-  claude: "npx -y @zed-industries/claude-agent-acp",
-  gemini: "gemini",
+  pi: "npx -y pi-acp@0.0.22",
+  openclaw: "openclaw acp",
+  codex: "npx -y @zed-industries/codex-acp@0.9.5",
+  claude: "npx -y @zed-industries/claude-agent-acp@0.21.0",
+  gemini: "gemini --acp",
+  cursor: "cursor-agent acp",
+  copilot: "copilot --acp --stdio",
+  droid: "droid exec --output-format acp",
+  iflow: "iflow --experimental-acp",
+  kilocode: "npx -y @kilocode/cli acp",
+  kimi: "kimi acp",
+  kiro: "kiro-cli acp",
   opencode: "npx -y opencode-ai acp",
-  pi: "npx pi-acp",
+  qwen: "qwen --acp",
 };
 
 const MCP_PROXY_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "mcp-proxy.mjs");
@@ -95,7 +105,7 @@ export async function resolveAcpxAgentCommand(params: {
   agent: string;
   stripProviderAuthEnvVars?: boolean;
   spawnOptions?: SpawnCommandOptions;
-}): Promise<string> {
+}): Promise<string | null> {
   const normalizedAgent = normalizeAgentName(params.agent);
   const overrides = await loadAgentOverrides({
     acpxCommand: params.acpxCommand,
@@ -103,7 +113,7 @@ export async function resolveAcpxAgentCommand(params: {
     stripProviderAuthEnvVars: params.stripProviderAuthEnvVars,
     spawnOptions: params.spawnOptions,
   });
-  return overrides[normalizedAgent] ?? ACPX_BUILTIN_AGENT_COMMANDS[normalizedAgent] ?? params.agent;
+  return overrides[normalizedAgent] ?? ACPX_BUILTIN_AGENT_COMMANDS[normalizedAgent] ?? null;
 }
 
 export function buildMcpProxyAgentCommand(params: {

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import {
@@ -11,6 +11,31 @@ import {
   resolveApiKeyForProvider,
   resolveEnvApiKey,
 } from "./model-auth.js";
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  resolveProviderSyntheticAuthWithPlugin: (params: {
+    provider: string;
+    context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
+  }) => {
+    if (params.provider !== "ollama") {
+      return undefined;
+    }
+    const providerConfig = params.context.providerConfig;
+    const hasApiConfig =
+      Boolean(providerConfig?.api?.trim()) ||
+      Boolean(providerConfig?.baseUrl?.trim()) ||
+      (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
+    if (!hasApiConfig) {
+      return undefined;
+    }
+    return {
+      apiKey: "ollama-local",
+      source: "models.providers.ollama (synthetic local key)",
+      mode: "api-key" as const,
+    };
+  },
+}));
 
 const envVar = (...parts: string[]) => parts.join("_");
 
@@ -466,20 +491,6 @@ describe("getApiKeyForModel", () => {
     );
   });
 
-  it("resolveEnvApiKey('qwen-portal') accepts QWEN_OAUTH_TOKEN", async () => {
-    await withEnvAsync(
-      {
-        QWEN_OAUTH_TOKEN: "qwen-oauth-token",
-        QWEN_PORTAL_API_KEY: undefined,
-      },
-      async () => {
-        const resolved = resolveEnvApiKey("qwen");
-        expect(resolved?.apiKey).toBe("qwen-oauth-token");
-        expect(resolved?.source).toContain("QWEN_OAUTH_TOKEN");
-      },
-    );
-  });
-
   it("resolveEnvApiKey('minimax-portal') accepts MINIMAX_OAUTH_TOKEN", async () => {
     await withEnvAsync(
       {
@@ -505,5 +516,56 @@ describe("getApiKeyForModel", () => {
         expect(resolved?.source).toContain("VOLCANO_ENGINE_API_KEY");
       },
     );
+  });
+
+  it("resolveEnvApiKey('anthropic-vertex') uses the provided env snapshot", async () => {
+    const resolved = resolveEnvApiKey("anthropic-vertex", {
+      GOOGLE_CLOUD_PROJECT_ID: "vertex-project",
+    } as NodeJS.ProcessEnv);
+
+    expect(resolved).toBeNull();
+  });
+
+  it("resolveEnvApiKey('anthropic-vertex') accepts GOOGLE_APPLICATION_CREDENTIALS with project_id", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-adc-"));
+    const credentialsPath = path.join(tempDir, "adc.json");
+    await fs.writeFile(credentialsPath, JSON.stringify({ project_id: "vertex-project" }), "utf8");
+
+    try {
+      const resolved = resolveEnvApiKey("anthropic-vertex", {
+        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('anthropic-vertex') accepts GOOGLE_APPLICATION_CREDENTIALS without a local project field", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-adc-"));
+    const credentialsPath = path.join(tempDir, "adc.json");
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+
+    try {
+      const resolved = resolveEnvApiKey("anthropic-vertex", {
+        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('anthropic-vertex') accepts explicit metadata auth opt-in", async () => {
+    const resolved = resolveEnvApiKey("anthropic-vertex", {
+      ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+    } as NodeJS.ProcessEnv);
+
+    expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+    expect(resolved?.source).toBe("gcloud adc");
   });
 });

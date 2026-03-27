@@ -17,6 +17,8 @@ import {
   webAuthExists,
 } from "./session.js";
 
+const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
 
 type ActiveLogin = {
@@ -271,14 +273,14 @@ export async function waitForWebLogin(
       // (distinguishes post-QR 401 from a genuine logged-out session).
       const isRestartCandidate =
         login.errorStatus === 515 ||
-        (login.errorStatus === DisconnectReason.loggedOut && !login.restartAttempted);
+        (login.errorStatus === LOGGED_OUT_STATUS && !login.restartAttempted);
       if (isRestartCandidate) {
         const restarted = await restartLoginSocket(login, runtime);
         if (restarted && isLoginFresh(login)) {
           continue;
         }
       }
-      if (login.errorStatus === DisconnectReason.loggedOut) {
+      if (login.errorStatus === LOGGED_OUT_STATUS) {
         await logoutWeb({
           authDir: login.authDir,
           isLegacyAuthDir: login.isLegacyAuthDir,

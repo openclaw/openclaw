@@ -9,6 +9,8 @@ export type { DiscordConfig, DiscordPluralKitConfig } from "../config/types.disc
 export type { InspectedDiscordAccount } from "../../extensions/discord/api.js";
 export type { ResolvedDiscordAccount } from "../../extensions/discord/api.js";
 export type { DiscordSendComponents, DiscordSendEmbeds } from "../../extensions/discord/api.js";
+export type { DiscordComponentMessageSpec } from "../../extensions/discord/api.js";
+export type { DiscordSendResult } from "../../extensions/discord/api.js";
 export type {
   ThreadBindingManager,
   ThreadBindingRecord,
@@ -64,8 +66,11 @@ export {
 } from "./status-helpers.js";
 
 export {
+  buildDiscordComponentMessage,
   createDiscordActionGate,
+  handleDiscordMessageAction,
   listDiscordAccountIds,
+  resolveDiscordAccount,
   resolveDefaultDiscordAccountId,
 } from "../../extensions/discord/api.js";
 export { inspectDiscordAccount } from "../../extensions/discord/api.js";
@@ -79,7 +84,7 @@ export { collectDiscordStatusIssues } from "../../extensions/discord/api.js";
 export {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-} from "../../extensions/discord/runtime-api.js";
+} from "../../extensions/discord/timeouts.js";
 export { normalizeExplicitDiscordSessionKey } from "../../extensions/discord/session-key-api.js";
 export {
   autoBindSpawnedDiscordSubagent,
@@ -93,6 +98,10 @@ export {
   setThreadBindingMaxAgeBySessionKey,
   unbindThreadBindingsBySessionKey,
 } from "../../extensions/discord/runtime-api.js";
+export {
+  __testing as discordThreadBindingTesting,
+  createThreadBindingManager as createDiscordThreadBindingManager,
+} from "../../extensions/discord/runtime-api.js";
 export { getGateway } from "../../extensions/discord/runtime-api.js";
 export { getPresence } from "../../extensions/discord/runtime-api.js";
 export { readDiscordComponentSpec } from "../../extensions/discord/api.js";
@@ -105,6 +114,8 @@ export {
   createScheduledEventDiscord,
   createThreadDiscord,
   deleteChannelDiscord,
+  editDiscordComponentMessage,
+  registerBuiltDiscordComponentMessage,
   deleteMessageDiscord,
   editChannelDiscord,
   editMessageDiscord,
@@ -150,3 +161,4 @@ export {
   uploadStickerDiscord,
 } from "../../extensions/discord/runtime-api.js";
 export { discordMessageActions } from "../../extensions/discord/runtime-api.js";
+export { resolveDiscordOutboundSessionRoute } from "../../extensions/discord/runtime-api.js";

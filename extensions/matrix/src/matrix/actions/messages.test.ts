@@ -2,6 +2,40 @@ import { describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { readMatrixMessages } from "./messages.js";
 
+function createPollResponseEvent(): Record<string, unknown> {
+  return {
+    event_id: "$vote",
+    sender: "@bob:example.org",
+    type: "m.poll.response",
+    origin_server_ts: 20,
+    content: {
+      "m.poll.response": { answers: ["a1"] },
+      "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
+    },
+  };
+}
+
+function createPollStartEvent(params?: {
+  answers?: Array<Record<string, unknown>>;
+  includeDisclosedKind?: boolean;
+  maxSelections?: number;
+}): Record<string, unknown> {
+  return {
+    event_id: "$poll",
+    sender: "@alice:example.org",
+    type: "m.poll.start",
+    origin_server_ts: 1,
+    content: {
+      "m.poll.start": {
+        question: { "m.text": "Favorite fruit?" },
+        ...(params?.includeDisclosedKind ? { kind: "m.poll.disclosed" } : {}),
+        ...(params?.maxSelections !== undefined ? { max_selections: params.maxSelections } : {}),
+        answers: params?.answers ?? [{ id: "a1", "m.text": "Apple" }],
+      },
+    },
+  };
+}
+
 function createMessagesClient(params: {
   chunk: Array<Record<string, unknown>>;
   hydratedChunk?: Array<Record<string, unknown>>;
@@ -43,16 +77,7 @@ describe("matrix message actions", () => {
   it("includes poll snapshots when reading message history", async () => {
     const { client, doRequest, getEvent, getRelations } = createMessagesClient({
       chunk: [
-        {
-          event_id: "$vote",
-          sender: "@bob:example.org",
-          type: "m.poll.response",
-          origin_server_ts: 20,
-          content: {
-            "m.poll.response": { answers: ["a1"] },
-            "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-          },
-        },
+        createPollResponseEvent(),
         {
           event_id: "$msg",
           sender: "@alice:example.org",
@@ -64,35 +89,15 @@ describe("matrix message actions", () => {
           },
         },
       ],
-      pollRoot: {
-        event_id: "$poll",
-        sender: "@alice:example.org",
-        type: "m.poll.start",
-        origin_server_ts: 1,
-        content: {
-          "m.poll.start": {
-            question: { "m.text": "Favorite fruit?" },
-            kind: "m.poll.disclosed",
-            max_selections: 1,
-            answers: [
-              { id: "a1", "m.text": "Apple" },
-              { id: "a2", "m.text": "Strawberry" },
-            ],
-          },
-        },
-      },
-      pollRelations: [
-        {
-          event_id: "$vote",
-          sender: "@bob:example.org",
-          type: "m.poll.response",
-          origin_server_ts: 20,
-          content: {
-            "m.poll.response": { answers: ["a1"] },
-            "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-          },
-        },
-      ],
+      pollRoot: createPollStartEvent({
+        includeDisclosedKind: true,
+        maxSelections: 1,
+        answers: [
+          { id: "a1", "m.text": "Apple" },
+          { id: "a2", "m.text": "Strawberry" },
+        ],
+      }),
+      pollRelations: [createPollResponseEvent()],
     });
 
     const result = await readMatrixMessages("room:!room:example.org", { client, limit: 2.9 });
@@ -127,42 +132,8 @@ describe("matrix message actions", () => {
 
   it("dedupes multiple poll events for the same poll within one read page", async () => {
     const { client, getEvent } = createMessagesClient({
-      chunk: [
-        {
-          event_id: "$vote",
-          sender: "@bob:example.org",
-          type: "m.poll.response",
-          origin_server_ts: 20,
-          content: {
-            "m.poll.response": { answers: ["a1"] },
-            "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-          },
-        },
-        {
-          event_id: "$poll",
-          sender: "@alice:example.org",
-          type: "m.poll.start",
-          origin_server_ts: 1,
-          content: {
-            "m.poll.start": {
-              question: { "m.text": "Favorite fruit?" },
-              answers: [{ id: "a1", "m.text": "Apple" }],
-            },
-          },
-        },
-      ],
-      pollRoot: {
-        event_id: "$poll",
-        sender: "@alice:example.org",
-        type: "m.poll.start",
-        origin_server_ts: 1,
-        content: {
-          "m.poll.start": {
-            question: { "m.text": "Favorite fruit?" },
-            answers: [{ id: "a1", "m.text": "Apple" }],
-          },
-        },
-      },
+      chunk: [createPollResponseEvent(), createPollStartEvent()],
+      pollRoot: createPollStartEvent(),
       pollRelations: [],
     });
 
@@ -189,30 +160,8 @@ describe("matrix message actions", () => {
           content: {},
         },
       ],
-      hydratedChunk: [
-        {
-          event_id: "$vote",
-          sender: "@bob:example.org",
-          type: "m.poll.response",
-          origin_server_ts: 20,
-          content: {
-            "m.poll.response": { answers: ["a1"] },
-            "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-          },
-        },
-      ],
-      pollRoot: {
-        event_id: "$poll",
-        sender: "@alice:example.org",
-        type: "m.poll.start",
-        origin_server_ts: 1,
-        content: {
-          "m.poll.start": {
-            question: { "m.text": "Favorite fruit?" },
-            answers: [{ id: "a1", "m.text": "Apple" }],
-          },
-        },
-      },
+      hydratedChunk: [createPollResponseEvent()],
+      pollRoot: createPollStartEvent(),
       pollRelations: [],
     });
 

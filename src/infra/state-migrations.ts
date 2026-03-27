@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { listTelegramAccountIds } from "openclaw/plugin-sdk/telegram";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -16,6 +15,7 @@ import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js
 import type { SessionScope } from "../config/sessions/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
+import { listTelegramAccountIds } from "../plugin-sdk/telegram-runtime.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_ACCOUNT_ID,

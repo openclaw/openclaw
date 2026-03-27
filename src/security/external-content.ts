@@ -91,6 +91,10 @@ export type ExternalContentSource =
   | "web_fetch"
   | "unknown";
 
+// Hook-origin async runs need immutable ingress provenance because routed
+// session keys can be normalized outside the hook:* namespace.
+export type HookExternalContentSource = "gmail" | "webhook";
+
 const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   email: "Email",
   webhook: "Webhook",
@@ -101,6 +105,25 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   web_fetch: "Web Fetch",
   unknown: "External",
 };
+
+export function resolveHookExternalContentSource(
+  sessionKey: string,
+): HookExternalContentSource | undefined {
+  const normalized = sessionKey.trim().toLowerCase();
+  if (normalized.startsWith("hook:gmail:")) {
+    return "gmail";
+  }
+  if (normalized.startsWith("hook:webhook:") || normalized.startsWith("hook:")) {
+    return "webhook";
+  }
+  return undefined;
+}
+
+export function mapHookExternalContentSource(
+  source: HookExternalContentSource,
+): Extract<ExternalContentSource, "email" | "webhook"> {
+  return source === "gmail" ? "email" : "webhook";
+}
 
 const FULLWIDTH_ASCII_OFFSET = 0xfee0;
 
@@ -315,29 +338,15 @@ export function buildSafeExternalPrompt(params: {
  * Checks if a session key indicates an external hook source.
  */
 export function isExternalHookSession(sessionKey: string): boolean {
-  const normalized = sessionKey.trim().toLowerCase();
-  return (
-    normalized.startsWith("hook:gmail:") ||
-    normalized.startsWith("hook:webhook:") ||
-    normalized.startsWith("hook:") // Generic hook prefix
-  );
+  return resolveHookExternalContentSource(sessionKey) !== undefined;
 }
 
 /**
  * Extracts the hook type from a session key.
  */
 export function getHookType(sessionKey: string): ExternalContentSource {
-  const normalized = sessionKey.trim().toLowerCase();
-  if (normalized.startsWith("hook:gmail:")) {
-    return "email";
-  }
-  if (normalized.startsWith("hook:webhook:")) {
-    return "webhook";
-  }
-  if (normalized.startsWith("hook:")) {
-    return "webhook";
-  }
-  return "unknown";
+  const source = resolveHookExternalContentSource(sessionKey);
+  return source ? mapHookExternalContentSource(source) : "unknown";
 }
 
 /**

@@ -1,4 +1,5 @@
 import type { PluginRegistry } from "./registry.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 import type { PluginHookAgentContext, PluginHookRegistration } from "./types.js";
 
 export function createMockPluginRegistry(
@@ -6,29 +7,12 @@ export function createMockPluginRegistry(
 ): PluginRegistry {
   return {
     plugins: [
-      {
+      createPluginRecord({
         id: "test-plugin",
         name: "Test Plugin",
         source: "test",
-        origin: "workspace",
-        enabled: true,
-        status: "loaded",
-        toolNames: [],
-        hookNames: [],
-        channelIds: [],
-        providerIds: [],
-        speechProviderIds: [],
-        mediaUnderstandingProviderIds: [],
-        imageGenerationProviderIds: [],
-        webSearchProviderIds: [],
-        gatewayMethods: [],
-        cliCommands: [],
-        services: [],
-        commands: [],
-        httpRoutes: 0,
         hookCount: hooks.length,
-        configSchema: false,
-      },
+      }),
     ],
     hooks: hooks as never[],
     typedHooks: hooks.map((h) => ({
@@ -56,6 +40,7 @@ export function createMockPluginRegistry(
 }
 
 export const TEST_PLUGIN_AGENT_CTX: PluginHookAgentContext = {
+  runId: "test-run-id",
   agentId: "test-agent",
   sessionKey: "test-session",
   sessionId: "test-session-id",

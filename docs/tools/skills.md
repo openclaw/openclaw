@@ -50,21 +50,24 @@ tool surface those skills teach.
 ## ClawHub (install + sync)
 
 ClawHub is the public skills registry for OpenClaw. Browse at
-[https://clawhub.com](https://clawhub.com). Use it to discover, install, update, and back up skills.
+[https://clawhub.com](https://clawhub.com). Use native `openclaw skills`
+commands to discover/install/update skills, or the separate `clawhub` CLI when
+you need publish/sync workflows.
 Full guide: [ClawHub](/tools/clawhub).
 
 Common flows:
 
 - Install a skill into your workspace:
-  - `clawhub install <skill-slug>`
+  - `openclaw skills install <skill-slug>`
 - Update all installed skills:
-  - `clawhub update --all`
+  - `openclaw skills update --all`
 - Sync (scan + publish updates):
   - `clawhub sync --all`
 
-By default, `clawhub` installs into `./skills` under your current working
-directory (or falls back to the configured OpenClaw workspace). OpenClaw picks
-that up as `<workspace>/skills` on the next session.
+Native `openclaw skills install` installs into the active workspace `skills/`
+directory. The separate `clawhub` CLI also installs into `./skills` under your
+current working directory (or falls back to the configured OpenClaw workspace).
+OpenClaw picks that up as `<workspace>/skills` on the next session.
 
 ## Security notes
 
@@ -217,6 +220,12 @@ Note: if the skill name contains hyphens, quote the key (JSON5 allows quoted key
 If you want stock image generation/editing inside OpenClaw itself, use the core
 `image_generate` tool with `agents.defaults.imageGenerationModel` instead of a
 bundled skill. Skill examples here are for custom or third-party workflows.
+
+For native image analysis, use the `image` tool with `agents.defaults.imageModel`.
+For native image generation/editing, use `image_generate` with
+`agents.defaults.imageGenerationModel`. If you pick `openai/*`, `google/*`,
+`fal/*`, or another provider-specific image model, add that provider's auth/API
+key too.
 
 Config keys match the **skill name** by default. If a skill defines
 `metadata.openclaw.skillKey`, use that key under `skills.entries`.

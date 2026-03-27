@@ -45,6 +45,78 @@ vi.mock("@clack/prompts", () => ({
 
 const { registerSecretsCli } = await import("./secrets-cli.js");
 
+function createManualSecretsPlan() {
+  return {
+    version: 1,
+    protocolVersion: 1,
+    generatedAt: "2026-02-26T00:00:00.000Z",
+    generatedBy: "manual",
+    targets: [],
+  };
+}
+
+function createConfigureInteractiveResult(options?: {
+  targets?: unknown[];
+  changed?: boolean;
+  resolvabilityComplete?: boolean;
+}) {
+  return {
+    plan: {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: "2026-02-26T00:00:00.000Z",
+      generatedBy: "openclaw secrets configure",
+      targets: options?.targets ?? [],
+    },
+    preflight: {
+      mode: "dry-run" as const,
+      changed: options?.changed ?? false,
+      changedFiles: options?.changed ? ["/tmp/openclaw.json"] : [],
+      checks: {
+        resolvability: true,
+        resolvabilityComplete: options?.resolvabilityComplete ?? true,
+      },
+      refsChecked: 0,
+      skippedExecRefs: 0,
+      warningCount: 0,
+      warnings: [],
+    },
+  };
+}
+
+function createSecretsApplyResult(options?: {
+  mode?: "dry-run" | "write";
+  changed?: boolean;
+  resolvabilityComplete?: boolean;
+}) {
+  return {
+    mode: options?.mode ?? "dry-run",
+    changed: options?.changed ?? false,
+    changedFiles: options?.changed ? ["/tmp/openclaw.json"] : [],
+    checks: {
+      resolvability: true,
+      resolvabilityComplete: options?.resolvabilityComplete ?? true,
+    },
+    refsChecked: 0,
+    skippedExecRefs: 0,
+    warningCount: 0,
+    warnings: [],
+  };
+}
+
+async function withPlanFile(run: (planPath: string) => Promise<void>) {
+  const planPath = path.join(
+    os.tmpdir(),
+    `openclaw-secrets-cli-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+  );
+  await fs.writeFile(planPath, `${JSON.stringify(createManualSecretsPlan())}\n`, "utf8");
+  try {
+    await run(planPath);
+  } finally {
+    await fs.rm(planPath, { force: true });
+  }
+}
+
 describe("secrets CLI", () => {
   const createProgram = () => {
     const program = new Command();
@@ -142,12 +214,9 @@ describe("secrets CLI", () => {
   });
 
   it("runs secrets configure then apply when confirmed", async () => {
-    runSecretsConfigureInteractive.mockResolvedValue({
-      plan: {
-        version: 1,
-        protocolVersion: 1,
-        generatedAt: "2026-02-26T00:00:00.000Z",
-        generatedBy: "openclaw secrets configure",
+    runSecretsConfigureInteractive.mockResolvedValue(
+      createConfigureInteractiveResult({
+        changed: true,
         targets: [
           {
             type: "skills.entries.apiKey",
@@ -160,35 +229,10 @@ describe("secrets CLI", () => {
             },
           },
         ],
-      },
-      preflight: {
-        mode: "dry-run",
-        changed: true,
-        changedFiles: ["/tmp/openclaw.json"],
-        checks: {
-          resolvability: true,
-          resolvabilityComplete: true,
-        },
-        refsChecked: 1,
-        skippedExecRefs: 0,
-        warningCount: 0,
-        warnings: [],
-      },
-    });
+      }),
+    );
     confirm.mockResolvedValue(true);
-    runSecretsApply.mockResolvedValue({
-      mode: "write",
-      changed: true,
-      changedFiles: ["/tmp/openclaw.json"],
-      checks: {
-        resolvability: true,
-        resolvabilityComplete: true,
-      },
-      refsChecked: 1,
-      skippedExecRefs: 0,
-      warningCount: 0,
-      warnings: [],
-    });
+    runSecretsApply.mockResolvedValue(createSecretsApplyResult({ mode: "write", changed: true }));
 
     await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
     expect(runSecretsConfigureInteractive).toHaveBeenCalled();
@@ -209,28 +253,7 @@ describe("secrets CLI", () => {
   });
 
   it("forwards --agent to secrets configure", async () => {
-    runSecretsConfigureInteractive.mockResolvedValue({
-      plan: {
-        version: 1,
-        protocolVersion: 1,
-        generatedAt: "2026-02-26T00:00:00.000Z",
-        generatedBy: "openclaw secrets configure",
-        targets: [],
-      },
-      preflight: {
-        mode: "dry-run",
-        changed: false,
-        changedFiles: [],
-        checks: {
-          resolvability: true,
-          resolvabilityComplete: true,
-        },
-        refsChecked: 0,
-        skippedExecRefs: 0,
-        warningCount: 0,
-        warnings: [],
-      },
-    });
+    runSecretsConfigureInteractive.mockResolvedValue(createConfigureInteractiveResult());
     confirm.mockResolvedValue(false);
 
     await createProgram().parseAsync(["secrets", "configure", "--agent", "ops"], { from: "user" });
@@ -243,154 +266,57 @@ describe("secrets CLI", () => {
   });
 
   it("forwards --allow-exec to secrets apply dry-run", async () => {
-    const planPath = path.join(
-      os.tmpdir(),
-      `openclaw-secrets-cli-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
-    );
-    await fs.writeFile(
-      planPath,
-      `${JSON.stringify({
-        version: 1,
-        protocolVersion: 1,
-        generatedAt: new Date().toISOString(),
-        generatedBy: "manual",
-        targets: [],
-      })}\n`,
-      "utf8",
-    );
-    runSecretsApply.mockResolvedValue({
-      mode: "dry-run",
-      changed: false,
-      changedFiles: [],
-      checks: {
-        resolvability: true,
-        resolvabilityComplete: true,
-      },
-      refsChecked: 0,
-      skippedExecRefs: 0,
-      warningCount: 0,
-      warnings: [],
-    });
+    await withPlanFile(async (planPath) => {
+      runSecretsApply.mockResolvedValue(createSecretsApplyResult());
 
-    await createProgram().parseAsync(
-      ["secrets", "apply", "--from", planPath, "--dry-run", "--allow-exec"],
-      {
-        from: "user",
-      },
-    );
-    expect(runSecretsApply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        write: false,
-        allowExec: true,
-      }),
-    );
-    await fs.rm(planPath, { force: true });
+      await createProgram().parseAsync(
+        ["secrets", "apply", "--from", planPath, "--dry-run", "--allow-exec"],
+        {
+          from: "user",
+        },
+      );
+      expect(runSecretsApply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          write: false,
+          allowExec: true,
+        }),
+      );
+    });
   });
 
   it("forwards --allow-exec to secrets apply write mode", async () => {
-    const planPath = path.join(
-      os.tmpdir(),
-      `openclaw-secrets-cli-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
-    );
-    await fs.writeFile(
-      planPath,
-      `${JSON.stringify({
-        version: 1,
-        protocolVersion: 1,
-        generatedAt: new Date().toISOString(),
-        generatedBy: "manual",
-        targets: [],
-      })}\n`,
-      "utf8",
-    );
-    runSecretsApply.mockResolvedValue({
-      mode: "write",
-      changed: false,
-      changedFiles: [],
-      checks: {
-        resolvability: true,
-        resolvabilityComplete: true,
-      },
-      refsChecked: 0,
-      skippedExecRefs: 0,
-      warningCount: 0,
-      warnings: [],
-    });
+    await withPlanFile(async (planPath) => {
+      runSecretsApply.mockResolvedValue(createSecretsApplyResult({ mode: "write" }));
 
-    await createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--allow-exec"], {
-      from: "user",
+      await createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--allow-exec"], {
+        from: "user",
+      });
+      expect(runSecretsApply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          write: true,
+          allowExec: true,
+        }),
+      );
     });
-    expect(runSecretsApply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        write: true,
-        allowExec: true,
-      }),
-    );
-    await fs.rm(planPath, { force: true });
   });
 
   it("does not print skipped-exec note when apply dry-run skippedExecRefs is zero", async () => {
-    const planPath = path.join(
-      os.tmpdir(),
-      `openclaw-secrets-cli-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
-    );
-    await fs.writeFile(
-      planPath,
-      `${JSON.stringify({
-        version: 1,
-        protocolVersion: 1,
-        generatedAt: new Date().toISOString(),
-        generatedBy: "manual",
-        targets: [],
-      })}\n`,
-      "utf8",
-    );
-    runSecretsApply.mockResolvedValue({
-      mode: "dry-run",
-      changed: false,
-      changedFiles: [],
-      checks: {
-        resolvability: true,
-        resolvabilityComplete: false,
-      },
-      refsChecked: 0,
-      skippedExecRefs: 0,
-      warningCount: 0,
-      warnings: [],
-    });
+    await withPlanFile(async (planPath) => {
+      runSecretsApply.mockResolvedValue(createSecretsApplyResult({ resolvabilityComplete: false }));
 
-    await createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--dry-run"], {
-      from: "user",
+      await createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--dry-run"], {
+        from: "user",
+      });
+      expect(runtimeLogs.some((line) => line.includes("Secrets apply dry-run note: skipped"))).toBe(
+        false,
+      );
     });
-    expect(runtimeLogs.some((line) => line.includes("Secrets apply dry-run note: skipped"))).toBe(
-      false,
-    );
-    await fs.rm(planPath, { force: true });
   });
 
   it("does not print skipped-exec note when configure preflight skippedExecRefs is zero", async () => {
-    runSecretsConfigureInteractive.mockResolvedValue({
-      plan: {
-        version: 1,
-        protocolVersion: 1,
-        generatedAt: "2026-02-26T00:00:00.000Z",
-        generatedBy: "openclaw secrets configure",
-        targets: [],
-      },
-      preflight: {
-        mode: "dry-run",
-        changed: false,
-        changedFiles: [],
-        checks: {
-          resolvability: true,
-          resolvabilityComplete: false,
-        },
-        refsChecked: 0,
-        skippedExecRefs: 0,
-        warningCount: 0,
-        warnings: [],
-      },
-    });
+    runSecretsConfigureInteractive.mockResolvedValue(
+      createConfigureInteractiveResult({ resolvabilityComplete: false }),
+    );
     confirm.mockResolvedValue(false);
 
     await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
@@ -398,41 +324,8 @@ describe("secrets CLI", () => {
   });
 
   it("forwards --allow-exec to configure preflight and apply", async () => {
-    runSecretsConfigureInteractive.mockResolvedValue({
-      plan: {
-        version: 1,
-        protocolVersion: 1,
-        generatedAt: "2026-02-26T00:00:00.000Z",
-        generatedBy: "openclaw secrets configure",
-        targets: [],
-      },
-      preflight: {
-        mode: "dry-run",
-        changed: false,
-        changedFiles: [],
-        checks: {
-          resolvability: true,
-          resolvabilityComplete: true,
-        },
-        refsChecked: 0,
-        skippedExecRefs: 0,
-        warningCount: 0,
-        warnings: [],
-      },
-    });
-    runSecretsApply.mockResolvedValue({
-      mode: "write",
-      changed: false,
-      changedFiles: [],
-      checks: {
-        resolvability: true,
-        resolvabilityComplete: true,
-      },
-      refsChecked: 0,
-      skippedExecRefs: 0,
-      warningCount: 0,
-      warnings: [],
-    });
+    runSecretsConfigureInteractive.mockResolvedValue(createConfigureInteractiveResult());
+    runSecretsApply.mockResolvedValue(createSecretsApplyResult({ mode: "write" }));
 
     await createProgram().parseAsync(["secrets", "configure", "--apply", "--yes", "--allow-exec"], {
       from: "user",

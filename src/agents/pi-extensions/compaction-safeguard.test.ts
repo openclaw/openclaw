@@ -4,13 +4,15 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../pi-embedded-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
+  consumeCompactionSafeguardCancelReason,
   getCompactionSafeguardRuntime,
+  setCompactionSafeguardCancelReason,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
@@ -37,13 +39,27 @@ const {
   resolveQualityGuardMaxRetries,
   extractOpaqueIdentifiers,
   auditSummaryQuality,
+  capCompactionSummary,
+  capCompactionSummaryPreservingSuffix,
+  formatFileOperations,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  MAX_COMPACTION_SUMMARY_CHARS,
+  MAX_FILE_OPS_SECTION_CHARS,
+  SUMMARY_TRUNCATED_MARKER,
 } = __testing;
+
+beforeEach(() => {
+  __testing.setSummarizeInStagesForTest(mockSummarizeInStages);
+});
+
+afterEach(() => {
+  __testing.setSummarizeInStagesForTest();
+});
 
 function stubSessionManager(): ExtensionContext["sessionManager"] {
   const stub: ExtensionContext["sessionManager"] = {
@@ -115,13 +131,13 @@ const createCompactionEvent = (params: { messageText: string; tokensBefore: numb
 
 const createCompactionContext = (params: {
   sessionManager: ExtensionContext["sessionManager"];
-  getApiKeyMock: ReturnType<typeof vi.fn>;
+  getApiKeyAndHeadersMock: ReturnType<typeof vi.fn>;
 }) =>
   ({
     model: undefined,
     sessionManager: params.sessionManager,
     modelRegistry: {
-      getApiKey: params.getApiKeyMock,
+      getApiKeyAndHeaders: params.getApiKeyAndHeadersMock,
     },
   }) as unknown as Partial<ExtensionContext>;
 
@@ -131,10 +147,14 @@ async function runCompactionScenario(params: {
   apiKey: string | null;
 }) {
   const compactionHandler = createCompactionHandler();
-  const getApiKeyMock = vi.fn().mockResolvedValue(params.apiKey);
+  const getApiKeyAndHeadersMock = vi
+    .fn()
+    .mockResolvedValue(
+      params.apiKey ? { ok: true, apiKey: params.apiKey } : { ok: false, error: "missing auth" },
+    );
   const mockContext = createCompactionContext({
     sessionManager: params.sessionManager,
-    getApiKeyMock,
+    getApiKeyAndHeadersMock,
   });
   const result = (await compactionHandler(params.event, mockContext)) as {
     cancel?: boolean;
@@ -144,7 +164,7 @@ async function runCompactionScenario(params: {
       tokensBefore: number;
     };
   };
-  return { result, getApiKeyMock };
+  return { result, getApiKeyAndHeadersMock };
 }
 
 function expectCompactionResult(result: {
@@ -252,6 +272,104 @@ describe("compaction-safeguard tool failures", () => {
     const failures = collectToolFailures(messages);
     const section = formatToolFailuresSection(failures);
     expect(section).toBe("");
+  });
+});
+
+describe("compaction-safeguard summary budgets", () => {
+  it("caps file operations summary and reports omitted entries", () => {
+    const readFiles = Array.from(
+      { length: 200 },
+      (_, i) => `docs/very/long/path/${i}-read-file.md`,
+    );
+    const modifiedFiles = Array.from(
+      { length: 200 },
+      (_, i) => `src/features/${i}/nested/component/file-${i}.ts`,
+    );
+
+    const section = formatFileOperations(readFiles, modifiedFiles);
+
+    expect(section).toContain("<read-files>");
+    expect(section).toContain("<modified-files>");
+    expect(section).toContain("...and ");
+    expect(section.length).toBeLessThanOrEqual(MAX_FILE_OPS_SECTION_CHARS);
+  });
+
+  it("caps final compaction summary with a truncation marker", () => {
+    const oversized = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS + 500);
+    const capped = capCompactionSummary(oversized);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain(SUMMARY_TRUNCATED_MARKER.trim());
+    expect(capped.endsWith(SUMMARY_TRUNCATED_MARKER)).toBe(true);
+  });
+
+  it("preserves workspace critical rules suffix when capping", () => {
+    const suffix =
+      "\n\n<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
+    const body = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+
+    const capped = capCompactionSummaryPreservingSuffix(body, suffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain("<workspace-critical-rules>");
+    expect(capped).toContain("## Session Startup");
+    expect(capped.endsWith(suffix)).toBe(true);
+  });
+
+  it("preserves diagnostic sections (tool failures, file ops) when capping oversized body", () => {
+    const diagnosticSuffix =
+      "\n\n## Tool Failures\n- exec: failed\n\n<read-files>\nfoo.ts\n</read-files>\n\n" +
+      "<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
+    const body = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+
+    const capped = capCompactionSummaryPreservingSuffix(body, diagnosticSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain("## Tool Failures");
+    expect(capped).toContain("<read-files>");
+    expect(capped).toContain("<workspace-critical-rules>");
+    expect(capped.endsWith(diagnosticSuffix)).toBe(true);
+  });
+
+  it("keeps section separator when body ends without newline (e.g. buildStructuredFallbackSummary)", () => {
+    const bodyNoNewline = "## Exact identifiers\nNone.";
+    const suffixNoLeadingNewline = "## Tool Failures\n- exec: failed";
+
+    const capped = capCompactionSummaryPreservingSuffix(
+      bodyNoNewline,
+      `\n\n${suffixNoLeadingNewline}`,
+    );
+
+    expect(capped).toContain("None.\n\n## Tool Failures");
+    expect(capped).not.toMatch(/None\.## Tool Failures/);
+  });
+
+  it("keeps body prefix when truncation marker cannot fit (tiny budget)", () => {
+    const body = "## Decisions\nKeep flow.\n## Constraints\nFollow rules.";
+    const tinyBudget = 10; // Smaller than SUMMARY_TRUNCATED_MARKER.length
+    const capped = capCompactionSummary(body, tinyBudget);
+
+    expect(capped.length).toBeLessThanOrEqual(tinyBudget);
+    expect(capped).toContain("## Decis");
+    expect(capped).not.toContain("[Compaction summary truncated");
+  });
+
+  it("preserves tail sections when suffix exceeds cap (workspace rules, diagnostics over preserved turns)", () => {
+    const criticalTail =
+      "\n\n## Tool Failures\n- exec: failed\n\n<read-files>\nfoo.ts\n</read-files>\n\n" +
+      "<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
+    const preservedTurns =
+      "## Recent turns preserved verbatim\n- User: x\n- Assistant: y\n" +
+      "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+    const oversizedSuffix = preservedTurns + criticalTail;
+
+    const capped = capCompactionSummaryPreservingSuffix("short body", oversizedSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain("<workspace-critical-rules>");
+    expect(capped).toContain("## Tool Failures");
+    expect(capped).toContain("<read-files>");
+    expect(capped).toContain("## Session Startup");
   });
 });
 
@@ -425,6 +543,24 @@ describe("compaction-safeguard runtime registry", () => {
       contextWindowTokens: 200000,
       model,
     });
+  });
+
+  it("consumes cancel reasons without dropping other runtime fields", () => {
+    const sm = {};
+    setCompactionSafeguardRuntime(sm, { maxHistoryShare: 0.6 });
+    setCompactionSafeguardCancelReason(sm, "no API key");
+
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBe("no API key");
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBeNull();
+    expect(getCompactionSafeguardRuntime(sm)).toEqual({ maxHistoryShare: 0.6 });
+  });
+
+  it("clears cancel reason when set to undefined", () => {
+    const sm = {};
+    setCompactionSafeguardCancelReason(sm, "temporary reason");
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBe("temporary reason");
+    setCompactionSafeguardCancelReason(sm, undefined);
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBeNull();
   });
 
   it("wires oversized safeguard runtime values when config validation is bypassed", () => {
@@ -1090,10 +1226,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
     });
 
     const compactionHandler = createCompactionHandler();
-    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" });
     const mockContext = createCompactionContext({
       sessionManager,
-      getApiKeyMock,
+      getApiKeyAndHeadersMock,
     });
     const messagesToSummarize: AgentMessage[] = Array.from({ length: 4 }, (_unused, index) => ({
       role: "user",
@@ -1146,10 +1282,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
     });
 
     const compactionHandler = createCompactionHandler();
-    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" });
     const mockContext = createCompactionContext({
       sessionManager,
-      getApiKeyMock,
+      getApiKeyAndHeadersMock,
     });
     const event = {
       preparation: {
@@ -1211,10 +1347,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
     });
 
     const compactionHandler = createCompactionHandler();
-    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" });
     const mockContext = createCompactionContext({
       sessionManager,
-      getApiKeyMock,
+      getApiKeyAndHeadersMock,
     });
     const event = {
       preparation: {
@@ -1314,10 +1450,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
     });
 
     const compactionHandler = createCompactionHandler();
-    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" });
     const mockContext = createCompactionContext({
       sessionManager,
-      getApiKeyMock,
+      getApiKeyAndHeadersMock,
     });
     const event = {
       preparation: {
@@ -1358,34 +1494,45 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(secondCall?.customInstructions).toContain("latest_user_ask_not_reflected");
   });
 
-  it("keeps last successful summary when a quality retry call fails", async () => {
+  it("preserves split-turn and recent-turn suffixes when retry fallback is capped", async () => {
     mockSummarizeInStages.mockReset();
+    const oversizedHistorySummary = "history detail ".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+    const splitTurnPrefixSummary = "split-turn prefix context that must survive capping";
     mockSummarizeInStages
-      .mockResolvedValueOnce("short summary missing headings")
+      .mockResolvedValueOnce(oversizedHistorySummary)
+      .mockResolvedValueOnce(splitTurnPrefixSummary)
       .mockRejectedValueOnce(new Error("retry transient failure"));
 
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, {
       model,
-      recentTurnsPreserve: 0,
+      recentTurnsPreserve: 1,
       qualityGuardEnabled: true,
       qualityGuardMaxRetries: 1,
     });
 
     const compactionHandler = createCompactionHandler();
-    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" });
     const mockContext = createCompactionContext({
       sessionManager,
-      getApiKeyMock,
+      getApiKeyAndHeadersMock,
     });
     const event = {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
           { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          { role: "user", content: "latest ask status", timestamp: 3 },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "latest assistant reply" }],
+            timestamp: 4,
+          } as unknown as AgentMessage,
         ],
-        turnPrefixMessages: [],
+        turnPrefixMessages: [
+          { role: "user", content: "prefix request that was split out", timestamp: 0 },
+        ],
         firstKeptEntryId: "entry-1",
         tokensBefore: 1_500,
         fileOps: {
@@ -1395,7 +1542,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
         },
         settings: { reserveTokens: 4_000 },
         previousSummary: undefined,
-        isSplitTurn: false,
+        isSplitTurn: true,
       },
       customInstructions: "",
       signal: new AbortController().signal,
@@ -1407,8 +1554,15 @@ describe("compaction-safeguard recent-turn preservation", () => {
     };
 
     expect(result.cancel).not.toBe(true);
-    expect(result.compaction?.summary).toContain("short summary missing headings");
-    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const summary = result.compaction?.summary ?? "";
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain(SUMMARY_TRUNCATED_MARKER);
+    expect(summary).toContain("**Turn Context (split turn):**");
+    expect(summary).toContain(splitTurnPrefixSummary);
+    expect(summary).toContain("## Recent turns preserved verbatim");
+    expect(summary).toContain("latest ask status");
+    expect(summary).toContain("latest assistant reply");
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(3);
   });
 
   it("keeps required headings when all turns are preserved and history is carried forward", async () => {
@@ -1422,10 +1576,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
     });
 
     const compactionHandler = createCompactionHandler();
-    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" });
     const mockContext = createCompactionContext({
       sessionManager,
-      getApiKeyMock,
+      getApiKeyAndHeadersMock,
     });
     const event = {
       preparation: {
@@ -1484,7 +1638,7 @@ describe("compaction-safeguard extension model fallback", () => {
       messageText: "test message",
       tokensBefore: 1000,
     });
-    const { result, getApiKeyMock } = await runCompactionScenario({
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
       apiKey: null,
@@ -1493,8 +1647,9 @@ describe("compaction-safeguard extension model fallback", () => {
     expect(result).toEqual({ cancel: true });
 
     // KEY ASSERTION: Prove the fallback path was exercised
-    // The handler should have called getApiKey with runtime.model (via ctx.model ?? runtime?.model)
-    expect(getApiKeyMock).toHaveBeenCalledWith(model);
+    // The handler should have resolved request auth with runtime.model
+    // (via ctx.model ?? runtime?.model).
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
 
     // Verify runtime.model is still available (for completeness)
     const retrieved = getCompactionSafeguardRuntime(sessionManager);
@@ -1510,7 +1665,7 @@ describe("compaction-safeguard extension model fallback", () => {
       messageText: "test",
       tokensBefore: 500,
     });
-    const { result, getApiKeyMock } = await runCompactionScenario({
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
       apiKey: null,
@@ -1518,8 +1673,8 @@ describe("compaction-safeguard extension model fallback", () => {
 
     expect(result).toEqual({ cancel: true });
 
-    // Verify early return: getApiKey should NOT have been called when both models are missing
-    expect(getApiKeyMock).not.toHaveBeenCalled();
+    // Verify early return: request auth should NOT have been resolved when both models are missing.
+    expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
   });
 });
 
@@ -1540,7 +1695,7 @@ describe("compaction-safeguard double-compaction guard", () => {
       customInstructions: "",
       signal: new AbortController().signal,
     };
-    const { result, getApiKeyMock } = await runCompactionScenario({
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
       apiKey: "sk-test", // pragma: allowlist secret
@@ -1554,7 +1709,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(compaction.summary).toContain("## Open TODOs");
     expect(compaction.firstKeptEntryId).toBe("entry-1");
     expect(compaction.tokensBefore).toBe(1500);
-    expect(getApiKeyMock).not.toHaveBeenCalled();
+    expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
   });
 
   it("returns compaction result with structured fallback summary sections", async () => {
@@ -1665,13 +1820,93 @@ describe("compaction-safeguard double-compaction guard", () => {
       messageText: "real message",
       tokensBefore: 1500,
     });
-    const { result, getApiKeyMock } = await runCompactionScenario({
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
       apiKey: null,
     });
     expect(result).toEqual({ cancel: true });
-    expect(getApiKeyMock).toHaveBeenCalled();
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalled();
+  });
+
+  it("treats tool results as real conversation only when linked to a meaningful user ask", async () => {
+    expect(
+      __testing.isRealConversationMessage(
+        {
+          role: "toolResult",
+          toolCallId: "t1",
+          toolName: "exec",
+          content: [{ type: "text", text: "done" }],
+        } as AgentMessage,
+        [
+          { role: "user", content: "<b>HEARTBEAT_OK</b>" } as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "t1",
+            toolName: "exec",
+            content: [{ type: "text", text: "done" }],
+          } as AgentMessage,
+        ],
+        1,
+      ),
+    ).toBe(false);
+
+    expect(
+      __testing.isRealConversationMessage(
+        {
+          role: "toolResult",
+          toolCallId: "t2",
+          toolName: "exec",
+          content: [{ type: "text", text: "done" }],
+        } as AgentMessage,
+        [
+          { role: "user", content: "please inspect the repo" } as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "t2",
+            toolName: "exec",
+            content: [{ type: "text", text: "done" }],
+          } as AgentMessage,
+        ],
+        1,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat assistant-only tool calls as meaningful conversation", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      } as AgentMessage),
+    ).toBe(false);
+  });
+
+  it("does not treat reasoning-only assistant blocks as meaningful conversation", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "checking" }],
+      } as AgentMessage),
+    ).toBe(false);
+
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "reasoning", summary: [] }],
+      } as unknown as AgentMessage),
+    ).toBe(false);
+  });
+
+  it("treats markup-wrapped heartbeat tokens as boilerplate", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent(
+        castAgentMessage({
+          role: "assistant",
+          content: "<b>HEARTBEAT_OK</b>",
+        }),
+      ),
+    ).toBe(false);
   });
 });
 
@@ -1679,15 +1914,14 @@ async function expectWorkspaceSummaryEmptyForAgentsAlias(
   createAlias: (outsidePath: string, agentsPath: string) => void,
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-  const prevCwd = process.cwd();
+  const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
   try {
     const outside = path.join(root, "outside-secret.txt");
     fs.writeFileSync(outside, "secret");
     createAlias(outside, path.join(root, "AGENTS.md"));
-    process.chdir(root);
     await expect(readWorkspaceContextForSummary()).resolves.toBe("");
   } finally {
-    process.chdir(prevCwd);
+    cwdSpy.mockRestore();
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

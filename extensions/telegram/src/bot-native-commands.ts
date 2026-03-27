@@ -1,10 +1,22 @@
 import type { Bot, Context } from "grammy";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/channel-runtime";
-import { recordInboundSessionMetaSafe } from "openclaw/plugin-sdk/channel-runtime";
+import {
+  resolveCommandAuthorization,
+  resolveCommandAuthorizedFromAuthorizers,
+  resolveNativeCommandSessionTargets,
+} from "openclaw/plugin-sdk/command-auth";
+import {
+  buildCommandTextFromArgs,
+  findCommandByNativeName,
+  listNativeCommandSpecs,
+  listNativeCommandSpecsForConfig,
+  parseCommandArgs,
+  resolveCommandArgMenu,
+  type CommandArgs,
+} from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
   normalizeTelegramCommandName,
@@ -18,7 +30,10 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-runtime";
-import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  ensureConfiguredBindingRouteReady,
+  recordInboundSessionMetaSafe,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   executePluginCommand,
@@ -26,16 +41,6 @@ import {
   matchPluginCommand,
 } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveCommandAuthorization } from "openclaw/plugin-sdk/reply-runtime";
-import type { CommandArgs } from "openclaw/plugin-sdk/reply-runtime";
-import {
-  buildCommandTextFromArgs,
-  findCommandByNativeName,
-  listNativeCommandSpecs,
-  listNativeCommandSpecsForConfig,
-  parseCommandArgs,
-  resolveCommandArgMenu,
-} from "openclaw/plugin-sdk/reply-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
@@ -47,6 +52,7 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
+import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
@@ -59,6 +65,7 @@ import {
   buildTelegramThreadParams,
   buildSenderName,
   buildTelegramGroupFrom,
+  resolveTelegramForumFlag,
   resolveTelegramGroupAllowFromContext,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
@@ -114,10 +121,7 @@ export type RegisterTelegramHandlerParams = {
     ctx: TelegramContext,
     allMedia: TelegramMediaRef[],
     storeAllowFrom: string[],
-    options?: {
-      messageIdOverride?: string;
-      forceWasMentioned?: boolean;
-    },
+    options?: TelegramMessageContextOptions,
     replyMedia?: TelegramMediaRef[],
   ) => Promise<void>;
   logger: ReturnType<typeof getChildLogger>;
@@ -181,7 +185,19 @@ async function resolveTelegramCommandAuth(params: {
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
-  const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+  const getChat =
+    typeof (bot.api as { getChat?: unknown }).getChat === "function"
+      ? ((bot.api as { getChat: (chatId: string | number) => Promise<unknown> }).getChat.bind(
+          bot.api,
+        ) as (chatId: string | number) => Promise<unknown>)
+      : undefined;
+  const isForum = await resolveTelegramForumFlag({
+    chatId,
+    chatType: msg.chat.type,
+    isGroup,
+    isForum: (msg.chat as { is_forum?: boolean }).is_forum,
+    getChat,
+  });
   const threadSpec = resolveTelegramThreadSpec({
     isGroup,
     isForum,
@@ -500,7 +516,7 @@ export const registerTelegramNativeCommands = ({
     const threadSpec = resolveTelegramThreadSpec({
       isGroup,
       isForum,
-      messageThreadId,
+      messageThreadId: resolvedThreadId ?? messageThreadId,
     });
     let { route, configuredBinding } = resolveTelegramConversationRoute({
       cfg: runtimeCfg,
@@ -630,6 +646,7 @@ export const registerTelegramNativeCommands = ({
           }
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
+          const executionCfg = getRuntimeConfigSnapshot() ?? cfg;
 
           const commandDefinition = findCommandByNativeName(command.name, "telegram");
           const rawText = ctx.match?.trim() ?? "";
@@ -759,7 +776,7 @@ export const registerTelegramNativeCommands = ({
           });
 
           await recordInboundSessionMetaSafe({
-            cfg: runtimeCfg,
+            cfg: executionCfg,
             agentId: route.agentId,
             sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
             ctx: ctxPayload,
@@ -779,7 +796,7 @@ export const registerTelegramNativeCommands = ({
           };
 
           const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-            cfg: runtimeCfg,
+            cfg: executionCfg,
             agentId: route.agentId,
             channel: "telegram",
             accountId: route.accountId,
@@ -787,13 +804,13 @@ export const registerTelegramNativeCommands = ({
 
           await telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
             ctx: ctxPayload,
-            cfg: runtimeCfg,
+            cfg: executionCfg,
             dispatcherOptions: {
               ...replyPipeline,
               deliver: async (payload, _info) => {
                 if (
                   shouldSuppressLocalTelegramExecApprovalPrompt({
-                    cfg: runtimeCfg,
+                    cfg: executionCfg,
                     accountId: route.accountId,
                     payload,
                   })

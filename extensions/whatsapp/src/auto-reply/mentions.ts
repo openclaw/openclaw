@@ -1,6 +1,13 @@
+import { buildMentionRegexes, normalizeMentionText } from "openclaw/plugin-sdk/channel-inbound";
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { buildMentionRegexes, normalizeMentionText } from "openclaw/plugin-sdk/reply-runtime";
-import { isSelfChatMode, jidToE164, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import { isSelfChatMode, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import {
+  getComparableIdentityValues,
+  getMentionIdentities,
+  getSelfIdentity,
+  identitiesOverlap,
+  type WhatsAppIdentity,
+} from "../identity.js";
 import type { WebInboundMsg } from "./types.js";
 
 export type MentionConfig = {
@@ -9,9 +16,8 @@ export type MentionConfig = {
 };
 
 export type MentionTargets = {
-  normalizedMentions: string[];
-  selfE164: string | null;
-  selfJid: string | null;
+  normalizedMentions: WhatsAppIdentity[];
+  self: WhatsAppIdentity;
 };
 
 export function buildMentionConfig(
@@ -23,13 +29,9 @@ export function buildMentionConfig(
 }
 
 export function resolveMentionTargets(msg: WebInboundMsg, authDir?: string): MentionTargets {
-  const jidOptions = authDir ? { authDir } : undefined;
-  const normalizedMentions = msg.mentionedJids?.length
-    ? msg.mentionedJids.map((jid) => jidToE164(jid, jidOptions) ?? jid).filter(Boolean)
-    : [];
-  const selfE164 = msg.selfE164 ?? (msg.selfJid ? jidToE164(msg.selfJid, jidOptions) : null);
-  const selfJid = msg.selfJid ? msg.selfJid.replace(/:\\d+/, "") : null;
-  return { normalizedMentions, selfE164, selfJid };
+  const normalizedMentions = getMentionIdentities(msg, authDir);
+  const self = getSelfIdentity(msg, authDir);
+  return { normalizedMentions, self };
 }
 
 export function isBotMentionedFromTargets(
@@ -41,16 +43,12 @@ export function isBotMentionedFromTargets(
     // Remove zero-width and directionality markers WhatsApp injects around display names
     normalizeMentionText(text);
 
-  const isSelfChat = isSelfChatMode(targets.selfE164, mentionCfg.allowFrom);
+  const isSelfChat = isSelfChatMode(targets.self.e164, mentionCfg.allowFrom);
 
-  const hasMentions = (msg.mentionedJids?.length ?? 0) > 0;
+  const hasMentions = targets.normalizedMentions.length > 0;
   if (hasMentions && !isSelfChat) {
-    if (targets.selfE164 && targets.normalizedMentions.includes(targets.selfE164)) {
-      return true;
-    }
-    if (targets.selfJid) {
-      // Some mentions use the bare JID; match on E.164 to be safe.
-      if (targets.normalizedMentions.includes(targets.selfJid)) {
+    for (const mention of targets.normalizedMentions) {
+      if (identitiesOverlap(targets.self, mention)) {
         return true;
       }
     }
@@ -65,8 +63,8 @@ export function isBotMentionedFromTargets(
   }
 
   // Fallback: detect body containing our own number (with or without +, spacing)
-  if (targets.selfE164) {
-    const selfDigits = targets.selfE164.replace(/\D/g, "");
+  if (targets.self.e164) {
+    const selfDigits = targets.self.e164.replace(/\D/g, "");
     if (selfDigits) {
       const bodyDigits = bodyClean.replace(/[^\d]/g, "");
       if (bodyDigits.includes(selfDigits)) {
@@ -94,14 +92,14 @@ export function debugMention(
     from: msg.from,
     body: msg.body,
     bodyClean: normalizeMentionText(msg.body),
-    mentionedJids: msg.mentionedJids ?? null,
+    mentionedJids: msg.mentions ?? msg.mentionedJids ?? null,
     normalizedMentionedJids: mentionTargets.normalizedMentions.length
-      ? mentionTargets.normalizedMentions
+      ? mentionTargets.normalizedMentions.map((identity) => getComparableIdentityValues(identity))
       : null,
-    selfJid: msg.selfJid ?? null,
-    selfJidBare: mentionTargets.selfJid,
-    selfE164: msg.selfE164 ?? null,
-    resolvedSelfE164: mentionTargets.selfE164,
+    selfJid: msg.self?.jid ?? msg.selfJid ?? null,
+    selfLid: msg.self?.lid ?? msg.selfLid ?? null,
+    selfE164: msg.self?.e164 ?? msg.selfE164 ?? null,
+    resolvedSelf: mentionTargets.self,
   };
   return { wasMentioned: result, details };
 }
