@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createMSTeamsTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 
@@ -103,31 +106,31 @@ describe("sendMessage channel normalization", () => {
 
   it.each([
     {
-      name: "normalizes Teams aliases",
+      name: "normalizes plugin aliases",
       registry: createTestRegistry([
         {
-          pluginId: "msteams",
+          pluginId: "demo-alias-channel",
           source: "test",
-          plugin: createMSTeamsTestPlugin({
-            outbound: createMSTeamsOutbound(),
-            aliases: ["teams"],
+          plugin: createDemoAliasPlugin({
+            outbound: createDemoAliasOutbound(),
+            aliases: ["workspace-chat"],
           }),
         },
       ]),
       params: {
-        to: "conversation:19:abc@thread.tacv2",
-        channel: "teams",
+        to: "conversation:demo-target",
+        channel: "workspace-chat",
         deps: {
-          sendMSTeams: vi.fn(async () => ({
+          sendDemoAliasChannel: vi.fn(async () => ({
             messageId: "m1",
             conversationId: "c1",
           })),
         },
       },
-      assertDeps: (deps: { sendMSTeams?: ReturnType<typeof vi.fn> }) => {
-        expect(deps.sendMSTeams).toHaveBeenCalledWith("conversation:19:abc@thread.tacv2", "hi");
+      assertDeps: (deps: { sendDemoAliasChannel?: ReturnType<typeof vi.fn> }) => {
+        expect(deps.sendDemoAliasChannel).toHaveBeenCalledWith("conversation:demo-target", "hi");
       },
-      expectedChannel: "msteams",
+      expectedChannel: "demo-alias-channel",
     },
     {
       name: "normalizes iMessage aliases",
@@ -209,16 +212,16 @@ describe("sendMessage replyToId threading", () => {
 });
 
 describe("sendPoll channel normalization", () => {
-  it("normalizes Teams alias for polls", async () => {
+  it("normalizes plugin aliases for polls", async () => {
     callGatewayMock.mockResolvedValueOnce({ messageId: "p1" });
     setRegistry(
       createTestRegistry([
         {
-          pluginId: "msteams",
+          pluginId: "demo-alias-channel",
           source: "test",
-          plugin: createMSTeamsTestPlugin({
-            aliases: ["teams"],
-            outbound: createMSTeamsOutbound({ includePoll: true }),
+          plugin: createDemoAliasPlugin({
+            aliases: ["workspace-chat"],
+            outbound: createDemoAliasOutbound({ includePoll: true }),
           }),
         },
       ]),
@@ -226,17 +229,17 @@ describe("sendPoll channel normalization", () => {
 
     const result = await sendPoll({
       cfg: {},
-      to: "conversation:19:abc@thread.tacv2",
+      to: "conversation:demo-target",
       question: "Lunch?",
       options: ["Pizza", "Sushi"],
-      channel: "Teams",
+      channel: "Workspace-Chat",
     });
 
     const call = callGatewayMock.mock.calls[0]?.[0] as {
       params?: Record<string, unknown>;
     };
-    expect(call?.params?.channel).toBe("msteams");
-    expect(result.channel).toBe("msteams");
+    expect(call?.params?.channel).toBe("demo-alias-channel");
+    expect(result.channel).toBe("demo-alias-channel");
   });
 });
 
@@ -305,32 +308,54 @@ describe("gateway url override hardening", () => {
 
 const emptyRegistry = createTestRegistry([]);
 
-const createMSTeamsOutbound = (opts?: { includePoll?: boolean }): ChannelOutboundAdapter => ({
+const createDemoAliasPlugin = (params?: {
+  aliases?: string[];
+  outbound?: ChannelOutboundAdapter;
+}): ChannelPlugin => ({
+  ...createChannelTestPluginBase({
+    id: "demo-alias-channel",
+    label: "Demo Alias Channel",
+    docsPath: "/channels/demo-alias-channel",
+    config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+  }),
+  meta: {
+    ...createChannelTestPluginBase({
+      id: "demo-alias-channel",
+      label: "Demo Alias Channel",
+      docsPath: "/channels/demo-alias-channel",
+      config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+    }).meta,
+    ...(params?.aliases ? { aliases: params.aliases } : {}),
+  },
+  ...(params?.outbound ? { outbound: params.outbound } : {}),
+});
+
+const createDemoAliasOutbound = (opts?: { includePoll?: boolean }): ChannelOutboundAdapter => ({
   deliveryMode: "direct",
   sendText: async ({ deps, to, text }) => {
-    const send = deps?.sendMSTeams as
+    const send = deps?.sendDemoAliasChannel as
       | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
       | undefined;
     if (!send) {
-      throw new Error("sendMSTeams missing");
+      throw new Error("sendDemoAliasChannel missing");
     }
     const result = await send(to, text);
-    return { channel: "msteams", ...result };
+    return { channel: "demo-alias-channel", ...result };
   },
   sendMedia: async ({ deps, to, text, mediaUrl }) => {
-    const send = deps?.sendMSTeams as
+    const send = deps?.sendDemoAliasChannel as
       | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
       | undefined;
     if (!send) {
-      throw new Error("sendMSTeams missing");
+      throw new Error("sendDemoAliasChannel missing");
     }
     const result = await send(to, text, { mediaUrl });
-    return { channel: "msteams", ...result };
+    return { channel: "demo-alias-channel", ...result };
   },
   ...(opts?.includePoll
     ? {
         pollMaxOptions: 12,
-        sendPoll: async () => ({ channel: "msteams", messageId: "p1" }),
+        sendPoll: async () => ({ channel: "demo-alias-channel", messageId: "p1" }),
       }
     : {}),
 });

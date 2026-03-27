@@ -79,6 +79,18 @@ function createGroqProviders(transcribedText = "transcribed text") {
   };
 }
 
+function createRegistryMediaProviders(): Record<string, MediaUnderstandingProvider> {
+  const createAudioProvider = (id: string): MediaUnderstandingProvider => ({
+    id,
+    capabilities: ["audio"],
+    transcribeAudio: async () => ({ text: "transcribed text" }),
+  });
+  return {
+    groq: createAudioProvider("groq"),
+    deepgram: createAudioProvider("deepgram"),
+  };
+}
+
 function expectTranscriptApplied(params: {
   ctx: MsgContext;
   transcript: string;
@@ -248,19 +260,15 @@ describe("applyMediaUnderstanding", () => {
     }));
     vi.doMock("./provider-registry.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("./provider-registry.js")>();
-      const { deepgramMediaUnderstandingProvider } =
-        await import("../../extensions/deepgram/media-understanding-provider.js");
-      const { groqMediaUnderstandingProvider } =
-        await import("../../extensions/groq/media-understanding-provider.js");
+      const registryProviders = createRegistryMediaProviders();
       return {
         ...actual,
         buildMediaUnderstandingRegistry: (
           overrides?: Record<string, MediaUnderstandingProvider>,
         ) => {
-          const registry = new Map<string, MediaUnderstandingProvider>([
-            ["groq", groqMediaUnderstandingProvider],
-            ["deepgram", deepgramMediaUnderstandingProvider],
-          ]);
+          const registry = new Map<string, MediaUnderstandingProvider>(
+            Object.entries(registryProviders),
+          );
           for (const [key, provider] of Object.entries(overrides ?? {})) {
             const normalizedKey = actual.normalizeMediaProviderId(key);
             const existing = registry.get(normalizedKey);
