@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { injectReActPrompt, parseReActResponse } from "./react-fallback-stream.js";
+import {
+  injectReActPrompt,
+  isUnsupportedToolError,
+  parseReActResponse,
+} from "./react-fallback-stream.js";
 
 describe("ReAct Fallback Stream Core", () => {
   describe("Reasoning Sanitizer (<think> block stripping)", () => {
@@ -87,6 +91,21 @@ describe("ReAct Fallback Stream Core", () => {
     it("does nothing if there are no tools", () => {
       const prompt = injectReActPrompt("Base", [], "verbose");
       expect(prompt).toBe("Base");
+    });
+  });
+
+  describe("Unsupported Tool Error Detection", () => {
+    it("matches common unsupported-tool variants case-insensitively", () => {
+      expect(isUnsupportedToolError("model does not support tools")).toBe(true);
+      expect(isUnsupportedToolError("Model Does Not Support Tools")).toBe(true);
+      expect(isUnsupportedToolError("tool calling is not supported by this model")).toBe(true);
+      expect(isUnsupportedToolError("TOOLS ARE NOT SUPPORTED HERE")).toBe(true);
+      expect(isUnsupportedToolError("this model may not support tool use")).toBe(true);
+    });
+
+    it("does not match unrelated provider errors", () => {
+      expect(isUnsupportedToolError("context window exceeded")).toBe(false);
+      expect(isUnsupportedToolError("connection refused")).toBe(false);
     });
   });
 });

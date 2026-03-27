@@ -67,8 +67,12 @@ Only output ONE Action per turn. If you do not need to use a tool, simply respon
  * Detects provider errors indicating lack of native tool support.
  */
 export function isUnsupportedToolError(errorMessage: string): boolean {
+  const normalized = errorMessage.toLowerCase();
   return (
-    errorMessage.includes("does not support tools") || errorMessage.includes("not support tool")
+    normalized.includes("does not support tools") ||
+    normalized.includes("not support tool") ||
+    normalized.includes("tool calling is not supported") ||
+    normalized.includes("tools are not supported")
   );
 }
 
