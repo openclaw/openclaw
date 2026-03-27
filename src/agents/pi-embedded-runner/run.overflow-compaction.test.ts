@@ -12,8 +12,10 @@ import {
   mockedCompactDirect,
   mockedContextEngine,
   mockedDescribeFailoverError,
+  mockedEvaluateContextWindowGuard,
   mockedGlobalHookRunner,
   mockedPickFallbackThinkingLevel,
+  mockedResolveContextWindowInfo,
   mockedResolveFailoverStatus,
   mockedRunContextEngineMaintenance,
   mockedRunEmbeddedAttempt,
@@ -77,6 +79,28 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         authProfileIdSource: "auto",
       }),
     );
+  });
+
+  it("blocks undersized models before dispatching a provider attempt", async () => {
+    mockedResolveContextWindowInfo.mockReturnValue({
+      tokens: 800,
+      source: "model",
+    });
+    mockedEvaluateContextWindowGuard.mockReturnValue({
+      shouldWarn: true,
+      shouldBlock: true,
+      tokens: 800,
+      source: "model",
+    });
+
+    await expect(
+      runEmbeddedPiAgent({
+        ...overflowBaseRunParams,
+        runId: "run-small-context",
+      }),
+    ).rejects.toThrow("Model context window too small (800 tokens). Minimum is 1000.");
+
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
   });
 
   it("passes trigger=overflow when retrying compaction after context overflow", async () => {
