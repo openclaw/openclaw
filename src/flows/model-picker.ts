@@ -216,7 +216,7 @@ async function maybeFilterModelsByProvider(params: {
     (a, b) => a.localeCompare(b),
   );
   const hasPreferredProvider = params.preferredProvider
-    ? providerIds.includes(params.preferredProvider)
+    ? providerIds.some((id) => matchesPreferredProvider(id, params.preferredProvider!))
     : false;
   const shouldPromptProvider =
     !hasPreferredProvider &&

@@ -554,32 +554,40 @@ describe("provider-runtime", () => {
       suppress: true,
     });
 
-    await expect(
-      augmentModelCatalogWithProviderPlugins({
+    const result = await augmentModelCatalogWithProviderPlugins({
+      env: process.env,
+      context: {
         env: process.env,
-        context: {
-          env: process.env,
-          entries: [
-            { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
-            { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
-            { provider: "openai", id: "gpt-5-mini", name: "GPT-5 mini" },
-            { provider: "openai", id: "gpt-5-nano", name: "GPT-5 nano" },
-            { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
-          ],
-        },
-      }),
-    ).resolves.toEqual([
-      { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
-      { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
-      { provider: "openai", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
-      { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
-      { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
-      {
-        provider: "openai-codex",
-        id: "gpt-5.3-codex-spark",
-        name: "gpt-5.3-codex-spark",
+        entries: [
+          { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
+          { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
+          { provider: "openai", id: "gpt-5-mini", name: "GPT-5 mini" },
+          { provider: "openai", id: "gpt-5-nano", name: "GPT-5 nano" },
+          { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
+        ],
       },
-    ]);
+    });
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+        { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
+        { provider: "openai", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
+        { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
+        { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
+        {
+          provider: "openai-codex",
+          id: "gpt-5.3-codex-spark",
+          name: "gpt-5.3-codex-spark",
+        },
+      ]),
+    );
+
+    expect(result.some((e) => e.provider === "byteplus")).toBe(true);
+    expect(result.some((e) => e.provider === "byteplus-plan")).toBe(true);
+    expect(result.some((e) => e.provider === "volcengine")).toBe(true);
+    expect(result.some((e) => e.provider === "volcengine-plan")).toBe(true);
+    expect(result.some((e) => e.provider === "kimi")).toBe(true);
 
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });

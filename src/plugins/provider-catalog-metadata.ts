@@ -1,3 +1,12 @@
+import {
+  BYTEPLUS_CODING_MODEL_CATALOG,
+  BYTEPLUS_MODEL_CATALOG,
+} from "../agents/byteplus-models.js";
+import {
+  DOUBAO_CODING_MODEL_CATALOG,
+  DOUBAO_MODEL_CATALOG,
+} from "../agents/doubao-models.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type {
   ProviderAugmentModelCatalogContext,
@@ -74,6 +83,61 @@ export function augmentBundledProviderCatalog(
     templateIds: ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"],
   });
 
+  const byteplusModels: ModelCatalogEntry[] = BYTEPLUS_MODEL_CATALOG.map((entry) => ({
+    id: entry.id,
+    name: entry.name,
+    provider: "byteplus",
+    contextWindow: entry.contextWindow,
+    reasoning: entry.reasoning,
+    input: [...entry.input],
+  }));
+
+  const byteplusPlanModels: ModelCatalogEntry[] = BYTEPLUS_CODING_MODEL_CATALOG.map((entry) => ({
+    id: entry.id,
+    name: entry.name,
+    provider: "byteplus-plan",
+    contextWindow: entry.contextWindow,
+    reasoning: entry.reasoning,
+    input: [...entry.input],
+  }));
+
+  const volcengineModels: ModelCatalogEntry[] = DOUBAO_MODEL_CATALOG.map((entry) => ({
+    id: entry.id,
+    name: entry.name,
+    provider: "volcengine",
+    contextWindow: entry.contextWindow,
+    reasoning: entry.reasoning,
+    input: [...entry.input],
+  }));
+
+  const volcenginePlanModels: ModelCatalogEntry[] = DOUBAO_CODING_MODEL_CATALOG.map((entry) => ({
+    id: entry.id,
+    name: entry.name,
+    provider: "volcengine-plan",
+    contextWindow: entry.contextWindow,
+    reasoning: entry.reasoning,
+    input: [...entry.input],
+  }));
+
+  const kimiModels: ModelCatalogEntry[] = [
+    {
+      id: "kimi-code",
+      name: "Kimi Code",
+      provider: "kimi",
+      contextWindow: 262144,
+      reasoning: true,
+      input: ["text", "image"] as const,
+    },
+    {
+      id: "k2p5",
+      name: "Kimi Code (legacy model id)",
+      provider: "kimi",
+      contextWindow: 262144,
+      reasoning: true,
+      input: ["text", "image"] as const,
+    },
+  ];
+
   return [
     openAiGpt54Template
       ? {
@@ -117,5 +181,10 @@ export function augmentBundledProviderCatalog(
           name: OPENAI_DIRECT_SPARK_MODEL_ID,
         }
       : undefined,
+    ...byteplusModels,
+    ...byteplusPlanModels,
+    ...volcengineModels,
+    ...volcenginePlanModels,
+    ...kimiModels,
   ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
 }
