@@ -53,10 +53,6 @@ function symlinkPathOrCopyFile(sourcePath, targetPath) {
   }
 }
 
-function symlinkPath(sourcePath, targetPath, type) {
-  ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
-}
-
 function shouldWrapRuntimeJsFile(sourcePath) {
   return path.extname(sourcePath) === ".js";
 }
