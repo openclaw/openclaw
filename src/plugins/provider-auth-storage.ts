@@ -7,6 +7,15 @@ import {
   writeOAuthCredentials,
   type WriteOAuthCredentialsOptions,
 } from "./provider-auth-helpers.js";
+import { HUGGINGFACE_DEFAULT_MODEL_REF } from "../../extensions/huggingface/api.js";
+import { LITELLM_DEFAULT_MODEL_REF } from "../../extensions/litellm/api.js";
+import { OPENROUTER_DEFAULT_MODEL_REF } from "../../extensions/openrouter/api.js";
+import { TOGETHER_DEFAULT_MODEL_REF } from "../../extensions/together/api.js";
+import {
+  VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+} from "../../extensions/vercel-ai-gateway/api.js";
+import { XIAOMI_DEFAULT_MODEL_REF } from "../../extensions/xiaomi/api.js";
+import { ZAI_DEFAULT_MODEL_REF } from "../../extensions/zai/api.js";
 import { KILOCODE_DEFAULT_MODEL_REF } from "./provider-model-kilocode.js";
 
 const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
@@ -26,7 +35,16 @@ function upsertProviderApiKeyProfile(params: {
   });
 }
 
-export { KILOCODE_DEFAULT_MODEL_REF };
+export {
+  HUGGINGFACE_DEFAULT_MODEL_REF,
+  KILOCODE_DEFAULT_MODEL_REF,
+  LITELLM_DEFAULT_MODEL_REF,
+  OPENROUTER_DEFAULT_MODEL_REF,
+  TOGETHER_DEFAULT_MODEL_REF,
+  VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+  XIAOMI_DEFAULT_MODEL_REF,
+  ZAI_DEFAULT_MODEL_REF,
+};
 export {
   buildApiKeyCredential,
   type ApiKeyStorageOptions,
@@ -115,14 +133,6 @@ export async function setVeniceApiKey(
 ) {
   upsertProviderApiKeyProfile({ provider: "venice", key, agentDir, options });
 }
-
-export const ZAI_DEFAULT_MODEL_REF = "zai/glm-5";
-export const XIAOMI_DEFAULT_MODEL_REF = "xiaomi/mimo-v2-flash";
-export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
-export const HUGGINGFACE_DEFAULT_MODEL_REF = "huggingface/deepseek-ai/DeepSeek-R1";
-export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
-export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
-export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
 
 export async function setZaiApiKey(
   key: SecretInput,
