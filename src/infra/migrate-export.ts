@@ -241,8 +241,11 @@ function remapArchiveEntryPath(params: {
   manifestPath: string;
   archiveRoot: string;
 }): string {
+  // Normalize both to resolved paths for comparison. Use path.resolve on both
+  // sides so the comparison is consistent even when tar normalizes separators.
   const normalizedEntry = path.resolve(params.entryPath);
-  if (normalizedEntry === params.manifestPath) {
+  const normalizedManifest = path.resolve(params.manifestPath);
+  if (normalizedEntry === normalizedManifest) {
     return path.posix.join(params.archiveRoot, "manifest.json");
   }
   return buildMigrateArchivePath(params.archiveRoot, normalizedEntry);
@@ -424,7 +427,11 @@ export async function createMigrateArchive(
         // the importer's onReadEntry handler.
         onWriteEntry: (entry) => {
           // Remap the config override path back to the original config source path.
-          if (stripSecrets && configOverridePath && entry.path === configOverridePath) {
+          // Normalize to forward slashes for comparison since node-tar normalizes
+          // entry paths to "/" on Windows while path.join uses backslashes.
+          const normalizedEntryPath = entry.path.replaceAll("\\", "/");
+          const normalizedOverride = configOverridePath?.replaceAll("\\", "/");
+          if (stripSecrets && normalizedOverride && normalizedEntryPath === normalizedOverride) {
             const configAsset = result.assets.find((a) => a.kind === "config");
             if (configAsset) {
               entry.path = buildMigrateArchivePath(archiveRoot, configAsset.sourcePath);
