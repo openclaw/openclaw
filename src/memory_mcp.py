@@ -13,8 +13,20 @@ _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
+import structlog
 import aiohttp
 from mcp.server.fastmcp import FastMCP
+
+# MCP uses stdio for JSON-RPC — redirect structlog to stderr so log lines
+# don't corrupt the protocol transport.
+structlog.configure(
+    processors=[
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer(),
+    ],
+    logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
+)
 
 from src.llm_gateway import route_llm, is_cloud_only
 
@@ -267,7 +279,7 @@ async def search_memory(query: str, tier: str = "all", top_k: int = 3) -> str:
                 if result.stdout:
                     rg_matches.append(result.stdout)
             except Exception as e:
-                print(f"Error searching {file_path}: {e}")
+                print(f"Error searching {file_path}: {e}", file=sys.stderr)
 
     # 2. Vector Search (Semantic)
     v_matches = await vector_search(query, tier, top_k=top_k*2)
