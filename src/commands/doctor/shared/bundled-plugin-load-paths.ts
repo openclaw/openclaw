@@ -17,14 +17,25 @@ function resolveBundledWorkspaceDir(cfg: OpenClawConfig): string | undefined {
   return resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ?? undefined;
 }
 
-function buildLegacyBundledPath(localPath: string, pluginId: string): string | null {
+function buildLegacyBundledPath(localPath: string): string | null {
   const normalized = path.normalize(localPath);
-  const suffix = path.join("dist", "extensions", pluginId);
-  if (!normalized.endsWith(suffix)) {
-    return null;
+  for (const bundledRoot of [
+    path.join("dist", "extensions"),
+    path.join("dist-runtime", "extensions"),
+  ]) {
+    const marker = `${bundledRoot}${path.sep}`;
+    const markerIndex = normalized.lastIndexOf(marker);
+    if (markerIndex === -1) {
+      continue;
+    }
+    const packageRoot = normalized.slice(0, markerIndex);
+    const bundledLeaf = normalized.slice(markerIndex + marker.length);
+    if (!bundledLeaf) {
+      continue;
+    }
+    return path.join(packageRoot, "extensions", bundledLeaf);
   }
-  const packageRoot = normalized.slice(0, normalized.length - suffix.length);
-  return path.join(packageRoot, "extensions", pluginId);
+  return null;
 }
 
 export function scanBundledPluginLoadPathMigrations(
@@ -48,7 +59,7 @@ export function scanBundledPluginLoadPathMigrations(
 
   const legacyPathMap = new Map<string, { pluginId: string; toPath: string }>();
   for (const source of bundled.values()) {
-    const legacyPath = buildLegacyBundledPath(source.localPath, source.pluginId);
+    const legacyPath = buildLegacyBundledPath(source.localPath);
     if (!legacyPath) {
       continue;
     }
