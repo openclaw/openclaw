@@ -21,6 +21,8 @@ export const SessionsListParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
+    /** When set to the hash from a prior `sessions.list` response, server may return `{ unchanged: true }` if the session rows are unchanged. */
+    lastHash: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

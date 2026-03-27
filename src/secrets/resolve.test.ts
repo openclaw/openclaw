@@ -204,11 +204,7 @@ describe("secret ref resolver", () => {
     // Keep the fixture cheap to start so this stays deterministic under a busy test run.
     await writeSecureFile(
       scriptPath,
-      [
-        "#!/bin/sh",
-        "sleep 0.03",
-        'printf \'{"protocolVersion":1,"values":{"delayed":"ok"}}\'',
-      ].join("\n"),
+      ["#!/bin/sh", 'printf \'{"protocolVersion":1,"values":{"delayed":"ok"}}\''].join("\n"),
       0o700,
     );
 

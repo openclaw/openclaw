@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
@@ -71,6 +71,11 @@ import {
   type SessionsPreviewResult,
   readSessionMessages,
 } from "../session-utils.js";
+import {
+  bumpSessionsListFullComputationForTest,
+  tryReadSessionsListResultCache,
+  writeSessionsListResultCache,
+} from "../sessions-list-result-cache.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { chatHandlers } from "./chat.js";
@@ -505,14 +510,55 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const cfg = loadConfig();
+    const cached = tryReadSessionsListResultCache({ cfg, listParams: p });
+    if (cached) {
+      const ts = Date.now();
+      const clientHash = typeof p.lastHash === "string" ? p.lastHash : undefined;
+      if (clientHash && clientHash === cached.hash) {
+        respond(true, { unchanged: true, hash: cached.hash, ts, count: cached.count }, undefined);
+        return;
+      }
+      respond(
+        true,
+        {
+          ts,
+          path: cached.path,
+          count: cached.count,
+          defaults: cached.defaults,
+          sessions: cached.sessions,
+          hash: cached.hash,
+        },
+        undefined,
+      );
+      return;
+    }
+
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
+    if (process.env.VITEST) {
+      bumpSessionsListFullComputationForTest();
+    }
     const result = listSessionsFromStore({
       cfg,
       storePath,
       store,
       opts: p,
     });
-    respond(true, result, undefined);
+    // `count` is intentionally omitted from the hash payload: when it changes because session
+    // data changed, the store/config fingerprint already invalidates the cache entry.
+    // `path` is included so clients cannot treat `{ unchanged: true }` as valid across store moves.
+    const serialized = JSON.stringify({
+      path: result.path,
+      sessions: result.sessions,
+      defaults: result.defaults,
+    });
+    const hash = createHash("sha256").update(serialized).digest("hex").slice(0, 16);
+    writeSessionsListResultCache({ cfg, listParams: p, hash, result });
+    const clientHash = typeof p.lastHash === "string" ? p.lastHash : undefined;
+    if (clientHash && clientHash === hash) {
+      respond(true, { unchanged: true, hash, ts: Date.now(), count: result.count }, undefined);
+      return;
+    }
+    respond(true, { ...result, ts: Date.now(), hash }, undefined);
   },
   "sessions.subscribe": ({ client, context, respond }) => {
     const connId = client?.connId?.trim();

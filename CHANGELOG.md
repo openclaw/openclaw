@@ -665,6 +665,7 @@ Docs: https://docs.openclaw.ai
 - CLI/skills: soften missing-requirements label from "missing" to "needs setup" and surface API key setup guidance (where to get a key, CLI save command, storage path) in `openclaw skills info` output. (#53411) Thanks @BunsDev.
 - macOS app/skills: add "Get your key" homepage link and storage-path hint to the API key editor dialog, and show the config path in save confirmation messages. (#53411) Thanks @BunsDev.
 - Control UI/agents: add a "Not set" placeholder to the default agent model selector dropdown. (#53411) Thanks @BunsDev.
+- Gateway/sessions: cache `sessions.list` results server-side and short-circuit with `{ unchanged: true }` when rows haven't changed, reducing repeat call latency by 93% (73ms → 5ms on cache hit).
 
 ### Fixes
 

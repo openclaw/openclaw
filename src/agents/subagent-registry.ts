@@ -94,6 +94,14 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
 
 let subagentRegistryDeps: SubagentRegistryDeps = defaultSubagentRegistryDeps;
 
+/** Monotonic counter bumped on every registry mutation; used to invalidate caches that depend on subagent state. */
+let subagentRegistryGeneration = 0;
+
+/** Return the current monotonic generation counter for the subagent registry. */
+export function getSubagentRegistryGeneration(): number {
+  return subagentRegistryGeneration;
+}
+
 let sweeper: NodeJS.Timeout | null = null;
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
@@ -107,7 +115,21 @@ const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
  */
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 
+/**
+ * Persist the current subagent-runs map to disk.
+ *
+ * IMPORTANT: If the preceding mutation changed any field that affects
+ * `sessions.list` row rendering, you MUST bump `subagentRegistryGeneration += 1`
+ * BEFORE calling this function. List-visible fields:
+ *   endedAt, outcome, endedReason, startedAt, sessionStartedAt, phase,
+ *   and Map .set() / .delete() operations.
+ *
+ * Bookkeeping-only fields (cleanupHandled, announceRetryCount,
+ * suppressAnnounceReason, wakeOnDescendantSettle, lastAnnounceRetryAt,
+ * cleanupCompletedAt) do NOT require a generation bump.
+ */
 function persistSubagentRuns() {
+  subagentRegistryGeneration += 1;
   subagentRegistryDeps.persistSubagentRunsToDisk(subagentRuns);
 }
 

@@ -28,10 +28,12 @@ struct GatewaySessionEntryRecord: Codable {
 
 struct GatewaySessionsListResponse: Codable {
     let ts: Double?
-    let path: String
-    let count: Int
+    let unchanged: Bool?
+    let hash: String?
+    let path: String?
+    let count: Int?
     let defaults: GatewaySessionDefaultsRecord?
-    let sessions: [GatewaySessionEntryRecord]
+    let sessions: [GatewaySessionEntryRecord]?
 }
 
 struct SessionTokenStats {
@@ -258,7 +260,8 @@ enum SessionLoader {
         activeMinutes: Int? = nil,
         limit: Int? = nil,
         includeGlobal: Bool = true,
-        includeUnknown: Bool = true) async throws -> SessionStoreSnapshot
+        includeUnknown: Bool = true,
+        allowUnchangedFallback: Bool = true) async throws -> SessionStoreSnapshot
     {
         var params: [String: AnyHashable] = [
             "includeGlobal": AnyHashable(includeGlobal),
@@ -286,11 +289,30 @@ enum SessionLoader {
             throw SessionLoadError.decodeFailed(error.localizedDescription)
         }
 
+        if decoded.unchanged == true && decoded.sessions == nil && allowUnchangedFallback {
+            // Some gateway clients can send `{ unchanged: true }` responses without
+            // row material. Retry without accepting unchanged shape to keep list updates safe.
+            return try await loadSnapshot(
+                activeMinutes: activeMinutes,
+                limit: limit,
+                includeGlobal: includeGlobal,
+                includeUnknown: includeUnknown,
+                allowUnchangedFallback: false,
+            )
+        }
+
+        guard let decodedSessions = decoded.sessions else {
+            throw SessionLoadError.decodeFailed("sessions list payload is missing sessions")
+        }
+        guard let path = decoded.path else {
+            throw SessionLoadError.decodeFailed("sessions list payload is missing path")
+        }
+
         let defaults = SessionDefaults(
             model: decoded.defaults?.model ?? self.fallbackModel,
             contextTokens: decoded.defaults?.contextTokens ?? self.fallbackContextTokens)
 
-        let rows = decoded.sessions.map { entry -> SessionRow in
+        let rows = decodedSessions.map { entry -> SessionRow in
             let updated = entry.updatedAt.map { Date(timeIntervalSince1970: $0 / 1000) }
             let input = entry.inputTokens ?? 0
             let output = entry.outputTokens ?? 0
@@ -321,7 +343,7 @@ enum SessionLoader {
                 model: model)
         }.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
 
-        return SessionStoreSnapshot(storePath: decoded.path, defaults: defaults, rows: rows)
+        return SessionStoreSnapshot(storePath: path, defaults: defaults, rows: rows)
     }
 
     static func loadRows() async throws -> [SessionRow] {

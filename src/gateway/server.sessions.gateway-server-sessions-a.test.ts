@@ -8,11 +8,17 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.j
 import { loadConfig } from "../config/config.js";
 import { withSessionStoreLockForTest } from "../config/sessions/store.js";
 import { isSessionPatchEvent, type InternalHookEvent } from "../hooks/internal-hooks.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import { performGatewaySessionReset } from "./session-reset-service.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import {
+  clearSessionsListResultCacheForTest,
+  getSessionsListFullComputationForTest,
+  resetSessionsListFullComputationForTest,
+} from "./sessions-list-result-cache.js";
 import {
   connectOk,
   embeddedRunMock,
@@ -29,7 +35,11 @@ async function getSessionsHandlers() {
 }
 
 const sessionCleanupMocks = vi.hoisted(() => ({
-  clearSessionQueues: vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] })),
+  clearSessionQueues: vi.fn(() => ({
+    followupCleared: 0,
+    laneCleared: 0,
+    keys: [],
+  })),
   stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
 }));
 
@@ -293,6 +303,8 @@ describe("gateway server sessions", () => {
     acpManagerMocks.closeSession.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
+    clearSessionsListResultCacheForTest();
+    resetSessionsListFullComputationForTest();
   });
 
   test("sessions.create stores dashboard session model and parent linkage, and creates a transcript", async () => {
@@ -519,7 +531,215 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
-  test("sessions.list surfaces transcript usage and model fallbacks from the transcript", async () => {
+  test("sessions.list returns unchanged when lastHash matches session rows", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-last-hash",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    const { ws } = await openClient();
+    const first = await rpcReq<{
+      hash?: string;
+      sessions?: unknown[];
+      count?: number;
+      unchanged?: boolean;
+    }>(ws, "sessions.list", { includeGlobal: true, includeUnknown: true });
+    expect(first.ok).toBe(true);
+    expect(first.payload?.hash).toMatch(/^[0-9a-f]{16}$/);
+    expect(Array.isArray(first.payload?.sessions)).toBe(true);
+
+    const second = await rpcReq<{
+      hash?: string;
+      unchanged?: boolean;
+      ts?: number;
+      count?: number;
+    }>(ws, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      lastHash: first.payload?.hash,
+    });
+    expect(second.ok).toBe(true);
+    expect(second.payload?.unchanged).toBe(true);
+    expect(second.payload?.hash).toBe(first.payload?.hash);
+    expect(second.payload?.count).toBe(first.payload?.count);
+
+    const third = await rpcReq<{ unchanged?: boolean; sessions?: unknown[] }>(ws, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      lastHash: "0000000000000000",
+    });
+    expect(third.ok).toBe(true);
+    expect(third.payload?.unchanged).toBeUndefined();
+    expect(Array.isArray(third.payload?.sessions)).toBe(true);
+
+    ws.close();
+  });
+
+  test("sessions.list does not return unchanged when only store path changes (hash includes path)", async () => {
+    const { storePath: path1 } = await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-path-hash-only",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    const { ws } = await openClient();
+    const first = await rpcReq<{
+      hash?: string;
+      path?: string;
+      unchanged?: boolean;
+    }>(ws, "sessions.list", { includeGlobal: true, includeUnknown: true });
+    expect(first.ok).toBe(true);
+    const hash1 = first.payload?.hash;
+    expect(first.payload?.path).toBe(path1);
+
+    const dir2 = path.join(sharedSessionStoreDir, `case-path-only-${sessionStoreCaseSeq++}`);
+    await fs.mkdir(dir2, { recursive: true });
+    const path2 = path.join(dir2, "sessions.json");
+    await fs.copyFile(path1, path2);
+    testState.sessionStorePath = path2;
+
+    const second = await rpcReq<{
+      hash?: string;
+      path?: string;
+      unchanged?: boolean;
+      sessions?: unknown[];
+    }>(ws, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      lastHash: hash1,
+    });
+    expect(second.ok).toBe(true);
+    expect(second.payload?.unchanged).toBeUndefined();
+    expect(second.payload?.path).toBe(path2);
+    expect(second.payload?.hash).not.toBe(hash1);
+    expect(Array.isArray(second.payload?.sessions)).toBe(true);
+
+    ws.close();
+  });
+
+  test("sessions.list result cache avoids repeated listSessionsFromStore for identical store+params", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-list-cache",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    const { ws } = await openClient();
+    const params = { includeGlobal: true, includeUnknown: true };
+    const first = await rpcReq(ws, "sessions.list", params);
+    expect(first.ok).toBe(true);
+    expect(getSessionsListFullComputationForTest()).toBe(1);
+
+    const second = await rpcReq(ws, "sessions.list", params);
+    expect(second.ok).toBe(true);
+    expect(getSessionsListFullComputationForTest()).toBe(1);
+
+    await rpcReq(ws, "sessions.list", {
+      ...params,
+      lastHash: (first.payload as { hash?: string }).hash,
+    });
+    expect(getSessionsListFullComputationForTest()).toBe(1);
+
+    ws.close();
+  });
+
+  test("sessions.list skips result cache when includeLastMessage is requested", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-no-list-cache",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    const { ws } = await openClient();
+    const params = {
+      includeGlobal: true,
+      includeUnknown: true,
+      includeLastMessage: true as const,
+    };
+    await rpcReq(ws, "sessions.list", params);
+    expect(getSessionsListFullComputationForTest()).toBe(1);
+    await rpcReq(ws, "sessions.list", params);
+    expect(getSessionsListFullComputationForTest()).toBe(2);
+
+    ws.close();
+  });
+
+  test("sessions.list does not return unchanged when only defaults change (hash includes defaults)", async () => {
+    await createSessionStoreDir();
+    testState.agentConfig = { contextTokens: 100 };
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-defaults-hash-only",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    const { ws } = await openClient();
+    const params = { includeGlobal: true, includeUnknown: true };
+    const first = await rpcReq<{
+      hash?: string;
+      unchanged?: boolean;
+      defaults?: { contextTokens?: number | null };
+    }>(ws, "sessions.list", params);
+    expect(first.ok).toBe(true);
+    const hash1 = first.payload?.hash;
+    expect(hash1).toMatch(/^[0-9a-f]{16}$/);
+    expect(first.payload?.defaults?.contextTokens).toBe(100);
+
+    clearSessionsListResultCacheForTest();
+    testState.agentConfig = { contextTokens: 200 };
+
+    const second = await rpcReq<{
+      hash?: string;
+      unchanged?: boolean;
+      defaults?: { contextTokens?: number | null };
+    }>(ws, "sessions.list", { ...params, lastHash: hash1 });
+    expect(second.ok).toBe(true);
+    expect(second.payload?.unchanged).toBeUndefined();
+    expect(second.payload?.hash).not.toBe(hash1);
+    expect(second.payload?.defaults?.contextTokens).toBe(200);
+
+    ws.close();
+  });
+
+  test("sessions.list recomputes after transcript write generation bumps cache key", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-txgen-bump",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    const { ws } = await openClient();
+    const params = { includeGlobal: true, includeUnknown: true };
+    resetSessionsListFullComputationForTest();
+    await rpcReq(ws, "sessions.list", params);
+    expect(getSessionsListFullComputationForTest()).toBe(1);
+
+    emitSessionTranscriptUpdate("/tmp/sess-txgen-bump.jsonl");
+    await rpcReq(ws, "sessions.list", params);
+    expect(getSessionsListFullComputationForTest()).toBe(2);
+
+    ws.close();
+  });
+
+  test("sessions.list surfaces transcript usage fallbacks and parent child relationships", async () => {
     const { dir } = await createSessionStoreDir();
     testState.agentConfig = {
       models: {
@@ -1575,7 +1795,9 @@ describe("gateway server sessions", () => {
     const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
     const lines = [
       JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      JSON.stringify({ message: { role: "assistant", content: "Legacy alias transcript" } }),
+      JSON.stringify({
+        message: { role: "assistant", content: "Legacy alias transcript" },
+      }),
     ];
     await fs.writeFile(transcriptPath, lines.join("\n"), "utf-8");
     await fs.writeFile(
@@ -1938,7 +2160,12 @@ describe("gateway server sessions", () => {
     expect(deleted.payload?.deleted).toBe(true);
     expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
     const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
-      | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
+      | {
+          targetKind?: string;
+          targetSessionKey?: string;
+          reason?: string;
+          outcome?: string;
+        }
       | undefined;
     expect(event).toMatchObject({
       targetSessionKey: "agent:main:subagent:worker",
@@ -2030,13 +2257,13 @@ describe("gateway server sessions", () => {
 
     const { ws } = await openClient();
 
-    const reset = await rpcReq<{ ok: true; key: string; entry: { sessionId: string } }>(
-      ws,
-      "sessions.reset",
-      {
-        key: "main",
-      },
-    );
+    const reset = await rpcReq<{
+      ok: true;
+      key: string;
+      entry: { sessionId: string };
+    }>(ws, "sessions.reset", {
+      key: "main",
+    });
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
@@ -2184,13 +2411,13 @@ describe("gateway server sessions", () => {
     });
 
     const { ws } = await openClient();
-    const reset = await rpcReq<{ ok: true; key: string; entry: { sessionId: string } }>(
-      ws,
-      "sessions.reset",
-      {
-        key: "agent:main:subagent:missing",
-      },
-    );
+    const reset = await rpcReq<{
+      ok: true;
+      key: string;
+      entry: { sessionId: string };
+    }>(ws, "sessions.reset", {
+      key: "agent:main:subagent:missing",
+    });
 
     expect(reset.ok).toBe(true);
     expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
@@ -2212,19 +2439,24 @@ describe("gateway server sessions", () => {
     });
 
     const { ws } = await openClient();
-    const reset = await rpcReq<{ ok: true; key: string; entry: { sessionId: string } }>(
-      ws,
-      "sessions.reset",
-      {
-        key: "agent:main:subagent:worker",
-      },
-    );
+    const reset = await rpcReq<{
+      ok: true;
+      key: string;
+      entry: { sessionId: string };
+    }>(ws, "sessions.reset", {
+      key: "agent:main:subagent:worker",
+    });
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:subagent:worker");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-subagent");
     expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
     const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
-      | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
+      | {
+          targetKind?: string;
+          targetSessionKey?: string;
+          reason?: string;
+          outcome?: string;
+        }
       | undefined;
     expect(event).toMatchObject({
       targetSessionKey: "agent:main:subagent:worker",
@@ -2304,7 +2536,9 @@ describe("gateway server sessions", () => {
         commandSource: "gateway:sessions.reset",
       },
     });
-    expect(event.context?.previousSessionEntry).toMatchObject({ sessionId: "sess-main" });
+    expect(event.context?.previousSessionEntry).toMatchObject({
+      sessionId: "sess-main",
+    });
     ws.close();
   });
 

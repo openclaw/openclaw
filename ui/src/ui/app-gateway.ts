@@ -194,6 +194,8 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
   host.lastErrorCode = null;
   host.hello = null;
   host.connected = false;
+  (host as unknown as OpenClawApp).sessionsListLastHash = null;
+  (host as unknown as OpenClawApp).sessionsListLastHashParamsKey = null;
   if (reconnectReason === "seq-gap") {
     // A seq gap means the socket stayed on the same gateway; preserve prompts
     // that only arrived as ephemeral events and clear stale run-scoped indicators.

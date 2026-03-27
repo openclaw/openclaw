@@ -22,6 +22,7 @@ import {
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
 } from "../agents/subagent-registry-read.js";
+import { getFileStatSnapshot } from "../config/cache-utils.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -84,6 +85,7 @@ export type {
   GatewaySessionRow,
   GatewaySessionsDefaults,
   SessionsListResult,
+  SessionsListRpcResult,
   SessionsPatchResult,
   SessionsPreviewEntry,
   SessionsPreviewResult,
@@ -952,6 +954,31 @@ function mergeSessionEntryIntoCombined(params: {
       ),
     };
   }
+}
+
+/**
+ * Cheap identity for combined session stores: sorted `path:mtime:size` markers.
+ * Used to skip `sessions.list` recomputation when backing files are unchanged.
+ */
+export function collectCombinedSessionStoreStatFingerprint(cfg: OpenClawConfig): string {
+  const storeConfig = cfg.session?.store;
+  const storePaths: string[] =
+    storeConfig && !isStorePathTemplate(storeConfig)
+      ? [resolveStorePath(storeConfig)]
+      : resolveAllAgentSessionStoreTargetsSync(cfg).map((t) => t.storePath);
+
+  const markers: string[] = [];
+  const seen = new Set<string>();
+  for (const storePath of storePaths) {
+    if (seen.has(storePath)) {
+      continue;
+    }
+    seen.add(storePath);
+    const snap = getFileStatSnapshot(storePath);
+    markers.push(snap ? `${storePath}:${snap.mtimeMs}:${snap.sizeBytes}` : `${storePath}:missing`);
+  }
+  markers.sort();
+  return markers.join("\n");
 }
 
 export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {

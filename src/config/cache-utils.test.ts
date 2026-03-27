@@ -47,4 +47,24 @@ describe("createExpiringMapCache", () => {
     expect(cache.get("stale")).toBeUndefined();
     expect(cache.keys()).toEqual(["fresh"]);
   });
+
+  it("evicts oldest entries when maxEntries is exceeded", () => {
+    let now = 1_000;
+    const cache = createExpiringMapCache<string, string>({
+      ttlMs: 60_000,
+      maxEntries: 2,
+      clock: () => now,
+    });
+
+    cache.set("a", "1");
+    now += 1;
+    cache.set("b", "2");
+    now += 1;
+    cache.set("c", "3");
+
+    expect(cache.size()).toBe(2);
+    expect(cache.get("a")).toBeUndefined();
+    expect(cache.get("b")).toBe("2");
+    expect(cache.get("c")).toBe("3");
+  });
 });

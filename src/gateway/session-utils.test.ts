@@ -14,6 +14,7 @@ import { withEnv } from "../test-utils/env.js";
 import {
   capArrayByJsonBytes,
   classifySessionKey,
+  collectCombinedSessionStoreStatFingerprint,
   deriveSessionTitle,
   listAgentsForGateway,
   listSessionsFromStore,
@@ -2469,6 +2470,17 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       const { store } = loadCombinedSessionStoreForGateway(cfg);
       expect(store["agent:main:main"]).toBeDefined();
       expect(store["agent:codex:acp-task"]).toBeDefined();
+
+      const fpBefore = collectCombinedSessionStoreStatFingerprint(cfg);
+      fs.writeFileSync(
+        path.join(codexDir, "sessions.json"),
+        JSON.stringify({
+          "agent:codex:acp-task": { sessionId: "s-codex-updated", updatedAt: 300 },
+        }),
+        "utf8",
+      );
+      const fpAfter = collectCombinedSessionStoreStatFingerprint(cfg);
+      expect(fpAfter).not.toBe(fpBefore);
     });
   });
 });

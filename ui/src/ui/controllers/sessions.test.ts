@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deleteSessionsAndRefresh, subscribeSessions, type SessionsState } from "./sessions.ts";
+import type { SessionsListResult } from "../types.ts";
+import {
+  buildSessionsListLastHashParamsKey,
+  deleteSessionsAndRefresh,
+  loadSessions,
+  patchSession,
+  subscribeSessions,
+  type SessionsState,
+} from "./sessions.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -17,6 +25,8 @@ function createState(request: RequestFn, overrides: Partial<SessionsState> = {})
     connected: true,
     sessionsLoading: false,
     sessionsResult: null,
+    sessionsListLastHash: null,
+    sessionsListLastHashParamsKey: null,
     sessionsError: null,
     sessionsFilterActive: "0",
     sessionsFilterLimit: "0",
@@ -28,6 +38,111 @@ function createState(request: RequestFn, overrides: Partial<SessionsState> = {})
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("loadSessions", () => {
+  it("sends lastHash when params match sessionsListLastHashParamsKey", async () => {
+    const request = vi.fn(async () => ({ unchanged: true, hash: "abc123", ts: 1, count: 0 }));
+    const paramsKey = buildSessionsListLastHashParamsKey({
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    const state = createState(request, {
+      sessionsListLastHash: "abc123",
+      sessionsListLastHashParamsKey: paramsKey,
+    });
+
+    await loadSessions(state);
+
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({
+        includeGlobal: true,
+        includeUnknown: true,
+        lastHash: "abc123",
+      }),
+    );
+    expect(state.sessionsListLastHash).toBe("abc123");
+    expect(state.sessionsListLastHashParamsKey).toBe(paramsKey);
+  });
+
+  it("preserves sessionsResult rows and applies count when server returns unchanged", async () => {
+    const existing: SessionsListResult = {
+      ts: 1,
+      path: "p",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [{ key: "k", kind: "direct", updatedAt: 1 }],
+    };
+    const request = vi.fn(async () => ({ unchanged: true, hash: "next", ts: 2, count: 7 }));
+    const paramsKey = buildSessionsListLastHashParamsKey({
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    const state = createState(request, {
+      sessionsResult: existing,
+      sessionsListLastHash: "old",
+      sessionsListLastHashParamsKey: paramsKey,
+    });
+
+    await loadSessions(state);
+
+    expect(state.sessionsResult).not.toBe(existing);
+    expect(state.sessionsResult).toEqual({ ...existing, count: 7 });
+    expect(state.sessionsResult?.count).toBe(7);
+    expect(state.sessionsListLastHash).toBe("next");
+  });
+
+  it("includes activeMinutes in the unchanged-key path so stale hashes are not reused", async () => {
+    const base = buildSessionsListLastHashParamsKey({
+      includeGlobal: true,
+      includeUnknown: true,
+      activeMinutes: 15,
+    });
+    const next = buildSessionsListLastHashParamsKey({
+      includeGlobal: true,
+      includeUnknown: true,
+      activeMinutes: 30,
+    });
+    expect(base).not.toBe(next);
+  });
+
+  it("replaces sessionsResult and hash on full list payload", async () => {
+    const full: SessionsListResult & { hash?: string } = {
+      ts: 1,
+      path: "p",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [{ key: "k", kind: "direct", updatedAt: 1 }],
+      hash: "fullhash",
+    };
+    const request = vi.fn(async () => full);
+    const state = createState(request);
+
+    await loadSessions(state);
+
+    expect(state.sessionsResult).toEqual(full);
+    expect(state.sessionsListLastHash).toBe("fullhash");
+    expect(state.sessionsListLastHashParamsKey).toBe(
+      buildSessionsListLastHashParamsKey({ includeGlobal: true, includeUnknown: true }),
+    );
+  });
+
+  it("clears lastHash tracking on error", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("network");
+    });
+    const state = createState(request, {
+      sessionsListLastHash: "x",
+      sessionsListLastHashParamsKey: "y",
+    });
+
+    await loadSessions(state);
+
+    expect(state.sessionsListLastHash).toBeNull();
+    expect(state.sessionsListLastHashParamsKey).toBeNull();
+    expect(state.sessionsError).toBe("Error: network");
+  });
 });
 
 describe("subscribeSessions", () => {
@@ -118,5 +233,75 @@ describe("deleteSessionsAndRefresh", () => {
 
     expect(deleted).toEqual([]);
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("clears lastHash before post-delete refresh", async () => {
+    const request: RequestFn = vi.fn(async (method: string) => {
+      if (method === "sessions.delete") {
+        return { ok: true };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 1,
+          path: "p",
+          count: 0,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [],
+          hash: "fresh",
+        };
+      }
+      throw new Error(`unexpected: ${method}`);
+    });
+    const paramsKey = buildSessionsListLastHashParamsKey({
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    const state = createState(request, {
+      sessionsListLastHash: "stale",
+      sessionsListLastHashParamsKey: paramsKey,
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await deleteSessionsAndRefresh(state, ["key-a"]);
+
+    // The sessions.list call after delete should NOT include the stale lastHash.
+    const listCall = vi.mocked(request).mock.calls.find(([m]) => m === "sessions.list");
+    expect(listCall).toBeDefined();
+    expect((listCall![1] as Record<string, unknown>)?.lastHash).toBeUndefined();
+  });
+});
+
+describe("patchSession", () => {
+  it("clears lastHash before post-patch refresh", async () => {
+    const request: RequestFn = vi.fn(async (method: string) => {
+      if (method === "sessions.patch") {
+        return { ok: true };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 1,
+          path: "p",
+          count: 0,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [],
+          hash: "fresh",
+        };
+      }
+      throw new Error(`unexpected: ${method}`);
+    });
+    const paramsKey = buildSessionsListLastHashParamsKey({
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    const state = createState(request, {
+      sessionsListLastHash: "stale",
+      sessionsListLastHashParamsKey: paramsKey,
+    });
+
+    await patchSession(state, "key-a", { label: "renamed" });
+
+    const listCall = vi.mocked(request).mock.calls.find(([m]) => m === "sessions.list");
+    expect(listCall).toBeDefined();
+    expect((listCall![1] as Record<string, unknown>)?.lastHash).toBeUndefined();
   });
 });
