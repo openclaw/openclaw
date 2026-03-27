@@ -329,3 +329,141 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
     ]);
   });
 });
+
+describe("legacy migrate TTS config", () => {
+  it("moves messages.tts.microsoft into messages.tts.providers.microsoft", () => {
+    const res = migrateLegacyConfig({
+      messages: {
+        tts: {
+          microsoft: {
+            enabled: true,
+            voice: "en-US-AriaNeural",
+            lang: "en-US",
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved messages.tts.microsoft → messages.tts.providers.microsoft.",
+    );
+    expect(res.config?.messages?.tts?.providers?.microsoft).toEqual({
+      enabled: true,
+      voice: "en-US-AriaNeural",
+      lang: "en-US",
+    });
+    expect(
+      (res.config?.messages?.tts as { microsoft?: unknown } | null)?.microsoft,
+    ).toBeUndefined();
+  });
+
+  it("moves messages.tts.edge into messages.tts.providers.microsoft", () => {
+    const res = migrateLegacyConfig({
+      messages: {
+        tts: {
+          edge: {
+            enabled: true,
+            voice: "en-US-JennyNeural",
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain("Moved messages.tts.edge → messages.tts.providers.microsoft.");
+    expect(res.config?.messages?.tts?.providers?.microsoft).toEqual({
+      enabled: true,
+      voice: "en-US-JennyNeural",
+    });
+    expect((res.config?.messages?.tts as { edge?: unknown } | null)?.edge).toBeUndefined();
+  });
+
+  it("moves messages.tts.openai into messages.tts.providers.openai", () => {
+    const res = migrateLegacyConfig({
+      messages: {
+        tts: {
+          openai: {
+            apiKey: "sk-test",
+            voice: "alloy",
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain("Moved messages.tts.openai → messages.tts.providers.openai.");
+    expect(res.config?.messages?.tts?.providers?.openai).toEqual({
+      apiKey: "sk-test",
+      voice: "alloy",
+    });
+    expect((res.config?.messages?.tts as { openai?: unknown } | null)?.openai).toBeUndefined();
+  });
+
+  it("moves messages.tts.elevenlabs into messages.tts.providers.elevenlabs", () => {
+    const res = migrateLegacyConfig({
+      messages: {
+        tts: {
+          elevenlabs: {
+            apiKey: "xi-test",
+            voiceId: "voice-123",
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved messages.tts.elevenlabs → messages.tts.providers.elevenlabs.",
+    );
+    expect(res.config?.messages?.tts?.providers?.elevenlabs).toEqual({
+      apiKey: "xi-test",
+      voiceId: "voice-123",
+    });
+    expect(
+      (res.config?.messages?.tts as { elevenlabs?: unknown } | null)?.elevenlabs,
+    ).toBeUndefined();
+  });
+
+  it("merges legacy TTS config with existing providers", () => {
+    const res = migrateLegacyConfig({
+      messages: {
+        tts: {
+          providers: {
+            microsoft: {
+              voice: "existing-voice",
+            },
+          },
+          microsoft: {
+            enabled: true,
+            voice: "legacy-voice",
+            lang: "en-US",
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved messages.tts.microsoft → messages.tts.providers.microsoft.",
+    );
+    // Existing config should be authoritative; legacy fills gaps
+    expect(res.config?.messages?.tts?.providers?.microsoft).toEqual({
+      voice: "existing-voice", // Kept from existing
+      enabled: true, // Filled from legacy
+      lang: "en-US", // Filled from legacy
+    });
+  });
+
+  it("does not migrate when no legacy TTS keys exist — returns null", () => {
+    const res = migrateLegacyConfig({
+      messages: {
+        tts: {
+          providers: {
+            microsoft: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toHaveLength(0);
+  });
+});

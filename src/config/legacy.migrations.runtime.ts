@@ -195,6 +195,30 @@ const HEARTBEAT_RULE: LegacyConfigRule = {
     "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
 };
 
+const MESSAGES_TTS_OPENAI_RULE: LegacyConfigRule = {
+  path: ["messages", "tts", "openai"],
+  message:
+    "messages.tts.openai was moved; use messages.tts.providers.openai instead (auto-migrated on load).",
+};
+
+const MESSAGES_TTS_ELEVENLABS_RULE: LegacyConfigRule = {
+  path: ["messages", "tts", "elevenlabs"],
+  message:
+    "messages.tts.elevenlabs was moved; use messages.tts.providers.elevenlabs instead (auto-migrated on load).",
+};
+
+const MESSAGES_TTS_MICROSOFT_RULE: LegacyConfigRule = {
+  path: ["messages", "tts", "microsoft"],
+  message:
+    "messages.tts.microsoft was moved; use messages.tts.providers.microsoft instead (auto-migrated on load).",
+};
+
+const MESSAGES_TTS_EDGE_RULE: LegacyConfigRule = {
+  path: ["messages", "tts", "edge"],
+  message:
+    "messages.tts.edge was moved; use messages.tts.providers.microsoft instead (auto-migrated on load).",
+};
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     // v2026.2.26 added a startup guard requiring gateway.controlUi.allowedOrigins (or the
@@ -307,6 +331,12 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "tts.providers-generic-shape",
     describe: "Move legacy bundled TTS config keys into messages.tts.providers",
+    legacyRules: [
+      MESSAGES_TTS_OPENAI_RULE,
+      MESSAGES_TTS_ELEVENLABS_RULE,
+      MESSAGES_TTS_MICROSOFT_RULE,
+      MESSAGES_TTS_EDGE_RULE,
+    ],
     apply: (raw, changes) => {
       const messages = getRecord(raw.messages);
       migrateLegacyTtsConfig(getRecord(messages?.tts), "messages.tts", changes);
