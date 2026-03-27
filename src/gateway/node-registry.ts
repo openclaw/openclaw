@@ -135,7 +135,10 @@ export class NodeRegistry {
         error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
       };
     }
-    const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 30_000;
+    // Default reduced from 30s to 5s to prevent blocking the gateway event loop
+    // when a node is offline/unreachable. Callers can still override with a higher
+    // value via params.timeoutMs when longer waits are acceptable.
+    const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 5_000;
     return await new Promise<NodeInvokeResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingInvokes.delete(requestId);

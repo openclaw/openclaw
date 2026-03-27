@@ -137,6 +137,19 @@ export function resolveGatewayOptions(opts?: GatewayCallOptions) {
   return { url: validatedOverride?.url, token, timeoutMs };
 }
 
+// Methods that only read local/cached state and should respond quickly.
+// Use a short timeout to avoid blocking the caller when the gateway is under load.
+const FAST_GATEWAY_METHODS = new Set([
+  "node.list",
+  "node.pair.list",
+  "node.describe",
+  "device.pair.list",
+  "health",
+  "status",
+  "channels.status",
+]);
+const FAST_METHOD_TIMEOUT_MS = 5_000;
+
 export async function callGatewayTool<T = Record<string, unknown>>(
   method: string,
   opts: GatewayCallOptions,
@@ -144,13 +157,20 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   extra?: { expectFinal?: boolean },
 ) {
   const gateway = resolveGatewayOptions(opts);
+  // Use a shorter timeout for read-only status methods that should never need
+  // to wait for offline nodes, keeping the default 30s for invoke-style RPCs.
+  const hasExplicitTimeout = typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs);
+  const timeoutMs =
+    hasExplicitTimeout || !FAST_GATEWAY_METHODS.has(method)
+      ? gateway.timeoutMs
+      : FAST_METHOD_TIMEOUT_MS;
   const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method);
   return await callGateway<T>({
     url: gateway.url,
     token: gateway.token,
     method,
     params,
-    timeoutMs: gateway.timeoutMs,
+    timeoutMs,
     expectFinal: extra?.expectFinal,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: "agent",

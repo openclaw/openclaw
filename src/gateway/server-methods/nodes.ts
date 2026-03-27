@@ -59,6 +59,20 @@ const NODE_WAKE_NUDGE_THROTTLE_MS = 10 * 60_000;
 const NODE_PENDING_ACTION_TTL_MS = 10 * 60_000;
 const NODE_PENDING_ACTION_MAX_PER_NODE = 64;
 
+// Cache for node.list to avoid blocking the event loop with repeated file I/O.
+// Short TTL ensures freshness while protecting against rapid repeated calls.
+const NODE_LIST_CACHE_TTL_MS = 2_000;
+type NodeListCacheEntry = {
+  ts: number;
+  data: Awaited<ReturnType<typeof listDevicePairing>>;
+};
+let nodeListCache: NodeListCacheEntry | null = null;
+
+/** @internal Test-only: reset the node.list response cache. */
+export function resetNodeListCacheForTests(): void {
+  nodeListCache = null;
+}
+
 type NodeWakeState = {
   lastWakeAtMs: number;
   inFlight?: Promise<NodeWakeAttempt>;
@@ -652,7 +666,17 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const list = await listDevicePairing();
+      // Use cached pairing list when available to avoid file I/O on every call.
+      // This prevents node.list from becoming a bottleneck when called frequently
+      // (e.g., heartbeat checks) while the gateway event loop is under load.
+      const now = Date.now();
+      let list: Awaited<ReturnType<typeof listDevicePairing>>;
+      if (nodeListCache && now - nodeListCache.ts < NODE_LIST_CACHE_TTL_MS) {
+        list = nodeListCache.data;
+      } else {
+        list = await listDevicePairing();
+        nodeListCache = { ts: now, data: list };
+      }
       const pairedById = new Map(
         list.paired
           .filter((entry) => isNodeEntry(entry))

@@ -185,6 +185,52 @@ describe("gateway tool defaults", () => {
     );
   });
 
+  it("uses short timeout for fast gateway methods like node.list", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    await callGatewayTool("node.list", {}, {});
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "node.list",
+        timeoutMs: 5_000,
+      }),
+    );
+  });
+
+  it("uses short timeout for other fast methods (health, status)", async () => {
+    for (const method of ["health", "status", "channels.status", "node.describe"]) {
+      callGatewayMock.mockResolvedValueOnce({ ok: true });
+      await callGatewayTool(method, {}, {});
+      expect(callGatewayMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          method,
+          timeoutMs: 5_000,
+        }),
+      );
+    }
+  });
+
+  it("uses default 30s timeout for non-fast methods like node.invoke", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    await callGatewayTool("node.invoke", {}, {});
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "node.invoke",
+        timeoutMs: 30_000,
+      }),
+    );
+  });
+
+  it("respects explicit timeoutMs even for fast methods", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    await callGatewayTool("node.list", { timeoutMs: 15_000 }, {});
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "node.list",
+        timeoutMs: 15_000,
+      }),
+    );
+  });
+
   it("rejects non-allowlisted overrides (SSRF hardening)", async () => {
     await expect(
       callGatewayTool("health", { gatewayUrl: "ws://127.0.0.1:8080", gatewayToken: "t" }, {}),
