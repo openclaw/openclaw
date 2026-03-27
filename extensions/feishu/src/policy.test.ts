@@ -17,6 +17,10 @@ function createCfg(feishu: Record<string, unknown>): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function createFeishuConfig(overrides: Partial<FeishuConfig>): FeishuConfig {
+  return FeishuConfigSchema.parse(overrides);
+}
+
 describe("resolveFeishuReplyPolicy", () => {
   it("defaults open groups to no mention when unset", () => {
     expect(
@@ -89,7 +93,7 @@ describe("resolveFeishuReplyPolicy", () => {
 
 describe("resolveFeishuGroupConfig", () => {
   it("falls back to wildcard group config when direct match is missing", () => {
-    const cfg: FeishuConfig = FeishuConfigSchema.parse({
+    const cfg = createFeishuConfig({
       groups: {
         "*": { requireMention: false },
         "oc-explicit": { requireMention: true },
@@ -105,7 +109,7 @@ describe("resolveFeishuGroupConfig", () => {
   });
 
   it("prefers exact group config over wildcard", () => {
-    const cfg: FeishuConfig = FeishuConfigSchema.parse({
+    const cfg = createFeishuConfig({
       groups: {
         "*": { requireMention: false },
         "oc-explicit": { requireMention: true },
@@ -121,7 +125,7 @@ describe("resolveFeishuGroupConfig", () => {
   });
 
   it("keeps case-insensitive matching for explicit group ids", () => {
-    const cfg: FeishuConfig = FeishuConfigSchema.parse({
+    const cfg = createFeishuConfig({
       groups: {
         "*": { requireMention: false },
         OC_UPPER: { requireMention: true },
