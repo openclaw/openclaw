@@ -11,6 +11,7 @@ import {
 } from "./reply.directive.directive-behavior.e2e-mocks.js";
 
 export const MAIN_SESSION_KEY = "agent:main:main";
+type RunPreparedReply = typeof import("./reply/get-reply-run.js").runPreparedReply;
 
 export const DEFAULT_TEST_MODEL_CATALOG: Array<{
   id: string;
@@ -152,6 +153,34 @@ export function installDirectiveBehaviorE2EHooks() {
     resetSystemEventsForTest();
     vi.restoreAllMocks();
   });
+}
+
+export function installFreshDirectiveBehaviorReplyMocks(params?: {
+  onActualRunPreparedReply?: (runPreparedReply: RunPreparedReply) => void;
+  runPreparedReply?: (...args: Parameters<RunPreparedReply>) => unknown;
+}) {
+  vi.doMock("../agents/pi-embedded.js", () => ({
+    abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+    runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
+    queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+    isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
+    isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+  }));
+  vi.doMock("../agents/model-catalog.js", () => ({
+    loadModelCatalog: loadModelCatalogMock,
+  }));
+  if (params?.runPreparedReply || params?.onActualRunPreparedReply) {
+    vi.doMock("./reply/get-reply-run.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./reply/get-reply-run.js")>();
+      params.onActualRunPreparedReply?.(actual.runPreparedReply);
+      return {
+        ...actual,
+        runPreparedReply: (...args: Parameters<RunPreparedReply>) =>
+          params.runPreparedReply?.(...args),
+      };
+    });
+  }
 }
 
 export function makeRestrictedElevatedDisabledConfig(home: string) {

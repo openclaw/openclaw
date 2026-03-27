@@ -155,8 +155,9 @@ describe("runMessageAction media behavior", () => {
         isConfigured: () => true,
       },
       actions: {
-        describeMessageTool: () => ({ actions: ["sendAttachment", "setGroupIcon"] }),
-        supportsAction: ({ action }) => action === "sendAttachment" || action === "setGroupIcon",
+        describeMessageTool: () => ({ actions: ["sendAttachment", "upload-file", "setGroupIcon"] }),
+        supportsAction: ({ action }) =>
+          action === "sendAttachment" || action === "upload-file" || action === "setGroupIcon",
         handleAction: async ({ params }) =>
           jsonResult({
             ok: true,
@@ -199,6 +200,7 @@ describe("runMessageAction media behavior", () => {
     }
 
     async function expectRejectsLocalAbsolutePathWithoutSandbox(params: {
+      cfg?: OpenClawConfig;
       action: "sendAttachment" | "setGroupIcon";
       target: string;
       mediaField?: "media" | "mediaUrl" | "fileUrl";
@@ -223,7 +225,7 @@ describe("runMessageAction media behavior", () => {
 
         await expect(
           runMessageAction({
-            cfg,
+            cfg: params.cfg ?? cfg,
             action: params.action,
             params: actionParams,
           }),
@@ -263,6 +265,30 @@ describe("runMessageAction media behavior", () => {
       );
       expect((call?.[1] as { sandboxValidated?: boolean } | undefined)?.sandboxValidated).not.toBe(
         true,
+      );
+    });
+
+    it("hydrates buffer and filename from media for bluebubbles upload-file", async () => {
+      const result = await runMessageAction({
+        cfg,
+        action: "upload-file",
+        params: {
+          channel: "bluebubbles",
+          target: "+15551234567",
+          media: "https://example.com/pic.png",
+          message: "caption",
+        },
+      });
+
+      expect(result.kind).toBe("action");
+      expect(result.payload).toMatchObject({
+        ok: true,
+        filename: "pic.png",
+        caption: "caption",
+        contentType: "image/png",
+      });
+      expect((result.payload as { buffer?: string }).buffer).toBe(
+        Buffer.from("hello").toString("base64"),
       );
     });
 
@@ -353,7 +379,10 @@ describe("runMessageAction media behavior", () => {
           tempPrefix: "msg-group-icon-",
         },
       ]) {
-        await expectRejectsLocalAbsolutePathWithoutSandbox(testCase);
+        await expectRejectsLocalAbsolutePathWithoutSandbox({
+          ...testCase,
+          cfg: { tools: { fs: { workspaceOnly: true } } },
+        });
       }
     });
   });

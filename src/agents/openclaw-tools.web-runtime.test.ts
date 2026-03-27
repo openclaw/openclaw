@@ -26,9 +26,6 @@ function mockToolFactory(name: string) {
 vi.mock("./tools/agents-list-tool.js", () => ({
   createAgentsListTool: mockToolFactory("agents_list_stub"),
 }));
-vi.mock("./tools/browser-tool.js", () => ({
-  createBrowserTool: mockToolFactory("browser_stub"),
-}));
 vi.mock("./tools/canvas-tool.js", () => ({
   createCanvasTool: mockToolFactory("canvas_stub"),
 }));

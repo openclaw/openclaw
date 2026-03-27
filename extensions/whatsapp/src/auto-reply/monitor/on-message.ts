@@ -5,6 +5,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { buildGroupHistoryKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
 import type { MentionConfig } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
 import { maybeBroadcastMessage } from "./broadcast.js";
@@ -96,6 +97,7 @@ export function createWebOnMessageHandler(params: {
     }
 
     if (msg.chatType === "group") {
+      const sender = getSenderIdentity(msg);
       const metaCtx = {
         From: msg.from,
         To: msg.to,
@@ -104,9 +106,9 @@ export function createWebOnMessageHandler(params: {
         ChatType: msg.chatType,
         ConversationLabel: conversationId,
         GroupSubject: msg.groupSubject,
-        SenderName: msg.senderName,
-        SenderId: msg.senderJid?.trim() || msg.senderE164,
-        SenderE164: msg.senderE164,
+        SenderName: sender.name ?? undefined,
+        SenderId: getPrimaryIdentityId(sender) ?? undefined,
+        SenderE164: sender.e164 ?? undefined,
         Provider: "whatsapp",
         Surface: "whatsapp",
         OriginatingChannel: "whatsapp",
@@ -144,8 +146,12 @@ export function createWebOnMessageHandler(params: {
       }
     } else {
       // Ensure `peerId` for DMs is stable and stored as E.164 when possible.
-      if (!msg.senderE164 && peerId && peerId.startsWith("+")) {
-        msg.senderE164 = normalizeE164(peerId) ?? msg.senderE164;
+      if (!msg.sender?.e164 && !msg.senderE164 && peerId && peerId.startsWith("+")) {
+        const normalized = normalizeE164(peerId);
+        if (normalized) {
+          msg.sender = { ...(msg.sender ?? {}), e164: normalized };
+          msg.senderE164 = normalized;
+        }
       }
     }
 
