@@ -134,11 +134,11 @@ describeLive("CLI TTS Multi-Agent Integration", () => {
 
     it("synthesizes with 'alice' agent config (English voice)", async () => {
       const cfg = buildMultiAgentConfig();
-      resolveTtsConfig(cfg, "alice");
 
       const result = await synthesizeSpeech({
         text: "Alice agent speaking English.",
         cfg,
+        agentId: "alice",
       });
 
       expect(result.success).toBe(true);

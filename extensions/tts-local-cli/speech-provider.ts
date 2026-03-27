@@ -13,7 +13,6 @@ import type {
 const log = createSubsystemLogger("tts/cli");
 
 const DEFAULT_CLI_TIMEOUT_MS = 120_000;
-const DEFAULT_OUTPUT_FORMAT = "mp3";
 
 type CliTtsConfig = {
   command: string;
