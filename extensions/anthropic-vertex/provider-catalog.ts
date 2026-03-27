@@ -2,7 +2,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-models";
-import { resolveAnthropicVertexRegion } from "openclaw/plugin-sdk/provider-models";
+import { resolveAnthropicVertexRegion } from "./region.js";
 export const ANTHROPIC_VERTEX_DEFAULT_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW = 1_000_000;
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";

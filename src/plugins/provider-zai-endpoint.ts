@@ -1,10 +1,12 @@
+import {
+  ZAI_CN_BASE_URL,
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_CODING_GLOBAL_BASE_URL,
+  ZAI_GLOBAL_BASE_URL,
+} from "../plugin-sdk/zai.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 
 export type ZaiEndpointId = "global" | "cn" | "coding-global" | "coding-cn";
-const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
-const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
-const ZAI_GLOBAL_BASE_URL = "https://api.z.ai/api/paas/v4";
-const ZAI_CN_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
 
 export type ZaiDetectedEndpoint = {
   endpoint: ZaiEndpointId;

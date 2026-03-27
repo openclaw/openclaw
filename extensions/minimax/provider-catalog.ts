@@ -6,7 +6,7 @@ import {
   MINIMAX_DEFAULT_MODEL_ID,
   MINIMAX_TEXT_MODEL_CATALOG,
   MINIMAX_TEXT_MODEL_ORDER,
-} from "openclaw/plugin-sdk/provider-models";
+} from "./provider-models.js";
 
 const MINIMAX_PORTAL_BASE_URL = "https://api.minimax.io/anthropic";
 const MINIMAX_DEFAULT_CONTEXT_WINDOW = 204800;

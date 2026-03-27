@@ -1,11 +1,10 @@
-import { OPENCODE_GO_DEFAULT_MODEL_REF } from "openclaw/plugin-sdk/provider-models";
 import {
   applyAgentDefaultModelPrimary,
   withAgentModelAliases,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 
-export { OPENCODE_GO_DEFAULT_MODEL_REF };
+export const OPENCODE_GO_DEFAULT_MODEL_REF = "opencode-go/kimi-k2.5";
 
 const OPENCODE_GO_ALIAS_DEFAULTS: Record<string, string> = {
   "opencode-go/kimi-k2.5": "Kimi",

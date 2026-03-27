@@ -1,10 +1,7 @@
+import { isMiniMaxModernModelId } from "openclaw/plugin-sdk/minimax";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
-import {
-  isMiniMaxModernModelId,
-  OPENCODE_ZEN_DEFAULT_MODEL,
-} from "openclaw/plugin-sdk/provider-models";
-import { applyOpencodeZenConfig } from "./onboard.js";
+import { applyOpencodeZenConfig, OPENCODE_ZEN_DEFAULT_MODEL } from "./api.js";
 
 const PROVIDER_ID = "opencode";
 
