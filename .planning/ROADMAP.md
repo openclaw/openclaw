@@ -91,7 +91,7 @@
    **Plans:** 2 plans
    Plans:
 
-- [ ] 04-01-PLAN.md — QueueManager class with lock-protected read-modify-write and serialization (TDD)
+- [x] 04-01-PLAN.md — QueueManager class with lock-protected read-modify-write and serialization (TDD)
 - [ ] 04-02-PLAN.md — Concurrent access tests and barrel exports
       **Estimated complexity**: M
 
