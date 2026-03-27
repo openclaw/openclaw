@@ -511,17 +511,17 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.deliver({ text: "answer part final" }, { kind: "final" });
 
     expect(streamingInstances).toHaveLength(1);
-    const updateCalls = streamingInstances[0].update.mock.calls.map((c: unknown[]) => c[0]);
-    const reasoningUpdate = updateCalls.find((c: string) => c.includes("Thinking"));
+    const updateCalls = streamingInstances[0].update.mock.calls.map((c: unknown[]) =>
+      String(c[0] ?? ""),
+    );
+    const reasoningUpdate = updateCalls.find((c) => c.includes("Thinking"));
     expect(reasoningUpdate).toContain("> 💭 **Thinking**");
     // formatReasoningPrefix strips "Reasoning:" prefix and italic markers
     expect(reasoningUpdate).toContain("> thinking step");
     expect(reasoningUpdate).not.toContain("Reasoning:");
     expect(reasoningUpdate).not.toMatch(/> _.*_/);
 
-    const combinedUpdate = updateCalls.find(
-      (c: string) => c.includes("Thinking") && c.includes("---"),
-    );
+    const combinedUpdate = updateCalls.find((c) => c.includes("Thinking") && c.includes("---"));
     expect(combinedUpdate).toBeDefined();
 
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
