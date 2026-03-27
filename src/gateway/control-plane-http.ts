@@ -760,13 +760,18 @@ function authorizeBridge(req: IncomingMessage): boolean {
   return header === expected;
 }
 
-function ensureMethod(req: IncomingMessage, res: ServerResponse, allowed: string): boolean {
+function ensureMethod(
+  req: IncomingMessage,
+  res: ServerResponse,
+  allowed: string | string[],
+): boolean {
   const method = (req.method ?? "GET").toUpperCase();
-  if (method === allowed) {
+  const allowedList = Array.isArray(allowed) ? allowed : [allowed];
+  if (allowedList.includes(method)) {
     return true;
   }
   res.statusCode = 405;
-  res.setHeader("Allow", allowed);
+  res.setHeader("Allow", allowedList.join(", "));
   res.end("Method Not Allowed");
   return false;
 }
@@ -1267,6 +1272,85 @@ function buildReleaseExportPayload(params: {
   };
 }
 
+async function deleteRuntimeAgentByRemoteAgentId(remoteAgentId: string): Promise<{
+  status: number;
+  body: JsonObject;
+}> {
+  const cfg = loadConfig();
+  const current = loadControlPlaneRuntimeState();
+  const runtimeAgent = (current.agents ?? []).find(
+    (entry) =>
+      normalizeRemoteAgentId(entry.remoteAgentId) === normalizeRemoteAgentId(remoteAgentId),
+  );
+  if (!runtimeAgent) {
+    return {
+      status: 404,
+      body: {
+        error: "remote agent is not synced to a local OpenClaw agent",
+        remoteAgentId,
+      },
+    };
+  }
+  if (normalizeAgentId(runtimeAgent.agentId) === resolveDefaultAgentId(cfg)) {
+    return {
+      status: 409,
+      body: {
+        error: "refusing to delete the default runtime template agent",
+        remoteAgentId,
+        agentId: runtimeAgent.agentId,
+      },
+    };
+  }
+
+  const remainingConfigAgents = listAgentEntries(cfg).filter(
+    (entry) => normalizeAgentId(entry.id) !== normalizeAgentId(runtimeAgent.agentId),
+  );
+  await writeConfigFile({
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      list: remainingConfigAgents,
+    },
+  });
+  const nextCfg = loadConfig();
+  await fs.rm(resolveAgentDir(nextCfg, runtimeAgent.agentId), {
+    recursive: true,
+    force: true,
+  });
+  await fs.rm(resolveAgentWorkspaceDir(nextCfg, runtimeAgent.agentId), {
+    recursive: true,
+    force: true,
+  });
+  const agents = (current.agents ?? []).filter(
+    (entry) =>
+      normalizeRemoteAgentId(entry.remoteAgentId) !== normalizeRemoteAgentId(remoteAgentId),
+  );
+  mergeControlPlaneRuntimeState({
+    agents,
+    remoteAgentId:
+      agents.length > 0
+        ? resolvePrimaryRuntimeRemoteAgentId({
+            cfg: nextCfg,
+            currentState: current,
+            agents,
+            fallbackRemoteAgentId: agents[0]?.remoteAgentId ?? "",
+          })
+        : undefined,
+  });
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      remoteAgentId,
+      agentId: runtimeAgent.agentId,
+      localAgentKey: runtimeAgent.localAgentKey ?? runtimeAgent.agentId,
+      workspaceKey: runtimeAgent.workspaceKey ?? null,
+      status: "deleted",
+      remainingAgents: agents.length,
+    },
+  };
+}
+
 function listPendingExecApprovalRecords(
   manager: NonNullable<ReturnType<typeof getGlobalExecApprovalManager>>,
 ): ExecApprovalRecord[] {
@@ -1515,69 +1599,42 @@ export async function handleControlPlaneHttpRequest(
       return true;
     }
     const remoteAgentId = undeployMatch[1] ?? "";
-    const cfg = loadConfig();
-    const current = loadControlPlaneRuntimeState();
-    const runtimeAgent = (current.agents ?? []).find(
-      (entry) =>
-        normalizeRemoteAgentId(entry.remoteAgentId) === normalizeRemoteAgentId(remoteAgentId),
-    );
-    if (!runtimeAgent) {
-      sendJson(res, 404, {
-        error: "remote agent is not synced to a local OpenClaw agent",
-        remoteAgentId,
-      });
+    const result = await deleteRuntimeAgentByRemoteAgentId(remoteAgentId);
+    sendJson(res, result.status, {
+      ...result.body,
+      status: result.status === 200 ? "undeployed" : result.body.status,
+    });
+    return true;
+  }
+
+  const deleteAgentMatch = url.pathname.match(
+    new RegExp(`^${PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/agents/([^/]+)$`),
+  );
+  if (deleteAgentMatch) {
+    if (!ensureMethod(req, res, "DELETE")) {
       return true;
     }
-    if (normalizeAgentId(runtimeAgent.agentId) === resolveDefaultAgentId(cfg)) {
-      sendJson(res, 409, {
-        error: "refusing to undeploy the default runtime template agent",
-        remoteAgentId,
-        agentId: runtimeAgent.agentId,
-      });
+    const remoteAgentId = deleteAgentMatch[1] ?? "";
+    const result = await deleteRuntimeAgentByRemoteAgentId(remoteAgentId);
+    sendJson(res, result.status, result.body);
+    return true;
+  }
+
+  if (url.pathname === `${PREFIX}/agents/delete`) {
+    if (!ensureMethod(req, res, "POST")) {
       return true;
     }
-    const remainingConfigAgents = listAgentEntries(cfg).filter(
-      (entry) => normalizeAgentId(entry.id) !== normalizeAgentId(runtimeAgent.agentId),
-    );
-    await writeConfigFile({
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        list: remainingConfigAgents,
-      },
-    });
-    const nextCfg = loadConfig();
-    await fs.rm(resolveAgentDir(nextCfg, runtimeAgent.agentId), {
-      recursive: true,
-      force: true,
-    });
-    await fs.rm(resolveAgentWorkspaceDir(nextCfg, runtimeAgent.agentId), {
-      recursive: true,
-      force: true,
-    });
-    const agents = (current.agents ?? []).filter(
-      (entry) =>
-        normalizeRemoteAgentId(entry.remoteAgentId) !== normalizeRemoteAgentId(remoteAgentId),
-    );
-    mergeControlPlaneRuntimeState({
-      agents,
-      remoteAgentId:
-        agents.length > 0
-          ? resolvePrimaryRuntimeRemoteAgentId({
-              cfg: nextCfg,
-              currentState: current,
-              agents,
-              fallbackRemoteAgentId: agents[0]?.remoteAgentId ?? "",
-            })
-          : undefined,
-    });
-    sendJson(res, 200, {
-      ok: true,
-      remoteAgentId,
-      agentId: runtimeAgent.agentId,
-      status: "undeployed",
-      remainingAgents: agents.length,
-    });
+    const body = await readBody(req);
+    const remoteAgentId =
+      typeof body.remoteAgentId === "string" && body.remoteAgentId.trim()
+        ? body.remoteAgentId.trim()
+        : "";
+    if (!remoteAgentId) {
+      sendJson(res, 400, { error: "missing or invalid remoteAgentId" });
+      return true;
+    }
+    const result = await deleteRuntimeAgentByRemoteAgentId(remoteAgentId);
+    sendJson(res, result.status, result.body);
     return true;
   }
 
