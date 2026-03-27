@@ -123,6 +123,10 @@ export class RealtimeCallHandler {
         }
       });
 
+      ws.on("error", (err: Error) => {
+        console.error("[RealtimeVoice] Twilio WebSocket error:", err);
+      });
+
       ws.on("close", () => {
         bridge?.close();
       });
