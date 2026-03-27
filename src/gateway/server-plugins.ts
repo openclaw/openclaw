@@ -7,6 +7,7 @@ import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { abortChatRunById } from "./chat-abort.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import type { ErrorShape } from "./protocol/index.js";
@@ -290,6 +291,30 @@ async function dispatchGatewayMethod<T>(
     throw new Error(result.error?.message ?? `Gateway method "${method}" failed.`);
   }
   return result.payload as T;
+}
+
+export function createGatewayAgentAbort(): PluginRuntime["agent"]["abort"] {
+  return async (params) => {
+    const scope = getPluginRuntimeGatewayRequestScope();
+    const ctx = scope?.context ?? getFallbackGatewayContext();
+    if (!ctx) {
+      return { aborted: false };
+    }
+    const active = ctx.chatAbortControllers.get(params.runId);
+    if (!active) {
+      return { aborted: false };
+    }
+    return abortChatRunById(ctx, {
+      runId: params.runId,
+      // When sessionKey is omitted, fall back to the entry's own sessionKey.
+      // This intentionally bypasses the cross-session ownership check in
+      // abortChatRunById, allowing any gateway-bound plugin to abort any run
+      // it knows the runId of. This is acceptable because abort access is
+      // gated by allowGatewaySubagentBinding at the runtime level.
+      sessionKey: params.sessionKey ?? active.sessionKey,
+      stopReason: "plugin",
+    });
+  };
 }
 
 export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {

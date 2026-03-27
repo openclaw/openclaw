@@ -67,6 +67,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       ensureAgentWorkspace: vi
         .fn()
         .mockResolvedValue(undefined) as unknown as PluginRuntime["agent"]["ensureAgentWorkspace"],
+      abort: vi.fn().mockImplementation(() => {
+        throw new Error("abort not available in tests");
+      }) as unknown as PluginRuntime["agent"]["abort"],
       session: {
         resolveStorePath: vi.fn(
           () => "/tmp/agent-sessions.json",

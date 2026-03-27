@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
+import { AGENT_LANE_SUBAGENT } from "../../agents/lanes.js";
 import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
+import { AGENT_NO_TIMEOUT_MS, resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
@@ -34,6 +36,7 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
+import { resolveChatRunExpiresAtMs } from "../chat-abort.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
@@ -177,9 +180,85 @@ function dispatchAgentRunFromGateway(params: {
   idempotencyKey: string;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
+  sessionKey?: string;
+  ownerConnId?: string;
+  ownerDeviceId?: string;
+  cfg?: Parameters<typeof resolveAgentTimeoutMs>[0]["cfg"];
 }) {
-  void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
+  const controller = new AbortController();
+  const registeredAbortController = Boolean(params.sessionKey);
+  const clearAbortControllerIfOwned = () => {
+    if (!registeredAbortController) {
+      return;
+    }
+    if (params.context.chatAbortControllers.get(params.runId)?.controller === controller) {
+      params.context.chatAbortControllers.delete(params.runId);
+    }
+  };
+  if (registeredAbortController) {
+    if (params.context.chatAbortControllers.has(params.runId)) {
+      const error = errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `idempotencyKey "${params.idempotencyKey}" already belongs to an active run; use a unique key.`,
+      );
+      const payload = {
+        runId: params.runId,
+        status: "error" as const,
+        summary: error.message,
+      };
+      setGatewayDedupeEntry({
+        dedupe: params.context.dedupe,
+        key: `agent:${params.idempotencyKey}`,
+        entry: {
+          ts: Date.now(),
+          ok: false,
+          payload,
+          error,
+        },
+      });
+      params.respond(false, payload, error, { runId: params.runId });
+      return;
+    }
+    const isSubagentLane =
+      typeof params.ingressOpts.lane === "string" &&
+      params.ingressOpts.lane.trim() === String(AGENT_LANE_SUBAGENT);
+    const timeoutSecondsRaw =
+      params.ingressOpts.timeout !== undefined
+        ? Number.parseInt(String(params.ingressOpts.timeout), 10)
+        : isSubagentLane
+          ? 0
+          : undefined;
+    const timeoutMs = resolveAgentTimeoutMs({
+      cfg: params.cfg,
+      overrideSeconds: timeoutSecondsRaw ?? null,
+    });
+    const now = Date.now();
+    params.context.chatAbortControllers.set(params.runId, {
+      controller,
+      sessionKey: params.sessionKey!,
+      sessionId: params.ingressOpts.sessionId ?? "",
+      startedAtMs: now,
+      // For no-timeout runs, skip the grace/cap logic entirely.
+      // For normal runs, override maxMs so >24h timeouts are not capped.
+      expiresAtMs:
+        timeoutMs >= AGENT_NO_TIMEOUT_MS
+          ? now + timeoutMs
+          : resolveChatRunExpiresAtMs({
+              now,
+              timeoutMs,
+              maxMs: Math.max(timeoutMs + 60_000, 24 * 60 * 60_000),
+            }),
+      ...(params.ownerConnId && { ownerConnId: params.ownerConnId }),
+      ...(params.ownerDeviceId && { ownerDeviceId: params.ownerDeviceId }),
+    });
+  }
+  void agentCommandFromIngress(
+    { ...params.ingressOpts, abortSignal: controller.signal },
+    defaultRuntime,
+    params.context.deps,
+  )
     .then((result) => {
+      clearAbortControllerIfOwned();
       const payload = {
         runId: params.runId,
         status: "ok" as const,
@@ -200,6 +279,7 @@ function dispatchAgentRunFromGateway(params: {
       params.respond(true, payload, undefined, { runId: params.runId });
     })
     .catch((err) => {
+      clearAbortControllerIfOwned();
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
         runId: params.runId,
@@ -452,6 +532,19 @@ export const agentHandlers: GatewayRequestHandlers = {
       message = injectTimestamp(message, timestampOptsFromConfig(cfg));
     }
 
+    const runId = idem;
+    // chat.send and agent share the same active-run namespace. Same-agent retries
+    // still dedupe via the cache above, but unrelated active runs must not reuse
+    // the same runId or abort/wait bookkeeping becomes ambiguous.
+    if (context.chatAbortControllers.has(runId)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `idempotencyKey "${idem}" already belongs to an active run; use a unique key.`),
+      );
+      return;
+    }
+
     if (requestedSessionKey) {
       const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(requestedSessionKey);
       cfgForAgent = cfg;
@@ -553,7 +646,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
     }
 
-    const runId = idem;
     const connId = typeof client?.connId === "string" ? client.connId : undefined;
     const wantsToolEvents = hasGatewayClientCap(
       client?.connect?.caps,
@@ -753,6 +845,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       idempotencyKey: idem,
       respond,
       context,
+      sessionKey: resolvedSessionKey,
+      ownerConnId: typeof client?.connId === "string" ? client.connId : undefined,
+      ownerDeviceId:
+        typeof client?.connect?.device?.id === "string" ? client.connect.device.id : undefined,
+      cfg: loadConfig(),
     });
   },
   "agent.identity.get": ({ params, respond }) => {
