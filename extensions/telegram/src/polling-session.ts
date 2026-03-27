@@ -17,7 +17,6 @@ const TELEGRAM_POLL_RESTART_POLICY = {
 const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
-const POLL_STARTUP_TIMEOUT_MS = 10_000;
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -297,11 +296,8 @@ export class TelegramPollingSession {
 
       const now = Date.now();
       const activeElapsed =
-        inFlightGetUpdates > 0 && lastGetUpdatesStartedAt != null
-          ? now - lastGetUpdatesStartedAt
-          : 0;
-      const idleElapsed =
-        inFlightGetUpdates > 0 ? 0 : now - (lastGetUpdatesFinishedAt ?? lastGetUpdatesAt);
+        inFlightGetUpdates > 0 && lastGetUpdatesStartedAt != null ? now - lastGetUpdatesStartedAt : 0;
+      const idleElapsed = inFlightGetUpdates > 0 ? 0 : now - (lastGetUpdatesFinishedAt ?? lastGetUpdatesAt);
       const elapsed = inFlightGetUpdates > 0 ? activeElapsed : idleElapsed;
 
       if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
@@ -335,32 +331,6 @@ export class TelegramPollingSession {
     }, POLL_WATCHDOG_INTERVAL_MS);
 
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
-
-    const startupWatchdog = setTimeout(() => {
-      if (this.opts.abortSignal?.aborted) {
-        return;
-      }
-      if (inFlightGetUpdates === 0 && lastGetUpdatesOutcome === "not-started") {
-        this.opts.log(
-          `[telegram][diag] polling startup stalled before first getUpdates; forcing restart`,
-        );
-        this.#discardTransportOnRestart = true;
-        stalledRestart = true;
-        void stopRunner();
-        if (!forceCycleTimer) {
-          forceCycleTimer = setTimeout(() => {
-            if (this.opts.abortSignal?.aborted) {
-              return;
-            }
-            this.opts.log(
-              `[telegram] Polling runner stop timed out after ${formatDurationPrecise(POLL_STOP_GRACE_MS)}; forcing restart cycle.`,
-            );
-            forceCycleResolve?.();
-          }, POLL_STOP_GRACE_MS);
-        }
-      }
-    }, POLL_STARTUP_TIMEOUT_MS);
-
     try {
       await Promise.race([runner.task(), forceCyclePromise]);
       if (this.opts.abortSignal?.aborted) {
@@ -405,7 +375,6 @@ export class TelegramPollingSession {
       );
       return shouldRestart ? "continue" : "exit";
     } finally {
-      clearTimeout(startupWatchdog);
       clearInterval(watchdog);
       if (forceCycleTimer) {
         clearTimeout(forceCycleTimer);
