@@ -153,6 +153,22 @@ describe("sessionFileHasContent", () => {
     expect(await sessionFileHasContent(file)).toBe(true);
   });
 
+  it("returns true when assistant message appears after large user content", async () => {
+    const file = path.join(tmpDir, "large-user.jsonl");
+    // Create a user message whose JSON line exceeds 256KB to ensure the
+    // JSONL-based parser (CWE-703 fix) finds the assistant record that a
+    // naive byte-prefix approach would miss.
+    const bigContent = "x".repeat(300 * 1024);
+    const lines =
+      [
+        `{"type":"session","id":"s1"}`,
+        `{"type":"message","message":{"role":"user","content":"${bigContent}"}}`,
+        `{"type":"message","message":{"role":"assistant","content":"done"}}`,
+      ].join("\n") + "\n";
+    await fs.writeFile(file, lines, "utf-8");
+    expect(await sessionFileHasContent(file)).toBe(true);
+  });
+
   it("returns false when session file is a symbolic link", async () => {
     const realFile = path.join(tmpDir, "real.jsonl");
     await fs.writeFile(

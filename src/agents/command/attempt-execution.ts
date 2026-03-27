@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import readline from "node:readline";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
@@ -29,15 +30,20 @@ import type { AgentCommandOpts } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
-/** Upper bound on bytes read from a session transcript for the history check. */
-const SESSION_FILE_READ_LIMIT = 256 * 1024;
+/** Maximum number of JSONL records to inspect before giving up. */
+const SESSION_FILE_MAX_RECORDS = 500;
 
 /**
  * Check whether a session transcript file exists and contains at least one
  * assistant message, indicating that the SessionManager has flushed the
  * initial user+assistant exchange to disk.  This is used to decide whether
  * a fallback retry can rely on the on-disk history or must re-send the
- * original task prompt.
+ * original prompt.
+ *
+ * The check parses JSONL records line-by-line (CWE-703) instead of relying
+ * on a raw substring match against a bounded byte prefix, which could
+ * produce false negatives when the pre-assistant content exceeds the byte
+ * limit.
  */
 export async function sessionFileHasContent(sessionFile: string | undefined): Promise<boolean> {
   if (!sessionFile) {
@@ -50,15 +56,33 @@ export async function sessionFileHasContent(sessionFile: string | undefined): Pr
       return false;
     }
 
-    // Bounded read: only inspect the first SESSION_FILE_READ_LIMIT bytes to
-    // prevent memory/time DoS on oversized transcripts (CWE-400).
-    const bytesToRead = Math.min(stat.size, SESSION_FILE_READ_LIMIT);
     const fh = await fs.open(sessionFile, "r");
     try {
-      const buf = Buffer.alloc(bytesToRead);
-      const { bytesRead } = await fh.read(buf, 0, bytesToRead, 0);
-      const prefix = buf.subarray(0, bytesRead).toString("utf-8");
-      return prefix.includes('"role":"assistant"') || prefix.includes('"role": "assistant"');
+      const rl = readline.createInterface({ input: fh.createReadStream({ encoding: "utf-8" }) });
+      let recordCount = 0;
+      for await (const line of rl) {
+        if (!line.trim()) {
+          continue;
+        }
+        recordCount++;
+        if (recordCount > SESSION_FILE_MAX_RECORDS) {
+          break;
+        }
+        let obj: unknown;
+        try {
+          obj = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const rec = obj as Record<string, unknown> | null;
+        if (
+          rec?.type === "message" &&
+          (rec.message as Record<string, unknown> | undefined)?.role === "assistant"
+        ) {
+          return true;
+        }
+      }
+      return false;
     } finally {
       await fh.close();
     }
