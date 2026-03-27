@@ -344,6 +344,10 @@
       "types": "./dist/plugin-sdk/channel-config-helpers.d.ts",
       "default": "./dist/plugin-sdk/channel-config-helpers.js"
     },
+    "./plugin-sdk/channel-config-writes": {
+      "types": "./dist/plugin-sdk/channel-config-writes.d.ts",
+      "default": "./dist/plugin-sdk/channel-config-writes.js"
+    },
     "./plugin-sdk/channel-config-primitives": {
       "types": "./dist/plugin-sdk/channel-config-primitives.d.ts",
       "default": "./dist/plugin-sdk/channel-config-primitives.js"
