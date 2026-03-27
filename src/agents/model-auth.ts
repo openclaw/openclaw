@@ -29,7 +29,7 @@ import {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
 } from "./model-auth-markers.js";
-import { normalizeProviderId } from "./model-selection.js";
+import { normalizeProviderId, normalizeProviderIdForAuth } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 
@@ -49,16 +49,37 @@ function resolveProviderConfig(
     return direct;
   }
   const normalized = normalizeProviderId(provider);
-  if (normalized === provider) {
-    const matched = Object.entries(providers).find(
-      ([key]) => normalizeProviderId(key) === normalized,
-    );
-    return matched?.[1];
+  const normalizedForAuth = normalizeProviderIdForAuth(provider);
+  
+  // Try exact match with normalized provider id
+  if (providers[normalized]) {
+    return providers[normalized] as ModelProviderConfig;
   }
-  return (
-    (providers[normalized] as ModelProviderConfig | undefined) ??
-    Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1]
+  
+  // Try match with normalized-for-auth provider id (for -plan variants)
+  if (normalizedForAuth !== normalized && providers[normalizedForAuth]) {
+    return providers[normalizedForAuth] as ModelProviderConfig;
+  }
+  
+  // Try to find by matching normalized provider ids
+  const matchedByNormalized = Object.entries(providers).find(
+    ([key]) => normalizeProviderId(key) === normalized,
   );
+  if (matchedByNormalized) {
+    return matchedByNormalized[1];
+  }
+  
+  // Try to find by matching normalized-for-auth provider ids
+  if (normalizedForAuth !== normalized) {
+    const matchedByAuthNormalized = Object.entries(providers).find(
+      ([key]) => normalizeProviderIdForAuth(key) === normalizedForAuth,
+    );
+    if (matchedByAuthNormalized) {
+      return matchedByAuthNormalized[1];
+    }
+  }
+  
+  return undefined;
 }
 
 export function getCustomProviderApiKey(
