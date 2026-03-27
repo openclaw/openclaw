@@ -361,8 +361,7 @@ export function createAnthropicFastModeWrapper(
     if (
       model.api !== "anthropic-messages" ||
       model.provider !== "anthropic" ||
-      !isAnthropicPublicApiBaseUrl(model.baseUrl) ||
-      isAnthropicOAuthApiKey(options?.apiKey)
+      !isAnthropicPublicApiBaseUrl(model.baseUrl)
     ) {
       return underlying(model, context, options);
     }
