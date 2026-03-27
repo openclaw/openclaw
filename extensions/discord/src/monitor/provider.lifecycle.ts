@@ -141,24 +141,6 @@ export async function runDiscordGatewayLifecycle(params: {
     },
   });
 
-  const onAbort = () => {
-    lifecycleStopping = true;
-    reconnectStallWatchdog.disarm();
-    const at = Date.now();
-    pushStatus({ connected: false, lastEventAt: at });
-    if (!gateway) {
-      return;
-    }
-    gateway.options.reconnect = { maxAttempts: 0 };
-    gateway.disconnect();
-  };
-
-  if (params.abortSignal?.aborted) {
-    onAbort();
-  } else {
-    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
-  }
-
   let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
   let helloConnectedPollId: ReturnType<typeof setInterval> | undefined;
   let consecutiveHelloStalls = 0;
@@ -369,6 +351,25 @@ export async function runDiscordGatewayLifecycle(params: {
   const reconnectGatewayFresh = async () => {
     await reconnectGateway({ resume: false, forceFreshIdentify: true });
   };
+  const onAbort = () => {
+    lifecycleStopping = true;
+    reconnectStallWatchdog.disarm();
+    const at = Date.now();
+    pushStatus({ connected: false, lastEventAt: at });
+    if (!gateway) {
+      return;
+    }
+    void disconnectGatewaySocketWithoutAutoReconnect().catch(() => {
+      // Shutdown already transitioned to a stopped state. Ignore late socket
+      // drain failures here so abort can remain best-effort and non-fatal.
+    });
+  };
+
+  if (params.abortSignal?.aborted) {
+    onAbort();
+  } else {
+    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+  }
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
     const at = Date.now();
@@ -473,7 +474,14 @@ export async function runDiscordGatewayLifecycle(params: {
       })();
     }, HELLO_TIMEOUT_MS);
   };
+  const onGatewayMetrics = () => {
+    if (!gateway?.isConnected) {
+      return;
+    }
+    pushStatus({ lastEventAt: Date.now() });
+  };
   gatewayEmitter?.on("debug", onGatewayDebug);
+  gatewayEmitter?.on("metrics", onGatewayMetrics);
 
   let sawDisallowedIntents = false;
   const handleGatewayEvent = (event: DiscordGatewayEvent): "continue" | "stop" => {
@@ -615,6 +623,7 @@ export async function runDiscordGatewayLifecycle(params: {
     reconnectStallWatchdog.stop();
     clearHelloWatch();
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
+    gatewayEmitter?.removeListener("metrics", onGatewayMetrics);
     params.abortSignal?.removeEventListener("abort", onAbort);
     if (params.voiceManager) {
       await params.voiceManager.destroy();

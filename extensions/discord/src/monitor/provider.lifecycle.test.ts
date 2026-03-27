@@ -264,6 +264,40 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(connectedCall[0].lastConnectedAt).toBeTypeOf("number");
   });
 
+  it("refreshes lastEventAt from gateway metrics while connected", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-26T10:00:00.000Z"));
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+      let resolveWait: (() => void) | undefined;
+      waitForDiscordGatewayStopMock.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveWait = resolve;
+          }),
+      );
+
+      const { lifecycleParams, statusSink } = createLifecycleHarness({ gateway });
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      await Promise.resolve();
+      statusSink.mockClear();
+
+      vi.setSystemTime(new Date("2026-03-26T10:01:00.000Z"));
+      emitter.emit("metrics", { latency: 42 });
+
+      expect(statusSink).toHaveBeenCalledWith({ lastEventAt: Date.now() });
+
+      resolveWait?.();
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("forces a fresh reconnect when startup never reaches READY, then recovers", async () => {
     vi.useFakeTimers();
     try {
@@ -830,5 +864,6 @@ describe("runDiscordGatewayLifecycle", () => {
     // guarded by !lifecycleStopping to avoid contradicting the abort.
     const connectedTrue = statusUpdates.find((s) => s.connected === true);
     expect(connectedTrue).toBeUndefined();
+    expect(gateway.options.reconnect).toEqual({ maxAttempts: 3 });
   });
 });
