@@ -164,10 +164,10 @@ export default definePluginEntry({
         }
 
         if (action === "set") {
-          // Persistent config writes require operator.admin on every channel.
-          // Without this check, external channel senders could bypass the
-          // admin-only config.patch RPC by reaching writeConfigFile indirectly.
-          if (!ctx.gatewayClientScopes?.includes("operator.admin")) {
+          // Internal gateway callers already expose operator scopes and should
+          // match the admin-only config.patch RPC. External channels rely on
+          // the plugin command's authorized-sender gate instead.
+          if (ctx.channel === "webchat" && !ctx.gatewayClientScopes?.includes("operator.admin")) {
             return { text: `⚠️ ${commandLabel} set requires operator.admin.` };
           }
 
