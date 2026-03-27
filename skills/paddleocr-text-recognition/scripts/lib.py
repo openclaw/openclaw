@@ -6,6 +6,7 @@ Simple OCR API wrapper for PaddleOCR text recognition.
 
 import base64
 import logging
+import math
 import os
 from pathlib import Path
 from typing import Any, Optional
@@ -25,6 +26,7 @@ FILE_TYPE_PDF = 0
 FILE_TYPE_IMAGE = 1
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp")
 
+
 # =============================================================================
 # Environment
 # =============================================================================
@@ -35,6 +37,50 @@ def _get_env(key: str) -> str:
     return os.getenv(key, "").strip()
 
 
+def _http_timeout_from_env(env_key: str, default_seconds: float) -> float:
+    """
+    Read HTTP client timeout in seconds from the environment.
+
+    Returns a positive finite float. If the variable is missing, empty,
+    unparsable, non-finite, or not greater than zero, logs a warning and uses the
+    default_seconds argument value.
+    """
+    raw = os.getenv(env_key)
+    if raw is None:
+        return float(default_seconds)
+    stripped = raw.strip()
+    if not stripped:
+        return float(default_seconds)
+    try:
+        timeout = float(stripped)
+    except (ValueError, TypeError):
+        logger.warning(
+            "Invalid %s value %r; using default %ss",
+            env_key,
+            raw,
+            default_seconds,
+        )
+        return float(default_seconds)
+    if not math.isfinite(timeout) or timeout <= 0:
+        logger.warning(
+            "%s must be a finite number > 0 (got %r); using default %ss",
+            env_key,
+            raw,
+            default_seconds,
+        )
+        return float(default_seconds)
+    return timeout
+
+
+def _resolve_api_url(api_url: str, env_var: str) -> str:
+    """Require https; allow host-only values by prepending https://."""
+    if api_url.startswith("http://"):
+        raise ValueError(f"{env_var} must use https://; http:// is not allowed.")
+    if not api_url.startswith("https://"):
+        return f"https://{api_url}"
+    return api_url
+
+
 def get_config() -> tuple[str, str]:
     """
     Get API URL and token from environment.
@@ -43,8 +89,8 @@ def get_config() -> tuple[str, str]:
         tuple of (api_url, token)
 
     Raises:
-        ValueError: If required env vars are missing or API URL doesn't end
-            with /ocr
+        ValueError: If required env vars are missing, API URL uses http://,
+            or URL path doesn't end with /ocr
     """
     api_url = _get_env("PADDLEOCR_OCR_API_URL")
     token = _get_env("PADDLEOCR_ACCESS_TOKEN")
@@ -58,8 +104,7 @@ def get_config() -> tuple[str, str]:
             f"PADDLEOCR_ACCESS_TOKEN not configured. Get your API at: {API_GUIDE_URL}"
         )
 
-    if not api_url.startswith("https://"):
-        api_url = f"https://{api_url}"
+    api_url = _resolve_api_url(api_url, "PADDLEOCR_OCR_API_URL")
     api_path = urlparse(api_url).path.rstrip("/")
     if not api_path.endswith("/ocr"):
         raise ValueError(
@@ -94,6 +139,8 @@ def _load_file_as_base64(file_path: str) -> str:
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
+    if path.stat().st_size == 0:
+        raise ValueError(f"File is empty (0 bytes): {file_path}")
     return base64.b64encode(path.read_bytes()).decode("utf-8")
 
 
@@ -125,18 +172,17 @@ def _make_api_request(
         "Client-Platform": "official-skill",
     }
 
-    try:
-        timeout = float(os.getenv("PADDLEOCR_OCR_TIMEOUT", str(DEFAULT_TIMEOUT)))
-    except (ValueError, TypeError):
-        logger.warning(
-            "Invalid PADDLEOCR_OCR_TIMEOUT value, using default %ds",
-            DEFAULT_TIMEOUT,
-        )
-        timeout = float(DEFAULT_TIMEOUT)
+    timeout = _http_timeout_from_env("PADDLEOCR_OCR_TIMEOUT", float(DEFAULT_TIMEOUT))
 
     try:
         with httpx.Client(timeout=timeout) as client:
-            resp = client.post(api_url, json=params, headers=headers)
+            try:
+                resp = client.post(api_url, json=params, headers=headers)
+            except TypeError as e:
+                raise RuntimeError(
+                    "Request parameters cannot be JSON-encoded; use only JSON-serializable "
+                    f"option values ({e})"
+                ) from e
     except httpx.TimeoutException:
         raise RuntimeError(f"API request timed out after {timeout}s")
     except httpx.RequestError as e:
@@ -176,7 +222,8 @@ def _make_api_request(
         )
 
     if result.get("errorCode", 0) != 0:
-        raise RuntimeError(f"API error: {result.get('errorMsg', 'Unknown error')}")
+        msg = result.get("errorMsg", "Unknown error")
+        raise RuntimeError(f"API error: {msg}")
 
     return result
 
@@ -196,8 +243,8 @@ def ocr(
     Perform OCR on image or PDF.
 
     Args:
-        file_path: Local file path
-        file_url: URL to file
+        file_path: Local file path (mutually exclusive with file_url)
+        file_url: URL to file (mutually exclusive with file_path)
         file_type: Optional file type override (0=PDF, 1=Image)
         **options: Additional API options (passed directly to API)
 
@@ -216,7 +263,19 @@ def ocr(
             "error": {"code": "...", "message": "..."}
         }
     """
-    if not file_path and not file_url:
+    if file_path is not None and not isinstance(file_path, str):
+        return _error("INPUT_ERROR", "file_path must be a string or None")
+    if file_url is not None and not isinstance(file_url, str):
+        return _error("INPUT_ERROR", "file_url must be a string or None")
+
+    fp = file_path.strip() if file_path else ""
+    fu = file_url.strip() if file_url else ""
+    if fp and fu:
+        return _error(
+            "INPUT_ERROR",
+            "Provide only one of file_path or file_url, not both",
+        )
+    if not fp and not fu:
         return _error("INPUT_ERROR", "file_path or file_url required")
     if file_type is not None and file_type not in (FILE_TYPE_PDF, FILE_TYPE_IMAGE):
         return _error("INPUT_ERROR", "file_type must be 0 (PDF) or 1 (Image)")
@@ -229,20 +288,20 @@ def ocr(
     # Build request params
     try:
         resolved_file_type: Optional[int] = None
-        if file_url:
-            params = {"file": file_url}
+        if fu:
+            params = {"file": fu}
             if file_type is not None:
                 resolved_file_type = file_type
             else:
                 try:
-                    resolved_file_type = _detect_file_type(file_url)
+                    resolved_file_type = _detect_file_type(fu)
                 except ValueError:
                     resolved_file_type = None
         else:
             resolved_file_type = (
-                file_type if file_type is not None else _detect_file_type(file_path)
+                file_type if file_type is not None else _detect_file_type(fp)
             )
-            params = {"file": _load_file_as_base64(file_path)}
+            params = {"file": _load_file_as_base64(fp)}
 
         params["visualize"] = (
             False  # reduce response payload; callers can override via options
@@ -253,7 +312,7 @@ def ocr(
         else:
             params.pop("fileType", None)
 
-    except (ValueError, OSError) as e:
+    except (ValueError, OSError, MemoryError) as e:
         return _error("INPUT_ERROR", str(e))
 
     try:
@@ -301,8 +360,21 @@ def _extract_text(result: dict[str, Any]) -> str:
             )
 
         texts = pruned.get("rec_texts", [])
-        if texts:
-            all_text.append("\n".join(texts))
+        if not isinstance(texts, list):
+            raise ValueError(
+                f"Invalid API response: result.ocrResults[{i}].prunedResult.rec_texts "
+                "must be an array"
+            )
+        line_parts: list[str] = []
+        for j, t in enumerate(texts):
+            if not isinstance(t, str):
+                raise ValueError(
+                    f"Invalid API response: result.ocrResults[{i}].prunedResult."
+                    f"rec_texts[{j}] must be a string"
+                )
+            line_parts.append(t)
+        if line_parts:
+            all_text.append("\n".join(line_parts))
     return "\n\n".join(all_text)
 
 

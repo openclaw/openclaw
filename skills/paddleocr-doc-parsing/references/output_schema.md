@@ -35,9 +35,9 @@ On error:
 
 | Code           | Description                                                                |
 | -------------- | -------------------------------------------------------------------------- |
-| `INPUT_ERROR`  | Invalid input (missing file, unsupported format, invalid file type)        |
-| `CONFIG_ERROR` | API not configured                                                         |
-| `API_ERROR`    | API call failed (auth, timeout, service error, or invalid response schema) |
+| `INPUT_ERROR`  | Invalid or unusable input (arguments, file source, format, types).         |
+| `CONFIG_ERROR` | Missing or invalid API / client configuration.                             |
+| `API_ERROR`    | Request or response handling failed (network, HTTP, body parsing, schema). |
 
 ## Raw Result Notes
 

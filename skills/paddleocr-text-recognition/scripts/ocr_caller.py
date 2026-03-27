@@ -129,7 +129,7 @@ Configuration:
             print(f"Error: Cannot write to {output_path}: {e}", file=sys.stderr)
             sys.exit(5)
 
-    sys.exit(0 if result["ok"] else 1)
+    sys.exit(0 if result.get("ok") else 1)
 
 
 if __name__ == "__main__":

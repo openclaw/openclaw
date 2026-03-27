@@ -102,7 +102,7 @@ def main() -> int:
 
     try:
         total_pages, kept_pages = split_pdf(input_path, output_path, args.pages)
-    except (ValueError, RuntimeError) as e:
+    except Exception as e:
         print(f"ERROR: {e}")
         return 1
 

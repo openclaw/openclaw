@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -19,6 +20,22 @@ SUPPORTED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp
 SUPPORTED_FORMATS_DISPLAY = ", ".join(
     e.lstrip(".").upper() for e in SUPPORTED_EXTENSIONS
 )
+
+
+def _arg_quality(value: str) -> int:
+    q = int(value)
+    if q < 1 or q > 100:
+        raise argparse.ArgumentTypeError("quality must be between 1 and 100 inclusive")
+    return q
+
+
+def _arg_positive_mb(value: str) -> float:
+    v = float(value)
+    if not math.isfinite(v) or v <= 0:
+        raise argparse.ArgumentTypeError(
+            "target size must be a finite number greater than 0"
+        )
+    return v
 
 
 def optimize_image(
@@ -34,6 +51,9 @@ def optimize_image(
         print("ERROR: Pillow not installed")
         print("Install with: pip install Pillow")
         sys.exit(1)
+
+    if input_path.stat().st_size == 0:
+        raise ValueError("Input file is empty (0 bytes); nothing to optimize")
 
     print(f"Optimizing image: {input_path}")
 
@@ -68,6 +88,12 @@ def optimize_image(
     while new_size > max_size_mb and scale_factor >= 0.4:
         new_width = int(img.size[0] * scale_factor)
         new_height = int(img.size[1] * scale_factor)
+        if new_width < 1 or new_height < 1:
+            print(
+                f"Cannot shrink to valid dimensions at scale {scale_factor:.2f} "
+                f"(would be {new_width}x{new_height}); stopping resize loop."
+            )
+            break
 
         print(f"Resizing to {new_width}x{new_height} (scale: {scale_factor:.2f})")
 
@@ -77,7 +103,8 @@ def optimize_image(
         scale_factor -= 0.1
 
     print(f"Optimized size: {new_size:.2f}MB")
-    print(f"Reduction: {((original_size - new_size) / original_size * 100):.1f}%")
+    pct = (original_size - new_size) / original_size * 100
+    print(f"Reduction: {pct:.1f}%")
 
     if new_size > max_size_mb:
         print(f"\nWARNING: File still larger than {max_size_mb}MB")
@@ -108,13 +135,13 @@ Supported formats:
     parser.add_argument("output", help="Output file path")
     parser.add_argument(
         "--quality",
-        type=int,
+        type=_arg_quality,
         default=DEFAULT_QUALITY,
         help="JPEG/WebP quality (1-100, default: %(default)s)",
     )
     parser.add_argument(
         "--target-size",
-        type=float,
+        type=_arg_positive_mb,
         default=DEFAULT_TARGET_SIZE_MB,
         help="Target maximum size in MB (default: %(default)s)",
     )
@@ -133,7 +160,7 @@ Supported formats:
     if ext in SUPPORTED_EXTENSIONS:
         try:
             optimize_image(input_path, output_path, args.quality, args.target_size)
-        except ValueError as e:
+        except Exception as e:
             print(f"ERROR: {e}")
             sys.exit(1)
     else:

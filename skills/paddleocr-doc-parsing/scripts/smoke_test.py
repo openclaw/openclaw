@@ -104,7 +104,7 @@ def main() -> int:
 
     result = parse_document(file_url=test_url)
 
-    if not result["ok"]:
+    if not result.get("ok"):
         error = result.get("error", {})
         print(f"\n  X API call failed: {error.get('message')}")
         if "Authentication" in error.get("message", ""):

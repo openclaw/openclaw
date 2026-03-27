@@ -239,6 +239,8 @@ To verify the skill is working properly:
 
 ```bash
 python scripts/smoke_test.py
+python scripts/smoke_test.py --skip-api-test
+python scripts/smoke_test.py --test-url "https://..."
 ```
 
-This tests configuration and API connectivity.
+The first form tests configuration and API connectivity. `--skip-api-test` checks configuration only. `--test-url` overrides the default sample image URL.
