@@ -17,7 +17,7 @@ type ResolvePluginProvidersRuntime =
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
 const applyAuthChoice = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
-const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => "openai"));
+const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => "demo-provider"));
 const resolveProviderPluginChoice = vi.hoisted(() =>
   vi.fn<ResolveProviderPluginChoice>(() => null),
 );

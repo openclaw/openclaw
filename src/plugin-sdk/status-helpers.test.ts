@@ -350,14 +350,14 @@ describe("buildTokenChannelStatusSummary", () => {
 describe("collectStatusIssuesFromLastError", () => {
   it("returns runtime issues only for non-empty string lastError values", () => {
     expect(
-      collectStatusIssuesFromLastError("telegram", [
+      collectStatusIssuesFromLastError("demo-channel", [
         { accountId: "default", lastError: " timeout " },
         { accountId: "silent", lastError: "   " },
         { accountId: "typed", lastError: { message: "boom" } },
       ]),
     ).toEqual([
       {
-        channel: "telegram",
+        channel: "demo-channel",
         accountId: "default",
         kind: "runtime",
         message: "Channel error: timeout",
