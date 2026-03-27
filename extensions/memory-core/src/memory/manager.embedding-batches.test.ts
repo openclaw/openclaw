@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { useFastShortTimeouts } from "../../../../test/helpers/fast-short-timeouts.js";
 import { installEmbeddingManagerFixture } from "./embedding-manager.test-harness.js";
+import type { MemorySyncProgressUpdate } from "./types.js";
 
 const fx = installEmbeddingManagerFixture({
   fixturePrefix: "openclaw-mem-",
@@ -27,12 +28,27 @@ const fx = installEmbeddingManagerFixture({
 });
 
 describe("memory embedding batches", () => {
+  function requireSync(manager: {
+    sync?: (params?: {
+      reason?: string;
+      progress?: (update: MemorySyncProgressUpdate) => void;
+    }) => Promise<void>;
+  }): (params?: {
+    reason?: string;
+    progress?: (update: MemorySyncProgressUpdate) => void;
+  }) => Promise<void> {
+    if (!manager.sync) {
+      throw new Error("manager.sync missing");
+    }
+    return manager.sync.bind(manager);
+  }
+
   async function expectSyncWithFastTimeouts(manager: {
-    sync: (params: { reason: string }) => Promise<void>;
+    sync?: (params?: { reason?: string }) => Promise<void>;
   }) {
     const restoreFastTimeouts = useFastShortTimeouts();
     try {
-      await manager.sync({ reason: "test" });
+      await requireSync(manager)({ reason: "test" });
     } finally {
       restoreFastTimeouts();
     }
@@ -47,7 +63,7 @@ describe("memory embedding batches", () => {
     const content = [line, line].join("\n");
     await fs.writeFile(path.join(memoryDir, "2026-01-03.md"), content);
     const updates: Array<{ completed: number; total: number; label?: string }> = [];
-    await managerLarge.sync({
+    await requireSync(managerLarge)({
       progress: (update) => {
         updates.push(update);
       },
@@ -77,7 +93,7 @@ describe("memory embedding batches", () => {
     const line = "b".repeat(120);
     const content = Array.from({ length: 4 }, () => line).join("\n");
     await fs.writeFile(path.join(memoryDir, "2026-01-04.md"), content);
-    await managerSmall.sync({ reason: "test" });
+    await requireSync(managerSmall)({ reason: "test" });
 
     expect(fx.embedBatch.mock.calls.length).toBe(1);
   });
@@ -133,7 +149,7 @@ describe("memory embedding batches", () => {
     const memoryDir = fx.getMemoryDir();
     const managerSmall = fx.getManagerSmall();
     await fs.writeFile(path.join(memoryDir, "2026-01-07.md"), "\n\n\n");
-    await managerSmall.sync({ reason: "test" });
+    await requireSync(managerSmall)({ reason: "test" });
 
     const inputs = fx.embedBatch.mock.calls.flatMap(
       (call: unknown[]) => (call[0] as string[]) ?? [],
