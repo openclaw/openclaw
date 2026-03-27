@@ -1,4 +1,4 @@
-export { applyMistralConfig, applyMistralProviderConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
+export { applyMistralConfig, applyMistralProviderConfig } from "./onboard.js";
 export {
   buildMistralCatalogModels,
   buildMistralModelDefinition,
