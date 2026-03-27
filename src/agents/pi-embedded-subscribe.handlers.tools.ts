@@ -390,7 +390,7 @@ export async function handleToolExecutionStart(
   // INFO-level observability for tool calls (see #55806).
   const argSummary = buildSanitizedArgSummary(args);
   logInfo(
-    `tool-call: start runId=${runId} toolCallId=${toolCallId} tool=${toolName}${argSummary ? ` args="${argSummary}"` : ""}`,
+    `tool-call: start runId=${runId} toolCallId=${toolCallId} tool=${toolName}${argSummary ? ` args=${JSON.stringify(argSummary)}` : ""}`,
   );
 
   const shouldEmitToolEvents = ctx.shouldEmitToolResult();
@@ -608,13 +608,16 @@ export async function handleToolExecutionEnd(
       parts.push(`duration=${durationMs}ms`);
     }
     if (isToolError) {
-      const rawError = extractToolErrorMessage(sanitizedResult);
+      // extractToolErrorMessage handles object payloads; fall back to string results directly.
+      const rawError =
+        extractToolErrorMessage(sanitizedResult) ??
+        (typeof sanitizedResult === "string" ? sanitizedResult : undefined);
       const errorMessage = rawError ? redactSensitiveText(rawError) : undefined;
       parts.push("status=error");
       if (errorMessage) {
         const truncated =
           errorMessage.length > 200 ? `${errorMessage.slice(0, 200)}…` : errorMessage;
-        parts.push(`error="${truncated}"`);
+        parts.push(`error=${JSON.stringify(truncated)}`);
       }
     } else {
       parts.push("status=ok");
@@ -627,6 +630,10 @@ export async function handleToolExecutionEnd(
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
+    // Compute duration after emitToolResultOutput so hook consumers get total
+    // wall-clock time (including output emission), preserving original semantics.
+    const hookDurationMs =
+      startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
       params: afterToolCallArgs,
@@ -634,7 +641,7 @@ export async function handleToolExecutionEnd(
       toolCallId,
       result: sanitizedResult,
       error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
-      durationMs,
+      durationMs: hookDurationMs,
     };
     void hookRunnerAfter
       .runAfterToolCall(hookEvent, {
