@@ -156,6 +156,100 @@ describe("config io write", () => {
     });
   });
 
+  it("writes local schema file and defaults $schema when enabled", async () => {
+    await withSuiteHome(async (home) => {
+      const { configPath, io } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: { gateway: { mode: "local" } },
+      });
+
+      await io.writeConfigFile({ gateway: { mode: "local" } });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        $schema?: string;
+      };
+      expect(persisted.$schema).toBe("openclaw_schema.json");
+
+      const schemaPath = path.join(home, ".openclaw", "openclaw_schema.json");
+      const schema = JSON.parse(await fs.readFile(schemaPath, "utf-8")) as {
+        meta?: { version?: string };
+        properties?: Record<string, unknown>;
+      };
+      expect(typeof schema.meta?.version).toBe("string");
+      expect(schema.properties?.$schema).toEqual({ type: "string" });
+    });
+  });
+
+  it("skips local schema maintenance when disabled", async () => {
+    await withSuiteHome(async (home) => {
+      const { configPath, io } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          gateway: { mode: "local" },
+          update: { maintainConfigJsonSchema: false },
+        },
+      });
+
+      await io.writeConfigFile({
+        gateway: { mode: "local" },
+        update: { maintainConfigJsonSchema: false },
+      });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        $schema?: string;
+      };
+      expect(persisted.$schema).toBeUndefined();
+
+      const schemaPath = path.join(home, ".openclaw", "openclaw_schema.json");
+      await expect(fs.access(schemaPath)).rejects.toThrow();
+    });
+  });
+
+  it("preserves a custom non-empty $schema value", async () => {
+    await withSuiteHome(async (home) => {
+      const customSchema = "https://example.com/openclaw.schema.json";
+      const { configPath, io } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          $schema: customSchema,
+          gateway: { mode: "local" },
+        },
+      });
+
+      await io.writeConfigFile({
+        $schema: customSchema,
+        gateway: { mode: "local" },
+      });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        $schema?: string;
+      };
+      expect(persisted.$schema).toBe(customSchema);
+    });
+  });
+
+  it("replaces a blank $schema value with the local schema file", async () => {
+    await withSuiteHome(async (home) => {
+      const { configPath, io } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          $schema: "   ",
+          gateway: { mode: "local" },
+        },
+      });
+
+      await io.writeConfigFile({
+        $schema: "   ",
+        gateway: { mode: "local" },
+      });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        $schema?: string;
+      };
+      expect(persisted.$schema).toBe("openclaw_schema.json");
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "tightens world-writable state dir when writing the default config",
     async () => {

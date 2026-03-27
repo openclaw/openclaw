@@ -30,6 +30,7 @@ import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 
 export type OpenClawConfig = {
+  $schema?: string;
   meta?: {
     /** Last OpenClaw version that wrote this config. */
     lastTouchedVersion?: string;
@@ -69,6 +70,7 @@ export type OpenClawConfig = {
     channel?: "stable" | "beta" | "dev";
     /** Check for updates on gateway start (npm installs only). */
     checkOnStart?: boolean;
+    maintainConfigJsonSchema?: boolean;
     /** Core auto-update policy for package installs. */
     auto?: {
       /** Enable background auto-update checks and apply logic. Default: false. */

@@ -8,6 +8,7 @@ const emitCliBannerMock = vi.fn();
 const ensureConfigReadyMock = vi.fn(async () => {});
 const ensurePluginRegistryLoadedMock = vi.fn();
 const routeLogsToStderrMock = vi.fn();
+const maintainLocalConfigJsonSchemaArtifactsMock = vi.fn(async () => {});
 
 const runtimeMock = {
   log: vi.fn(),
@@ -45,6 +46,14 @@ vi.mock("../plugin-registry.js", () => ({
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
 }));
 
+vi.mock("../../config/local-json-schema.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/local-json-schema.js")>();
+  return {
+    ...actual,
+    maintainLocalConfigJsonSchemaArtifacts: maintainLocalConfigJsonSchemaArtifactsMock,
+  };
+});
+
 const mockedModuleIds = [
   "../../globals.js",
   "../../runtime.js",
@@ -52,6 +61,7 @@ const mockedModuleIds = [
   "../cli-name.js",
   "./config-guard.js",
   "../plugin-registry.js",
+  "../../config/local-json-schema.js",
 ];
 
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
@@ -325,6 +335,7 @@ describe("registerPreActionHooks", () => {
     expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(setVerboseMock).not.toHaveBeenCalled();
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(maintainLocalConfigJsonSchemaArtifactsMock).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
     process.env.OPENCLAW_HIDE_BANNER = "1";
@@ -430,6 +441,30 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+  });
+
+  it("maintains local schema artifacts after config guard succeeds", async () => {
+    await runPreAction({
+      parseArgv: ["agents", "list"],
+      processArgv: ["node", "openclaw", "agents", "list"],
+    });
+
+    expect(maintainLocalConfigJsonSchemaArtifactsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns when local schema maintenance fails", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    maintainLocalConfigJsonSchemaArtifactsMock.mockRejectedValueOnce(new Error("schema-failed"));
+
+    await runPreAction({
+      parseArgv: ["agents", "list"],
+      processArgv: ["node", "openclaw", "agents", "list"],
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to maintain local config schema artifacts:"),
+    );
+    warnSpy.mockRestore();
   });
 
   it("bypasses config guard for backup create", async () => {

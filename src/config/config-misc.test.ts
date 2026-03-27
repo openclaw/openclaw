@@ -39,6 +39,26 @@ describe("$schema key in config (#14998)", () => {
   });
 });
 
+describe("update.maintainConfigJsonSchema", () => {
+  it("accepts the camelCase config key", () => {
+    const result = OpenClawSchema.safeParse({
+      update: {
+        maintainConfigJsonSchema: false,
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects the legacy snake_case config key", () => {
+    const result = OpenClawSchema.safeParse({
+      update: {
+        maintain_config_json_schema: false,
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("plugins.slots.contextEngine", () => {
   it("accepts a contextEngine slot id", () => {
     const result = OpenClawSchema.safeParse({

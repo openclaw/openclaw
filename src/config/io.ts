@@ -1767,6 +1767,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         }
       }
     }
+    const {
+      LOCAL_CONFIG_SCHEMA_FILENAME,
+      withDefaultLocalConfigSchemaRef,
+      writeLocalConfigJsonSchemaFile,
+    } = await import("./local-json-schema.js");
+    outputConfig = withDefaultLocalConfigSchemaRef(outputConfig);
     // Do NOT apply runtime defaults when writing — user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
     const stampedOutputConfig = stampConfigVersion(outputConfig);
@@ -1898,6 +1904,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           });
           logConfigOverwrite();
           logConfigWriteAnomalies();
+          await writeLocalConfigJsonSchemaFile({
+            configPath,
+            config: stampedOutputConfig,
+            fsModule: deps.fs,
+          }).catch((error) => {
+            deps.logger.warn(`Failed to update ${LOCAL_CONFIG_SCHEMA_FILENAME}: ${String(error)}`);
+          });
           await appendWriteAudit("copy-fallback");
           return;
         }
@@ -1908,6 +1921,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       logConfigOverwrite();
       logConfigWriteAnomalies();
+      await writeLocalConfigJsonSchemaFile({
+        configPath,
+        config: stampedOutputConfig,
+        fsModule: deps.fs,
+      }).catch((error) => {
+        deps.logger.warn(`Failed to update ${LOCAL_CONFIG_SCHEMA_FILENAME}: ${String(error)}`);
+      });
       await appendWriteAudit("rename");
     } catch (err) {
       await appendWriteAudit("failed", err);

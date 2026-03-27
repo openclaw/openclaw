@@ -8,9 +8,11 @@ import { OpenClawSchema } from "./zod-schema.js";
 type ConfigSchema = Record<string, unknown>;
 
 type JsonSchemaObject = Record<string, unknown> & {
-  properties?: Record<string, JsonSchemaObject>;
+  title?: string;
+  default?: unknown;
+  properties?: Record<string, unknown>;
   required?: string[];
-  additionalProperties?: JsonSchemaObject | boolean;
+  additionalProperties?: unknown;
 };
 
 const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
@@ -59,8 +61,15 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
   const schema = OpenClawSchema.toJSONSchema({
     target: "draft-07",
     unrepresentable: "any",
-  });
+  }) as JsonSchemaObject;
   schema.title = "OpenClawConfig";
+  const updateSchema = asSchemaObject(schema.properties?.update);
+  const maintainConfigJsonSchemaSchema = asSchemaObject(
+    updateSchema?.properties?.maintainConfigJsonSchema,
+  );
+  if (maintainConfigJsonSchemaSchema) {
+    maintainConfigJsonSchemaSchema.default = true;
+  }
   const stablePayload = {
     schema: stripChannelSchema(schema),
     uiHints: applyDerivedTags(mapSensitivePaths(OpenClawSchema, "", buildBaseHints())),

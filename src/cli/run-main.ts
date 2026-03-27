@@ -11,6 +11,7 @@ import {
   getPrimaryCommand,
   hasHelpOrVersion,
   isRootHelpInvocation,
+  isRootVersionInvocation,
 } from "./argv.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { loadCliDotEnv } from "./dotenv.js";
@@ -24,6 +25,16 @@ async function closeCliMemoryManagers(): Promise<void> {
     await closeActiveMemorySearchManagers();
   } catch {
     // Best-effort teardown for short-lived CLI processes.
+  }
+}
+
+async function maintainRootLocalConfigSchemaArtifacts(): Promise<void> {
+  try {
+    const { maintainLocalConfigJsonSchemaArtifacts } =
+      await import("../config/local-json-schema.js");
+    await maintainLocalConfigJsonSchemaArtifacts();
+  } catch (error) {
+    console.warn(`Failed to maintain local config schema artifacts: ${String(error)}`);
   }
 }
 
@@ -148,6 +159,9 @@ export async function runCli(argv: string[] = process.argv) {
     // Register the primary command (builtin or subcli) so help and command parsing
     // are correct even with lazy command registration.
     const primary = getPrimaryCommand(parseArgv);
+    if (!primary && !isRootVersionInvocation(normalizedArgv)) {
+      await maintainRootLocalConfigSchemaArtifacts();
+    }
     if (primary) {
       const { getProgramContext } = await import("./program/program-context.js");
       const ctx = getProgramContext(program);
