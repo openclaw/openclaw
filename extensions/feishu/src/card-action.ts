@@ -8,6 +8,12 @@ import {
   FEISHU_APPROVAL_CONFIRM_ACTION,
   FEISHU_APPROVAL_REQUEST_ACTION,
 } from "./card-ux-approval.js";
+import {
+  FEISHU_EXEC_APPROVAL_ALLOW_ONCE_ACTION,
+  FEISHU_EXEC_APPROVAL_ALLOW_ALWAYS_ACTION,
+  FEISHU_EXEC_APPROVAL_DENY_ACTION,
+  createExecApprovalResolvedCard,
+} from "./card-ux-exec-approval.js";
 import { sendCardFeishu, sendMessageFeishu } from "./send.js";
 
 export type FeishuCardActionEvent = {
@@ -166,6 +172,21 @@ async function sendInvalidInteractionNotice(params: {
   });
 }
 
+function resolveExecApprovalDecision(
+  action: string,
+): "allow-once" | "allow-always" | "deny" | null {
+  if (action === FEISHU_EXEC_APPROVAL_ALLOW_ONCE_ACTION) {
+    return "allow-once";
+  }
+  if (action === FEISHU_EXEC_APPROVAL_ALLOW_ALWAYS_ACTION) {
+    return "allow-always";
+  }
+  if (action === FEISHU_EXEC_APPROVAL_DENY_ACTION) {
+    return "deny";
+  }
+  return null;
+}
+
 export async function handleFeishuCardAction(params: {
   cfg: ClawdbotConfig;
   event: FeishuCardActionEvent;
@@ -269,6 +290,36 @@ export async function handleFeishuCardAction(params: {
           cfg,
           event,
           command,
+          botOpenId: params.botOpenId,
+          runtime,
+          accountId,
+          chatType: envelope.c?.t ?? (event.context.chat_id ? "group" : "p2p"),
+        });
+        completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+        return;
+      }
+
+      const execApprovalDecision = resolveExecApprovalDecision(envelope.a);
+      if (execApprovalDecision) {
+        const approvalId =
+          typeof envelope.m?.approvalId === "string" ? envelope.m.approvalId.trim() : "";
+        if (!approvalId) {
+          await sendInvalidInteractionNotice({
+            cfg,
+            event,
+            reason: "malformed",
+            accountId,
+          });
+          completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+          return;
+        }
+        log(
+          `feishu[${account.accountId}]: exec approval ${execApprovalDecision} for ${approvalId} by ${event.operator.open_id}`,
+        );
+        await dispatchSyntheticCommand({
+          cfg,
+          event,
+          command: `/approve ${approvalId} ${execApprovalDecision}`,
           botOpenId: params.botOpenId,
           runtime,
           accountId,

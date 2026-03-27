@@ -3665,6 +3665,44 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           default: true,
           type: "boolean",
         },
+        execApprovals: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+            },
+            approvers: {
+              type: "array",
+              items: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    type: "number",
+                  },
+                ],
+              },
+            },
+            agentFilter: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+            sessionFilter: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+            target: {
+              type: "string",
+              enum: ["dm", "channel", "both"],
+            },
+          },
+          additionalProperties: false,
+        },
         groupSessionScope: {
           type: "string",
           enum: ["group", "group_sender", "group_topic", "group_topic_sender"],
@@ -4217,6 +4255,44 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               resolveSenderNames: {
                 type: "boolean",
+              },
+              execApprovals: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  approvers: {
+                    type: "array",
+                    items: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "number",
+                        },
+                      ],
+                    },
+                  },
+                  agentFilter: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  sessionFilter: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  target: {
+                    type: "string",
+                    enum: ["dm", "channel", "both"],
+                  },
+                },
+                additionalProperties: false,
               },
               groupSessionScope: {
                 type: "string",
