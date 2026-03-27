@@ -13,9 +13,11 @@ import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
+import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
+import { resolveDiscordRestFetch } from "./monitor/rest-fetch.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import {
   buildDiscordMessagePayload,
@@ -364,7 +366,20 @@ export async function sendWebhookMessageDiscord(
   const replyTo = typeof opts.replyTo === "string" ? opts.replyTo.trim() : "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
 
-  const fetchImpl = opts.proxyFetch ?? fetch;
+  let resolvedProxyFetch = opts.proxyFetch;
+  if (!resolvedProxyFetch) {
+    try {
+      const cfg = opts.cfg ?? loadConfig();
+      const account = resolveDiscordAccount({ cfg, accountId: opts.accountId });
+      const proxyUrl = account.config.proxy?.trim();
+      if (proxyUrl) {
+        resolvedProxyFetch = resolveDiscordRestFetch(proxyUrl, createNonExitingRuntime());
+      }
+    } catch {
+      // Best-effort proxy resolution; fall back to bare fetch.
+    }
+  }
+  const fetchImpl = resolvedProxyFetch ?? fetch;
   const response = await fetchImpl(
     resolveWebhookExecutionUrl({
       webhookId,
