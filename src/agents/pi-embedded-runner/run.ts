@@ -86,6 +86,10 @@ import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
+// Detect model safety-filter rejections (stop_reason: sensitive).
+const SENSITIVE_STOP_REASON_RE =
+  /\bunhandled\s+stop[_ ]reason:\s*"?sensitive"?\b|\bstop[_ ]reason"?:\s*"?sensitive"?\b|\breason"?:\s*"?sensitive"?\b/i;
+
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
@@ -904,6 +908,33 @@ export async function runEmbeddedPiAgent(
             if (await maybeRefreshRuntimeAuthForAuthError(errorText, runtimeAuthRetry)) {
               authRetryPending = true;
               continue;
+            }
+            // Handle sensitive stop_reason (content safety filter) with a user-friendly message.
+            if (SENSITIVE_STOP_REASON_RE.test(errorText)) {
+              return {
+                payloads: [
+                  {
+                    text:
+                      "I can't respond to that - the content was flagged by the model's safety filter. " +
+                      "Please rephrase or try a different topic.",
+                    isError: true,
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: buildErrorAgentMeta({
+                    sessionId: sessionIdUsed,
+                    provider,
+                    model: model.id,
+                    usageAccumulator,
+                    lastRunPromptUsage,
+                    lastAssistant,
+                    lastTurnTotal,
+                  }),
+                  systemPromptReport: attempt.systemPromptReport,
+                  error: { kind: "sensitive", message: errorText },
+                },
+              };
             }
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
