@@ -27,6 +27,7 @@ import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pi
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
@@ -103,6 +104,16 @@ import {
 import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import { sendTyping } from "./typing.js";
+
+function resolveComponentGroupPolicy(
+  ctx: AgentComponentContext,
+): "open" | "disabled" | "allowlist" {
+  return resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent: ctx.cfg.channels?.discord !== undefined,
+    groupPolicy: ctx.discordConfig?.groupPolicy,
+    defaultGroupPolicy: ctx.cfg.channels?.defaults?.groupPolicy,
+  }).groupPolicy;
+}
 
 async function dispatchPluginDiscordInteractiveEvent(params: {
   ctx: AgentComponentContext;
@@ -574,6 +585,7 @@ async function handleDiscordComponentEvent(params: {
     componentLabel: params.componentLabel,
     unauthorizedReply,
     allowNameMatching,
+    groupPolicy: resolveComponentGroupPolicy(params.ctx),
   });
   if (!memberAllowed) {
     return;
@@ -755,6 +767,7 @@ async function handleDiscordModalTrigger(params: {
     componentLabel: "form",
     unauthorizedReply,
     allowNameMatching: isDangerousNameMatchingEnabled(params.ctx.discordConfig),
+    groupPolicy: resolveComponentGroupPolicy(params.ctx),
   });
   if (!memberAllowed) {
     return;
@@ -1218,6 +1231,7 @@ class DiscordComponentModal extends Modal {
       componentLabel: "form",
       unauthorizedReply: "You are not authorized to use this form.",
       allowNameMatching,
+      groupPolicy: resolveComponentGroupPolicy(this.ctx),
     });
     if (!memberAllowed) {
       return;
