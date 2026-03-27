@@ -83,6 +83,7 @@ describe("promptRemoteGatewayConfig", () => {
         displayName: "Gateway",
         host: "gateway.tailnet.ts.net",
         port: 18789,
+        gatewayTlsFingerprintSha256: "sha256:abc123",
       },
     ]);
 
@@ -111,9 +112,47 @@ describe("promptRemoteGatewayConfig", () => {
     expect(next.gateway?.mode).toBe("remote");
     expect(next.gateway?.remote?.url).toBe("wss://gateway.tailnet.ts.net:18789");
     expect(next.gateway?.remote?.token).toBe("token-123");
+    expect(next.gateway?.remote?.tlsFingerprint).toBe("sha256:abc123");
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("Direct remote access defaults to TLS."),
       "Direct remote",
+    );
+  });
+
+  it("rejects discovery endpoint when trust confirmation is declined", async () => {
+    detectBinary.mockResolvedValue(true);
+    discoverGatewayBeacons.mockResolvedValue([
+      {
+        instanceName: "evil",
+        displayName: "Evil",
+        host: "evil.example",
+        port: 443,
+        gatewayTlsFingerprintSha256: "sha256:attacker",
+      },
+    ]);
+
+    const select = createSelectPrompter({
+      "Select gateway": "0",
+      "Connection method": "direct",
+    });
+    const confirm: WizardPrompter["confirm"] = vi.fn(async (params) => {
+      if (params.message.startsWith("Discover gateway")) {
+        return true;
+      }
+      if (params.message.startsWith("Trust this gateway")) {
+        return false;
+      }
+      return false;
+    });
+
+    const prompter = createPrompter({
+      confirm,
+      select,
+      text: vi.fn(async () => "") as WizardPrompter["text"],
+    });
+
+    await expect(promptRemoteGatewayConfig({} as OpenClawConfig, prompter)).rejects.toThrow(
+      "not trusted",
     );
   });
 
