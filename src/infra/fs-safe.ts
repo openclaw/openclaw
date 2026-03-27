@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { logWarn } from "../logger.js";
 import { sameFileIdentity } from "./file-identity.js";
+import { runPinnedPathHelper } from "./fs-pinned-path-helper.js";
 import { runPinnedWriteHelper } from "./fs-pinned-write-helper.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { assertNoPathAliasEscape } from "./path-alias-guards.js";
@@ -544,6 +545,47 @@ export async function appendFileWithinRoot(params: {
   }
 }
 
+export async function removePathWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+}): Promise<void> {
+  const resolved = await resolvePinnedRemovePathWithinRoot(params);
+  if (process.platform === "win32") {
+    await removePathWithinRootLegacy(resolved);
+    return;
+  }
+  try {
+    await runPinnedPathHelper({
+      operation: "remove",
+      rootPath: resolved.rootReal,
+      relativePath: resolved.relativePosix,
+    });
+  } catch (error) {
+    throw normalizePinnedPathError(error);
+  }
+}
+
+export async function mkdirPathWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  allowRoot?: boolean;
+}): Promise<void> {
+  const resolved = await resolvePinnedPathWithinRoot(params);
+  if (process.platform === "win32") {
+    await mkdirPathWithinRootLegacy(resolved);
+    return;
+  }
+  try {
+    await runPinnedPathHelper({
+      operation: "mkdirp",
+      rootPath: resolved.rootReal,
+      relativePath: resolved.relativePosix,
+    });
+  } catch (error) {
+    throw normalizePinnedPathError(error);
+  }
+}
+
 export async function writeFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
@@ -724,6 +766,82 @@ async function resolvePinnedWriteTargetWithinRoot(params: {
   };
 }
 
+async function resolvePinnedPathWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  allowRoot?: boolean;
+}): Promise<{ rootReal: string; resolved: string; relativePosix: string }> {
+  const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot(params);
+  try {
+    await assertNoPathAliasEscape({
+      absolutePath: resolved,
+      rootPath: rootReal,
+      boundaryLabel: "root",
+    });
+  } catch (err) {
+    throw new SafeOpenError("invalid-path", "path alias escape blocked", { cause: err });
+  }
+
+  const relativeResolved = path.relative(rootReal, resolved);
+  if ((relativeResolved === "" || relativeResolved === ".") && params.allowRoot === true) {
+    return { rootReal, resolved, relativePosix: "" };
+  }
+  if (
+    relativeResolved === "" ||
+    relativeResolved === "." ||
+    relativeResolved.startsWith("..") ||
+    path.isAbsolute(relativeResolved)
+  ) {
+    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+
+  const relativePosix = relativeResolved.split(path.sep).join(path.posix.sep);
+  if (!isPathInside(rootWithSep, resolved)) {
+    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+
+  return { rootReal, resolved, relativePosix };
+}
+
+async function resolvePinnedRemovePathWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+}): Promise<{ rootReal: string; resolved: string; relativePosix: string }> {
+  const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot(params);
+  const relativeResolved = path.relative(rootReal, resolved);
+  if (
+    relativeResolved === "" ||
+    relativeResolved === "." ||
+    relativeResolved.startsWith("..") ||
+    path.isAbsolute(relativeResolved)
+  ) {
+    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+  const relativePosix = relativeResolved.split(path.sep).join(path.posix.sep);
+  if (!isPathInside(rootWithSep, resolved)) {
+    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+
+  const parentRelative = path.posix.dirname(relativePosix);
+  if (parentRelative === "." || parentRelative === "") {
+    return { rootReal, resolved, relativePosix };
+  }
+  const { resolved: parentResolved } = await resolvePathWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: parentRelative.split(path.posix.sep).join(path.sep),
+  });
+  try {
+    await assertNoPathAliasEscape({
+      absolutePath: parentResolved,
+      rootPath: rootReal,
+      boundaryLabel: "root",
+    });
+  } catch (err) {
+    throw new SafeOpenError("invalid-path", "path alias escape blocked", { cause: err });
+  }
+  return { rootReal, resolved, relativePosix };
+}
+
 function normalizePinnedWriteError(error: unknown): Error {
   if (error instanceof SafeOpenError) {
     return error;
@@ -731,6 +849,40 @@ function normalizePinnedWriteError(error: unknown): Error {
   return new SafeOpenError("invalid-path", "path is not a regular file under root", {
     cause: error instanceof Error ? error : undefined,
   });
+}
+
+function normalizePinnedPathError(error: unknown): Error {
+  if (error instanceof SafeOpenError) {
+    return error;
+  }
+  if (error instanceof Error) {
+    const message = error.message;
+    if (/No such file or directory/i.test(message)) {
+      return new SafeOpenError("not-found", "file not found", { cause: error });
+    }
+    if (/Not a directory|symbolic link|Too many levels of symbolic links/i.test(message)) {
+      return new SafeOpenError("invalid-path", "path is not under root", { cause: error });
+    }
+    if (/Directory not empty/i.test(message)) {
+      return new SafeOpenError("invalid-path", "directory is not empty", { cause: error });
+    }
+    if (/Is a directory|Operation not permitted|Permission denied/i.test(message)) {
+      return new SafeOpenError("invalid-path", "path is not removable under root", {
+        cause: error,
+      });
+    }
+  }
+  return new SafeOpenError("invalid-path", "path is not under root", {
+    cause: error instanceof Error ? error : undefined,
+  });
+}
+
+async function removePathWithinRootLegacy(resolved: { resolved: string }): Promise<void> {
+  await fs.rm(resolved.resolved);
+}
+
+async function mkdirPathWithinRootLegacy(resolved: { resolved: string }): Promise<void> {
+  await fs.mkdir(resolved.resolved, { recursive: true });
 }
 
 async function writeFileWithinRootLegacy(params: {
