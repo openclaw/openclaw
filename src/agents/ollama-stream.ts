@@ -446,8 +446,12 @@ function splitInlineToolArgs(raw: string): string[] {
   return parts;
 }
 
-function extractInlineJsonToolCall(content: string): OllamaToolCall | null {
-  const trimmed = content.trim();
+function parseInlineToolCallCandidate(candidate: string): OllamaToolCall | null {
+  const trimmed = candidate.trim();
+  if (!trimmed) {
+    return null;
+  }
+
   if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
     try {
       const parsed = parseJsonPreservingUnsafeIntegers(trimmed) as {
@@ -509,6 +513,108 @@ function extractInlineJsonToolCall(content: string): OllamaToolCall | null {
   };
 }
 
+function extractBraceBalancedObjectCandidates(content: string): string[] {
+  const candidates: string[] = [];
+  let start = -1;
+  let depth = 0;
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+
+  for (let idx = 0; idx < content.length; idx += 1) {
+    const ch = content[idx] ?? "";
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+
+    if (ch === "{") {
+      if (depth === 0) {
+        start = idx;
+      }
+      depth += 1;
+      continue;
+    }
+
+    if (ch === "}" && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        candidates.push(content.slice(start, idx + 1));
+        start = -1;
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function extractInlineToolCall(content: string): OllamaToolCall | null {
+  const exactMatch = parseInlineToolCallCandidate(content);
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const fenceMatches = Array.from(trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi));
+  for (let idx = fenceMatches.length - 1; idx >= 0; idx -= 1) {
+    const candidate = fenceMatches[idx]?.[1];
+    if (!candidate) {
+      continue;
+    }
+    const parsed = parseInlineToolCallCandidate(candidate);
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  const objectCandidates = extractBraceBalancedObjectCandidates(trimmed);
+  for (let idx = objectCandidates.length - 1; idx >= 0; idx -= 1) {
+    const parsed = parseInlineToolCallCandidate(objectCandidates[idx] ?? "");
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  const paragraphs = trimmed
+    .split(/\n\s*\n/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  for (let idx = paragraphs.length - 1; idx >= 0; idx -= 1) {
+    const parsed = parseInlineToolCallCandidate(paragraphs[idx] ?? "");
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  const lines = trimmed
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (let idx = lines.length - 1; idx >= 0; idx -= 1) {
+    const parsed = parseInlineToolCallCandidate(lines[idx] ?? "");
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
 export function buildAssistantMessage(
   response: OllamaChatResponse,
   modelInfo: { api: string; provider: string; id: string },
@@ -518,7 +624,7 @@ export function buildAssistantMessage(
   const nativeToolCalls = response.message.tool_calls;
   const inlineToolCall =
     !nativeToolCalls || nativeToolCalls.length === 0
-      ? extractInlineJsonToolCall(response.message.content || "")
+      ? extractInlineToolCall(response.message.content || "")
       : null;
   const toolCalls =
     nativeToolCalls && nativeToolCalls.length > 0

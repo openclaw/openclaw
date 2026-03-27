@@ -227,6 +227,75 @@ describe("buildAssistantMessage", () => {
     expect(toolCall.id).toMatch(/^ollama_call_[0-9a-f-]{36}$/);
   });
 
+  it("parses embedded inline JSON tool calls from mixed assistant text", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: [
+          "validate_config(config_path)",
+          "",
+          '{"name":"validate_config","arguments":{"config_path":"/home/gnulnx/BLR/perception_layer_models/zero_512net_h50w4d1m25.cfg"}}',
+        ].join("\n"),
+      },
+      done: true,
+      prompt_eval_count: 20,
+      eval_count: 10,
+    };
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0].type).toBe("toolCall");
+    const toolCall = result.content[0] as {
+      type: "toolCall";
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    };
+    expect(toolCall.name).toBe("validate_config");
+    expect(toolCall.arguments).toEqual({
+      config_path: "/home/gnulnx/BLR/perception_layer_models/zero_512net_h50w4d1m25.cfg",
+    });
+    expect(toolCall.id).toMatch(/^ollama_call_[0-9a-f-]{36}$/);
+  });
+
+  it("parses embedded fenced JSON tool calls from mixed assistant text", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: [
+          "I will use the write tool now.",
+          "",
+          "```json",
+          '{"name":"write","arguments":{"file":"~/hello_you.txt","content":"Hello from Dojo."}}',
+          "```",
+        ].join("\n"),
+      },
+      done: true,
+      prompt_eval_count: 20,
+      eval_count: 10,
+    };
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0].type).toBe("toolCall");
+    const toolCall = result.content[0] as {
+      type: "toolCall";
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    };
+    expect(toolCall.name).toBe("write");
+    expect(toolCall.arguments).toEqual({
+      file: "~/hello_you.txt",
+      content: "Hello from Dojo.",
+    });
+    expect(toolCall.id).toMatch(/^ollama_call_[0-9a-f-]{36}$/);
+  });
+
   it("sets all costs to zero for local models", () => {
     const response = {
       model: "qwen3:32b",
