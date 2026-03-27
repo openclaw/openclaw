@@ -802,4 +802,51 @@ describe("session history HTTP endpoints", () => {
       envSnapshot.restore();
     }
   });
+
+  test.each([
+    {
+      requestSessionKey: "agent:main:subagent:worker",
+      storedSessionKey: "agent:main:subagent:worker",
+      sessionId: "sess-subagent-ws",
+    },
+    {
+      requestSessionKey: "cron:daily",
+      storedSessionKey: "agent:main:cron:daily",
+      sessionId: "sess-cron-ws",
+    },
+    {
+      requestSessionKey: "agent:main:acp:session-1",
+      storedSessionKey: "agent:main:acp:session-1",
+      sessionId: "sess-acp-ws",
+    },
+  ])(
+    "rejects internal session history over WebSocket chat.history for $requestSessionKey",
+    async ({ requestSessionKey, storedSessionKey, sessionId }) => {
+      await seedNamedSession({
+        sessionKey: storedSessionKey,
+        sessionId,
+        text: "internal session transcript",
+      });
+
+      const harness = await createGatewaySuiteHarness();
+      const ws = await harness.openWs();
+      try {
+        const connect = await connectReq(ws, {
+          token: "test-gateway-token-1234567890",
+          scopes: ["operator.read"],
+        });
+        expect(connect.ok).toBe(true);
+
+        const history = await rpcReq(ws, "chat.history", {
+          sessionKey: requestSessionKey,
+          limit: 1,
+        });
+        expect(history.ok).toBe(false);
+        expect(history.error?.message).toBe("internal sessions are not available via chat.history");
+      } finally {
+        ws.close();
+        await harness.close();
+      }
+    },
+  );
 });
