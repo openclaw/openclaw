@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
@@ -34,6 +35,15 @@ type ToolErrorWarningPolicy = {
   includeDetails: boolean;
 };
 
+const TERMINAL_EMPTY_TOOL_RESULT_FALLBACK_MAX_CHARS = 1_600;
+const TOOL_RESULT_SUMMARY_KEY_PRIORITY = [
+  "metrics",
+  "checkpoints",
+  "experiments",
+  "models",
+  "files",
+  "results",
+] as const;
 const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "required",
   "missing",
@@ -51,6 +61,124 @@ function isRecoverableToolError(error: string | undefined): boolean {
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
   return level === "on" || level === "full";
+}
+
+function extractFirstTextContent(content: unknown): string | undefined {
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const type = (block as { type?: unknown }).type;
+    const text = (block as { text?: unknown }).text;
+    if (type === "text" && typeof text === "string" && text.trim()) {
+      return text.trim();
+    }
+  }
+  return undefined;
+}
+
+function isPrimitiveArray(value: unknown): value is Array<string | number | boolean> {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((item) => ["string", "number", "boolean"].includes(typeof item))
+  );
+}
+
+function formatStructuredToolResultSummary(text: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return undefined;
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const arrayKeys = Object.keys(record).filter((key) => isPrimitiveArray(record[key]));
+  const prioritizedKey =
+    TOOL_RESULT_SUMMARY_KEY_PRIORITY.find((key) => arrayKeys.includes(key)) ?? arrayKeys[0];
+  if (prioritizedKey) {
+    const values = record[prioritizedKey] as Array<string | number | boolean>;
+    const joined = values.join(", ");
+    if (joined.length > 0 && joined.length <= TERMINAL_EMPTY_TOOL_RESULT_FALLBACK_MAX_CHARS) {
+      const label = prioritizedKey.charAt(0).toUpperCase() + prioritizedKey.slice(1);
+      return `${label}: ${joined}`;
+    }
+  }
+
+  const ok = typeof record.ok === "boolean" ? record.ok : undefined;
+  const errors = Array.isArray(record.errors) ? record.errors.length : undefined;
+  const warnings = Array.isArray(record.warnings) ? record.warnings.length : undefined;
+  if (ok !== undefined || errors !== undefined || warnings !== undefined) {
+    const parts = [
+      ok !== undefined ? `ok=${ok}` : null,
+      errors !== undefined ? `errors=${errors}` : null,
+      warnings !== undefined ? `warnings=${warnings}` : null,
+    ].filter(Boolean);
+    if (parts.length > 0) {
+      return parts.join(", ");
+    }
+  }
+  return undefined;
+}
+
+function clipToolResultText(text: string): string {
+  if (text.length <= TERMINAL_EMPTY_TOOL_RESULT_FALLBACK_MAX_CHARS) {
+    return text;
+  }
+  return `${text.slice(0, TERMINAL_EMPTY_TOOL_RESULT_FALLBACK_MAX_CHARS).trimEnd()}
+
+[Truncated]`;
+}
+
+function buildTerminalEmptyAssistantToolFallback(params: {
+  lastAssistant?: AssistantMessage;
+  messagesSnapshot?: AgentMessage[];
+  suppressAssistantArtifacts: boolean;
+  didSendViaMessagingTool?: boolean;
+}): string | undefined {
+  if (params.suppressAssistantArtifacts || params.didSendViaMessagingTool) {
+    return undefined;
+  }
+  const lastAssistant = params.lastAssistant;
+  if (!lastAssistant || lastAssistant.stopReason === "error" || lastAssistant.content.length > 0) {
+    return undefined;
+  }
+  const messages = params.messagesSnapshot;
+  if (!messages || messages.length < 2) {
+    return undefined;
+  }
+  const lastMessage = messages[messages.length - 1];
+  const previousMessage = messages[messages.length - 2];
+  if (
+    (lastMessage as { role?: unknown }).role !== "assistant" ||
+    (previousMessage as { role?: unknown }).role !== "toolResult"
+  ) {
+    return undefined;
+  }
+
+  const toolNameRaw = (previousMessage as { toolName?: unknown }).toolName;
+  const toolName =
+    typeof toolNameRaw === "string" && toolNameRaw.trim().length > 0 ? toolNameRaw.trim() : "tool";
+  const toolText = extractFirstTextContent((previousMessage as { content?: unknown }).content);
+  if (!toolText) {
+    return `Tool \`${toolName}\` completed, but the model returned no final text.`;
+  }
+  const summarized = formatStructuredToolResultSummary(toolText);
+  if (summarized) {
+    return `Tool \`${toolName}\` completed, but the model returned no final text.
+
+${summarized}`;
+  }
+  return `Tool \`${toolName}\` completed, but the model returned no final text.
+
+${clipToolResultText(toolText)}`;
 }
 
 function resolveToolErrorWarningPolicy(params: {
@@ -92,6 +220,7 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
+  messagesSnapshot?: AgentMessage[];
   lastToolError?: LastToolError;
   config?: OpenClawConfig;
   sessionKey: string;
@@ -258,6 +387,17 @@ export function buildEmbeddedRunPayloads(params: {
           ? [fallbackAnswerText]
           : []
       ).filter((text) => !shouldSuppressRawErrorText(text));
+  if (answerTexts.length === 0) {
+    const terminalEmptyFallback = buildTerminalEmptyAssistantToolFallback({
+      lastAssistant: params.lastAssistant,
+      messagesSnapshot: params.messagesSnapshot,
+      suppressAssistantArtifacts,
+      didSendViaMessagingTool: params.didSendViaMessagingTool,
+    });
+    if (terminalEmptyFallback) {
+      answerTexts.push(terminalEmptyFallback);
+    }
+  }
 
   let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {

@@ -90,4 +90,39 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       didSendDeterministicApprovalPrompt: true,
     });
   });
+  it("falls back to the latest tool result when the model stops with empty content", () => {
+    const payloads = buildPayloads({
+      messagesSnapshot: [
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "list_metrics",
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                ok: true,
+                metrics: ["checkpoint_id", "mean_reward", "success_rate"],
+              }),
+            },
+          ],
+        } as never,
+        {
+          role: "assistant",
+          content: [],
+          stopReason: "stop",
+        } as never,
+      ],
+      lastAssistant: {
+        role: "assistant",
+        content: [],
+        stopReason: "stop",
+      } as never,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBeUndefined();
+    expect(payloads[0]?.text).toContain("Tool `list_metrics` completed");
+    expect(payloads[0]?.text).toContain("Metrics: checkpoint_id, mean_reward, success_rate");
+  });
 });
