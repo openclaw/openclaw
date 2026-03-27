@@ -242,8 +242,12 @@ describe("line runtime api", () => {
     });
   }, 240_000);
 
-  it("keeps the LINE runtime barrel self-contained ahead of the plugin-sdk facade", () => {
+  it("keeps the LINE runtime barrel self-contained", () => {
     const runtimeApiPath = path.join(process.cwd(), "extensions", "line", "runtime-api.ts");
+    expect(collectRuntimeApiPreExports(runtimeApiPath)).toEqual([]);
+    const runtimeApiSource = readFileSync(runtimeApiPath, "utf8");
+
+    expect(runtimeApiSource).not.toContain("openclaw/plugin-sdk/line-runtime");
     expect(collectRuntimeApiPreExports(runtimeApiPath)).toEqual([]);
   });
 });
