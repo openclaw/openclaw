@@ -12,6 +12,7 @@ import {
 } from "../../../test/helpers/extensions/feishu-lifecycle.js";
 import { createNonExitingRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import { FeishuConfigSchema } from "./config-schema.js";
 import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
 import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
 
@@ -88,7 +89,7 @@ function createLifecycleConfig(): ClawdbotConfig {
 }
 
 function createLifecycleAccount(accountId: "account-A" | "account-B"): ResolvedFeishuAccount {
-  const config: FeishuConfig = {
+  const config: FeishuConfig = FeishuConfigSchema.parse({
     enabled: true,
     connectionMode: "websocket",
     groupPolicy: "open",
@@ -99,7 +100,7 @@ function createLifecycleAccount(accountId: "account-A" | "account-B"): ResolvedF
         requireMention: false,
       },
     },
-  };
+  });
   return {
     accountId,
     selectionSource: "explicit",

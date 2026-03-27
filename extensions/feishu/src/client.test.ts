@@ -1,6 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../../test/helpers/extensions/plugin-api.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import type { OpenClawPluginApi } from "../runtime-api.js";
+import { FeishuConfigSchema } from "./config-schema.js";
 import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
 
 type CreateFeishuClient = typeof import("./client.js").createFeishuClient;
@@ -100,12 +102,17 @@ const baseAccount: ResolvedFeishuAccount = {
   appId: "app_123",
   appSecret: "secret_123", // pragma: allowlist secret
   domain: "feishu",
-  config: {},
+  config: FeishuConfigSchema.parse({}),
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+type HttpInstanceLike = {
+  get: (url: string, options?: Record<string, unknown>) => Promise<unknown>;
+  post: (url: string, body?: unknown, options?: Record<string, unknown>) => Promise<unknown>;
+};
 
 function readCallOptions(
   mock: { mock: { calls: unknown[][] } },
@@ -191,9 +198,19 @@ afterEach(() => {
 });
 
 describe("createFeishuClient HTTP timeout", () => {
-  const getLastClientHttpInstance = () => {
+  const getLastClientHttpInstance = (): HttpInstanceLike | undefined => {
     const httpInstance = readCallOptions(clientCtorMock).httpInstance;
-    return isRecord(httpInstance) ? httpInstance : undefined;
+    if (
+      isRecord(httpInstance) &&
+      typeof httpInstance.get === "function" &&
+      typeof httpInstance.post === "function"
+    ) {
+      return {
+        get: httpInstance.get as HttpInstanceLike["get"],
+        post: httpInstance.post as HttpInstanceLike["post"],
+      };
+    }
+    return undefined;
   };
 
   const expectGetCallTimeout = async (timeout: number) => {
@@ -218,7 +235,7 @@ describe("createFeishuClient HTTP timeout", () => {
     const httpInstance = getLastClientHttpInstance();
 
     expect(httpInstance).toBeDefined();
-    await httpInstance?.post?.(
+    await httpInstance?.post(
       "https://example.com/api",
       { data: 1 },
       { headers: { "X-Custom": "yes" } },
@@ -237,7 +254,7 @@ describe("createFeishuClient HTTP timeout", () => {
     const httpInstance = getLastClientHttpInstance();
 
     expect(httpInstance).toBeDefined();
-    await httpInstance?.get?.("https://example.com/api", { timeout: 5_000 });
+    await httpInstance?.get("https://example.com/api", { timeout: 5_000 });
 
     expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
       "https://example.com/api",
@@ -323,7 +340,7 @@ describe("createFeishuClient HTTP timeout", () => {
     expect(clientCtorMock.mock.calls.length).toBe(2);
     const httpInstance = getLastClientHttpInstance();
     expect(httpInstance).toBeDefined();
-    await httpInstance?.get?.("https://example.com/api");
+    await httpInstance?.get("https://example.com/api");
 
     expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
       "https://example.com/api",
@@ -340,7 +357,7 @@ describe("feishu plugin register", () => {
       id: "feishu-test",
       name: "Feishu Test",
       source: "local",
-      runtime: { log: vi.fn() },
+      runtime: createPluginRuntimeMock(),
       on: vi.fn(),
       config: {},
       registerChannel,
