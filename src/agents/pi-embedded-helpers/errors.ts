@@ -59,25 +59,34 @@ type TransientErrorOpts = {
   sessionKey?: string;
 };
 
-function buildTransientErrorContext(opts?: TransientErrorOpts): string {
-  if (!opts) {
-    return "";
+function extractRequestId(raw: string): string | undefined {
+  if (!raw) {
+    return undefined;
   }
+  const match = raw.match(/"request_id"\s*:\s*"([^"]+)"/);
+  return match?.[1];
+}
+
+function buildTransientErrorContext(raw: string, opts?: TransientErrorOpts): string {
   const parts: string[] = [];
-  if (opts.provider || opts.model) {
+  if (opts?.provider || opts?.model) {
     const providerModel = [opts.provider, opts.model].filter(Boolean).join("/");
     if (providerModel) {
       parts.push(providerModel);
     }
   }
-  if (opts.profileId) {
+  if (opts?.profileId) {
     parts.push(`profile=${opts.profileId}`);
   }
-  if (opts.trigger) {
+  if (opts?.trigger) {
     parts.push(`trigger=${opts.trigger}`);
   }
-  if (opts.sessionKey) {
+  if (opts?.sessionKey) {
     parts.push(`session=${opts.sessionKey}`);
+  }
+  const requestId = extractRequestId(raw);
+  if (requestId) {
+    parts.push(`req=${requestId}`);
   }
   return parts.length > 0 ? ` [${parts.join(", ")}]` : "";
 }
@@ -86,12 +95,12 @@ function formatRateLimitOrOverloadedErrorCopy(
   raw: string,
   opts?: TransientErrorOpts,
 ): string | undefined {
-  const ctx = buildTransientErrorContext(opts);
+  const ctx = buildTransientErrorContext(raw, opts);
   if (isRateLimitErrorMessage(raw)) {
-    return `⚠️ API rate limit reached. Please try again later.${ctx}`;
+    return `⚠️ API rate limit reached. Please try again later.${ctx} Tip: add a fallback model or switch to a higher-quota API key.`;
   }
   if (isOverloadedErrorMessage(raw)) {
-    return `⚠️ The AI service is temporarily overloaded. Please try again in a moment.${ctx}`;
+    return `⚠️ The AI service is temporarily overloaded. Please try again in a moment.${ctx} Tip: add a fallback model to avoid waiting (see model fallback config).`;
   }
   return undefined;
 }
