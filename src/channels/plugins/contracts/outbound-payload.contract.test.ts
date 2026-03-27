@@ -19,9 +19,13 @@ import {
   primeChannelOutboundSendMock,
 } from "./suites.js";
 
-vi.mock("../../../../extensions/zalo/src/send.js", () => ({
-  sendMessageZalo: vi.fn().mockResolvedValue({ ok: true, messageId: "zl-1" }),
-}));
+vi.mock("../../../../extensions/zalo/test-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../extensions/zalo/test-api.js")>();
+  return {
+    ...actual,
+    sendMessageZalo: vi.fn().mockResolvedValue({ ok: true, messageId: "zl-1" }),
+  };
+});
 
 // This suite only validates payload adaptation. Keep zalouser's runtime-only
 // ZCA import graph mocked so local contract runs don't depend on native socket
@@ -64,10 +68,15 @@ vi.mock("../../../../extensions/zalouser/src/zalo-js.js", () => ({
   })),
 }));
 
-vi.mock("../../../../extensions/zalouser/src/send.js", () => ({
-  sendMessageZalouser: vi.fn().mockResolvedValue({ ok: true, messageId: "zlu-1" }),
-  sendReactionZalouser: vi.fn().mockResolvedValue({ ok: true }),
-}));
+vi.mock("../../../../extensions/zalouser/test-api.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../extensions/zalouser/test-api.js")>();
+  return {
+    ...actual,
+    sendMessageZalouser: vi.fn().mockResolvedValue({ ok: true, messageId: "zlu-1" }),
+    sendReactionZalouser: vi.fn().mockResolvedValue({ ok: true }),
+  };
+});
 
 type PayloadHarnessParams = {
   payload: ReplyPayload;
