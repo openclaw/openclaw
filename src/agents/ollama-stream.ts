@@ -541,7 +541,14 @@ export function createOllamaStreamFn(
           message: assistantMessage,
         });
       } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
+        let errorMessage = err instanceof Error ? err.message : String(err);
+        // Include nested cause for better diagnostics (e.g. undici wraps
+        // network errors as `TypeError: fetch failed` with the real error
+        // in `.cause`).
+        if (err instanceof Error && err.cause instanceof Error && err.cause.message) {
+          errorMessage = `${errorMessage}: ${err.cause.message}`;
+          log.warn(`Ollama fetch error cause: ${err.cause.message}`);
+        }
         stream.push({
           type: "error",
           reason: "error",
