@@ -21,7 +21,7 @@ export default definePluginEntry({
       })) as OpenClawPluginToolFactory);
     api.registerCli(({ program }) => registerBrowserCli(program), { commands: ["browser"] });
     api.registerGatewayMethod("browser.request", handleBrowserGatewayRequest, {
-      scope: "operator.write",
+      scope: "operator.admin",
     });
     api.registerService(createBrowserPluginService());
   },

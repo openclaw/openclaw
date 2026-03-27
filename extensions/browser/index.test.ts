@@ -56,7 +56,7 @@ describe("browser plugin", () => {
     expect(registerGatewayMethod).toHaveBeenCalledWith(
       "browser.request",
       runtimeApiMocks.handleBrowserGatewayRequest,
-      { scope: "operator.write" },
+      { scope: "operator.admin" },
     );
     expect(runtimeApiMocks.createBrowserPluginService).toHaveBeenCalledTimes(1);
     expect(registerService).toHaveBeenCalledWith(
