@@ -39,6 +39,14 @@ top-level delivery fields, payload `provider` delivery aliases) and migrates sim
 `notify: true` webhook fallback jobs to explicit webhook delivery when `cron.webhook` is
 configured.
 
+## JSON output
+
+Use these shapes when you script against the CLI:
+
+- `openclaw cron list --json` returns `{ "jobs": [...] }`
+- `openclaw cron runs --id <job-id> --json` returns `{ "entries": [...] }`
+- `openclaw cron run --json` returns `{ ok: true, enqueued: true, runId }` when the manual run is queued successfully
+
 ## Common edits
 
 Update delivery settings without changing the message:

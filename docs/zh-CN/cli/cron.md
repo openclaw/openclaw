@@ -28,6 +28,14 @@ x-i18n:
 
 说明：一次性（`--at`）任务成功后默认删除。使用 `--keep-after-run` 保留。
 
+## JSON 输出
+
+如果你要把 CLI 输出接进脚本，返回结构如下：
+
+- `openclaw cron list --json` 返回 `{ "jobs": [...] }`
+- `openclaw cron runs --id <job-id> --json` 返回 `{ "entries": [...] }`
+- `openclaw cron run --json` 在手动执行成功入队时返回 `{ ok: true, enqueued: true, runId }`
+
 ## 常见编辑
 
 更新投递设置而不更改消息：
