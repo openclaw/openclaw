@@ -1,3 +1,4 @@
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
@@ -54,11 +55,45 @@ export async function persistSessionEntry(params: PersistSessionEntryParams): Pr
 export function resolveFallbackRetryPrompt(params: {
   body: string;
   isFallbackRetry: boolean;
+  runStartedAt: number;
+  sessionFile: string;
 }): string {
   if (!params.isFallbackRetry) {
     return params.body;
   }
-  return "Continue where you left off. The previous model attempt failed or timed out.";
+  try {
+    const raw = nodeFs.readFileSync(params.sessionFile, "utf-8");
+    const lines = raw.split(/\r?\n/);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index]?.trim();
+      if (!line) {
+        continue;
+      }
+      const parsed = JSON.parse(line) as {
+        type?: unknown;
+        timestamp?: unknown;
+        message?: { role?: unknown; content?: unknown };
+      };
+      if (parsed.type !== "message" || parsed.message?.role !== "user") {
+        continue;
+      }
+      const timestamp =
+        typeof parsed.timestamp === "number"
+          ? parsed.timestamp
+          : typeof parsed.timestamp === "string"
+            ? Date.parse(parsed.timestamp)
+            : Number.NaN;
+      if (!Number.isFinite(timestamp) || timestamp < params.runStartedAt) {
+        break;
+      }
+      if (parsed.message.content === params.body) {
+        return "Continue where you left off. The previous model attempt failed or timed out.";
+      }
+    }
+  } catch {
+    return params.body;
+  }
+  return params.body;
 }
 
 export function prependInternalEventContext(
@@ -257,10 +292,13 @@ export function runAgentAttempt(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
+  runStartedAt: number;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
+    runStartedAt: params.runStartedAt,
+    sessionFile: params.sessionFile,
   });
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
