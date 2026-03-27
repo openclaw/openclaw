@@ -614,11 +614,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    const apiKey = (await ctx.modelRegistry.getApiKey(model)) ?? "";
-    const headers =
+    const fallbackHeaders =
       model.headers && typeof model.headers === "object" && !Array.isArray(model.headers)
         ? model.headers
         : undefined;
+    const requestAuth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    const apiKey = requestAuth.ok ? (requestAuth.apiKey ?? "") : "";
+    const headers = requestAuth.ok ? (requestAuth.headers ?? fallbackHeaders) : fallbackHeaders;
     if (!apiKey && !headers) {
       log.warn(
         "Compaction safeguard: no request auth available; cancelling compaction to preserve history.",
@@ -692,6 +694,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   messages: pruned.droppedMessagesList,
                   model,
                   apiKey,
+                  headers,
                   signal,
                   reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
                   maxChunkTokens: droppedMaxChunkTokens,
@@ -763,6 +766,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   messages: messagesToSummarize,
                   model,
                   apiKey,
+                  headers,
                   signal,
                   reserveTokens,
                   maxChunkTokens,
@@ -779,6 +783,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               messages: turnPrefixMessages,
               model,
               apiKey,
+              headers,
               signal,
               reserveTokens,
               maxChunkTokens,
