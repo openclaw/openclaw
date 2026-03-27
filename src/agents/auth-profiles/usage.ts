@@ -386,8 +386,18 @@ function resolveAuthCooldownConfig(params: {
     billingBackoffMs: billingBackoffHours * 60 * 60 * 1000,
     billingMaxMs: billingMaxHours * 60 * 60 * 1000,
     failureWindowMs: failureWindowHours * 60 * 60 * 1000,
-    transientFailureThreshold: cooldowns?.transientFailureThreshold,
-    transientCooldownMinutes: cooldowns?.transientCooldownMinutes,
+    transientFailureThreshold:
+      typeof cooldowns?.transientFailureThreshold === "number" &&
+      Number.isFinite(cooldowns.transientFailureThreshold) &&
+      cooldowns.transientFailureThreshold >= 2
+        ? cooldowns.transientFailureThreshold
+        : undefined,
+    transientCooldownMinutes:
+      typeof cooldowns?.transientCooldownMinutes === "number" &&
+      Number.isFinite(cooldowns.transientCooldownMinutes) &&
+      cooldowns.transientCooldownMinutes > 0
+        ? cooldowns.transientCooldownMinutes
+        : undefined,
   };
 }
 

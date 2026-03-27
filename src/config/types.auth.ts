@@ -28,7 +28,9 @@ export type AuthConfig = {
     failureWindowHours?: number;
     /**
      * Number of consecutive transient failures (rate_limit, timeout, overloaded)
-     * before applying the maximum cooldown duration. Default: 3.
+     * before applying the maximum cooldown duration. Default: 3, minimum: 2.
+     * Backoff progression: 30s (1st failure) -> 60s (below threshold) -> max
+     * cooldown (at threshold). The 60s step only applies when threshold >= 3.
      */
     transientFailureThreshold?: number;
     /**

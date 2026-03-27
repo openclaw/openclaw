@@ -1334,9 +1334,14 @@ export function collectDmScopeFindings(cfg: OpenClawConfig): SecurityAuditFindin
   if (dmScope !== "main") {
     return findings;
   }
-  // Only warn when multi-user DM ingress is plausible.
+  // Only warn when multi-user DM ingress is plausible — filter out
+  // group-only signals (groupPolicy, groupAllowFrom) since dmScope
+  // only affects DM sessions, not group chats.
   const signals = listPotentialMultiUserSignals(cfg);
-  if (signals.length === 0) {
+  const dmSignals = signals.filter(
+    (s) => s.includes("dmPolicy") || s.includes(".allowFrom"),
+  );
+  if (dmSignals.length === 0) {
     return findings;
   }
   findings.push({

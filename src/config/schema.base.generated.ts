@@ -791,7 +791,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
               transientFailureThreshold: {
                 type: "integer",
-                minimum: 1,
+                minimum: 2,
               },
               transientCooldownMinutes: {
                 type: "number",
