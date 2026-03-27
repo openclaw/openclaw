@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { telegramOutbound, whatsappOutbound } from "../../../test/channel-outbounds.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { parseTelegramTarget } from "../../plugin-sdk/telegram.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../plugin-sdk/whatsapp-shared.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../plugin-sdk/whatsapp-targets.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveOutboundTarget } from "./targets.js";

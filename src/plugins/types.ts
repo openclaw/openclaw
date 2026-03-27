@@ -169,6 +169,7 @@ export type ProviderAuthResult = {
 /** Interactive auth context passed to provider login/setup methods. */
 export type ProviderAuthContext = {
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   agentDir?: string;
   workspaceDir?: string;
   prompter: WizardPrompter;
