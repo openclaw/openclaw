@@ -13,7 +13,6 @@ import {
   OPENAI_TTS_VOICES,
   resolveOpenAITtsInstructions,
 } from "../../extensions/openai/tts.ts";
-import { prepareModelForSimpleCompletion } from "../agents/simple-completion-transport.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -25,6 +24,7 @@ let getApiKeyForModelMock: typeof import("../agents/model-auth.js").getApiKeyFor
 let requireApiKeyMock: typeof import("../agents/model-auth.js").requireApiKey;
 let resolveModelAsyncMock: typeof import("../agents/pi-embedded-runner/model.js").resolveModelAsync;
 let ensureCustomApiRegisteredMock: typeof import("../agents/custom-api-registry.js").ensureCustomApiRegistered;
+let prepareModelForSimpleCompletionMock: typeof import("../agents/simple-completion-transport.js").prepareModelForSimpleCompletion;
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
@@ -143,6 +143,7 @@ describe("tts", () => {
       await import("../agents/pi-embedded-runner/model.js"));
     ({ ensureCustomApiRegistered: ensureCustomApiRegisteredMock } =
       await import("../agents/custom-api-registry.js"));
+    prepareModelForSimpleCompletionMock = vi.fn(({ model }) => model);
     const registry = createEmptyPluginRegistry();
     registry.speechProviders = [
       { pluginId: "openai", provider: buildOpenAISpeechProvider(), source: "test" },
@@ -390,7 +391,7 @@ describe("tts", () => {
         {
           completeSimple,
           getApiKeyForModel: getApiKeyForModelMock,
-          prepareModelForSimpleCompletion,
+          prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
           requireApiKey: requireApiKeyMock,
           resolveModelAsync: resolveModelAsyncMock,
         },
@@ -416,7 +417,7 @@ describe("tts", () => {
         {
           completeSimple,
           getApiKeyForModel: getApiKeyForModelMock,
-          prepareModelForSimpleCompletion,
+          prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
           requireApiKey: requireApiKeyMock,
           resolveModelAsync: resolveModelAsyncMock,
         },
@@ -446,7 +447,7 @@ describe("tts", () => {
         {
           completeSimple,
           getApiKeyForModel: getApiKeyForModelMock,
-          prepareModelForSimpleCompletion,
+          prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
           requireApiKey: requireApiKeyMock,
           resolveModelAsync: resolveModelAsyncMock,
         },
@@ -476,7 +477,7 @@ describe("tts", () => {
         {
           completeSimple,
           getApiKeyForModel: getApiKeyForModelMock,
-          prepareModelForSimpleCompletion,
+          prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
           requireApiKey: requireApiKeyMock,
           resolveModelAsync: resolveModelAsyncMock,
         },
@@ -506,7 +507,7 @@ describe("tts", () => {
           {
             completeSimple,
             getApiKeyForModel: getApiKeyForModelMock,
-            prepareModelForSimpleCompletion,
+            prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
             requireApiKey: requireApiKeyMock,
             resolveModelAsync: resolveModelAsyncMock,
           },
@@ -544,7 +545,7 @@ describe("tts", () => {
             {
               completeSimple,
               getApiKeyForModel: getApiKeyForModelMock,
-              prepareModelForSimpleCompletion,
+              prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
               requireApiKey: requireApiKeyMock,
               resolveModelAsync: resolveModelAsyncMock,
             },
