@@ -85,6 +85,19 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    llm: z
+      .object({
+        idleTimeoutSeconds: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe(
+            "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 60 seconds.",
+          ),
+      })
+      .strict()
+      .optional(),
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),

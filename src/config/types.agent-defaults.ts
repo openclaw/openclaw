@@ -171,6 +171,8 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
+  /** LLM timeout configuration. */
+  llm?: AgentLlmConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
   /** Embedded Pi runner hardening and compatibility controls. */
@@ -364,4 +366,17 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
+};
+
+/**
+ * LLM timeout configuration.
+ */
+export type AgentLlmConfig = {
+  /**
+   * Idle timeout for LLM streaming responses in seconds.
+   * If no token is received within this time, the request is aborted.
+   * Set to 0 to disable (never timeout).
+   * Default: 60 seconds.
+   */
+  idleTimeoutSeconds?: number;
 };
