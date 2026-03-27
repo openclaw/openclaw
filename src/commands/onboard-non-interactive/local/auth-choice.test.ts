@@ -12,6 +12,11 @@ vi.mock("../api-keys.js", () => ({
   resolveNonInteractiveApiKey,
 }));
 
+const resolveManifestDeprecatedProviderAuthChoice = vi.hoisted(() => vi.fn(() => undefined));
+vi.mock("../../../plugins/provider-auth-choices.js", () => ({
+  resolveManifestDeprecatedProviderAuthChoice,
+}));
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -40,6 +45,29 @@ describe("applyNonInteractiveAuthChoice", () => {
     });
 
     expect(result).toBe(resolvedConfig);
+    expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledOnce();
+  });
+
+  it("fails with manifest-owned replacement guidance for deprecated auth choices", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    resolveManifestDeprecatedProviderAuthChoice.mockReturnValueOnce({
+      choiceId: "minimax-global-api",
+    } as never);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "minimax",
+      opts: {} as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(
+      '"minimax" is no longer supported. Use --auth-choice minimax-global-api instead.',
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledOnce();
   });
 });

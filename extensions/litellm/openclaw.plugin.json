@@ -1,5 +1,6 @@
 {
   "id": "litellm",
+  "enabledByDefault": true,
   "providers": ["litellm"],
   "providerAuthEnvVars": {
     "litellm": ["LITELLM_API_KEY"]

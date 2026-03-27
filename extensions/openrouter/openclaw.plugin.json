@@ -1,5 +1,6 @@
 {
   "id": "openrouter",
+  "enabledByDefault": true,
   "providers": ["openrouter"],
   "providerAuthEnvVars": {
     "openrouter": ["OPENROUTER_API_KEY"]

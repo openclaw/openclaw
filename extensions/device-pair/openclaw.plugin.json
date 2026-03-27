@@ -1,5 +1,6 @@
 {
   "id": "device-pair",
+  "enabledByDefault": true,
   "name": "Device Pairing",
   "description": "Generate setup codes and approve device pairing requests.",
   "configSchema": {

@@ -158,53 +158,17 @@ async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMod
 async function promptWebToolsConfig(
   nextConfig: OpenClawConfig,
   runtime: RuntimeEnv,
+  prompter: ReturnType<typeof createClackPrompter>,
 ): Promise<OpenClawConfig> {
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
-  const {
-    resolveSearchProviderOptions,
-    resolveExistingKey,
-    hasExistingKey,
-    applySearchKey,
-    applySearchProviderSelection,
-    hasKeyInEnv,
-  } = await import("./onboard-search.js");
+  const { resolveSearchProviderOptions, setupSearch } = await import("./onboard-search.js");
   const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
-  const defaultProvider = searchProviderOptions[0]?.id;
-
-  const hasKeyForProvider = (provider: string): boolean => {
-    const entry = searchProviderOptions.find((e) => e.id === provider);
-    if (!entry) {
-      return false;
-    }
-    if (entry.requiresCredential === false) {
-      return true;
-    }
-    return hasExistingKey(nextConfig, provider) || hasKeyInEnv(entry);
-  };
-
-  const existingProvider = (() => {
-    const stored = existingSearch?.provider;
-    if (stored && searchProviderOptions.some((e) => e.id === stored)) {
-      return stored;
-    }
-    return searchProviderOptions.find((e) => hasKeyForProvider(e.id))?.id ?? defaultProvider;
-  })();
-
-  note(
-    [
-      "Web search lets your agent look things up online using the `web_search` tool.",
-      "Choose a provider. Some providers need an API key, and some work key-free.",
-      "Docs: https://docs.openclaw.ai/tools/web",
-    ].join("\n"),
-    "Web search",
-  );
 
   const enableSearch = guardCancel(
     await confirm({
       message: "Enable web_search?",
-      initialValue:
-        existingSearch?.enabled ?? searchProviderOptions.some((e) => hasKeyForProvider(e.id)),
+      initialValue: existingSearch?.enabled ?? searchProviderOptions.length > 0,
     }),
     runtime,
   );
@@ -230,85 +194,11 @@ async function promptWebToolsConfig(
         enabled: false,
       };
     } else {
-      const providerOptions = searchProviderOptions.map((entry) => {
-        const configured = hasKeyForProvider(entry.id);
-        return {
-          value: entry.id,
-          label: entry.label,
-          hint:
-            entry.requiresCredential === false
-              ? `${entry.hint} · key-free`
-              : configured
-                ? `${entry.hint} · configured`
-                : entry.hint,
-        };
-      });
-
-      const providerChoice = guardCancel(
-        await select({
-          message: "Choose web search provider",
-          options: providerOptions,
-          initialValue: existingProvider,
-        }),
-        runtime,
-      );
-
-      nextSearch = { ...nextSearch, provider: providerChoice };
-
-      const entry = searchProviderOptions.find((e) => e.id === providerChoice)!;
-      const credentialLabel = entry.credentialLabel?.trim() || `${entry.label} API key`;
-      const existingKey = resolveExistingKey(nextConfig, providerChoice);
-      const keyConfigured = hasExistingKey(nextConfig, providerChoice);
-      const envAvailable = entry.envVars.some((k) => Boolean(process.env[k]?.trim()));
-      const envVarNames = entry.envVars.join(" / ");
-      const needsCredential = entry.requiresCredential !== false;
-
-      if (!needsCredential) {
-        workingConfig = applySearchProviderSelection(workingConfig, providerChoice);
-        nextSearch = { ...workingConfig.tools?.web?.search };
-        note(
-          [
-            `${entry.label} works without an API key.`,
-            "OpenClaw enabled the plugin and selected it as your web_search provider.",
-            `Docs: ${entry.docsUrl ?? "https://docs.openclaw.ai/tools/web"}`,
-          ].join("\n"),
-          "Web search",
-        );
-      } else {
-        const keyInput = guardCancel(
-          await text({
-            message: keyConfigured
-              ? envAvailable
-                ? `${credentialLabel} (leave blank to keep current or use ${envVarNames})`
-                : `${credentialLabel} (leave blank to keep current)`
-              : envAvailable
-                ? `${credentialLabel} (paste it here; leave blank to use ${envVarNames})`
-                : credentialLabel,
-            placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
-          }),
-          runtime,
-        );
-        const key = String(keyInput ?? "").trim();
-
-        if (key || existingKey) {
-          workingConfig = applySearchKey(workingConfig, providerChoice, (key || existingKey)!);
-          nextSearch = { ...workingConfig.tools?.web?.search };
-        } else if (keyConfigured || envAvailable) {
-          workingConfig = applySearchProviderSelection(workingConfig, providerChoice);
-          nextSearch = { ...workingConfig.tools?.web?.search };
-        } else {
-          nextSearch = { ...nextSearch, provider: providerChoice };
-          note(
-            [
-              "No key stored yet — web_search won't work until a key is available.",
-              `Store your ${credentialLabel} here or set ${envVarNames} in the Gateway environment.`,
-              `Get your API key at: ${entry.signupUrl}`,
-              "Docs: https://docs.openclaw.ai/tools/web",
-            ].join("\n"),
-            "Web search",
-          );
-        }
-      }
+      workingConfig = await setupSearch(workingConfig, runtime, prompter);
+      nextSearch = {
+        ...workingConfig.tools?.web?.search,
+        enabled: workingConfig.tools?.web?.search?.provider ? true : existingSearch?.enabled,
+      };
     }
   }
 
@@ -555,7 +445,7 @@ export async function runConfigureWizard(
       }
 
       if (selected.includes("web")) {
-        nextConfig = await promptWebToolsConfig(nextConfig, runtime);
+        nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
       }
 
       if (selected.includes("gateway")) {
@@ -608,7 +498,7 @@ export async function runConfigureWizard(
         }
 
         if (choice === "web") {
-          nextConfig = await promptWebToolsConfig(nextConfig, runtime);
+          nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
           await persistConfig();
         }
 

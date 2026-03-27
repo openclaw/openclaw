@@ -43,6 +43,7 @@ function makeRegistry(
   plugins: Array<{
     id: string;
     channels: string[];
+    autoEnableWhenConfiguredProviders?: string[];
     channelConfigs?: Record<string, { schema: Record<string, unknown>; preferOver?: string[] }>;
   }>,
 ): PluginManifestRegistry {
@@ -50,6 +51,7 @@ function makeRegistry(
     plugins: plugins.map((p) => ({
       id: p.id,
       channels: p.channels,
+      autoEnableWhenConfiguredProviders: p.autoEnableWhenConfiguredProviders,
       channelConfigs: p.channelConfigs,
       providers: [],
       cliBackends: [],
@@ -374,6 +376,50 @@ describe("applyPluginAutoEnable", () => {
 
     expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.["minimax-portal-auth"]).toBeUndefined();
+  });
+
+  it("does not auto-enable unrelated provider plugins just because auth profiles exist", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "openai:default": {
+              provider: "openai",
+              mode: "api_key",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.openai).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
+  it("uses manifest-owned provider auto-enable metadata for third-party plugins", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "acme-oauth:default": {
+              provider: "acme-oauth",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+      env: {},
+      manifestRegistry: makeRegistry([
+        {
+          id: "acme",
+          channels: [],
+          autoEnableWhenConfiguredProviders: ["acme-oauth"],
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.acme?.enabled).toBe(true);
   });
 
   it("auto-enables acpx plugin when ACP is configured", () => {

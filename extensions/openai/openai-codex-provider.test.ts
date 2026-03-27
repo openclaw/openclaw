@@ -69,4 +69,19 @@ describe("openai codex provider", () => {
       expires: expect.any(Number),
     });
   });
+
+  it("returns deprecated-profile doctor guidance for legacy Codex CLI ids", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.buildAuthDoctorHint?.({
+        provider: "openai-codex",
+        profileId: "openai-codex:codex-cli",
+        config: undefined,
+        store: { version: 1, profiles: {} },
+      }),
+    ).toBe(
+      "Deprecated profile. Run `openclaw models auth login --provider openai-codex` or `openclaw configure`.",
+    );
+  });
 });

@@ -1,5 +1,6 @@
 {
   "id": "xai",
+  "enabledByDefault": true,
   "providers": ["xai"],
   "providerAuthEnvVars": {
     "xai": ["XAI_API_KEY"]

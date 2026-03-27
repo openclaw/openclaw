@@ -1,6 +1,7 @@
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
+import { resolveManifestDeprecatedProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import {
@@ -17,7 +18,6 @@ import {
 } from "../../onboard-custom.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
-import { applySimpleNonInteractiveApiKeyChoice } from "./auth-choice.api-key-providers.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 type ResolvedNonInteractiveApiKey = NonNullable<
@@ -45,9 +45,6 @@ export async function applyNonInteractiveAuthChoice(params: {
     runtime.exit(1);
     return null;
   }
-  const apiKeyStorageOptions = requestedSecretInputMode
-    ? { secretInputMode: requestedSecretInputMode }
-    : undefined;
   const toStoredSecretInput = (resolved: ResolvedNonInteractiveApiKey): SecretInput | null => {
     const storePlaintextSecret = requestedSecretInputMode !== "ref"; // pragma: allowlist secret
     if (storePlaintextSecret) {
@@ -79,20 +76,6 @@ export async function applyNonInteractiveAuthChoice(params: {
       ...input,
       secretInputMode: requestedSecretInputMode,
     });
-  const maybeSetResolvedApiKey = async (
-    resolved: ResolvedNonInteractiveApiKey,
-    setter: (value: SecretInput) => Promise<void> | void,
-  ): Promise<boolean> => {
-    if (resolved.source === "profile") {
-      return true;
-    }
-    const stored = toStoredSecretInput(resolved);
-    if (!stored) {
-      return false;
-    }
-    await setter(stored);
-    return true;
-  };
   const toApiKeyCredential = (params: {
     provider: string;
     resolved: ResolvedNonInteractiveApiKey;
@@ -168,32 +151,13 @@ export async function applyNonInteractiveAuthChoice(params: {
     return pluginProviderChoice;
   }
 
-  const simpleApiKeyChoice = await applySimpleNonInteractiveApiKeyChoice({
-    authChoice,
-    nextConfig,
-    baseConfig,
-    opts,
-    runtime,
-    apiKeyStorageOptions,
-    resolveApiKey,
-    maybeSetResolvedApiKey,
+  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice as string, {
+    config: nextConfig,
+    env: process.env,
   });
-  if (simpleApiKeyChoice !== undefined) {
-    return simpleApiKeyChoice;
-  }
-  // Legacy aliases: these choice values were removed; fail with an actionable message so
-  // existing CI automation gets a clear error instead of silently exiting 0 with no auth.
-  const REMOVED_MINIMAX_CHOICES: Record<string, string> = {
-    minimax: "minimax-global-api",
-    "minimax-api": "minimax-global-api",
-    "minimax-cloud": "minimax-global-api",
-    "minimax-api-lightning": "minimax-global-api",
-    "minimax-api-key-cn": "minimax-cn-api",
-  };
-  if (Object.prototype.hasOwnProperty.call(REMOVED_MINIMAX_CHOICES, authChoice as string)) {
-    const replacement = REMOVED_MINIMAX_CHOICES[authChoice as string];
+  if (deprecatedChoice) {
     runtime.error(
-      `"${authChoice as string}" is no longer supported. Use --auth-choice ${replacement} instead.`,
+      `"${authChoice as string}" is no longer supported. Use --auth-choice ${deprecatedChoice.choiceId} instead.`,
     );
     runtime.exit(1);
     return null;
