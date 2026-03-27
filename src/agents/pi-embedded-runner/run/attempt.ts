@@ -894,7 +894,7 @@ export async function runEmbeddedAttempt(
       const resolvedAuth = await params.modelRegistry
         .getApiKeyAndHeaders(params.model)
         .then((auth) => (auth.ok ? { apiKey: auth.apiKey, headers: auth.headers } : undefined))
-        .catch(() => undefined);
+	.catch((err) => { log.warn(`[auth] getApiKeyAndHeaders failed for model=${params.model}: ${err}`); return undefined; });
 
       const setBaseStreamFn = (fn: StreamFn) => {
         activeSession.agent.streamFn = wrapStreamFnWithModelRegistryAuth(
