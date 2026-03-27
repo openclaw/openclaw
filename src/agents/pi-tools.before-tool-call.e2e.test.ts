@@ -554,14 +554,17 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result).toHaveProperty("reason", "Registration returns no id");
   });
 
-  it("uses immediate decision from request response without calling waitDecision", async () => {
+  it("blocks on immediate null decision without calling waitDecision even when timeoutBehavior is allow", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const mockCallGateway = vi.mocked(callGatewayTool);
+    const onResolution = vi.fn();
 
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "No route",
         description: "No approval route available",
+        timeoutBehavior: "allow",
+        onResolution,
       },
     });
 
@@ -574,7 +577,8 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", "Approval timed out");
+    expect(result).toHaveProperty("reason", "Plugin approval unavailable (no approval route)");
+    expect(onResolution).toHaveBeenCalledWith("cancelled");
     expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
     ]);

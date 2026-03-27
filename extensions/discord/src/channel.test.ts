@@ -49,7 +49,9 @@ function createCfg(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function createPluginApprovalRequest(): PluginApprovalRequest {
+function createPluginApprovalRequest(
+  overrides?: Partial<PluginApprovalRequest["request"]>,
+): PluginApprovalRequest {
   return {
     id: "plugin:approval-1",
     request: {
@@ -60,6 +62,7 @@ function createPluginApprovalRequest(): PluginApprovalRequest {
       toolName: "plugin.tool",
       agentId: "agent-1",
       sessionKey: "agent:agent-1:discord:channel:123456789",
+      ...overrides,
     },
     createdAtMs: 1_000,
     expiresAtMs: 61_000,
@@ -168,6 +171,42 @@ describe("discordPlugin outbound", () => {
     const execApproval = (payload?.channelData as { execApproval?: { approvalId?: string } })
       ?.execApproval;
     expect(execApproval?.approvalId).toBe("plugin:approval-1");
+  });
+
+  it("neutralizes plugin approval mentions in forwarded text and components", () => {
+    const cfg = createCfg();
+    cfg.channels!.discord!.execApprovals = {
+      enabled: true,
+      approvers: ["123"],
+    };
+    const payload = discordPlugin.execApprovals?.buildPluginPendingPayload?.({
+      cfg,
+      request: createPluginApprovalRequest({
+        title: "Heads up @everyone <@123> <@&456>",
+        description: "route @here and <#789>",
+      }),
+      target: { channel: "discord", to: "user:123" },
+      nowMs: 2_000,
+    });
+
+    const text = payload?.text ?? "";
+    const componentsJson = JSON.stringify(
+      ((payload?.channelData as { discord?: { components?: unknown } } | undefined)?.discord
+        ?.components ?? {}) as object,
+    );
+
+    expect(text).toContain("@\u200beveryone");
+    expect(text).toContain("@\u200bhere");
+    expect(text).toContain("<@\u200b123>");
+    expect(text).toContain("<@\u200b&456>");
+    expect(text).toContain("<#\u200b789>");
+    expect(text).not.toContain("@everyone");
+    expect(text).not.toContain("@here");
+    expect(componentsJson).not.toContain("@everyone");
+    expect(componentsJson).not.toContain("@here");
+    expect(componentsJson).not.toContain("<@123>");
+    expect(componentsJson).not.toContain("<@&456>");
+    expect(componentsJson).not.toContain("<#789>");
   });
 
   it("falls back to non-interactive plugin approval pending payload when Discord exec approvals are disabled", () => {

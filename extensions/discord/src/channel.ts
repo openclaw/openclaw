@@ -137,7 +137,12 @@ function buildDiscordExecApprovalCustomId(
 }
 
 function formatDiscordApprovalPreview(value: string, maxChars: number): string {
-  const trimmed = value.trim();
+  const trimmed = value
+    .replace(/@everyone/gi, "@\u200beveryone")
+    .replace(/@here/gi, "@\u200bhere")
+    .replace(/<@/g, "<@\u200b")
+    .replace(/<#/g, "<#\u200b")
+    .trim();
   const raw = trimmed.length > maxChars ? `${trimmed.slice(0, maxChars)}...` : trimmed;
   return raw.replace(/`/g, "\u200b`");
 }
@@ -436,7 +441,10 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           (normalizeMessageChannel(target.channel) ?? target.channel) === "discord" &&
           isDiscordExecApprovalClientEnabled({ cfg, accountId: target.accountId }),
         buildPluginPendingPayload: ({ cfg, request, target, nowMs }) => {
-          const text = buildPluginApprovalRequestMessage(request, nowMs);
+          const text = formatDiscordApprovalPreview(
+            buildPluginApprovalRequestMessage(request, nowMs),
+            10_000,
+          );
           const execApproval = {
             approvalId: request.id,
             approvalSlug: request.id.slice(0, 8),
@@ -466,16 +474,20 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         },
         buildPluginResolvedPayload: ({ resolved }) => {
           const componentSpec = buildDiscordPluginResolvedComponentSpec({ resolved });
+          const text = formatDiscordApprovalPreview(
+            buildPluginApprovalResolvedMessage(resolved),
+            10_000,
+          );
           return componentSpec
             ? {
-                text: buildPluginApprovalResolvedMessage(resolved),
+                text,
                 channelData: {
                   discord: {
                     components: componentSpec,
                   },
                 },
               }
-            : { text: buildPluginApprovalResolvedMessage(resolved) };
+            : { text };
         },
       },
       directory: createChannelDirectoryAdapter({

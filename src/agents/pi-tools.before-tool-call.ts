@@ -262,6 +262,13 @@ export async function runBeforeToolCallHook(args: {
         let decision: string | null | undefined;
         if (hasImmediateDecision) {
           decision = requestResult?.decision;
+          if (decision === null) {
+            safeOnResolution(PluginApprovalResolutions.CANCELLED);
+            return {
+              blocked: true,
+              reason: "Plugin approval unavailable (no approval route)",
+            };
+          }
         } else {
           // Wait for the decision, but abort early if the agent run is cancelled
           // so the user isn't blocked for the full approval timeout.
