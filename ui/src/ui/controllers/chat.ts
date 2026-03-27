@@ -14,10 +14,13 @@ const DEFAULT_MAIN_SESSION_ALIAS = "main";
 const DEFAULT_MAIN_SESSION_KEY = "agent:main:main";
 
 function normalizeSessionKey(sessionKey: string | undefined | null): string {
-  return (sessionKey ?? "").trim().toLowerCase();
+  return (sessionKey ?? "").trim();
 }
 
-function matchesSessionKey(current: string | undefined | null, incoming: string | undefined | null): boolean {
+function matchesSessionKey(
+  current: string | undefined | null,
+  incoming: string | undefined | null,
+): boolean {
   const currentNormalized = normalizeSessionKey(current);
   const incomingNormalized = normalizeSessionKey(incoming);
   if (!currentNormalized || !incomingNormalized) {
@@ -26,11 +29,13 @@ function matchesSessionKey(current: string | undefined | null, incoming: string 
   if (currentNormalized === incomingNormalized) {
     return true;
   }
+  const currentAliasKey = currentNormalized.toLowerCase();
+  const incomingAliasKey = incomingNormalized.toLowerCase();
   return (
-    (currentNormalized === DEFAULT_MAIN_SESSION_ALIAS &&
-      incomingNormalized === DEFAULT_MAIN_SESSION_KEY) ||
-    (currentNormalized === DEFAULT_MAIN_SESSION_KEY &&
-      incomingNormalized === DEFAULT_MAIN_SESSION_ALIAS)
+    (currentAliasKey === DEFAULT_MAIN_SESSION_ALIAS &&
+      incomingAliasKey === DEFAULT_MAIN_SESSION_KEY) ||
+    (currentAliasKey === DEFAULT_MAIN_SESSION_KEY &&
+      incomingAliasKey === DEFAULT_MAIN_SESSION_ALIAS)
   );
 }
 

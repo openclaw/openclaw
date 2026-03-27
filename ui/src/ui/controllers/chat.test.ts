@@ -128,6 +128,17 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe(null);
   });
 
+  it("keeps exact sessionKey matching case-sensitive outside the alias pair", () => {
+    const state = createState({ sessionKey: "Work" });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "work",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+  });
+
   it("returns null for delta from another run", () => {
     const state = createState({
       sessionKey: "main",
