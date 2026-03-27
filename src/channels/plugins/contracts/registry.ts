@@ -8,6 +8,11 @@ import {
 } from "../../../../extensions/discord/runtime-api.js";
 import { createFeishuThreadBindingManager } from "../../../../extensions/feishu/api.js";
 import {
+  resolveDefaultLineAccountId,
+  resolveLineAccount,
+  listLineAccountIds,
+} from "../../../../extensions/line/runtime-api.js";
+import {
   createMatrixThreadBindingManager,
   resetMatrixThreadBindingsForTests,
 } from "../../../../extensions/matrix/api.js";
@@ -20,16 +25,17 @@ import {
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import {
-  resolveDefaultLineAccountId,
-  resolveLineAccount,
-  listLineAccountIds,
-} from "../../../line/accounts.js";
-import {
   bundledChannelPlugins,
   bundledChannelRuntimeSetters,
   requireBundledChannelPlugin,
 } from "../bundled.js";
 import type { ChannelPlugin } from "../types.js";
+import {
+  channelPluginSurfaceKeys,
+  type ChannelPluginSurface,
+  sessionBindingContractChannelIds,
+  type SessionBindingContractChannelId,
+} from "./manifest.js";
 
 type PluginContractEntry = {
   id: string;
@@ -79,27 +85,6 @@ type StatusContractEntry = {
     assertSummary?: (summary: Record<string, unknown>) => void;
   }>;
 };
-
-export const channelPluginSurfaceKeys = [
-  "actions",
-  "setup",
-  "status",
-  "outbound",
-  "messaging",
-  "threading",
-  "directory",
-  "gateway",
-] as const;
-
-export type ChannelPluginSurface =
-  | "actions"
-  | "setup"
-  | "status"
-  | "outbound"
-  | "messaging"
-  | "threading"
-  | "directory"
-  | "gateway";
 
 type SurfaceContractEntry = {
   id: string;
@@ -296,6 +281,7 @@ export const actionContractRegistry: ActionsContractEntry[] = [
           "edit",
           "delete",
           "download-file",
+          "upload-file",
           "pin",
           "unpin",
           "list-pins",
@@ -325,6 +311,7 @@ export const actionContractRegistry: ActionsContractEntry[] = [
           "edit",
           "delete",
           "download-file",
+          "upload-file",
           "pin",
           "unpin",
           "list-pins",
@@ -647,9 +634,11 @@ const baseSessionBindingCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
 
-export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
-  {
-    id: "discord",
+const sessionBindingContractEntries: Record<
+  SessionBindingContractChannelId,
+  Omit<SessionBindingContractEntry, "id">
+> = {
+  discord: {
     expectedCapabilities: {
       adapterAvailable: true,
       bindSupported: true,
@@ -711,8 +700,7 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
       });
     },
   },
-  {
-    id: "feishu",
+  feishu: {
     expectedCapabilities: {
       adapterAvailable: true,
       bindSupported: true,
@@ -766,8 +754,7 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
       });
     },
   },
-  {
-    id: "matrix",
+  matrix: {
     expectedCapabilities: {
       adapterAvailable: true,
       bindSupported: true,
@@ -817,8 +804,7 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
       });
     },
   },
-  {
-    id: "telegram",
+  telegram: {
     expectedCapabilities: {
       adapterAvailable: true,
       bindSupported: true,
@@ -879,4 +865,10 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
       });
     },
   },
-];
+};
+
+export const sessionBindingContractRegistry: SessionBindingContractEntry[] =
+  sessionBindingContractChannelIds.map((id) => ({
+    id,
+    ...sessionBindingContractEntries[id],
+  }));

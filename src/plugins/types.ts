@@ -21,7 +21,8 @@ import type {
   ChannelStructuredComponents,
 } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ModelProviderConfig } from "../config/types.js";
+import type { CliBackendConfig, ModelProviderConfig } from "../config/types.js";
+import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
@@ -31,7 +32,13 @@ import type { MediaUnderstandingProvider } from "../media-understanding/types.js
 import type { RuntimeEnv } from "../runtime.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import type {
+  SpeechDirectiveTokenParseContext,
+  SpeechDirectiveTokenParseResult,
   SpeechProviderConfiguredContext,
+  SpeechProviderConfig,
+  SpeechProviderResolveConfigContext,
+  SpeechProviderResolveTalkConfigContext,
+  SpeechProviderResolveTalkOverridesContext,
   SpeechListVoicesRequest,
   SpeechProviderId,
   SpeechSynthesisRequest,
@@ -55,6 +62,7 @@ export type ProviderAuthOptionBag = {
   [key: string]: unknown;
 };
 
+/** Logger passed into plugin registration, services, and CLI surfaces. */
 export type PluginLogger = {
   debug?: (message: string) => void;
   info: (message: string) => void;
@@ -77,6 +85,13 @@ export type PluginConfigValidation =
   | { ok: true; value?: unknown }
   | { ok: false; errors: string[] };
 
+/**
+ * Config schema contract accepted by plugin manifests and runtime registration.
+ *
+ * Plugins can provide a Zod-like parser, a lightweight `validate(...)`
+ * function, or both. `uiHints` and `jsonSchema` are optional extras for docs,
+ * forms, and config UIs.
+ */
 export type OpenClawPluginConfigSchema = {
   safeParse?: (value: unknown) => {
     success: boolean;
@@ -91,6 +106,7 @@ export type OpenClawPluginConfigSchema = {
   jsonSchema?: Record<string, unknown>;
 };
 
+/** Trusted execution context passed to plugin-owned agent tool factories. */
 export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -99,6 +115,10 @@ export type OpenClawPluginToolContext = {
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
+  browser?: {
+    sandboxBridgeUrl?: string;
+    allowHostControl?: boolean;
+  };
   messageChannel?: string;
   agentAccountId?: string;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
@@ -127,6 +147,7 @@ export type OpenClawPluginHookOptions = {
 
 export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
 
+/** Standard result payload returned by provider auth methods. */
 export type ProviderAuthResult = {
   profiles: Array<{ profileId: string; credential: AuthProfileCredential }>;
   /**
@@ -141,6 +162,7 @@ export type ProviderAuthResult = {
   notes?: string[];
 };
 
+/** Interactive auth context passed to provider login/setup methods. */
 export type ProviderAuthContext = {
   config: OpenClawConfig;
   agentDir?: string;
@@ -612,12 +634,14 @@ export type ProviderPluginWizardSetup = {
   };
 };
 
+/** Optional model-picker metadata shown in interactive provider selection flows. */
 export type ProviderPluginWizardModelPicker = {
   label?: string;
   hint?: string;
   methodId?: string;
 };
 
+/** UI metadata that lets provider plugins appear in onboarding and configure flows. */
 export type ProviderPluginWizard = {
   setup?: ProviderPluginWizardSetup;
   modelPicker?: ProviderPluginWizardModelPicker;
@@ -631,6 +655,7 @@ export type ProviderModelSelectedContext = {
   workspaceDir?: string;
 };
 
+/** Text-inference provider capability registered by a plugin. */
 export type ProviderPlugin = {
   id: string;
   pluginId?: string;
@@ -891,6 +916,7 @@ export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
+  requiresCredential?: boolean;
   credentialLabel?: string;
   envVars: string[];
   placeholder: string;
@@ -914,12 +940,20 @@ export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
   pluginId: string;
 };
 
+/** Speech capability registered by a plugin. */
 export type SpeechProviderPlugin = {
   id: SpeechProviderId;
   label: string;
   aliases?: string[];
+  autoSelectOrder?: number;
   models?: readonly string[];
   voices?: readonly string[];
+  resolveConfig?: (ctx: SpeechProviderResolveConfigContext) => SpeechProviderConfig;
+  parseDirectiveToken?: (ctx: SpeechDirectiveTokenParseContext) => SpeechDirectiveTokenParseResult;
+  resolveTalkConfig?: (ctx: SpeechProviderResolveTalkConfigContext) => SpeechProviderConfig;
+  resolveTalkOverrides?: (
+    ctx: SpeechProviderResolveTalkOverridesContext,
+  ) => SpeechProviderConfig | undefined;
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
   synthesizeTelephony?: (
@@ -956,6 +990,8 @@ export type PluginCommandContext = {
   channelId?: ChannelId;
   /** Whether the sender is on the allowlist */
   isAuthorizedSender: boolean;
+  /** Gateway client scopes for internal control-plane callers */
+  gatewayClientScopes?: string[];
   /** Raw command arguments after the command name */
   args?: string;
   /** The full normalized command body */
@@ -1255,6 +1291,13 @@ export type OpenClawPluginCliContext = {
 
 export type OpenClawPluginCliRegistrar = (ctx: OpenClawPluginCliContext) => void | Promise<void>;
 
+export type OpenClawPluginCliCommandDescriptor = {
+  name: string;
+  description: string;
+  hasSubcommands: boolean;
+};
+
+/** Context passed to long-lived plugin services. */
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
   workspaceDir?: string;
@@ -1262,16 +1305,40 @@ export type OpenClawPluginServiceContext = {
   logger: PluginLogger;
 };
 
+/** Background service registered by a plugin during `register(api)`. */
 export type OpenClawPluginService = {
   id: string;
   start: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
 };
 
+/** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
+export type CliBackendPlugin = {
+  /** Provider id used in model refs, for example `claude-cli/opus`. */
+  id: string;
+  /** Default backend config before user overrides from `agents.defaults.cliBackends`. */
+  config: CliBackendConfig;
+  /**
+   * Whether OpenClaw should inject bundle MCP config for this backend.
+   *
+   * Keep this opt-in. Only backends that explicitly consume an MCP config file
+   * should enable it.
+   */
+  bundleMcp?: boolean;
+  /**
+   * Optional config normalizer applied after user overrides merge.
+   *
+   * Use this for backend-specific compatibility rewrites when old config
+   * shapes need to stay working.
+   */
+  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
+};
+
 export type OpenClawPluginChannelRegistration = {
   plugin: ChannelPlugin;
 };
 
+/** Module-level plugin definition loaded from a native plugin entry file. */
 export type OpenClawPluginDefinition = {
   id?: string;
   name?: string;
@@ -1289,6 +1356,7 @@ export type OpenClawPluginModule =
 
 export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime";
 
+/** Main registration API injected into native plugin entry files. */
 export type OpenClawPluginApi = {
   id: string;
   name: string;
@@ -1319,9 +1387,21 @@ export type OpenClawPluginApi = {
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
   /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
-  registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
-  registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
+  registerGatewayMethod: (
+    method: string,
+    handler: GatewayRequestHandler,
+    opts?: { scope?: OperatorScope },
+  ) => void;
+  registerCli: (
+    registrar: OpenClawPluginCliRegistrar,
+    opts?: {
+      commands?: string[];
+      descriptors?: OpenClawPluginCliCommandDescriptor[];
+    },
+  ) => void;
   registerService: (service: OpenClawPluginService) => void;
+  /** Register a text-only CLI backend used by the local CLI runner. */
+  registerCliBackend: (backend: CliBackendPlugin) => void;
   /** Register a native model/provider plugin (text inference capability). */
   registerProvider: (provider: ProviderPlugin) => void;
   /** Register a speech synthesis provider (speech capability). */
@@ -1346,6 +1426,18 @@ export type OpenClawPluginApi = {
   registerContextEngine: (
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
+  ) => void;
+  /** Register the system prompt section builder for this memory plugin (exclusive slot). */
+  registerMemoryPromptSection: (
+    builder: import("./memory-state.js").MemoryPromptSectionBuilder,
+  ) => void;
+  /** Register the pre-compaction flush plan resolver for this memory plugin (exclusive slot). */
+  registerMemoryFlushPlan: (resolver: import("./memory-state.js").MemoryFlushPlanResolver) => void;
+  /** Register the active memory runtime adapter for this memory plugin (exclusive slot). */
+  registerMemoryRuntime: (runtime: import("./memory-state.js").MemoryPluginRuntime) => void;
+  /** Register a memory embedding provider adapter. Multiple adapters may coexist. */
+  registerMemoryEmbeddingProvider: (
+    adapter: import("./memory-embedding-providers.js").MemoryEmbeddingProviderAdapter,
   ) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
@@ -1398,7 +1490,8 @@ export type PluginHookName =
   | "subagent_spawned"
   | "subagent_ended"
   | "gateway_start"
-  | "gateway_stop";
+  | "gateway_stop"
+  | "before_dispatch";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -1426,6 +1519,7 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_ended",
   "gateway_start",
   "gateway_stop",
+  "before_dispatch",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -1648,6 +1742,39 @@ export type PluginHookInboundClaimEvent = {
 
 export type PluginHookInboundClaimResult = {
   handled: boolean;
+};
+
+// before_dispatch hook
+export type PluginHookBeforeDispatchEvent = {
+  /** Message text content. */
+  content: string;
+  /** Body text prepared for agent (after command parsing). */
+  body?: string;
+  /** Channel identifier (e.g. "telegram", "discord"). */
+  channel?: string;
+  /** Session key for this message. */
+  sessionKey?: string;
+  /** Sender identifier. */
+  senderId?: string;
+  /** Whether this is a group message. */
+  isGroup?: boolean;
+  /** Message timestamp. */
+  timestamp?: number;
+};
+
+export type PluginHookBeforeDispatchContext = {
+  channelId?: string;
+  accountId?: string;
+  conversationId?: string;
+  sessionKey?: string;
+  senderId?: string;
+};
+
+export type PluginHookBeforeDispatchResult = {
+  /** Whether the plugin handled this message (skips default dispatch). */
+  handled: boolean;
+  /** Plugin-defined reply text (used when handled=true). */
+  text?: string;
 };
 
 // message_received hook
@@ -1910,6 +2037,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookInboundClaimEvent,
     ctx: PluginHookInboundClaimContext,
   ) => Promise<PluginHookInboundClaimResult | void> | PluginHookInboundClaimResult | void;
+  before_dispatch: (
+    event: PluginHookBeforeDispatchEvent,
+    ctx: PluginHookBeforeDispatchContext,
+  ) => Promise<PluginHookBeforeDispatchResult | void> | PluginHookBeforeDispatchResult | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,

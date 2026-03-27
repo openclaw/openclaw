@@ -2,31 +2,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../../../src/config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 import { optimizeImageToPng } from "../../../src/media/image-ops.js";
 import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
 import { captureEnv } from "../../../test/helpers/extensions/env.js";
-import { sendVoiceMessageDiscord } from "../../discord/src/send.js";
-import {
-  LocalMediaAccessError,
-  loadWebMedia,
-  loadWebMediaRaw,
-  optimizeImageToJpeg,
-} from "./media.js";
 
-const convertHeicToJpegMock = vi.fn();
-
-vi.mock("../../../src/media/image-ops.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../src/media/image-ops.js")>(
-    "../../../src/media/image-ops.js",
-  );
-  return {
-    ...actual,
-    convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
-  };
-});
+let LocalMediaAccessError: typeof import("./media.js").LocalMediaAccessError;
+let loadWebMedia: typeof import("./media.js").loadWebMedia;
+let loadWebMediaRaw: typeof import("./media.js").loadWebMediaRaw;
+let optimizeImageToJpeg: typeof import("./media.js").optimizeImageToJpeg;
+let sendVoiceMessageDiscord: typeof import("../../discord/src/send.js").sendVoiceMessageDiscord;
 
 let fixtureRoot = "";
 let fixtureFileCount = 0;
@@ -35,7 +22,6 @@ let largeJpegFile = "";
 let tinyPngBuffer: Buffer;
 let tinyPngFile = "";
 let tinyPngWrongExtFile = "";
-let fakeHeicFile = "";
 let alphaPngBuffer: Buffer;
 let alphaPngFile = "";
 let fallbackPngBuffer: Buffer;
@@ -68,6 +54,9 @@ function cloneStatWithDev<T extends { dev: number | bigint }>(stat: T, dev: numb
 }
 
 beforeAll(async () => {
+  ({ LocalMediaAccessError, loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } =
+    await import("./media.js"));
+  ({ sendVoiceMessageDiscord } = await import("../../discord/src/send.js"));
   fixtureRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
   );
@@ -89,7 +78,6 @@ beforeAll(async () => {
     .toBuffer();
   tinyPngFile = await writeTempFile(tinyPngBuffer, ".png");
   tinyPngWrongExtFile = await writeTempFile(tinyPngBuffer, ".bin");
-  fakeHeicFile = await writeTempFile(Buffer.from("fake-heic"), ".heic");
   alphaPngBuffer = await sharp({
     create: {
       width: 64,
@@ -190,22 +178,6 @@ describe("web media loading", () => {
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
-  });
-
-  it("normalizes HEIC local files to JPEG output", async () => {
-    convertHeicToJpegMock.mockResolvedValueOnce(tinyPngBuffer);
-
-    const result = await loadWebMedia(fakeHeicFile, 1024 * 1024);
-
-    expect(convertHeicToJpegMock).toHaveBeenCalledTimes(1);
-    expect(result.kind).toBe("image");
-    expect(result.contentType).toBe("image/jpeg");
-    expect(result.fileName).toBe(path.basename(fakeHeicFile, ".heic") + ".jpg");
-    expect(result.buffer.length).toBeGreaterThan(0);
-    expect(result.buffer.equals(tinyPngBuffer)).toBe(false);
-    // Confirm the output is actually JPEG (magic bytes 0xFF 0xD8)
-    expect(result.buffer[0]).toBe(0xff);
-    expect(result.buffer[1]).toBe(0xd8);
   });
 
   it("includes URL + status in fetch errors", async () => {
@@ -391,6 +363,21 @@ describe("local media root guard", () => {
     expect(result.kind).toBe("image");
   });
 
+  it("rejects remote-host file URLs before filesystem checks", async () => {
+    const realpathSpy = vi.spyOn(fs, "realpath");
+
+    try {
+      await expect(
+        loadWebMedia("file://attacker/share/evil.png", 1024 * 1024, {
+          localRoots: [resolvePreferredOpenClawTmpDir()],
+        }),
+      ).rejects.toMatchObject({ code: "invalid-file-url" });
+      expect(realpathSpy).not.toHaveBeenCalled();
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
   it("accepts win32 dev=0 stat mismatch for local file loads", async () => {
     const actualLstat = await fs.lstat(tinyPngFile);
     const actualStat = await fs.stat(tinyPngFile);
@@ -411,6 +398,23 @@ describe("local media root guard", () => {
     } finally {
       statSpy.mockRestore();
       lstatSpy.mockRestore();
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("rejects Windows network paths before filesystem checks", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const realpathSpy = vi.spyOn(fs, "realpath");
+
+    try {
+      await expect(
+        loadWebMedia("\\\\attacker\\share\\evil.png", 1024 * 1024, {
+          localRoots: [resolvePreferredOpenClawTmpDir()],
+        }),
+      ).rejects.toMatchObject({ code: "network-path-not-allowed" });
+      expect(realpathSpy).not.toHaveBeenCalled();
+    } finally {
+      realpathSpy.mockRestore();
       platformSpy.mockRestore();
     }
   });

@@ -4,13 +4,15 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../pi-embedded-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
+  consumeCompactionSafeguardCancelReason,
   getCompactionSafeguardRuntime,
+  setCompactionSafeguardCancelReason,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
@@ -50,6 +52,14 @@ const {
   MAX_FILE_OPS_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } = __testing;
+
+beforeEach(() => {
+  __testing.setSummarizeInStagesForTest(mockSummarizeInStages);
+});
+
+afterEach(() => {
+  __testing.setSummarizeInStagesForTest();
+});
 
 function stubSessionManager(): ExtensionContext["sessionManager"] {
   const stub: ExtensionContext["sessionManager"] = {
@@ -529,6 +539,24 @@ describe("compaction-safeguard runtime registry", () => {
       contextWindowTokens: 200000,
       model,
     });
+  });
+
+  it("consumes cancel reasons without dropping other runtime fields", () => {
+    const sm = {};
+    setCompactionSafeguardRuntime(sm, { maxHistoryShare: 0.6 });
+    setCompactionSafeguardCancelReason(sm, "no API key");
+
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBe("no API key");
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBeNull();
+    expect(getCompactionSafeguardRuntime(sm)).toEqual({ maxHistoryShare: 0.6 });
+  });
+
+  it("clears cancel reason when set to undefined", () => {
+    const sm = {};
+    setCompactionSafeguardCancelReason(sm, "temporary reason");
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBe("temporary reason");
+    setCompactionSafeguardCancelReason(sm, undefined);
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBeNull();
   });
 
   it("wires oversized safeguard runtime values when config validation is bypassed", () => {
@@ -1795,21 +1823,100 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).toHaveBeenCalled();
   });
+
+  it("treats tool results as real conversation only when linked to a meaningful user ask", async () => {
+    expect(
+      __testing.isRealConversationMessage(
+        {
+          role: "toolResult",
+          toolCallId: "t1",
+          toolName: "exec",
+          content: [{ type: "text", text: "done" }],
+        } as AgentMessage,
+        [
+          { role: "user", content: "<b>HEARTBEAT_OK</b>" } as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "t1",
+            toolName: "exec",
+            content: [{ type: "text", text: "done" }],
+          } as AgentMessage,
+        ],
+        1,
+      ),
+    ).toBe(false);
+
+    expect(
+      __testing.isRealConversationMessage(
+        {
+          role: "toolResult",
+          toolCallId: "t2",
+          toolName: "exec",
+          content: [{ type: "text", text: "done" }],
+        } as AgentMessage,
+        [
+          { role: "user", content: "please inspect the repo" } as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "t2",
+            toolName: "exec",
+            content: [{ type: "text", text: "done" }],
+          } as AgentMessage,
+        ],
+        1,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat assistant-only tool calls as meaningful conversation", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      } as AgentMessage),
+    ).toBe(false);
+  });
+
+  it("does not treat reasoning-only assistant blocks as meaningful conversation", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "checking" }],
+      } as AgentMessage),
+    ).toBe(false);
+
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "reasoning", summary: [] }],
+      } as unknown as AgentMessage),
+    ).toBe(false);
+  });
+
+  it("treats markup-wrapped heartbeat tokens as boilerplate", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent(
+        castAgentMessage({
+          role: "assistant",
+          content: "<b>HEARTBEAT_OK</b>",
+        }),
+      ),
+    ).toBe(false);
+  });
 });
 
 async function expectWorkspaceSummaryEmptyForAgentsAlias(
   createAlias: (outsidePath: string, agentsPath: string) => void,
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-  const prevCwd = process.cwd();
+  const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
   try {
     const outside = path.join(root, "outside-secret.txt");
     fs.writeFileSync(outside, "secret");
     createAlias(outside, path.join(root, "AGENTS.md"));
-    process.chdir(root);
     await expect(readWorkspaceContextForSummary()).resolves.toBe("");
   } finally {
-    process.chdir(prevCwd);
+    cwdSpy.mockRestore();
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

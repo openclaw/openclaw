@@ -1,7 +1,9 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
+import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveRuntimeServiceVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { normalizePluginsConfig } from "./config-state.js";
@@ -15,6 +17,7 @@ export type PluginStatusReport = PluginRegistry & {
 };
 
 export type PluginCapabilityKind =
+  | "cli-backend"
   | "text-inference"
   | "speech"
   | "media-understanding"
@@ -114,6 +117,20 @@ function buildCompatibilityNoticesForInspect(
 
 const log = createSubsystemLogger("plugins");
 
+function resolveReportedPluginVersion(
+  plugin: PluginRegistry["plugins"][number],
+  env: NodeJS.ProcessEnv | undefined,
+): string | undefined {
+  if (plugin.origin !== "bundled") {
+    return plugin.version;
+  }
+  return (
+    normalizeOpenClawVersionBase(resolveRuntimeServiceVersion(env)) ??
+    normalizeOpenClawVersionBase(plugin.version) ??
+    plugin.version
+  );
+}
+
 export function buildPluginStatusReport(params?: {
   config?: ReturnType<typeof loadConfig>;
   workspaceDir?: string;
@@ -136,11 +153,16 @@ export function buildPluginStatusReport(params?: {
   return {
     workspaceDir,
     ...registry,
+    plugins: registry.plugins.map((plugin) => ({
+      ...plugin,
+      version: resolveReportedPluginVersion(plugin, params?.env),
+    })),
   };
 }
 
 function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
   return [
+    { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
     { kind: "text-inference" as const, ids: plugin.providerIds },
     { kind: "speech" as const, ids: plugin.speechProviderIds },
     { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },

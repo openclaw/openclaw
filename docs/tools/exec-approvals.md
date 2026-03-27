@@ -107,6 +107,25 @@ If a prompt is required but no UI is reachable, fallback decides:
 - **allowlist**: allow only if allowlist matches.
 - **full**: allow.
 
+### Inline interpreter eval hardening (`tools.exec.strictInlineEval`)
+
+When `tools.exec.strictInlineEval=true`, OpenClaw treats inline code-eval forms as approval-only even if the interpreter binary itself is allowlisted.
+
+Examples:
+
+- `python -c`
+- `node -e`, `node --eval`, `node -p`
+- `ruby -e`
+- `perl -e`, `perl -E`
+- `php -r`
+- `lua -e`
+- `osascript -e`
+
+This is defense-in-depth for interpreter loaders that do not map cleanly to one stable file operand. In strict mode:
+
+- these commands still need explicit approval;
+- `allow-always` does not persist new allowlist entries for them automatically.
+
 ## Allowlist (per agent)
 
 Allowlists are **per agent**. If multiple agents exist, switch which agent you’re
@@ -141,7 +160,7 @@ Important trust notes:
 
 ## Safe bins (stdin-only)
 
-`tools.exec.safeBins` defines a small list of **stdin-only** binaries (for example `jq`)
+`tools.exec.safeBins` defines a small list of **stdin-only** binaries (for example `cut`)
 that can run in allowlist mode **without** explicit allowlist entries. Safe bins reject
 positional file args and path-like tokens, so they can only operate on the incoming stream.
 Treat this as a narrow fast-path for stream filters, not a general trust list.
@@ -194,8 +213,15 @@ For allow-always decisions in allowlist mode, known dispatch wrappers
 paths. Shell multiplexers (`busybox`, `toybox`) are also unwrapped for shell applets (`sh`, `ash`,
 etc.) so inner executables are persisted instead of multiplexer binaries. If a wrapper or
 multiplexer cannot be safely unwrapped, no allowlist entry is persisted automatically.
+If you allowlist interpreters like `python3` or `node`, prefer `tools.exec.strictInlineEval=true` so inline eval still requires an explicit approval.
 
-Default safe bins: `jq`, `cut`, `uniq`, `head`, `tail`, `tr`, `wc`.
+Default safe bins:
+
+[//]: # "SAFE_BIN_DEFAULTS:START"
+
+`cut`, `uniq`, `head`, `tail`, `tr`, `wc`
+
+[//]: # "SAFE_BIN_DEFAULTS:END"
 
 `grep` and `sort` are not in the default list. If you opt in, keep explicit allowlist entries for
 their non-stdin workflows.
@@ -209,7 +235,7 @@ rejected so file operands cannot be smuggled as ambiguous positionals.
 | Goal             | Auto-allow narrow stdin filters                        | Explicitly trust specific executables                        |
 | Match type       | Executable name + safe-bin argv policy                 | Resolved executable path glob pattern                        |
 | Argument scope   | Restricted by safe-bin profile and literal-token rules | Path match only; arguments are otherwise your responsibility |
-| Typical examples | `jq`, `head`, `tail`, `wc`                             | `python3`, `node`, `ffmpeg`, custom CLIs                     |
+| Typical examples | `head`, `tail`, `tr`, `wc`                             | `jq`, `python3`, `node`, `ffmpeg`, custom CLIs               |
 | Best use         | Low-risk text transforms in pipelines                  | Any tool with broader behavior or side effects               |
 
 Configuration location:
@@ -240,6 +266,10 @@ Custom profile example:
   },
 }
 ```
+
+If you explicitly opt `jq` into `safeBins`, OpenClaw still rejects the `env` builtin in safe-bin
+mode so `jq -n env` cannot dump the host process environment without an explicit allowlist path
+or approval prompt.
 
 ## Control UI editing
 

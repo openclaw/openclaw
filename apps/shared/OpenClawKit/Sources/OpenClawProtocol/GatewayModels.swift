@@ -2764,6 +2764,110 @@ public struct ToolsCatalogResult: Codable, Sendable {
     }
 }
 
+public struct ToolsEffectiveParams: Codable, Sendable {
+    public let agentid: String?
+    public let sessionkey: String
+
+    public init(
+        agentid: String?,
+        sessionkey: String)
+    {
+        self.agentid = agentid
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct ToolsEffectiveEntry: Codable, Sendable {
+    public let id: String
+    public let label: String
+    public let description: String
+    public let rawdescription: String
+    public let source: AnyCodable
+    public let pluginid: String?
+    public let channelid: String?
+
+    public init(
+        id: String,
+        label: String,
+        description: String,
+        rawdescription: String,
+        source: AnyCodable,
+        pluginid: String?,
+        channelid: String?)
+    {
+        self.id = id
+        self.label = label
+        self.description = description
+        self.rawdescription = rawdescription
+        self.source = source
+        self.pluginid = pluginid
+        self.channelid = channelid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case description
+        case rawdescription = "rawDescription"
+        case source
+        case pluginid = "pluginId"
+        case channelid = "channelId"
+    }
+}
+
+public struct ToolsEffectiveGroup: Codable, Sendable {
+    public let id: AnyCodable
+    public let label: String
+    public let source: AnyCodable
+    public let tools: [ToolsEffectiveEntry]
+
+    public init(
+        id: AnyCodable,
+        label: String,
+        source: AnyCodable,
+        tools: [ToolsEffectiveEntry])
+    {
+        self.id = id
+        self.label = label
+        self.source = source
+        self.tools = tools
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case source
+        case tools
+    }
+}
+
+public struct ToolsEffectiveResult: Codable, Sendable {
+    public let agentid: String
+    public let profile: String
+    public let groups: [ToolsEffectiveGroup]
+
+    public init(
+        agentid: String,
+        profile: String,
+        groups: [ToolsEffectiveGroup])
+    {
+        self.agentid = agentid
+        self.profile = profile
+        self.groups = groups
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case profile
+        case groups
+    }
+}
+
 public struct SkillsBinsParams: Codable, Sendable {}
 
 public struct SkillsBinsResult: Codable, Sendable {
@@ -2777,54 +2881,6 @@ public struct SkillsBinsResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case bins
-    }
-}
-
-public struct SkillsInstallParams: Codable, Sendable {
-    public let name: String
-    public let installid: String
-    public let timeoutms: Int?
-
-    public init(
-        name: String,
-        installid: String,
-        timeoutms: Int?)
-    {
-        self.name = name
-        self.installid = installid
-        self.timeoutms = timeoutms
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case name
-        case installid = "installId"
-        case timeoutms = "timeoutMs"
-    }
-}
-
-public struct SkillsUpdateParams: Codable, Sendable {
-    public let skillkey: String
-    public let enabled: Bool?
-    public let apikey: String?
-    public let env: [String: AnyCodable]?
-
-    public init(
-        skillkey: String,
-        enabled: Bool?,
-        apikey: String?,
-        env: [String: AnyCodable]?)
-    {
-        self.skillkey = skillkey
-        self.enabled = enabled
-        self.apikey = apikey
-        self.env = env
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case skillkey = "skillKey"
-        case enabled
-        case apikey = "apiKey"
-        case env
     }
 }
 

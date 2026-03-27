@@ -1,10 +1,19 @@
 import fs from "node:fs";
+import path from "node:path";
+import { BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveRuntimeServiceVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
-import { loadPluginManifest, type PluginManifest } from "./manifest.js";
+import {
+  loadPluginManifest,
+  type PluginManifest,
+  type PluginManifestChannelConfig,
+  type PluginManifestContracts,
+} from "./manifest.js";
+import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import type {
@@ -42,6 +51,7 @@ export type PluginManifestRecord = {
   kind?: PluginKind;
   channels: string[];
   providers: string[];
+  cliBackends: string[];
   providerAuthEnvVars?: Record<string, string[]>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   skills: string[];
@@ -57,6 +67,14 @@ export type PluginManifestRecord = {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
+  contracts?: PluginManifestContracts;
+  channelConfigs?: Record<string, PluginManifestChannelConfig>;
+  channelCatalogMeta?: {
+    id: string;
+    label?: string;
+    blurb?: string;
+    preferOver?: string[];
+  };
 };
 
 export type PluginManifestRegistry = {
@@ -109,9 +127,10 @@ function buildCacheKey(params: {
   const workspaceKey = roots.workspace ?? "";
   const configExtensionsRoot = roots.global;
   const bundledRoot = roots.stock ?? "";
+  const runtimeServiceVersion = resolveRuntimeServiceVersion(params.env);
   // The manifest registry only depends on where plugins are discovered from (workspace + load paths).
   // It does not depend on allow/deny/entries enable-state, so exclude those for higher cache hit rates.
-  return `${workspaceKey}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(loadPaths)}`;
+  return `${workspaceKey}::${configExtensionsRoot}::${bundledRoot}::${runtimeServiceVersion}::${JSON.stringify(loadPaths)}`;
 }
 
 function safeStatMtimeMs(filePath: string): number | null {
@@ -138,7 +157,8 @@ function isCompatiblePluginIdHint(idHint: string | undefined, manifestId: string
   return (
     normalizedHint === `${manifestId}-provider` ||
     normalizedHint === `${manifestId}-plugin` ||
-    normalizedHint === `${manifestId}-sandbox`
+    normalizedHint === `${manifestId}-sandbox` ||
+    normalizedHint === `${manifestId}-media-understanding`
   );
 }
 
@@ -149,6 +169,7 @@ function buildRecord(params: {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
 }): PluginManifestRecord {
+  const bundledChannelConfigs = resolveBundledChannelConfigs(params.manifest.id);
   return {
     id: params.manifest.id,
     name: normalizeManifestLabel(params.manifest.name) ?? params.candidate.packageName,
@@ -161,6 +182,7 @@ function buildRecord(params: {
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
+    cliBackends: params.manifest.cliBackends ?? [],
     providerAuthEnvVars: params.manifest.providerAuthEnvVars,
     providerAuthChoices: params.manifest.providerAuthChoices,
     skills: params.manifest.skills ?? [],
@@ -178,7 +200,59 @@ function buildRecord(params: {
     schemaCacheKey: params.schemaCacheKey,
     configSchema: params.configSchema,
     configUiHints: params.manifest.uiHints,
+    contracts: params.manifest.contracts,
+    channelConfigs: mergeChannelConfigs(bundledChannelConfigs, params.manifest.channelConfigs),
+    ...(params.candidate.packageManifest?.channel?.id
+      ? {
+          channelCatalogMeta: {
+            id: params.candidate.packageManifest.channel.id,
+            ...(typeof params.candidate.packageManifest.channel.label === "string"
+              ? { label: params.candidate.packageManifest.channel.label }
+              : {}),
+            ...(typeof params.candidate.packageManifest.channel.blurb === "string"
+              ? { blurb: params.candidate.packageManifest.channel.blurb }
+              : {}),
+            ...(params.candidate.packageManifest.channel.preferOver
+              ? { preferOver: params.candidate.packageManifest.channel.preferOver }
+              : {}),
+          },
+        }
+      : {}),
   };
+}
+
+function resolveBundledChannelConfigs(
+  pluginId: string,
+): Record<string, PluginManifestChannelConfig> | undefined {
+  const entries = BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.pluginId === pluginId);
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(
+    entries.map((entry) => [
+      entry.channelId,
+      {
+        schema: entry.schema,
+        ...(entry.uiHints ? { uiHints: entry.uiHints } : {}),
+        ...(entry.label ? { label: entry.label } : {}),
+        ...(entry.description ? { description: entry.description } : {}),
+      },
+    ]),
+  );
+}
+
+function mergeChannelConfigs(
+  generated: Record<string, PluginManifestChannelConfig> | undefined,
+  manifest: Record<string, PluginManifestChannelConfig> | undefined,
+): Record<string, PluginManifestChannelConfig> | undefined {
+  if (!generated) {
+    return manifest;
+  }
+  if (!manifest) {
+    return generated;
+  }
+  return { ...generated, ...manifest };
 }
 
 function buildBundleRecord(params: {
@@ -205,6 +279,7 @@ function buildBundleRecord(params: {
     bundleCapabilities: params.manifest.capabilities,
     channels: [],
     providers: [],
+    cliBackends: [],
     skills: params.manifest.skills ?? [],
     settingsFiles: params.manifest.settingsFiles ?? [],
     hooks: params.manifest.hooks ?? [],
@@ -216,6 +291,7 @@ function buildBundleRecord(params: {
     schemaCacheKey: undefined,
     configSchema: undefined,
     configUiHints: undefined,
+    channelConfigs: undefined,
   };
 }
 
@@ -312,18 +388,28 @@ export function loadPluginManifestRegistry(
   const records: PluginManifestRecord[] = [];
   const seenIds = new Map<string, SeenIdEntry>();
   const realpathCache = new Map<string, string>();
+  const currentHostVersion = resolveRuntimeServiceVersion(env);
 
   for (const candidate of candidates) {
     const rejectHardlinks = candidate.origin !== "bundled";
     const isBundleRecord = (candidate.format ?? "openclaw") === "bundle";
-    const manifestRes =
-      isBundleRecord && candidate.bundleFormat
-        ? loadBundleManifest({
-            rootDir: candidate.rootDir,
-            bundleFormat: candidate.bundleFormat,
-            rejectHardlinks,
-          })
-        : loadPluginManifest(candidate.rootDir, rejectHardlinks);
+    const manifestRes:
+      | ReturnType<typeof loadPluginManifest>
+      | ReturnType<typeof loadBundleManifest>
+      | { ok: true; manifest: PluginManifest; manifestPath: string } =
+      candidate.origin === "bundled" && candidate.bundledManifest && candidate.bundledManifestPath
+        ? {
+            ok: true,
+            manifest: candidate.bundledManifest,
+            manifestPath: candidate.bundledManifestPath,
+          }
+        : isBundleRecord && candidate.bundleFormat
+          ? loadBundleManifest({
+              rootDir: candidate.rootDir,
+              bundleFormat: candidate.bundleFormat,
+              rejectHardlinks,
+            })
+          : loadPluginManifest(candidate.rootDir, rejectHardlinks);
     if (!manifestRes.ok) {
       diagnostics.push({
         level: "error",
@@ -333,6 +419,28 @@ export function loadPluginManifestRegistry(
       continue;
     }
     const manifest = manifestRes.manifest;
+    const minHostVersionCheck = checkMinHostVersion({
+      currentVersion: currentHostVersion,
+      minHostVersion: candidate.packageManifest?.install?.minHostVersion,
+    });
+    if (!minHostVersionCheck.ok) {
+      const packageManifestSource = path.join(
+        candidate.packageDir ?? candidate.rootDir,
+        "package.json",
+      );
+      diagnostics.push({
+        level: minHostVersionCheck.kind === "unknown_host_version" ? "warn" : "error",
+        pluginId: manifest.id,
+        source: packageManifestSource,
+        message:
+          minHostVersionCheck.kind === "invalid"
+            ? `plugin manifest invalid | ${minHostVersionCheck.error}`
+            : minHostVersionCheck.kind === "unknown_host_version"
+              ? `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
+              : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
+      });
+      continue;
+    }
 
     if (!isCompatiblePluginIdHint(candidate.idHint, manifest.id)) {
       diagnostics.push({

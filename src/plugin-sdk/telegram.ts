@@ -1,1 +1,2 @@
-export * from "../plugins/runtime/runtime-telegram-contract.js";
+export * from "./telegram-core.js";
+export * from "./telegram-runtime.js";

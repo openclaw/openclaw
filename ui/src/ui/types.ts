@@ -391,6 +391,7 @@ export type GatewaySessionRow = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  totalTokensFresh?: boolean;
   status?: SessionRunStatus;
   startedAt?: number;
   endedAt?: number;
@@ -644,7 +645,7 @@ export type ModelCatalogEntry = {
   provider: string;
   contextWindow?: number;
   reasoning?: boolean;
-  input?: Array<"text" | "image">;
+  input?: Array<"text" | "image" | "document">;
 };
 
 export type ToolCatalogProfile =
@@ -655,6 +656,12 @@ export type ToolCatalogGroup =
   import("../../../src/gateway/protocol/schema/types.js").ToolCatalogGroup;
 export type ToolsCatalogResult =
   import("../../../src/gateway/protocol/schema/types.js").ToolsCatalogResult;
+export type ToolsEffectiveEntry =
+  import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveEntry;
+export type ToolsEffectiveGroup =
+  import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveGroup;
+export type ToolsEffectiveResult =
+  import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveResult;
 
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 

@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "../../../runtime-api.js";
-import { setMatrixRuntime } from "../../runtime.js";
-import type { MatrixClient } from "../sdk.js";
-import type { MatrixRawEvent } from "./types.js";
-import { EventType } from "./types.js";
+import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
+import {
+  createMatrixHandlerTestHarness,
+  createMatrixRoomMessageEvent,
+} from "./handler.test-helpers.js";
 
 const { downloadMatrixMediaMock } = vi.hoisted(() => ({
   downloadMatrixMediaMock: vi.fn(),
@@ -13,158 +13,70 @@ vi.mock("./media.js", () => ({
   downloadMatrixMedia: (...args: unknown[]) => downloadMatrixMediaMock(...args),
 }));
 
-import { createMatrixRoomMessageHandler } from "./handler.js";
-
-function createHandlerHarness() {
-  const recordInboundSession = vi.fn().mockResolvedValue(undefined);
+function createMediaFailureHarness() {
   const logger = {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
-  } as unknown as RuntimeLogger;
+  };
   const runtime = {
     error: vi.fn(),
-  } as unknown as RuntimeEnv;
-  const core = {
-    channel: {
-      pairing: {
-        readAllowFromStore: vi.fn().mockResolvedValue([]),
-        upsertPairingRequest: vi.fn().mockResolvedValue(undefined),
-        buildPairingReply: vi.fn().mockReturnValue("pairing"),
-      },
-      routing: {
-        resolveAgentRoute: vi.fn().mockReturnValue({
-          agentId: "main",
-          accountId: undefined,
-          sessionKey: "agent:main:matrix:channel:!room:example.org",
-          mainSessionKey: "agent:main:main",
-        }),
-      },
-      mentions: {
-        buildMentionRegexes: vi.fn().mockReturnValue([]),
-      },
-      session: {
-        resolveStorePath: vi.fn().mockReturnValue("/tmp/openclaw-test-session.json"),
-        readSessionUpdatedAt: vi.fn().mockReturnValue(123),
-        recordInboundSession,
-      },
-      reply: {
-        resolveEnvelopeFormatOptions: vi.fn().mockReturnValue({}),
-        formatAgentEnvelope: vi.fn().mockImplementation((params: { body: string }) => params.body),
-        finalizeInboundContext: vi.fn().mockImplementation((ctx: Record<string, unknown>) => ctx),
-        createReplyDispatcherWithTyping: vi.fn().mockReturnValue({
-          dispatcher: {},
-          replyOptions: {},
-          markDispatchIdle: vi.fn(),
-          markRunComplete: vi.fn(),
-        }),
-        resolveHumanDelayConfig: vi.fn().mockReturnValue(undefined),
-        dispatchReplyFromConfig: vi
-          .fn()
-          .mockResolvedValue({ queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } }),
-        withReplyDispatcher: vi.fn().mockImplementation(async ({ run, onSettled }) => {
-          try {
-            return await run();
-          } finally {
-            await onSettled?.();
-          }
-        }),
-      },
-      commands: {
-        shouldHandleTextCommands: vi.fn().mockReturnValue(true),
-      },
-      text: {
-        hasControlCommand: vi.fn().mockReturnValue(false),
-        resolveMarkdownTableMode: vi.fn().mockReturnValue("code"),
-      },
-      reactions: {
-        shouldAckReaction: vi.fn().mockReturnValue(false),
-      },
-    },
-    system: {
-      enqueueSystemEvent: vi.fn(),
-    },
-  } as unknown as PluginRuntime;
-
-  const client = {
-    getUserId: vi.fn().mockResolvedValue("@bot:matrix.example.org"),
-  } as unknown as MatrixClient;
-
-  const handler = createMatrixRoomMessageHandler({
-    client,
-    core,
-    cfg: {},
-    accountId: "ops",
-    runtime,
-    logger,
-    logVerboseMessage: vi.fn(),
-    allowFrom: [],
-    groupAllowFrom: [],
-    roomsConfig: undefined,
-    mentionRegexes: [],
-    groupPolicy: "open",
-    replyToMode: "first",
-    threadReplies: "inbound",
-    dmEnabled: true,
-    dmPolicy: "open",
-    textLimit: 4000,
-    mediaMaxBytes: 5 * 1024 * 1024,
-    startupMs: Date.now() - 120_000,
-    startupGraceMs: 60_000,
-    directTracker: {
-      isDirectMessage: vi.fn().mockResolvedValue(true),
-    },
-    dropPreStartupMessages: true,
-    getRoomInfo: vi.fn().mockResolvedValue({
+  };
+  const harness = createMatrixHandlerTestHarness({
+    logger: logger as never,
+    runtime: runtime as never,
+    shouldHandleTextCommands: () => true,
+    resolveMarkdownTableMode: () => "code",
+    resolveAgentRoute: () => ({
+      agentId: "main",
+      accountId: "ops",
+      sessionKey: "agent:main:matrix:channel:!room:example.org",
+      mainSessionKey: "agent:main:main",
+      channel: "matrix",
+      matchedBy: "binding.account",
+    }),
+    resolveStorePath: () => "/tmp/openclaw-test-session.json",
+    readSessionUpdatedAt: () => 123,
+    getRoomInfo: async () => ({
       name: "Media Room",
       canonicalAlias: "#media:example.org",
       altAliases: [],
     }),
-    getMemberDisplayName: vi.fn().mockResolvedValue("Gum"),
-    needsRoomAliasesForConfig: false,
+    getMemberDisplayName: async () => "Gum",
+    startupMs: Date.now() - 120_000,
+    startupGraceMs: 60_000,
+    textLimit: 4000,
+    mediaMaxBytes: 5 * 1024 * 1024,
+    replyToMode: "first",
   });
 
-  return { handler, recordInboundSession, logger, runtime };
+  return {
+    ...harness,
+    logger,
+    runtime,
+  };
 }
 
-function createImageEvent(content: Record<string, unknown>): MatrixRawEvent {
-  return {
-    type: EventType.RoomMessage,
-    event_id: "$event1",
+function createImageEvent(content: Record<string, unknown>) {
+  return createMatrixRoomMessageEvent({
+    eventId: "$event1",
     sender: "@gum:matrix.example.org",
-    origin_server_ts: Date.now(),
     content: {
       ...content,
       "m.mentions": { user_ids: ["@bot:matrix.example.org"] },
-    },
-  } as MatrixRawEvent;
+    } as never,
+  });
 }
 
 describe("createMatrixRoomMessageHandler media failures", () => {
   beforeEach(() => {
     downloadMatrixMediaMock.mockReset();
-    setMatrixRuntime({
-      channel: {
-        mentions: {
-          matchesMentionPatterns: (text: string, patterns: RegExp[]) =>
-            patterns.some((pattern) => pattern.test(text)),
-        },
-        media: {
-          saveMediaBuffer: vi.fn(),
-        },
-      },
-      config: {
-        loadConfig: () => ({}),
-      },
-      state: {
-        resolveStateDir: () => "/tmp",
-      },
-    } as unknown as PluginRuntime);
+    installMatrixMonitorTestRuntime();
   });
 
   it("replaces bare image filenames with an unavailable marker when unencrypted download fails", async () => {
     downloadMatrixMediaMock.mockRejectedValue(new Error("download failed"));
-    const { handler, recordInboundSession, logger, runtime } = createHandlerHarness();
+    const { handler, recordInboundSession, logger, runtime } = createMediaFailureHarness();
 
     await handler(
       "!room:example.org",
@@ -197,7 +109,7 @@ describe("createMatrixRoomMessageHandler media failures", () => {
 
   it("replaces bare image filenames with an unavailable marker when encrypted download fails", async () => {
     downloadMatrixMediaMock.mockRejectedValue(new Error("decrypt failed"));
-    const { handler, recordInboundSession } = createHandlerHarness();
+    const { handler, recordInboundSession } = createMediaFailureHarness();
 
     await handler(
       "!room:example.org",
@@ -227,7 +139,7 @@ describe("createMatrixRoomMessageHandler media failures", () => {
 
   it("preserves a real caption while marking the attachment unavailable", async () => {
     downloadMatrixMediaMock.mockRejectedValue(new Error("download failed"));
-    const { handler, recordInboundSession } = createHandlerHarness();
+    const { handler, recordInboundSession } = createMediaFailureHarness();
 
     await handler(
       "!room:example.org",
