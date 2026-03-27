@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { slackPlugin } from "../../../extensions/slack/src/channel.js";
+import { slackPlugin } from "../../../extensions/slack/index.js";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
