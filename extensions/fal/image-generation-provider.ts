@@ -2,6 +2,12 @@ import type {
   GeneratedImageAsset,
   ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
+import {
+  buildHostnameAllowlistPolicyFromSuffixAllowlist,
+  fetchWithSsrFGuard,
+  type SsrFPolicy,
+  ssrfPolicyFromAllowPrivateNetwork,
+} from "openclaw/plugin-sdk/infra-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth";
 
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
@@ -28,6 +34,81 @@ type FalImageGenerationResponse = {
 };
 
 type FalImageSize = string | { width: number; height: number };
+type FalNetworkPolicy = {
+  apiPolicy?: SsrFPolicy;
+  trustedDownloadHostSuffix?: string;
+  trustedDownloadPolicy?: SsrFPolicy;
+};
+
+let falFetchGuard = fetchWithSsrFGuard;
+
+export function _setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+  falFetchGuard = impl ?? fetchWithSsrFGuard;
+}
+
+function mergeSsrFPolicies(...policies: Array<SsrFPolicy | undefined>): SsrFPolicy | undefined {
+  const merged: SsrFPolicy = {};
+  for (const policy of policies) {
+    if (!policy) {
+      continue;
+    }
+    if (policy.allowPrivateNetwork) {
+      merged.allowPrivateNetwork = true;
+    }
+    if (policy.dangerouslyAllowPrivateNetwork) {
+      merged.dangerouslyAllowPrivateNetwork = true;
+    }
+    if (policy.allowRfc2544BenchmarkRange) {
+      merged.allowRfc2544BenchmarkRange = true;
+    }
+    if (policy.allowedHostnames?.length) {
+      merged.allowedHostnames = Array.from(
+        new Set([...(merged.allowedHostnames ?? []), ...policy.allowedHostnames]),
+      );
+    }
+    if (policy.hostnameAllowlist?.length) {
+      merged.hostnameAllowlist = Array.from(
+        new Set([...(merged.hostnameAllowlist ?? []), ...policy.hostnameAllowlist]),
+      );
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): boolean {
+  const normalizedHost = hostname.trim().toLowerCase();
+  const normalizedSuffix = trustedSuffix.trim().toLowerCase();
+  return normalizedHost === normalizedSuffix || normalizedHost.endsWith(`.${normalizedSuffix}`);
+}
+
+function resolveFalNetworkPolicy(
+  cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
+): FalNetworkPolicy {
+  const baseUrl = resolveFalBaseUrl(cfg);
+  const explicitBaseUrl = cfg?.models?.providers?.fal?.baseUrl?.trim();
+  let parsedBaseUrl: URL;
+  try {
+    parsedBaseUrl = new URL(baseUrl);
+  } catch {
+    return {};
+  }
+
+  const hostSuffix = parsedBaseUrl.hostname.trim().toLowerCase();
+  if (!hostSuffix) {
+    return {};
+  }
+
+  const hostPolicy = buildHostnameAllowlistPolicyFromSuffixAllowlist([hostSuffix]);
+  const privateNetworkPolicy = explicitBaseUrl
+    ? ssrfPolicyFromAllowPrivateNetwork(true)
+    : undefined;
+  const trustedHostPolicy = mergeSsrFPolicies(hostPolicy, privateNetworkPolicy);
+  return {
+    apiPolicy: trustedHostPolicy,
+    trustedDownloadHostSuffix: explicitBaseUrl ? hostSuffix : undefined,
+    trustedDownloadPolicy: explicitBaseUrl ? trustedHostPolicy : undefined,
+  };
+}
 
 function resolveFalBaseUrl(cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"]): string {
   const direct = cfg?.models?.providers?.fal?.baseUrl?.trim();
@@ -174,17 +255,41 @@ function fileExtensionForMimeType(mimeType: string | undefined): string {
   return slashIndex >= 0 ? normalized.slice(slashIndex + 1) || "png" : "png";
 }
 
-async function fetchImageBuffer(url: string): Promise<{ buffer: Buffer; mimeType: string }> {
-  const response = await fetch(url);
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(
-      `fal image download failed (${response.status}): ${text || response.statusText}`,
-    );
+async function fetchImageBuffer(
+  url: string,
+  networkPolicy?: FalNetworkPolicy,
+): Promise<{ buffer: Buffer; mimeType: string }> {
+  const downloadPolicy = (() => {
+    const trustedSuffix = networkPolicy?.trustedDownloadHostSuffix;
+    const trustedPolicy = networkPolicy?.trustedDownloadPolicy;
+    if (!trustedSuffix || !trustedPolicy) {
+      return undefined;
+    }
+    try {
+      const parsed = new URL(url);
+      return matchesTrustedHostSuffix(parsed.hostname, trustedSuffix) ? trustedPolicy : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
+  const { response, release } = await falFetchGuard({
+    url,
+    policy: downloadPolicy,
+    auditContext: "fal-image-download",
+  });
+  try {
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `fal image download failed (${response.status}): ${text || response.statusText}`,
+      );
+    }
+    const mimeType = response.headers.get("content-type")?.trim() || "image/png";
+    const arrayBuffer = await response.arrayBuffer();
+    return { buffer: Buffer.from(arrayBuffer), mimeType };
+  } finally {
+    await release();
   }
-  const mimeType = response.headers.get("content-type")?.trim() || "image/png";
-  const arrayBuffer = await response.arrayBuffer();
-  return { buffer: Buffer.from(arrayBuffer), mimeType };
 }
 
 export function buildFalImageGenerationProvider(): ImageGenerationProvider {
@@ -236,6 +341,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         hasInputImages,
       });
       const model = ensureFalModelPath(req.model, hasInputImages);
+      const networkPolicy = resolveFalNetworkPolicy(req.cfg);
       const requestBody: Record<string, unknown> = {
         prompt: req.prompt,
         num_images: req.count ?? 1,
@@ -253,50 +359,58 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         requestBody.image_url = toDataUri(input.buffer, input.mimeType);
       }
 
-      const response = await fetch(`${resolveFalBaseUrl(req.cfg)}/${model}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Key ${auth.apiKey}`,
-          "Content-Type": "application/json",
+      const { response, release } = await falFetchGuard({
+        url: `${resolveFalBaseUrl(req.cfg)}/${model}`,
+        init: {
+          method: "POST",
+          headers: {
+            Authorization: `Key ${auth.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
         },
-        body: JSON.stringify(requestBody),
+        policy: networkPolicy.apiPolicy,
+        auditContext: "fal-image-generate",
       });
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => "");
-        throw new Error(
-          `fal image generation failed (${response.status}): ${text || response.statusText}`,
-        );
-      }
-
-      const payload = (await response.json()) as FalImageGenerationResponse;
-      const images: GeneratedImageAsset[] = [];
-      let imageIndex = 0;
-      for (const entry of payload.images ?? []) {
-        const url = entry.url?.trim();
-        if (!url) {
-          continue;
+      try {
+        if (!response.ok) {
+          const text = await response.text().catch(() => "");
+          throw new Error(
+            `fal image generation failed (${response.status}): ${text || response.statusText}`,
+          );
         }
-        const downloaded = await fetchImageBuffer(url);
-        imageIndex += 1;
-        images.push({
-          buffer: downloaded.buffer,
-          mimeType: downloaded.mimeType,
-          fileName: `image-${imageIndex}.${fileExtensionForMimeType(
-            downloaded.mimeType || entry.content_type,
-          )}`,
-        });
-      }
 
-      if (images.length === 0) {
-        throw new Error("fal image generation response missing image data");
-      }
+        const payload = (await response.json()) as FalImageGenerationResponse;
+        const images: GeneratedImageAsset[] = [];
+        let imageIndex = 0;
+        for (const entry of payload.images ?? []) {
+          const url = entry.url?.trim();
+          if (!url) {
+            continue;
+          }
+          const downloaded = await fetchImageBuffer(url, networkPolicy);
+          imageIndex += 1;
+          images.push({
+            buffer: downloaded.buffer,
+            mimeType: downloaded.mimeType,
+            fileName: `image-${imageIndex}.${fileExtensionForMimeType(
+              downloaded.mimeType || entry.content_type,
+            )}`,
+          });
+        }
 
-      return {
-        images,
-        model,
-        metadata: payload.prompt ? { prompt: payload.prompt } : undefined,
-      };
+        if (images.length === 0) {
+          throw new Error("fal image generation response missing image data");
+        }
+
+        return {
+          images,
+          model,
+          metadata: payload.prompt ? { prompt: payload.prompt } : undefined,
+        };
+      } finally {
+        await release();
+      }
     },
   };
 }
