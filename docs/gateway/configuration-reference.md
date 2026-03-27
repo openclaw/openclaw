@@ -3115,8 +3115,8 @@ Split config into multiple files:
 - Array of files: deep-merged in order (later overrides earlier).
 - Sibling keys: merged after includes (override included values).
 - Nested includes: up to 10 levels deep.
-- Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of `openclaw.json`). Absolute/`../` forms are allowed only when they still resolve inside that boundary.
-- Errors: clear messages for missing files, parse errors, and circular includes.
+- Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of `openclaw.json`). Absolute/`../` forms are allowed only when they still resolve inside that boundary. Paths must not contain null bytes and must be strictly shorter than 4096 characters (before and after resolution; aligns with Linux PATH_MAX including NUL); invalid paths produce a clear error.
+- Errors: clear messages for missing files, parse errors, circular includes, and invalid path format (null bytes or excessive length).
 
 ---
 

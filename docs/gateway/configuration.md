@@ -427,8 +427,8 @@ When validation fails:
     - **Array of files**: deep-merged in order (later wins)
     - **Sibling keys**: merged after includes (override included values)
     - **Nested includes**: supported up to 10 levels deep
-    - **Relative paths**: resolved relative to the including file
-    - **Error handling**: clear errors for missing files, parse errors, and circular includes
+    - **Relative paths**: resolved relative to the including file; paths must not contain null bytes and must be strictly shorter than 4096 characters
+    - **Error handling**: clear errors for missing files, parse errors, circular includes, and invalid path format
 
   </Accordion>
 </AccordionGroup>
