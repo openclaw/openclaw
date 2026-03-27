@@ -31,7 +31,6 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
-<<<<<<< HEAD
 vi.mock("../../../extensions/openai/openai-codex-provider.runtime.js", () => ({
   refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
 }));

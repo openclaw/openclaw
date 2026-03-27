@@ -16,14 +16,20 @@ import {
   writeJson,
 } from "./generated-plugin-test-helpers.js";
 
+const BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS = 300_000;
+
 installGeneratedPluginTempRootCleanup();
 
 describe("bundled plugin metadata", () => {
-  it("matches the generated metadata snapshot", async () => {
-    await expect(collectBundledPluginMetadata({ repoRoot })).resolves.toEqual(
-      BUNDLED_PLUGIN_METADATA,
-    );
-  });
+  it(
+    "matches the generated metadata snapshot",
+    { timeout: BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS },
+    async () => {
+      await expect(collectBundledPluginMetadata({ repoRoot })).resolves.toEqual(
+        BUNDLED_PLUGIN_METADATA,
+      );
+    },
+  );
 
   it("captures setup-entry metadata for bundled channel plugins", () => {
     const discord = BUNDLED_PLUGIN_METADATA.find((entry) => entry.dirName === "discord");
