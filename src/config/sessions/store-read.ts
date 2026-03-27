@@ -1,9 +1,11 @@
 import fs from "node:fs";
+import { z } from "zod";
+import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
 import type { SessionEntry } from "./types.js";
 
-function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry | undefined> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
+const SessionStoreSchema = z.record(z.string(), z.unknown()) as z.ZodType<
+  Record<string, SessionEntry | undefined>
+>;
 
 export function readSessionStoreReadOnly(
   storePath: string,
@@ -13,8 +15,7 @@ export function readSessionStoreReadOnly(
     if (!raw.trim()) {
       return {};
     }
-    const parsed = JSON.parse(raw);
-    return isSessionStoreRecord(parsed) ? parsed : {};
+    return safeParseJsonWithSchema(SessionStoreSchema, raw) ?? {};
   } catch {
     return {};
   }
