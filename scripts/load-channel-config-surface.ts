@@ -77,6 +77,13 @@ function shouldRetryViaIsolatedCopy(error: unknown): boolean {
   return code === "ERR_MODULE_NOT_FOUND" && message.includes(`${path.sep}node_modules${path.sep}`);
 }
 
+function isMissingExecutableError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  return "code" in error && error.code === "ENOENT";
+}
+
 const SOURCE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 
 function resolveImportCandidates(basePath: string): string[] {
@@ -232,6 +239,12 @@ export async function loadChannelConfigSurfaceModule(
         OPENCLAW_CONFIG_SURFACE_MODULE: path.resolve(candidatePath),
       },
     });
+    if (result.error) {
+      if (isMissingExecutableError(result.error)) {
+        return null;
+      }
+      throw result.error;
+    }
     if (result.status !== 0) {
       throw new Error(result.stderr || result.stdout || `bun loader failed for ${candidatePath}`);
     }
