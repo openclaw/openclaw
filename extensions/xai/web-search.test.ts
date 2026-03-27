@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { NON_ENV_SECRETREF_MARKER } from "../../src/agents/model-auth-markers.js";
 import { capturePluginRegistration } from "../../src/plugins/captured-registration.js";
 import { withEnv } from "../../test/helpers/extensions/env.js";
 import xaiPlugin from "./index.js";
@@ -158,6 +159,34 @@ describe("xai web search config resolution", () => {
       }),
     ).toEqual({
       apiKey: "xai-legacy-fallback",
+      source: "tools.web.search.grok.apiKey",
+      mode: "api-key",
+    });
+  });
+
+  it("returns a managed marker for SecretRef-backed plugin auth fallback", () => {
+    const captured = capturePluginRegistration(xaiPlugin);
+    const provider = captured.providers[0];
+    expect(
+      provider?.resolveSyntheticAuth?.({
+        config: {
+          plugins: {
+            entries: {
+              xai: {
+                config: {
+                  webSearch: {
+                    apiKey: { source: "file", provider: "vault", id: "/xai/api-key" },
+                  },
+                },
+              },
+            },
+          },
+        },
+        provider: "xai",
+        providerConfig: undefined,
+      }),
+    ).toEqual({
+      apiKey: NON_ENV_SECRETREF_MARKER,
       source: "plugins.entries.xai.config.webSearch.apiKey",
       mode: "api-key",
     });
