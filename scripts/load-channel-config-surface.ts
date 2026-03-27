@@ -264,14 +264,25 @@ export async function loadChannelConfigSurfaceModule(
     });
     return jiti(resolvedPath) as Record<string, unknown>;
   };
+  const loadFromPath = (
+    candidatePath: string,
+  ): { schema: Record<string, unknown>; uiHints?: Record<string, unknown> } | null => {
+    try {
+      const bunLoaded = loadViaBun(candidatePath);
+      if (bunLoaded && isBuiltChannelConfigSchema(bunLoaded)) {
+        return bunLoaded;
+      }
+    } catch {
+      // Bun is the fastest happy path, but some plugin config modules only load
+      // correctly through the source-aware Jiti alias setup.
+    }
+
+    const imported = loadViaJiti(candidatePath);
+    return resolveConfigSchemaExport(imported);
+  };
 
   try {
-    const bunLoaded = loadViaBun(modulePath);
-    if (bunLoaded && isBuiltChannelConfigSchema(bunLoaded)) {
-      return bunLoaded;
-    }
-    const imported = loadViaJiti(modulePath);
-    return resolveConfigSchemaExport(imported);
+    return loadFromPath(modulePath);
   } catch (error) {
     if (!shouldRetryViaIsolatedCopy(error)) {
       throw error;
@@ -279,12 +290,7 @@ export async function loadChannelConfigSurfaceModule(
 
     const isolatedCopy = copyModuleImportGraphWithoutNodeModules({ modulePath, repoRoot });
     try {
-      const bunLoaded = loadViaBun(isolatedCopy.copiedModulePath);
-      if (bunLoaded && isBuiltChannelConfigSchema(bunLoaded)) {
-        return bunLoaded;
-      }
-      const imported = loadViaJiti(isolatedCopy.copiedModulePath);
-      return resolveConfigSchemaExport(imported);
+      return loadFromPath(isolatedCopy.copiedModulePath);
     } finally {
       isolatedCopy.cleanup();
     }
