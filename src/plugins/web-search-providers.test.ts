@@ -45,7 +45,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
     const providers = resolveBundledPluginWebSearchProviders({
       config: {
         plugins: {
-          allow: ["openrouter"],
+          allow: ["demo-other-plugin"],
         },
       },
       bundledAllowlistCompat: true,
@@ -68,7 +68,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
     const providers = resolveBundledPluginWebSearchProviders({
       config: {
         plugins: {
-          allow: ["openrouter"],
+          allow: ["demo-other-plugin"],
         },
       },
     });
