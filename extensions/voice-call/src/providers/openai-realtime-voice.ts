@@ -136,6 +136,14 @@ export interface RealtimeVoiceConfig {
    */
   onClearAudio: () => void;
 
+  /**
+   * Called after each audio delta so the caller can emit a Twilio mark frame.
+   * The mark name is what the bridge tracks in its queue; Twilio echoes it back
+   * as a mark acknowledgment event which the caller should forward to
+   * bridge.acknowledgeMark() so barge-in truncation timestamps stay accurate.
+   */
+  onMark?: (markName: string) => void;
+
   // ---- Event callbacks (optional) ----
   /**
    * Transcript event (partial or final). Role is "user" or "assistant".
@@ -717,9 +725,9 @@ export class OpenAIRealtimeVoiceBridge {
    * The mark name is used to coordinate barge-in truncation.
    */
   private sendMark(): void {
-    // We don't send marks directly — the caller does via onAudio
-    // We track mark queue internally for truncation calculations
-    this.markQueue.push(`audio-${Date.now()}`);
+    const markName = `audio-${Date.now()}`;
+    this.markQueue.push(markName);
+    this.config.onMark?.(markName);
   }
 
   /**
@@ -808,6 +816,7 @@ export class OpenAIRealtimeVoiceProvider {
       azureApiVersion: callConfig.azureApiVersion ?? this.defaults.azureApiVersion,
       onAudio: callConfig.onAudio,
       onClearAudio: callConfig.onClearAudio,
+      onMark: callConfig.onMark,
       onTranscript: callConfig.onTranscript,
       onToolCall: callConfig.onToolCall,
       onReady: callConfig.onReady,

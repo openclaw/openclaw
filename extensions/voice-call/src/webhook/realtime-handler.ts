@@ -280,6 +280,11 @@ export class RealtimeCallHandler {
         ws.send(JSON.stringify({ event: "clear", streamSid }));
       },
 
+      onMark: (markName) => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ event: "mark", streamSid, mark: { name: markName } }));
+      },
+
       onTranscript: (role, text, isFinal) => {
         if (isFinal) {
           if (role === "user") {
