@@ -29,9 +29,9 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
 
 ## Sponsors
 
-| OpenAI                                                            | Vercel                                                            | Blacksmith                                                                   | Convex                                                                |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| [![OpenAI](docs/assets/sponsors/openai.svg)](https://openai.com/) | [![Vercel](docs/assets/sponsors/vercel.svg)](https://vercel.com/) | [![Blacksmith](docs/assets/sponsors/blacksmith.svg)](https://blacksmith.sh/) | [![Convex](docs/assets/sponsors/convex.svg)](https://www.convex.dev/) |
+| OpenAI | Vercel | Blacksmith | Convex |
+| --- | --- | --- | --- |
+| [![OpenAI](docs/assets/sponsors/openai.svg#gh-dark-mode-only)](https://openai.com/)[![OpenAI](docs/assets/sponsors/openai-dark.svg#gh-light-mode-only)](https://openai.com/) | [![Vercel](docs/assets/sponsors/vercel.svg#gh-dark-mode-only)](https://vercel.com/)[![Vercel](docs/assets/sponsors/vercel-dark.svg#gh-light-mode-only)](https://vercel.com/) | [![Blacksmith](docs/assets/sponsors/blacksmith.svg#gh-dark-mode-only)](https://blacksmith.sh/)[![Blacksmith](docs/assets/sponsors/blacksmith-dark.svg#gh-light-mode-only)](https://blacksmith.sh/) | [![Convex](docs/assets/sponsors/convex.svg#gh-dark-mode-only)](https://www.convex.dev/)[![Convex](docs/assets/sponsors/convex-dark.svg#gh-light-mode-only)](https://www.convex.dev/) |
 
 **Subscriptions (OAuth):**
 
