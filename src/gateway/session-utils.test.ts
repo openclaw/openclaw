@@ -1364,6 +1364,86 @@ describe("listSessionsFromStore search", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  test("keeps a running subagent model when transcript fallback still reflects an older run", () => {
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-session-utils-subagent-stale-model-"),
+    );
+    const storePath = path.join(tmpDir, "sessions.json");
+    const now = Date.now();
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        list: [{ id: "main", default: true }],
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    fs.writeFileSync(
+      path.join(tmpDir, "sess-child-stale.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-child-stale" }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: 2_000,
+              output: 500,
+              cacheRead: 1_200,
+              cost: { total: 0.007725 },
+            },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    addSubagentRunForTests({
+      runId: "run-child-live-new-model",
+      childSessionKey: "agent:main:subagent:child-live-stale-transcript",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "child task",
+      cleanup: "keep",
+      createdAt: now - 5_000,
+      startedAt: now - 4_000,
+      model: "openai/gpt-5.4",
+    });
+
+    try {
+      const result = listSessionsFromStore({
+        cfg,
+        storePath,
+        store: {
+          "agent:main:subagent:child-live-stale-transcript": {
+            sessionId: "sess-child-stale",
+            updatedAt: now,
+            spawnedBy: "agent:main:main",
+            totalTokens: 0,
+            totalTokensFresh: false,
+          } as SessionEntry,
+        },
+        opts: {},
+      });
+
+      expect(result.sessions[0]).toMatchObject({
+        key: "agent:main:subagent:child-live-stale-transcript",
+        status: "running",
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        totalTokens: 3_200,
+        totalTokensFresh: true,
+      });
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("listSessionsFromStore subagent metadata", () => {

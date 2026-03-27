@@ -1192,8 +1192,14 @@ export function buildGatewaySessionRow(params: {
           fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
         })
       : null;
-  const modelProvider = transcriptUsage?.modelProvider ?? resolvedModel.provider;
-  const model = transcriptUsage?.model ?? resolvedModel.model ?? DEFAULT_MODEL;
+  const preferLiveSubagentModelIdentity =
+    Boolean(subagentRun?.model?.trim()) && subagentStatus === "running";
+  const modelProvider = preferLiveSubagentModelIdentity
+    ? resolvedModel.provider
+    : (transcriptUsage?.modelProvider ?? resolvedModel.provider);
+  const model = preferLiveSubagentModelIdentity
+    ? (resolvedModel.model ?? DEFAULT_MODEL)
+    : (transcriptUsage?.model ?? resolvedModel.model ?? DEFAULT_MODEL);
   const totalTokens =
     resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
     resolvePositiveNumber(transcriptUsage?.totalTokens);
