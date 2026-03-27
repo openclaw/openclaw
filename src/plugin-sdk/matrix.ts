@@ -169,6 +169,11 @@ export {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "../../extensions/matrix/helper-api.js";
+export {
+  createMatrixThreadBindingManager,
+  resetMatrixThreadBindingsForTests,
+} from "../../extensions/matrix/src/matrix/thread-bindings.js";
+export { setMatrixRuntime } from "../../extensions/matrix/src/runtime.js";
 
 const matrixSetup = createOptionalChannelSetupSurface({
   channel: "matrix",
