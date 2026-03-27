@@ -182,6 +182,13 @@ describe("createSessionVisibilityGuard", () => {
 
     expect(guard.check(childKey)).toEqual({ allowed: true });
 
+    expect(guard.check("agent:other:main")).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.",
+    });
+
     sessionsResolutionTesting.setDepsForTest();
   });
 
