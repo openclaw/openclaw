@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../../test/helpers/extensions/plugin-api.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { registerFeishuChatTools } from "./chat.js";
 
@@ -22,8 +23,8 @@ describe("registerFeishuChatTools", () => {
       name: "Feishu Test",
       source: "local",
       config: params.config,
-      runtime: { log: vi.fn(), error: vi.fn() },
-      logger: { debug: vi.fn(), info: vi.fn() },
+      runtime: createPluginRuntimeMock(),
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       registerTool: params.registerTool,
     });
   }
