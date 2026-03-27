@@ -89,6 +89,7 @@ describe("resolvePluginWebSearchProviders", () => {
             manifestPath: "/tmp/brave/openclaw.plugin.json",
             channels: [],
             providers: [],
+            cliBackends: [],
             skills: [],
             hooks: [],
             configUiHints: { "webSearch.apiKey": { label: "key" } },
@@ -101,15 +102,14 @@ describe("resolvePluginWebSearchProviders", () => {
             manifestPath: "/tmp/noise/openclaw.plugin.json",
             channels: [],
             providers: [],
+            cliBackends: [],
             skills: [],
             hooks: [],
             configUiHints: { unrelated: { label: "nope" } },
           },
         ],
         diagnostics: [],
-      } as ManifestRegistryModule["loadPluginManifestRegistry"] extends (...args: any[]) => infer R
-        ? R
-        : never);
+      } as unknown as ReturnType<ManifestRegistryModule["loadPluginManifestRegistry"]>);
     const loaderModule = await import("./loader.js");
     loadOpenClawPluginsMock = vi
       .spyOn(loaderModule, "loadOpenClawPlugins")
