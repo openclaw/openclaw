@@ -4,6 +4,7 @@ type MockRegistryToolEntry = {
   pluginId: string;
   optional: boolean;
   source: string;
+  names?: string[];
   factory: (ctx: unknown) => unknown;
 };
 
@@ -193,5 +194,101 @@ describe("resolvePluginTools optional tools", () => {
         },
       }),
     );
+  });
+});
+
+describe("execute context injection", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    const mod = await import("./tools.js");
+    resolvePluginTools = mod.resolvePluginTools;
+    const runtimeMod = await import("./runtime.js");
+    resetPluginRuntimeStateForTest = runtimeMod.resetPluginRuntimeStateForTest;
+    resetPluginRuntimeStateForTest();
+  });
+
+  it("injects agentId into execute context as third argument", async () => {
+    let receivedContext: unknown = undefined;
+    const tool = {
+      name: "ctx_test",
+      description: "test tool",
+      parameters: { type: "object" as const, properties: {} },
+      async execute(_callId: string, _params: unknown, context?: unknown) {
+        receivedContext = context;
+        return { content: [{ type: "text" as const, text: "ok" }] };
+      },
+    };
+
+    setRegistry([
+      {
+        pluginId: "ctx-test-plugin",
+        optional: false,
+        source: "test",
+        factory: () => tool,
+        names: ["ctx_test"],
+      },
+    ]);
+
+    const ctx = {
+      ...createContext(),
+      agentId: "test_agent_42",
+      sessionKey: "agent:test_agent_42:main",
+    };
+
+    const tools = resolvePluginTools({
+      context: ctx as never,
+    });
+
+    expect(tools).toHaveLength(1);
+    await tools[0].execute("call-1", {});
+
+    expect(receivedContext).toEqual(
+      expect.objectContaining({
+        agentId: "test_agent_42",
+        sessionKey: "agent:test_agent_42:main",
+      }),
+    );
+  });
+
+  it("does not leak config into execute context", async () => {
+    let receivedContext: Record<string, unknown> = {};
+    const tool = {
+      name: "leak_test",
+      description: "test tool",
+      parameters: { type: "object" as const, properties: {} },
+      async execute(_callId: string, _params: unknown, context?: unknown) {
+        receivedContext = (context ?? {}) as Record<string, unknown>;
+        return { content: [{ type: "text" as const, text: "ok" }] };
+      },
+    };
+
+    setRegistry([
+      {
+        pluginId: "leak-test-plugin",
+        optional: false,
+        source: "test",
+        factory: () => tool,
+        names: ["leak_test"],
+      },
+    ]);
+
+    const ctx = {
+      ...createContext(),
+      agentId: "agent_1",
+    };
+
+    const tools = resolvePluginTools({
+      context: ctx as never,
+    });
+
+    await tools[0].execute("call-1", {});
+
+    // config must NOT be present in execute context
+    expect(receivedContext).not.toHaveProperty("config");
+    expect(receivedContext).not.toHaveProperty("workspaceDir");
+    expect(receivedContext).not.toHaveProperty("agentDir");
+    // but agentId must be present
+    expect(receivedContext).toHaveProperty("agentId", "agent_1");
   });
 });
