@@ -520,6 +520,39 @@ describe("listReactionsMSTeams", () => {
     expect(result.reactions).toEqual([]);
   });
 
+  it("counts reactions from users without an ID (deleted/guest/anonymous)", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      id: "msg-1",
+      body: { content: "Hello" },
+      reactions: [
+        { reactionType: "like", user: { id: "u1", displayName: "Alice" } },
+        { reactionType: "like", user: { displayName: "Deleted User" } },
+        { reactionType: "like", user: undefined },
+        { reactionType: "like" },
+        { reactionType: "heart", user: { id: "u2", displayName: "Bob" } },
+      ],
+    });
+
+    const result = await listReactionsMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      messageId: "msg-1",
+    });
+
+    expect(result.reactions).toEqual([
+      {
+        reactionType: "like",
+        count: 4,
+        users: [{ id: "u1", displayName: "Alice" }],
+      },
+      {
+        reactionType: "heart",
+        count: 1,
+        users: [{ id: "u2", displayName: "Bob" }],
+      },
+    ]);
+  });
+
   it("fetches from channel path for channel targets", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       id: "msg-2",

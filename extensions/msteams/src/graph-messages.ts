@@ -341,24 +341,31 @@ export async function listReactionsMSTeams(
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}`;
   const msg = await fetchGraphJson<GraphMessageWithReactions>({ token, path });
 
-  const grouped = new Map<string, Array<{ id: string; displayName?: string }>>();
+  const grouped = new Map<
+    string,
+    { count: number; users: Array<{ id: string; displayName?: string }> }
+  >();
   for (const reaction of msg.reactions ?? []) {
     const type = reaction.reactionType ?? "unknown";
     if (!grouped.has(type)) {
-      grouped.set(type, []);
+      grouped.set(type, { count: 0, users: [] });
     }
+    const group = grouped.get(type)!;
+    // Count every reaction regardless of whether the user ID is present
+    // (deleted accounts, guests, or anonymous users may lack a user ID)
+    group.count++;
     if (reaction.user?.id) {
-      grouped.get(type)!.push({
+      group.users.push({
         id: reaction.user.id,
         displayName: reaction.user.displayName,
       });
     }
   }
 
-  const reactions: ReactionSummary[] = Array.from(grouped.entries()).map(([type, users]) => ({
+  const reactions: ReactionSummary[] = Array.from(grouped.entries()).map(([type, group]) => ({
     reactionType: type,
-    count: users.length,
-    users,
+    count: group.count,
+    users: group.users,
   }));
 
   return { reactions };
