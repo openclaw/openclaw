@@ -9,7 +9,8 @@ import * as noteModule from "../terminal/note.js";
 const resolveAgentWorkspaceDirMock = vi.fn();
 const resolveDefaultAgentIdMock = vi.fn();
 const buildWorkspaceSkillStatusMock = vi.fn();
-const loadOpenClawPluginsMock = vi.fn();
+const buildPluginStatusReportMock = vi.fn();
+const buildPluginCompatibilityWarningsMock = vi.fn();
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
@@ -20,19 +21,26 @@ vi.mock("../agents/skills-status.js", () => ({
   buildWorkspaceSkillStatus: (...args: unknown[]) => buildWorkspaceSkillStatusMock(...args),
 }));
 
-vi.mock("../plugins/loader.js", () => ({
-  loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
+vi.mock("../plugins/status.js", () => ({
+  buildPluginStatusReport: (...args: unknown[]) => buildPluginStatusReportMock(...args),
+  buildPluginCompatibilityWarnings: (...args: unknown[]) =>
+    buildPluginCompatibilityWarningsMock(...args),
 }));
 
 async function runNoteWorkspaceStatusForTest(
   loadResult: ReturnType<typeof createPluginLoadResult>,
+  compatibilityWarnings: string[] = [],
 ) {
   resolveDefaultAgentIdMock.mockReturnValue("default");
   resolveAgentWorkspaceDirMock.mockReturnValue("/workspace");
   buildWorkspaceSkillStatusMock.mockReturnValue({
     skills: [],
   });
-  loadOpenClawPluginsMock.mockReturnValue(loadResult);
+  buildPluginStatusReportMock.mockReturnValue({
+    workspaceDir: "/workspace",
+    ...loadResult,
+  });
+  buildPluginCompatibilityWarningsMock.mockReturnValue(compatibilityWarnings);
 
   const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
   const { noteWorkspaceStatus } = await import("./doctor-workspace-status.js");
@@ -57,16 +65,14 @@ describe("noteWorkspaceStatus", () => {
       }),
     );
     try {
+      expect(buildPluginStatusReportMock).toHaveBeenCalledWith({
+        config: {},
+        workspaceDir: "/workspace",
+      });
       const compatibilityCalls = noteSpy.mock.calls.filter(
         ([, title]) => title === "Plugin compatibility",
       );
-      expect(compatibilityCalls).toHaveLength(1);
-      expect(String(compatibilityCalls[0]?.[0])).toContain(
-        "legacy-plugin still uses legacy before_agent_start",
-      );
-      expect(String(compatibilityCalls[0]?.[0])).toContain(
-        "legacy-plugin is hook-only. This remains a supported compatibility path",
-      );
+      expect(compatibilityCalls).toHaveLength(0);
     } finally {
       noteSpy.mockRestore();
     }
@@ -112,6 +118,41 @@ describe("noteWorkspaceStatus", () => {
     );
     try {
       expect(noteSpy.mock.calls.some(([, title]) => title === "Plugin compatibility")).toBe(false);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("passes the shared status report into compatibility warnings", async () => {
+    const loadResult = createPluginLoadResult({
+      plugins: [
+        createPluginRecord({
+          id: "legacy-plugin",
+          name: "Legacy Plugin",
+          hookCount: 1,
+        }),
+      ],
+      typedHooks: [createTypedHook({ pluginId: "legacy-plugin", hookName: "before_agent_start" })],
+    });
+    const noteSpy = await runNoteWorkspaceStatusForTest(loadResult, [
+      "legacy-plugin still uses legacy before_agent_start",
+    ]);
+    try {
+      expect(buildPluginCompatibilityWarningsMock).toHaveBeenCalledWith({
+        config: {},
+        workspaceDir: "/workspace",
+        report: {
+          workspaceDir: "/workspace",
+          ...loadResult,
+        },
+      });
+      const compatibilityCalls = noteSpy.mock.calls.filter(
+        ([, title]) => title === "Plugin compatibility",
+      );
+      expect(compatibilityCalls).toHaveLength(1);
+      expect(String(compatibilityCalls[0]?.[0])).toContain(
+        "legacy-plugin still uses legacy before_agent_start",
+      );
     } finally {
       noteSpy.mockRestore();
     }
