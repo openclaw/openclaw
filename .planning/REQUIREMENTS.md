@@ -45,9 +45,9 @@ Requirements for Phase 1 release. Each maps to roadmap phases.
 
 ### Agent Integration
 
-- [ ] **AGNT-01**: Agents detect PROJECT.md via cwd-based pickup in post-compaction context (extending existing AGENTS.md flow)
-- [ ] **AGNT-02**: Agents receive PROJECT.md context via `agent:bootstrap` channel hook for project-scoped channels
-- [ ] **AGNT-03**: Context injection is additive -- existing AGENTS.md loading is not modified
+- [x] **AGNT-01**: Agents detect PROJECT.md via cwd-based pickup in post-compaction context (extending existing AGENTS.md flow)
+- [x] **AGNT-02**: Agents receive PROJECT.md context via `agent:bootstrap` channel hook for project-scoped channels
+- [x] **AGNT-03**: Context injection is additive -- existing AGENTS.md loading is not modified
 - [x] **AGNT-04**: Capability tags in agent IDENTITY.md (e.g., `capabilities: [code, git, testing, ui]`) are used for task matching
 - [ ] **AGNT-05**: On heartbeat, agents scan queue.md of assigned projects for Available tasks matching their capabilities
 - [ ] **AGNT-06**: Agents claim tasks by updating queue.md (moving from Available to Claimed) with lock protection
@@ -156,9 +156,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONC-03     | Phase 4  | Complete |
 | CONC-04     | Phase 4  | Complete |
 | CONC-05     | Phase 4  | Complete |
-| AGNT-01     | Phase 5  | Pending  |
-| AGNT-02     | Phase 5  | Pending  |
-| AGNT-03     | Phase 5  | Pending  |
+| AGNT-01     | Phase 5  | Complete |
+| AGNT-02     | Phase 5  | Complete |
+| AGNT-03     | Phase 5  | Complete |
 | AGNT-04     | Phase 5  | Complete |
 | AGNT-05     | Phase 6  | Pending  |
 | AGNT-06     | Phase 6  | Pending  |
