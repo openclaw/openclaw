@@ -1,14 +1,32 @@
-import { resolveGlobalMap } from "openclaw/plugin-sdk/text-runtime";
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 
 const DEFAULT_COMPONENT_TTL_MS = 30 * 60 * 1000;
 const DISCORD_COMPONENT_ENTRIES_KEY = Symbol.for("openclaw.discord.componentEntries");
 const DISCORD_MODAL_ENTRIES_KEY = Symbol.for("openclaw.discord.modalEntries");
 
-const componentEntries = resolveGlobalMap<string, DiscordComponentEntry>(
-  DISCORD_COMPONENT_ENTRIES_KEY,
-);
-const modalEntries = resolveGlobalMap<string, DiscordModalEntry>(DISCORD_MODAL_ENTRIES_KEY);
+let componentEntries: Map<string, DiscordComponentEntry> | undefined;
+let modalEntries: Map<string, DiscordModalEntry> | undefined;
+
+function resolveGlobalMap<T>(key: symbol): Map<string, T> {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalStore[key];
+  if (existing instanceof Map) {
+    return existing as Map<string, T>;
+  }
+  const created = new Map<string, T>();
+  globalStore[key] = created;
+  return created;
+}
+
+function getComponentEntries(): Map<string, DiscordComponentEntry> {
+  componentEntries ??= resolveGlobalMap<DiscordComponentEntry>(DISCORD_COMPONENT_ENTRIES_KEY);
+  return componentEntries;
+}
+
+function getModalEntries(): Map<string, DiscordModalEntry> {
+  modalEntries ??= resolveGlobalMap<DiscordModalEntry>(DISCORD_MODAL_ENTRIES_KEY);
+  return modalEntries;
+}
 
 function isExpired(entry: { expiresAt?: number }, now: number) {
   return typeof entry.expiresAt === "number" && entry.expiresAt <= now;
@@ -68,25 +86,29 @@ export function registerDiscordComponentEntries(params: {
 }): void {
   const now = Date.now();
   const ttlMs = params.ttlMs ?? DEFAULT_COMPONENT_TTL_MS;
-  registerEntries(params.entries, componentEntries, { now, ttlMs, messageId: params.messageId });
-  registerEntries(params.modals, modalEntries, { now, ttlMs, messageId: params.messageId });
+  registerEntries(params.entries, getComponentEntries(), {
+    now,
+    ttlMs,
+    messageId: params.messageId,
+  });
+  registerEntries(params.modals, getModalEntries(), { now, ttlMs, messageId: params.messageId });
 }
 
 export function resolveDiscordComponentEntry(params: {
   id: string;
   consume?: boolean;
 }): DiscordComponentEntry | null {
-  return resolveEntry(componentEntries, params);
+  return resolveEntry(getComponentEntries(), params);
 }
 
 export function resolveDiscordModalEntry(params: {
   id: string;
   consume?: boolean;
 }): DiscordModalEntry | null {
-  return resolveEntry(modalEntries, params);
+  return resolveEntry(getModalEntries(), params);
 }
 
 export function clearDiscordComponentEntries(): void {
-  componentEntries.clear();
-  modalEntries.clear();
+  getComponentEntries().clear();
+  getModalEntries().clear();
 }
