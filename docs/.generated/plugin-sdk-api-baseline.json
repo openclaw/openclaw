@@ -1523,6 +1523,15 @@
           }
         },
         {
+          "declaration": "export function normalizeChannelId(raw?: string | null | undefined): ChannelId | null;",
+          "exportName": "normalizeChannelId",
+          "kind": "function",
+          "source": {
+            "line": 80,
+            "path": "src/channels/plugins/registry.ts"
+          }
+        },
+        {
           "declaration": "export function normalizeChatType(raw?: string | undefined): ChatType | undefined;",
           "exportName": "normalizeChatType",
           "kind": "function",

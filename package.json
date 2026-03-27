@@ -228,6 +228,10 @@
       "types": "./dist/plugin-sdk/account-resolution.d.ts",
       "default": "./dist/plugin-sdk/account-resolution.js"
     },
+    "./plugin-sdk/agent-config-primitives": {
+      "types": "./dist/plugin-sdk/agent-config-primitives.d.ts",
+      "default": "./dist/plugin-sdk/agent-config-primitives.js"
+    },
     "./plugin-sdk/allow-from": {
       "types": "./dist/plugin-sdk/allow-from.d.ts",
       "default": "./dist/plugin-sdk/allow-from.js"
@@ -291,6 +295,10 @@
     "./plugin-sdk/channel-config-schema": {
       "types": "./dist/plugin-sdk/channel-config-schema.d.ts",
       "default": "./dist/plugin-sdk/channel-config-schema.js"
+    },
+    "./plugin-sdk/channel-config-primitives": {
+      "types": "./dist/plugin-sdk/channel-config-primitives.d.ts",
+      "default": "./dist/plugin-sdk/channel-config-primitives.js"
     },
     "./plugin-sdk/channel-actions": {
       "types": "./dist/plugin-sdk/channel-actions.d.ts",

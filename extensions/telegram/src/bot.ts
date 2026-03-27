@@ -33,7 +33,13 @@ import {
   resolveTelegramUpdateId,
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
-import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
+import {
+  apiThrottler,
+  Bot,
+  sequentialize,
+  type ApiClientOptions,
+  type UserFromGetMe,
+} from "./bot.runtime.js";
 import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
 import { tagTelegramNetworkError } from "./network-errors.js";
@@ -65,6 +71,10 @@ export type TelegramBotOptions = {
   /** Pre-resolved Telegram transport to reuse across bot instances. If not provided, creates a new one. */
   telegramTransport?: TelegramTransport;
   telegramDeps?: TelegramBotDeps;
+  /** Cached bot info from a previous `bot.init()` / `getMe()` call.
+   *  When provided, grammy skips the `getMe()` network call on startup,
+   *  eliminating the init-retry stall after network recovery. */
+  botInfo?: UserFromGetMe;
 };
 
 export { getTelegramSequentialKey };
@@ -254,7 +264,10 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         }
       : undefined;
 
-  const bot = new botRuntime.Bot(opts.token, client ? { client } : undefined);
+  const bot = new botRuntime.Bot(opts.token, {
+    ...(client ? { client } : {}),
+    ...(opts.botInfo ? { botInfo: opts.botInfo } : {}),
+  });
   bot.api.config.use(botRuntime.apiThrottler());
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
