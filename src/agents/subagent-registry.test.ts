@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   resolveContextEngine: vi.fn(),
   onSubagentEnded: vi.fn(async () => {}),
   runSubagentEnded: vi.fn(async () => {}),
+  closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
   resolveAgentTimeoutMs: vi.fn(() => 1_000),
 }));
 
@@ -78,6 +79,10 @@ vi.mock("./subagent-announce.js", () => ({
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: mocks.getGlobalHookRunner,
+}));
+
+vi.mock("../plugin-sdk/browser-runtime.js", () => ({
+  closeTrackedBrowserTabsForSessions: mocks.closeTrackedBrowserTabsForSessions,
 }));
 
 vi.mock("./runtime-plugins.js", () => ({
@@ -133,6 +138,7 @@ describe("subagent registry seam flow", () => {
       }
       return {};
     });
+    mocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
     mod = await import("./subagent-registry.js");
     mod.resetSubagentRegistryForTests({ persist: false });
   });
@@ -176,6 +182,10 @@ describe("subagent registry seam flow", () => {
         outcome: { status: "ok" },
       }),
     );
+    expect(mocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith({
+      sessionKeys: ["agent:main:subagent:child"],
+      onWarn: expect.any(Function),
+    });
 
     expect(mocks.updateSessionStore).toHaveBeenCalledTimes(1);
     expect(mocks.updateSessionStore).toHaveBeenCalledWith(

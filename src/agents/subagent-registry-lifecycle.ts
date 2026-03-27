@@ -52,6 +52,7 @@ export function createSubagentRegistryLifecycleController(params: {
     reason: "completed" | "deleted";
     workspaceDir?: string;
   }): Promise<void>;
+  closeTrackedBrowserTabsForSessions(sessionKeys: string[]): Promise<number | void>;
   resumeSubagentRun(runId: string): void;
   warn(message: string, meta?: Record<string, unknown>): void;
 }) {
@@ -452,6 +453,18 @@ export function createSubagentRegistryLifecycleController(params: {
         runId: entry.runId,
         childSessionKey: entry.childSessionKey,
       });
+    }
+
+    if (completeParams.triggerCleanup) {
+      try {
+        await params.closeTrackedBrowserTabsForSessions([entry.childSessionKey]);
+      } catch (err) {
+        params.warn("failed to close tracked browser tabs for completed subagent run", {
+          err,
+          runId: entry.runId,
+          childSessionKey: entry.childSessionKey,
+        });
+      }
     }
 
     const suppressedForSteerRestart = params.suppressAnnounceForSteerRestart(entry);

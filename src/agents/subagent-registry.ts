@@ -3,6 +3,7 @@ import { ensureContextEnginesInitialized } from "../context-engine/init.js";
 import { resolveContextEngine } from "../context-engine/registry.js";
 import type { SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
+import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-runtime.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
@@ -163,6 +164,13 @@ async function notifyContextEngineSubagentEnded(params: {
   }
 }
 
+async function closeTrackedBrowserTabsForSessionKeys(sessionKeys: string[]) {
+  return await closeTrackedBrowserTabsForSessions({
+    sessionKeys,
+    onWarn: (message) => log.warn(message),
+  });
+}
+
 function suppressAnnounceForSteerRestart(entry?: SubagentRunRecord) {
   return entry?.suppressAnnounceReason === "steer-restart";
 }
@@ -222,6 +230,7 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   shouldEmitEndedHookForRun,
   emitSubagentEndedHookForRun,
   notifyContextEngineSubagentEnded,
+  closeTrackedBrowserTabsForSessions: closeTrackedBrowserTabsForSessionKeys,
   resumeSubagentRun,
   warn: (message, meta) => log.warn(message, meta),
 });
@@ -505,6 +514,7 @@ const subagentRunManager = createSubagentRunManager({
   clearPendingLifecycleError,
   resolveSubagentWaitTimeoutMs,
   notifyContextEngineSubagentEnded,
+  closeTrackedBrowserTabsForSessions: closeTrackedBrowserTabsForSessionKeys,
   completeCleanupBookkeeping,
   completeSubagentRun,
 });
