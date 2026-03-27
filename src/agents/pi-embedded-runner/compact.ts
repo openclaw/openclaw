@@ -82,6 +82,7 @@ import {
   type SkillSnapshot,
 } from "../skills.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import { createAuthenticatedStreamFn } from "./authenticated-stream.js";
 import { classifyCompactionReason, resolveCompactionFailureReason } from "./compact-reasons.js";
 import {
   asCompactionHookRunner,
@@ -727,7 +728,10 @@ export async function compactEmbeddedPiSessionDirect(
         workspaceDir: effectiveWorkspace,
       });
       if (providerStreamFn) {
-        session.agent.streamFn = providerStreamFn;
+        session.agent.streamFn = createAuthenticatedStreamFn(
+          providerStreamFn,
+          session.modelRegistry,
+        );
       }
 
       try {

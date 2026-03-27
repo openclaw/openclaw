@@ -97,6 +97,7 @@ import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
+import { createAuthenticatedStreamFn } from "../authenticated-stream.js";
 import { isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
@@ -850,8 +851,15 @@ export async function runEmbeddedAttempt(
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
+      const authWrappedDefaultStreamFn = createAuthenticatedStreamFn(
+        defaultSessionStreamFn,
+        activeSession.modelRegistry,
+      );
       if (providerStreamFn) {
-        activeSession.agent.streamFn = providerStreamFn;
+        activeSession.agent.streamFn = createAuthenticatedStreamFn(
+          providerStreamFn,
+          activeSession.modelRegistry,
+        );
       } else if (
         shouldUseOpenAIWebSocketTransport({
           provider: params.provider,
@@ -865,14 +873,14 @@ export async function runEmbeddedAttempt(
           });
         } else {
           log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
-          activeSession.agent.streamFn = defaultSessionStreamFn;
+          activeSession.agent.streamFn = authWrappedDefaultStreamFn;
         }
       } else if (params.model.provider === "anthropic-vertex") {
         // Anthropic Vertex AI: inject AnthropicVertex client into pi-ai's
         // streamAnthropic for GCP IAM auth instead of Anthropic API keys.
         activeSession.agent.streamFn = createAnthropicVertexStreamFnForModel(params.model);
       } else {
-        activeSession.agent.streamFn = defaultSessionStreamFn;
+        activeSession.agent.streamFn = authWrappedDefaultStreamFn;
       }
 
       const { effectiveExtraParams } = applyExtraParamsToAgent(
