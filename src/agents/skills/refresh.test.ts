@@ -18,6 +18,13 @@ async function loadFreshRefreshModuleForTest() {
 }
 
 describe("ensureSkillsWatcher", () => {
+  it("starts snapshot version above zero so long-lived sessions refresh after restart", async () => {
+    await loadFreshRefreshModuleForTest();
+    expect(refreshModule.getSkillsSnapshotVersion()).toBe(1);
+    expect(refreshModule.getSkillsSnapshotVersion("/tmp/workspace")).toBe(1);
+    await refreshModule.resetSkillsRefreshForTest();
+  });
+
   beforeEach(async () => {
     watchMock.mockClear();
     await loadFreshRefreshModuleForTest();
