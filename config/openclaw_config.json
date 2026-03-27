@@ -9,7 +9,7 @@
   },
   "system": {
     "framework": "OpenClaw",
-    "version": "11.3-HEARTBEAT",
+    "version": "11.4-RECOVERY",
     "hardware": {
       "target_gpu": "NVIDIA RTX 5060 Ti (16GB, Blackwell GB206)",
       "vram_limit_gb": 16,
@@ -132,7 +132,7 @@
         "Auditor": {
           "model": "meta-llama/llama-3.3-70b-instruct:free",
           "openrouter_model": "meta-llama/llama-3.3-70b-instruct:free",
-          "fallback_model": "deepseek/deepseek-r1:free",
+          "fallback_model": "google/gemma-3-12b-it:free",
           "num_ctx": 32768,
           "temperature": 0.1,
           "timeout_sec": 120,
@@ -198,7 +198,7 @@
         "Auditor": {
           "model": "deepseek/deepseek-r1:free",
           "openrouter_model": "stepfun/step-3.5-flash:free",
-          "fallback_model": "deepseek/deepseek-r1:free",
+          "fallback_model": "google/gemma-3-12b-it:free",
           "num_ctx": 32768,
           "temperature": 0.1,
           "timeout_sec": 120,

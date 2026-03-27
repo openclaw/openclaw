@@ -580,6 +580,19 @@ class PipelineExecutor:
 
         fallback = role_config.get("fallback_model", model)
 
+        # --- AUDITOR ISOLATION: truncate context + fallback model ---
+        is_auditor = "Auditor" in role_name
+        if is_auditor:
+            auditor_budget = ROLE_TOKEN_BUDGET.get("Auditor", 1536)
+            max_prompt_chars = auditor_budget * 4  # ~4 chars per token
+            if len(user_prompt) > max_prompt_chars:
+                logger.warning(
+                    "Auditor context truncated",
+                    original_chars=len(user_prompt),
+                    budget_chars=max_prompt_chars,
+                )
+                user_prompt = user_prompt[:max_prompt_chars] + "\n\n[... контекст сокращён для Auditor ...]"
+
         t0 = time.monotonic()
         if self.openrouter_enabled and or_model:
             result = await call_openrouter(
@@ -597,6 +610,30 @@ class PipelineExecutor:
                 preserve_think=preserve_think,
                 json_schema=json_schema,
             )
+
+            # Auditor fallback: if primary model returned error/empty, retry with gemma
+            if is_auditor and (not result or result.startswith("[ERROR]")):
+                auditor_fallback = "google/gemma-3-12b-it:free"
+                logger.warning(
+                    "Auditor primary model failed — retrying with fallback",
+                    primary=or_model,
+                    fallback=auditor_fallback,
+                )
+                result = await call_openrouter(
+                    openrouter_config=self.openrouter_config,
+                    vllm_url=self.vllm_url,
+                    model=auditor_fallback,
+                    fallback_model=fallback,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    role_name=role_name,
+                    role_config=role_config,
+                    mcp_client=mcp_client,
+                    config=self.config,
+                    vllm_manager=self.vllm_manager,
+                    preserve_think=preserve_think,
+                    json_schema=json_schema,
+                )
         else:
             result = await call_vllm(
                 vllm_url=self.vllm_url,

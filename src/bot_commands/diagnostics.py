@@ -295,6 +295,34 @@ async def cmd_diag(gateway, message: Message):
     except Exception:
         lines.append("\n<b>Sandbox:</b> ⚠️ import error")
 
+    # --- Last API Error ---
+    try:
+        from src.llm_gateway import get_last_api_error
+        api_err = get_last_api_error()
+        if api_err and api_err.get("status"):
+            lines.append(f"\n<b>Last API Error:</b>")
+            lines.append(f"  Status: {api_err.get('status')}")
+            lines.append(f"  Model: <code>{api_err.get('model', '?')}</code>")
+            lines.append(f"  Endpoint: <code>{api_err.get('endpoint', '?')}</code>")
+            body_preview = (api_err.get("body") or "")[:200]
+            lines.append(f"  Body: <code>{body_preview}</code>")
+        else:
+            lines.append(f"\n<b>Last API Error:</b> None (all clear ✅)")
+    except Exception:
+        pass
+
+    # --- Nemotron VL Readiness ---
+    lines.append(f"\n<b>NVIDIA Nemotron VL:</b>")
+    try:
+        from src.llm_gateway import _VISION_MODELS
+        nemotron = [m for m in _VISION_MODELS if "nemotron" in m.lower()]
+        if nemotron:
+            lines.append(f"  Registered: <code>{', '.join(nemotron)}</code> ✅")
+        else:
+            lines.append(f"  ⚠️ Not in _VISION_MODELS list")
+    except Exception:
+        lines.append(f"  ⚠️ Cannot check _VISION_MODELS")
+
     report = "\n".join(lines)
     try:
         await status_msg.edit_text(report, parse_mode="HTML")

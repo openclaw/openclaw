@@ -446,6 +446,15 @@ def _infer_task_type(prompt: str, hint: str) -> str:
     return "general"
 
 
+# Last API error details — populated by _call_openrouter for Telegram debug reporting
+_last_api_error: Dict[str, Any] = {}
+
+
+def get_last_api_error() -> Dict[str, Any]:
+    """Return the last OpenRouter API error details (for /diag and crash reporting)."""
+    return dict(_last_api_error)
+
+
 async def _call_openrouter(
     messages: List[Dict[str, Any]],
     model: str,
@@ -456,8 +465,9 @@ async def _call_openrouter(
     """Call OpenRouter API with retry + circuit breaker awareness."""
     from src.openrouter_client import _is_circuit_open, _record_failure, _record_success
 
-    api_key = _openrouter_config.get("api_key", "")
+    api_key = _openrouter_config.get("api_key", "").strip()
     base_url = _openrouter_config.get("base_url", "https://openrouter.ai/api/v1").rstrip("/")
+    endpoint = f"{base_url}/chat/completions"
 
     if not api_key or _is_circuit_open():
         return ""
@@ -470,8 +480,8 @@ async def _call_openrouter(
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/OpenClaw",
-        "X-Title": "OpenClaw Bot",
+        "HTTP-Referer": "https://openclaw.bot",
+        "X-Title": "OpenClaw_Autonomous_Agent",
     }
     payload = {
         "model": model,
@@ -485,11 +495,7 @@ async def _call_openrouter(
     for attempt in range(retries):
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
-                    f"{base_url}/chat/completions",
-                    json=payload,
-                    headers=headers,
-                ) as resp:
+                async with session.post(endpoint, json=payload, headers=headers) as resp:
                     if resp.status == 200:
                         _record_success()
                         data = await resp.json()
@@ -500,9 +506,25 @@ async def _call_openrouter(
                         )
                         return content.strip()
 
+                    # Capture full error details for debug reporting
+                    error_body = await resp.text()
+                    _last_api_error.update({
+                        "status": resp.status,
+                        "model": model,
+                        "endpoint": endpoint,
+                        "body": error_body[:1000],
+                        "attempt": attempt + 1,
+                    })
+                    logger.warning(
+                        "OpenRouter HTTP error",
+                        status=resp.status,
+                        model=model,
+                        attempt=f"{attempt + 1}/{retries}",
+                        body=error_body[:300],
+                    )
+
                     if resp.status == 429 and attempt < retries - 1:
                         wait = min(2 ** attempt * 3, 30)
-                        logger.warning("OpenRouter rate-limited", wait=wait, attempt=attempt)
                         await asyncio.sleep(wait)
                         continue
 
@@ -514,6 +536,13 @@ async def _call_openrouter(
             raise
         except Exception as e:
             _record_failure()
+            _last_api_error.update({
+                "status": 0,
+                "model": model,
+                "endpoint": endpoint,
+                "body": str(e)[:1000],
+                "attempt": attempt + 1,
+            })
             if attempt < retries - 1:
                 logger.warning("OpenRouter error", error=str(e), attempt=attempt)
                 await asyncio.sleep(2 ** attempt)

@@ -118,7 +118,7 @@ async def call_openrouter(
     """
     from src.pipeline_schemas import ROLE_TOKEN_BUDGET
 
-    api_key = openrouter_config.get("api_key", "")
+    api_key = openrouter_config.get("api_key", "").strip()
     base_url = openrouter_config.get("base_url", OPENROUTER_BASE_URL).rstrip("/")
 
     max_tokens = role_config.get("max_tokens", ROLE_TOKEN_BUDGET.get(role_name, 2048))
@@ -142,8 +142,8 @@ async def call_openrouter(
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://openclaw.ai",
-        "X-Title": "OpenClaw Bot",
+        "HTTP-Referer": "https://openclaw.bot",
+        "X-Title": "OpenClaw_Autonomous_Agent",
     }
 
     timeout_sec = role_config.get("timeout_sec", config.get("system", {}).get("timeout_sec", 120))
@@ -214,11 +214,24 @@ async def call_openrouter(
                             await asyncio.sleep(wait)
                             continue
 
-                        # Other non-200: log and retry
+                        # Non-200: capture full error for Telegram debug
                         error_body = await resp.text()
+                        from src.llm_gateway import _last_api_error
+                        _last_api_error.update({
+                            "status": resp.status,
+                            "model": model,
+                            "endpoint": f"{base_url}/chat/completions",
+                            "body": error_body[:1000],
+                            "role": role_name,
+                            "attempt": attempt + 1,
+                        })
                         logger.warning(
-                            f"OpenRouter HTTP {resp.status} for {role_name} (attempt {attempt + 1}/{max_retries})",
-                            error=error_body[:200],
+                            "OpenRouter HTTP error (pipeline)",
+                            status=resp.status,
+                            role=role_name,
+                            model=model,
+                            attempt=f"{attempt + 1}/{max_retries}",
+                            body=error_body[:300],
                         )
                         if attempt < max_retries - 1:
                             await asyncio.sleep(2 ** attempt)
@@ -314,10 +327,10 @@ async def _execute_tool_calls(tool_calls: list, mcp_client: Any) -> list:
 async def test_openrouter(api_key: str, model: str = "arcee-ai/trinity-mini:free") -> Dict[str, Any]:
     """Quick connectivity test — sends a ping to OpenRouter and returns status."""
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {api_key.strip()}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://openclaw.ai",
-        "X-Title": "OpenClaw Bot",
+        "HTTP-Referer": "https://openclaw.bot",
+        "X-Title": "OpenClaw_Autonomous_Agent",
     }
     payload = {
         "model": model,
