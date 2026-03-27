@@ -67,10 +67,10 @@ function isMcporterCommand(cmd: unknown): boolean {
   return /(^|[\\/])mcporter(?:\.cmd)?$/i.test(cmd);
 }
 
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine", async () => {
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async () => {
   const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/memory-core-host-engine")
-  >("openclaw/plugin-sdk/memory-core-host-engine");
+    typeof import("openclaw/plugin-sdk/memory-core-host-engine-foundation")
+  >("openclaw/plugin-sdk/memory-core-host-engine-foundation");
   return {
     ...actual,
     createSubsystemLogger: () => {
