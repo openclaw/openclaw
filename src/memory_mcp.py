@@ -1,11 +1,39 @@
 import asyncio
 import json
+import math
 import os
+import re
 import subprocess
+import sys
+from collections import Counter
 from typing import Any, Dict, List, Optional
+
+# Ensure project root is on sys.path for subprocess execution
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 import aiohttp
 from mcp.server.fastmcp import FastMCP
+
+from src.llm_gateway import route_llm, is_cloud_only
+
+# Auto-configure gateway when running as MCP subprocess
+def _ensure_gateway_configured():
+    """Configure llm_gateway from config if not already done (subprocess context)."""
+    try:
+        import src.llm_gateway as _gw
+        if _gw._configured:
+            return
+        cfg_path = os.path.join(_project_root, "config", "openclaw_config.json")
+        if os.path.exists(cfg_path):
+            with open(cfg_path, "r") as f:
+                cfg = json.loads(os.path.expandvars(f.read()))
+            _gw.configure(cfg)
+    except Exception:
+        pass
+
+_ensure_gateway_configured()
 
 mcp = FastMCP("Memory Hybrid Search")
 
@@ -21,72 +49,162 @@ def get_config_vllm_url():
     try:
         if os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, "r") as f:
-                cfg = json.load(f)
+                cfg = json.loads(os.path.expandvars(f.read()))
                 return cfg.get("system", {}).get("vllm_base_url", "http://localhost:8000/v1")
-    except:
+    except Exception:
         pass
     return "http://localhost:8000/v1"
 
 VLLM_URL = os.environ.get("VLLM_BASE_URL", get_config_vllm_url()).rstrip("/")
 
-RERANK_MODEL = "google/gemma-3-12b-it"
-EMBED_MODEL = "nvidia/nv-embedqa-e5-v5"
 INDEX_FILE = os.path.join(MEMORY_BANK_DIR, "embeddings.json")
 
+
+def _get_running_model() -> str:
+    """Read the active generative model name from config (needed for chat/completions reranking)."""
+    try:
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, "r") as f:
+                cfg = json.loads(os.path.expandvars(f.read()))
+            return cfg.get("system", {}).get("model_router", {}).get("general",
+                                                                        "meta-llama/llama-3.3-70b-instruct:free")
+    except Exception:
+        pass
+    return "meta-llama/llama-3.3-70b-instruct:free"
+
 async def get_embeddings(text: str) -> List[float]:
-    """Get embeddings for a text snippet using vLLM local server."""
+    """Get embeddings for a text snippet using vLLM /embeddings endpoint.
+    Returns [] if cloud-only mode is active or the running model doesn't support embeddings.
+    In that case vector_search() falls back to TF-IDF search automatically.
+    """
+    if is_cloud_only():
+        return []  # Cloud-only: no local vLLM, use TF-IDF fallback
     try:
         async with aiohttp.ClientSession(trust_env=False) as session:
             async with session.post(f"{VLLM_URL}/embeddings", json={
-                "model": EMBED_MODEL,
+                "model": _get_running_model(),
                 "input": text,
-                "input_type": "query"
-            }, timeout=10, proxy=None) as resp:
+            }, timeout=aiohttp.ClientTimeout(total=10), proxy=None) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     return data.get("data", [{}])[0].get("embedding", [])
-    except Exception as e:
-        print(f"Embedding error: {e}")
+    except Exception:
+        pass
     return []
 
 def cosine_similarity(v1: List[float], v2: List[float]) -> float:
-    """Simple dot product (assuming normalized vectors from nomic-embed-text)."""
+    """Dot-product cosine similarity (assumes pre-normalized vectors)."""
     if not v1 or not v2 or len(v1) != len(v2):
         return 0.0
     return sum(a * b for a, b in zip(v1, v2))
 
-async def vector_search(query: str, tier: str, top_k: int = 5) -> List[str]:
-    """Perform semantic search using cached embeddings with adaptive threshold."""
-    query_vec = await get_embeddings(query)
-    if not query_vec:
+
+def _tfidf_search(query: str, memory_files: List[str], top_k: int = 5) -> List[str]:
+    """Pure-Python TF-IDF cosine similarity search over memory file sections.
+    Used as a fallback when vLLM embeddings endpoint is not available
+    (e.g., when serving a causal LM instead of a dedicated embedding model).
+    """
+    query_terms = re.findall(r'\b\w+\b', query.lower())
+    if not query_terms:
         return []
 
-    if not os.path.exists(INDEX_FILE):
-        return []
-
-    try:
-        with open(INDEX_FILE, "r", encoding="utf-8") as f:
-            index = json.load(f)
-    except:
-        return []
-
-    results = []
-    for snippet_id, data in index.items():
-        if tier != "all" and data.get("tier") != tier:
+    # ── Collect text chunks (split on markdown headers or every ~300 words) ──
+    chunks: List[str] = []
+    for fpath in memory_files:
+        if not os.path.exists(fpath):
             continue
-        sim = cosine_similarity(query_vec, data.get("vector", []))
-        results.append((sim, data.get("text", "")))
+        try:
+            with open(fpath, 'r', encoding='utf-8') as f:
+                content = f.read()
+            sections = re.split(r'(?m)^#{1,3} ', content)
+            for sec in sections:
+                sec = sec.strip()
+                if len(sec) > 30:
+                    chunks.append(sec[:600])   # cap per-chunk size
+        except Exception:
+            pass
 
-    results.sort(key=lambda x: x[0], reverse=True)
-
-    # Adaptive threshold: take top_k results, but only if sim > 0.3
-    # If the best result is very high (>0.7), tighten threshold to top_result * 0.6
-    if not results:
+    if not chunks:
         return []
-    best_sim = results[0][0]
-    threshold = max(0.3, best_sim * 0.6) if best_sim > 0.7 else 0.3
-    filtered = [(sim, text) for sim, text in results if sim >= threshold]
-    return [text for sim, text in filtered[:top_k]]
+
+    # ── Compute TF vectors and IDF over query terms only (efficient) ──
+    def tf_counter(text: str) -> Counter:
+        return Counter(re.findall(r'\b\w+\b', text.lower()))
+
+    chunk_tfs = [tf_counter(c) for c in chunks]
+    n = len(chunks)
+    query_term_set = set(query_terms)
+
+    # IDF: how many chunks contain each query term
+    doc_freq: Counter = Counter()
+    for vec in chunk_tfs:
+        for term in query_term_set:
+            if term in vec:
+                doc_freq[term] += 1
+
+    idf = {t: math.log((n + 1) / (doc_freq.get(t, 0) + 1)) + 1.0 for t in query_term_set}
+
+    # Query TF-IDF vector
+    q_tf = tf_counter(query)
+    q_tfidf = {t: q_tf[t] * idf[t] for t in query_term_set}
+    q_norm = math.sqrt(sum(v ** 2 for v in q_tfidf.values())) or 1.0
+
+    # Score every chunk
+    scored: List[tuple] = []
+    for i, chunk in enumerate(chunks):
+        vec = chunk_tfs[i]
+        dot = sum(vec.get(t, 0) * idf[t] * q_tfidf[t] for t in query_term_set)
+        if dot == 0:
+            continue
+        chunk_norm = math.sqrt(sum((vec.get(t, 0) * idf[t]) ** 2 for t in query_term_set)) or 1.0
+        score = dot / (q_norm * chunk_norm)
+        scored.append((score, chunk))
+
+    scored.sort(reverse=True)
+    return [text for _, text in scored[:top_k]]
+
+async def vector_search(query: str, tier: str, top_k: int = 5) -> List[str]:
+    """Semantic search: tries pre-built dense-embedding index first, then falls back
+    to pure-Python TF-IDF search over memory files when the embedding endpoint is
+    unavailable (e.g., when vLLM is serving a causal LM without --task embed).
+    """
+    # ── Path 1: dense-embedding index (populated by scripts/index_memory.py) ──
+    query_vec = await get_embeddings(query)
+    if query_vec and os.path.exists(INDEX_FILE):
+        try:
+            with open(INDEX_FILE, "r", encoding="utf-8") as f:
+                index = json.load(f)
+            results = []
+            for _sid, data in index.items():
+                if tier != "all" and data.get("tier") != tier:
+                    continue
+                sim = cosine_similarity(query_vec, data.get("vector", []))
+                results.append((sim, data.get("text", "")))
+            results.sort(reverse=True)
+            if results:
+                best_sim = results[0][0]
+                threshold = max(0.3, best_sim * 0.6) if best_sim > 0.7 else 0.3
+                filtered = [t for s, t in results if s >= threshold]
+                return filtered[:top_k]
+        except Exception:
+            pass
+
+    # ── Path 2: TF-IDF fallback (no extra dependencies, works with causal LMs) ──
+    tier_files = {
+        "hot": [HOT_MEMORY],
+        "domain": [DOMAIN_EXPERTS],
+        "cold": [COLD_MEMORY],
+        "knowledge": [],
+        "all": [HOT_MEMORY, DOMAIN_EXPERTS, COLD_MEMORY],
+    }
+    files = tier_files.get(tier, [HOT_MEMORY, DOMAIN_EXPERTS, COLD_MEMORY])
+    if tier == "knowledge" and os.path.isdir(KNOWLEDGE_DIR):
+        files = [os.path.join(KNOWLEDGE_DIR, f)
+                 for f in os.listdir(KNOWLEDGE_DIR) if f.endswith(".md")]
+    elif tier == "all" and os.path.isdir(KNOWLEDGE_DIR):
+        files += [os.path.join(KNOWLEDGE_DIR, f)
+                  for f in os.listdir(KNOWLEDGE_DIR) if f.endswith(".md")]
+    return _tfidf_search(query, files, top_k=top_k)
 
 
 async def expand_query(query: str) -> List[str]:
@@ -180,7 +298,7 @@ async def search_memory(query: str, tier: str = "all", top_k: int = 3) -> str:
 
     confidence_tag = "HIGH" if avg_sim > 0.7 else ("MEDIUM" if avg_sim > 0.5 else "LOW")
 
-    joined_matches = "\n---\n".join(all_snippets[:15]) # Limit for context window
+    joined_matches = "\n---\n".join(all_snippets[:8]) # Limit for context window
     
     prompt = (
         "You are a Memory Re-ranker. Select the most relevant snippets from the memory bank to answer the user query.\n"
@@ -189,22 +307,18 @@ async def search_memory(query: str, tier: str = "all", top_k: int = 3) -> str:
         f"TASK: Select the top {top_k} most relevant snippets. Return them exactly, separated by '---'."
     )
 
-    rerank_payload = {
-        "model": RERANK_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": False,
-        "max_tokens": 1024,
-    }
-
+    # Use Unified LLM Gateway for re-ranking (respects cloud-only mode)
     try:
-        async with aiohttp.ClientSession(trust_env=False) as session:
-            async with session.post(f"{VLLM_URL}/chat/completions", json=rerank_payload, timeout=30, proxy=None) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    result = data["choices"][0]["message"]["content"].strip()
-                    return f"[RAG_CONFIDENCE: {confidence_tag}] {result}"
-                else:
-                    return f"[RAG_CONFIDENCE: LOW] Re-ranking failed. Raw match snippet:\n{joined_matches[:500]}"
+        result = await route_llm(
+            prompt,
+            task_type="general",
+            max_tokens=256,
+            temperature=0.0,
+        )
+        if result:
+            return f"[RAG_CONFIDENCE: {confidence_tag}] {result}"
+        else:
+            return f"[RAG_CONFIDENCE: LOW] Re-ranking unavailable. Raw match snippet:\n{joined_matches[:500]}"
     except Exception as e:
         return f"[RAG_CONFIDENCE: LOW] Hybrid search failed: {e}. Raw match snippet:\n{joined_matches[:500]}"
 
