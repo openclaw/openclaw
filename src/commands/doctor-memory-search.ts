@@ -14,6 +14,12 @@ import { resolveActiveMemoryBackendConfig } from "../plugins/memory-runtime.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 
+function resolveSuggestedRemoteMemoryProvider(): string | undefined {
+  return listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata().find(
+    (provider) => provider.transport === "remote",
+  )?.providerId;
+}
+
 /**
  * Check whether memory search has a usable embedding provider.
  * Runs as part of `openclaw doctor` - config-only, no network calls.
@@ -52,6 +58,7 @@ export async function noteMemorySearchHealth(
   // If a specific provider is configured (not "auto"), check only that one.
   if (resolved.provider !== "auto") {
     if (resolved.provider === "local") {
+      const suggestedRemoteProvider = resolveSuggestedRemoteMemoryProvider();
       if (hasLocalEmbeddings(resolved.local, true)) {
         // Model path looks valid (explicit file, hf: URL, or default model).
         // If a gateway probe is available and reports not-ready, warn anyway -
@@ -79,7 +86,9 @@ export async function noteMemorySearchHealth(
           "",
           "Fix (pick one):",
           `- Install node-llama-cpp and set a local model path in config`,
-          `- Switch to a remote provider: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.provider openai")}`,
+          suggestedRemoteProvider
+            ? `- Switch to a remote provider: ${formatCliCommand(`openclaw config set agents.defaults.memorySearch.provider ${suggestedRemoteProvider}`)}`
+            : `- Switch to a remote embedding provider in config`,
           "",
           `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
         ].join("\n"),

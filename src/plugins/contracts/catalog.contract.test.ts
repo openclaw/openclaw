@@ -15,22 +15,22 @@ const PROVIDER_CATALOG_CONTRACT_TIMEOUT_MS = 300_000;
 type ResolvePluginProviders = typeof import("../providers.runtime.js").resolvePluginProviders;
 type ResolveOwningPluginIdsForProvider =
   typeof import("../providers.js").resolveOwningPluginIdsForProvider;
-type ResolveNonBundledProviderPluginIds =
-  typeof import("../providers.js").resolveNonBundledProviderPluginIds;
+type ResolveCatalogHookProviderPluginIds =
+  typeof import("../providers.js").resolveCatalogHookProviderPluginIds;
 
 const resolvePluginProvidersMock = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
 const resolveOwningPluginIdsForProviderMock = vi.hoisted(() =>
   vi.fn<ResolveOwningPluginIdsForProvider>(() => undefined),
 );
-const resolveNonBundledProviderPluginIdsMock = vi.hoisted(() =>
-  vi.fn<ResolveNonBundledProviderPluginIds>((_) => [] as string[]),
+const resolveCatalogHookProviderPluginIdsMock = vi.hoisted(() =>
+  vi.fn<ResolveCatalogHookProviderPluginIds>((_) => [] as string[]),
 );
 
 vi.mock("../providers.js", () => ({
   resolveOwningPluginIdsForProvider: (params: unknown) =>
     resolveOwningPluginIdsForProviderMock(params as never),
-  resolveNonBundledProviderPluginIds: (params: unknown) =>
-    resolveNonBundledProviderPluginIdsMock(params as never),
+  resolveCatalogHookProviderPluginIds: (params: unknown) =>
+    resolveCatalogHookProviderPluginIdsMock(params as never),
 }));
 
 vi.mock("../providers.runtime.js", () => ({
@@ -45,6 +45,7 @@ let openaiProvider: ProviderPlugin;
 
 describe("provider catalog contract", { timeout: PROVIDER_CATALOG_CONTRACT_TIMEOUT_MS }, () => {
   beforeAll(async () => {
+    vi.resetModules();
     const openaiPlugin = await import("../../../extensions/openai/index.ts");
     openaiProviders = registerProviderPlugin({
       plugin: openaiPlugin.default,
@@ -83,8 +84,8 @@ describe("provider catalog contract", { timeout: PROVIDER_CATALOG_CONTRACT_TIMEO
       }
     });
 
-    resolveNonBundledProviderPluginIdsMock.mockReset();
-    resolveNonBundledProviderPluginIdsMock.mockReturnValue([]);
+    resolveCatalogHookProviderPluginIdsMock.mockReset();
+    resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["openai"]);
   });
 
   it("keeps codex-only missing-auth hints wired through the provider runtime", () => {

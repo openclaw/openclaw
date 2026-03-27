@@ -61,10 +61,10 @@ function buildEntry(name: string): SkillEntry {
       filePath: path.join(skillDir, "SKILL.md"),
       baseDir: skillDir,
       sourceInfo: {
-        path: path.join(skillDir, "SKILL.md"),
+        path: skillDir,
         source: "openclaw-workspace",
         scope: "project",
-        origin: "top-level",
+        origin: "package",
         baseDir: skillDir,
       },
       disableModelInvocation: false,

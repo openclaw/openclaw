@@ -25,10 +25,10 @@ function makeEntry(params: {
       filePath: `/tmp/${params.name}/SKILL.md`,
       baseDir: `/tmp/${params.name}`,
       sourceInfo: {
-        path: `/tmp/${params.name}/SKILL.md`,
+        path: `/tmp/${params.name}`,
         source: params.source ?? "openclaw-workspace",
         scope: "project",
-        origin: "top-level",
+        origin: "package",
         baseDir: `/tmp/${params.name}`,
       },
       disableModelInvocation: false,

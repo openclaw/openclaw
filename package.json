@@ -717,6 +717,7 @@
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:check-i18n-glossary": "node scripts/check-docs-i18n-glossary.mjs",
     "docs:check-links": "node scripts/docs-link-audit.mjs",
+    "docs:check-links:anchors": "node scripts/docs-link-audit.mjs --anchors",
     "docs:dev": "cd docs && mint dev",
     "docs:list": "node scripts/docs-list.js",
     "docs:spellcheck": "bash scripts/docs-spellcheck.sh",

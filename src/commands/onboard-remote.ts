@@ -52,6 +52,8 @@ export async function promptRemoteGatewayConfig(
 ): Promise<OpenClawConfig> {
   let selectedBeacon: GatewayBonjourBeacon | null = null;
   let suggestedUrl = cfg.gateway?.remote?.url ?? DEFAULT_GATEWAY_URL;
+  let discoveryTlsFingerprint: string | undefined;
+  let trustedDiscoveryUrl: string | undefined;
 
   const hasBonjourTool = (await detectBinary("dns-sd")) || (await detectBinary("avahi-browse"));
   const wantsDiscover = hasBonjourTool
@@ -113,10 +115,23 @@ export async function promptRemoteGatewayConfig(
       });
       if (mode === "direct") {
         suggestedUrl = `wss://${host}:${port}`;
+        const fingerprint = target.endpoint.gatewayTlsFingerprintSha256;
+        const trusted = await prompter.confirm({
+          message: `Trust this gateway? Host: ${host}:${port} TLS fingerprint: ${fingerprint ?? "not advertised (connection will not be pinned)"}`,
+          initialValue: false,
+        });
+        if (!trusted) {
+          throw new Error(
+            `Discovery endpoint ${host}:${port} not trusted. Re-run onboarding or enter the URL manually.`,
+          );
+        }
+        discoveryTlsFingerprint = fingerprint;
+        trustedDiscoveryUrl = suggestedUrl;
         await prompter.note(
           [
             "Direct remote access defaults to TLS.",
             `Using: ${suggestedUrl}`,
+            ...(fingerprint ? [`TLS pin: ${fingerprint}`] : []),
             "If your gateway is loopback-only, choose SSH tunnel and keep ws://127.0.0.1:18789.",
           ].join("\n"),
           "Direct remote",
@@ -141,6 +156,8 @@ export async function promptRemoteGatewayConfig(
     validate: (value) => validateGatewayWebSocketUrl(String(value)),
   });
   const url = ensureWsUrl(String(urlInput));
+  const pinnedDiscoveryFingerprint =
+    discoveryTlsFingerprint && url === trustedDiscoveryUrl ? discoveryTlsFingerprint : undefined;
 
   const authChoice = await prompter.select({
     message: "Gateway auth",
@@ -231,6 +248,7 @@ export async function promptRemoteGatewayConfig(
         url,
         ...(token !== undefined ? { token } : {}),
         ...(password !== undefined ? { password } : {}),
+        ...(pinnedDiscoveryFingerprint ? { tlsFingerprint: pinnedDiscoveryFingerprint } : {}),
       },
     },
   };
