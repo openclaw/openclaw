@@ -32,19 +32,19 @@ type NormalizedAttachment = {
 };
 type SavedMedia = {
   id: string;
-  path?: string; 
+  path?: string;
 };
 
 const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
 
 const MIME_TO_EXT: Record<string, string> = {
   "image/jpeg": ".jpg",
-  "image/jpg":  ".jpg",
-  "image/png":  ".png",
+  "image/jpg": ".jpg",
+  "image/png": ".png",
   "image/webp": ".webp",
-  "image/gif":  ".gif",
+  "image/gif": ".gif",
   "image/avif": ".avif",
-  "image/bmp":  ".bmp",
+  "image/bmp": ".bmp",
   "image/tiff": ".tiff",
 };
 
@@ -160,9 +160,7 @@ export async function parseMessageWithAttachments(
     }
 
     if (sizeBytes > maxBytes) {
-      throw new Error(
-        `attachment ${label}: exceeds size limit (${sizeBytes} > ${maxBytes} bytes)`,
-      );
+      throw new Error(`attachment ${label}: exceeds size limit (${sizeBytes} > ${maxBytes} bytes)`);
     }
 
     const providedMime = normalizeMime(mime);
@@ -185,7 +183,9 @@ export async function parseMessageWithAttachments(
 
     let isOffloaded = false;
 
-    if (sizeBytes > OFFLOAD_THRESHOLD_BYTES) {
+    const isSupportedForOffload = finalMime !== "image/avif";
+
+    if (sizeBytes > OFFLOAD_THRESHOLD_BYTES && isSupportedForOffload) {
       try {
         const buffer = Buffer.from(b64, "base64");
 
@@ -195,6 +195,7 @@ export async function parseMessageWithAttachments(
           buffer,
           finalMime,
           "inbound",
+          undefined,
           labelWithExt,
         )) as SavedMedia;
 
