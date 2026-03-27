@@ -16,7 +16,6 @@ function createDocxDescendantClient(create: DocxDescendantCreate): InsertBlocksC
       },
     },
   } as InsertBlocksClient;
-  } as InsertBlocksClient;
 }
 
 function createCountingIterable<T>(values: T[]) {
