@@ -34,3 +34,4 @@ export * from "./types.tools.js";
 export * from "./types.whatsapp.js";
 export * from "./types.memory.js";
 export * from "./types.mcp.js";
+export * from "./types.safety-posture.js";

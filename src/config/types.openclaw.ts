@@ -16,6 +16,7 @@ import type {
 import type { HooksConfig } from "./types.hooks.js";
 import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
+import type { SafetyPostureConfig } from "./types.safety-posture.js";
 import type {
   AudioConfig,
   BroadcastConfig,
@@ -121,6 +122,7 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  safetyPosture?: SafetyPostureConfig;
   mcp?: McpConfig;
 };
 

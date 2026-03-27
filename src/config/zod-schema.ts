@@ -13,6 +13,7 @@ import {
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { PluginInstallRecordShape } from "./zod-schema.installs.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
+import { SafetyPostureConfigSchema } from "./zod-schema.safety-posture.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
   CommandsSchema,
@@ -877,6 +878,7 @@ export const OpenClawSchema = z
       })
       .optional(),
     memory: MemorySchema,
+    safetyPosture: SafetyPostureConfigSchema,
     mcp: McpConfigSchema,
     skills: z
       .object({
