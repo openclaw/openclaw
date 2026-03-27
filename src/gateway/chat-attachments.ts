@@ -186,7 +186,13 @@ export async function parseMessageWithAttachments(
 
     let isOffloaded = false;
 
-    const isSupportedForOffload = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"].includes(finalMime);
+    const isSupportedForOffload = [
+      "image/jpeg",
+      "image/jpg",
+      "image/png",
+      "image/webp",
+      "image/gif",
+    ].includes(finalMime);
 
     if (sizeBytes > OFFLOAD_THRESHOLD_BYTES && isSupportedForOffload) {
       try {
