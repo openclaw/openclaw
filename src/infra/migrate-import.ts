@@ -175,11 +175,21 @@ function isRootManifestEntry(entryPath: string): boolean {
 }
 
 async function extractManifestFromArchive(archivePath: string): Promise<MigrateManifest> {
-  // First pass: find the manifest entry.
+  const maxScanEntries = MIGRATE_IMPORT_LIMITS.maxEntries;
+
+  // First pass: find the manifest entry (with entry-count guard).
   let manifestEntryPath: string | undefined;
+  let pass1Count = 0;
   await tar.t({
     file: archivePath,
     gzip: true,
+    filter: () => {
+      pass1Count += 1;
+      if (pass1Count > maxScanEntries) {
+        throw new Error(`Migration archive exceeds entry count limit (${maxScanEntries}).`);
+      }
+      return true;
+    },
     onentry: (entry) => {
       if (isRootManifestEntry(entry.path)) {
         manifestEntryPath = entry.path;
@@ -191,12 +201,20 @@ async function extractManifestFromArchive(archivePath: string): Promise<MigrateM
     throw new Error("Archive does not contain a migration manifest.");
   }
 
-  // Second pass: extract manifest content.
+  // Second pass: extract manifest content (with entry-count guard).
   const targetEntry = manifestEntryPath;
   let contentPromise: Promise<string> | undefined;
+  let pass2Count = 0;
   await tar.t({
     file: archivePath,
     gzip: true,
+    filter: () => {
+      pass2Count += 1;
+      if (pass2Count > maxScanEntries) {
+        throw new Error(`Migration archive exceeds entry count limit (${maxScanEntries}).`);
+      }
+      return true;
+    },
     onentry: (entry) => {
       if (entry.path !== targetEntry) {
         entry.resume();
