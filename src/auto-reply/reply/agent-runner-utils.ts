@@ -51,6 +51,7 @@ export function buildThreadingToolContext(params: {
     return {
       currentChannelId: originTo?.trim() || undefined,
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
+      currentThreadTs: sessionCtx.MessageThreadId != null ? String(sessionCtx.MessageThreadId) : undefined,
       currentMessageId,
       hasRepliedRef,
     };

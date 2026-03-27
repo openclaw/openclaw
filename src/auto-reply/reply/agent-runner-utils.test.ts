@@ -175,7 +175,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
   });
 
-  it("uses OriginatingTo for telegram native command tool context without implicit thread state", () => {
+  it("uses OriginatingTo for telegram native command tool context with thread state from MessageThreadId", () => {
     const context = buildThreadingToolContext({
       sessionCtx: {
         Provider: "telegram",
@@ -193,7 +193,7 @@ describe("agent-runner-utils", () => {
       currentChannelId: "telegram:-1003841603622",
       currentMessageId: "2284",
     });
-    expect(context.currentThreadTs).toBeUndefined();
+    expect(context.currentThreadTs).toBe("928");
   });
 
   it("uses OriginatingTo for threading tool context on discord native commands", () => {
