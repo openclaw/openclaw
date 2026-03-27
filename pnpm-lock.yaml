@@ -130,7 +130,7 @@ importers:
         version: 1.2.10
       node-llama-cpp:
         specifier: 3.18.1
-        version: 3.18.1(typescript@5.9.3)
+        version: 3.18.1(typescript@6.0.2)
       osc-progress:
         specifier: ^0.3.0
         version: 0.3.0
@@ -250,10 +250,6 @@ importers:
   extensions/anthropic: {}
 
   extensions/bluebubbles:
-    dependencies:
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
     devDependencies:
       openclaw:
         specifier: workspace:*
@@ -364,9 +360,6 @@ importers:
       https-proxy-agent:
         specifier: ^8.0.0
         version: 8.0.0
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
     devDependencies:
       openclaw:
         specifier: workspace:*
@@ -394,11 +387,7 @@ importers:
 
   extensions/imessage: {}
 
-  extensions/irc:
-    dependencies:
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
+  extensions/irc: {}
 
   extensions/kilocode: {}
 
@@ -442,9 +431,6 @@ importers:
       music-metadata:
         specifier: ^11.12.3
         version: 11.12.3
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
     devDependencies:
       openclaw:
         specifier: workspace:*
@@ -458,9 +444,6 @@ importers:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
     devDependencies:
       openclaw:
         specifier: workspace:*
@@ -517,10 +500,6 @@ importers:
         version: link:../..
 
   extensions/nextcloud-talk:
-    dependencies:
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
     devDependencies:
       openclaw:
         specifier: workspace:*
@@ -531,9 +510,6 @@ importers:
       nostr-tools:
         specifier: ^2.23.3
         version: 2.23.3(typescript@6.0.2)
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
     devDependencies:
       openclaw:
         specifier: workspace:*
@@ -572,11 +548,7 @@ importers:
         specifier: ^7.15.0
         version: 7.15.0
 
-  extensions/synology-chat:
-    dependencies:
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
+  extensions/synology-chat: {}
 
   extensions/synthetic: {}
 
@@ -608,9 +580,6 @@ importers:
       '@urbit/aura':
         specifier: ^3.0.0
         version: 3.0.0
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
     devDependencies:
       openclaw:
         specifier: workspace:*
@@ -629,9 +598,6 @@ importers:
       '@twurple/chat':
         specifier: ^8.0.3
         version: 8.0.3(@twurple/auth@8.0.3)
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
 
   extensions/venice: {}
 
@@ -650,9 +616,6 @@ importers:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
     devDependencies:
       openclaw:
         specifier: workspace:*
@@ -684,9 +647,6 @@ importers:
       undici:
         specifier: 7.24.6
         version: 7.24.6
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
     devDependencies:
       openclaw:
         specifier: workspace:*
@@ -700,9 +660,6 @@ importers:
       zca-js:
         specifier: 2.1.2
         version: 2.1.2
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
     devDependencies:
       openclaw:
         specifier: workspace:*
@@ -713,6 +670,8 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+
+  packages/memory-host-sdk: {}
 
   packages/moltbot:
     dependencies:
@@ -6276,10 +6235,6 @@ packages:
   tar-stream@3.1.8:
     resolution: {integrity: sha512-U6QpVRyCGHva435KoNWy9PRoi2IFYCgtEhq9nmrPPpbRacPs9IH4aJ3gbrFC8dPcXvdSZ4XXfXT5Fshbp2MtlQ==}
 
-  tar@7.5.12:
-    resolution: {integrity: sha512-9TsuLcdhOn4XztcQqhNyq1KOwOOED/3k58JAvtULiYqbO8B/0IBAAIE1hj0Svmm58k27TmcigyDI0deMlgG3uw==}
-    engines: {node: '>=18'}
-
   tar@7.5.13:
     resolution: {integrity: sha512-tOG/7GyXpFevhXVh8jOPJrmtRpOTsYqUIkVdVooZYJS/z8WhfQUX8RJILmeuJNinGAMSu1veBr4asSHFt5/hng==}
     engines: {node: '>=18'}
@@ -6414,11 +6369,6 @@ packages:
   type-is@2.0.1:
     resolution: {integrity: sha512-OZs6gsjF4vMp32qrCbiVSkrFmXtG/AZhY3t0iAMrMBiAZyV9oALtXO8hsrHbMXF9x6L3grlFuwW2oAz7cav+Gw==}
     engines: {node: '>= 0.6'}
-
-  typescript@5.9.3:
-    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
-    engines: {node: '>=14.17'}
-    hasBin: true
 
   typescript@6.0.2:
     resolution: {integrity: sha512-bGdAIrZ0wiGDo5l8c++HWtbaNCWTS4UTv7RaTH/ThVIgjkveJt83m74bBHMJkuCbslY8ixgLBVZJIOiQlQTjfQ==}
@@ -10549,7 +10499,7 @@ snapshots:
       node-api-headers: 1.8.0
       rc: 1.2.8
       semver: 7.7.4
-      tar: 7.5.12
+      tar: 7.5.13
       url-join: 4.0.1
       which: 6.0.1
       yargs: 17.7.2
@@ -11979,7 +11929,7 @@ snapshots:
       fetch-blob: 3.2.0
       formdata-polyfill: 4.0.10
 
-  node-llama-cpp@3.18.1(typescript@5.9.3):
+  node-llama-cpp@3.18.1(typescript@6.0.2):
     dependencies:
       '@huggingface/jinja': 0.5.6
       async-retry: 1.3.3
@@ -12023,7 +11973,7 @@ snapshots:
       '@node-llama-cpp/win-x64-cuda': 3.18.1
       '@node-llama-cpp/win-x64-cuda-ext': 3.18.1
       '@node-llama-cpp/win-x64-vulkan': 3.18.1
-      typescript: 5.9.3
+      typescript: 6.0.2
     transitivePeerDependencies:
       - supports-color
 
@@ -13081,14 +13031,6 @@ snapshots:
       - bare-buffer
       - react-native-b4a
 
-  tar@7.5.12:
-    dependencies:
-      '@isaacs/fs-minipass': 4.0.1
-      chownr: 3.0.0
-      minipass: 7.1.3
-      minizlib: 3.1.0
-      yallist: 5.0.0
-
   tar@7.5.13:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
@@ -13232,9 +13174,6 @@ snapshots:
       content-type: 1.0.5
       media-typer: 1.1.0
       mime-types: 3.0.2
-
-  typescript@5.9.3:
-    optional: true
 
   typescript@6.0.2: {}
 

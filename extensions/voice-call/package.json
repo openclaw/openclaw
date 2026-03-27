@@ -6,8 +6,7 @@
   "dependencies": {
     "@sinclair/typebox": "0.34.48",
     "commander": "^14.0.3",
-    "ws": "^8.20.0",
-    "zod": "^4.3.6"
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "openclaw": "workspace:*"
