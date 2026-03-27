@@ -1336,10 +1336,11 @@ export function collectDmScopeFindings(cfg: OpenClawConfig): SecurityAuditFindin
   }
   // Only warn when multi-user DM ingress is plausible — filter out
   // group-only signals (groupPolicy, groupAllowFrom) since dmScope
-  // only affects DM sessions, not group chats.
+  // only affects DM sessions, not group chats.  Also match the
+  // legacy "dm.policy" key form emitted for older channel configs.
   const signals = listPotentialMultiUserSignals(cfg);
   const dmSignals = signals.filter(
-    (s) => s.includes("dmPolicy") || s.includes(".allowFrom"),
+    (s) => s.includes("dmPolicy") || s.includes("dm.policy") || s.includes(".allowFrom"),
   );
   if (dmSignals.length === 0) {
     return findings;
