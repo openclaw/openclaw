@@ -421,7 +421,10 @@ async function prepareCronRunContext(params: {
     logWarn(`[cron:${input.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
   }
 
-  const authProfileId = await resolveSessionAuthProfileOverride({
+// Resolve auth profile for the session, mirroring the inbound auto-reply path
+  // (get-reply-run.ts). Without this, isolated cron sessions fall back to env-var
+  // auth which may not match the configured auth-profiles, causing 401 errors.
+  const authProfileResolved = await resolveSessionAuthProfileOverride({
     cfg: cfgWithAgentDefaults,
     provider,
     agentDir,
@@ -431,12 +434,14 @@ async function prepareCronRunContext(params: {
     storePath: cronSession.storePath,
     isNewSession: cronSession.isNewSession,
   });
+  const authProfileId = authProfileResolved.authProfileId;
+  const authProfileIdSource = authProfileResolved.authProfileIdSource;
   const liveSelection: CronLiveSelection = {
     provider,
     model,
     authProfileId,
     authProfileIdSource: authProfileId
-      ? cronSession.sessionEntry.authProfileOverrideSource
+      ? authProfileIdSource ?? cronSession.sessionEntry.authProfileOverrideSource
       : undefined,
   };
 

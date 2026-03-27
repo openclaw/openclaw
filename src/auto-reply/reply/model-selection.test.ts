@@ -9,11 +9,16 @@ import { createModelSelectionState, resolveContextTokens } from "./model-selecti
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
-    { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
+    {
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+      name: "Claude Opus 4.6",
+      input: ["text", "image"],
+    },
     { provider: "inferencer", id: "deepseek-v3-4bit-mlx", name: "DeepSeek V3" },
     { provider: "kimi", id: "kimi-code", name: "Kimi Code" },
-    { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
-    { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
+    { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini", input: ["text", "image"] },
+    { provider: "openai", id: "gpt-4o", name: "GPT-4o", input: ["text", "image"] },
     { provider: "xai", id: "grok-4", name: "Grok 4" },
     { provider: "xai", id: "grok-4.20-reasoning", name: "Grok 4.20 (Reasoning)" },
   ]),
@@ -491,7 +496,7 @@ describe("createModelSelectionState respects session model override", () => {
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
   });
 
-  it("keeps allowed legacy combined session overrides after normalization", async () => {
+it("keeps allowed legacy combined session overrides after normalization", async () => {
     const cfg = {
       agents: {
         defaults: {
@@ -527,6 +532,209 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.resetModelOverride).toBe(false);
     expect(sessionStore[sessionKey]?.modelOverride).toBe("ollama-beelink2/qwen2.5-coder:7b");
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+  });
+
+  it("skips stored override when imageModel provider differs from stored provider", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+          },
+          imageModel: "openai/gpt-4o",
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      providerOverride: "xai",
+      modelOverride: "gpt-4o",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+      hasAppliedImageModelOverride: true,
+    });
+
+    expect(state.provider).toBe("anthropic");
+    expect(state.model).toBe("claude-opus-4-5");
+  });
+
+  it("keeps stored override when imageModel provider matches stored provider", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+            "openai/gpt-4o": {},
+          },
+          imageModel: "openai/gpt-4o",
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+      hasAppliedImageModelOverride: true,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-4o");
+  });
+
+  it("keeps stored override when imageModel is providerless", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+            "openai/gpt-4o": {},
+          },
+          imageModel: "gpt-4o",
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+      hasAppliedImageModelOverride: true,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-4o");
+  });
+
+  it("keeps stored override when providerless fallback resolves to image model provider", async () => {
+    // This tests the mixed-provider scenario from PR #52079 review feedback:
+    // imageModel.primary = openai/gpt-4o with providerless fallback "gpt-4.1"
+    // should resolve the fallback against openai (not the agent default anthropic)
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+            "openai/gpt-4o": {},
+            "openai/gpt-4.1": {},
+          },
+          imageModel: { primary: "openai/gpt-4o", fallbacks: ["gpt-4.1"] },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4.1", // Stored override matches providerless fallback resolved to openai
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+      hasAppliedImageModelOverride: true,
+    });
+
+    // The stored override openai/gpt-4.1 should be kept because it matches
+    // the providerless fallback "gpt-4.1" resolved to openai/gpt-4.1
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-4.1");
+  });
+
+  it("derives imageModelDefaultProvider from fallbacks when primary is providerless", async () => {
+    // Tests P2 review feedback: when imageModel.primary is providerless like "gpt-4o"
+    // with fallbacks ["openai/gpt-4.1"], the provider "openai" should be derived from
+    // fallbacks so that storedProvider !== imageModelDefaultProvider is correctly false
+    // (instead of always true due to empty imageModelDefaultProvider).
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+            "openai/gpt-4o": {},
+            "openai/gpt-4.1": {},
+          },
+          imageModel: { primary: "gpt-4o", fallbacks: ["openai/gpt-4.1"] },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4.1", // Stored override matches fallback with explicit provider
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+      hasAppliedImageModelOverride: true,
+    });
+
+    // The stored override openai/gpt-4.1 should be kept because:
+    // 1. imageModelDefaultProvider is derived as "openai" from fallback
+    // 2. storedProvider === imageModelDefaultProvider, so no catalog vision check is forced
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-4.1");
   });
 });
 

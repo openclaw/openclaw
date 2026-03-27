@@ -3,7 +3,10 @@ import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
-  resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
+  resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue({
+    authProfileId: undefined,
+    authProfileIdSource: undefined,
+  }),
 }));
 
 vi.mock("../../agents/pi-embedded.runtime.js", () => ({

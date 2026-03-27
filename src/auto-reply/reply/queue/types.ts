@@ -82,6 +82,8 @@ export type FollowupRun = {
     extraSystemPrompt?: string;
     enforceFinalTag?: boolean;
     silentExpected?: boolean;
+    /** Fallback models for image model override (from agents.defaults.imageModel.fallbacks). */
+    imageModelFallbacks?: string[];
   };
 };
 
