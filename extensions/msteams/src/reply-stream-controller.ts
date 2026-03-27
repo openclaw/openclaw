@@ -58,6 +58,12 @@ export function createTeamsReplyStreamController(params: {
         return payload;
       }
 
+      // Stream handled this text segment — finalize it and reset so any
+      // subsequent text segments (after tool calls) use fallback delivery.
+      // finalize() is idempotent; the later call in markDispatchIdle is a no-op.
+      streamReceivedTokens = false;
+      void stream.finalize();
+
       const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
       if (!hasMedia) {
         return undefined;
