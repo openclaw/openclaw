@@ -18,9 +18,12 @@ export {
   getMemorySearchManager,
   MemoryIndexManager,
 } from "../../extensions/memory-core/src/memory/index.js";
-export { listMemoryFiles, normalizeExtraMemoryPaths } from "../memory/internal.js";
-export { readAgentMemoryFile } from "../memory/read-file.js";
-export { resolveMemoryBackendConfig } from "../memory/backend-config.js";
+export {
+  listMemoryFiles,
+  normalizeExtraMemoryPaths,
+  readAgentMemoryFile,
+  resolveMemoryBackendConfig,
+} from "./memory-core-host-runtime.js";
 export { setVerbose, isVerbose } from "../globals.js";
 export { defaultRuntime } from "../runtime.js";
 export { colorize, isRich, theme } from "../terminal/theme.js";
@@ -32,7 +35,7 @@ export { withProgress, withProgressTotals } from "../cli/progress.js";
 export { shortenHomeInString, shortenHomePath } from "../utils.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { MemoryCitationsMode } from "../config/types.memory.js";
-export type { MemorySearchResult } from "../memory/types.js";
+export type { MemorySearchResult } from "./memory-core-host-runtime.js";
 export type {
   MemoryFlushPlan,
   MemoryFlushPlanResolver,

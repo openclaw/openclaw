@@ -5,7 +5,10 @@ import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { extractKeywords, isQueryStopWordToken } from "../../memory/query-expansion.js";
+import {
+  extractKeywords,
+  isQueryStopWordToken,
+} from "../../plugins/memory-host/query-expansion.js";
 import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
