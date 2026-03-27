@@ -334,3 +334,44 @@
   - `node --import tsx scripts/release-check.ts`
   - `pnpm release:check`
   - `pnpm test:install:smoke` or `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke` for non-root smoke path.
+
+## gstack
+
+- For all web browsing, use the `/browse` skill from gstack. Never use `mcp__claude-in-chrome__*` tools.
+- Available skills: `/office-hours`, `/plan-ceo-review`, `/plan-eng-review`, `/plan-design-review`, `/design-consultation`, `/review`, `/ship`, `/land-and-deploy`, `/canary`, `/benchmark`, `/browse`, `/qa`, `/qa-only`, `/design-review`, `/setup-browser-cookies`, `/setup-deploy`, `/retro`, `/investigate`, `/document-release`, `/codex`, `/cso`, `/autoplan`, `/careful`, `/freeze`, `/guard`, `/unfreeze`, `/gstack-upgrade`.
+- If gstack skills aren't working, run `cd .claude/skills/gstack && ./setup` to build the binary and register skills.
+
+## Image Generation Pipeline (smart-image-gen.py)
+
+- Script: `~/clawd/scripts/smart-image-gen.py`
+- Fallback order: SiliconFlow → Pollinations → Gemini API → Together → HuggingFace → **Browser (Grok/ChatGPT/Gemini)** → **Local SDXL-Turbo**
+- Browser gen: `C:\mickey-browser\browser-image-gen.js` (unified script, persistent patchright profile at `C:\mickey-browser\patchright-profile\`)
+- Local gen: ~/clawd/scripts/local-image-gen.py (segmind/tiny-sd FP32 on GTX 1650, ~14s/image, 512x512, always available)
+- GTX 1650 note: FP16 produces black images (overflow), must use FP32. SDXL-Turbo too large for 4GB VRAM, use tiny-sd.
+- Auto-post scripts (`~/clawd/scripts/auto-post-*.sh`) call `smart-image-gen.py` and handle `.jpg` fallback
+- Browser login: `node C:\mickey-browser\browser-image-gen.js --login grok|chatgpt|gemini` (persistent profile, login once)
+- If persistent profile crashes: delete `C:\mickey-browser\patchright-profile\` and re-login all 3
+- Bluesky posting: `cd ~/clawd/bluesky && uv run --script bsky.py post`
+
+## Embedding Configuration
+
+- Core memorySearch: `provider: local` (local GGUF model, no API)
+- memory-lancedb-pro plugin: Ollama `nomic-embed-text` on `localhost:11434`
+- Gemini API not used for embedding (avoids 429 rate limits)
+- Rate limiter: `src/memory/embedding-rate-limiter.ts` (token bucket, priority queue)
+
+## Gateway
+
+- Managed by systemd: `systemctl --user restart openclaw-gateway.service`
+- Auth: `gateway.controlUi.dangerouslyDisableDeviceAuth: true` (bypasses device pairing)
+- Dashboard: `http://127.0.0.1:18789/#token=<token from openclaw dashboard --no-open>`
+- Cron jobs config: `/home/mark/.openclaw/cron/jobs.json` (owned by mark, 41 jobs, all gpt-4.1)
+- WebUI login issues: clear localStorage in browser, restart gateway to reset auth rate limiter
+
+## Windows/WSL Bridge
+
+- PowerShell path: `/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe`
+- Browser automation: `C:\mickey-browser\` (patchright + persistent profile)
+- Social posting scripts: `x-post.js`, `facebook-post.js`, `threads-post.js`, `reddit-post.js`
+- Win-exec bridge: `~/clawd/scripts/win-exec.sh`
+- Sudo: passwordless for mark (`/etc/sudoers.d/mark`)
