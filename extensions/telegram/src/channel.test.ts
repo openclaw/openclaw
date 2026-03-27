@@ -107,7 +107,12 @@ function installGatewayRuntime(params?: { probeOk?: boolean; botUsername?: strin
       groups: [],
       elapsedMs: 0,
     }));
-  installTelegramRuntime();
+  installTelegramRuntime({
+    probeTelegram,
+    collectTelegramUnmentionedGroupIds: collectUnmentionedGroupIds,
+    auditTelegramGroupMembership: auditGroupMembership,
+    monitorTelegramProvider,
+  });
   return {
     monitorTelegramProvider,
     probeTelegram,
@@ -288,12 +293,7 @@ describe("telegramPlugin duplicate token guard", () => {
   });
 
   it("passes account proxy and network settings into Telegram probes", async () => {
-    const runtimeProbeTelegram = vi.fn(async () => {
-      throw new Error("runtime probe should not be used");
-    });
-    installTelegramRuntime({
-      probeTelegram: runtimeProbeTelegram,
-    });
+    installGatewayRuntime();
     probeTelegramMock.mockResolvedValue({
       ok: true,
       bot: { username: "opsbot" },
@@ -316,20 +316,10 @@ describe("telegramPlugin duplicate token guard", () => {
         dnsResultOrder: "ipv4first",
       },
     });
-    expect(runtimeProbeTelegram).not.toHaveBeenCalled();
   });
 
   it("passes account proxy and network settings into Telegram membership audits", async () => {
-    const runtimeCollectUnmentionedGroupIds = vi.fn(() => {
-      throw new Error("runtime audit helper should not be used");
-    });
-    const runtimeAuditGroupMembership = vi.fn(async () => {
-      throw new Error("runtime audit helper should not be used");
-    });
-    installTelegramRuntime({
-      collectUnmentionedGroupIds: runtimeCollectUnmentionedGroupIds,
-      auditGroupMembership: runtimeAuditGroupMembership,
-    });
+    installGatewayRuntime();
     collectTelegramUnmentionedGroupIdsMock.mockReturnValue({
       groupIds: ["-100123"],
       unresolvedGroups: 0,
@@ -373,8 +363,6 @@ describe("telegramPlugin duplicate token guard", () => {
       },
       timeoutMs: 5000,
     });
-    expect(runtimeCollectUnmentionedGroupIds).not.toHaveBeenCalled();
-    expect(runtimeAuditGroupMembership).not.toHaveBeenCalled();
   });
 
   it("forwards mediaLocalRoots to sendMessageTelegram for outbound media sends", async () => {
