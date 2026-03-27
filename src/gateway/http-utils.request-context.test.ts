@@ -54,9 +54,18 @@ describe("resolveGatewayRequestContext", () => {
 
   it("rejects explicit session keys that target internal session namespaces", () => {
     const cases = [
-      { sessionKey: "agent:main:subagent:worker", expectedPrefix: "subagent:" },
-      { sessionKey: "agent:main:acp:session", expectedPrefix: "acp:" },
-      { sessionKey: "cron:daily", expectedPrefix: "cron:" },
+      {
+        sessionKey: "agent:main:subagent:worker",
+        expectedPrefix: "subagent:",
+      },
+      {
+        sessionKey: "agent:main:acp:session",
+        expectedPrefix: "acp:",
+      },
+      {
+        sessionKey: "cron:daily",
+        expectedPrefix: "cron:",
+      },
     ];
 
     for (const testCase of cases) {
