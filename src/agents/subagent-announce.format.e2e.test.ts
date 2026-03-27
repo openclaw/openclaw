@@ -190,7 +190,7 @@ vi.mock("./subagent-registry-runtime.js", () => subagentRegistryMock);
 describe("subagent announce formatting", () => {
   let previousFastTestEnv: string | undefined;
   let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
-  let matrixPlugin: (typeof import("../../extensions/matrix/src/channel.js"))["matrixPlugin"];
+  let matrixPlugin: (typeof import("../../extensions/matrix/index.js"))["matrixPlugin"];
 
   beforeAll(async () => {
     // Set FAST_TEST_MODE before importing the module to ensure the module-level
@@ -199,7 +199,7 @@ describe("subagent announce formatting", () => {
     // See: https://github.com/openclaw/openclaw/issues/31298
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
-    ({ matrixPlugin } = await import("../../extensions/matrix/src/channel.js"));
+    ({ matrixPlugin } = await import("../../extensions/matrix/index.js"));
     ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
   });
 
