@@ -1,13 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  buildProviderRegistry,
-  createMediaAttachmentCache,
-  normalizeMediaAttachments,
-  resolveAutoImageModel,
-  runCapability,
-} from "./runner.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 
 const catalog = [
   {
@@ -90,6 +85,18 @@ describe("runCapability image skip", () => {
 
   it("uses active OpenRouter image models for auto image resolution", async () => {
     vi.stubEnv("OPENROUTER_API_KEY", "test-openrouter-key");
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "openrouter",
+      pluginName: "OpenRouter Provider",
+      source: "test",
+      provider: {
+        id: "openrouter",
+        capabilities: ["image"],
+        describeImage: async () => ({ text: "ok" }),
+      },
+    });
+    setActivePluginRegistry(pluginRegistry);
     try {
       await expect(
         resolveAutoImageModel({
@@ -101,6 +108,7 @@ describe("runCapability image skip", () => {
         model: "google/gemini-2.5-flash",
       });
     } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
       vi.unstubAllEnvs();
     }
   });
