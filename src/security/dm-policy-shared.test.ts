@@ -56,7 +56,7 @@ describe("security/dm-policy-shared", () => {
 
   it("normalizes config + store allow entries and counts distinct senders", async () => {
     const state = await resolveDmAllowState({
-      provider: "telegram",
+      provider: "demo-channel-a" as never,
       accountId: "default",
       allowFrom: [" * ", " alice ", "ALICE", "bob"],
       normalizeEntry: (value) => value.toLowerCase(),
@@ -70,7 +70,7 @@ describe("security/dm-policy-shared", () => {
 
   it("handles empty allowlists and store failures", async () => {
     const state = await resolveDmAllowState({
-      provider: "slack",
+      provider: "demo-channel-b" as never,
       accountId: "default",
       allowFrom: undefined,
       readStore: async (_provider, _accountId) => {
@@ -85,7 +85,7 @@ describe("security/dm-policy-shared", () => {
 
   it("skips pairing-store reads when dmPolicy is allowlist", async () => {
     await expectStoreReadSkipped({
-      provider: "telegram",
+      provider: "demo-channel-a",
       accountId: "default",
       dmPolicy: "allowlist",
     });
@@ -93,7 +93,7 @@ describe("security/dm-policy-shared", () => {
 
   it("skips pairing-store reads when shouldRead=false", async () => {
     await expectStoreReadSkipped({
-      provider: "slack",
+      provider: "demo-channel-b",
       accountId: "default",
       shouldRead: false,
     });
