@@ -11,6 +11,8 @@ import {
   type MemoryEmbeddingProviderAdapter,
 } from "./memory-embedding-providers.js";
 
+const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProviders");
+
 function createAdapter(id: string): MemoryEmbeddingProviderAdapter {
   return {
     id,
@@ -80,5 +82,19 @@ describe("memory embedding provider registry", () => {
     clearMemoryEmbeddingProviders();
 
     expect(listMemoryEmbeddingProviders()).toEqual([]);
+  });
+
+  it("stores adapters in a process-global singleton map", () => {
+    const alpha = createAdapter("alpha");
+    registerMemoryEmbeddingProvider(alpha, { ownerPluginId: "memory-core" });
+
+    const globalRegistry = (globalThis as Record<PropertyKey, unknown>)[
+      MEMORY_EMBEDDING_PROVIDERS_KEY
+    ] as Map<string, { adapter: MemoryEmbeddingProviderAdapter; ownerPluginId?: string }>;
+
+    expect(globalRegistry.get("alpha")).toEqual({
+      adapter: alpha,
+      ownerPluginId: "memory-core",
+    });
   });
 });
