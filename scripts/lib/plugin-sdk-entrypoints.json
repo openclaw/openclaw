@@ -152,5 +152,6 @@
   "whatsapp-core",
   "whatsapp-shared",
   "zalo",
-  "zalouser"
+  "zalouser",
+  "zod"
 ]
