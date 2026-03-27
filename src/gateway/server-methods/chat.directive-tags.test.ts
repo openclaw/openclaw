@@ -854,6 +854,46 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("chat.send falls back to origin provider metadata for configured main CLI delivery inheritance", async () => {
+    createTranscriptFixture("openclaw-chat-send-config-main-origin-provider-routes-");
+    mockState.mainSessionKey = "work";
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      origin: {
+        provider: "whatsapp",
+        accountId: "default",
+      },
+      lastTo: "whatsapp:+8613800138000",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-config-main-origin-provider-routes",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.CLI,
+            id: "cli",
+          },
+        },
+      } as unknown,
+      sessionKey: "agent:main:work",
+      deliver: true,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: "whatsapp:+8613800138000",
+        AccountId: "default",
+      }),
+    );
+  });
+
   it("chat.send keeps configured main delivery inheritance when connect metadata omits client details", async () => {
     createTranscriptFixture("openclaw-chat-send-config-main-connect-no-client-");
     mockState.mainSessionKey = "work";
