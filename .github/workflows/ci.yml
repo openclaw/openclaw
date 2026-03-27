@@ -310,6 +310,7 @@ jobs:
               pnpm test:extensions
               ;;
             contracts|contracts-protocol)
+              pnpm build
               pnpm test:contracts
               pnpm protocol:check
               ;;

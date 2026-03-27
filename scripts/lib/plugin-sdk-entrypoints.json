@@ -76,6 +76,7 @@
   "discord-timeouts",
   "extension-shared",
   "channel-config-helpers",
+  "channel-config-writes",
   "channel-config-primitives",
   "channel-config-schema",
   "channel-actions",
