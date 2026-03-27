@@ -20,9 +20,9 @@ function extractRelevantSnippet(
   text: string,
   query: string,
   maxChars: number,
-): { snippet: string; offsetLines: number } {
+): { snippet: string; offsetLines: number; snippetLines: number } {
   if (text.length <= maxChars) {
-    return { snippet: text, offsetLines: 0 };
+    return { snippet: text, offsetLines: 0, snippetLines: (text.match(/\n/g) || []).length };
   }
 
   // Use the same tokenizer as the search engine so CJK terms and
@@ -43,7 +43,12 @@ function extractRelevantSnippet(
 
   // If no match found, fall back to beginning
   if (matchIndex === -1) {
-    return { snippet: truncateUtf16Safe(text, maxChars), offsetLines: 0 };
+    const fallback = truncateUtf16Safe(text, maxChars);
+    return {
+      snippet: fallback,
+      offsetLines: 0,
+      snippetLines: (fallback.match(/\n/g) || []).length,
+    };
   }
 
   // Calculate window start, trying to center the match
@@ -70,10 +75,10 @@ function extractRelevantSnippet(
   const textBeforeWindow = text.substring(0, windowStart);
   const offsetLines = (textBeforeWindow.match(/\n/g) || []).length;
 
-  const snippet = text.substring(windowStart, windowEnd);
-  return { snippet: truncateUtf16Safe(snippet, maxChars), offsetLines };
+  const snippet = truncateUtf16Safe(text.substring(windowStart, windowEnd), maxChars);
+  const snippetLines = (snippet.match(/\n/g) || []).length;
+  return { snippet, offsetLines, snippetLines };
 }
-
 
 export type SearchSource = string;
 
@@ -214,12 +219,17 @@ export async function searchVector(params: {
       dist: number;
     }>;
     return rows.map((row) => {
-      const { snippet, offsetLines } = extractRelevantSnippet(row.text, params.queryText, params.snippetMaxChars);
+      const { snippet, offsetLines, snippetLines } = extractRelevantSnippet(
+        row.text,
+        params.queryText,
+        params.snippetMaxChars,
+      );
+      const adjustedStart = row.start_line + offsetLines;
       return {
         id: row.id,
         path: row.path,
-        startLine: row.start_line + offsetLines,
-        endLine: row.end_line,
+        startLine: adjustedStart,
+        endLine: adjustedStart + snippetLines,
         score: 1 - row.dist,
         snippet,
         source: row.source,
@@ -242,16 +252,17 @@ export async function searchVector(params: {
     .toSorted((a, b) => b.score - a.score)
     .slice(0, params.limit)
     .map((entry) => {
-      const { snippet, offsetLines } = extractRelevantSnippet(
+      const { snippet, offsetLines, snippetLines } = extractRelevantSnippet(
         entry.chunk.text,
         params.queryText,
         params.snippetMaxChars,
       );
+      const adjustedStart = entry.chunk.startLine + offsetLines;
       return {
         id: entry.chunk.id,
         path: entry.chunk.path,
-        startLine: entry.chunk.startLine + offsetLines,
-        endLine: entry.chunk.endLine,
+        startLine: adjustedStart,
+        endLine: adjustedStart + snippetLines,
         score: entry.score,
         snippet,
         source: entry.chunk.source,
@@ -370,12 +381,17 @@ export async function searchKeyword(params: {
           ftsScore: textScore,
         })
       : textScore;
-    const { snippet, offsetLines } = extractRelevantSnippet(row.text, params.query, params.snippetMaxChars);
+    const { snippet, offsetLines, snippetLines } = extractRelevantSnippet(
+      row.text,
+      params.query,
+      params.snippetMaxChars,
+    );
+    const adjustedStart = row.start_line + offsetLines;
     return {
       id: row.id,
       path: row.path,
-      startLine: row.start_line + offsetLines,
-      endLine: row.end_line,
+      startLine: adjustedStart,
+      endLine: adjustedStart + snippetLines,
       score,
       textScore,
       snippet,
