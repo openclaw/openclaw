@@ -32,6 +32,19 @@ export type PluginManifest = {
   description?: string;
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
+  /**
+   * Static capability ownership snapshot used for manifest-driven discovery,
+   * compat wiring, and contract coverage without importing plugin runtime.
+   */
+  contracts?: PluginManifestContracts;
+};
+
+export type PluginManifestContracts = {
+  speechProviders?: string[];
+  mediaUnderstandingProviders?: string[];
+  imageGenerationProviders?: string[];
+  webSearchProviders?: string[];
+  tools?: string[];
 };
 
 export type PluginManifestProviderAuthChoice = {
@@ -90,6 +103,30 @@ function normalizeStringListRecord(value: unknown): Record<string, string[]> | u
     normalized[providerId] = values;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestContracts(value: unknown): PluginManifestContracts | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const contracts = {
+    ...(normalizeStringList(value.speechProviders)
+      ? { speechProviders: normalizeStringList(value.speechProviders) }
+      : {}),
+    ...(normalizeStringList(value.mediaUnderstandingProviders)
+      ? { mediaUnderstandingProviders: normalizeStringList(value.mediaUnderstandingProviders) }
+      : {}),
+    ...(normalizeStringList(value.imageGenerationProviders)
+      ? { imageGenerationProviders: normalizeStringList(value.imageGenerationProviders) }
+      : {}),
+    ...(normalizeStringList(value.webSearchProviders)
+      ? { webSearchProviders: normalizeStringList(value.webSearchProviders) }
+      : {}),
+    ...(normalizeStringList(value.tools) ? { tools: normalizeStringList(value.tools) } : {}),
+  } satisfies PluginManifestContracts;
+
+  return Object.keys(contracts).length > 0 ? contracts : undefined;
 }
 
 function normalizeProviderAuthChoices(
@@ -215,6 +252,7 @@ export function loadPluginManifest(
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const skills = normalizeStringList(raw.skills);
+  const contracts = normalizeManifestContracts(raw.contracts);
 
   let uiHints: Record<string, PluginConfigUiHint> | undefined;
   if (isRecord(raw.uiHints)) {
@@ -241,6 +279,7 @@ export function loadPluginManifest(
       description,
       version,
       uiHints,
+      contracts,
     },
     manifestPath,
   };

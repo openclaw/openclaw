@@ -2,11 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import openAIPlugin from "../../../extensions/openai/index.js";
 import { createProviderUsageFetch, makeResponse } from "../../test-utils/provider-usage-fetch.js";
 import type { ProviderPlugin, ProviderRuntimeModel } from "../types.js";
 import { requireProviderContractProvider as requireBundledProviderContractProvider } from "./registry.js";
-import { registerProviders, requireProvider } from "./testkit.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
@@ -46,9 +44,6 @@ function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRun
 }
 
 function requireProviderContractProvider(providerId: string): ProviderPlugin {
-  if (providerId === "openai-codex") {
-    return requireProvider(registerProviders(openAIPlugin), providerId);
-  }
   return requireBundledProviderContractProvider(providerId);
 }
 

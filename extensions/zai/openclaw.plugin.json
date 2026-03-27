@@ -76,6 +76,9 @@
       "cliDescription": "Z.AI API key"
     }
   ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["zai"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -44,6 +44,11 @@
       "help": "Gemini model override for web search grounding."
     }
   },
+  "contracts": {
+    "mediaUnderstandingProviders": ["google"],
+    "imageGenerationProviders": ["google"],
+    "webSearchProviders": ["gemini"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

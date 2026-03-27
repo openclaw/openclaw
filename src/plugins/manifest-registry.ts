@@ -6,7 +6,11 @@ import { resolveRuntimeServiceVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
-import { loadPluginManifest, type PluginManifest } from "./manifest.js";
+import {
+  loadPluginManifest,
+  type PluginManifest,
+  type PluginManifestContracts,
+} from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import { resolvePluginCacheInputs } from "./roots.js";
@@ -64,6 +68,7 @@ export type PluginManifestRecord = {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
+  contracts?: PluginManifestContracts;
   channelCatalogMeta?: {
     id: string;
     preferOver?: string[];
@@ -195,6 +200,7 @@ function buildRecord(params: {
     schemaCacheKey: params.schemaCacheKey,
     configSchema: params.configSchema,
     configUiHints: params.manifest.uiHints,
+    contracts: params.manifest.contracts,
     ...(params.candidate.packageManifest?.channel?.id
       ? {
           channelCatalogMeta: {

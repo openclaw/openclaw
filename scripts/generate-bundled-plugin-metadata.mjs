@@ -50,6 +50,33 @@ function normalizeStringList(values) {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeManifestContracts(raw) {
+  const contracts = normalizeObject(raw);
+  if (!contracts) {
+    return undefined;
+  }
+  const normalized = {
+    ...(normalizeStringList(contracts.speechProviders)
+      ? { speechProviders: normalizeStringList(contracts.speechProviders) }
+      : {}),
+    ...(normalizeStringList(contracts.mediaUnderstandingProviders)
+      ? {
+          mediaUnderstandingProviders: normalizeStringList(contracts.mediaUnderstandingProviders),
+        }
+      : {}),
+    ...(normalizeStringList(contracts.imageGenerationProviders)
+      ? { imageGenerationProviders: normalizeStringList(contracts.imageGenerationProviders) }
+      : {}),
+    ...(normalizeStringList(contracts.webSearchProviders)
+      ? { webSearchProviders: normalizeStringList(contracts.webSearchProviders) }
+      : {}),
+    ...(normalizeStringList(contracts.tools)
+      ? { tools: normalizeStringList(contracts.tools) }
+      : {}),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function normalizeObject(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -109,6 +136,9 @@ function normalizePluginManifest(raw) {
     ...(normalizeStringList(raw.imageGenerationProviders)
       ? { imageGenerationProviders: normalizeStringList(raw.imageGenerationProviders) }
       : {}),
+    ...(normalizeStringList(raw.cliBackends)
+      ? { cliBackends: normalizeStringList(raw.cliBackends) }
+      : {}),
     ...(normalizeObject(raw.providerAuthEnvVars)
       ? { providerAuthEnvVars: raw.providerAuthEnvVars }
       : {}),
@@ -120,6 +150,9 @@ function normalizePluginManifest(raw) {
     ...(typeof raw.description === "string" ? { description: raw.description.trim() } : {}),
     ...(typeof raw.version === "string" ? { version: raw.version.trim() } : {}),
     ...(normalizeObject(raw.uiHints) ? { uiHints: raw.uiHints } : {}),
+    ...(normalizeManifestContracts(raw.contracts)
+      ? { contracts: normalizeManifestContracts(raw.contracts) }
+      : {}),
   };
 }
 

@@ -57,6 +57,10 @@
       "cliDescription": "MiniMax API key"
     }
   ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["minimax", "minimax-portal"],
+    "imageGenerationProviders": ["minimax", "minimax-portal"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

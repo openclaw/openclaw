@@ -1,13 +1,4 @@
-const BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS = {
-  brave: "brave",
-  exa: "exa",
-  firecrawl: "firecrawl",
-  gemini: "google",
-  grok: "xai",
-  kimi: "moonshot",
-  perplexity: "perplexity",
-  tavily: "tavily",
-} as const satisfies Record<string, string>;
+import { BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS } from "./bundled-capability-metadata.js";
 
 export function resolveBundledWebSearchPluginId(
   providerId: string | undefined,

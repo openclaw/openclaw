@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { bundledWebSearchPluginRegistrations } from "../bundled-web-search-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { BUNDLED_WEB_SEARCH_PLUGIN_IDS } from "./bundled-web-search-ids.js";
 import { resolveBundledWebSearchPluginId } from "./bundled-web-search-provider-ids.js";
@@ -85,14 +84,16 @@ describe("bundled web search metadata", () => {
 
   it("keeps bundled web search fast-path ids aligned with the registry", () => {
     expect([...BUNDLED_WEB_SEARCH_PLUGIN_IDS]).toEqual(
-      bundledWebSearchPluginRegistrations
-        .map(({ plugin }) => plugin.id)
+      listBundledWebSearchProviders()
+        .map(({ pluginId }) => pluginId)
+        .filter((value, index, values) => values.indexOf(value) === index)
         .toSorted((left, right) => left.localeCompare(right)),
     );
   });
 
   it("keeps bundled web search provider-to-plugin ids aligned with bundled contracts", () => {
     expect(resolveBundledWebSearchPluginId("brave")).toBe("brave");
+    expect(resolveBundledWebSearchPluginId("duckduckgo")).toBe("duckduckgo");
     expect(resolveBundledWebSearchPluginId("exa")).toBe("exa");
     expect(resolveBundledWebSearchPluginId("firecrawl")).toBe("firecrawl");
     expect(resolveBundledWebSearchPluginId("gemini")).toBe("google");
@@ -102,7 +103,7 @@ describe("bundled web search metadata", () => {
     expect(resolveBundledWebSearchPluginId("grok")).toBe("xai");
   });
 
-  it("keeps fast-path bundled provider metadata aligned with bundled plugin contracts", async () => {
+  it("keeps bundled provider metadata aligned with bundled plugin contracts", async () => {
     const fastPathProviders = listBundledWebSearchProviders();
 
     expect(

@@ -96,7 +96,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
     expect(providers).toEqual([]);
   });
 
-  it("can resolve bundled providers without the plugin loader", () => {
+  it("can resolve bundled providers through the manifest-scoped loader path", () => {
     const providers = resolveBundledPluginWebSearchProviders({
       bundledAllowlistCompat: true,
     });

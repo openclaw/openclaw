@@ -41,6 +41,9 @@
       "cliDescription": "Anthropic API key"
     }
   ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["anthropic"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
