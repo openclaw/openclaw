@@ -7,18 +7,15 @@ import {
 } from "../../context-engine/index.js";
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
   type AuthProfileFailureReason,
-  isProfileInCooldown,
   markAuthProfileFailure,
   markAuthProfileGood,
   markAuthProfileUsed,
-  resolveProfilesUnavailableReason,
 } from "../auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import {
@@ -27,11 +24,9 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
-import { shouldAllowCooldownProbeForReason } from "../failover-policy.js";
 import {
   applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
-  getApiKeyForModel,
   type ResolvedProviderAuth,
   resolveAuthProfileOrder,
 } from "../model-auth.js";
@@ -55,7 +50,6 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
-import { clampRuntimeAuthRefreshDelayMs } from "../runtime-auth-refresh.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { isLikelyMutatingToolName } from "../tool-mutation.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
@@ -67,6 +61,7 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
+import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import {
   buildErrorAgentMeta,
@@ -75,9 +70,6 @@ import {
   OVERLOAD_FAILOVER_BACKOFF_POLICY,
   resolveActiveErrorContext,
   resolveMaxRunRetryIterations,
-  RUNTIME_AUTH_REFRESH_MARGIN_MS,
-  RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
-  RUNTIME_AUTH_REFRESH_RETRY_MS,
   type RuntimeAuthState,
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
@@ -229,373 +221,60 @@ export async function runEmbeddedPiAgent(
       let lastProfileId: string | undefined;
       let runtimeAuthState: RuntimeAuthState | null = null;
       let runtimeAuthRefreshCancelled = false;
-      const hasRefreshableRuntimeAuth = () => Boolean(runtimeAuthState?.sourceApiKey.trim());
+      const {
+        advanceAuthProfile,
+        initializeAuthProfile,
+        maybeRefreshRuntimeAuthForAuthError,
+        stopRuntimeAuthRefreshTimer,
+      } = createEmbeddedRunAuthController({
+        config: params.config,
+        agentDir,
+        workspaceDir: resolvedWorkspace,
+        authStore,
+        authStorage,
+        profileCandidates,
+        lockedProfileId,
+        initialThinkLevel,
+        attemptedThinking,
+        fallbackConfigured,
+        allowTransientCooldownProbe: params.allowTransientCooldownProbe === true,
+        getProvider: () => provider,
+        getModelId: () => modelId,
+        getRuntimeModel: () => runtimeModel,
+        setRuntimeModel: (next) => {
+          runtimeModel = next;
+        },
+        getEffectiveModel: () => effectiveModel,
+        setEffectiveModel: (next) => {
+          effectiveModel = next;
+        },
+        getApiKeyInfo: () => apiKeyInfo,
+        setApiKeyInfo: (next) => {
+          apiKeyInfo = next;
+        },
+        getLastProfileId: () => lastProfileId,
+        setLastProfileId: (next) => {
+          lastProfileId = next;
+        },
+        getRuntimeAuthState: () => runtimeAuthState,
+        setRuntimeAuthState: (next) => {
+          runtimeAuthState = next;
+        },
+        getRuntimeAuthRefreshCancelled: () => runtimeAuthRefreshCancelled,
+        setRuntimeAuthRefreshCancelled: (next) => {
+          runtimeAuthRefreshCancelled = next;
+        },
+        getProfileIndex: () => profileIndex,
+        setProfileIndex: (next) => {
+          profileIndex = next;
+        },
+        setThinkLevel: (next) => {
+          thinkLevel = next;
+        },
+        log,
+      });
 
-      const clearRuntimeAuthRefreshTimer = () => {
-        if (!runtimeAuthState?.refreshTimer) {
-          return;
-        }
-        clearTimeout(runtimeAuthState.refreshTimer);
-        runtimeAuthState.refreshTimer = undefined;
-      };
-
-      const stopRuntimeAuthRefreshTimer = () => {
-        if (!runtimeAuthState) {
-          return;
-        }
-        runtimeAuthRefreshCancelled = true;
-        clearRuntimeAuthRefreshTimer();
-      };
-
-      const refreshRuntimeAuth = async (reason: string): Promise<void> => {
-        if (!runtimeAuthState) {
-          return;
-        }
-        if (runtimeAuthState.refreshInFlight) {
-          await runtimeAuthState.refreshInFlight;
-          return;
-        }
-        runtimeAuthState.refreshInFlight = (async () => {
-          const sourceApiKey = runtimeAuthState?.sourceApiKey.trim() ?? "";
-          if (!sourceApiKey) {
-            throw new Error(`Runtime auth refresh requires a source credential.`);
-          }
-          log.debug(`Refreshing runtime auth for ${runtimeModel.provider} (${reason})...`);
-          const preparedAuth = await prepareProviderRuntimeAuth({
-            provider: runtimeModel.provider,
-            config: params.config,
-            workspaceDir: resolvedWorkspace,
-            env: process.env,
-            context: {
-              config: params.config,
-              agentDir,
-              workspaceDir: resolvedWorkspace,
-              env: process.env,
-              provider: runtimeModel.provider,
-              modelId,
-              model: runtimeModel,
-              apiKey: sourceApiKey,
-              authMode: runtimeAuthState?.authMode ?? "unknown",
-              profileId: runtimeAuthState?.profileId,
-            },
-          });
-          if (!preparedAuth?.apiKey) {
-            throw new Error(
-              `Provider "${runtimeModel.provider}" does not support runtime auth refresh.`,
-            );
-          }
-          authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
-          if (preparedAuth.baseUrl) {
-            runtimeModel = { ...runtimeModel, baseUrl: preparedAuth.baseUrl };
-            effectiveModel = {
-              ...effectiveModel,
-              baseUrl: preparedAuth.baseUrl,
-            };
-          }
-          runtimeAuthState = {
-            ...runtimeAuthState,
-            expiresAt: preparedAuth.expiresAt,
-          };
-          if (preparedAuth.expiresAt) {
-            const remaining = preparedAuth.expiresAt - Date.now();
-            log.debug(
-              `Runtime auth refreshed for ${runtimeModel.provider}; expires in ${Math.max(0, Math.floor(remaining / 1000))}s.`,
-            );
-          }
-        })()
-          .catch((err) => {
-            log.warn(
-              `Runtime auth refresh failed for ${runtimeModel.provider}: ${describeUnknownError(err)}`,
-            );
-            throw err;
-          })
-          .finally(() => {
-            if (runtimeAuthState) {
-              runtimeAuthState.refreshInFlight = undefined;
-            }
-          });
-        await runtimeAuthState.refreshInFlight;
-      };
-
-      const scheduleRuntimeAuthRefresh = (): void => {
-        if (!runtimeAuthState || runtimeAuthRefreshCancelled) {
-          return;
-        }
-        if (!hasRefreshableRuntimeAuth()) {
-          log.warn(
-            `Skipping runtime auth refresh scheduling for ${runtimeModel.provider}; source credential missing.`,
-          );
-          return;
-        }
-        if (!runtimeAuthState.expiresAt) {
-          return;
-        }
-        clearRuntimeAuthRefreshTimer();
-        const now = Date.now();
-        const refreshAt = runtimeAuthState.expiresAt - RUNTIME_AUTH_REFRESH_MARGIN_MS;
-        const delayMs = clampRuntimeAuthRefreshDelayMs({
-          refreshAt,
-          now,
-          minDelayMs: RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
-        });
-        const timer = setTimeout(() => {
-          if (runtimeAuthRefreshCancelled) {
-            return;
-          }
-          refreshRuntimeAuth("scheduled")
-            .then(() => scheduleRuntimeAuthRefresh())
-            .catch(() => {
-              if (runtimeAuthRefreshCancelled) {
-                return;
-              }
-              const retryTimer = setTimeout(() => {
-                if (runtimeAuthRefreshCancelled) {
-                  return;
-                }
-                refreshRuntimeAuth("scheduled-retry")
-                  .then(() => scheduleRuntimeAuthRefresh())
-                  .catch(() => undefined);
-              }, RUNTIME_AUTH_REFRESH_RETRY_MS);
-              const activeRuntimeAuthState = runtimeAuthState;
-              if (activeRuntimeAuthState) {
-                activeRuntimeAuthState.refreshTimer = retryTimer;
-              }
-              if (runtimeAuthRefreshCancelled && activeRuntimeAuthState) {
-                clearTimeout(retryTimer);
-                activeRuntimeAuthState.refreshTimer = undefined;
-              }
-            });
-        }, delayMs);
-        runtimeAuthState.refreshTimer = timer;
-        if (runtimeAuthRefreshCancelled) {
-          clearTimeout(timer);
-          runtimeAuthState.refreshTimer = undefined;
-        }
-      };
-
-      const resolveAuthProfileFailoverReason = (params: {
-        allInCooldown: boolean;
-        message: string;
-        profileIds?: Array<string | undefined>;
-      }): FailoverReason => {
-        if (params.allInCooldown) {
-          const profileIds = (params.profileIds ?? profileCandidates).filter(
-            (id): id is string => typeof id === "string" && id.length > 0,
-          );
-          return (
-            resolveProfilesUnavailableReason({
-              store: authStore,
-              profileIds,
-            }) ?? "unknown"
-          );
-        }
-        const classified = classifyFailoverReason(params.message);
-        return classified ?? "auth";
-      };
-
-      const throwAuthProfileFailover = (params: {
-        allInCooldown: boolean;
-        message?: string;
-        error?: unknown;
-      }): never => {
-        const fallbackMessage = `No available auth profile for ${provider} (all in cooldown or unavailable).`;
-        const message =
-          params.message?.trim() ||
-          (params.error ? describeUnknownError(params.error).trim() : "") ||
-          fallbackMessage;
-        const reason = resolveAuthProfileFailoverReason({
-          allInCooldown: params.allInCooldown,
-          message,
-          profileIds: profileCandidates,
-        });
-        if (fallbackConfigured) {
-          throw new FailoverError(message, {
-            reason,
-            provider,
-            model: modelId,
-            status: resolveFailoverStatus(reason),
-            cause: params.error,
-          });
-        }
-        if (params.error instanceof Error) {
-          throw params.error;
-        }
-        throw new Error(message);
-      };
-
-      const resolveApiKeyForCandidate = async (candidate?: string) => {
-        return getApiKeyForModel({
-          model: runtimeModel,
-          cfg: params.config,
-          profileId: candidate,
-          store: authStore,
-          agentDir,
-        });
-      };
-
-      const applyApiKeyInfo = async (candidate?: string): Promise<void> => {
-        apiKeyInfo = await resolveApiKeyForCandidate(candidate);
-        const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
-        if (!apiKeyInfo.apiKey) {
-          if (apiKeyInfo.mode !== "aws-sdk") {
-            throw new Error(
-              `No API key resolved for provider "${runtimeModel.provider}" (auth mode: ${apiKeyInfo.mode}).`,
-            );
-          }
-          lastProfileId = resolvedProfileId;
-          return;
-        }
-        let runtimeAuthHandled = false;
-        const preparedAuth = await prepareProviderRuntimeAuth({
-          provider: runtimeModel.provider,
-          config: params.config,
-          workspaceDir: resolvedWorkspace,
-          env: process.env,
-          context: {
-            config: params.config,
-            agentDir,
-            workspaceDir: resolvedWorkspace,
-            env: process.env,
-            provider: runtimeModel.provider,
-            modelId,
-            model: runtimeModel,
-            apiKey: apiKeyInfo.apiKey,
-            authMode: apiKeyInfo.mode,
-            profileId: apiKeyInfo.profileId,
-          },
-        });
-        if (preparedAuth?.baseUrl) {
-          runtimeModel = { ...runtimeModel, baseUrl: preparedAuth.baseUrl };
-          effectiveModel = { ...effectiveModel, baseUrl: preparedAuth.baseUrl };
-        }
-        if (preparedAuth?.apiKey) {
-          authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
-          runtimeAuthState = {
-            sourceApiKey: apiKeyInfo.apiKey,
-            authMode: apiKeyInfo.mode,
-            profileId: apiKeyInfo.profileId,
-            expiresAt: preparedAuth.expiresAt,
-          };
-          if (preparedAuth.expiresAt) {
-            scheduleRuntimeAuthRefresh();
-          }
-          runtimeAuthHandled = true;
-        }
-        if (runtimeAuthHandled) {
-          // Plugin-owned runtime auth already stored the exchanged credential.
-        } else {
-          authStorage.setRuntimeApiKey(runtimeModel.provider, apiKeyInfo.apiKey);
-          runtimeAuthState = null;
-        }
-        lastProfileId = apiKeyInfo.profileId;
-      };
-
-      const advanceAuthProfile = async (): Promise<boolean> => {
-        if (lockedProfileId) {
-          return false;
-        }
-        let nextIndex = profileIndex + 1;
-        while (nextIndex < profileCandidates.length) {
-          const candidate = profileCandidates[nextIndex];
-          if (candidate && isProfileInCooldown(authStore, candidate, undefined, modelId)) {
-            nextIndex += 1;
-            continue;
-          }
-          try {
-            await applyApiKeyInfo(candidate);
-            profileIndex = nextIndex;
-            thinkLevel = initialThinkLevel;
-            attemptedThinking.clear();
-            return true;
-          } catch (err) {
-            if (candidate && candidate === lockedProfileId) {
-              throw err;
-            }
-            nextIndex += 1;
-          }
-        }
-        return false;
-      };
-
-      try {
-        const autoProfileCandidates = profileCandidates.filter(
-          (candidate): candidate is string =>
-            typeof candidate === "string" && candidate.length > 0 && candidate !== lockedProfileId,
-        );
-        const allAutoProfilesInCooldown =
-          autoProfileCandidates.length > 0 &&
-          autoProfileCandidates.every((candidate) =>
-            isProfileInCooldown(authStore, candidate, undefined, modelId),
-          );
-        const unavailableReason = allAutoProfilesInCooldown
-          ? (resolveProfilesUnavailableReason({
-              store: authStore,
-              profileIds: autoProfileCandidates,
-            }) ?? "unknown")
-          : null;
-        const allowTransientCooldownProbe =
-          params.allowTransientCooldownProbe === true &&
-          allAutoProfilesInCooldown &&
-          shouldAllowCooldownProbeForReason(unavailableReason);
-        let didTransientCooldownProbe = false;
-
-        while (profileIndex < profileCandidates.length) {
-          const candidate = profileCandidates[profileIndex];
-          const inCooldown =
-            candidate &&
-            candidate !== lockedProfileId &&
-            isProfileInCooldown(authStore, candidate, undefined, modelId);
-          if (inCooldown) {
-            if (allowTransientCooldownProbe && !didTransientCooldownProbe) {
-              didTransientCooldownProbe = true;
-              log.warn(
-                `probing cooldowned auth profile for ${provider}/${modelId} due to ${unavailableReason ?? "transient"} unavailability`,
-              );
-            } else {
-              profileIndex += 1;
-              continue;
-            }
-          }
-          await applyApiKeyInfo(profileCandidates[profileIndex]);
-          break;
-        }
-        if (profileIndex >= profileCandidates.length) {
-          throwAuthProfileFailover({ allInCooldown: true });
-        }
-      } catch (err) {
-        if (err instanceof FailoverError) {
-          throw err;
-        }
-        if (profileCandidates[profileIndex] === lockedProfileId) {
-          throwAuthProfileFailover({ allInCooldown: false, error: err });
-        }
-        const advanced = await advanceAuthProfile();
-        if (!advanced) {
-          throwAuthProfileFailover({ allInCooldown: false, error: err });
-        }
-      }
-
-      const maybeRefreshRuntimeAuthForAuthError = async (
-        errorText: string,
-        retried: boolean,
-      ): Promise<boolean> => {
-        if (!runtimeAuthState || retried) {
-          return false;
-        }
-        if (!isFailoverErrorMessage(errorText)) {
-          return false;
-        }
-        if (classifyFailoverReason(errorText) !== "auth") {
-          return false;
-        }
-        try {
-          await refreshRuntimeAuth("auth-error");
-          scheduleRuntimeAuthRefresh();
-          return true;
-        } catch {
-          return false;
-        }
-      };
+      await initializeAuthProfile();
 
       const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
