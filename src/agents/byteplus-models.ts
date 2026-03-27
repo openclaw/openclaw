@@ -12,12 +12,13 @@ export const BYTEPLUS_DEFAULT_MODEL_ID = "seed-1-8-251228";
 export const BYTEPLUS_CODING_DEFAULT_MODEL_ID = "ark-code-latest";
 export const BYTEPLUS_DEFAULT_MODEL_REF = `byteplus/${BYTEPLUS_DEFAULT_MODEL_ID}`;
 
-// BytePlus pricing (approximate, adjust based on actual pricing)
+// BytePlus ARK pricing (per 1M tokens, USD)
+// https://www.bytepluses.com/en/docs/model-platform/pricing
 export const BYTEPLUS_DEFAULT_COST = {
-  input: 0.0001, // $0.0001 per 1K tokens
-  output: 0.0002, // $0.0002 per 1K tokens
-  cacheRead: 0,
-  cacheWrite: 0,
+  input: 0.11, // $0.11/Mtok
+  output: 0.55, // $0.55/Mtok
+  cacheRead: 0.055, // 50% of input (context caching read)
+  cacheWrite: 0.11, // same as input (context caching write)
 };
 
 /**

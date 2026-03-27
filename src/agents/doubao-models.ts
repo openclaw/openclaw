@@ -12,12 +12,13 @@ export const DOUBAO_DEFAULT_MODEL_ID = "doubao-seed-1-8-251228";
 export const DOUBAO_CODING_DEFAULT_MODEL_ID = "ark-code-latest";
 export const DOUBAO_DEFAULT_MODEL_REF = `volcengine/${DOUBAO_DEFAULT_MODEL_ID}`;
 
-// Volcano Engine Doubao pricing (approximate, adjust based on actual pricing)
+// Volcano Engine Doubao pricing (per 1M tokens, approximate CNY converted to USD)
+// https://www.volcengine.com/docs/82379/1099320
 export const DOUBAO_DEFAULT_COST = {
-  input: 0.0001, // ¥0.0001 per 1K tokens
-  output: 0.0002, // ¥0.0002 per 1K tokens
-  cacheRead: 0,
-  cacheWrite: 0,
+  input: 0.11, // ~¥0.8/Mtok
+  output: 0.55, // ~¥4/Mtok
+  cacheRead: 0.055, // 50% of input (context caching read)
+  cacheWrite: 0.11, // same as input (context caching write)
 };
 
 /**
