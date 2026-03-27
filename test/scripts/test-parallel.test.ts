@@ -371,9 +371,13 @@ describe("scripts/test-parallel lane planning", () => {
       }),
     );
 
-    expect(output).toContain("unit-batch-1 filters=50");
-    expect(output).toContain("unit-batch-2 filters=49");
-    expect(output).not.toContain("unit-batch-3");
+    const unitBatchLines = getPlanLines(output, "unit-batch-");
+    const unitBatchFilterCounts = unitBatchLines.map((line) =>
+      parseNumericPlanField(line, "filters"),
+    );
+
+    expect(unitBatchLines.length).toBe(2);
+    expect(unitBatchFilterCounts).toEqual([50, 50]);
   });
 
   it("explains targeted file ownership and execution policy", () => {

@@ -1,11 +1,11 @@
-import { ToolPolicySchema } from "openclaw/plugin-sdk/agent-config-primitives";
 import {
   AllowFromListSchema,
   buildCatchallMultiAccountChannelSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
-} from "openclaw/plugin-sdk/channel-config-primitives";
+  ToolPolicySchema,
+} from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "openclaw/plugin-sdk/zod";
 
 const groupConfigSchema = z.object({
