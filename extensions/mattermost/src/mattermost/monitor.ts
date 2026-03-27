@@ -1525,6 +1525,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           const sendPromise = sendMessageMattermost(to, text, {
             accountId: account.accountId,
             replyToId: effectiveReplyToId,
+            signal: flushAbortController.signal,
           });
           // Register in patchInflight so awaitInflightBounded can track it
           patchInflight = sendPromise;
@@ -1598,6 +1599,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 const result = await sendMessageMattermost(to, text, {
                   accountId: account.accountId,
                   replyToId: effectiveReplyToId,
+                  signal: ac.signal,
                 });
                 streamMessageId = result.messageId;
                 lastSentText = text;

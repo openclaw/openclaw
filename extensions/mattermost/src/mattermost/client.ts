@@ -487,6 +487,7 @@ export async function createMattermostPost(
     rootId?: string;
     fileIds?: string[];
     props?: Record<string, unknown>;
+    signal?: AbortSignal;
   },
 ): Promise<MattermostPost> {
   const payload: Record<string, unknown> = {
@@ -505,6 +506,7 @@ export async function createMattermostPost(
   return await client.request<MattermostPost>("/posts", {
     method: "POST",
     body: JSON.stringify(payload),
+    signal: params.signal,
   });
 }
 
