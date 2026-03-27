@@ -171,10 +171,16 @@ export function mergeConsecutiveUserTurns(
   previous: Extract<AgentMessage, { role: "user" }>,
   current: Extract<AgentMessage, { role: "user" }>,
 ): Extract<AgentMessage, { role: "user" }> {
-  const mergedContent = [
-    ...(Array.isArray(previous.content) ? previous.content : []),
-    ...(Array.isArray(current.content) ? current.content : []),
-  ];
+  const toBlocks = (content: unknown): AnthropicContentBlock[] => {
+    if (Array.isArray(content)) {
+      return content;
+    }
+    if (typeof content === "string" && content.length > 0) {
+      return [{ type: "text", text: content }];
+    }
+    return [];
+  };
+  const mergedContent = [...toBlocks(previous.content), ...toBlocks(current.content)];
 
   return {
     ...current,

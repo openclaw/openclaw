@@ -141,7 +141,7 @@ export async function updateAuthProfileStoreWithLock(params: {
         // ensureAuthProfileStore() see the freshly persisted state
         // instead of returning stale per-agent keys. (#55562)
         const cacheKey = resolveRuntimeStoreKey(params.agentDir);
-        if (runtimeAuthStoreSnapshots.size > 0) {
+        if (runtimeAuthStoreSnapshots.size > 0 && runtimeAuthStoreSnapshots.has(cacheKey)) {
           runtimeAuthStoreSnapshots.set(cacheKey, cloneAuthProfileStore(store));
         }
       }
