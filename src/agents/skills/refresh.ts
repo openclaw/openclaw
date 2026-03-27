@@ -24,7 +24,12 @@ const log = createSubsystemLogger("gateway/skills");
 const listeners = new Set<(event: SkillsChangeEvent) => void>();
 const workspaceVersions = new Map<string, number>();
 const watchers = new Map<string, SkillsWatchState>();
-let globalVersion = 0;
+// Start at 1 so that sessions persisted with version 0 (the default) are
+// always refreshed on the first turn after a gateway restart.  Without this,
+// a restart resets the in-memory counter to 0 and the comparison
+// `snapshotVersion > 0 && stored < snapshotVersion` is always false, leaving
+// long-lived sessions stuck with a stale skills snapshot indefinitely.
+let globalVersion = 1;
 
 export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.git([\\/]|$)/,
