@@ -978,23 +978,28 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           : () => {},
       registerHttpRoute:
         registrationMode === "full" ? (params) => registerHttpRoute(record, params) : () => {},
-      registerChannel: (registration) => registerChannel(record, registration, registrationMode),
+      registerChannel:
+        registrationMode === "provider-only"
+          ? () => {}
+          : (registration) => registerChannel(record, registration, registrationMode),
       registerProvider:
-        registrationMode === "full" ? (provider) => registerProvider(record, provider) : () => {},
+        registrationMode === "full" || registrationMode === "provider-only"
+          ? (provider) => registerProvider(record, provider)
+          : () => {},
       registerSpeechProvider:
-        registrationMode === "full"
+        registrationMode === "full" || registrationMode === "provider-only"
           ? (provider) => registerSpeechProvider(record, provider)
           : () => {},
       registerMediaUnderstandingProvider:
-        registrationMode === "full"
+        registrationMode === "full" || registrationMode === "provider-only"
           ? (provider) => registerMediaUnderstandingProvider(record, provider)
           : () => {},
       registerImageGenerationProvider:
-        registrationMode === "full"
+        registrationMode === "full" || registrationMode === "provider-only"
           ? (provider) => registerImageGenerationProvider(record, provider)
           : () => {},
       registerWebSearchProvider:
-        registrationMode === "full"
+        registrationMode === "full" || registrationMode === "provider-only"
           ? (provider) => registerWebSearchProvider(record, provider)
           : () => {},
       registerGatewayMethod:
