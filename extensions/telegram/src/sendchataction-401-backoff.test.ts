@@ -132,8 +132,8 @@ describe("createTelegramSendChatActionHandler", () => {
       maxConsecutive401: 2,
     });
 
-    await expect(handler.sendChatAction(123, "typing")).resolves.toBeUndefined();
-    await expect(handler.sendChatAction(123, "typing")).resolves.toBeUndefined();
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
 
     expect(handler.isSuspended()).toBe(false);
     expect(fn).toHaveBeenCalledTimes(1);
@@ -174,7 +174,7 @@ describe("createTelegramSendChatActionHandler", () => {
         logger,
       });
 
-      await expect(handler.sendChatAction(123, "typing")).resolves.toBeUndefined();
+      await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
       now = 10_000;
       await expect(handler.sendChatAction(123, "typing")).resolves.toBeUndefined();
 
@@ -193,7 +193,9 @@ describe("createTelegramSendChatActionHandler", () => {
       logger,
     });
 
-    await expect(handler.sendChatAction(123, "typing")).resolves.toBeUndefined();
+    await expect(handler.sendChatAction(123, "typing")).rejects.toMatchObject({
+      error_code: 429,
+    });
     expect(handler.isSuspended()).toBe(false);
     expect(logger).toHaveBeenCalledWith(expect.stringContaining("transient failure"));
   });
@@ -206,7 +208,9 @@ describe("createTelegramSendChatActionHandler", () => {
       logger,
     });
 
-    await expect(handler.sendChatAction(123, "typing")).resolves.toBeUndefined();
+    await expect(handler.sendChatAction(123, "typing")).rejects.toMatchObject({
+      error_code: 502,
+    });
     expect(handler.isSuspended()).toBe(false);
     expect(logger).toHaveBeenCalledWith(expect.stringContaining("transient failure"));
   });
@@ -240,7 +244,7 @@ describe("createTelegramSendChatActionHandler", () => {
       });
 
       await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("401");
-      await expect(handler.sendChatAction(123, "typing")).resolves.toBeUndefined();
+      await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
       now = 10_000;
       await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("401");
 
