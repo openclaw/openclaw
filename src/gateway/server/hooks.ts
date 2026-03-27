@@ -149,7 +149,7 @@ export function createGatewayHooksRequestHandler(params: {
         }
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);
-        enqueueSystemEvent(`Hook ${value.name} (error): ${String(err)}`, {
+        enqueueSystemEvent(`${formatHookPrefix(value.name, "error")}: ${String(err)}`, {
           sessionKey: mainSessionKey,
         });
         if (value.wakeMode === "now") {
