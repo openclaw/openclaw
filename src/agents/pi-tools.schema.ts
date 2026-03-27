@@ -98,6 +98,12 @@ export function normalizeToolParameters(
     options?.modelProvider?.toLowerCase().includes("gemini");
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
   const hasXaiSchemaProfile = usesXaiToolSchemaProfile(options?.modelCompat);
+  // BytePlus/ark rejects tool schemas that contain keywords not supported by its decoding
+  // guidance engine (e.g. `patternProperties`). It shares the same restricted subset as
+  // Gemini, so we reuse cleanSchemaForGemini to strip those unsupported keywords.
+  const isByteplusProvider =
+    options?.modelProvider?.toLowerCase().includes("byteplus") ||
+    options?.modelId?.toLowerCase().includes("ark");
 
   function applyProviderCleaning(s: unknown): unknown {
     if (isGeminiProvider && !isAnthropicProvider) {
@@ -105,6 +111,9 @@ export function normalizeToolParameters(
     }
     if (hasXaiSchemaProfile) {
       return stripXaiUnsupportedKeywords(s);
+    }
+    if (isByteplusProvider) {
+      return cleanSchemaForGemini(s);
     }
     return s;
   }
