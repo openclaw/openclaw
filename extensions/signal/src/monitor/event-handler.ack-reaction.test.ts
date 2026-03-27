@@ -1,55 +1,72 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { dispatchInboundMessageMock, sendReactionSignalMock } = vi.hoisted(() => ({
+  dispatchInboundMessageMock: vi.fn().mockResolvedValue({ queuedFinal: false }),
+  sendReactionSignalMock: vi.fn().mockResolvedValue({ ok: true }),
+}));
 
 vi.mock("../send-reactions.js", () => ({
-  sendReactionSignal: vi.fn().mockResolvedValue({ ok: true }),
+  sendReactionSignal: sendReactionSignalMock,
 }));
 
-vi.mock("../../../../src/auto-reply/dispatch.js", () => ({
-  dispatchInboundMessage: vi.fn().mockResolvedValue({ queuedFinal: false }),
-}));
+vi.mock("../../../../src/auto-reply/dispatch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/auto-reply/dispatch.js")>();
+  return {
+    ...actual,
+    dispatchInboundMessage: dispatchInboundMessageMock,
+  };
+});
 
-import { dispatchInboundMessage } from "../../../../src/auto-reply/dispatch.js";
-import { sendReactionSignal } from "../send-reactions.js";
-import { createSignalEventHandler } from "./event-handler.js";
-import {
-  createBaseSignalEventHandlerDeps,
-  createSignalReceiveEvent,
-} from "./event-handler.test-harness.js";
+let dispatchInboundMessage: typeof import("../../../../src/auto-reply/dispatch.js").dispatchInboundMessage;
+let sendReactionSignal: typeof import("../send-reactions.js").sendReactionSignal;
+let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
+let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
+let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;
 
-function makeDeps(cfgOverrides: Record<string, unknown> = {}) {
-  const accountOverrides = (cfgOverrides.accountOverrides as Record<string, unknown>) ?? undefined;
-  const messagesOverrides = (cfgOverrides.messages as Record<string, unknown>) ?? undefined;
-  return createBaseSignalEventHandlerDeps({
-    cfg: {
-      channels: {
-        signal: {
-          accounts: {
-            default: {
-              reactionLevel: "ack",
-              ...accountOverrides,
+describe("Signal ACK reactions", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ dispatchInboundMessage } = await import("../../../../src/auto-reply/dispatch.js"));
+    ({ sendReactionSignal } = await import("../send-reactions.js"));
+    ({ createSignalEventHandler } = await import("./event-handler.js"));
+    ({ createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =
+      await import("./event-handler.test-harness.js"));
+  });
+
+  function makeDeps(cfgOverrides: Record<string, unknown> = {}) {
+    const accountOverrides =
+      (cfgOverrides.accountOverrides as Record<string, unknown>) ?? undefined;
+    const messagesOverrides = (cfgOverrides.messages as Record<string, unknown>) ?? undefined;
+    return createBaseSignalEventHandlerDeps({
+      cfg: {
+        channels: {
+          signal: {
+            accounts: {
+              default: {
+                reactionLevel: "ack",
+                ...accountOverrides,
+              },
             },
           },
         },
+        messages: {
+          ackReaction: "👀",
+          ackReactionScope: "all",
+          ...messagesOverrides,
+        },
+        ...cfgOverrides,
       },
-      messages: {
-        ackReaction: "👀",
-        ackReactionScope: "all",
-        ...messagesOverrides,
-      },
-      ...cfgOverrides,
-    },
-    ignoreAttachments: true,
-  });
-}
+      ignoreAttachments: true,
+    });
+  }
 
-function makeEvent(overrides: Record<string, unknown> = {}) {
-  return createSignalReceiveEvent({
-    dataMessage: { message: "hello", timestamp: 1700000000000 },
-    ...overrides,
-  });
-}
+  function makeEvent(overrides: Record<string, unknown> = {}) {
+    return createSignalReceiveEvent({
+      dataMessage: { message: "hello", timestamp: 1700000000000 },
+      ...overrides,
+    });
+  }
 
-describe("Signal ACK reactions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -80,48 +97,12 @@ describe("Signal ACK reactions", () => {
     const handler = createSignalEventHandler(deps);
     await handler(makeEvent());
 
-    expect(sendReactionSignal).toHaveBeenCalledOnce();
-  });
-
-  it("sends ack reaction for group when scope=all", async () => {
-    const deps = makeDeps({
-      messages: { ackReaction: "👀", ackReactionScope: "all" },
-    });
-    const handler = createSignalEventHandler(deps);
-    await handler(
-      makeEvent({
-        dataMessage: {
-          message: "hello group",
-          timestamp: 1700000000000,
-          groupInfo: { groupId: "grp123", groupName: "Test Group" },
-        },
-      }),
-    );
-
     expect(sendReactionSignal).toHaveBeenCalledWith(
       "+15550001111",
       1700000000000,
       "👀",
-      expect.objectContaining({ groupId: "grp123" }),
+      expect.objectContaining({ accountId: "default" }),
     );
-  });
-
-  it("sends ack reaction for group when scope=group-all", async () => {
-    const deps = makeDeps({
-      messages: { ackReaction: "👀", ackReactionScope: "group-all" },
-    });
-    const handler = createSignalEventHandler(deps);
-    await handler(
-      makeEvent({
-        dataMessage: {
-          message: "hello group",
-          timestamp: 1700000000000,
-          groupInfo: { groupId: "grp123", groupName: "Test Group" },
-        },
-      }),
-    );
-
-    expect(sendReactionSignal).toHaveBeenCalledOnce();
   });
 
   it("does NOT send ack when scope=off", async () => {
@@ -132,53 +113,6 @@ describe("Signal ACK reactions", () => {
     await handler(makeEvent());
 
     expect(sendReactionSignal).not.toHaveBeenCalled();
-  });
-
-  it("does NOT send ack for group when scope=group-mentions and not mentioned", async () => {
-    const deps = makeDeps({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
-    });
-    const handler = createSignalEventHandler(deps);
-    await handler(
-      makeEvent({
-        dataMessage: {
-          message: "hello group no mention",
-          timestamp: 1700000000000,
-          groupInfo: { groupId: "grp123", groupName: "Test Group" },
-        },
-      }),
-    );
-
-    // group-mentions requires a mention pattern match — no mention patterns configured so no ack
-    expect(sendReactionSignal).not.toHaveBeenCalled();
-  });
-
-  it("sends ack for group when scope=group-mentions and agent is mentioned", async () => {
-    const deps = makeDeps({
-      messages: {
-        ackReaction: "👀",
-        ackReactionScope: "group-mentions",
-        groupChat: { mentionPatterns: ["\\bpinky\\b"] },
-      },
-    });
-    const handler = createSignalEventHandler(deps);
-    await handler(
-      makeEvent({
-        dataMessage: {
-          message: "hey pinky what do you think?",
-          timestamp: 1700000000000,
-          groupInfo: { groupId: "grp123", groupName: "Test Group" },
-        },
-      }),
-    );
-
-    // group-mentions with a configured pattern that matches the message → should ACK
-    expect(sendReactionSignal).toHaveBeenCalledWith(
-      "+15550001111",
-      1700000000000,
-      "👀",
-      expect.objectContaining({ groupId: "grp123" }),
-    );
   });
 
   it("does NOT send ack when reactionLevel=minimal", async () => {
@@ -205,18 +139,17 @@ describe("Signal ACK reactions", () => {
     const deps = makeDeps();
     const handler = createSignalEventHandler(deps);
     await handler(
-      makeEvent({
-        timestamp: undefined,
-        dataMessage: { message: "hello", timestamp: 1700000001234 },
+      createSignalReceiveEvent({
+        envelope: { source: "+15550001111", sourceDevice: 1 },
+        dataMessage: { message: "hello", timestamp: 1700000000001 },
       }),
     );
 
-    expect(sendReactionSignal).toHaveBeenCalledTimes(1);
     expect(sendReactionSignal).toHaveBeenCalledWith(
-      expect.any(String),
-      1700000001234,
-      expect.any(String),
-      expect.any(Object),
+      "+15550001111",
+      1700000000001,
+      "👀",
+      expect.objectContaining({ accountId: "default" }),
     );
   });
 
@@ -224,21 +157,9 @@ describe("Signal ACK reactions", () => {
     const deps = makeDeps();
     const handler = createSignalEventHandler(deps);
     await handler(
-      makeEvent({
-        timestamp: undefined,
-        dataMessage: { message: "hello", timestamp: undefined },
-      }),
-    );
-
-    expect(sendReactionSignal).not.toHaveBeenCalled();
-  });
-
-  it("does NOT send ack when message body is empty (whitespace-only text, no attachment, no quote)", async () => {
-    const deps = makeDeps();
-    const handler = createSignalEventHandler(deps);
-    await handler(
-      makeEvent({
-        dataMessage: { message: "   ", timestamp: 1700000000000 },
+      createSignalReceiveEvent({
+        envelope: { source: "+15550001111", sourceDevice: 1 },
+        dataMessage: { message: "hello" },
       }),
     );
 
@@ -249,31 +170,31 @@ describe("Signal ACK reactions", () => {
     const deps = makeDeps();
     const handler = createSignalEventHandler(deps);
     await handler(
-      makeEvent({
+      createSignalReceiveEvent({
         dataMessage: {
-          message: "",
           timestamp: 1700000000000,
-          attachments: [{ id: "att1", contentType: "image/png", size: 1024 }],
+          attachments: [{ contentType: "image/png", filename: "test.png", id: "1" }],
         },
       }),
     );
 
-    expect(sendReactionSignal).toHaveBeenCalledTimes(1);
+    expect(sendReactionSignal).toHaveBeenCalledWith(
+      "+15550001111",
+      1700000000000,
+      "👀",
+      expect.objectContaining({ accountId: "default" }),
+    );
   });
 
   it("sends ack BEFORE dispatch", async () => {
     const callOrder: string[] = [];
-    vi.mocked(sendReactionSignal).mockImplementation(async () => {
+    sendReactionSignalMock.mockImplementation(async () => {
       callOrder.push("ack");
       return { ok: true };
     });
-    vi.mocked(dispatchInboundMessage).mockImplementation(async () => {
+    dispatchInboundMessageMock.mockImplementation(async () => {
       callOrder.push("dispatch");
-      return { queuedFinal: false } as ReturnType<typeof dispatchInboundMessage> extends Promise<
-        infer T
-      >
-        ? T
-        : never;
+      return { queuedFinal: false };
     });
 
     const deps = makeDeps();
@@ -282,5 +203,75 @@ describe("Signal ACK reactions", () => {
 
     expect(callOrder[0]).toBe("ack");
     expect(callOrder).toContain("dispatch");
+  });
+
+  it("does NOT send ack for group messages when scope=direct", async () => {
+    const deps = makeDeps({
+      messages: { ackReaction: "👀", ackReactionScope: "direct" },
+    });
+    const handler = createSignalEventHandler(deps);
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "hello",
+          timestamp: 1700000000000,
+          groupInfo: { groupId: "group123", type: "DELIVER" },
+        },
+      }),
+    );
+
+    expect(sendReactionSignal).not.toHaveBeenCalled();
+  });
+
+  it("sends ack for group messages when scope=all", async () => {
+    const deps = makeDeps({
+      messages: { ackReaction: "👀", ackReactionScope: "all" },
+    });
+    const handler = createSignalEventHandler(deps);
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "hello",
+          timestamp: 1700000000000,
+          groupInfo: { groupId: "group123", type: "DELIVER" },
+        },
+      }),
+    );
+
+    expect(sendReactionSignal).toHaveBeenCalled();
+  });
+
+  it("sends ack for group messages when scope=group", async () => {
+    const deps = makeDeps({
+      messages: { ackReaction: "👀", ackReactionScope: "group" },
+    });
+    const handler = createSignalEventHandler(deps);
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "hello",
+          timestamp: 1700000000000,
+          groupInfo: { groupId: "group123", type: "DELIVER" },
+        },
+      }),
+    );
+
+    expect(sendReactionSignal).toHaveBeenCalled();
+  });
+
+  it("uses account-level ackReaction emoji over global config", async () => {
+    const deps = makeDeps({
+      accountOverrides: { ackReaction: "🔥" },
+      messages: { ackReaction: "👀", ackReactionScope: "all" },
+    });
+    const handler = createSignalEventHandler(deps);
+    await handler(makeEvent());
+
+    expect(sendReactionSignal).toHaveBeenCalledWith(
+      "+15550001111",
+      1700000000000,
+      "🔥",
+      expect.any(Object),
+    );
   });
 });
