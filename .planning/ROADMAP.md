@@ -54,7 +54,7 @@
    Plans:
 
 - [x] 02-01-PLAN.md — Template generation and ProjectManager with create() method
-- [ ] 02-02-PLAN.md — Sub-project creation and sequential task ID generation
+- [x] 02-02-PLAN.md — Sub-project creation and sequential task ID generation
       **Estimated complexity**: S
 
 ### Phase 3: Sync Pipeline

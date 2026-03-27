@@ -10,11 +10,11 @@ Requirements for Phase 1 release. Each maps to roadmap phases.
 ### Data Model
 
 - [x] **DATA-01**: Project folder structure exists at `~/.openclaw/projects/<name>/` with PROJECT.md, queue.md, and tasks/ directory
-- [ ] **DATA-02**: Sub-project folders supported one level deep under a parent project
+- [x] **DATA-02**: Sub-project folders supported one level deep under a parent project
 - [x] **DATA-03**: PROJECT.md contains YAML frontmatter with name, status, description, owner, tags, columns, dashboard widgets
 - [x] **DATA-04**: Task files in `tasks/TASK-NNN.md` contain YAML frontmatter with title, status, priority, assignee, capabilities, depends_on, created, updated
 - [x] **DATA-05**: Queue.md contains sections (Available, Claimed, Blocked) with task references and metadata
-- [ ] **DATA-06**: Task IDs are auto-generated sequential integers per project (TASK-001, TASK-002, etc.)
+- [x] **DATA-06**: Task IDs are auto-generated sequential integers per project (TASK-001, TASK-002, etc.)
 - [x] **DATA-07**: Task frontmatter supports `depends_on` field referencing other task IDs
 - [x] **DATA-08**: Kanban column names are configurable per project via PROJECT.md frontmatter with defaults (Backlog, In Progress, Review, Done)
 
@@ -133,11 +133,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase    | Status   |
 | ----------- | -------- | -------- |
 | DATA-01     | Phase 2  | Complete |
-| DATA-02     | Phase 2  | Pending  |
+| DATA-02     | Phase 2  | Complete |
 | DATA-03     | Phase 1  | Complete |
 | DATA-04     | Phase 1  | Complete |
 | DATA-05     | Phase 1  | Complete |
-| DATA-06     | Phase 2  | Pending  |
+| DATA-06     | Phase 2  | Complete |
 | DATA-07     | Phase 1  | Complete |
 | DATA-08     | Phase 1  | Complete |
 | PARSE-01    | Phase 1  | Complete |
