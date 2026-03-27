@@ -696,7 +696,7 @@ describe("AcpSessionManager", () => {
       id: "acpx",
       runtime: runtimeState.runtime,
     });
-    const sessionKey = "agent:codex:acp:binding:discord:default:deadbeef";
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:deadbeef";
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
       const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
       return {
@@ -739,7 +739,7 @@ describe("AcpSessionManager", () => {
       id: "acpx",
       runtime: runtimeState.runtime,
     });
-    const sessionKey = "agent:codex:acp:binding:discord:default:oneshot";
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:oneshot";
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
       const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
       return {
@@ -811,7 +811,7 @@ describe("AcpSessionManager", () => {
       id: "acpx",
       runtime: runtimeState.runtime,
     });
-    const sessionKey = "agent:codex:acp:binding:discord:default:retry-fresh";
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:retry-fresh";
     let currentMeta: SessionAcpMeta = {
       ...readySessionMeta(),
       runtimeSessionName: sessionKey,

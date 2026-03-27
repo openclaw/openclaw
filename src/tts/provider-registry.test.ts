@@ -54,16 +54,16 @@ describe("speech provider registry", () => {
       ...createEmptyPluginRegistry(),
       speechProviders: [
         {
-          pluginId: "test-openai",
+          pluginId: "test-demo-speech",
           source: "test",
-          provider: createSpeechProvider("openai"),
+          provider: createSpeechProvider("demo-speech"),
         },
       ],
     });
 
     const providers = listSpeechProviders();
 
-    expect(providers.map((provider) => provider.id)).toEqual(["openai"]);
+    expect(providers.map((provider) => provider.id)).toEqual(["demo-speech"]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
@@ -88,7 +88,7 @@ describe("speech provider registry", () => {
 
   it("returns no providers when neither plugins nor active registry provide speech support", () => {
     expect(listSpeechProviders()).toEqual([]);
-    expect(getSpeechProvider("openai")).toBeUndefined();
+    expect(getSpeechProvider("demo-speech")).toBeUndefined();
   });
 
   it("canonicalizes the legacy edge alias to microsoft", () => {
