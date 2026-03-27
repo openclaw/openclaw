@@ -6,6 +6,15 @@ import { TranscribeAudioSchema } from "./zod-schema.core.js";
 export const AgentsSchema = z
   .object({
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
+    retries: z
+      .object({
+        default: z.number().int().min(0).max(10).optional(),
+        rate_limit: z.number().int().min(0).max(10).optional(),
+        overloaded: z.number().int().min(0).max(10).optional(),
+        auth_failure: z.number().int().min(0).max(10).optional(),
+      })
+      .strict()
+      .optional(),
     list: z.array(AgentEntrySchema).optional(),
   })
   .strict()
