@@ -42,37 +42,8 @@ const TIME_FLAG_OPTIONS = new Set([
   "--version",
 ]);
 const TIME_OPTIONS_WITH_VALUE = new Set(["-f", "--format", "-o", "--output"]);
-const SCRIPT_FLAG_OPTIONS = new Set([
-  "-a",
-  "--append",
-  "-e",
-  "--return",
-  "-f",
-  "--flush",
-  "--force",
-  "-q",
-  "--quiet",
-  "-h",
-  "--help",
-  "-V",
-  "--version",
-]);
-const SCRIPT_OPTIONS_WITH_VALUE = new Set([
-  "-B",
-  "--log-io",
-  "-E",
-  "--echo",
-  "-I",
-  "--log-in",
-  "-m",
-  "--logging-format",
-  "-O",
-  "--log-out",
-  "-o",
-  "--output-limit",
-  "-T",
-  "--log-timing",
-]);
+const BSD_SCRIPT_FLAG_OPTIONS = new Set(["-a", "-d", "-k", "-p", "-q", "-r"]);
+const BSD_SCRIPT_OPTIONS_WITH_VALUE = new Set(["-F", "-t"]);
 const TIMEOUT_FLAG_OPTIONS = new Set(["--foreground", "--preserve-status", "-v", "--verbose"]);
 const TIMEOUT_OPTIONS_WITH_VALUE = new Set(["-k", "--kill-after", "-s", "--signal"]);
 
@@ -304,15 +275,11 @@ function unwrapScriptInvocation(argv: string[]): string[] | null {
       if (!lower.startsWith("-") || lower === "-") {
         return "stop";
       }
-      if (lower === "-c" || lower === "--command" || lower === "-t" || lower.startsWith("-t")) {
-        return "invalid";
-      }
       const [flag] = token.split("=", 2);
-      const [lowerFlag] = lower.split("=", 2);
-      if (SCRIPT_OPTIONS_WITH_VALUE.has(flag) || SCRIPT_OPTIONS_WITH_VALUE.has(lowerFlag)) {
-        return lower.includes("=") ? "continue" : "consume-next";
+      if (BSD_SCRIPT_OPTIONS_WITH_VALUE.has(flag)) {
+        return token.includes("=") ? "continue" : "consume-next";
       }
-      if (SCRIPT_FLAG_OPTIONS.has(flag) || SCRIPT_FLAG_OPTIONS.has(lowerFlag)) {
+      if (BSD_SCRIPT_FLAG_OPTIONS.has(flag)) {
         return "continue";
       }
       return "invalid";

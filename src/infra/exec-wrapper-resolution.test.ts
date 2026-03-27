@@ -132,9 +132,7 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
     },
     {
       argv: ["script", "-E", "always", "/dev/null", "bash", "-lc", "echo hi"],
-      expected: supportsScriptPositionalCommandForTests()
-        ? { kind: "unwrapped", wrapper: "script", argv: ["bash", "-lc", "echo hi"] }
-        : { kind: "blocked", wrapper: "script" },
+      expected: { kind: "blocked", wrapper: "script" },
     },
     {
       argv: ["stdbuf", "-o", "L", "bash", "-lc", "echo hi"],
