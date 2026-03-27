@@ -23,6 +23,10 @@ import {
   setupWebhookTargetsForTest,
   trackWebhookRegistrationForTest,
 } from "./monitor.webhook.test-helpers.js";
+import {
+  resetBlueBubblesParticipantContactNameCacheForTest,
+  setBlueBubblesParticipantContactDepsForTest,
+} from "./participant-contact-names.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
 
 // Mock dependencies
@@ -104,6 +108,7 @@ const mockChunkTextWithMode = vi.fn((text: string) => (text ? [text] : []));
 const mockChunkMarkdownTextWithMode = vi.fn((text: string) => (text ? [text] : []));
 const mockResolveChunkMode = vi.fn(() => "length" as const);
 const mockFetchBlueBubblesHistory = vi.mocked(fetchBlueBubblesHistory);
+const mockFetch = vi.fn();
 
 function createMockRuntime(): PluginRuntime {
   return createBlueBubblesMonitorTestRuntime({
@@ -176,6 +181,12 @@ describe("BlueBubbles webhook monitor", () => {
   }
 
   beforeEach(() => {
+    vi.stubGlobal("fetch", mockFetch);
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [] }),
+    });
     resetBlueBubblesMonitorTestState({
       createRuntime: createMockRuntime,
       fetchHistoryMock: mockFetchBlueBubblesHistory,
@@ -185,13 +196,19 @@ describe("BlueBubbles webhook monitor", () => {
       hasControlCommandMock: mockHasControlCommand,
       resolveCommandAuthorizedFromAuthorizersMock: mockResolveCommandAuthorizedFromAuthorizers,
       buildMentionRegexesMock: mockBuildMentionRegexes,
-      extraReset: resetBlueBubblesSelfChatCache,
+      extraReset: () => {
+        resetBlueBubblesSelfChatCache();
+        resetBlueBubblesParticipantContactNameCacheForTest();
+        setBlueBubblesParticipantContactDepsForTest();
+      },
     });
   });
 
   afterEach(() => {
     unregister?.();
+    setBlueBubblesParticipantContactDepsForTest();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   describe("DM pairing behavior vs allowFrom", () => {
@@ -488,6 +505,147 @@ describe("BlueBubbles webhook monitor", () => {
       const callArgs = getFirstDispatchCall();
       expect(callArgs.ctx.GroupSubject).toBe("Family");
       expect(callArgs.ctx.GroupMembers).toBe("Alice (+15551234567), Bob (+15557654321)");
+    });
+
+    it("does not enrich group participants when the config flag is disabled", async () => {
+      const resolvePhoneNames = vi.fn(async () => new Map([["5551234567", "Alice Contact"]]));
+      setupWebhookTarget({
+        account: createMockAccount({
+          enrichGroupParticipantsFromContacts: false,
+        }),
+      });
+      setBlueBubblesParticipantContactDepsForTest({
+        platform: "darwin",
+        resolvePhoneNames,
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hello bert",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+        participants: [{ address: "+15551234567" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(resolvePhoneNames).not.toHaveBeenCalled();
+      expect(getFirstDispatchCall().ctx.GroupMembers).toBe("+15551234567");
+    });
+
+    it("enriches unnamed phone participants from local contacts after gating passes", async () => {
+      const resolvePhoneNames = vi.fn(
+        async (phoneKeys: string[]) =>
+          new Map(
+            phoneKeys.map((phoneKey) => [
+              phoneKey,
+              phoneKey === "5551234567" ? "Alice Contact" : "Bob Contact",
+            ]),
+          ),
+      );
+      setupWebhookTarget({
+        account: createMockAccount({
+          enrichGroupParticipantsFromContacts: true,
+        }),
+      });
+      setBlueBubblesParticipantContactDepsForTest({
+        platform: "darwin",
+        resolvePhoneNames,
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hello bert",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+        participants: [{ address: "+15551234567" }, { address: "+15557654321" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(resolvePhoneNames).toHaveBeenCalledTimes(1);
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupMembers).toBe(
+        "Alice Contact (+15551234567), Bob Contact (+15557654321)",
+      );
+    });
+
+    it("fetches missing group participants from the BlueBubbles API before contact enrichment", async () => {
+      const resolvePhoneNames = vi.fn(
+        async (phoneKeys: string[]) =>
+          new Map(
+            phoneKeys.map((phoneKey) => [
+              phoneKey,
+              phoneKey === "5551234567" ? "Alice Contact" : "Bob Contact",
+            ]),
+          ),
+      );
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            data: [
+              {
+                guid: "iMessage;+;chat123456",
+                participants: [{ address: "+15551234567" }, { address: "+15557654321" }],
+              },
+            ],
+          }),
+      });
+      setupWebhookTarget({
+        account: createMockAccount({
+          enrichGroupParticipantsFromContacts: true,
+        }),
+      });
+      setBlueBubblesParticipantContactDepsForTest({
+        platform: "darwin",
+        resolvePhoneNames,
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hello bert",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/v1/chat/query"),
+        expect.objectContaining({ method: "POST" }),
+      );
+      expect(resolvePhoneNames).toHaveBeenCalledTimes(1);
+      expect(getFirstDispatchCall().ctx.GroupMembers).toBe(
+        "Alice Contact (+15551234567), Bob Contact (+15557654321)",
+      );
+    });
+
+    it("does not read local contacts before mention gating allows the message", async () => {
+      const resolvePhoneNames = vi.fn(async () => new Map([["5551234567", "Alice Contact"]]));
+      setupWebhookTarget({
+        account: createMockAccount({
+          enrichGroupParticipantsFromContacts: true,
+        }),
+      });
+      setBlueBubblesParticipantContactDepsForTest({
+        platform: "darwin",
+        resolvePhoneNames,
+      });
+      mockResolveRequireMention.mockReturnValueOnce(true);
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hello group",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+        participants: [{ address: "+15551234567" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(resolvePhoneNames).not.toHaveBeenCalled();
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
   });
 
@@ -1160,6 +1318,28 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
     });
 
+    it("skips group reactions when requireMention=true", async () => {
+      mockEnqueueSystemEvent.mockClear();
+      mockResolveRequireMention.mockReturnValue(true);
+
+      setupWebhookTarget({
+        account: createMockAccount({
+          groupPolicy: "open",
+        }),
+      });
+
+      const payload = createTimestampedMessageReactionPayloadForTest({
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        associatedMessageType: 2000,
+        handle: { address: "+15559999999" },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+    });
+
     it("enqueues system event for reaction added", async () => {
       mockEnqueueSystemEvent.mockClear();
 
@@ -1167,6 +1347,31 @@ describe("BlueBubbles webhook monitor", () => {
 
       const payload = createTimestampedMessageReactionPayloadForTest({
         associatedMessageType: 2000, // Heart reaction added
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
+        expect.stringContaining("reacted with ❤️ [[reply_to:"),
+        expect.any(Object),
+      );
+    });
+
+    it("enqueues group reactions when requireMention=false", async () => {
+      mockEnqueueSystemEvent.mockClear();
+      mockResolveRequireMention.mockReturnValue(false);
+
+      setupWebhookTarget({
+        account: createMockAccount({
+          groupPolicy: "open",
+        }),
+      });
+
+      const payload = createTimestampedMessageReactionPayloadForTest({
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        associatedMessageType: 2000,
+        handle: { address: "+15559999999" },
       });
 
       await dispatchWebhookPayload(payload);

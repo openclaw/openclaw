@@ -5,6 +5,7 @@ import {
   applyGoogleGeminiModelDefault,
 } from "openclaw/plugin-sdk/provider-models";
 import { createGoogleThinkingPayloadWrapper } from "openclaw/plugin-sdk/provider-stream";
+import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import { buildGoogleImageGenerationProvider } from "./image-generation-provider.js";
 import { googleMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -48,6 +49,7 @@ export default definePluginEntry({
       wrapStreamFn: (ctx) => createGoogleThinkingPayloadWrapper(ctx.streamFn, ctx.thinkingLevel),
       isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     });
+    api.registerCliBackend(buildGoogleGeminiCliBackend());
     registerGoogleGeminiCliProvider(api);
     api.registerImageGenerationProvider(buildGoogleImageGenerationProvider());
     api.registerMediaUnderstandingProvider(googleMediaUnderstandingProvider);

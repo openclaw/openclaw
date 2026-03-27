@@ -20,8 +20,8 @@ import { normalizeWindowsArgv } from "./windows-argv.js";
 
 async function closeCliMemoryManagers(): Promise<void> {
   try {
-    const { closeAllMemorySearchManagers } = await import("../memory/search-manager.js");
-    await closeAllMemorySearchManagers();
+    const { closeActiveMemorySearchManagers } = await import("../plugins/memory-runtime.js");
+    await closeActiveMemorySearchManagers();
   } catch {
     // Best-effort teardown for short-lived CLI processes.
   }

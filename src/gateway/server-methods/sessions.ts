@@ -149,6 +149,7 @@ function emitSessionsChanged(
             sessionId: sessionRow.sessionId,
             kind: sessionRow.kind,
             channel: sessionRow.channel,
+            spawnedBy: sessionRow.spawnedBy,
             label: sessionRow.label,
             displayName: sessionRow.displayName,
             deliveryContext: sessionRow.deliveryContext,
@@ -466,7 +467,7 @@ async function handleSessionSend(params: {
   });
   if (sendAcked) {
     if (shouldAttachPendingMessageSeq({ payload: sendPayload, cached: sendCached })) {
-      reactivateCompletedSubagentSession({
+      await reactivateCompletedSubagentSession({
         sessionKey: canonicalKey,
         runId: startedRunId,
       });

@@ -12,6 +12,7 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
+import { migrateLegacyConfig } from "../config/legacy-migrate.js";
 import { resolveUserPath } from "../utils.js";
 import {
   collectCommandSecretAssignmentsFromSnapshot,
@@ -139,7 +140,9 @@ export async function prepareSecretsRuntimeSnapshot(params: {
 }): Promise<PreparedSecretsRuntimeSnapshot> {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
   const sourceConfig = structuredClone(params.config);
-  const resolvedConfig = structuredClone(params.config);
+  const resolvedConfig = structuredClone(
+    migrateLegacyConfig(params.config).config ?? params.config,
+  );
   const context = createResolverContext({
     sourceConfig,
     env: runtimeEnv,

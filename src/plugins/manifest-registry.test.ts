@@ -126,6 +126,31 @@ function loadSingleCandidateRegistry(params: {
   ]);
 }
 
+function loadRegistryForMinHostVersionCase(params: {
+  rootDir: string;
+  minHostVersion: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  return loadPluginManifestRegistry({
+    cache: false,
+    ...(params.env ? { env: params.env } : {}),
+    candidates: [
+      createPluginCandidate({
+        idHint: "synology-chat",
+        rootDir: params.rootDir,
+        packageDir: params.rootDir,
+        origin: "global",
+        packageManifest: {
+          install: {
+            npmSpec: "@openclaw/synology-chat",
+            minHostVersion: params.minHostVersion,
+          },
+        },
+      }),
+    ],
+  });
+}
+
 function hasUnsafeManifestDiagnostic(registry: ReturnType<typeof loadPluginManifestRegistry>) {
   return registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path"));
 }
@@ -223,6 +248,7 @@ describe("loadPluginManifestRegistry", () => {
       id: "openai",
       enabledByDefault: true,
       providers: ["openai", "openai-codex"],
+      cliBackends: ["codex-cli"],
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
       },
@@ -246,6 +272,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
       openai: ["OPENAI_API_KEY"],
     });
+    expect(registry.plugins[0]?.cliBackends).toEqual(["codex-cli"]);
     expect(registry.plugins[0]?.enabledByDefault).toBe(true);
     expect(registry.plugins[0]?.providerAuthChoices).toEqual([
       {
@@ -261,23 +288,10 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
 
-    const registry = loadPluginManifestRegistry({
-      cache: false,
+    const registry = loadRegistryForMinHostVersionCase({
+      rootDir: dir,
+      minHostVersion: ">=2026.3.22",
       env: { OPENCLAW_VERSION: "2026.3.21" },
-      candidates: [
-        createPluginCandidate({
-          idHint: "synology-chat",
-          rootDir: dir,
-          packageDir: dir,
-          origin: "global",
-          packageManifest: {
-            install: {
-              npmSpec: "@openclaw/synology-chat",
-              minHostVersion: ">=2026.3.22",
-            },
-          },
-        }),
-      ],
     });
 
     expect(registry.plugins).toEqual([]);
@@ -292,22 +306,9 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
 
-    const registry = loadPluginManifestRegistry({
-      cache: false,
-      candidates: [
-        createPluginCandidate({
-          idHint: "synology-chat",
-          rootDir: dir,
-          packageDir: dir,
-          origin: "global",
-          packageManifest: {
-            install: {
-              npmSpec: "@openclaw/synology-chat",
-              minHostVersion: "2026.3.22",
-            },
-          },
-        }),
-      ],
+    const registry = loadRegistryForMinHostVersionCase({
+      rootDir: dir,
+      minHostVersion: "2026.3.22",
     });
 
     expect(registry.plugins).toEqual([]);
@@ -322,23 +323,10 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
 
-    const registry = loadPluginManifestRegistry({
-      cache: false,
+    const registry = loadRegistryForMinHostVersionCase({
+      rootDir: dir,
+      minHostVersion: ">=2026.3.22",
       env: { OPENCLAW_VERSION: "unknown" },
-      candidates: [
-        createPluginCandidate({
-          idHint: "synology-chat",
-          rootDir: dir,
-          packageDir: dir,
-          origin: "global",
-          packageManifest: {
-            install: {
-              npmSpec: "@openclaw/synology-chat",
-              minHostVersion: ">=2026.3.22",
-            },
-          },
-        }),
-      ],
     });
 
     expect(registry.plugins).toEqual([]);

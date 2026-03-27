@@ -10,6 +10,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
@@ -22,7 +23,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { resolveAgentDir } from "../agent-scope.js";
+import { resolveAgentConfig, resolveAgentDir } from "../agent-scope.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { resolveModelAuthLabel } from "../model-auth-label.js";
 import { loadModelCatalog } from "../model-catalog.js";
@@ -367,7 +368,7 @@ export function createSessionStatusTool(opts?: {
         throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
       }
 
-      if (visibilityGuard && !requestedKeyRaw.startsWith("agent:")) {
+      if (visibilityGuard && !isExplicitAgentKey) {
         const access = visibilityGuard.check(
           normalizeVisibilityTargetSessionKey(resolved.key, agentId),
         );
@@ -413,7 +414,31 @@ export function createSessionStatusTool(opts?: {
       }
 
       const agentDir = resolveAgentDir(cfg, agentId);
-      const providerForCard = resolved.entry.providerOverride?.trim() || configured.provider;
+      const runtimeModelIdentity = resolveSessionModelIdentityRef(
+        cfg,
+        resolved.entry,
+        agentId,
+        `${configured.provider}/${configured.model}`,
+      );
+      const hasExplicitModelOverride = Boolean(
+        resolved.entry.providerOverride?.trim() || resolved.entry.modelOverride?.trim(),
+      );
+      const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
+      const runtimeModelForCard = runtimeModelIdentity.model.trim();
+      const defaultProviderForCard = hasExplicitModelOverride
+        ? configured.provider
+        : (runtimeProviderForCard ?? "");
+      const defaultModelForCard = hasExplicitModelOverride
+        ? configured.model
+        : runtimeModelForCard || configured.model;
+      // Preserve the "provider unknown" case for legacy runtime-only sessions so the
+      // status card does not synthesize a configured provider/model pair that never ran.
+      const statusSessionEntry =
+        !hasExplicitModelOverride && !runtimeProviderForCard && runtimeModelForCard
+          ? { ...resolved.entry, providerOverride: "" }
+          : resolved.entry;
+      const providerOverrideForCard = statusSessionEntry.providerOverride?.trim();
+      const providerForCard = providerOverrideForCard ?? defaultProviderForCard;
       const usageProvider = resolveUsageProviderId(providerForCard);
       let usageLine: string | undefined;
       if (usageProvider) {
@@ -467,7 +492,10 @@ export function createSessionStatusTool(opts?: {
         : `🕒 Time zone: ${userTimezone}`;
 
       const agentDefaults = cfg.agents?.defaults ?? {};
-      const defaultLabel = `${configured.provider}/${configured.model}`;
+      const agentConfig = resolveAgentConfig(cfg, agentId);
+      const defaultLabel = defaultProviderForCard
+        ? `${defaultProviderForCard}/${defaultModelForCard}`
+        : defaultModelForCard;
       const agentModel =
         typeof agentDefaults.model === "object" && agentDefaults.model
           ? { ...agentDefaults.model, primary: defaultLabel }
@@ -477,20 +505,21 @@ export function createSessionStatusTool(opts?: {
         agent: {
           ...agentDefaults,
           model: agentModel,
+          thinkingDefault: agentConfig?.thinkingDefault ?? agentDefaults.thinkingDefault,
         },
         agentId,
         explicitConfiguredContextTokens:
           typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
             ? agentDefaults.contextTokens
             : undefined,
-        sessionEntry: resolved.entry,
+        sessionEntry: statusSessionEntry,
         sessionKey: resolved.key,
         sessionStorePath: storePath,
         groupActivation,
         modelAuth: resolveModelAuthLabel({
           provider: providerForCard,
           cfg,
-          sessionEntry: resolved.entry,
+          sessionEntry: statusSessionEntry,
           agentDir,
         }),
         usageLine,

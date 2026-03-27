@@ -134,7 +134,6 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "phone-control",
   "copilot-proxy",
   "zai",
-  "qwen-portal-auth",
   "signal",
   "synology-chat",
   "talk-voice",
@@ -165,6 +164,12 @@ let extensionSourceFilesCache: string[] | null = null;
 let coreSourceFilesCache: string[] | null = null;
 const extensionFilesCache = new Map<string, string[]>();
 
+type SourceFileCollectorOptions = {
+  rootDir: string;
+  shouldSkipPath?: (normalizedFullPath: string) => boolean;
+  shouldSkipEntry?: (params: { entryName: string; normalizedFullPath: string }) => boolean;
+};
+
 function readSource(path: string): string {
   const fullPath = resolve(REPO_ROOT, path);
   const cached = sourceTextCache.get(fullPath);
@@ -178,6 +183,51 @@ function readSource(path: string): string {
 
 function normalizePath(path: string): string {
   return path.replaceAll("\\", "/");
+}
+
+function collectSourceFiles(
+  cached: string[] | undefined | null,
+  options: SourceFileCollectorOptions,
+): string[] {
+  if (cached) {
+    return cached;
+  }
+  const files: string[] = [];
+  const stack = [options.rootDir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const fullPath = resolve(current, entry.name);
+      const normalizedFullPath = normalizePath(fullPath);
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
+          continue;
+        }
+        if (options.shouldSkipPath?.(normalizedFullPath)) {
+          continue;
+        }
+        stack.push(fullPath);
+        continue;
+      }
+      if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
+        continue;
+      }
+      if (entry.name.endsWith(".d.ts")) {
+        continue;
+      }
+      if (
+        options.shouldSkipPath?.(normalizedFullPath) ||
+        options.shouldSkipEntry?.({ entryName: entry.name, normalizedFullPath })
+      ) {
+        continue;
+      }
+      files.push(fullPath);
+    }
+  }
+  return files;
 }
 
 function readSetupBarrelImportBlock(path: string): string {
@@ -196,145 +246,59 @@ function readSetupBarrelImportBlock(path: string): string {
 }
 
 function collectExtensionSourceFiles(): string[] {
-  if (extensionSourceFilesCache) {
-    return extensionSourceFilesCache;
-  }
   const extensionsDir = normalizePath(resolve(ROOT_DIR, "..", "extensions"));
   const sharedExtensionsDir = normalizePath(resolve(extensionsDir, "shared"));
-  const files: string[] = [];
-  const stack = [resolve(ROOT_DIR, "..", "extensions")];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) {
-      continue;
-    }
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const fullPath = resolve(current, entry.name);
-      const normalizedFullPath = normalizePath(fullPath);
-      if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
-          continue;
-        }
-        stack.push(fullPath);
-        continue;
-      }
-      if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
-        continue;
-      }
-      if (entry.name.endsWith(".d.ts") || normalizedFullPath.includes(sharedExtensionsDir)) {
-        continue;
-      }
-      if (normalizedFullPath.includes(`${extensionsDir}/shared/`)) {
-        continue;
-      }
-      if (
-        normalizedFullPath.includes(".test.") ||
-        normalizedFullPath.includes(".test-") ||
-        normalizedFullPath.includes(".fixture.") ||
-        normalizedFullPath.includes(".snap") ||
-        normalizedFullPath.includes("test-support") ||
-        entry.name === "api.ts" ||
-        entry.name === "runtime-api.ts"
-      ) {
-        continue;
-      }
-      files.push(fullPath);
-    }
-  }
-  extensionSourceFilesCache = files;
-  return files;
+  extensionSourceFilesCache = collectSourceFiles(extensionSourceFilesCache, {
+    rootDir: resolve(ROOT_DIR, "..", "extensions"),
+    shouldSkipPath: (normalizedFullPath) =>
+      normalizedFullPath.includes(sharedExtensionsDir) ||
+      normalizedFullPath.includes(`${extensionsDir}/shared/`),
+    shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
+      normalizedFullPath.includes(".test.") ||
+      normalizedFullPath.includes(".test-") ||
+      normalizedFullPath.includes(".fixture.") ||
+      normalizedFullPath.includes(".snap") ||
+      normalizedFullPath.includes("test-support") ||
+      entryName === "api.ts" ||
+      entryName === "runtime-api.ts",
+  });
+  return extensionSourceFilesCache;
 }
 
 function collectCoreSourceFiles(): string[] {
-  if (coreSourceFilesCache) {
-    return coreSourceFilesCache;
-  }
   const srcDir = resolve(ROOT_DIR, "..", "src");
   const normalizedPluginSdkDir = normalizePath(resolve(ROOT_DIR, "plugin-sdk"));
-  const files: string[] = [];
-  const stack = [srcDir];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) {
-      continue;
-    }
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const fullPath = resolve(current, entry.name);
-      const normalizedFullPath = normalizePath(fullPath);
-      if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
-          continue;
-        }
-        stack.push(fullPath);
-        continue;
-      }
-      if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
-        continue;
-      }
-      if (entry.name.endsWith(".d.ts")) {
-        continue;
-      }
-      if (
-        normalizedFullPath.includes(".test.") ||
-        normalizedFullPath.includes(".mock-harness.") ||
-        normalizedFullPath.includes(".spec.") ||
-        normalizedFullPath.includes(".fixture.") ||
-        normalizedFullPath.includes(".snap") ||
-        // src/plugin-sdk is the curated bridge layer; validate its contracts with dedicated
-        // plugin-sdk guardrails instead of the generic "core should not touch extensions" rule.
-        normalizedFullPath.includes(`${normalizedPluginSdkDir}/`)
-      ) {
-        continue;
-      }
-      files.push(fullPath);
-    }
-  }
-  coreSourceFilesCache = files;
-  return files;
+  coreSourceFilesCache = collectSourceFiles(coreSourceFilesCache, {
+    rootDir: srcDir,
+    shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
+      normalizedFullPath.includes(".test.") ||
+      normalizedFullPath.includes(".test-harness.") ||
+      normalizedFullPath.includes(".test-helpers.") ||
+      entryName === "test-manager-helpers.ts" ||
+      normalizedFullPath.includes(".mock-harness.") ||
+      normalizedFullPath.includes(".suite.") ||
+      normalizedFullPath.includes(".spec.") ||
+      normalizedFullPath.includes(".fixture.") ||
+      normalizedFullPath.includes(".snap") ||
+      // src/plugin-sdk is the curated bridge layer; validate its contracts with dedicated
+      // plugin-sdk guardrails instead of the generic "core should not touch extensions" rule.
+      normalizedFullPath.includes(`${normalizedPluginSdkDir}/`),
+  });
+  return coreSourceFilesCache;
 }
 
 function collectExtensionFiles(extensionId: string): string[] {
   const cached = extensionFilesCache.get(extensionId);
-  if (cached) {
-    return cached;
-  }
-  const extensionDir = resolve(ROOT_DIR, "..", "extensions", extensionId);
-  const files: string[] = [];
-  const stack = [extensionDir];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) {
-      continue;
-    }
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const fullPath = resolve(current, entry.name);
-      const normalizedFullPath = normalizePath(fullPath);
-      if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
-          continue;
-        }
-        stack.push(fullPath);
-        continue;
-      }
-      if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
-        continue;
-      }
-      if (entry.name.endsWith(".d.ts")) {
-        continue;
-      }
-      if (
-        normalizedFullPath.includes(".test.") ||
-        normalizedFullPath.includes(".test-") ||
-        normalizedFullPath.includes(".spec.") ||
-        normalizedFullPath.includes(".fixture.") ||
-        normalizedFullPath.includes(".snap") ||
-        entry.name === "runtime-api.ts"
-      ) {
-        continue;
-      }
-      files.push(fullPath);
-    }
-  }
+  const files = collectSourceFiles(cached, {
+    rootDir: resolve(ROOT_DIR, "..", "extensions", extensionId),
+    shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
+      normalizedFullPath.includes(".test.") ||
+      normalizedFullPath.includes(".test-") ||
+      normalizedFullPath.includes(".spec.") ||
+      normalizedFullPath.includes(".fixture.") ||
+      normalizedFullPath.includes(".snap") ||
+      entryName === "runtime-api.ts",
+  });
   extensionFilesCache.set(extensionId, files);
   return files;
 }
