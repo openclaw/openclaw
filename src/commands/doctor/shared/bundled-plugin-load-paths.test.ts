@@ -101,6 +101,25 @@ describe("bundled plugin load path repair", () => {
     ]);
   });
 
+  it("matches legacy bundled paths with a trailing slash", () => {
+    const packageRoot = path.resolve("app-node-modules", "openclaw");
+    const legacyPath = `${path.join(packageRoot, "extensions", "feishu")}${path.sep}`;
+    const bundledPath = path.join(packageRoot, "dist", "extensions", "feishu");
+    vi.spyOn(bundledSources, "resolveBundledPluginSources").mockReturnValue(
+      new Map([["feishu", bundled("feishu", bundledPath)]]),
+    );
+
+    const result = maybeRepairBundledPluginLoadPaths({
+      plugins: {
+        load: {
+          paths: [legacyPath],
+        },
+      },
+    });
+
+    expect(result.config.plugins?.load?.paths).toEqual([bundledPath]);
+  });
+
   it("rewrites dist-runtime bundled paths back to their legacy source path", () => {
     const packageRoot = path.resolve("app-node-modules", "openclaw");
     const legacyPath = path.join(packageRoot, "extensions", "feishu");

@@ -17,8 +17,18 @@ function resolveBundledWorkspaceDir(cfg: OpenClawConfig): string | undefined {
   return resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ?? undefined;
 }
 
+function normalizeBundledLookupPath(targetPath: string): string {
+  const normalized = path.normalize(targetPath);
+  const root = path.parse(normalized).root;
+  let trimmed = normalized;
+  while (trimmed.length > root.length && (trimmed.endsWith(path.sep) || trimmed.endsWith("/"))) {
+    trimmed = trimmed.slice(0, -1);
+  }
+  return trimmed;
+}
+
 function buildLegacyBundledPath(localPath: string): string | null {
-  const normalized = path.normalize(localPath);
+  const normalized = normalizeBundledLookupPath(localPath);
   for (const bundledRoot of [
     path.join("dist", "extensions"),
     path.join("dist-runtime", "extensions"),
@@ -63,7 +73,7 @@ export function scanBundledPluginLoadPathMigrations(
     if (!legacyPath) {
       continue;
     }
-    legacyPathMap.set(path.normalize(legacyPath), {
+    legacyPathMap.set(normalizeBundledLookupPath(legacyPath), {
       pluginId: source.pluginId,
       toPath: source.localPath,
     });
@@ -74,7 +84,7 @@ export function scanBundledPluginLoadPathMigrations(
     if (typeof rawPath !== "string") {
       continue;
     }
-    const normalized = path.normalize(resolveUserPath(rawPath, env));
+    const normalized = normalizeBundledLookupPath(resolveUserPath(rawPath, env));
     const match = legacyPathMap.get(normalized);
     if (!match) {
       continue;
@@ -124,7 +134,7 @@ export function maybeRepairBundledPluginLoadPaths(
   }
 
   const replacements = new Map(
-    hits.map((hit) => [path.normalize(resolveUserPath(hit.fromPath, env)), hit]),
+    hits.map((hit) => [normalizeBundledLookupPath(resolveUserPath(hit.fromPath, env)), hit]),
   );
   const seen = new Set<string>();
   const rewritten: Array<(typeof paths)[number]> = [];
@@ -133,9 +143,9 @@ export function maybeRepairBundledPluginLoadPaths(
       rewritten.push(entry);
       continue;
     }
-    const resolved = path.normalize(resolveUserPath(entry, env));
+    const resolved = normalizeBundledLookupPath(resolveUserPath(entry, env));
     const replacement = replacements.get(resolved)?.toPath ?? entry;
-    const replacementResolved = path.normalize(resolveUserPath(replacement, env));
+    const replacementResolved = normalizeBundledLookupPath(resolveUserPath(replacement, env));
     if (seen.has(replacementResolved)) {
       continue;
     }
