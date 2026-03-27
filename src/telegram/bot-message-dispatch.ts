@@ -404,11 +404,16 @@ export const dispatchTelegramMessage = async ({
     }
     return { ...payload, text };
   };
+  // Track message IDs sent via block reply so onToolStart can delete narration.
+  const pendingBlockReplyMessageIds: number[] = [];
   const sendPayload = async (payload: ReplyPayload) => {
     const result = await deliverReplies({
       ...deliveryBaseOptions,
       replies: [payload],
       onVoiceRecording: sendRecordVoice,
+      onMessageSent: (messageId) => {
+        pendingBlockReplyMessageIds.push(messageId);
+      },
     });
     if (result.delivered) {
       deliveryState.markDelivered();
@@ -626,9 +631,19 @@ export const dispatchTelegramMessage = async ({
           if (statusReactionController) {
             await statusReactionController.setTool(payload.name);
           }
+          // Delete block reply messages that contained intermediate narration
+          // (e.g. "Let me fetch…") before tool execution starts.
+          const blockIdsToDelete = pendingBlockReplyMessageIds.splice(0);
+          for (const msgId of blockIdsToDelete) {
+            try {
+              await bot.api.deleteMessage(chatId, msgId);
+            } catch {
+              // Message may already have been cleaned up.
+            }
+          }
           // When tool execution starts, the preceding text was intermediate
           // reasoning ("Let me fetch..."), not a user-facing answer. Delete
-          // the draft preview immediately so the user doesn't see it (TES-642).
+          // the draft preview immediately so the user doesn't see it.
           if (answerLane.hasStreamedMessage) {
             const previewMessageId = answerLane.stream?.messageId();
             if (typeof previewMessageId === "number" && !finalizedPreviewByLane.answer) {
