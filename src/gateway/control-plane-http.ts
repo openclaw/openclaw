@@ -19,9 +19,11 @@ import {
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
+import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
   loadControlPlaneRuntimeState,
   mergeControlPlaneRuntimeState,
@@ -37,6 +39,7 @@ import {
   getGlobalExecApprovalManager,
 } from "./exec-approval-context.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
+import { setSseHeaders, writeDone } from "./http-common.js";
 import { resolveSessionStoreKey } from "./session-utils.js";
 
 // AGENT_BOT_COMPAT: HTTP bridge used by agent-bot-task-a control-plane.
@@ -71,6 +74,141 @@ type PortalWritePolicy = {
   core: PortalCoreWriteMode;
   memory: PortalMemoryWriteMode;
 };
+
+/** Stable wire shape for agent-bot control-plane → RuntimeEventRecord ingestion */
+type PortalRuntimeEventWire = {
+  eventType: string;
+  level: "debug" | "info" | "warn" | "error";
+  message: string;
+  payload?: JsonObject;
+  createdAt: string;
+};
+
+function buildPortalRuntimeEvent(params: {
+  eventType: string;
+  level: PortalRuntimeEventWire["level"];
+  message: string;
+  payload?: JsonObject;
+  createdAt?: string;
+}): PortalRuntimeEventWire {
+  return {
+    eventType: params.eventType,
+    level: params.level,
+    message: params.message,
+    ...(params.payload ? { payload: params.payload } : {}),
+    createdAt: params.createdAt ?? new Date().toISOString(),
+  };
+}
+
+function isSseRequest(req: IncomingMessage): boolean {
+  return String(req.headers.accept ?? "")
+    .toLowerCase()
+    .includes("text/event-stream");
+}
+
+function writePortalStreamEvent(res: ServerResponse, type: string, data: unknown): void {
+  res.write(`data: ${JSON.stringify({ type, data })}\n\n`);
+}
+
+function buildPortalRuntimeEventFromAgentEvent(
+  evt: AgentEventPayload,
+): PortalRuntimeEventWire | null {
+  const createdAt = new Date(evt.ts).toISOString();
+  if (evt.stream === "tool") {
+    const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+    const toolName = typeof evt.data?.name === "string" ? evt.data.name : "tool";
+    const toolCallId = typeof evt.data?.toolCallId === "string" ? evt.data.toolCallId : undefined;
+    if (phase === "start") {
+      return buildPortalRuntimeEvent({
+        eventType: "tool.started",
+        level: "info",
+        message: `工具 ${toolName} 开始执行`,
+        payload: {
+          runId: evt.runId,
+          stream: evt.stream,
+          phase,
+          name: toolName,
+          toolCallId: toolCallId ?? null,
+          seq: evt.seq,
+          ts: evt.ts,
+        },
+        createdAt,
+      });
+    }
+    if (phase === "result") {
+      const isError = Boolean(evt.data?.isError);
+      return buildPortalRuntimeEvent({
+        eventType: isError ? "tool.failed" : "tool.completed",
+        level: isError ? "error" : "info",
+        message: isError ? `工具 ${toolName} 执行失败` : `工具 ${toolName} 执行完成`,
+        payload: {
+          runId: evt.runId,
+          stream: evt.stream,
+          phase,
+          name: toolName,
+          toolCallId: toolCallId ?? null,
+          isError,
+          meta:
+            evt.data?.meta && typeof evt.data.meta === "object" && !Array.isArray(evt.data.meta)
+              ? evt.data.meta
+              : undefined,
+          seq: evt.seq,
+          ts: evt.ts,
+        },
+        createdAt,
+      });
+    }
+    return null;
+  }
+  if (evt.stream === "lifecycle") {
+    const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+    if (!phase) {
+      return null;
+    }
+    const level = phase === "error" ? "error" : "info";
+    return buildPortalRuntimeEvent({
+      eventType: `lifecycle.${phase}`,
+      level,
+      message:
+        phase === "start"
+          ? "Agent 运行已开始"
+          : phase === "end"
+            ? "Agent 运行已结束"
+            : typeof evt.data?.error === "string" && evt.data.error
+              ? evt.data.error
+              : "Agent 运行失败",
+      payload: {
+        runId: evt.runId,
+        stream: evt.stream,
+        phase,
+        error: typeof evt.data?.error === "string" ? evt.data.error : null,
+        stopReason: typeof evt.data?.stopReason === "string" ? evt.data.stopReason : null,
+        seq: evt.seq,
+        ts: evt.ts,
+      },
+      createdAt,
+    });
+  }
+  if (evt.stream === "error") {
+    return buildPortalRuntimeEvent({
+      eventType: "stream.error",
+      level: "error",
+      message:
+        typeof evt.data?.reason === "string" && evt.data.reason
+          ? `事件流异常：${evt.data.reason}`
+          : "事件流异常",
+      payload: {
+        runId: evt.runId,
+        stream: evt.stream,
+        seq: evt.seq,
+        ts: evt.ts,
+        ...evt.data,
+      },
+      createdAt,
+    });
+  }
+  return null;
+}
 
 type PortalSessionRecord = {
   remoteAgentId: string;
@@ -1524,6 +1662,21 @@ export async function handleControlPlaneHttpRequest(
       releaseVersion: resolvedTarget.runtimeAgent?.releaseVersion,
       releaseStatus: resolvedTarget.runtimeAgent?.releaseStatus,
     });
+    const sessionCreatedEvent = buildPortalRuntimeEvent({
+      eventType: "session.created",
+      level: "info",
+      message: "Portal session created on runtime",
+      payload: {
+        remoteSessionId,
+        remoteAgentId,
+        agentId: resolvedTarget.agentId,
+        mode,
+        conversationView,
+        traceId: traceId ?? null,
+        portalSessionId: portalSessionId ?? null,
+      },
+      createdAt: now,
+    });
     sendJson(res, 200, {
       ok: true,
       remoteSessionId,
@@ -1541,6 +1694,7 @@ export async function handleControlPlaneHttpRequest(
       releaseVersion: resolvedTarget.runtimeAgent?.releaseVersion,
       releaseStatus: resolvedTarget.runtimeAgent?.releaseStatus,
       status: "ready",
+      runtimeEvents: [sessionCreatedEvent],
     });
     return true;
   }
@@ -1570,6 +1724,20 @@ export async function handleControlPlaneHttpRequest(
     const portalSessionId = readOptionalString(body, "portalSessionId");
     const runId = `run_${randomUUID().replace(/-/g, "")}`;
     const runStartedAt = new Date().toISOString();
+    const runStartedEvent = buildPortalRuntimeEvent({
+      eventType: "run.started",
+      level: "info",
+      message: `Portal run ${runId} started`,
+      payload: {
+        runId,
+        remoteSessionId,
+        portalSessionId: portalSessionId ?? session.portalSessionId ?? null,
+        traceId: traceId ?? session.traceId ?? null,
+        agentId: session.agentId,
+        mode: session.mode,
+      },
+      createdAt: runStartedAt,
+    });
     const nextSession: PortalSessionRecord = {
       ...session,
       portalSessionId: portalSessionId ?? session.portalSessionId,
@@ -1587,6 +1755,361 @@ export async function handleControlPlaneHttpRequest(
       startedAt: runStartedAt,
       timeline: [{ phase: "started", at: runStartedAt }],
     });
+    if (isSseRequest(req)) {
+      setSseHeaders(res);
+      let streamClosed = false;
+      let sawAssistantDelta = false;
+      let unsubscribe = () => {};
+      const closeStream = () => {
+        if (streamClosed) {
+          return;
+        }
+        streamClosed = true;
+        unsubscribe();
+        writeDone(res);
+        res.end();
+      };
+      unsubscribe = onAgentEvent((evt) => {
+        if (streamClosed || evt.runId !== runId) {
+          return;
+        }
+        if (evt.stream === "assistant") {
+          const delta = resolveAssistantStreamDeltaText(evt);
+          if (!delta) {
+            return;
+          }
+          sawAssistantDelta = true;
+          writePortalStreamEvent(res, "assistant.delta", {
+            runId,
+            traceId: traceId ?? nextSession.traceId ?? null,
+            delta,
+            seq: evt.seq,
+            createdAt: new Date(evt.ts).toISOString(),
+          });
+          return;
+        }
+        const runtimeEvent = buildPortalRuntimeEventFromAgentEvent(evt);
+        if (!runtimeEvent) {
+          return;
+        }
+        writePortalStreamEvent(res, "runtime.event", runtimeEvent);
+      });
+      req.on("close", () => {
+        if (streamClosed) {
+          return;
+        }
+        streamClosed = true;
+        unsubscribe();
+      });
+
+      writePortalStreamEvent(res, "message.start", {
+        runId,
+        traceId: traceId ?? nextSession.traceId ?? null,
+        portalSessionId: portalSessionId ?? nextSession.portalSessionId ?? null,
+        remoteSessionId,
+        mode: nextSession.mode,
+        conversationView: nextSession.conversationView,
+        runtimeRole: nextSession.runtimeRole,
+        agentVersionId: nextSession.agentVersionId ?? null,
+        releaseId: nextSession.releaseId ?? null,
+        releaseVersion: nextSession.releaseVersion ?? null,
+        releaseStatus: nextSession.releaseStatus ?? null,
+        startedAt: runStartedAt,
+      });
+      writePortalStreamEvent(res, "runtime.event", runStartedEvent);
+
+      void (async () => {
+        try {
+          const cfg = loadConfig();
+          const result = await agentCommandFromIngress(
+            {
+              message,
+              sessionKey: nextSession.sessionKey,
+              runId,
+              deliver: false,
+              messageChannel: "webchat",
+              bestEffortDeliver: false,
+              senderIsOwner: true,
+              allowModelOverride: false,
+              thinking: "off",
+              extraSystemPrompt: buildPortalExtraSystemPrompt({
+                remoteSessionId,
+                session: nextSession,
+                traceId,
+                portalSessionId,
+              }),
+            },
+            defaultRuntime,
+            createDefaultDeps(),
+          );
+          const reply = resolvePortalReplyText(result);
+          const usage = extractPortalUsage(result);
+          if (reply === EMPTY_PORTAL_REPLY) {
+            defaultRuntime.log(
+              `[control-plane] portal session produced no visible reply (runId=${runId}, traceId=${traceId}, remoteSessionId=${remoteSessionId}, agentId=${nextSession.agentId})`,
+            );
+          }
+          let approval: PortalApprovalSummary | undefined;
+          if (nextSession.mode === "training") {
+            const manager = getGlobalExecApprovalManager();
+            if (manager) {
+              const pendingForSession = listPendingExecApprovalRecords(manager).filter(
+                (record: ExecApprovalRecord) => {
+                  const requestSessionKey =
+                    record.request.sessionKey ??
+                    record.request.systemRunBinding?.sessionKey ??
+                    null;
+                  return requestSessionKey === nextSession.sessionKey;
+                },
+              );
+              if (pendingForSession.length > 0) {
+                let latest = pendingForSession[0];
+                for (const current of pendingForSession.slice(1)) {
+                  if (current.createdAtMs > latest.createdAtMs) {
+                    latest = current;
+                  }
+                }
+                approval = {
+                  id: latest.id,
+                  kind: "exec",
+                  command: latest.request.command,
+                  host: latest.request.host ?? undefined,
+                  cwd: latest.request.cwd ?? undefined,
+                  expiresAt: new Date(latest.expiresAtMs).toISOString(),
+                };
+              }
+            }
+          }
+          const candidateChanges = buildTrainingCandidateChanges({
+            session: nextSession,
+            message,
+            reply,
+            status: approval ? "requires_approval" : "completed",
+            approval,
+          });
+          const updatedHistorySummary = appendHistorySummary(
+            nextSession.historySummary,
+            summarizePortalExchange({
+              message,
+              reply,
+              usage,
+            }),
+          );
+
+          if (!streamClosed && !sawAssistantDelta && reply && reply !== EMPTY_PORTAL_REPLY) {
+            sawAssistantDelta = true;
+            writePortalStreamEvent(res, "assistant.delta", {
+              runId,
+              traceId: traceId ?? nextSession.traceId ?? null,
+              delta: reply,
+              createdAt: new Date().toISOString(),
+            });
+          }
+
+          if (approval) {
+            portalSessions.set(remoteSessionId, {
+              ...nextSession,
+              turnCount: nextSession.turnCount + 1,
+              historySummary: updatedHistorySummary,
+            });
+            const approvalTime = new Date().toISOString();
+            const runRecord = savePortalRun({
+              runId,
+              remoteSessionId,
+              portalSessionId: portalSessionId ?? nextSession.portalSessionId,
+              traceId: traceId ?? nextSession.traceId,
+              status: "requires_approval",
+              startedAt: runStartedAt,
+              endedAt: approvalTime,
+              durationMs: Math.max(0, Date.parse(approvalTime) - Date.parse(runStartedAt)),
+              reply,
+              usage,
+              candidateChanges,
+              timeline: appendPortalRunTimeline(portalRuns.get(runId), {
+                phase: "requires_approval",
+                at: approvalTime,
+              }),
+            });
+            const approvalRequiredEvent = buildPortalRuntimeEvent({
+              eventType: "approval.required",
+              level: "warn",
+              message: "Exec approval required before continuing",
+              payload: {
+                runId,
+                approvalId: approval.id,
+                kind: approval.kind,
+                command: approval.command,
+                host: approval.host ?? null,
+                cwd: approval.cwd ?? null,
+                expiresAt: approval.expiresAt ?? null,
+              },
+              createdAt: approvalTime,
+            });
+            if (!streamClosed) {
+              writePortalStreamEvent(res, "runtime.event", approvalRequiredEvent);
+              writePortalStreamEvent(res, "message.complete", {
+                ok: true,
+                status: "requires_approval",
+                runId,
+                traceId: traceId ?? nextSession.traceId,
+                portalSessionId: portalSessionId ?? nextSession.portalSessionId,
+                remoteSessionId,
+                startedAt: runRecord.startedAt,
+                endedAt: runRecord.endedAt,
+                durationMs: runRecord.durationMs,
+                reply,
+                usage,
+                mode: nextSession.mode,
+                conversationView: nextSession.conversationView,
+                runtimeRole: nextSession.runtimeRole,
+                writePolicy: nextSession.writePolicy,
+                agentVersionId: nextSession.agentVersionId,
+                releaseId: nextSession.releaseId,
+                releaseVersion: nextSession.releaseVersion,
+                releaseStatus: nextSession.releaseStatus,
+                timeline: runRecord.timeline,
+                approval,
+                candidateChanges,
+                runtimeEvents: [runStartedEvent, approvalRequiredEvent],
+              });
+            }
+          } else {
+            let persistedSession: PortalSessionRecord = {
+              ...nextSession,
+              turnCount: nextSession.turnCount + 1,
+              historySummary: updatedHistorySummary,
+            };
+            if (shouldRolloverPortalSession({ session: persistedSession, usage })) {
+              const nextRevision = persistedSession.sessionRevision + 1;
+              persistedSession = {
+                ...persistedSession,
+                sessionRevision: nextRevision,
+                sessionKey: buildPortalSessionKey({
+                  cfg,
+                  agentId: persistedSession.agentId,
+                  remoteSessionId,
+                  conversationView: persistedSession.conversationView,
+                  revision: nextRevision,
+                }),
+                turnCount: 0,
+              };
+            }
+            portalSessions.set(remoteSessionId, persistedSession);
+            const completedAt = new Date().toISOString();
+            const runRecord = savePortalRun({
+              runId,
+              remoteSessionId,
+              portalSessionId: portalSessionId ?? nextSession.portalSessionId,
+              traceId: traceId ?? nextSession.traceId,
+              status: "completed",
+              startedAt: runStartedAt,
+              endedAt: completedAt,
+              durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(runStartedAt)),
+              reply,
+              usage,
+              candidateChanges,
+              timeline: appendPortalRunTimeline(portalRuns.get(runId), {
+                phase: "completed",
+                at: completedAt,
+              }),
+            });
+            const runCompletedEvent = buildPortalRuntimeEvent({
+              eventType: "run.completed",
+              level: "info",
+              message: `Portal run ${runId} completed`,
+              payload: {
+                runId,
+                status: "completed",
+                usage: usage ?? null,
+              },
+              createdAt: completedAt,
+            });
+            if (!streamClosed) {
+              writePortalStreamEvent(res, "runtime.event", runCompletedEvent);
+              writePortalStreamEvent(res, "message.complete", {
+                ok: true,
+                status: "completed",
+                runId,
+                traceId: traceId ?? nextSession.traceId,
+                portalSessionId: portalSessionId ?? nextSession.portalSessionId,
+                remoteSessionId,
+                startedAt: runRecord.startedAt,
+                endedAt: runRecord.endedAt,
+                durationMs: runRecord.durationMs,
+                reply,
+                usage,
+                mode: nextSession.mode,
+                conversationView: nextSession.conversationView,
+                runtimeRole: nextSession.runtimeRole,
+                writePolicy: nextSession.writePolicy,
+                agentVersionId: nextSession.agentVersionId,
+                releaseId: nextSession.releaseId,
+                releaseVersion: nextSession.releaseVersion,
+                releaseStatus: nextSession.releaseStatus,
+                timeline: runRecord.timeline,
+                candidateChanges,
+                runtimeEvents: [runStartedEvent, runCompletedEvent],
+              });
+            }
+          }
+        } catch (error) {
+          const failedAt = new Date().toISOString();
+          const message = error instanceof Error ? error.message : String(error);
+          const runRecord = savePortalRun({
+            runId,
+            remoteSessionId,
+            portalSessionId: portalSessionId ?? nextSession.portalSessionId,
+            traceId: traceId ?? nextSession.traceId,
+            status: "failed",
+            startedAt: runStartedAt,
+            endedAt: failedAt,
+            durationMs: Math.max(0, Date.parse(failedAt) - Date.parse(runStartedAt)),
+            error: {
+              message,
+            },
+            timeline: appendPortalRunTimeline(portalRuns.get(runId), {
+              phase: "failed",
+              at: failedAt,
+              error: message,
+            }),
+          });
+          const runFailedEvent = buildPortalRuntimeEvent({
+            eventType: "run.failed",
+            level: "error",
+            message: `Portal run ${runId} failed`,
+            payload: {
+              runId,
+              code: "PORTAL_RUN_FAILED",
+              error: message,
+            },
+            createdAt: failedAt,
+          });
+          if (!streamClosed) {
+            writePortalStreamEvent(res, "runtime.event", runFailedEvent);
+            writePortalStreamEvent(res, "message.error", {
+              code: "PORTAL_RUN_FAILED",
+              message,
+              status: 500,
+              runId,
+              traceId: traceId ?? nextSession.traceId,
+              portalSessionId: portalSessionId ?? nextSession.portalSessionId,
+              remoteSessionId,
+              startedAt: runRecord.startedAt,
+              endedAt: runRecord.endedAt,
+              durationMs: runRecord.durationMs,
+              timeline: runRecord.timeline,
+              usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              runtimeEvents: [runStartedEvent, runFailedEvent],
+            });
+          }
+        } finally {
+          if (!streamClosed) {
+            closeStream();
+          }
+        }
+      })();
+      return true;
+    }
     try {
       const cfg = loadConfig();
       const result = await agentCommandFromIngress(
@@ -1685,6 +2208,21 @@ export async function handleControlPlaneHttpRequest(
             at: approvalTime,
           }),
         });
+        const approvalRequiredEvent = buildPortalRuntimeEvent({
+          eventType: "approval.required",
+          level: "warn",
+          message: "Exec approval required before continuing",
+          payload: {
+            runId,
+            approvalId: approval.id,
+            kind: approval.kind,
+            command: approval.command,
+            host: approval.host ?? null,
+            cwd: approval.cwd ?? null,
+            expiresAt: approval.expiresAt ?? null,
+          },
+          createdAt: approvalTime,
+        });
         sendJson(res, 200, {
           ok: true,
           status: "requires_approval",
@@ -1708,6 +2246,7 @@ export async function handleControlPlaneHttpRequest(
           timeline: runRecord.timeline,
           approval,
           candidateChanges,
+          runtimeEvents: [runStartedEvent, approvalRequiredEvent],
         });
       } else {
         let persistedSession: PortalSessionRecord = {
@@ -1749,6 +2288,17 @@ export async function handleControlPlaneHttpRequest(
             at: completedAt,
           }),
         });
+        const runCompletedEvent = buildPortalRuntimeEvent({
+          eventType: "run.completed",
+          level: "info",
+          message: `Portal run ${runId} completed`,
+          payload: {
+            runId,
+            status: "completed",
+            usage: usage ?? null,
+          },
+          createdAt: completedAt,
+        });
         sendJson(res, 200, {
           ok: true,
           status: "completed",
@@ -1771,6 +2321,7 @@ export async function handleControlPlaneHttpRequest(
           releaseStatus: nextSession.releaseStatus,
           timeline: runRecord.timeline,
           candidateChanges,
+          runtimeEvents: [runStartedEvent, runCompletedEvent],
         });
       }
     } catch (error) {
@@ -1794,8 +2345,21 @@ export async function handleControlPlaneHttpRequest(
           error: message,
         }),
       });
+      const runFailedEvent = buildPortalRuntimeEvent({
+        eventType: "run.failed",
+        level: "error",
+        message: `Portal run ${runId} failed`,
+        payload: {
+          runId,
+          code: "PORTAL_RUN_FAILED",
+          error: message,
+        },
+        createdAt: failedAt,
+      });
       sendJson(res, 500, {
+        ok: false,
         error: message,
+        code: "PORTAL_RUN_FAILED",
         status: "failed",
         runId,
         traceId: traceId ?? nextSession.traceId,
@@ -1805,6 +2369,8 @@ export async function handleControlPlaneHttpRequest(
         endedAt: runRecord.endedAt,
         durationMs: runRecord.durationMs,
         timeline: runRecord.timeline,
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        runtimeEvents: [runStartedEvent, runFailedEvent],
       });
     }
     return true;
@@ -1896,6 +2462,175 @@ export async function handleControlPlaneHttpRequest(
     const broadcast = getGlobalExecApprovalBroadcast();
     const forwarder = getGlobalExecApprovalForwarder();
     const ts = Date.now();
+    const lastRunId = session.lastRunId;
+    const existingRun = lastRunId ? portalRuns.get(lastRunId) : undefined;
+    const resolvedAt = new Date(ts).toISOString();
+    const updatedRun =
+      lastRunId && existingRun
+        ? savePortalRun({
+            ...existingRun,
+            status: "approval_applied",
+            timeline: appendPortalRunTimeline(existingRun, {
+              phase: "approval_applied",
+              at: resolvedAt,
+            }),
+          })
+        : undefined;
+    const approvalAppliedEvent = buildPortalRuntimeEvent({
+      eventType: "approval.applied",
+      level: decisionRaw === "deny" ? "warn" : "info",
+      message: `审批已处理：${decisionRaw}`,
+      payload: {
+        runId: lastRunId ?? null,
+        approvalId,
+        decision: decisionRaw,
+      },
+      createdAt: resolvedAt,
+    });
+    if (isSseRequest(req)) {
+      setSseHeaders(res);
+      let streamClosed = false;
+      let unsubscribe = () => {};
+      const streamedRuntimeEvents: PortalRuntimeEventWire[] = [approvalAppliedEvent];
+      const bufferedDeltas: string[] = [];
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+      const clearIdleTimer = () => {
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+          idleTimer = null;
+        }
+      };
+      const finishStream = (kind: "complete" | "error", override?: Record<string, unknown>) => {
+        if (streamClosed) {
+          return;
+        }
+        streamClosed = true;
+        clearIdleTimer();
+        unsubscribe();
+        const currentRun = lastRunId ? (portalRuns.get(lastRunId) ?? updatedRun) : updatedRun;
+        const continuedReply = bufferedDeltas.join("");
+        const priorReply = currentRun?.reply ?? existingRun?.reply ?? "";
+        const combinedReply =
+          continuedReply.trim().length > 0
+            ? [priorReply, continuedReply].filter(Boolean).join("\n\n").trim()
+            : priorReply || undefined;
+        const payload = {
+          decision: decisionRaw,
+          status:
+            override?.status ??
+            (kind === "error"
+              ? "failed"
+              : combinedReply || currentRun?.status === "completed"
+                ? "completed"
+                : "applied"),
+          runId: lastRunId ?? null,
+          traceId: session.traceId,
+          remoteSessionId,
+          portalSessionId: session.portalSessionId ?? null,
+          startedAt: currentRun?.startedAt,
+          endedAt: currentRun?.endedAt ?? resolvedAt,
+          durationMs: currentRun?.durationMs,
+          reply: combinedReply ?? "",
+          usage: currentRun?.usage,
+          timeline: currentRun?.timeline,
+          runtimeEvents: streamedRuntimeEvents,
+          ...override,
+        };
+        writePortalStreamEvent(
+          res,
+          kind === "error" ? "message.error" : "message.complete",
+          payload,
+        );
+        writeDone(res);
+        res.end();
+      };
+      const touchIdleTimer = () => {
+        clearIdleTimer();
+        idleTimer = setTimeout(() => {
+          finishStream("complete");
+        }, 15000);
+      };
+      req.on("close", () => {
+        streamClosed = true;
+        clearIdleTimer();
+        unsubscribe();
+      });
+      if (lastRunId) {
+        unsubscribe = onAgentEvent((evt) => {
+          if (streamClosed || evt.runId !== lastRunId) {
+            return;
+          }
+          touchIdleTimer();
+          if (evt.stream === "assistant") {
+            const delta = resolveAssistantStreamDeltaText(evt);
+            if (!delta) {
+              return;
+            }
+            bufferedDeltas.push(delta);
+            writePortalStreamEvent(res, "assistant.delta", {
+              runId: lastRunId,
+              traceId: session.traceId ?? null,
+              delta,
+              seq: evt.seq,
+              createdAt: new Date(evt.ts).toISOString(),
+            });
+            return;
+          }
+          const runtimeEvent = buildPortalRuntimeEventFromAgentEvent(evt);
+          if (runtimeEvent) {
+            streamedRuntimeEvents.push(runtimeEvent);
+            writePortalStreamEvent(res, "runtime.event", runtimeEvent);
+          }
+          if (evt.stream === "lifecycle" && typeof evt.data?.phase === "string") {
+            const lifecyclePhase = evt.data.phase;
+            if (lifecyclePhase === "end" || lifecyclePhase === "error") {
+              const current = portalRuns.get(lastRunId) ?? updatedRun ?? existingRun;
+              if (current) {
+                const endedAt = new Date(evt.ts).toISOString();
+                const nextRun = savePortalRun({
+                  ...current,
+                  status: lifecyclePhase === "error" ? "failed" : "completed",
+                  endedAt,
+                  durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(current.startedAt)),
+                  reply:
+                    [current.reply, bufferedDeltas.join("")]
+                      .filter((part) => typeof part === "string" && part.trim().length > 0)
+                      .join("\n\n") || current.reply,
+                  timeline: appendPortalRunTimeline(current, {
+                    phase: lifecyclePhase === "error" ? "failed" : "completed",
+                    at: endedAt,
+                    error:
+                      lifecyclePhase === "error" && typeof evt.data?.error === "string"
+                        ? evt.data.error
+                        : undefined,
+                  }),
+                });
+                portalRuns.set(lastRunId, nextRun);
+              }
+              finishStream(
+                lifecyclePhase === "error" ? "error" : "complete",
+                lifecyclePhase === "error"
+                  ? {
+                      code: "PORTAL_RUN_FAILED",
+                      message:
+                        typeof evt.data?.error === "string" ? evt.data.error : "审批后续执行失败",
+                    }
+                  : undefined,
+              );
+            }
+          }
+        });
+      }
+      writePortalStreamEvent(res, "runtime.event", approvalAppliedEvent);
+      if (decisionRaw === "deny" || !lastRunId) {
+        finishStream("complete", {
+          status: decisionRaw === "deny" ? "denied" : "applied",
+          timeline: updatedRun?.timeline,
+        });
+      } else {
+        touchIdleTimer();
+      }
+    }
     if (broadcast) {
       broadcast(
         "exec.approval.resolved",
@@ -1924,20 +2659,9 @@ export async function handleControlPlaneHttpRequest(
           );
         });
     }
-    const lastRunId = session.lastRunId;
-    const existingRun = lastRunId ? portalRuns.get(lastRunId) : undefined;
-    const resolvedAt = new Date(ts).toISOString();
-    const updatedRun =
-      lastRunId && existingRun
-        ? savePortalRun({
-            ...existingRun,
-            status: "approval_applied",
-            timeline: appendPortalRunTimeline(existingRun, {
-              phase: "approval_applied",
-              at: resolvedAt,
-            }),
-          })
-        : undefined;
+    if (isSseRequest(req)) {
+      return true;
+    }
     sendJson(res, 200, {
       ok: true,
       runId: lastRunId,
