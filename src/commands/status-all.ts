@@ -246,7 +246,9 @@ export async function statusAllCommand(
     const dashboard = controlUiEnabled
       ? resolveControlUiLinks({
           port,
-          bind: cfg.gateway?.bind,
+          // LAN bind means 0.0.0.0 — localhost still reaches it and avoids
+          // browser secure-context failures when the URL is opened in a browser.
+          bind: cfg.gateway?.bind === "lan" ? "loopback" : cfg.gateway?.bind,
           customBindHost: cfg.gateway?.customBindHost,
           basePath: cfg.gateway?.controlUi?.basePath,
         }).httpUrl

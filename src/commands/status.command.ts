@@ -258,9 +258,12 @@ export async function statusCommand(
     if (!controlUiEnabled) {
       return "disabled";
     }
+    const bind = cfg.gateway?.bind;
+    // LAN bind means 0.0.0.0 — localhost still reaches it and avoids browser
+    // secure-context failures when the displayed URL is opened in a browser.
     const links = resolveControlUiLinks({
       port: resolveGatewayPort(cfg),
-      bind: cfg.gateway?.bind,
+      bind: bind === "lan" ? "loopback" : bind,
       customBindHost: cfg.gateway?.customBindHost,
       basePath: cfg.gateway?.controlUi?.basePath,
     });
