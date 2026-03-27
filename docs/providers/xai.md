@@ -29,6 +29,8 @@ openclaw onboard --auth-choice xai-api-key
 
 OpenClaw now uses the xAI Responses API as the bundled xAI transport. The same
 `XAI_API_KEY` can also power Grok-backed `web_search` and first-class `x_search`.
+If you store an xAI key under `plugins.entries.xai.config.webSearch.apiKey`,
+the bundled xAI model provider now reuses that key as a fallback too.
 
 ## Current bundled model catalog
 
