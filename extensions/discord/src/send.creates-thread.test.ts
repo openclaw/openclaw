@@ -427,7 +427,7 @@ function createMockRateLimitError(retryAfter = 0.001): RateLimitError {
     message: "You are being rate limited.",
     retry_after: retryAfter,
     global: false,
-  });
+  }, request);
 }
 
 describe("retry rate limits", () => {
