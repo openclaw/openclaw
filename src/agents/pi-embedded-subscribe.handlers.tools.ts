@@ -4,6 +4,8 @@ import {
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
 } from "../infra/exec-approval-reply.js";
+import { logInfo } from "../logger.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
@@ -326,6 +328,24 @@ async function emitToolResultOutput(params: {
   });
 }
 
+/**
+ * Build a compact, redacted summary of tool call arguments for log output.
+ * Truncates long values to keep log lines readable while still providing
+ * enough context to diagnose tool call issues.
+ */
+function buildSanitizedArgSummary(args: unknown, maxLen = 200): string {
+  if (args == null) {
+    return "";
+  }
+  try {
+    const raw = typeof args === "string" ? args : JSON.stringify(args);
+    const redacted = redactSensitiveText(raw);
+    return redacted.length > maxLen ? `${redacted.slice(0, maxLen)}…` : redacted;
+  } catch {
+    return "[unserializable]";
+  }
+}
+
 export async function handleToolExecutionStart(
   ctx: ToolHandlerContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
@@ -367,6 +387,9 @@ export async function handleToolExecutionStart(
   ctx.log.debug(
     `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
+  // INFO-level observability for tool calls (see #55806).
+  const argSummary = buildSanitizedArgSummary(args);
+  logInfo(`tool-call: start tool=${toolName}${argSummary ? ` args=${argSummary}` : ""}`);
 
   const shouldEmitToolEvents = ctx.shouldEmitToolResult();
   emitAgentEvent({
@@ -575,13 +598,32 @@ export async function handleToolExecutionEnd(
   ctx.log.debug(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
+  // INFO-level observability for tool results (see #55806).
+  const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
+  {
+    const parts = [`tool-call: end tool=${toolName}`];
+    if (durationMs != null) {
+      parts.push(`duration=${durationMs}ms`);
+    }
+    if (isToolError) {
+      const errorMessage = extractToolErrorMessage(sanitizedResult);
+      parts.push("status=error");
+      if (errorMessage) {
+        const truncated =
+          errorMessage.length > 200 ? `${errorMessage.slice(0, 200)}…` : errorMessage;
+        parts.push(`error=${truncated}`);
+      }
+    } else {
+      parts.push("status=ok");
+    }
+    logInfo(parts.join(" "));
+  }
 
   await emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
       params: afterToolCallArgs,
