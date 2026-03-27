@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { maybeApplyTtsToPayload } from "../../tts/tts.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -184,6 +185,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       await startReplyLifecycleOnce();
     }
 
+    const agentId = resolveAgentIdFromSessionKey(params.ctx.SessionKey);
     const ttsPayload = meta?.skipTts
       ? payload
       : await maybeApplyTtsToPayload({
@@ -193,6 +195,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           kind,
           inboundAudio: params.inboundAudio,
           ttsAuto: params.sessionTtsAuto,
+          agentId,
         });
 
     if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {

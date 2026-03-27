@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildCliSpeechProvider, stripEmojis } from "../../../extensions/tts-local-cli/speech-provider.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -316,6 +317,7 @@ describe("tts", () => {
       { pluginId: "openai", provider: buildTestOpenAISpeechProvider(), source: "test" },
       { pluginId: "microsoft", provider: buildTestMicrosoftSpeechProvider(), source: "test" },
       { pluginId: "elevenlabs", provider: buildTestElevenLabsSpeechProvider(), source: "test" },
+      { pluginId: "tts-local-cli", provider: buildCliSpeechProvider(), source: "test" },
     ];
     setActivePluginRegistry(registry, "tts-test");
     vi.clearAllMocks();
@@ -919,6 +921,120 @@ describe("tts", () => {
           }
         });
       }
+    });
+  });
+
+  describe("CLI TTS agent config", () => {
+    it("merges agent-specific CLI config with base config", () => {
+      const cfg: OpenClawConfig = {
+        messages: {
+          tts: {
+            provider: "cli",
+            providers: {
+              cli: {
+                command: "tts-cli",
+                args: ["--output", "{{OutputPath}}", "{{Text}}"],
+                outputFormat: "mp3",
+                timeoutMs: 60000,
+                agents: {
+                  "agent-1": {
+                    command: "specialized-tts-1",
+                    args: ["--voice", "voice1", "{{Text}}"],
+                    outputFormat: "opus",
+                  },
+                  "agent-2": {
+                    command: "specialized-tts-2",
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      // Test base config (no agentId)
+      const baseConfig = resolveTtsConfig(cfg);
+      const cliBaseConfig = getResolvedSpeechProviderConfig(baseConfig, "cli");
+      expect(cliBaseConfig.command).toBe("tts-cli");
+      expect(cliBaseConfig.args).toEqual(["--output", "{{OutputPath}}", "{{Text}}"]);
+      expect(cliBaseConfig.outputFormat).toBe("mp3");
+      expect(cliBaseConfig.timeoutMs).toBe(60000);
+
+      // Test agent-1 override
+      const agent1Config = resolveTtsConfig(cfg, "agent-1");
+      const cliAgent1Config = getResolvedSpeechProviderConfig(agent1Config, "cli");
+      expect(cliAgent1Config.command).toBe("specialized-tts-1");
+      expect(cliAgent1Config.args).toEqual(["--voice", "voice1", "{{Text}}"]);
+      expect(cliAgent1Config.outputFormat).toBe("opus");
+      expect(cliAgent1Config.timeoutMs).toBe(60000); // inherited from base
+
+      // Test agent-2 override (command only)
+      const agent2Config = resolveTtsConfig(cfg, "agent-2");
+      const cliAgent2Config = getResolvedSpeechProviderConfig(agent2Config, "cli");
+      expect(cliAgent2Config.command).toBe("specialized-tts-2");
+      expect(cliAgent2Config.args).toEqual(["--output", "{{OutputPath}}", "{{Text}}"]); // inherited
+      expect(cliAgent2Config.outputFormat).toBe("mp3"); // inherited
+    });
+
+    it("returns base config for unknown agent", () => {
+      const cfg: OpenClawConfig = {
+        messages: {
+          tts: {
+            provider: "cli",
+            providers: {
+              cli: {
+                command: "tts-cli",
+                args: ["{{Text}}"],
+                agents: {
+                  "known-agent": {
+                    command: "special-tts",
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const unknownConfig = resolveTtsConfig(cfg, "unknown-agent");
+      const cliConfig = getResolvedSpeechProviderConfig(unknownConfig, "cli");
+      expect(cliConfig.command).toBe("tts-cli"); // base config, not agent override
+    });
+  });
+
+  describe("stripEmojis", () => {
+    it("removes common emojis and replaces with space", () => {
+      expect(stripEmojis("Hello 😀 World")).toBe("Hello World");
+      expect(stripEmojis("Hi 🎉 there")).toBe("Hi there");
+    });
+
+    it("removes multiple emojis", () => {
+      expect(stripEmojis("Test 😀🎉🚀 text")).toBe("Test text");
+    });
+
+    it("collapses multiple spaces from emoji replacement", () => {
+      expect(stripEmojis("Hello 😀 🎉 World")).toBe("Hello World");
+    });
+
+    it("trims whitespace", () => {
+      expect(stripEmojis("  😀Hello World🎉  ")).toBe("Hello World");
+    });
+
+    it("preserves Chinese characters", () => {
+      expect(stripEmojis("你好世界")).toBe("你好世界");
+      expect(stripEmojis("你好 😀 世界")).toBe("你好 世界");
+    });
+
+    it("preserves English text", () => {
+      expect(stripEmojis("Hello World")).toBe("Hello World");
+    });
+
+    it("returns empty string for emoji-only input", () => {
+      expect(stripEmojis("😀🎉🚀")).toBe("");
+    });
+
+    it("preserves word boundaries when emoji between words", () => {
+      expect(stripEmojis("Hello😀World")).toBe("Hello World");
     });
   });
 });

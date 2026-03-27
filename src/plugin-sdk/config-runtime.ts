@@ -79,6 +79,7 @@ export type {
   TtsMode,
   TtsModelOverrideConfig,
   TtsProvider,
+  CliTtsProviderConfig,
 } from "../config/types.js";
 export {
   loadSessionStore,

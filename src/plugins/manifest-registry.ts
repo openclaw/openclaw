@@ -53,6 +53,7 @@ export type PluginManifestRecord = {
   channels: string[];
   providers: string[];
   cliBackends: string[];
+  speechProviders?: string[];
   providerAuthEnvVars?: Record<string, string[]>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   skills: string[];
@@ -228,6 +229,7 @@ function buildRecord(params: {
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
     cliBackends: params.manifest.cliBackends ?? [],
+    speechProviders: params.manifest.contracts?.speechProviders ?? [],
     providerAuthEnvVars: params.manifest.providerAuthEnvVars,
     providerAuthChoices: params.manifest.providerAuthChoices,
     skills: params.manifest.skills ?? [],

@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/tts-local-cli",
+  "version": "2026.3.27",
+  "private": true,
+  "description": "OpenClaw TTS Local CLI plugin for local text-to-speech commands",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

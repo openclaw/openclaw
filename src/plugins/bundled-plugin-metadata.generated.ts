@@ -16794,6 +16794,29 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "tts-local-cli",
+    idHint: "tts-local-cli",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/tts-local-cli",
+    packageVersion: "2026.3.27",
+    packageDescription: "OpenClaw TTS Local CLI plugin for local text-to-speech commands",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "tts-local-cli",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      speechProviders: ["cli"],
+    },
+  },
+  {
     dirName: "twitch",
     idHint: "twitch",
     source: {

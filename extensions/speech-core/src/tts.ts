@@ -17,6 +17,7 @@ import type {
   TtsMode,
   TtsModelOverrideConfig,
   TtsProvider,
+  CliTtsProviderConfig,
 } from "openclaw/plugin-sdk/config-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -169,14 +170,47 @@ function asProviderConfigMap(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function mergeCliAgentConfig(
+  baseConfig: CliTtsProviderConfig,
+  agentId?: string,
+): CliTtsProviderConfig {
+  if (!agentId || !baseConfig.agents?.[agentId]) {
+    return baseConfig;
+  }
+  const agentConfig = baseConfig.agents[agentId];
+  // Merge agent-specific overrides on top of base config
+  // Agent config fields override base config fields (except 'agents' and 'command' if not specified)
+  return {
+    ...baseConfig,
+    ...agentConfig,
+    // Keep the agents map from base (not overwritten by agent config)
+    agents: baseConfig.agents,
+    // Use base command if agent doesn't specify one
+    command: agentConfig.command ?? baseConfig.command,
+  };
+}
+
 function resolveSpeechProviderConfigs(
   raw: TtsConfig,
   cfg: OpenClawConfig,
   timeoutMs: number,
+  agentId?: string,
 ): Record<string, SpeechProviderConfig> {
   const providerConfigs: Record<string, SpeechProviderConfig> = {};
   const rawProviders = asProviderConfigMap(raw.providers);
   for (const provider of listSpeechProviders(cfg)) {
+    let rawConfig = asProviderConfig(
+      rawProviders[provider.id] ?? (raw as Record<string, unknown>)[provider.id],
+    );
+
+    // Merge CLI agent-specific config if this is the CLI provider
+    if (provider.id === "cli" && agentId) {
+      const cliConfig = rawConfig as CliTtsProviderConfig;
+      if (cliConfig.agents?.[agentId]) {
+        rawConfig = mergeCliAgentConfig(cliConfig, agentId);
+      }
+    }
+
     providerConfigs[provider.id] =
       provider.resolveConfig?.({
         cfg,
@@ -185,8 +219,7 @@ function resolveSpeechProviderConfigs(
           providers: rawProviders,
         },
         timeoutMs,
-      }) ??
-      asProviderConfig(rawProviders[provider.id] ?? (raw as Record<string, unknown>)[provider.id]);
+      }) ?? rawConfig;
   }
   return providerConfigs;
 }
@@ -201,7 +234,7 @@ export function getResolvedSpeechProviderConfig(
   return config.providerConfigs[canonical] ?? {};
 }
 
-export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
+export function resolveTtsConfig(cfg: OpenClawConfig, agentId?: string): ResolvedTtsConfig {
   const raw: TtsConfig = cfg.messages?.tts ?? {};
   const providerSource = raw.provider ? "config" : "default";
   const timeoutMs = raw.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -215,7 +248,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     providerSource,
     summaryModel: raw.summaryModel?.trim() || undefined,
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),
-    providerConfigs: resolveSpeechProviderConfigs(raw, cfg, timeoutMs),
+    providerConfigs: resolveSpeechProviderConfigs(raw, cfg, timeoutMs, agentId),
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs,
@@ -696,11 +729,12 @@ export async function maybeApplyTtsToPayload(params: {
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;
   ttsAuto?: string;
+  agentId?: string;
 }): Promise<ReplyPayload> {
   if (params.payload.isCompactionNotice) {
     return params.payload;
   }
-  const config = resolveTtsConfig(params.cfg);
+  const config = resolveTtsConfig(params.cfg, params.agentId);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({
     config,

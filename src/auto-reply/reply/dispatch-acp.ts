@@ -206,6 +206,7 @@ async function finalizeAcpTurnOutput(params: {
   let finalMediaDelivered = false;
   if (ttsMode === "final" && hasAccumulatedBlockText) {
     try {
+      const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
       const ttsSyntheticReply = await maybeApplyTtsToPayload({
         payload: { text: accumulatedBlockText },
         cfg: params.cfg,
@@ -213,6 +214,7 @@ async function finalizeAcpTurnOutput(params: {
         kind: "final",
         inboundAudio: params.inboundAudio,
         ttsAuto: params.sessionTtsAuto,
+        agentId,
       });
       if (ttsSyntheticReply.mediaUrl) {
         const delivered = await params.delivery.deliver("final", {

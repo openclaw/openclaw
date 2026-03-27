@@ -25,6 +25,36 @@ export type TtsModelOverrideConfig = {
   allowSeed?: boolean;
 };
 
+// =============================================================================
+// CLI TTS Provider Configuration
+// =============================================================================
+
+/** Per-agent CLI TTS override config. */
+export type CliTtsAgentConfig = {
+  /** CLI command to execute (e.g., "tts-cli", "/usr/local/bin/tts"). */
+  command?: string;
+  /** Argument templates with {{...}} placeholders (e.g., ["--output", "{{OutputPath}}", "{{Text}}"]). */
+  args?: string[];
+  /** Output audio format. */
+  outputFormat?: "mp3" | "opus" | "wav";
+  /** Timeout in milliseconds (default: 120000). */
+  timeoutMs?: number;
+  /** Working directory for CLI execution. */
+  cwd?: string;
+  /** Environment variables to pass to CLI. */
+  env?: Record<string, string>;
+};
+
+/** CLI TTS provider configuration. */
+export type CliTtsProviderConfig = CliTtsAgentConfig & {
+  /** CLI command to execute (required at provider level). */
+  command: string;
+  /** Per-agent CLI TTS overrides keyed by agent id. */
+  agents?: Record<string, CliTtsAgentConfig>;
+};
+
+// =============================================================================
+
 export type TtsProviderConfigMap = Record<string, Record<string, unknown>>;
 
 export type LegacyTtsConfigCompat = {
