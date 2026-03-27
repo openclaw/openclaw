@@ -879,6 +879,7 @@ export function createOpenAIWebSocketStreamFn(
 
       // ── 3. Compute incremental vs full input ─────────────────────────────
       const prevResponseId = session.manager.previousResponseId;
+      let requestPreviousResponseId: string | undefined;
       let inputItems: InputItem[];
 
       if (prevResponseId && session.lastContextLength > 0) {
@@ -887,13 +888,15 @@ export function createOpenAIWebSocketStreamFn(
         // Filter to only tool results — the assistant message is already in server context
         const toolResults = newMessages.filter((m) => (m as AnyMessage).role === "toolResult");
         if (toolResults.length === 0) {
-          // Shouldn't happen in a well-formed turn, but fall back to full context
+          // The WebSocket guide requires a fresh full-context turn here: when we
+          // cannot continue the incremental chain, omit previous_response_id.
           log.debug(
-            `[ws-stream] session=${sessionId}: no new tool results found; sending full context`,
+            `[ws-stream] session=${sessionId}: no new tool results found; sending full context without previous_response_id`,
           );
           inputItems = buildFullInput(context, model);
         } else {
           inputItems = convertMessagesToInputItems(toolResults, model);
+          requestPreviousResponseId = prevResponseId;
         }
         log.debug(
           `[ws-stream] session=${sessionId}: incremental send (${inputItems.length} tool results) previous_response_id=${prevResponseId}`,
@@ -955,7 +958,7 @@ export function createOpenAIWebSocketStreamFn(
         input: inputItems,
         instructions: context.systemPrompt ?? undefined,
         tools: tools.length > 0 ? tools : undefined,
-        ...(prevResponseId ? { previous_response_id: prevResponseId } : {}),
+        ...(requestPreviousResponseId ? { previous_response_id: requestPreviousResponseId } : {}),
         ...extraParams,
       };
       const nextPayload = options?.onPayload?.(payload, model);
