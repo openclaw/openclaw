@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { probeGateway } from "../gateway/probe.js";
-import type { MemoryProviderStatus } from "../memory/types.js";
+import type { MemoryProviderStatus } from "../plugins/memory-host/types.js";
 import {
   pickGatewaySelfPresence,
   resolveGatewayProbeAuthResolution,
@@ -123,7 +123,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   requireDefaultStore?: (agentId: string) => string | null;
 }): Promise<MemoryStatusSnapshot | null> {
   const { cfg, agentStatus, memoryPlugin } = params;
-  if (!memoryPlugin.enabled || memoryPlugin.slot !== "memory-core") {
+  if (!memoryPlugin.enabled || !memoryPlugin.slot) {
     return null;
   }
   const agentId = agentStatus.defaultId ?? "main";

@@ -193,8 +193,24 @@ export function createSessionsListTool(opts?: {
           key: displayKey,
           kind,
           channel: derivedChannel,
+          spawnedBy:
+            typeof entry.spawnedBy === "string"
+              ? resolveDisplaySessionKey({
+                  key: entry.spawnedBy,
+                  alias,
+                  mainKey,
+                })
+              : undefined,
           label: typeof entry.label === "string" ? entry.label : undefined,
           displayName: typeof entry.displayName === "string" ? entry.displayName : undefined,
+          parentSessionKey:
+            typeof entry.parentSessionKey === "string"
+              ? resolveDisplaySessionKey({
+                  key: entry.parentSessionKey,
+                  alias,
+                  mainKey,
+                })
+              : undefined,
           deliveryContext:
             deliveryChannel || deliveryTo || deliveryAccountId
               ? {

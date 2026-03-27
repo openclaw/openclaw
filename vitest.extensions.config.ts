@@ -14,7 +14,6 @@ export function createExtensionsVitestConfig(
   return createScopedVitestConfig(loadIncludePatternsFromEnv(env) ?? ["extensions/**/*.test.ts"], {
     dir: "extensions",
     env,
-    pool: "threads",
     passWithNoTests: true,
     // Channel implementations live under extensions/ but are tested by
     // vitest.channels.config.ts (pnpm test:channels) which provides

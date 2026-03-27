@@ -5,15 +5,16 @@ import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../auto-reply/reply/queue.js";
-import { closeTrackedBrowserTabsForSessions } from "../browser/session-tab-registry.js";
 import { loadConfig } from "../config/config.js";
 import {
   snapshotSessionOrigin,
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
+import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
+import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-runtime.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import {
@@ -306,8 +307,18 @@ export async function performGatewaySessionReset(params: {
     oldSessionId = currentEntry?.sessionId;
     oldSessionFile = currentEntry?.sessionFile;
     const now = Date.now();
+    const nextSessionId = randomUUID();
+    const sessionFile = resolveSessionFilePath(
+      nextSessionId,
+      undefined,
+      resolveSessionFilePathOptions({
+        storePath,
+        agentId: sessionAgentId,
+      }),
+    );
     const nextEntry: SessionEntry = {
-      sessionId: randomUUID(),
+      sessionId: nextSessionId,
+      sessionFile,
       updatedAt: now,
       systemSent: false,
       abortedLastRun: false,
@@ -315,18 +326,51 @@ export async function performGatewaySessionReset(params: {
       fastMode: currentEntry?.fastMode,
       verboseLevel: currentEntry?.verboseLevel,
       reasoningLevel: currentEntry?.reasoningLevel,
+      elevatedLevel: currentEntry?.elevatedLevel,
+      ttsAuto: currentEntry?.ttsAuto,
+      execHost: currentEntry?.execHost,
+      execSecurity: currentEntry?.execSecurity,
+      execAsk: currentEntry?.execAsk,
+      execNode: currentEntry?.execNode,
       responseUsage: currentEntry?.responseUsage,
+      providerOverride: currentEntry?.providerOverride,
+      modelOverride: currentEntry?.modelOverride,
+      authProfileOverride: currentEntry?.authProfileOverride,
+      authProfileOverrideSource: currentEntry?.authProfileOverrideSource,
+      authProfileOverrideCompactionCount: currentEntry?.authProfileOverrideCompactionCount,
+      groupActivation: currentEntry?.groupActivation,
+      groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
+      chatType: currentEntry?.chatType,
       model: resolvedModel.model,
       modelProvider: resolvedModel.provider,
       contextTokens: resetEntry?.contextTokens,
       sendPolicy: currentEntry?.sendPolicy,
+      queueMode: currentEntry?.queueMode,
+      queueDebounceMs: currentEntry?.queueDebounceMs,
+      queueCap: currentEntry?.queueCap,
+      queueDrop: currentEntry?.queueDrop,
+      spawnedBy: currentEntry?.spawnedBy,
+      spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
+      parentSessionKey: currentEntry?.parentSessionKey,
+      forkedFromParent: currentEntry?.forkedFromParent,
+      spawnDepth: currentEntry?.spawnDepth,
+      subagentRole: currentEntry?.subagentRole,
+      subagentControlScope: currentEntry?.subagentControlScope,
       label: currentEntry?.label,
+      displayName: currentEntry?.displayName,
+      channel: currentEntry?.channel,
+      groupId: currentEntry?.groupId,
+      subject: currentEntry?.subject,
+      groupChannel: currentEntry?.groupChannel,
+      space: currentEntry?.space,
       origin: snapshotSessionOrigin(currentEntry),
+      deliveryContext: currentEntry?.deliveryContext,
       lastChannel: currentEntry?.lastChannel,
       lastTo: currentEntry?.lastTo,
       lastAccountId: currentEntry?.lastAccountId,
       lastThreadId: currentEntry?.lastThreadId,
       skillsSnapshot: currentEntry?.skillsSnapshot,
+      acp: currentEntry?.acp,
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,

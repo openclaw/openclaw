@@ -112,15 +112,6 @@ describe("buildAuthChoiceOptions", () => {
         groupLabel: "Together AI",
       },
       {
-        pluginId: "qwen-portal-auth",
-        providerId: "qwen-portal",
-        methodId: "device",
-        choiceId: "qwen-portal",
-        choiceLabel: "Qwen OAuth",
-        groupId: "qwen",
-        groupLabel: "Qwen",
-      },
-      {
         pluginId: "xai",
         providerId: "xai",
         methodId: "api-key",
@@ -200,7 +191,6 @@ describe("buildAuthChoiceOptions", () => {
       "moonshot-api-key",
       "together-api-key",
       "chutes",
-      "qwen-portal",
       "xai-api-key",
       "mistral-api-key",
       "volcengine-api-key",

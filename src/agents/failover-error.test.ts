@@ -70,8 +70,8 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 499 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 400 })).toBe("format");
     expect(resolveFailoverReasonFromError({ status: 422 })).toBe("format");
-    // Keep the status-only path behavior-preserving and conservative.
-    expect(resolveFailoverReasonFromError({ status: 500 })).toBeNull();
+    // Transient server errors (500/502/503/504) should trigger failover as timeout.
+    expect(resolveFailoverReasonFromError({ status: 500 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 504 })).toBe("timeout");

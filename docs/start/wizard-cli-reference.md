@@ -126,7 +126,10 @@ What you set:
   <Accordion title="Anthropic API key">
     Uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
   </Accordion>
-  <Accordion title="Anthropic OAuth (Claude Code CLI)">
+  <Accordion title="Anthropic Claude CLI">
+    Reuses a local Claude CLI login on the gateway host and switches model
+    selection to `claude-cli/...`.
+
     - macOS: checks Keychain item "Claude Code-credentials"
     - Linux and Windows: reuses `~/.claude/.credentials.json` if present
 

@@ -466,20 +466,6 @@ describe("getApiKeyForModel", () => {
     );
   });
 
-  it("resolveEnvApiKey('qwen-portal') accepts QWEN_OAUTH_TOKEN", async () => {
-    await withEnvAsync(
-      {
-        QWEN_OAUTH_TOKEN: "qwen-oauth-token",
-        QWEN_PORTAL_API_KEY: undefined,
-      },
-      async () => {
-        const resolved = resolveEnvApiKey("qwen");
-        expect(resolved?.apiKey).toBe("qwen-oauth-token");
-        expect(resolved?.source).toContain("QWEN_OAUTH_TOKEN");
-      },
-    );
-  });
-
   it("resolveEnvApiKey('minimax-portal') accepts MINIMAX_OAUTH_TOKEN", async () => {
     await withEnvAsync(
       {
