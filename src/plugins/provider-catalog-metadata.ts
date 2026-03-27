@@ -9,6 +9,10 @@ import {
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import {
+  normalizePluginsConfig,
+  resolveEnableState,
+} from "./config-state.js";
+import {
   KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
   KIMI_CODING_DEFAULT_MODEL_ID,
   KIMI_CODING_LEGACY_MODEL_ID,
@@ -22,6 +26,14 @@ const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const OPENAI_DIRECT_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const SUPPRESSED_SPARK_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
+
+function isBundledProviderEnabled(
+  pluginId: string,
+  config: ProviderAugmentModelCatalogContext["config"],
+): boolean {
+  const normalized = normalizePluginsConfig(config?.plugins);
+  return resolveEnableState(pluginId, "bundled", normalized).enabled;
+}
 
 function findCatalogTemplate(params: {
   entries: ReadonlyArray<{ provider: string; id: string }>;
@@ -186,10 +198,10 @@ export function augmentBundledProviderCatalog(
           name: OPENAI_DIRECT_SPARK_MODEL_ID,
         }
       : undefined,
-    ...byteplusModels,
-    ...byteplusPlanModels,
-    ...volcengineModels,
-    ...volcenginePlanModels,
-    ...kimiModels,
+    ...(isBundledProviderEnabled("byteplus", context.config) ? byteplusModels : []),
+    ...(isBundledProviderEnabled("byteplus", context.config) ? byteplusPlanModels : []),
+    ...(isBundledProviderEnabled("volcengine", context.config) ? volcengineModels : []),
+    ...(isBundledProviderEnabled("volcengine", context.config) ? volcenginePlanModels : []),
+    ...(isBundledProviderEnabled("kimi", context.config) ? kimiModels : []),
   ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
 }
