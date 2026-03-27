@@ -48,7 +48,7 @@ describe("appendWorkspaceMountArgs", () => {
   });
 
   it.each([
-    { propagation: "private" as const, expected: "/tmp/workspace:/workspace:rw" },
+    { propagation: "rprivate" as const, expected: "/tmp/workspace:/workspace:rw" },
     { propagation: "rslave" as const, expected: "/tmp/workspace:/workspace:rw,rslave" },
     { propagation: "rshared" as const, expected: "/tmp/workspace:/workspace:rw,rshared" },
   ])(

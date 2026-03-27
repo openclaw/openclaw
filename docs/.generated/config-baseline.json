@@ -3533,6 +3533,21 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.sandbox.docker.workspaceMountPropagation",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "rprivate",
+        "rslave",
+        "rshared"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.sandbox.mode",
       "kind": "core",
       "type": "string",
@@ -5890,6 +5905,21 @@
       "kind": "core",
       "type": "string",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.docker.workspaceMountPropagation",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "rprivate",
+        "rslave",
+        "rshared"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
