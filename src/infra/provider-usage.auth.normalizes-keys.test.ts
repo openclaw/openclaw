@@ -160,10 +160,23 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  ...providerRuntimeMocks.providerRuntimeMock,
-  resolveProviderUsageAuthWithPlugin: providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock,
-}));
+vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+  return {
+    ...actual,
+    ...providerRuntimeMocks.providerRuntimeMock,
+    resolveProviderUsageAuthWithPlugin: providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock,
+  };
+});
+
+vi.mock("../plugins/provider-runtime.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/provider-runtime.ts")>();
+  return {
+    ...actual,
+    ...providerRuntimeMocks.providerRuntimeMock,
+    resolveProviderUsageAuthWithPlugin: providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock,
+  };
+});
 
 vi.mock("../agents/cli-credentials.js", () => ({
   readCodexCliCredentialsCached: () => null,
