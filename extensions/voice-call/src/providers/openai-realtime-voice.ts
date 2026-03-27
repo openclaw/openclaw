@@ -779,8 +779,16 @@ export interface RealtimeVoiceProviderConfig {
   vadThreshold?: number;
   /** Default silence duration ms (default: 500) */
   silenceDurationMs?: number;
+  /** Default prefix padding ms */
+  prefixPaddingMs?: number;
   /** Default tools */
   tools?: RealtimeTool[];
+  /** Azure OpenAI endpoint (overrides standard OpenAI API) */
+  azureEndpoint?: string;
+  /** Azure deployment name */
+  azureDeployment?: string;
+  /** Azure API version */
+  azureApiVersion?: string;
 }
 
 /**
