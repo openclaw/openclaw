@@ -293,7 +293,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
   });
 
   it.each([
-    { workspaceAccess: "rw" as const, expectedMainMount: "/tmp/workspace:/workspace:z" },
+    { workspaceAccess: "rw" as const, expectedMainMount: "/tmp/workspace:/workspace:rw,z" },
     { workspaceAccess: "ro" as const, expectedMainMount: "/tmp/workspace:/workspace:ro,z" },
     { workspaceAccess: "none" as const, expectedMainMount: "/tmp/workspace:/workspace:ro,z" },
   ])(
