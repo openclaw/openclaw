@@ -422,6 +422,10 @@ export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
 }
 
 export function shouldPreferNativeJiti(modulePath: string): boolean {
+  const versions = process.versions as { bun?: string };
+  if (typeof versions.bun === "string") {
+    return false;
+  }
   switch (path.extname(modulePath).toLowerCase()) {
     case ".js":
     case ".mjs":
