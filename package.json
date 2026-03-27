@@ -24,7 +24,6 @@
     "CHANGELOG.md",
     "LICENSE",
     "openclaw.mjs",
-    "README-header.png",
     "README.md",
     "assets/",
     "dist/",
@@ -245,6 +244,18 @@
       "types": "./dist/plugin-sdk/bluebubbles.d.ts",
       "default": "./dist/plugin-sdk/bluebubbles.js"
     },
+    "./plugin-sdk/browser": {
+      "types": "./dist/plugin-sdk/browser.d.ts",
+      "default": "./dist/plugin-sdk/browser.js"
+    },
+    "./plugin-sdk/browser-runtime": {
+      "types": "./dist/plugin-sdk/browser-runtime.d.ts",
+      "default": "./dist/plugin-sdk/browser-runtime.js"
+    },
+    "./plugin-sdk/browser-support": {
+      "types": "./dist/plugin-sdk/browser-support.d.ts",
+      "default": "./dist/plugin-sdk/browser-support.js"
+    },
     "./plugin-sdk/boolean-param": {
       "types": "./dist/plugin-sdk/boolean-param.d.ts",
       "default": "./dist/plugin-sdk/boolean-param.js"
@@ -409,6 +420,18 @@
       "types": "./dist/plugin-sdk/memory-core.d.ts",
       "default": "./dist/plugin-sdk/memory-core.js"
     },
+    "./plugin-sdk/memory-core-host": {
+      "types": "./dist/plugin-sdk/memory-core-host.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host.js"
+    },
+    "./plugin-sdk/memory-core-host-engine": {
+      "types": "./dist/plugin-sdk/memory-core-host-engine.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-engine.js"
+    },
+    "./plugin-sdk/memory-core-host-runtime": {
+      "types": "./dist/plugin-sdk/memory-core-host-runtime.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-runtime.js"
+    },
     "./plugin-sdk/memory-lancedb": {
       "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
       "default": "./dist/plugin-sdk/memory-lancedb.js"
@@ -452,6 +475,10 @@
     "./plugin-sdk/provider-env-vars": {
       "types": "./dist/plugin-sdk/provider-env-vars.d.ts",
       "default": "./dist/plugin-sdk/provider-env-vars.js"
+    },
+    "./plugin-sdk/provider-http": {
+      "types": "./dist/plugin-sdk/provider-http.d.ts",
+      "default": "./dist/plugin-sdk/provider-http.js"
     },
     "./plugin-sdk/provider-google": {
       "types": "./dist/plugin-sdk/provider-google.d.ts",
@@ -528,6 +555,10 @@
     "./plugin-sdk/telegram-core": {
       "types": "./dist/plugin-sdk/telegram-core.d.ts",
       "default": "./dist/plugin-sdk/telegram-core.js"
+    },
+    "./plugin-sdk/telegram-runtime": {
+      "types": "./dist/plugin-sdk/telegram-runtime.d.ts",
+      "default": "./dist/plugin-sdk/telegram-runtime.js"
     },
     "./plugin-sdk/thread-ownership": {
       "types": "./dist/plugin-sdk/thread-ownership.d.ts",
@@ -750,6 +781,7 @@
     "test:perf:profile:runner": "node scripts/run-vitest-profile.mjs runner",
     "test:perf:update-memory-hotspots": "node scripts/test-update-memory-hotspots.mjs",
     "test:perf:update-timings": "node scripts/test-update-timings.mjs",
+    "test:perf:update-timings:extensions": "node scripts/test-update-timings.mjs --config vitest.extensions.config.ts",
     "test:sectriage": "pnpm exec vitest run --config vitest.gateway.config.ts && vitest run --config vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
     "test:serial": "node scripts/test-parallel.mjs --profile serial",
     "test:startup:memory": "node scripts/check-cli-startup-memory.mjs",

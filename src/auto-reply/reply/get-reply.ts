@@ -36,9 +36,7 @@ import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
-import { applyResetModelOverride } from "./session-reset-model.js";
 import { initSessionState } from "./session.js";
-import { stageSandboxMedia } from "./stage-sandbox-media.js";
 import { createTypingController } from "./typing.js";
 
 function shouldLogCoreIngressTiming(): boolean {
@@ -46,6 +44,23 @@ function shouldLogCoreIngressTiming(): boolean {
 }
 
 type ResetCommandAction = "new" | "reset";
+
+let sessionResetModelRuntimePromise: Promise<
+  typeof import("./session-reset-model.runtime.js")
+> | null = null;
+let stageSandboxMediaRuntimePromise: Promise<
+  typeof import("./stage-sandbox-media.runtime.js")
+> | null = null;
+
+function loadSessionResetModelRuntime() {
+  sessionResetModelRuntimePromise ??= import("./session-reset-model.runtime.js");
+  return sessionResetModelRuntimePromise;
+}
+
+function loadStageSandboxMediaRuntime() {
+  stageSandboxMediaRuntimePromise ??= import("./stage-sandbox-media.runtime.js");
+  return stageSandboxMediaRuntimePromise;
+}
 
 function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
   const normalize = (list?: string[]) => {
@@ -319,21 +334,24 @@ export async function getReplyFromConfig(
     bodyStripped,
   } = sessionState;
 
-  await applyResetModelOverride({
-    cfg,
-    agentId,
-    resetTriggered,
-    bodyStripped,
-    sessionCtx,
-    ctx: finalized,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-  });
+  if (resetTriggered && bodyStripped?.trim()) {
+    const { applyResetModelOverride } = await loadSessionResetModelRuntime();
+    await applyResetModelOverride({
+      cfg,
+      agentId,
+      resetTriggered,
+      bodyStripped,
+      sessionCtx,
+      ctx: finalized,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+    });
+  }
 
   const channelModelOverride = resolveChannelModelOverride({
     cfg,
@@ -648,13 +666,16 @@ export async function getReplyFromConfig(
   directives = inlineActionResult.directives;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
 
-  await stageSandboxMedia({
-    ctx,
-    sessionCtx,
-    cfg,
-    sessionKey,
-    workspaceDir,
-  });
+  if (sessionKey && hasInboundMedia(ctx)) {
+    const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
+    await stageSandboxMedia({
+      ctx,
+      sessionCtx,
+      cfg,
+      sessionKey,
+      workspaceDir,
+    });
+  }
   logIngressStage("sandbox-media");
 
   // Create final opts with potentially cleared modelOverrideFallbacks

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,7 @@ import {
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
+  mcpConfigHash?: string;
 };
 
 async function readExternalMcpConfig(configPath: string): Promise<BundleMcpConfig> {
@@ -96,13 +98,13 @@ export async function prepareCliBundleMcpConfig(params: {
   }
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
 
-  if (Object.keys(mergedConfig.mcpServers).length === 0) {
-    return { backend: params.backend };
-  }
-
+  // Always pass an explicit strict MCP config for background claude-cli runs.
+  // Otherwise Claude may inherit ambient user/global MCP servers (for example
+  // Playwright) and spawn unexpected background processes.
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-"));
   const mcpConfigPath = path.join(tempDir, "mcp.json");
-  await fs.writeFile(mcpConfigPath, `${JSON.stringify(mergedConfig, null, 2)}\n`, "utf-8");
+  const serializedConfig = `${JSON.stringify(mergedConfig, null, 2)}\n`;
+  await fs.writeFile(mcpConfigPath, serializedConfig, "utf-8");
 
   return {
     backend: {
@@ -113,6 +115,7 @@ export async function prepareCliBundleMcpConfig(params: {
         mcpConfigPath,
       ),
     },
+    mcpConfigHash: crypto.createHash("sha256").update(serializedConfig).digest("hex"),
     cleanup: async () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     },

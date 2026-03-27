@@ -2,6 +2,7 @@ import path from "node:path";
 import { isUnitConfigTestFile } from "../../vitest.unit-paths.mjs";
 import {
   loadChannelTimingManifest,
+  loadExtensionTimingManifest,
   loadUnitMemoryHotspotManifest,
   loadUnitTimingManifest,
   packFilesByDuration,
@@ -145,6 +146,7 @@ const createPlannerContext = (request, options = {}) => {
   const catalog = options.catalog ?? loadTestCatalog();
   const unitTimingManifest = loadUnitTimingManifest();
   const channelTimingManifest = loadChannelTimingManifest();
+  const extensionTimingManifest = loadExtensionTimingManifest();
   const unitMemoryHotspotManifest = loadUnitMemoryHotspotManifest();
   return {
     env,
@@ -153,6 +155,7 @@ const createPlannerContext = (request, options = {}) => {
     catalog,
     unitTimingManifest,
     channelTimingManifest,
+    extensionTimingManifest,
     unitMemoryHotspotManifest,
   };
 };
@@ -198,10 +201,15 @@ const resolveEntryTimingEstimator = (entry, context) => {
       context.unitTimingManifest.files[file]?.durationMs ??
       context.unitTimingManifest.defaultDurationMs;
   }
-  if (config === "vitest.channels.config.ts" || config === "vitest.extensions.config.ts") {
+  if (config === "vitest.channels.config.ts") {
     return (file) =>
       context.channelTimingManifest.files[file]?.durationMs ??
       context.channelTimingManifest.defaultDurationMs;
+  }
+  if (config === "vitest.extensions.config.ts") {
+    return (file) =>
+      context.extensionTimingManifest.files[file]?.durationMs ??
+      context.extensionTimingManifest.defaultDurationMs;
   }
   return null;
 };
@@ -233,6 +241,33 @@ const splitFilesByDurationBudget = (files, targetDurationMs, estimateDurationMs)
   return batches;
 };
 
+const splitFilesByBalancedDurationBudget = (files, targetDurationMs, estimateDurationMs) => {
+  if (!Number.isFinite(targetDurationMs) || targetDurationMs <= 0 || files.length <= 1) {
+    return [files];
+  }
+  const totalDurationMs = files.reduce((sum, file) => sum + estimateDurationMs(file), 0);
+  const batchCount = clamp(Math.ceil(totalDurationMs / targetDurationMs), 1, files.length);
+  const originalOrder = new Map(files.map((file, index) => [file, index]));
+  return packFilesByDuration(files, batchCount, estimateDurationMs).map((batch) =>
+    [...batch].toSorted(
+      (left, right) => (originalOrder.get(left) ?? 0) - (originalOrder.get(right) ?? 0),
+    ),
+  );
+};
+
+const resolveUnitFastBatchTargetMs = ({ context, selectedSurfaceSet, unitOnlyRun }) => {
+  const defaultTargetMs = context.executionBudget.unitFastBatchTargetMs;
+  if (
+    !unitOnlyRun &&
+    selectedSurfaceSet.size > 1 &&
+    !context.runtime.isCI &&
+    context.runtime.memoryBand === "high"
+  ) {
+    return Math.max(defaultTargetMs, 75_000);
+  }
+  return defaultTargetMs;
+};
+
 const resolveMaxWorkersForUnit = (unit, context) => {
   const overrideWorkers = Number.parseInt(context.env.OPENCLAW_TEST_WORKERS ?? "", 10);
   const resolvedOverride =
@@ -249,6 +284,9 @@ const resolveMaxWorkersForUnit = (unit, context) => {
   }
   if (unit.surface === "extensions") {
     return budget.extensionWorkers;
+  }
+  if (unit.surface === "channels") {
+    return budget.channelSharedWorkers ?? budget.unitSharedWorkers;
   }
   if (unit.surface === "gateway") {
     return budget.gatewayWorkers;
@@ -332,11 +370,20 @@ const resolveUnitHeavyFileGroups = (context) => {
 };
 
 const buildDefaultUnits = (context, request) => {
-  const { env, executionBudget, catalog, unitTimingManifest, channelTimingManifest } = context;
+  const {
+    env,
+    executionBudget,
+    catalog,
+    unitTimingManifest,
+    channelTimingManifest,
+    extensionTimingManifest,
+  } = context;
   const noIsolateArgs = context.noIsolateArgs;
   const selectedSurfaces = buildRequestedSurfaces(request, env);
   const selectedSurfaceSet = new Set(selectedSurfaces);
+  const unitOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("unit");
   const channelsOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("channels");
+  const extensionsOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("extensions");
 
   const {
     heavyUnitLaneCount,
@@ -361,6 +408,8 @@ const buildDefaultUnits = (context, request) => {
     unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
   const estimateChannelDurationMs = (file) =>
     channelTimingManifest.files[file]?.durationMs ?? channelTimingManifest.defaultDurationMs;
+  const estimateExtensionDurationMs = (file) =>
+    extensionTimingManifest.files[file]?.durationMs ?? extensionTimingManifest.defaultDurationMs;
   const unitFastCandidateFiles = catalog.allKnownUnitFiles.filter(
     (file) => !new Set(unitFastExcludedFiles).has(file),
   );
@@ -383,7 +432,11 @@ const buildDefaultUnits = (context, request) => {
     1,
     parseEnvNumber(env, "OPENCLAW_TEST_UNIT_FAST_LANES", defaultUnitFastLaneCount),
   );
-  const defaultUnitFastBatchTargetMs = executionBudget.unitFastBatchTargetMs;
+  const defaultUnitFastBatchTargetMs = resolveUnitFastBatchTargetMs({
+    context,
+    selectedSurfaceSet,
+    unitOnlyRun,
+  });
   const unitFastBatchTargetMs = parseEnvNumber(
     env,
     "OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS",
@@ -421,7 +474,7 @@ const buildDefaultUnits = (context, request) => {
             id: unitId,
             surface: "unit",
             isolate: false,
-            serialPhase: "unit-fast",
+            serialPhase: unitOnlyRun ? undefined : "unit-fast",
             includeFiles: batch,
             estimatedDurationMs: estimateEntryFilesDurationMs(
               { args: ["vitest", "run", "--config", "vitest.unit.config.ts"] },
@@ -453,6 +506,7 @@ const buildDefaultUnits = (context, request) => {
           id: `unit-${path.basename(file, ".test.ts")}-isolated`,
           surface: "unit",
           isolate: true,
+          estimatedDurationMs: estimateUnitDurationMs(file),
           args: [
             "vitest",
             "run",
@@ -478,6 +532,7 @@ const buildDefaultUnits = (context, request) => {
           id: `unit-heavy-${String(index + 1)}`,
           surface: "unit",
           isolate: false,
+          estimatedDurationMs: files.reduce((sum, file) => sum + estimateUnitDurationMs(file), 0),
           args: [
             "vitest",
             "run",
@@ -498,6 +553,7 @@ const buildDefaultUnits = (context, request) => {
           id: `unit-${path.basename(file, ".test.ts")}-memory-isolated`,
           surface: "unit",
           isolate: true,
+          estimatedDurationMs: estimateUnitDurationMs(file),
           args: [
             "vitest",
             "run",
@@ -533,6 +589,29 @@ const buildDefaultUnits = (context, request) => {
     }
   }
 
+  if (selectedSurfaceSet.has("channels")) {
+    for (const file of catalog.channelIsolatedFiles) {
+      units.push(
+        createExecutionUnit(context, {
+          id: `${path.basename(file, ".test.ts")}-channels-isolated`,
+          surface: "channels",
+          isolate: true,
+          estimatedDurationMs: estimateChannelDurationMs(file),
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.channels.config.ts",
+            "--pool=forks",
+            ...noIsolateArgs,
+            file,
+          ],
+          reasons: ["channels-isolated-rule"],
+        }),
+      );
+    }
+  }
+
   if (selectedSurfaceSet.has("extensions")) {
     for (const file of catalog.extensionForkIsolatedFiles) {
       units.push(
@@ -540,15 +619,16 @@ const buildDefaultUnits = (context, request) => {
           id: `extensions-${path.basename(file, ".test.ts")}-isolated`,
           surface: "extensions",
           isolate: true,
+          estimatedDurationMs: estimateExtensionDurationMs(file),
           args: ["vitest", "run", "--config", "vitest.extensions.config.ts", "--pool=forks", file],
           reasons: ["extensions-isolated-manifest"],
         }),
       );
     }
-    const extensionBatches = splitFilesByDurationBudget(
+    const extensionBatches = splitFilesByBalancedDurationBudget(
       extensionSharedCandidateFiles,
       extensionsBatchTargetMs,
-      estimateChannelDurationMs,
+      estimateExtensionDurationMs,
     );
     for (const [batchIndex, batch] of extensionBatches.entries()) {
       if (batch.length === 0) {
@@ -561,7 +641,7 @@ const buildDefaultUnits = (context, request) => {
           id: unitId,
           surface: "extensions",
           isolate: false,
-          serialPhase: "extensions",
+          serialPhase: extensionsOnlyRun ? undefined : "extensions",
           includeFiles: batch,
           estimatedDurationMs: estimateEntryFilesDurationMs(
             { args: ["vitest", "run", "--config", "vitest.extensions.config.ts"] },
@@ -581,25 +661,6 @@ const buildDefaultUnits = (context, request) => {
   }
 
   if (selectedSurfaceSet.has("channels")) {
-    for (const file of catalog.channelIsolatedFiles) {
-      units.push(
-        createExecutionUnit(context, {
-          id: `${path.basename(file, ".test.ts")}-channels-isolated`,
-          surface: "channels",
-          isolate: true,
-          args: [
-            "vitest",
-            "run",
-            "--config",
-            "vitest.channels.config.ts",
-            "--pool=forks",
-            ...noIsolateArgs,
-            file,
-          ],
-          reasons: ["channels-isolated-rule"],
-        }),
-      );
-    }
     const channelBatches = splitFilesByDurationBudget(
       channelSharedCandidateFiles,
       channelsBatchTargetMs,
@@ -765,10 +826,19 @@ const buildTargetedUnits = (context, request) => {
     return [];
   }
   const unitMemoryIsolatedFiles = request.unitMemoryIsolatedFiles ?? [];
+  const estimateUnitDurationMs = (file) =>
+    context.unitTimingManifest.files[file]?.durationMs ??
+    context.unitTimingManifest.defaultDurationMs;
   const estimateChannelDurationMs = (file) =>
     context.channelTimingManifest.files[file]?.durationMs ??
     context.channelTimingManifest.defaultDurationMs;
-  const defaultTargetedChannelsBatchTargetMs = 12_000;
+  const defaultTargetedUnitBatchTargetMs = 12_000;
+  const targetedUnitBatchTargetMs = parseEnvNumber(
+    context.env,
+    "OPENCLAW_TEST_TARGETED_UNIT_BATCH_TARGET_MS",
+    defaultTargetedUnitBatchTargetMs,
+  );
+  const defaultTargetedChannelsBatchTargetMs = 11_000;
   const targetedChannelsBatchTargetMs = parseEnvNumber(
     context.env,
     "OPENCLAW_TEST_TARGETED_CHANNELS_BATCH_TARGET_MS",
@@ -815,6 +885,28 @@ const buildTargetedUnits = (context, request) => {
       );
     }
     if (
+      classification.surface === "unit" &&
+      uniqueFilters.length > 4 &&
+      targetedUnitBatchTargetMs > 0
+    ) {
+      const estimatedTotalDurationMs = uniqueFilters.reduce(
+        (totalMs, file) => totalMs + estimateUnitDurationMs(file),
+        0,
+      );
+      if (estimatedTotalDurationMs > targetedUnitBatchTargetMs) {
+        return splitFilesByBalancedDurationBudget(
+          uniqueFilters,
+          targetedUnitBatchTargetMs,
+          estimateUnitDurationMs,
+        ).map((batch, batchIndex) =>
+          createExecutionUnit(context, {
+            ...createTargetedUnit(context, classification, batch),
+            id: `unit-batch-${String(batchIndex + 1)}`,
+          }),
+        );
+      }
+    }
+    if (
       classification.surface === "channels" &&
       uniqueFilters.length > 4 &&
       targetedChannelsBatchTargetMs > 0
@@ -824,7 +916,7 @@ const buildTargetedUnits = (context, request) => {
         0,
       );
       if (estimatedTotalDurationMs > targetedChannelsBatchTargetMs) {
-        return splitFilesByDurationBudget(
+        return splitFilesByBalancedDurationBudget(
           uniqueFilters,
           targetedChannelsBatchTargetMs,
           estimateChannelDurationMs,

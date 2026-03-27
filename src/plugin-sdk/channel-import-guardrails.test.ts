@@ -270,9 +270,13 @@ function collectCoreSourceFiles(): string[] {
   const normalizedPluginSdkDir = normalizePath(resolve(ROOT_DIR, "plugin-sdk"));
   coreSourceFilesCache = collectSourceFiles(coreSourceFilesCache, {
     rootDir: srcDir,
-    shouldSkipEntry: ({ normalizedFullPath }) =>
+    shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
       normalizedFullPath.includes(".test.") ||
+      normalizedFullPath.includes(".test-harness.") ||
+      normalizedFullPath.includes(".test-helpers.") ||
+      entryName === "test-manager-helpers.ts" ||
       normalizedFullPath.includes(".mock-harness.") ||
+      normalizedFullPath.includes(".suite.") ||
       normalizedFullPath.includes(".spec.") ||
       normalizedFullPath.includes(".fixture.") ||
       normalizedFullPath.includes(".snap") ||

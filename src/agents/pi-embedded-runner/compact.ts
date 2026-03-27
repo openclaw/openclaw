@@ -18,13 +18,13 @@ import {
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
-import { getMemorySearchManager } from "../../memory/index.js";
 import { resolveSignalReactionLevel } from "../../plugin-sdk/signal.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramReactionLevel,
 } from "../../plugin-sdk/telegram.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
@@ -290,7 +290,7 @@ async function runPostCompactionSessionMemorySync(params: {
     if (!resolvedMemory.sync.sessions.postCompactionForce) {
       return;
     }
-    const { manager } = await getMemorySearchManager({
+    const { manager } = await getActiveMemorySearchManager({
       cfg: params.config,
       agentId,
     });

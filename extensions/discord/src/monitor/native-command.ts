@@ -36,13 +36,13 @@ import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runti
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import { executePluginCommand, matchPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
+import * as pluginRuntime from "openclaw/plugin-sdk/plugin-runtime";
 import {
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
 } from "openclaw/plugin-sdk/reply-payload";
+import * as replyRuntime from "openclaw/plugin-sdk/reply-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
-import { dispatchReplyWithDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -84,6 +84,41 @@ const log = createSubsystemLogger("discord/native-command");
 // Discord application command and option descriptions are limited to 1-100 chars.
 // https://discord.com/developers/docs/interactions/application-commands#application-command-object-application-command-structure
 const DISCORD_COMMAND_DESCRIPTION_MAX = 100;
+let matchPluginCommandImpl = pluginRuntime.matchPluginCommand;
+let executePluginCommandImpl = pluginRuntime.executePluginCommand;
+let dispatchReplyWithDispatcherImpl = replyRuntime.dispatchReplyWithDispatcher;
+let resolveDiscordNativeInteractionRouteStateImpl = resolveDiscordNativeInteractionRouteState;
+
+export const __testing = {
+  setMatchPluginCommand(
+    next: typeof pluginRuntime.matchPluginCommand,
+  ): typeof pluginRuntime.matchPluginCommand {
+    const previous = matchPluginCommandImpl;
+    matchPluginCommandImpl = next;
+    return previous;
+  },
+  setExecutePluginCommand(
+    next: typeof pluginRuntime.executePluginCommand,
+  ): typeof pluginRuntime.executePluginCommand {
+    const previous = executePluginCommandImpl;
+    executePluginCommandImpl = next;
+    return previous;
+  },
+  setDispatchReplyWithDispatcher(
+    next: typeof replyRuntime.dispatchReplyWithDispatcher,
+  ): typeof replyRuntime.dispatchReplyWithDispatcher {
+    const previous = dispatchReplyWithDispatcherImpl;
+    dispatchReplyWithDispatcherImpl = next;
+    return previous;
+  },
+  setResolveDiscordNativeInteractionRouteState(
+    next: typeof resolveDiscordNativeInteractionRouteState,
+  ): typeof resolveDiscordNativeInteractionRouteState {
+    const previous = resolveDiscordNativeInteractionRouteStateImpl;
+    resolveDiscordNativeInteractionRouteStateImpl = next;
+    return previous;
+  },
+};
 
 function truncateDiscordCommandDescription(params: { value: string; label: string }): string {
   const { value, label } = params;
@@ -109,6 +144,7 @@ function resolveDiscordNativeCommandAllowlistAccess(params: {
   sender: { id: string; name?: string; tag?: string };
   chatType: "direct" | "group" | "thread" | "channel";
   conversationId?: string;
+  guildId?: string | null;
 }) {
   const commandsAllowFrom = params.cfg.commands?.allowFrom;
   if (!commandsAllowFrom || typeof commandsAllowFrom !== "object") {
@@ -119,6 +155,16 @@ function resolveDiscordNativeCommandAllowlistAccess(params: {
     : commandsAllowFrom["*"];
   if (!Array.isArray(rawAllowList)) {
     return { configured: false, allowed: false } as const;
+  }
+  // Check guild-level entries (e.g. "guild:123456") before user matching.
+  const guildId = params.guildId?.trim();
+  if (guildId) {
+    for (const entry of rawAllowList) {
+      const text = String(entry).trim();
+      if (text.startsWith("guild:") && text.slice("guild:".length) === guildId) {
+        return { configured: true, allowed: true } as const;
+      }
+    }
   }
   const allowList = normalizeDiscordAllowList(rawAllowList.map(String), [
     "discord:",
@@ -290,6 +336,7 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
           ? "channel"
           : "group",
     conversationId: rawChannelId || undefined,
+    guildId: interaction.guild?.id,
   });
   const guildInfo = resolveDiscordGuildEntry({
     guild: interaction.guild ?? undefined,
@@ -671,6 +718,7 @@ async function dispatchDiscordCommandInteraction(params: {
           ? "channel"
           : "group",
     conversationId: rawChannelId || undefined,
+    guildId: interaction.guild?.id,
   });
   const guildInfo = resolveDiscordGuildEntry({
     guild: interaction.guild ?? undefined,
@@ -863,13 +911,13 @@ async function dispatchDiscordCommandInteraction(params: {
     return;
   }
 
-  const pluginMatch = matchPluginCommand(prompt);
+  const pluginMatch = matchPluginCommandImpl(prompt);
   if (pluginMatch) {
     if (suppressReplies) {
       return;
     }
     const channelId = rawChannelId || "unknown";
-    const pluginReply = await executePluginCommand({
+    const pluginReply = await executePluginCommandImpl({
       command: pluginMatch.command,
       args: pluginMatch.args,
       senderId: sender.id,
@@ -926,7 +974,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const interactionId = interaction.rawData.id;
   const threadBinding = isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined;
   const commandName = command.nativeName ?? command.key;
-  const routeState = await resolveDiscordNativeInteractionRouteState({
+  const routeState = await resolveDiscordNativeInteractionRouteStateImpl({
     cfg,
     accountId,
     guildId: interaction.guild?.id ?? undefined,
@@ -994,7 +1042,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
 
   let didReply = false;
-  const dispatchResult = await dispatchReplyWithDispatcher({
+  const dispatchResult = await dispatchReplyWithDispatcherImpl({
     ctx: ctxPayload,
     cfg,
     dispatcherOptions: {

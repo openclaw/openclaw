@@ -154,8 +154,8 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   }),
 }));
 
-vi.mock("../browser/session-tab-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../browser/session-tab-registry.js")>();
+vi.mock("../plugin-sdk/browser-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugin-sdk/browser-runtime.js")>();
   return {
     ...actual,
     closeTrackedBrowserTabsForSessions: browserSessionTabMocks.closeTrackedBrowserTabsForSessions,
@@ -587,6 +587,106 @@ describe("gateway server sessions", () => {
         estimatedCostUsd: 0,
         modelProvider: "openai-codex",
         model: "gpt-5.3-codex-spark",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+  });
+
+  test("sessions.changed mutation events include live session setting metadata", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          verboseLevel: "on",
+          responseUsage: "full",
+          fastMode: true,
+        },
+      },
+    });
+
+    const broadcastToConnIds = vi.fn();
+    const respond = vi.fn();
+    const sessionsHandlers = await getSessionsHandlers();
+    await sessionsHandlers["sessions.patch"]({
+      req: {} as never,
+      params: {
+        key: "main",
+        verboseLevel: "on",
+      },
+      respond,
+      context: {
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        loadGatewayModelCatalog: async () => ({ providers: [] }),
+      } as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, key: "agent:main:main" }),
+      undefined,
+    );
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        reason: "patch",
+        verboseLevel: "on",
+        responseUsage: "full",
+        fastMode: true,
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+  });
+
+  test("sessions.changed mutation events include sendPolicy metadata", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          sendPolicy: "deny",
+        },
+      },
+    });
+
+    const broadcastToConnIds = vi.fn();
+    const respond = vi.fn();
+    const sessionsHandlers = await getSessionsHandlers();
+    await sessionsHandlers["sessions.patch"]({
+      req: {} as never,
+      params: {
+        key: "main",
+        sendPolicy: "deny",
+      },
+      respond,
+      context: {
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        loadGatewayModelCatalog: async () => ({ providers: [] }),
+      } as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, key: "agent:main:main" }),
+      undefined,
+    );
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        reason: "patch",
+        sendPolicy: "deny",
       }),
       new Set(["conn-1"]),
       { dropIfSlow: true },
@@ -1140,10 +1240,8 @@ describe("gateway server sessions", () => {
     expect(reset.payload?.entry.execAsk).toBe("on-miss");
     expect(reset.payload?.entry.execNode).toBe("mac-mini");
     expect(reset.payload?.entry.displayName).toBe("Ops Child");
-    expect(reset.payload?.entry.cliSessionIds).toEqual({
-      "claude-cli": "cli-session-123",
-    });
-    expect(reset.payload?.entry.claudeCliSessionId).toBe("cli-session-123");
+    expect(reset.payload?.entry.cliSessionIds).toBeUndefined();
+    expect(reset.payload?.entry.claudeCliSessionId).toBeUndefined();
     expect(reset.payload?.entry.deliveryContext).toEqual({
       channel: "discord",
       to: "discord:child",
@@ -1230,10 +1328,8 @@ describe("gateway server sessions", () => {
     expect(store["agent:main:subagent:child"]?.execAsk).toBe("on-miss");
     expect(store["agent:main:subagent:child"]?.execNode).toBe("mac-mini");
     expect(store["agent:main:subagent:child"]?.displayName).toBe("Ops Child");
-    expect(store["agent:main:subagent:child"]?.cliSessionIds).toEqual({
-      "claude-cli": "cli-session-123",
-    });
-    expect(store["agent:main:subagent:child"]?.claudeCliSessionId).toBe("cli-session-123");
+    expect(store["agent:main:subagent:child"]?.cliSessionIds).toBeUndefined();
+    expect(store["agent:main:subagent:child"]?.claudeCliSessionId).toBeUndefined();
     expect(store["agent:main:subagent:child"]?.deliveryContext).toEqual({
       channel: "discord",
       to: "discord:child",
