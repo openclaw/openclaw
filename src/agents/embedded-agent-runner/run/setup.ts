@@ -34,7 +34,7 @@ type HookRunnerLike = {
     context: HookContext,
   ): Promise<{ providerOverride?: string; modelOverride?: string } | undefined>;
   runBeforeAgentStart(
-    input: { prompt: string },
+    input: { prompt: string; rawBody?: string },
     context: HookContext,
   ): Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
@@ -42,6 +42,7 @@ type HookRunnerLike = {
 export async function resolveHookModelSelection(params: {
   prompt: string;
   attachments?: PluginHookBeforeModelResolveAttachment[];
+  rawBody?: string;
   provider: string;
   modelId: string;
   hookRunner?: HookRunnerLike | null;
@@ -72,7 +73,7 @@ export async function resolveHookModelSelection(params: {
   if (hookRunner?.hasHooks("before_agent_start")) {
     try {
       beforeAgentStartResult = await hookRunner.runBeforeAgentStart(
-        { prompt: params.prompt },
+        { prompt: params.prompt, rawBody: params.rawBody },
         params.hookContext,
       );
       modelResolveOverride = {

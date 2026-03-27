@@ -658,6 +658,7 @@ export async function runEmbeddedAgent(
       const hookSelection = await resolveHookModelSelection({
         prompt: params.prompt,
         attachments: buildBeforeModelResolveAttachments(params.images),
+        rawBody: params.rawBody,
         provider,
         modelId,
         hookRunner,
@@ -1593,6 +1594,7 @@ export async function runEmbeddedAgent(
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
             currentInboundEventKind: params.currentInboundEventKind,
             currentInboundContext: params.currentInboundContext,
+            rawBody: params.rawBody,
             images: params.images,
             imageOrder: params.imageOrder,
             clientTools: params.clientTools,

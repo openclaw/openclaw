@@ -56,6 +56,8 @@ export type FollowupRun = {
   abortSignal?: AbortSignal;
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   queuedLifecycle?: QueuedReplyLifecycle;
+  /** The user's original input text before channel context and metadata. Threaded to plugin hooks. */
+  rawBody?: string;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
