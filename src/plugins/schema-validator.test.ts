@@ -231,4 +231,43 @@ describe("schema validator", () => {
       expect(issue?.text).not.toContain("\x1b");
     }
   });
+
+  it("supports uri-formatted string schemas", () => {
+    const valid = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.uri.valid",
+      schema: {
+        type: "object",
+        properties: {
+          apiRoot: {
+            type: "string",
+            format: "uri",
+          },
+        },
+        required: ["apiRoot"],
+      },
+      value: { apiRoot: "https://api.telegram.org" },
+    });
+    expect(valid.ok).toBe(true);
+
+    const invalid = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.uri.invalid",
+      schema: {
+        type: "object",
+        properties: {
+          apiRoot: {
+            type: "string",
+            format: "uri",
+          },
+        },
+        required: ["apiRoot"],
+      },
+      value: { apiRoot: "not a uri" },
+    });
+    expect(invalid.ok).toBe(false);
+    if (!invalid.ok) {
+      expect(invalid.errors.find((entry) => entry.path === "apiRoot")?.message).toContain(
+        "must match format",
+      );
+    }
+  });
 });
