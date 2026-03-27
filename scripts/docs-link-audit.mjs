@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -288,12 +289,26 @@ export function auditDocsLinks() {
   return { checked, broken };
 }
 
-function isCliEntry() {
-  const cliArg = process.argv[1];
-  return cliArg ? import.meta.url === pathToFileURL(cliArg).href : false;
-}
+/**
+ * @param {{
+ *   args?: string[];
+ *   spawnSyncImpl?: typeof spawnSync;
+ * }} [options]
+ */
+export function runDocsLinkAuditCli(options = {}) {
+  const args = options.args ?? process.argv.slice(2);
+  if (args.includes("--anchors")) {
+    const result = (options.spawnSyncImpl ?? spawnSync)(
+      "pnpm",
+      ["dlx", "mint", "broken-links", "--check-anchors"],
+      {
+        cwd: DOCS_DIR,
+        stdio: "inherit",
+      },
+    );
+    return result.status ?? 1;
+  }
 
-if (isCliEntry()) {
   const { checked, broken } = auditDocsLinks();
   console.log(`checked_internal_links=${checked}`);
   console.log(`broken_links=${broken.length}`);
@@ -302,7 +317,14 @@ if (isCliEntry()) {
     console.log(`${item.file}:${item.line} :: ${item.link} :: ${item.reason}`);
   }
 
-  if (broken.length > 0) {
-    process.exit(1);
-  }
+  return broken.length > 0 ? 1 : 0;
+}
+
+function isCliEntry() {
+  const cliArg = process.argv[1];
+  return cliArg ? import.meta.url === pathToFileURL(cliArg).href : false;
+}
+
+if (isCliEntry()) {
+  process.exit(runDocsLinkAuditCli());
 }
