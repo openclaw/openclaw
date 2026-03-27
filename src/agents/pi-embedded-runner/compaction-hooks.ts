@@ -6,7 +6,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createEpisodeEncoder } from "../../memory/episodic/encoder.js";
 import { EpisodicStore } from "../../memory/episodic/store.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { buildSessionEntry } from "../../plugins/memory-host/session-files.js";
+import { buildSessionEntry } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveAgentDir, resolveSessionAgentId } from "../agent-scope.js";
@@ -108,7 +108,7 @@ async function runPostCompactionEpisodicEncoding(params: {
     return;
   }
 
-  const encoder = createEpisodeEncoder(params.config, params.agentId);
+  const encoder = await createEpisodeEncoder(params.config, params.agentId);
   const episodes = await encoder.encode(entry.content, params.agentId);
   if (episodes.length === 0) {
     return;

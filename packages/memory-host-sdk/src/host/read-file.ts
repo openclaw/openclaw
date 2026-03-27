@@ -95,7 +95,7 @@ export async function readAgentMemoryFile(params: {
     }
     const episodeId = episodicMatch[1];
     // Lazy import to avoid pulling in better-sqlite3 unless needed.
-    const { EpisodicStore } = await import("./episodic/store.js");
+    const { EpisodicStore } = await import("../../../../src/memory/episodic/store.js");
     const agentBaseDir = resolveAgentDir(params.cfg, params.agentId);
     const dbPath = path.join(agentBaseDir, "episodic", "episodes.db");
     const store = new EpisodicStore(dbPath);

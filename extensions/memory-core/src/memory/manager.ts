@@ -31,6 +31,7 @@ import {
 import { createEpisodeEncoder } from "./episodic/encoder.js";
 import { EpisodicSearch } from "./episodic/search.js";
 import { EpisodicStore } from "./episodic/store.js";
+import type { EpisodeSearchResult } from "./episodic/types.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
@@ -481,8 +482,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       });
 
       return episodicResults
-        .filter((r) => r.score >= minScore)
-        .map((r) => {
+        .filter((r: EpisodeSearchResult) => r.score >= minScore)
+        .map((r: EpisodeSearchResult) => {
           const snippet = r.episode.details
             ? `${r.episode.summary}\n${r.episode.details}`
             : r.episode.summary;

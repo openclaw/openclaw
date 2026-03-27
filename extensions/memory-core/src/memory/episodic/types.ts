@@ -9,4 +9,4 @@ export type {
   EpisodeAssociation,
   EpisodeSearchOptions,
   EpisodeSearchResult,
-} from "../../../../src/memory/episodic/types.js";
+} from "../../../../../src/memory/episodic/types.js";
