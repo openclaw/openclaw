@@ -1,16 +1,16 @@
+import type { WorkspaceMountPropagation } from "../../config/types.sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 
 export const SANDBOX_MOUNT_FORMAT_VERSION = 2;
 
-type WorkspaceMountPropagation = "private" | "rslave" | "rshared";
 
 function mainWorkspaceMountSpec(
   access: SandboxWorkspaceAccess,
   propagation: WorkspaceMountPropagation | undefined,
 ): string {
   const parts: string[] = [access === "rw" ? "rw" : "ro"];
-  if (propagation && propagation !== "private") {
+  if (propagation && propagation !== "rprivate") {
     parts.push(propagation);
   }
   parts.push("z");
