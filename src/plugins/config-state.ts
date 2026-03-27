@@ -159,7 +159,8 @@ const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
   Boolean(plugins?.entries && Object.prototype.hasOwnProperty.call(plugins.entries, "memory-core"));
 
 export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) =>
-  hasExplicitPluginConfigShared(plugins);
+  hasExplicitPluginConfigShared(plugins) ||
+  typeof (plugins as Record<string, unknown>)?.hookTimeoutMs === "number";
 
 export function applyTestPluginDefaults(
   cfg: OpenClawConfig,
