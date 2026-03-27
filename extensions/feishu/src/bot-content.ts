@@ -215,7 +215,7 @@ export function parseMergeForwardContent(params: { content: string; log?: Feishu
 
   log?.(`feishu: merge_forward contains ${subMessages.length} sub-messages`);
   subMessages.sort(
-    (a, b) => parseInt(a.create_time || "0", 10) - parseInt(b.create_time || "0", 10),
+    (a, b) => (parseInt(a.create_time || "0", 10) || 0) - (parseInt(b.create_time || "0", 10) || 0),
   );
 
   const lines = ["[Merged and Forwarded Messages]"];
