@@ -389,7 +389,9 @@ export async function handleToolExecutionStart(
   );
   // INFO-level observability for tool calls (see #55806).
   const argSummary = buildSanitizedArgSummary(args);
-  logInfo(`tool-call: start tool=${toolName}${argSummary ? ` args=${argSummary}` : ""}`);
+  logInfo(
+    `tool-call: start runId=${runId} toolCallId=${toolCallId} tool=${toolName}${argSummary ? ` args="${argSummary}"` : ""}`,
+  );
 
   const shouldEmitToolEvents = ctx.shouldEmitToolResult();
   emitAgentEvent({
@@ -601,17 +603,18 @@ export async function handleToolExecutionEnd(
   // INFO-level observability for tool results (see #55806).
   const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
   {
-    const parts = [`tool-call: end tool=${toolName}`];
+    const parts = [`tool-call: end runId=${runId} toolCallId=${toolCallId} tool=${toolName}`];
     if (durationMs != null) {
       parts.push(`duration=${durationMs}ms`);
     }
     if (isToolError) {
-      const errorMessage = extractToolErrorMessage(sanitizedResult);
+      const rawError = extractToolErrorMessage(sanitizedResult);
+      const errorMessage = rawError ? redactSensitiveText(rawError) : undefined;
       parts.push("status=error");
       if (errorMessage) {
         const truncated =
           errorMessage.length > 200 ? `${errorMessage.slice(0, 200)}…` : errorMessage;
-        parts.push(`error=${truncated}`);
+        parts.push(`error="${truncated}"`);
       }
     } else {
       parts.push("status=ok");
