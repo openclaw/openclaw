@@ -57,6 +57,26 @@ describe("x_search tool", () => {
     expect(tool?.name).toBe("x_search");
   });
 
+  it("enables x_search when the xAI plugin web search key is configured", () => {
+    const tool = createXSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-key", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(tool?.name).toBe("x_search");
+  });
+
   it("uses the xAI Responses x_search tool with structured filters", async () => {
     const mockFetch = installXSearchFetch();
     const tool = createXSearchTool({
@@ -100,6 +120,34 @@ describe("x_search tool", () => {
     expect((result?.details as { citations?: string[] } | undefined)?.citations).toEqual([
       "https://x.com/openclaw/status/1",
     ]);
+  });
+
+  it("reuses the xAI plugin web search key for x_search requests", async () => {
+    const mockFetch = installXSearchFetch();
+    const tool = createXSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-key", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await tool?.execute?.("x-search:plugin-key", {
+      query: "latest post from huntharo",
+    });
+
+    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+      "Bearer xai-plugin-key",
+    );
   });
 
   it("rejects invalid date ordering before calling xAI", async () => {
