@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
 import { formatDurationPrecise } from "openclaw/plugin-sdk/infra-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
+import type { UserFromGetMe } from "./bot.runtime.js";
 import { type TelegramTransport } from "./fetch.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
@@ -62,6 +63,10 @@ export class TelegramPollingSession {
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
   #transportState: TelegramPollingTransportState;
+  /** Cached botInfo from the first successful `getMe()` call.
+   *  Passed to subsequent Bot instances so grammy skips `bot.init()` → `getMe()`,
+   *  eliminating the init-retry stall after network recovery. */
+  #cachedBotInfo: UserFromGetMe | undefined;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {
     this.#transportState = new TelegramPollingTransportState({
@@ -142,7 +147,7 @@ export class TelegramPollingSession {
     this.#activeFetchAbort = fetchAbortController;
     const telegramTransport = this.#transportState.acquireForNextCycle();
     try {
-      return createTelegramBot({
+      const bot = createTelegramBot({
         token: this.opts.token,
         runtime: this.opts.runtime,
         proxyFetch: this.opts.proxyFetch,
@@ -154,7 +159,54 @@ export class TelegramPollingSession {
           onUpdateId: this.opts.persistUpdateId,
         },
         telegramTransport,
+        botInfo: this.#cachedBotInfo,
       });
+      // On the first cycle, eagerly init the bot so we can cache botInfo.
+      // Subsequent cycles already have botInfo injected into the Bot constructor,
+      // so bot.init() inside the runner will be a no-op (isInited() === true).
+      if (!this.#cachedBotInfo) {
+        // Use a dedicated abort controller for the eager init so that a timeout
+        // does not poison the bot's fetch pipeline (fetchAbortController stays
+        // intact for the polling cycle that follows).
+        const EAGER_INIT_TIMEOUT_MS = 15_000;
+        const initAbort = new AbortController();
+
+        // Forward session-level abort → init controller.
+        const onSessionAbort = () => initAbort.abort();
+        this.opts.abortSignal?.addEventListener("abort", onSessionAbort, { once: true });
+
+        // Time-box the init so a stalled network cannot block the session
+        // outside the watchdog's protection.
+        const initTimeout = setTimeout(() => initAbort.abort(), EAGER_INIT_TIMEOUT_MS);
+        try {
+          // grammy's init() accepts AbortSignal from the `abort-controller` polyfill package,
+          // which is structurally incompatible with the native Node.js AbortSignal at the type
+          // level. At runtime they are interchangeable, so we suppress the type error.
+          // @ts-ignore — grammy AbortSignal (abort-controller polyfill) vs native Node.js AbortSignal
+          await bot.init(initAbort.signal);
+          this.#cachedBotInfo = bot.botInfo;
+          this.opts.log(
+            "[telegram] Cached botInfo from initial getMe(); subsequent cycles will skip init.",
+          );
+        } catch {
+          // If the session itself was aborted, short-circuit immediately so
+          // runUntilAbort() does not continue into webhook cleanup / polling
+          // setup over the still-live fetchAbortController.
+          if (this.opts.abortSignal?.aborted) {
+            clearTimeout(initTimeout);
+            this.opts.abortSignal.removeEventListener("abort", onSessionAbort);
+            return undefined;
+          }
+          // Otherwise non-fatal: network unavailable or timeout fired.
+          // The runner will call bot.init() itself with its own retry logic
+          // under the watchdog. We skip caching and let the existing code
+          // path handle it.
+        } finally {
+          clearTimeout(initTimeout);
+          this.opts.abortSignal?.removeEventListener("abort", onSessionAbort);
+        }
+      }
+      return bot;
     } catch (err) {
       await this.#waitBeforeRetryOnRecoverableSetupError(err, "Telegram setup network error");
       if (this.#activeFetchAbort === fetchAbortController) {

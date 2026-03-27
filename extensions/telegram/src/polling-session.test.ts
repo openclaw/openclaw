@@ -34,14 +34,17 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
 
 function makeBot() {
-  return {
+  const bot = {
     api: {
       deleteWebhook: vi.fn(async () => true),
       getUpdates: vi.fn(async () => []),
       config: { use: vi.fn() },
     },
     stop: vi.fn(async () => undefined),
+    init: vi.fn(async () => undefined),
+    botInfo: { id: 123, is_bot: true, first_name: "Test", username: "testbot" },
   };
+  return bot;
 }
 
 function installPollingStallWatchdogHarness() {
@@ -156,6 +159,8 @@ describe("TelegramPollingSession", () => {
         config: { use: vi.fn() },
       },
       stop: botStop,
+      init: vi.fn(async () => undefined),
+      botInfo: { id: 123, is_bot: true, first_name: "Test", username: "testbot" },
     };
     createTelegramBotMock.mockReturnValue(bot);
 
@@ -213,6 +218,8 @@ describe("TelegramPollingSession", () => {
         config: { use: vi.fn() },
       },
       stop: botStop,
+      init: vi.fn(async () => undefined),
+      botInfo: { id: 123, is_bot: true, first_name: "Test", username: "testbot" },
     };
     createTelegramBotMock.mockReturnValue(bot);
 
