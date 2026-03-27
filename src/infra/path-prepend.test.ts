@@ -8,6 +8,7 @@ import {
 } from "./path-prepend.js";
 
 const env = (value: Record<string, string>) => value;
+const pathLine = (...parts: string[]) => parts.join(path.delimiter);
 
 describe("path prepend helpers", () => {
   it.each([
@@ -36,9 +37,9 @@ describe("path prepend helpers", () => {
 
   it.each([
     {
-      existingPath: `/usr/bin${path.delimiter}/opt/bin`,
+      existingPath: pathLine("/usr/bin", "/opt/bin"),
       prepend: ["/custom/bin", "/usr/bin"],
-      expected: ["/custom/bin", "/usr/bin", "/opt/bin"].join(path.delimiter),
+      expected: pathLine("/custom/bin", "/usr/bin", "/opt/bin"),
     },
     {
       existingPath: undefined,
@@ -53,7 +54,7 @@ describe("path prepend helpers", () => {
     {
       existingPath: ` /usr/bin ${path.delimiter} ${path.delimiter} /opt/bin `,
       prepend: ["/custom/bin"],
-      expected: ["/custom/bin", "/usr/bin", "/opt/bin"].join(path.delimiter),
+      expected: pathLine("/custom/bin", "/usr/bin", "/opt/bin"),
     },
   ])("merges prepended paths for %j", ({ existingPath, prepend, expected }) => {
     expect(mergePathPrepend(existingPath, prepend)).toBe(expected);
@@ -61,13 +62,13 @@ describe("path prepend helpers", () => {
 
   it("applies prepends to the discovered PATH key and preserves existing casing", () => {
     const env = {
-      Path: [`/usr/bin`, `/opt/bin`].join(path.delimiter),
+      Path: pathLine("/usr/bin", "/opt/bin"),
     };
 
     applyPathPrepend(env, ["/custom/bin", "/usr/bin"]);
 
     expect(env).toEqual({
-      Path: ["/custom/bin", "/usr/bin", "/opt/bin"].join(path.delimiter),
+      Path: pathLine("/custom/bin", "/usr/bin", "/opt/bin"),
     });
   });
 
@@ -97,14 +98,19 @@ describe("path prepend helpers", () => {
     expect(env).toEqual(expected);
   });
 
-  it("creates PATH when prepends are provided and no path key exists", () => {
-    const env = { HOME: "/tmp/home" };
-
-    applyPathPrepend(env, ["/custom/bin"]);
-
-    expect(env).toEqual({
-      HOME: "/tmp/home",
-      PATH: "/custom/bin",
-    });
+  it.each([
+    {
+      name: "creates PATH when prepends are provided and no path key exists",
+      env: { HOME: "/tmp/home" },
+      prepend: ["/custom/bin"],
+      opts: undefined,
+      expected: {
+        HOME: "/tmp/home",
+        PATH: "/custom/bin",
+      },
+    },
+  ])("$name", ({ env, prepend, opts, expected }) => {
+    applyPathPrepend(env, prepend, opts);
+    expect(env).toEqual(expected);
   });
 });
