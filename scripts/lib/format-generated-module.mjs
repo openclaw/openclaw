@@ -32,7 +32,12 @@ export function formatGeneratedModule(source, { repoRoot, outputPath, errorLabel
         formatter.stdout?.trim() ||
         formatter.error?.message ||
         "unknown formatter failure";
-      throw new Error(`failed to format generated ${errorLabel}: ${details}`);
+      const bindingHint = /Cannot find native binding|@oxfmt\/binding-|MODULE_NOT_FOUND/u.test(
+        details,
+      )
+        ? " oxfmt optional platform bindings are missing or wrong for this machine (common if node_modules was copied from another OS). Run `pnpm install` on this host to install `@oxfmt/binding-*` for your platform."
+        : "";
+      throw new Error(`failed to format generated ${errorLabel}: ${details}${bindingHint}`);
     }
     return fs.readFileSync(tempOutputPath, "utf8");
   } finally {
