@@ -46,6 +46,17 @@ file messages via any DingTalk client.
 openclaw plugins install @largezhou/ddingtalk
 ```
 
+### ExperienceEngine
+
+Experience intervention layer for coding agents that learns reusable task guidance and injects it across OpenClaw, Claude Code, and Codex.
+
+- **npm:** `@alan512/experienceengine`
+- **repo:** [github.com/Alan-512/ExperienceEngine](https://github.com/Alan-512/ExperienceEngine)
+
+```bash
+openclaw plugins install @alan512/experienceengine
+```
+
 ### Lossless Claw (LCM)
 
 Lossless Context Management plugin for OpenClaw. DAG-based conversation
