@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/msteams";
-import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/msteams";
+import type { OpenClawConfig } from "../runtime-api.js";
+import { loadOutboundMediaFromUrl } from "../runtime-api.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {
   classifyMSTeamsSendError,
@@ -28,6 +28,8 @@ export type SendMSTeamsMessageParams = {
   text: string;
   /** Optional media URL */
   mediaUrl?: string;
+  /** Optional filename override for uploaded media/files */
+  filename?: string;
   mediaLocalRoots?: readonly string[];
 };
 
@@ -94,7 +96,7 @@ export type SendMSTeamsCardResult = {
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
-  const { cfg, to, text, mediaUrl, mediaLocalRoots } = params;
+  const { cfg, to, text, mediaUrl, filename, mediaLocalRoots } = params;
   const tableMode = getMSTeamsRuntime().channel.text.resolveMarkdownTableMode({
     cfg,
     channel: "msteams",
@@ -129,7 +131,7 @@ export async function sendMessageMSTeams(
     const isLargeFile = media.buffer.length >= FILE_CONSENT_THRESHOLD_BYTES;
     const isImage = media.contentType?.startsWith("image/") ?? false;
     const fallbackFileName = await extractFilename(mediaUrl);
-    const fileName = media.fileName ?? fallbackFileName;
+    const fileName = filename?.trim() || media.fileName || fallbackFileName;
 
     log.debug?.("processing media", {
       fileName,
@@ -206,7 +208,9 @@ export async function sendMessageMSTeams(
           contentType: media.contentType,
           tokenProvider,
           siteId: sharePointSiteId,
-          chatId: conversationId,
+          // Use the Graph-native chat ID (19:xxx format) — the Bot Framework conversationId
+          // for personal DMs uses a different format that Graph API rejects.
+          chatId: ctx.graphChatId ?? conversationId,
           usePerUserSharing: conversationType === "groupChat",
         });
 
@@ -507,6 +511,116 @@ export async function sendAdaptiveCardMSTeams(
     messageId,
     conversationId,
   };
+}
+
+export type EditMSTeamsMessageParams = {
+  /** Full config (for credentials) */
+  cfg: OpenClawConfig;
+  /** Conversation ID or user ID */
+  to: string;
+  /** Activity ID of the message to edit */
+  activityId: string;
+  /** New message text */
+  text: string;
+};
+
+export type EditMSTeamsMessageResult = {
+  conversationId: string;
+};
+
+export type DeleteMSTeamsMessageParams = {
+  /** Full config (for credentials) */
+  cfg: OpenClawConfig;
+  /** Conversation ID or user ID */
+  to: string;
+  /** Activity ID of the message to delete */
+  activityId: string;
+};
+
+export type DeleteMSTeamsMessageResult = {
+  conversationId: string;
+};
+
+/**
+ * Edit (update) a previously sent message in a Teams conversation.
+ *
+ * Uses the Bot Framework `continueConversation` → `updateActivity` flow
+ * for proactive edits outside of the original turn context.
+ */
+export async function editMessageMSTeams(
+  params: EditMSTeamsMessageParams,
+): Promise<EditMSTeamsMessageResult> {
+  const { cfg, to, activityId, text } = params;
+  const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
+    cfg,
+    to,
+  });
+
+  log.debug?.("editing proactive message", { conversationId, activityId, textLength: text.length });
+
+  const baseRef = buildConversationReference(ref);
+  const proactiveRef = { ...baseRef, activityId: undefined };
+
+  try {
+    await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
+      await ctx.updateActivity({
+        type: "message",
+        id: activityId,
+        text,
+      });
+    });
+  } catch (err) {
+    const classification = classifyMSTeamsSendError(err);
+    const hint = formatMSTeamsSendErrorHint(classification);
+    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
+    throw new Error(
+      `msteams edit failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
+      { cause: err },
+    );
+  }
+
+  log.info("edited proactive message", { conversationId, activityId });
+
+  return { conversationId };
+}
+
+/**
+ * Delete a previously sent message in a Teams conversation.
+ *
+ * Uses the Bot Framework `continueConversation` → `deleteActivity` flow
+ * for proactive deletes outside of the original turn context.
+ */
+export async function deleteMessageMSTeams(
+  params: DeleteMSTeamsMessageParams,
+): Promise<DeleteMSTeamsMessageResult> {
+  const { cfg, to, activityId } = params;
+  const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
+    cfg,
+    to,
+  });
+
+  log.debug?.("deleting proactive message", { conversationId, activityId });
+
+  const baseRef = buildConversationReference(ref);
+  const proactiveRef = { ...baseRef, activityId: undefined };
+
+  try {
+    await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
+      await ctx.deleteActivity(activityId);
+    });
+  } catch (err) {
+    const classification = classifyMSTeamsSendError(err);
+    const hint = formatMSTeamsSendErrorHint(classification);
+    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
+    throw new Error(
+      `msteams delete failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
+      { cause: err },
+    );
+  }
+
+  log.info("deleted proactive message", { conversationId, activityId });
+
+  return { conversationId };
 }
 
 /**

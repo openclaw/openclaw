@@ -1,19 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
-import { registerSlackPinEvents } from "./pins.js";
-import {
-  createSlackSystemEventTestHarness as buildPinHarness,
-  type SlackSystemEventTestOverrides as PinOverrides,
-} from "./system-event-test-harness.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const pinEnqueueMock = vi.hoisted(() => vi.fn());
-const pinAllowMock = vi.hoisted(() => vi.fn());
+let registerSlackPinEvents: typeof import("./pins.js").registerSlackPinEvents;
+let buildPinHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
+type PinOverrides = import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
-vi.mock("../../../../../src/infra/system-events.js", () => {
-  return { enqueueSystemEvent: pinEnqueueMock };
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return { ...actual, enqueueSystemEvent: pinEnqueueMock };
 });
-vi.mock("../../../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: pinAllowMock,
-}));
 
 type PinHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
@@ -57,7 +52,6 @@ function installPinHandlers(args: {
 
 async function runPinCase(input: PinCase = {}): Promise<void> {
   pinEnqueueMock.mockClear();
-  pinAllowMock.mockReset().mockResolvedValue([]);
   const { added, removed } = installPinHandlers({
     overrides: input.overrides,
     trackEvent: input.trackEvent,
@@ -75,6 +69,16 @@ async function runPinCase(input: PinCase = {}): Promise<void> {
 }
 
 describe("registerSlackPinEvents", () => {
+  beforeAll(async () => {
+    ({ registerSlackPinEvents } = await import("./pins.js"));
+    ({ createSlackSystemEventTestHarness: buildPinHarness } =
+      await import("./system-event-test-harness.js"));
+  });
+
+  beforeEach(() => {
+    pinEnqueueMock.mockClear();
+  });
+
   const cases: Array<{ name: string; args: PinCase; expectedCalls: number }> = [
     {
       name: "enqueues DM pin system events when dmPolicy is open",

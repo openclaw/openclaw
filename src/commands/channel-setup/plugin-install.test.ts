@@ -60,6 +60,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { makePrompter, makeRuntime } from "../setup/__tests__/test-utils.js";
 import {
@@ -248,6 +249,60 @@ describe("ensureChannelSetupPluginInstalled", () => {
     );
   });
 
+  it("does not default to bundled local path when an external catalog overrides the npm spec", async () => {
+    const runtime = makeRuntime();
+    const select = vi.fn((async <T extends string>() => "skip" as T) as WizardPrompter["select"]);
+    const prompter = makePrompter({ select: select as unknown as WizardPrompter["select"] });
+    const cfg: OpenClawConfig = { update: { channel: "beta" } };
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    resolveBundledPluginSources.mockReturnValue(
+      new Map([
+        [
+          "whatsapp",
+          {
+            pluginId: "whatsapp",
+            localPath: "/opt/openclaw/extensions/whatsapp",
+            npmSpec: "@openclaw/whatsapp",
+          },
+        ],
+      ]),
+    );
+
+    await ensureChannelSetupPluginInstalled({
+      cfg,
+      entry: {
+        id: "whatsapp",
+        meta: {
+          id: "whatsapp",
+          label: "WhatsApp",
+          selectionLabel: "WhatsApp",
+          docsPath: "/channels/whatsapp",
+          blurb: "Test",
+        },
+        install: {
+          npmSpec: "@vendor/whatsapp-fork",
+        },
+      },
+      prompter,
+      runtime,
+    });
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialValue: "npm",
+        options: [
+          expect.objectContaining({
+            value: "npm",
+            label: "Download from npm (@vendor/whatsapp-fork)",
+          }),
+          expect.objectContaining({
+            value: "skip",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("falls back to local path after npm install failure", async () => {
     const runtime = makeRuntime();
     const note = vi.fn(async () => {});
@@ -326,28 +381,15 @@ describe("ensureChannelSetupPluginInstalled", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
     const registry = createEmptyPluginRegistry();
-    registry.plugins.push({
-      id: "loaded",
-      name: "loaded",
-      source: "/tmp/loaded.cjs",
-      origin: "bundled",
-      enabled: true,
-      status: "loaded",
-      toolNames: [],
-      hookNames: [],
-      channelIds: [],
-      providerIds: [],
-      speechProviderIds: [],
-      mediaUnderstandingProviderIds: [],
-      webSearchProviderIds: [],
-      gatewayMethods: [],
-      cliCommands: [],
-      services: [],
-      commands: [],
-      httpRoutes: 0,
-      hookCount: 0,
-      configSchema: true,
-    });
+    registry.plugins.push(
+      createPluginRecord({
+        id: "loaded",
+        name: "loaded",
+        source: "/tmp/loaded.cjs",
+        origin: "bundled",
+        configSchema: true,
+      }),
+    );
     setActivePluginRegistry(registry);
 
     reloadChannelSetupPluginRegistryForChannel({

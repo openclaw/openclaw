@@ -1,5 +1,9 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { PresenceEntry } from "../types.ts";
+import {
+  formatMissingOperatorReadScopeMessage,
+  isMissingOperatorReadScopeError,
+} from "./scope-errors.ts";
 
 export type PresenceState = {
   client: GatewayBrowserClient | null;
@@ -30,7 +34,13 @@ export async function loadPresence(state: PresenceState) {
       state.presenceStatus = "No presence payload.";
     }
   } catch (err) {
-    state.presenceError = String(err);
+    if (isMissingOperatorReadScopeError(err)) {
+      state.presenceEntries = [];
+      state.presenceStatus = null;
+      state.presenceError = formatMissingOperatorReadScopeMessage("instance presence");
+    } else {
+      state.presenceError = String(err);
+    }
   } finally {
     state.presenceLoading = false;
   }

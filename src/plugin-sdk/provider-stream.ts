@@ -1,6 +1,14 @@
 // Public stream-wrapper helpers for provider plugins.
 
 export {
+  createBedrockNoCacheWrapper,
+  isAnthropicBedrockModel,
+} from "../agents/pi-embedded-runner/anthropic-stream-wrappers.js";
+export {
+  createGoogleThinkingPayloadWrapper,
+  sanitizeGoogleThinkingPayload,
+} from "../agents/pi-embedded-runner/google-stream-wrappers.js";
+export {
   createKilocodeWrapper,
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
@@ -9,8 +17,15 @@ export {
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
-} from "../agents/pi-embedded-runner/moonshot-stream-wrappers.js";
-export { createZaiToolStreamWrapper } from "../agents/pi-embedded-runner/zai-stream-wrappers.js";
+} from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
+export {
+  createOpenAIAttributionHeadersWrapper,
+  createOpenAIDefaultTransportWrapper,
+} from "../agents/pi-embedded-runner/openai-stream-wrappers.js";
+export {
+  createToolStreamWrapper,
+  createZaiToolStreamWrapper,
+} from "../agents/pi-embedded-runner/zai-stream-wrappers.js";
 export {
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,

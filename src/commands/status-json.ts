@@ -1,6 +1,6 @@
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 import { scanStatusJsonFast } from "./status.scan.fast-json.js";
 
@@ -33,15 +33,17 @@ export async function statusJsonCommand(
   runtime: RuntimeEnv,
 ) {
   const scan = await scanStatusJsonFast({ timeoutMs: opts.timeoutMs, all: opts.all }, runtime);
-  const securityAudit = await loadSecurityAuditModule().then(({ runSecurityAudit }) =>
-    runSecurityAudit({
-      config: scan.cfg,
-      sourceConfig: scan.sourceConfig,
-      deep: false,
-      includeFilesystem: true,
-      includeChannelSecurity: true,
-    }),
-  );
+  const securityAudit = opts.all
+    ? await loadSecurityAuditModule().then(({ runSecurityAudit }) =>
+        runSecurityAudit({
+          config: scan.cfg,
+          sourceConfig: scan.sourceConfig,
+          deep: false,
+          includeFilesystem: true,
+          includeChannelSecurity: true,
+        }),
+      )
+    : undefined;
 
   const usage = opts.usage
     ? await loadProviderUsage().then(({ loadProviderUsageSummary }) =>
@@ -81,36 +83,30 @@ export async function statusJsonCommand(
     gitBranch: scan.update.git?.branch ?? null,
   });
 
-  runtime.log(
-    JSON.stringify(
-      {
-        ...scan.summary,
-        os: scan.osSummary,
-        update: scan.update,
-        updateChannel: channelInfo.channel,
-        updateChannelSource: channelInfo.source,
-        memory: scan.memory,
-        memoryPlugin: scan.memoryPlugin,
-        gateway: {
-          mode: scan.gatewayMode,
-          url: scan.gatewayConnection.url,
-          urlSource: scan.gatewayConnection.urlSource,
-          misconfigured: scan.remoteUrlMissing,
-          reachable: scan.gatewayReachable,
-          connectLatencyMs: scan.gatewayProbe?.connectLatencyMs ?? null,
-          self: scan.gatewaySelf,
-          error: scan.gatewayProbe?.error ?? null,
-          authWarning: scan.gatewayProbeAuthWarning ?? null,
-        },
-        gatewayService: daemon,
-        nodeService: nodeDaemon,
-        agents: scan.agentStatus,
-        securityAudit,
-        secretDiagnostics: scan.secretDiagnostics,
-        ...(health || usage || lastHeartbeat ? { health, usage, lastHeartbeat } : {}),
-      },
-      null,
-      2,
-    ),
-  );
+  writeRuntimeJson(runtime, {
+    ...scan.summary,
+    os: scan.osSummary,
+    update: scan.update,
+    updateChannel: channelInfo.channel,
+    updateChannelSource: channelInfo.source,
+    memory: scan.memory,
+    memoryPlugin: scan.memoryPlugin,
+    gateway: {
+      mode: scan.gatewayMode,
+      url: scan.gatewayConnection.url,
+      urlSource: scan.gatewayConnection.urlSource,
+      misconfigured: scan.remoteUrlMissing,
+      reachable: scan.gatewayReachable,
+      connectLatencyMs: scan.gatewayProbe?.connectLatencyMs ?? null,
+      self: scan.gatewaySelf,
+      error: scan.gatewayProbe?.error ?? null,
+      authWarning: scan.gatewayProbeAuthWarning ?? null,
+    },
+    gatewayService: daemon,
+    nodeService: nodeDaemon,
+    agents: scan.agentStatus,
+    secretDiagnostics: scan.secretDiagnostics,
+    ...(securityAudit ? { securityAudit } : {}),
+    ...(health || usage || lastHeartbeat ? { health, usage, lastHeartbeat } : {}),
+  });
 }

@@ -95,7 +95,7 @@ describe("model override pipeline wiring", () => {
         pluginId: "legacy-hook",
         hookName: "before_agent_start",
         handler: (() => ({
-          modelOverride: "gpt-4o",
+          modelOverride: "gpt-5.4",
           providerOverride: "openai",
         })) as PluginHookRegistration["handler"],
       });

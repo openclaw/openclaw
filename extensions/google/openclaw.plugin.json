@@ -1,6 +1,7 @@
 {
   "id": "google",
   "providers": ["google", "google-gemini-cli"],
+  "cliBackends": ["google-gemini-cli"],
   "providerAuthEnvVars": {
     "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
   },
@@ -29,9 +30,39 @@
       "groupHint": "Gemini API key + OAuth"
     }
   ],
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Gemini Search API Key",
+      "help": "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "AIza..."
+    },
+    "webSearch.model": {
+      "label": "Gemini Search Model",
+      "help": "Gemini model override for web search grounding."
+    }
+  },
+  "contracts": {
+    "mediaUnderstandingProviders": ["google"],
+    "imageGenerationProviders": ["google"],
+    "webSearchProviders": ["gemini"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      }
+    }
   }
 }

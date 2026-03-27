@@ -42,6 +42,44 @@ openclaw browser --browser-profile openclaw snapshot
 If you get “Browser disabled”, enable it in config (see below) and restart the
 Gateway.
 
+## Plugin control
+
+The default `browser` tool is now a bundled plugin that ships enabled by
+default. That means you can disable or replace it without removing the rest of
+OpenClaw's plugin system:
+
+```json5
+{
+  plugins: {
+    entries: {
+      browser: {
+        enabled: false,
+      },
+    },
+  },
+}
+```
+
+Disable the bundled plugin before installing another plugin that provides the
+same `browser` tool name. The default browser experience needs both:
+
+- `plugins.entries.browser.enabled` not disabled
+- `browser.enabled=true`
+
+If you turn off only the plugin, the bundled browser CLI (`openclaw browser`),
+gateway method (`browser.request`), agent tool, and default browser control
+service all disappear together. Your `browser.*` config stays intact for a
+replacement plugin to reuse.
+
+The bundled browser plugin also owns the browser runtime implementation now.
+Core keeps only shared Plugin SDK helpers plus compatibility re-exports for
+older internal import paths. In practice, removing or replacing
+`extensions/browser` removes the browser feature set instead of leaving a
+second core-owned runtime behind.
+
+Browser config changes still require a Gateway restart so the bundled plugin
+can re-register its browser service with the new settings.
+
 ## Profiles: `openclaw` vs `user`
 
 - `openclaw`: managed, isolated browser (no extension required).
@@ -184,6 +222,8 @@ Notes:
 
 - The node host exposes its local browser control server via a **proxy command**.
 - Profiles come from the node’s own `browser.profiles` config (same as local).
+- `nodeHost.browserProxy.allowProfiles` is optional. Leave it empty for the legacy/default behavior: all configured profiles remain reachable through the proxy, including profile create/delete routes.
+- If you set `nodeHost.browserProxy.allowProfiles`, OpenClaw treats it as a least-privilege boundary: only allowlisted profiles can be targeted, and persistent profile create/delete routes are blocked on the proxy surface.
 - Disable if you don’t want it:
   - On the node: `nodeHost.browserProxy.enabled=false`
   - On the gateway: `gateway.nodes.browser.mode="off"`
@@ -191,7 +231,7 @@ Notes:
 ## Browserless (hosted remote CDP)
 
 [Browserless](https://browserless.io) is a hosted Chromium service that exposes
-CDP endpoints over HTTPS. You can point a OpenClaw browser profile at a
+CDP endpoints over HTTPS. You can point an OpenClaw browser profile at a
 Browserless region endpoint and authenticate with your API key.
 
 Example:
@@ -581,7 +621,7 @@ Notes:
   - `--format ai` (default when Playwright is installed): returns an AI snapshot with numeric refs (`aria-ref="<n>"`).
   - `--format aria`: returns the accessibility tree (no refs; inspection only).
   - `--efficient` (or `--mode efficient`): compact role snapshot preset (interactive + compact + depth + lower maxChars).
-  - Config default (tool/CLI only): set `browser.snapshotDefaults.mode: "efficient"` to use efficient snapshots when the caller does not pass a mode (see [Gateway configuration](/gateway/configuration#browser-openclaw-managed-browser)).
+  - Config default (tool/CLI only): set `browser.snapshotDefaults.mode: "efficient"` to use efficient snapshots when the caller does not pass a mode (see [Gateway configuration](/gateway/configuration-reference#browser)).
   - Role snapshot options (`--interactive`, `--compact`, `--depth`, `--selector`) force a role-based snapshot with refs like `ref=e12`.
   - `--frame "<iframe selector>"` scopes role snapshots to an iframe (pairs with role refs like `e12`).
   - `--interactive` outputs a flat, easy-to-pick list of interactive elements (best for driving actions).

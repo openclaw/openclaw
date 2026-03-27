@@ -1,7 +1,7 @@
 import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";
-import { isVerbose } from "../globals.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { isVerbose } from "../global-state.js";
+import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import {
   formatConsoleTimestamp,
@@ -307,13 +307,13 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   let fileLogger: TsLogger<LogObj> | null = null;
-  const getFileLogger = () => {
+  const getFileLogger = (): TsLogger<LogObj> => {
     if (!fileLogger) {
       fileLogger = getChildLogger({ subsystem });
     }
     return fileLogger;
   };
-  const emit = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
+  const emit = (level: LogLevel, message: string, meta?: Record<string, unknown>): void => {
     const consoleSettings = getConsoleSettings();
     const consoleEnabled =
       shouldLogToConsole(level, { level: consoleSettings.level }) &&
@@ -366,11 +366,13 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       shouldLogSubsystemToConsole(subsystem)
     );
   };
-  const isFileEnabled = (level: LogLevel): boolean => isFileLogLevelEnabled(level);
+  const isFileEnabled = (level: LogLevel): boolean => {
+    return isFileLogLevelEnabled(level);
+  };
 
   const logger: SubsystemLogger = {
     subsystem,
-    isEnabled: (level, target = "any") => {
+    isEnabled(level, target = "any") {
       if (target === "console") {
         return isConsoleEnabled(level);
       }
@@ -379,13 +381,25 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       }
       return isConsoleEnabled(level) || isFileEnabled(level);
     },
-    trace: (message, meta) => emit("trace", message, meta),
-    debug: (message, meta) => emit("debug", message, meta),
-    info: (message, meta) => emit("info", message, meta),
-    warn: (message, meta) => emit("warn", message, meta),
-    error: (message, meta) => emit("error", message, meta),
-    fatal: (message, meta) => emit("fatal", message, meta),
-    raw: (message) => {
+    trace(message, meta) {
+      emit("trace", message, meta);
+    },
+    debug(message, meta) {
+      emit("debug", message, meta);
+    },
+    info(message, meta) {
+      emit("info", message, meta);
+    },
+    warn(message, meta) {
+      emit("warn", message, meta);
+    },
+    error(message, meta) {
+      emit("error", message, meta);
+    },
+    fatal(message, meta) {
+      emit("fatal", message, meta);
+    },
+    raw(message) {
       if (isFileEnabled("info")) {
         logToFile(getFileLogger(), "info", message, { raw: true });
       }
@@ -396,7 +410,9 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         writeConsoleLine("info", message);
       }
     },
-    child: (name) => createSubsystemLogger(`${subsystem}/${name}`),
+    child(name) {
+      return createSubsystemLogger(`${subsystem}/${name}`);
+    },
   };
   return logger;
 }
@@ -404,7 +420,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
 export function runtimeForLogger(
   logger: SubsystemLogger,
   exit: RuntimeEnv["exit"] = defaultRuntime.exit,
-): RuntimeEnv {
+): OutputRuntimeEnv {
   const formatArgs = (...args: unknown[]) =>
     args
       .map((arg) => formatRuntimeArg(arg))
@@ -413,6 +429,10 @@ export function runtimeForLogger(
   return {
     log: (...args: unknown[]) => logger.info(formatArgs(...args)),
     error: (...args: unknown[]) => logger.error(formatArgs(...args)),
+    writeStdout: (value: string) => logger.info(value),
+    writeJson: (value: unknown, space = 2) => {
+      logger.info(JSON.stringify(value, null, space > 0 ? space : undefined));
+    },
     exit,
   };
 }
@@ -420,6 +440,6 @@ export function runtimeForLogger(
 export function createSubsystemRuntime(
   subsystem: string,
   exit: RuntimeEnv["exit"] = defaultRuntime.exit,
-): RuntimeEnv {
+): OutputRuntimeEnv {
   return runtimeForLogger(createSubsystemLogger(subsystem), exit);
 }

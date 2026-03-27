@@ -5,10 +5,10 @@ import {
   VLLM_PROVIDER_LABEL,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  emptyPluginConfigSchema,
+  definePluginEntry,
   type OpenClawPluginApi,
   type ProviderAuthMethodNonInteractiveContext,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/plugin-entry";
 
 const PROVIDER_ID = "vllm";
 
@@ -16,11 +16,10 @@ async function loadProviderSetup() {
   return await import("openclaw/plugin-sdk/self-hosted-provider-setup");
 }
 
-const vllmPlugin = {
+export default definePluginEntry({
   id: "vllm",
   name: "vLLM Provider",
   description: "Bundled vLLM provider plugin",
-  configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     api.registerProvider({
       id: PROVIDER_ID,
@@ -85,8 +84,10 @@ const vllmPlugin = {
           methodId: "custom",
         },
       },
+      buildUnknownModelHint: () =>
+        "vLLM requires authentication to be registered as a provider. " +
+        'Set VLLM_API_KEY (any value works) or run "openclaw configure". ' +
+        "See: https://docs.openclaw.ai/providers/vllm",
     });
   },
-};
-
-export default vllmPlugin;
+});

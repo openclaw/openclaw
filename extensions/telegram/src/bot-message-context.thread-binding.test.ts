@@ -1,19 +1,21 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const resolveByConversationMock = vi.fn();
+  const recordInboundSessionMock = vi.fn().mockResolvedValue(undefined);
   const touchMock = vi.fn();
   return {
+    recordInboundSessionMock,
     resolveByConversationMock,
     touchMock,
   };
 });
 
-vi.mock("../../../src/infra/outbound/session-binding-service.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../src/infra/outbound/session-binding-service.js")>();
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
+    recordInboundSession: (...args: unknown[]) => hoisted.recordInboundSessionMock(...args),
     getSessionBindingService: () => ({
       bind: vi.fn(),
       getCapabilities: vi.fn(),
@@ -25,11 +27,17 @@ vi.mock("../../../src/infra/outbound/session-binding-service.js", async (importO
   };
 });
 
-const { buildTelegramMessageContextForTest } =
-  await import("./bot-message-context.test-harness.js");
+let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
 
 describe("buildTelegramMessageContext bound conversation override", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ buildTelegramMessageContextForTest } =
+      await import("./bot-message-context.test-harness.js"));
+  });
+
   beforeEach(() => {
+    hoisted.recordInboundSessionMock.mockClear();
     hoisted.resolveByConversationMock.mockReset().mockReturnValue(null);
     hoisted.touchMock.mockReset();
   });
@@ -59,6 +67,9 @@ describe("buildTelegramMessageContext bound conversation override", () => {
       conversationId: "-100200300:topic:77",
     });
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-1");
+    expect(hoisted.recordInboundSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      updateLastRoute: undefined,
+    });
     expect(hoisted.touchMock).toHaveBeenCalledWith("default:-100200300:topic:77", undefined);
   });
 

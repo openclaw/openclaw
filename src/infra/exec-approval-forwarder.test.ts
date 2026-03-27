@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { discordPlugin } from "../../extensions/discord/src/channel.js";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import { isDiscordExecApprovalClientEnabled } from "../../extensions/discord/src/exec-approvals.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  buildTelegramExecApprovalPendingPayload,
+  shouldSuppressTelegramExecApprovalForwardingFallback,
+} from "../plugin-sdk/telegram.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
 
 const baseRequest = {
@@ -23,15 +27,38 @@ afterEach(() => {
 });
 
 const emptyRegistry = createTestRegistry([]);
+const telegramApprovalPlugin: Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config" | "execApprovals"
+> = {
+  ...createChannelTestPluginBase({ id: "telegram" }),
+  execApprovals: {
+    shouldSuppressForwardingFallback: (params) =>
+      shouldSuppressTelegramExecApprovalForwardingFallback(params),
+    buildPendingPayload: ({ request, nowMs }) =>
+      buildTelegramExecApprovalPendingPayload({ request, nowMs }),
+  },
+};
+const discordApprovalPlugin: Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config" | "execApprovals"
+> = {
+  ...createChannelTestPluginBase({ id: "discord" }),
+  execApprovals: {
+    shouldSuppressForwardingFallback: ({ cfg, target }) =>
+      target.channel === "discord" &&
+      isDiscordExecApprovalClientEnabled({ cfg, accountId: target.accountId }),
+  },
+};
 const defaultRegistry = createTestRegistry([
   {
     pluginId: "telegram",
-    plugin: telegramPlugin,
+    plugin: telegramApprovalPlugin,
     source: "test",
   },
   {
     pluginId: "discord",
-    plugin: discordPlugin,
+    plugin: discordApprovalPlugin,
     source: "test",
   },
 ]);

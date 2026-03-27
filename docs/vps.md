@@ -1,49 +1,59 @@
 ---
-summary: "VPS hosting hub for OpenClaw (Oracle/Fly/Hetzner/GCP/exe.dev)"
+summary: "Run OpenClaw on a Linux server or cloud VPS — provider picker, architecture, and tuning"
 read_when:
-  - You want to run the Gateway in the cloud
-  - You need a quick map of VPS/hosting guides
-title: "VPS Hosting"
+  - You want to run the Gateway on a Linux server or cloud VPS
+  - You need a quick map of hosting guides
+  - You want generic Linux server tuning for OpenClaw
+title: "Linux Server"
+sidebarTitle: "Linux Server"
 ---
 
-# VPS hosting
+# Linux Server
 
-This hub links to the supported VPS/hosting guides and explains how cloud
-deployments work at a high level.
+Run the OpenClaw Gateway on any Linux server or cloud VPS. This page helps you
+pick a provider, explains how cloud deployments work, and covers generic Linux
+tuning that applies everywhere.
 
 ## Pick a provider
 
-- **Railway** (one‑click + browser setup): [Railway](/install/railway)
-- **Northflank** (one‑click + browser setup): [Northflank](/install/northflank)
-- **Oracle Cloud (Always Free)**: [Oracle](/platforms/oracle) — $0/month (Always Free, ARM; capacity/signup can be finicky)
-- **Fly.io**: [Fly.io](/install/fly)
-- **Hetzner (Docker)**: [Hetzner](/install/hetzner)
-- **Hostinger (Docker)**: [Hostinger](/install/hostinger)
-- **GCP (Compute Engine)**: [GCP](/install/gcp)
-- **exe.dev** (VM + HTTPS proxy): [exe.dev](/install/exe-dev)
-- **AWS (EC2/Lightsail/free tier)**: works well too. Video guide:
-  [https://x.com/techfrenAJ/status/2014934471095812547](https://x.com/techfrenAJ/status/2014934471095812547)
+<CardGroup cols={2}>
+  <Card title="Railway" href="/install/railway">One-click, browser setup</Card>
+  <Card title="Northflank" href="/install/northflank">One-click, browser setup</Card>
+  <Card title="DigitalOcean" href="/install/digitalocean">Simple paid VPS</Card>
+  <Card title="Oracle Cloud" href="/install/oracle">Always Free ARM tier</Card>
+  <Card title="Fly.io" href="/install/fly">Fly Machines</Card>
+  <Card title="Hetzner" href="/install/hetzner">Docker on Hetzner VPS</Card>
+  <Card title="Hostinger" href="/install/hostinger">Docker on Hostinger</Card>
+  <Card title="GCP" href="/install/gcp">Compute Engine</Card>
+  <Card title="Azure" href="/install/azure">Linux VM</Card>
+  <Card title="exe.dev" href="/install/exe-dev">VM with HTTPS proxy</Card>
+  <Card title="Raspberry Pi" href="/install/raspberry-pi">ARM self-hosted</Card>
+</CardGroup>
+
+**AWS (EC2 / Lightsail / free tier)** also works well.
+A community video walkthrough is available at
+[x.com/techfrenAJ/status/2014934471095812547](https://x.com/techfrenAJ/status/2014934471095812547)
+(community resource -- may become unavailable).
 
 ## How cloud setups work
 
 - The **Gateway runs on the VPS** and owns state + workspace.
-- You connect from your laptop/phone via the **Control UI** or **Tailscale/SSH**.
-- Treat the VPS as the source of truth and **back up** the state + workspace.
+- You connect from your laptop or phone via the **Control UI** or **Tailscale/SSH**.
+- Treat the VPS as the source of truth and **back up** the state + workspace regularly.
 - Secure default: keep the Gateway on loopback and access it via SSH tunnel or Tailscale Serve.
-  If you bind to `lan`/`tailnet`, require `gateway.auth.token` or `gateway.auth.password`.
+  If you bind to `lan` or `tailnet`, require `gateway.auth.token` or `gateway.auth.password`.
 
-Remote access: [Gateway remote](/gateway/remote)  
-Platforms hub: [Platforms](/platforms)
+Related pages: [Gateway remote access](/gateway/remote), [Platforms hub](/platforms).
 
 ## Shared company agent on a VPS
 
-This is a valid setup when the users are in one trust boundary (for example one company team), and the agent is business-only.
+Running a single agent for a team is a valid setup when every user is in the same trust boundary and the agent is business-only.
 
 - Keep it on a dedicated runtime (VPS/VM/container + dedicated OS user/accounts).
 - Do not sign that runtime into personal Apple/Google accounts or personal browser/password-manager profiles.
 - If users are adversarial to each other, split by gateway/host/OS user.
 
-Security model details: [Security](/gateway/security)
+Security model details: [Security](/gateway/security).
 
 ## Using nodes with a VPS
 
@@ -51,7 +61,7 @@ You can keep the Gateway in the cloud and pair **nodes** on your local devices
 (Mac/iOS/Android/headless). Nodes provide local screen/camera/canvas and `system.run`
 capabilities while the Gateway stays in the cloud.
 
-Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes)
+Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes).
 
 ## Startup tuning for small VMs and ARM hosts
 
@@ -68,14 +78,14 @@ source ~/.bashrc
 
 - `NODE_COMPILE_CACHE` improves repeated command startup times.
 - `OPENCLAW_NO_RESPAWN=1` avoids extra startup overhead from a self-respawn path.
-- First command run warms cache; subsequent runs are faster.
-- For Raspberry Pi specifics, see [Raspberry Pi](/platforms/raspberry-pi).
+- First command run warms the cache; subsequent runs are faster.
+- For Raspberry Pi specifics, see [Raspberry Pi](/install/raspberry-pi).
 
 ### systemd tuning checklist (optional)
 
 For VM hosts using `systemd`, consider:
 
-- Add service env for stable startup path:
+- Add service env for a stable startup path:
   - `OPENCLAW_NO_RESPAWN=1`
   - `NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache`
 - Keep restart behavior explicit:

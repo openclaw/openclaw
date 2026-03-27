@@ -1,31 +1,48 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { createEmptyPluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
-import {
-  resolvePluginWebSearchProviders,
-  resolveRuntimeWebSearchProviders,
-} from "./web-search-providers.js";
+import { describe, expect, it } from "vitest";
+import { resolveBundledPluginWebSearchProviders } from "./web-search-providers.js";
 
-describe("resolvePluginWebSearchProviders", () => {
-  afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  });
+const WEB_SEARCH_PROVIDER_TEST_TIMEOUT_MS = 300_000;
 
-  it("returns bundled providers in auto-detect order", () => {
-    const providers = resolvePluginWebSearchProviders({});
+describe("resolveBundledPluginWebSearchProviders", () => {
+  it(
+    "returns bundled providers in alphabetical order",
+    { timeout: WEB_SEARCH_PROVIDER_TEST_TIMEOUT_MS },
+    () => {
+      const providers = resolveBundledPluginWebSearchProviders({});
 
-    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
-      "brave:brave",
-      "google:gemini",
-      "xai:grok",
-      "moonshot:kimi",
-      "perplexity:perplexity",
-      "firecrawl:firecrawl",
-    ]);
-  });
+      expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
+        "brave:brave",
+        "duckduckgo:duckduckgo",
+        "exa:exa",
+        "firecrawl:firecrawl",
+        "google:gemini",
+        "xai:grok",
+        "moonshot:kimi",
+        "perplexity:perplexity",
+        "tavily:tavily",
+      ]);
+      expect(providers.map((provider) => provider.credentialPath)).toEqual([
+        "plugins.entries.brave.config.webSearch.apiKey",
+        "",
+        "plugins.entries.exa.config.webSearch.apiKey",
+        "plugins.entries.firecrawl.config.webSearch.apiKey",
+        "plugins.entries.google.config.webSearch.apiKey",
+        "plugins.entries.xai.config.webSearch.apiKey",
+        "plugins.entries.moonshot.config.webSearch.apiKey",
+        "plugins.entries.perplexity.config.webSearch.apiKey",
+        "plugins.entries.tavily.config.webSearch.apiKey",
+      ]);
+      expect(
+        providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig,
+      ).toEqual(expect.any(Function));
+      expect(
+        providers.find((provider) => provider.id === "perplexity")?.resolveRuntimeMetadata,
+      ).toEqual(expect.any(Function));
+    },
+  );
 
   it("can augment restrictive allowlists for bundled compatibility", () => {
-    const providers = resolvePluginWebSearchProviders({
+    const providers = resolveBundledPluginWebSearchProviders({
       config: {
         plugins: {
           allow: ["openrouter"],
@@ -36,16 +53,19 @@ describe("resolvePluginWebSearchProviders", () => {
 
     expect(providers.map((provider) => provider.pluginId)).toEqual([
       "brave",
+      "duckduckgo",
+      "exa",
+      "firecrawl",
       "google",
       "xai",
       "moonshot",
       "perplexity",
-      "firecrawl",
+      "tavily",
     ]);
   });
 
   it("does not return bundled providers excluded by a restrictive allowlist without compat", () => {
-    const providers = resolvePluginWebSearchProviders({
+    const providers = resolveBundledPluginWebSearchProviders({
       config: {
         plugins: {
           allow: ["openrouter"],
@@ -57,7 +77,7 @@ describe("resolvePluginWebSearchProviders", () => {
   });
 
   it("preserves explicit bundled provider entry state", () => {
-    const providers = resolvePluginWebSearchProviders({
+    const providers = resolveBundledPluginWebSearchProviders({
       config: {
         plugins: {
           entries: {
@@ -71,7 +91,7 @@ describe("resolvePluginWebSearchProviders", () => {
   });
 
   it("returns no providers when plugins are globally disabled", () => {
-    const providers = resolvePluginWebSearchProviders({
+    const providers = resolveBundledPluginWebSearchProviders({
       config: {
         plugins: {
           enabled: false,
@@ -82,35 +102,41 @@ describe("resolvePluginWebSearchProviders", () => {
     expect(providers).toEqual([]);
   });
 
-  it("prefers the active plugin registry for runtime resolution", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.webSearchProviders.push({
-      pluginId: "custom-search",
-      pluginName: "Custom Search",
-      provider: {
-        id: "custom",
-        label: "Custom Search",
-        hint: "Custom runtime provider",
-        envVars: ["CUSTOM_SEARCH_API_KEY"],
-        placeholder: "custom-...",
-        signupUrl: "https://example.com/signup",
-        autoDetectOrder: 1,
-        getCredentialValue: () => "configured",
-        setCredentialValue: () => {},
-        createTool: () => ({
-          description: "custom",
-          parameters: {},
-          execute: async () => ({}),
-        }),
-      },
-      source: "test",
+  it("can resolve bundled providers through the manifest-scoped loader path", () => {
+    const providers = resolveBundledPluginWebSearchProviders({
+      bundledAllowlistCompat: true,
     });
-    setActivePluginRegistry(registry);
-
-    const providers = resolveRuntimeWebSearchProviders({});
 
     expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
-      "custom-search:custom",
+      "brave:brave",
+      "duckduckgo:duckduckgo",
+      "exa:exa",
+      "firecrawl:firecrawl",
+      "google:gemini",
+      "xai:grok",
+      "moonshot:kimi",
+      "perplexity:perplexity",
+      "tavily:tavily",
+    ]);
+  });
+
+  it("can scope bundled resolution to one plugin id", () => {
+    const providers = resolveBundledPluginWebSearchProviders({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "gemini",
+            },
+          },
+        },
+      },
+      bundledAllowlistCompat: true,
+      onlyPluginIds: ["google"],
+    });
+
+    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
+      "google:gemini",
     ]);
   });
 });

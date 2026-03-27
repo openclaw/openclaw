@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecretInput } from "../config/types.secrets.js";
-import { encodePairingSetupCode, resolvePairingSetupFromConfig } from "./setup-code.js";
 
 vi.mock("../infra/device-bootstrap.js", () => ({
   issueDeviceBootstrapToken: vi.fn(async () => ({
@@ -8,6 +7,10 @@ vi.mock("../infra/device-bootstrap.js", () => ({
     expiresAtMs: 123,
   })),
 }));
+
+let encodePairingSetupCode: typeof import("./setup-code.js").encodePairingSetupCode;
+let resolvePairingSetupFromConfig: typeof import("./setup-code.js").resolvePairingSetupFromConfig;
+let issueDeviceBootstrapTokenMock: typeof import("../infra/device-bootstrap.js").issueDeviceBootstrapToken;
 
 describe("pairing setup code", () => {
   type ResolvedSetup = Awaited<ReturnType<typeof resolvePairingSetupFromConfig>>;
@@ -51,6 +54,14 @@ describe("pairing setup code", () => {
     }
     expect(resolved.authLabel).toBe(params.authLabel);
     expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
+    expect(issueDeviceBootstrapTokenMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profile: {
+          roles: ["node"],
+          scopes: [],
+        },
+      }),
+    );
     if (params.url) {
       expect(resolved.payload.url).toBe(params.url);
     }
@@ -68,10 +79,17 @@ describe("pairing setup code", () => {
   }
 
   beforeEach(() => {
+    vi.resetModules();
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
-    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
-    vi.stubEnv("CLAWDBOT_GATEWAY_PASSWORD", "");
+    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
+  });
+
+  beforeEach(async () => {
+    ({ encodePairingSetupCode, resolvePairingSetupFromConfig } = await import("./setup-code.js"));
+    ({ issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock } =
+      await import("../infra/device-bootstrap.js"));
+    vi.mocked(issueDeviceBootstrapTokenMock).mockClear();
   });
 
   afterEach(() => {
@@ -356,6 +374,27 @@ describe("pairing setup code", () => {
       },
       authLabel: "password",
       urlSource: "gateway.tailscale.mode=serve",
+    });
+  });
+
+  it("returns a bind-specific error when interface discovery throws", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "token", token: "tok" },
+        },
+      },
+      {
+        networkInterfaces: () => {
+          throw new Error("uv_interface_addresses failed");
+        },
+      },
+    );
+
+    expect(resolved).toEqual({
+      ok: false,
+      error: "gateway.bind=lan set, but no private LAN IP was found.",
     });
   });
 

@@ -2,19 +2,20 @@ import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-sc
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
-import {
-  loadSessionStore,
-  resolveSessionFilePath,
-  resolveStorePath,
-  saveSessionStore,
-} from "../../config/sessions.js";
+import { resolveSessionFilePath, resolveStorePath } from "../../config/sessions/paths.js";
+import { loadSessionStore, saveSessionStore } from "../../config/sessions/store.js";
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
 
+const loadEmbeddedPiRuntime = createLazyRuntimeModule(
+  () => import("./runtime-embedded-pi.runtime.js"),
+);
+
 export function createRuntimeAgent(): PluginRuntime["agent"] {
-  return {
+  const agentRuntime = {
     defaults: {
       model: DEFAULT_MODEL,
       provider: DEFAULT_PROVIDER,
@@ -23,14 +24,20 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveAgentWorkspaceDir,
     resolveAgentIdentity,
     resolveThinkingDefault,
-    runEmbeddedPiAgent,
     resolveAgentTimeoutMs,
     ensureAgentWorkspace,
-    session: {
-      resolveStorePath,
-      loadSessionStore,
-      saveSessionStore,
-      resolveSessionFilePath,
-    },
-  };
+  } satisfies Omit<PluginRuntime["agent"], "runEmbeddedPiAgent" | "session"> &
+    Partial<Pick<PluginRuntime["agent"], "runEmbeddedPiAgent" | "session">>;
+
+  defineCachedValue(agentRuntime, "runEmbeddedPiAgent", () =>
+    createLazyRuntimeMethod(loadEmbeddedPiRuntime, (runtime) => runtime.runEmbeddedPiAgent),
+  );
+  defineCachedValue(agentRuntime, "session", () => ({
+    resolveStorePath,
+    loadSessionStore,
+    saveSessionStore,
+    resolveSessionFilePath,
+  }));
+
+  return agentRuntime as PluginRuntime["agent"];
 }

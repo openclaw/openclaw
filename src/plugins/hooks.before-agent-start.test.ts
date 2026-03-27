@@ -72,7 +72,7 @@ describe("before_agent_start hook merger", () => {
   });
 
   it("higher-priority plugin wins for modelOverride", async () => {
-    addBeforeAgentStartHook(registry, "low-priority", () => ({ modelOverride: "gpt-4o" }), 1);
+    addBeforeAgentStartHook(registry, "low-priority", () => ({ modelOverride: "gpt-5.4" }), 1);
     addBeforeAgentStartHook(
       registry,
       "high-priority",

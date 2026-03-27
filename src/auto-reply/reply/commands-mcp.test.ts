@@ -1,19 +1,11 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTempHome } from "../../config/home-env.test-harness.js";
 import { handleCommands } from "./commands-core.js";
+import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
-const tempDirs: string[] = [];
-
-async function createWorkspace(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-command-mcp-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const workspaceHarness = createCommandWorkspaceHarness("openclaw-command-mcp-");
 
 function buildCfg(): OpenClawConfig {
   return {
@@ -26,14 +18,12 @@ function buildCfg(): OpenClawConfig {
 
 describe("handleCommands /mcp", () => {
   afterEach(async () => {
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+    await workspaceHarness.cleanupWorkspaces();
   });
 
   it("writes MCP config and shows it back", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
+      const workspaceDir = await workspaceHarness.createWorkspace();
       const setParams = buildCommandTestParams(
         '/mcp set context7={"command":"uvx","args":["context7-mcp"]}',
         buildCfg(),
@@ -57,7 +47,7 @@ describe("handleCommands /mcp", () => {
 
   it("rejects internal writes without operator.admin", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
+      const workspaceDir = await workspaceHarness.createWorkspace();
       const params = buildCommandTestParams(
         '/mcp set context7={"command":"uvx","args":["context7-mcp"]}',
         buildCfg(),
@@ -77,7 +67,7 @@ describe("handleCommands /mcp", () => {
 
   it("accepts non-stdio MCP config at the config layer", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
+      const workspaceDir = await workspaceHarness.createWorkspace();
       const params = buildCommandTestParams(
         '/mcp set remote={"url":"https://example.com/mcp"}',
         buildCfg(),

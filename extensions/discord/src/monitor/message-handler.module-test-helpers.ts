@@ -1,15 +1,24 @@
-import type { MockFn } from "openclaw/plugin-sdk/test-utils";
+import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { vi } from "vitest";
 
 export const preflightDiscordMessageMock: MockFn = vi.fn();
 export const processDiscordMessageMock: MockFn = vi.fn();
+export const deliverDiscordReplyMock: MockFn = vi.fn(async () => undefined);
 
-vi.mock("./message-handler.preflight.js", () => ({
-  preflightDiscordMessage: preflightDiscordMessageMock,
-}));
+const { createDiscordMessageHandler: createRealDiscordMessageHandler } =
+  await import("./message-handler.js");
 
-vi.mock("./message-handler.process.js", () => ({
-  processDiscordMessage: processDiscordMessageMock,
-}));
-
-export const { createDiscordMessageHandler } = await import("./message-handler.js");
+export function createDiscordMessageHandler(
+  ...args: Parameters<typeof createRealDiscordMessageHandler>
+) {
+  const [params] = args;
+  return createRealDiscordMessageHandler({
+    ...params,
+    __testing: {
+      ...params.__testing,
+      preflightDiscordMessage: preflightDiscordMessageMock,
+      processDiscordMessage: processDiscordMessageMock,
+      deliverDiscordReply: deliverDiscordReplyMock,
+    },
+  });
+}

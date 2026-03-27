@@ -1,27 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../runtime.js";
-import { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
-} from "./ollama-setup.js";
+} from "../../extensions/ollama/src/setup.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 
 const upsertAuthProfileWithLock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../agents/auth-profiles.js", () => ({
   upsertAuthProfileWithLock,
-}));
-
-const openUrlMock = vi.hoisted(() => vi.fn(async () => false));
-vi.mock("./onboard-helpers.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("./onboard-helpers.js")>();
-  return { ...original, openUrl: openUrlMock };
-});
-
-const isRemoteEnvironmentMock = vi.hoisted(() => vi.fn(() => false));
-vi.mock("./oauth-env.js", () => ({
-  isRemoteEnvironment: isRemoteEnvironmentMock,
 }));
 
 function createOllamaFetchMock(params: {
@@ -100,30 +89,40 @@ describe("ollama setup", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     upsertAuthProfileWithLock.mockClear();
-    openUrlMock.mockClear();
-    isRemoteEnvironmentMock.mockReset().mockReturnValue(false);
   });
 
-  it("returns suggested default model for local mode", async () => {
+  it("puts suggested local model first in local mode", async () => {
     const prompter = createModePrompter("local");
 
     const fetchMock = createOllamaFetchMock({ tags: ["llama3:8b"] });
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await promptAndConfigureOllama({ cfg: {}, prompter });
+    const result = await promptAndConfigureOllama({
+      cfg: {},
+      prompter,
+      isRemote: false,
+      openUrl: vi.fn(async () => undefined),
+    });
+    const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
 
-    expect(result.defaultModelId).toBe("glm-4.7-flash");
+    expect(modelIds?.[0]).toBe("glm-4.7-flash");
   });
 
-  it("returns suggested default model for remote mode", async () => {
+  it("puts suggested cloud model first in remote mode", async () => {
     const prompter = createModePrompter("remote");
 
     const fetchMock = createOllamaFetchMock({ tags: ["llama3:8b"] });
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await promptAndConfigureOllama({ cfg: {}, prompter });
+    const result = await promptAndConfigureOllama({
+      cfg: {},
+      prompter,
+      isRemote: false,
+      openUrl: vi.fn(async () => undefined),
+    });
+    const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
 
-    expect(result.defaultModelId).toBe("kimi-k2.5:cloud");
+    expect(modelIds?.[0]).toBe("kimi-k2.5:cloud");
   });
 
   it("mode selection affects model ordering (local)", async () => {
@@ -132,9 +131,13 @@ describe("ollama setup", () => {
     const fetchMock = createOllamaFetchMock({ tags: ["llama3:8b", "glm-4.7-flash"] });
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await promptAndConfigureOllama({ cfg: {}, prompter });
+    const result = await promptAndConfigureOllama({
+      cfg: {},
+      prompter,
+      isRemote: false,
+      openUrl: vi.fn(async () => undefined),
+    });
 
-    expect(result.defaultModelId).toBe("glm-4.7-flash");
     const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
     expect(modelIds?.[0]).toBe("glm-4.7-flash");
     expect(modelIds).toContain("llama3:8b");
@@ -143,23 +146,24 @@ describe("ollama setup", () => {
   it("cloud+local mode triggers /api/me check and opens sign-in URL", async () => {
     const prompter = createModePrompter("remote", { confirm: true });
     const fetchMock = createSignedOutRemoteFetchMock();
+    const openUrl = vi.fn(async () => undefined);
     vi.stubGlobal("fetch", fetchMock);
 
-    await promptAndConfigureOllama({ cfg: {}, prompter });
+    await promptAndConfigureOllama({ cfg: {}, prompter, isRemote: false, openUrl });
 
-    expect(openUrlMock).toHaveBeenCalledWith("https://ollama.com/signin");
+    expect(openUrl).toHaveBeenCalledWith("https://ollama.com/signin");
     expect(prompter.confirm).toHaveBeenCalled();
   });
 
   it("cloud+local mode does not open browser in remote environment", async () => {
-    isRemoteEnvironmentMock.mockReturnValue(true);
     const prompter = createModePrompter("remote", { confirm: true });
     const fetchMock = createSignedOutRemoteFetchMock();
+    const openUrl = vi.fn(async () => undefined);
     vi.stubGlobal("fetch", fetchMock);
 
-    await promptAndConfigureOllama({ cfg: {}, prompter });
+    await promptAndConfigureOllama({ cfg: {}, prompter, isRemote: true, openUrl });
 
-    expect(openUrlMock).not.toHaveBeenCalled();
+    expect(openUrl).not.toHaveBeenCalled();
   });
 
   it("local mode does not trigger cloud auth", async () => {
@@ -168,7 +172,12 @@ describe("ollama setup", () => {
     const fetchMock = createOllamaFetchMock({ tags: ["llama3:8b"] });
     vi.stubGlobal("fetch", fetchMock);
 
-    await promptAndConfigureOllama({ cfg: {}, prompter });
+    await promptAndConfigureOllama({
+      cfg: {},
+      prompter,
+      isRemote: false,
+      openUrl: vi.fn(async () => undefined),
+    });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0]?.[0]).toContain("/api/tags");
@@ -189,7 +198,12 @@ describe("ollama setup", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await promptAndConfigureOllama({ cfg: {}, prompter });
+    const result = await promptAndConfigureOllama({
+      cfg: {},
+      prompter,
+      isRemote: false,
+      openUrl: vi.fn(async () => undefined),
+    });
     const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
 
     expect(modelIds).toEqual([
@@ -215,7 +229,12 @@ describe("ollama setup", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await promptAndConfigureOllama({ cfg: {}, prompter });
+    const result = await promptAndConfigureOllama({
+      cfg: {},
+      prompter,
+      isRemote: false,
+      openUrl: vi.fn(async () => undefined),
+    });
     const model = result.config.models?.providers?.ollama?.models?.find(
       (m) => m.id === "llama3:8b",
     );
@@ -238,6 +257,7 @@ describe("ollama setup", () => {
 
       await ensureOllamaModelPulled({
         config: createDefaultOllamaConfig("ollama/glm-4.7-flash"),
+        model: "ollama/glm-4.7-flash",
         prompter,
       });
 
@@ -253,6 +273,7 @@ describe("ollama setup", () => {
 
       await ensureOllamaModelPulled({
         config: createDefaultOllamaConfig("ollama/glm-4.7-flash"),
+        model: "ollama/glm-4.7-flash",
         prompter,
       });
 
@@ -266,6 +287,7 @@ describe("ollama setup", () => {
 
       await ensureOllamaModelPulled({
         config: createDefaultOllamaConfig("ollama/kimi-k2.5:cloud"),
+        model: "ollama/kimi-k2.5:cloud",
         prompter,
       });
 
@@ -281,6 +303,7 @@ describe("ollama setup", () => {
         config: {
           agents: { defaults: { model: { primary: "openai/gpt-4o" } } },
         },
+        model: "openai/gpt-4o",
         prompter,
       });
 

@@ -4,24 +4,17 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeSkill } from "../../../src/agents/skills.e2e-test-helpers.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import {
+  pluginCommandMocks,
+  resetPluginCommandMocks,
+} from "../../../test/helpers/extensions/telegram-plugin-command.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createNativeCommandTestParams,
+  listSkillCommandsForAgents,
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
-
-const pluginCommandMocks = vi.hoisted(() => ({
-  getPluginCommandSpecs: vi.fn(() => []),
-  matchPluginCommand: vi.fn(() => null),
-  executePluginCommand: vi.fn(async () => ({ text: "ok" })),
-}));
-
-vi.mock("../../../src/plugins/commands.js", () => ({
-  getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
-  matchPluginCommand: pluginCommandMocks.matchPluginCommand,
-  executePluginCommand: pluginCommandMocks.executePluginCommand,
-}));
 
 const tempDirs: string[] = [];
 
@@ -34,9 +27,7 @@ async function makeWorkspace(prefix: string) {
 describe("registerTelegramNativeCommands skill allowlist integration", () => {
   afterEach(async () => {
     resetNativeCommandMenuMocks();
-    pluginCommandMocks.getPluginCommandSpecs.mockClear().mockReturnValue([]);
-    pluginCommandMocks.matchPluginCommand.mockClear().mockReturnValue(null);
-    pluginCommandMocks.executePluginCommand.mockClear().mockResolvedValue({ text: "ok" });
+    resetPluginCommandMocks();
     await Promise.all(
       tempDirs
         .splice(0, tempDirs.length)
@@ -72,6 +63,10 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
         },
       ],
     };
+    const actualSkillCommands = await import("../../../src/auto-reply/skill-commands.js");
+    listSkillCommandsForAgents.mockImplementation(({ cfg, agentIds }) =>
+      actualSkillCommands.listSkillCommandsForAgents({ cfg, agentIds }),
+    );
 
     registerTelegramNativeCommands({
       ...createNativeCommandTestParams(cfg, {

@@ -36,14 +36,12 @@ export function registerControlUiAndPairingSuite(): void {
     expectedOk: boolean;
     expectedErrorSubstring?: string;
     expectedErrorCode?: string;
-    expectStatusChecks: boolean;
   }> = [
     {
       name: "allows trusted-proxy control ui operator without device identity",
       role: "operator",
       withUnpairedNodeDevice: false,
       expectedOk: true,
-      expectStatusChecks: true,
     },
     {
       name: "rejects trusted-proxy control ui node role without device identity",
@@ -52,7 +50,6 @@ export function registerControlUiAndPairingSuite(): void {
       expectedOk: false,
       expectedErrorSubstring: "control ui requires device identity",
       expectedErrorCode: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
-      expectStatusChecks: false,
     },
     {
       name: "requires pairing for trusted-proxy control ui node role with unpaired device",
@@ -61,7 +58,6 @@ export function registerControlUiAndPairingSuite(): void {
       expectedOk: false,
       expectedErrorSubstring: "pairing required",
       expectedErrorCode: ConnectErrorDetailCodes.PAIRING_REQUIRED,
-      expectStatusChecks: false,
     },
   ];
 
@@ -96,16 +92,43 @@ export function registerControlUiAndPairingSuite(): void {
     expect(admin.ok).toBe(true);
   };
 
+  const expectStatusMissingScopeButHealthOk = async (ws: WebSocket) => {
+    const status = await rpcReq(ws, "status");
+    expect(status.ok).toBe(false);
+    expect(status.error?.message ?? "").toContain("missing scope");
+    const health = await rpcReq(ws, "health");
+    expect(health.ok).toBe(true);
+  };
+
+  const expectAdminRpcDenied = async (ws: WebSocket) => {
+    const admin = await rpcReq(ws, "set-heartbeats", { enabled: false });
+    expect(admin.ok).toBe(false);
+    expect(admin.error?.message).toBe("missing scope: operator.admin");
+  };
+
+  const expectTalkSecretsDenied = async (ws: WebSocket) => {
+    const talk = await rpcReq(ws, "talk.config", { includeSecrets: true });
+    expect(talk.ok).toBe(false);
+    expect(talk.error?.message).toBe("missing scope: operator.read");
+  };
+
+  const expectDevicePairApproveDenied = async (ws: WebSocket, requestId: string) => {
+    const approve = await rpcReq(ws, "device.pair.approve", { requestId });
+    expect(approve.ok).toBe(false);
+    expect(approve.error?.message ?? "").toMatch(/^missing scope: operator\.(admin|pairing)$/);
+  };
+
   const connectControlUiWithoutDeviceAndExpectOk = async (params: {
     ws: WebSocket;
     token?: string;
     password?: string;
+    client?: { id: string; version: string; platform: string; mode: string };
   }) => {
     const res = await connectReq(params.ws, {
       ...(params.token ? { token: params.token } : {}),
       ...(params.password ? { password: params.password } : {}),
       device: null,
-      client: { ...CONTROL_UI_CLIENT },
+      client: { ...(params.client ?? CONTROL_UI_CLIENT) },
     });
     expect(res.ok).toBe(true);
     await expectStatusAndHealthOk(params.ws);
@@ -221,16 +244,47 @@ export function registerControlUiAndPairingSuite(): void {
           ws.close();
           return;
         }
-        if (tc.expectStatusChecks) {
-          await expectStatusAndHealthOk(ws);
-          if (tc.role === "operator") {
-            await expectAdminRpcOk(ws);
-          }
-        }
         ws.close();
       });
     });
   }
+
+  test("clears self-declared scopes for trusted-proxy control ui without device identity", async () => {
+    await configureTrustedProxyControlUiAuth();
+    const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
+    const { rejectDevicePairing, requestDevicePairing } =
+      await import("../infra/device-pairing.js");
+    const { identity } = await createOperatorIdentityFixture("openclaw-control-ui-trusted-proxy-");
+    const pendingRequest = await requestDevicePairing({
+      deviceId: identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      role: "operator",
+      scopes: ["operator.admin"],
+      clientId: CONTROL_UI_CLIENT.id,
+      clientMode: CONTROL_UI_CLIENT.mode,
+    });
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, TRUSTED_PROXY_CONTROL_UI_HEADERS);
+      try {
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          scopes: ["operator.admin"],
+          device: null,
+          client: { ...CONTROL_UI_CLIENT },
+        });
+        expect(res.ok).toBe(true);
+        expect((res.payload as { auth?: unknown } | undefined)?.auth).toBeUndefined();
+
+        await expectStatusMissingScopeButHealthOk(ws);
+        await expectAdminRpcDenied(ws);
+        await expectTalkSecretsDenied(ws);
+        await expectDevicePairApproveDenied(ws, pendingRequest.request.requestId);
+      } finally {
+        ws.close();
+        await rejectDevicePairing(pendingRequest.request.requestId);
+      }
+    });
+  });
 
   test("allows localhost control ui without device identity when insecure auth is enabled", async () => {
     testState.gatewayControlUi = { allowInsecureAuth: true };
@@ -238,6 +292,24 @@ export function registerControlUiAndPairingSuite(): void {
       wsHeaders: { origin: "http://127.0.0.1" },
     });
     await connectControlUiWithoutDeviceAndExpectOk({ ws, token: "secret" });
+    ws.close();
+    await server.close();
+    restoreGatewayToken(prevToken);
+  });
+
+  test("allows localhost tui without device identity when insecure auth is enabled", async () => {
+    testState.gatewayControlUi = { allowInsecureAuth: true };
+    const { server, ws, prevToken } = await startServerWithClient("secret");
+    await connectControlUiWithoutDeviceAndExpectOk({
+      ws,
+      token: "secret",
+      client: {
+        id: GATEWAY_CLIENT_NAMES.TUI,
+        version: "1.0.0",
+        platform: "darwin",
+        mode: GATEWAY_CLIENT_MODES.UI,
+      },
+    });
     ws.close();
     await server.close();
     restoreGatewayToken(prevToken);
@@ -349,6 +421,35 @@ export function registerControlUiAndPairingSuite(): void {
         expect((res.payload as { auth?: unknown } | undefined)?.auth).toBeUndefined();
         const health = await rpcReq(ws, "health");
         expect(health.ok).toBe(true);
+        ws.close();
+      });
+    } finally {
+      restoreGatewayToken(prevToken);
+    }
+  });
+
+  test("preserves requested control ui scopes when dangerouslyDisableDeviceAuth bypasses device identity", async () => {
+    testState.gatewayControlUi = { dangerouslyDisableDeviceAuth: true };
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    try {
+      await withGatewayServer(async ({ port }) => {
+        const ws = await openWs(port, { origin: originForPort(port) });
+        const res = await connectReq(ws, {
+          token: "secret",
+          scopes: ["operator.read"],
+          client: {
+            ...CONTROL_UI_CLIENT,
+          },
+        });
+        expect(res.ok).toBe(true);
+
+        const health = await rpcReq(ws, "health");
+        expect(health.ok).toBe(true);
+
+        const talk = await rpcReq(ws, "chat.history", { sessionKey: "main", limit: 1 });
+        expect(talk.ok).toBe(true);
         ws.close();
       });
     } finally {

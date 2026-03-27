@@ -1,6 +1,6 @@
 import { ChannelType, type Client, type Message } from "@buape/carbon";
 import { StickerFormatType } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchRemoteMedia = vi.fn();
 const saveMediaBuffer = vi.fn();
@@ -9,22 +9,36 @@ vi.mock("../../../../src/media/fetch.js", () => ({
   fetchRemoteMedia: (...args: unknown[]) => fetchRemoteMedia(...args),
 }));
 
-vi.mock("../../../../src/media/store.js", () => ({
-  saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
-}));
+vi.mock("../../../../src/media/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/media/store.js")>();
+  return {
+    ...actual,
+    saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
+  };
+});
 
 vi.mock("../../../../src/globals.js", () => ({
   logVerbose: () => {},
 }));
 
-const {
-  __resetDiscordChannelInfoCacheForTest,
-  resolveDiscordChannelInfo,
-  resolveDiscordMessageChannelId,
-  resolveDiscordMessageText,
-  resolveForwardedMediaList,
-  resolveMediaList,
-} = await import("./message-utils.js");
+let __resetDiscordChannelInfoCacheForTest: typeof import("./message-utils.js").__resetDiscordChannelInfoCacheForTest;
+let resolveDiscordChannelInfo: typeof import("./message-utils.js").resolveDiscordChannelInfo;
+let resolveDiscordMessageChannelId: typeof import("./message-utils.js").resolveDiscordMessageChannelId;
+let resolveDiscordMessageText: typeof import("./message-utils.js").resolveDiscordMessageText;
+let resolveForwardedMediaList: typeof import("./message-utils.js").resolveForwardedMediaList;
+let resolveMediaList: typeof import("./message-utils.js").resolveMediaList;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({
+    __resetDiscordChannelInfoCacheForTest,
+    resolveDiscordChannelInfo,
+    resolveDiscordMessageChannelId,
+    resolveDiscordMessageText,
+    resolveForwardedMediaList,
+    resolveMediaList,
+  } = await import("./message-utils.js"));
+});
 
 function asMessage(payload: Record<string, unknown>): Message {
   return payload as unknown as Message;

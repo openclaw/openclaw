@@ -69,31 +69,41 @@ const {
   };
 });
 
-vi.mock("@discordjs/voice", () => ({
-  AudioPlayerStatus: { Playing: "playing", Idle: "idle" },
-  EndBehaviorType: { AfterSilence: "AfterSilence" },
-  VoiceConnectionStatus: {
-    Ready: "ready",
-    Disconnected: "disconnected",
-    Destroyed: "destroyed",
-    Signalling: "signalling",
-    Connecting: "connecting",
-  },
-  createAudioPlayer: createAudioPlayerMock,
-  createAudioResource: vi.fn(),
-  entersState: entersStateMock,
-  joinVoiceChannel: joinVoiceChannelMock,
+vi.mock("./sdk-runtime.js", () => ({
+  loadDiscordVoiceSdk: () => ({
+    AudioPlayerStatus: { Playing: "playing", Idle: "idle" },
+    EndBehaviorType: { AfterSilence: "AfterSilence" },
+    VoiceConnectionStatus: {
+      Ready: "ready",
+      Disconnected: "disconnected",
+      Destroyed: "destroyed",
+      Signalling: "signalling",
+      Connecting: "connecting",
+    },
+    createAudioPlayer: createAudioPlayerMock,
+    createAudioResource: vi.fn(),
+    entersState: entersStateMock,
+    joinVoiceChannel: joinVoiceChannelMock,
+  }),
 }));
 
-vi.mock("../../../../src/routing/resolve-route.js", () => ({
-  resolveAgentRoute: resolveAgentRouteMock,
-}));
+vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
+  return {
+    ...actual,
+    resolveAgentRoute: resolveAgentRouteMock,
+  };
+});
 
-vi.mock("../../../../src/commands/agent.js", () => ({
-  agentCommandFromIngress: agentCommandMock,
-}));
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
+  return {
+    ...actual,
+    agentCommandFromIngress: agentCommandMock,
+  };
+});
 
-vi.mock("../../../../src/media-understanding/runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => ({
   transcribeAudioFile: transcribeAudioFileMock,
 }));
 

@@ -41,6 +41,13 @@ export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   ...CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES,
 };
 
+export function getProviderEnvVars(providerId: string): string[] {
+  const envVars = Object.hasOwn(PROVIDER_ENV_VARS, providerId)
+    ? PROVIDER_ENV_VARS[providerId]
+    : undefined;
+  return Array.isArray(envVars) ? [...envVars] : [];
+}
+
 const EXTRA_PROVIDER_AUTH_ENV_VARS = ["MINIMAX_CODE_PLAN_KEY"] as const;
 
 const KNOWN_SECRET_ENV_VARS = [

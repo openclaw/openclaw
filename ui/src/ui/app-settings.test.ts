@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   applyResolvedTheme,
   applySettings,
@@ -44,6 +45,7 @@ type SettingsHost = {
     navCollapsed: boolean;
     navWidth: number;
     navGroupsCollapsed: Record<string, boolean>;
+    borderRadius: number;
   };
   theme: ThemeName & ThemeMode;
   themeMode: ThemeMode;
@@ -65,28 +67,47 @@ type SettingsHost = {
   pendingGatewayToken?: string | null;
 };
 
-function createStorageMock(): Storage {
-  const store = new Map<string, string>();
-  return {
-    get length() {
-      return store.size;
+function setTestWindowUrl(urlString: string) {
+  const current = new URL(urlString);
+  const history = {
+    replaceState: vi.fn((_state: unknown, _title: string, nextUrl: string | URL) => {
+      const next = new URL(String(nextUrl), current.toString());
+      current.href = next.toString();
+      current.protocol = next.protocol;
+      current.host = next.host;
+      current.pathname = next.pathname;
+      current.search = next.search;
+      current.hash = next.hash;
+    }),
+  };
+  const locationLike = {
+    get href() {
+      return current.toString();
     },
-    clear() {
-      store.clear();
+    get protocol() {
+      return current.protocol;
     },
-    getItem(key: string) {
-      return store.get(key) ?? null;
+    get host() {
+      return current.host;
     },
-    key(index: number) {
-      return Array.from(store.keys())[index] ?? null;
+    get pathname() {
+      return current.pathname;
     },
-    removeItem(key: string) {
-      store.delete(key);
+    get search() {
+      return current.search;
     },
-    setItem(key: string, value: string) {
-      store.set(key, String(value));
+    get hash() {
+      return current.hash;
     },
   };
+  vi.stubGlobal("window", {
+    location: locationLike,
+    history,
+    setInterval,
+    clearInterval,
+  } as unknown as Window & typeof globalThis);
+  vi.stubGlobal("location", locationLike as Location);
+  return { history, location: locationLike };
 }
 
 const createHost = (tab: Tab): SettingsHost => ({
@@ -104,6 +125,7 @@ const createHost = (tab: Tab): SettingsHost => ({
     navCollapsed: false,
     navWidth: 220,
     navGroupsCollapsed: {},
+    borderRadius: 50,
   },
   theme: "claw" as unknown as ThemeName & ThemeMode,
   themeMode: "system",
@@ -233,15 +255,56 @@ describe("setTabFromRoute", () => {
 describe("applySettingsFromUrl", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
+    setTestWindowUrl("https://control.example/ui/overview");
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    window.history.replaceState({}, "", "/chat");
+  });
+
+  it("hydrates query token params and strips them from the URL", () => {
+    setTestWindowUrl("https://control.example/ui/overview?token=abc123");
+    const host = createHost("overview");
+    host.settings.gatewayUrl = "wss://control.example/openclaw";
+
+    applySettingsFromUrl(host);
+
+    expect(host.settings.token).toBe("abc123");
+    expect(window.location.search).toBe("");
+  });
+
+  it("keeps query token params pending when a gatewayUrl confirmation is required", () => {
+    setTestWindowUrl(
+      "https://control.example/ui/overview?gatewayUrl=wss://other-gateway.example/openclaw&token=abc123",
+    );
+    const host = createHost("overview");
+    host.settings.gatewayUrl = "wss://control.example/openclaw";
+
+    applySettingsFromUrl(host);
+
+    expect(host.settings.token).toBe("");
+    expect(host.pendingGatewayUrl).toBe("wss://other-gateway.example/openclaw");
+    expect(host.pendingGatewayToken).toBe("abc123");
+    expect(window.location.search).toBe("");
+  });
+
+  it("prefers fragment tokens over legacy query tokens when both are present", () => {
+    setTestWindowUrl("https://control.example/ui/overview?token=query-token#token=hash-token");
+    const host = createHost("overview");
+    host.settings.gatewayUrl = "wss://control.example/openclaw";
+
+    applySettingsFromUrl(host);
+
+    expect(host.settings.token).toBe("hash-token");
+    expect(window.location.search).toBe("");
+    expect(window.location.hash).toBe("");
   });
 
   it("resets stale persisted session selection to main when a token is supplied without a session", () => {
+    setTestWindowUrl("https://control.example/chat#token=test-token");
     const host = createHost("chat");
     host.settings = {
       ...host.settings,
@@ -251,8 +314,6 @@ describe("applySettingsFromUrl", () => {
       lastActiveSessionKey: "agent:test_old:main",
     };
     host.sessionKey = "agent:test_old:main";
-
-    window.history.replaceState({}, "", "/chat#token=test-token");
 
     applySettingsFromUrl(host);
 
@@ -262,6 +323,9 @@ describe("applySettingsFromUrl", () => {
   });
 
   it("preserves an explicit session from the URL when token and session are both supplied", () => {
+    setTestWindowUrl(
+      "https://control.example/chat?session=agent%3Atest_new%3Amain#token=test-token",
+    );
     const host = createHost("chat");
     host.settings = {
       ...host.settings,
@@ -272,8 +336,6 @@ describe("applySettingsFromUrl", () => {
     };
     host.sessionKey = "agent:test_old:main";
 
-    window.history.replaceState({}, "", "/chat?session=agent%3Atest_new%3Amain#token=test-token");
-
     applySettingsFromUrl(host);
 
     expect(host.sessionKey).toBe("agent:test_new:main");
@@ -282,6 +344,9 @@ describe("applySettingsFromUrl", () => {
   });
 
   it("does not reset the current gateway session when a different gateway is pending confirmation", () => {
+    setTestWindowUrl(
+      "https://control.example/chat?gatewayUrl=ws%3A%2F%2Fgateway-b.example%3A18789#token=test-token",
+    );
     const host = createHost("chat");
     host.settings = {
       ...host.settings,
@@ -291,12 +356,6 @@ describe("applySettingsFromUrl", () => {
       lastActiveSessionKey: "agent:test_old:main",
     };
     host.sessionKey = "agent:test_old:main";
-
-    window.history.replaceState(
-      {},
-      "",
-      "/chat?gatewayUrl=ws%3A%2F%2Fgateway-b.example%3A18789#token=test-token",
-    );
 
     applySettingsFromUrl(host);
 

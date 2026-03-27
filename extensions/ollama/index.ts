@@ -1,25 +1,33 @@
 import {
-  emptyPluginConfigSchema,
+  definePluginEntry,
   type OpenClawPluginApi,
   type ProviderAuthContext,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
-} from "openclaw/plugin-sdk/core";
-import { OLLAMA_DEFAULT_BASE_URL, resolveOllamaApiBase } from "openclaw/plugin-sdk/provider-models";
+} from "openclaw/plugin-sdk/plugin-entry";
+import { OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
+import {
+  DEFAULT_OLLAMA_EMBEDDING_MODEL,
+  createOllamaEmbeddingProvider,
+} from "./src/embedding-provider.js";
+import { resolveOllamaApiBase } from "./src/provider-models.js";
+import {
+  createConfiguredOllamaCompatNumCtxWrapper,
+  createConfiguredOllamaStreamFn,
+} from "./src/stream.js";
 
 const PROVIDER_ID = "ollama";
 const DEFAULT_API_KEY = "ollama-local";
 
 async function loadProviderSetup() {
-  return await import("openclaw/plugin-sdk/ollama-setup");
+  return await import("openclaw/plugin-sdk/provider-setup");
 }
 
-const ollamaPlugin = {
+export default definePluginEntry({
   id: "ollama",
   name: "Ollama Provider",
   description: "Bundled Ollama provider plugin",
-  configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     api.registerProvider({
       id: PROVIDER_ID,
@@ -37,6 +45,8 @@ const ollamaPlugin = {
             const result = await providerSetup.promptAndConfigureOllama({
               cfg: ctx.config,
               prompter: ctx.prompter,
+              isRemote: ctx.isRemote,
+              openUrl: ctx.openUrl,
             });
             return {
               profiles: [
@@ -50,15 +60,18 @@ const ollamaPlugin = {
                 },
               ],
               configPatch: result.config,
-              defaultModel: `ollama/${result.defaultModelId}`,
             };
           },
           runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
             const providerSetup = await loadProviderSetup();
             return await providerSetup.configureOllamaNonInteractive({
               nextConfig: ctx.config,
-              opts: ctx.opts,
+              opts: {
+                customBaseUrl: ctx.opts.customBaseUrl as string | undefined,
+                customModelId: ctx.opts.customModelId as string | undefined,
+              },
               runtime: ctx.runtime,
+              agentDir: ctx.agentDir,
             });
           },
         },
@@ -107,6 +120,10 @@ const ollamaPlugin = {
           groupLabel: "Ollama",
           groupHint: "Cloud and local open models",
           methodId: "local",
+          modelSelection: {
+            promptWhenAuthChoiceProvided: true,
+            allowKeepCurrent: false,
+          },
         },
         modelPicker: {
           label: "Ollama (custom)",
@@ -119,10 +136,46 @@ const ollamaPlugin = {
           return;
         }
         const providerSetup = await loadProviderSetup();
-        await providerSetup.ensureOllamaModelPulled({ config, prompter });
+        await providerSetup.ensureOllamaModelPulled({ config, model, prompter });
       },
+      createStreamFn: ({ config, model }) => {
+        return createConfiguredOllamaStreamFn({
+          model,
+          providerBaseUrl: config?.models?.providers?.ollama?.baseUrl,
+        });
+      },
+      wrapStreamFn: (ctx) => {
+        return createConfiguredOllamaCompatNumCtxWrapper(ctx);
+      },
+      createEmbeddingProvider: async ({ config, model, remote }) => {
+        const { provider, client } = await createOllamaEmbeddingProvider({
+          config,
+          remote,
+          model: model || DEFAULT_OLLAMA_EMBEDDING_MODEL,
+        });
+        return {
+          ...provider,
+          client,
+        };
+      },
+      resolveSyntheticAuth: ({ providerConfig }) => {
+        const hasApiConfig =
+          Boolean(providerConfig?.api?.trim()) ||
+          Boolean(providerConfig?.baseUrl?.trim()) ||
+          (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
+        if (!hasApiConfig) {
+          return undefined;
+        }
+        return {
+          apiKey: DEFAULT_API_KEY,
+          source: "models.providers.ollama (synthetic local key)",
+          mode: "api-key",
+        };
+      },
+      buildUnknownModelHint: () =>
+        "Ollama requires authentication to be registered as a provider. " +
+        'Set OLLAMA_API_KEY="ollama-local" (any value works) or run "openclaw configure". ' +
+        "See: https://docs.openclaw.ai/providers/ollama",
     });
   },
-};
-
-export default ollamaPlugin;
+});

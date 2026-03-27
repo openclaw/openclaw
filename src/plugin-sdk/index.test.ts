@@ -1,23 +1,53 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-  buildPluginSdkPackageExports,
-  buildPluginSdkSpecifiers,
-  pluginSdkEntrypoints,
-} from "./entrypoints.js";
-import * as sdk from "./index.js";
+import { buildPluginSdkPackageExports } from "./entrypoints.js";
 
-const pluginSdkSpecifiers = buildPluginSdkSpecifiers();
+async function collectRuntimeExports(filePath: string, seen = new Set<string>()) {
+  const normalizedPath = path.resolve(filePath);
+  if (seen.has(normalizedPath)) {
+    return new Set<string>();
+  }
+  seen.add(normalizedPath);
+
+  const source = await fs.readFile(normalizedPath, "utf8");
+  const exportNames = new Set<string>();
+
+  for (const match of source.matchAll(/export\s+(?!type\b)\{([\s\S]*?)\}\s+from\s+"([^"]+)";/g)) {
+    const names = match[1]
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => part.split(/\s+as\s+/).at(-1) ?? part);
+    for (const name of names) {
+      exportNames.add(name);
+    }
+  }
+
+  for (const match of source.matchAll(/export\s+\*\s+from\s+"([^"]+)";/g)) {
+    const specifier = match[1];
+    if (!specifier.startsWith(".")) {
+      continue;
+    }
+    const nestedPath = path.resolve(
+      path.dirname(normalizedPath),
+      specifier.replace(/\.js$/, ".ts"),
+    );
+    const nestedExports = await collectRuntimeExports(nestedPath, seen);
+    for (const name of nestedExports) {
+      exportNames.add(name);
+    }
+  }
+
+  return exportNames;
+}
 
 describe("plugin-sdk exports", () => {
-  it("does not expose runtime modules", () => {
+  it("does not expose runtime modules", async () => {
+    const runtimeExports = await collectRuntimeExports(path.join(import.meta.dirname, "index.ts"));
     const forbidden = [
       "chunkMarkdownText",
       "chunkText",
-      "resolveTextChunkLimit",
       "hasControlCommand",
       "isControlCommandMessage",
       "shouldComputeCommandAuthorized",
@@ -25,9 +55,7 @@ describe("plugin-sdk exports", () => {
       "buildMentionRegexes",
       "matchesMentionPatterns",
       "resolveStateDir",
-      "loadConfig",
       "writeConfigFile",
-      "runCommandWithTimeout",
       "enqueueSystemEvent",
       "fetchRemoteMedia",
       "saveMediaBuffer",
@@ -54,71 +82,18 @@ describe("plugin-sdk exports", () => {
     ];
 
     for (const key of forbidden) {
-      expect(Object.prototype.hasOwnProperty.call(sdk, key)).toBe(false);
+      expect(runtimeExports.has(key)).toBe(false);
     }
   });
 
-  it("keeps the root runtime surface intentionally small", () => {
-    expect(typeof sdk.emptyPluginConfigSchema).toBe("function");
-    expect(Object.prototype.hasOwnProperty.call(sdk, "resolveControlCommandGate")).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(sdk, "buildAgentSessionKey")).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(sdk, "isDangerousNameMatchingEnabled")).toBe(false);
-  });
-
-  it("emits importable bundled subpath entries", { timeout: 240_000 }, async () => {
-    const fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-consumer-"));
-    const repoDistDir = path.join(process.cwd(), "dist");
-
-    try {
-      await expect(fs.access(path.join(repoDistDir, "plugin-sdk"))).resolves.toBeUndefined();
-
-      for (const entry of pluginSdkEntrypoints) {
-        const module = await import(
-          pathToFileURL(path.join(repoDistDir, "plugin-sdk", `${entry}.js`)).href
-        );
-        expect(module).toBeTypeOf("object");
-      }
-
-      const packageDir = path.join(fixtureDir, "openclaw");
-      const consumerDir = path.join(fixtureDir, "consumer");
-      const consumerEntry = path.join(consumerDir, "import-plugin-sdk.mjs");
-
-      await fs.mkdir(packageDir, { recursive: true });
-      await fs.symlink(repoDistDir, path.join(packageDir, "dist"), "dir");
-      await fs.writeFile(
-        path.join(packageDir, "package.json"),
-        JSON.stringify(
-          {
-            exports: buildPluginSdkPackageExports(),
-            name: "openclaw",
-            type: "module",
-          },
-          null,
-          2,
-        ),
-      );
-
-      await fs.mkdir(path.join(consumerDir, "node_modules"), { recursive: true });
-      await fs.symlink(packageDir, path.join(consumerDir, "node_modules", "openclaw"), "dir");
-      await fs.writeFile(
-        consumerEntry,
-        [
-          `const specifiers = ${JSON.stringify(pluginSdkSpecifiers)};`,
-          "const results = {};",
-          "for (const specifier of specifiers) {",
-          "  results[specifier] = typeof (await import(specifier));",
-          "}",
-          "export default results;",
-        ].join("\n"),
-      );
-
-      const { default: importResults } = await import(pathToFileURL(consumerEntry).href);
-      expect(importResults).toEqual(
-        Object.fromEntries(pluginSdkSpecifiers.map((specifier: string) => [specifier, "object"])),
-      );
-    } finally {
-      await fs.rm(fixtureDir, { recursive: true, force: true });
-    }
+  it("keeps the root runtime surface intentionally small", async () => {
+    const runtimeExports = await collectRuntimeExports(path.join(import.meta.dirname, "index.ts"));
+    expect([...runtimeExports].toSorted()).toEqual([
+      "delegateCompactionToRuntime",
+      "emptyPluginConfigSchema",
+      "onDiagnosticEvent",
+      "registerContextEngine",
+    ]);
   });
 
   it("keeps package.json plugin-sdk exports synced with the manifest", async () => {

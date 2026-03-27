@@ -1,12 +1,16 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
 import {
+  resolveLoggerBackedRuntime,
+  safeParseJsonWithSchema,
+} from "openclaw/plugin-sdk/extension-shared";
+import { z } from "zod";
+import {
   type RuntimeEnv,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk/nextcloud-talk";
-import { resolveLoggerBackedRuntime } from "../../shared/runtime.js";
+} from "../runtime-api.js";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
@@ -28,6 +32,26 @@ const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 const PREAUTH_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 const PREAUTH_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 const HEALTH_PATH = "/healthz";
+const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> = z.object({
+  type: z.enum(["Create", "Update", "Delete"]),
+  actor: z.object({
+    type: z.literal("Person"),
+    id: z.string().min(1),
+    name: z.string(),
+  }),
+  object: z.object({
+    type: z.literal("Note"),
+    id: z.string().min(1),
+    name: z.string(),
+    content: z.string(),
+    mediaType: z.string(),
+  }),
+  target: z.object({
+    type: z.literal("Collection"),
+    id: z.string().min(1),
+    name: z.string(),
+  }),
+});
 const WEBHOOK_ERRORS = {
   missingSignatureHeaders: "Missing signature headers",
   invalidBackend: "Invalid backend",
@@ -53,23 +77,7 @@ function normalizeOrigin(value: string): string | null {
 }
 
 function parseWebhookPayload(body: string): NextcloudTalkWebhookPayload | null {
-  try {
-    const data = JSON.parse(body);
-    if (
-      !data.type ||
-      !data.actor?.type ||
-      !data.actor?.id ||
-      !data.object?.type ||
-      !data.object?.id ||
-      !data.target?.type ||
-      !data.target?.id
-    ) {
-      return null;
-    }
-    return data as NextcloudTalkWebhookPayload;
-  } catch {
-    return null;
-  }
+  return safeParseJsonWithSchema(NextcloudTalkWebhookPayloadSchema, body);
 }
 
 function writeJsonResponse(

@@ -3,15 +3,6 @@ import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import type { SpeechProviderId } from "./provider-types.js";
-import { buildElevenLabsSpeechProvider } from "./providers/elevenlabs.js";
-import { buildMicrosoftSpeechProvider } from "./providers/microsoft.js";
-import { buildOpenAISpeechProvider } from "./providers/openai.js";
-
-const BUILTIN_SPEECH_PROVIDERS: readonly SpeechProviderPlugin[] = [
-  buildOpenAISpeechProvider(),
-  buildElevenLabsSpeechProvider(),
-  buildMicrosoftSpeechProvider(),
-];
 
 function trimToUndefined(value: string | undefined): string | undefined {
   const trimmed = value?.trim().toLowerCase();
@@ -21,11 +12,7 @@ function trimToUndefined(value: string | undefined): string | undefined {
 export function normalizeSpeechProviderId(
   providerId: string | undefined,
 ): SpeechProviderId | undefined {
-  const normalized = trimToUndefined(providerId);
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized === "edge" ? "microsoft" : normalized;
+  return trimToUndefined(providerId);
 }
 
 function resolveSpeechProviderPluginEntries(cfg?: OpenClawConfig): SpeechProviderPlugin[] {
@@ -58,9 +45,6 @@ function buildProviderMaps(cfg?: OpenClawConfig): {
     }
   };
 
-  for (const provider of BUILTIN_SPEECH_PROVIDERS) {
-    register(provider);
-  }
   for (const provider of resolveSpeechProviderPluginEntries(cfg)) {
     register(provider);
   }
@@ -81,4 +65,15 @@ export function getSpeechProvider(
     return undefined;
   }
   return buildProviderMaps(cfg).aliases.get(normalized);
+}
+
+export function canonicalizeSpeechProviderId(
+  providerId: string | undefined,
+  cfg?: OpenClawConfig,
+): SpeechProviderId | undefined {
+  const normalized = normalizeSpeechProviderId(providerId);
+  if (!normalized) {
+    return undefined;
+  }
+  return getSpeechProvider(normalized, cfg)?.id ?? normalized;
 }

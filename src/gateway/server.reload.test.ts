@@ -26,11 +26,6 @@ const hoisted = vi.hoisted(() => {
     }
   }
 
-  const browserStop = vi.fn(async () => {});
-  const startBrowserControlServerIfEnabled = vi.fn(async () => ({
-    stop: browserStop,
-  }));
-
   const heartbeatStop = vi.fn();
   const heartbeatUpdateConfig = vi.fn();
   const startHeartbeatRunner = vi.fn(() => ({
@@ -131,8 +126,6 @@ const hoisted = vi.hoisted(() => {
   return {
     CronService: CronServiceMock,
     cronInstances,
-    browserStop,
-    startBrowserControlServerIfEnabled,
     heartbeatStop,
     heartbeatUpdateConfig,
     startHeartbeatRunner,
@@ -149,10 +142,6 @@ const hoisted = vi.hoisted(() => {
 
 vi.mock("../cron/service.js", () => ({
   CronService: hoisted.CronService,
-}));
-
-vi.mock("./server-browser.js", () => ({
-  startBrowserControlServerIfEnabled: hoisted.startBrowserControlServerIfEnabled,
 }));
 
 vi.mock("../infra/heartbeat-runner.js", () => ({
@@ -463,7 +452,6 @@ describe("gateway hot reload", () => {
         },
         cron: { enabled: true, store: "/tmp/cron.json" },
         agents: { defaults: { heartbeat: { every: "1m" }, maxConcurrent: 2 } },
-        browser: { enabled: true },
         web: { enabled: true },
         channels: {
           telegram: { botToken: "token" },
@@ -479,7 +467,6 @@ describe("gateway hot reload", () => {
             "hooks.gmail.account",
             "cron.enabled",
             "agents.defaults.heartbeat.every",
-            "browser.enabled",
             "web.enabled",
             "channels.telegram.botToken",
             "channels.discord.token",
@@ -491,7 +478,6 @@ describe("gateway hot reload", () => {
           hotReasons: ["web.enabled"],
           reloadHooks: true,
           restartGmailWatcher: true,
-          restartBrowserControl: true,
           restartCron: true,
           restartHeartbeat: true,
           restartChannels: new Set(["whatsapp", "telegram", "discord", "signal", "imessage"]),
@@ -502,9 +488,6 @@ describe("gateway hot reload", () => {
 
       expect(hoisted.stopGmailWatcher).toHaveBeenCalled();
       expect(hoisted.startGmailWatcher).toHaveBeenCalledWith(expect.objectContaining(nextConfig));
-
-      expect(hoisted.browserStop).toHaveBeenCalledTimes(1);
-      expect(hoisted.startBrowserControlServerIfEnabled).toHaveBeenCalledTimes(2);
 
       expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
       expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledTimes(1);
@@ -543,7 +526,6 @@ describe("gateway hot reload", () => {
           hotReasons: [],
           reloadHooks: false,
           restartGmailWatcher: false,
-          restartBrowserControl: false,
           restartCron: false,
           restartHeartbeat: false,
           restartChannels: new Set(),
@@ -567,9 +549,22 @@ describe("gateway hot reload", () => {
 
   it("fails startup when an active exec ref id contains traversal segments", async () => {
     await writeGatewayTraversalExecRefConfig();
-    await expect(withGatewayServer(async () => {})).rejects.toThrow(
-      /must not include "\." or "\.\." path segments/i,
-    );
+    const previousGatewayAuth = testState.gatewayAuth;
+    const previousGatewayTokenEnv = process.env.OPENCLAW_GATEWAY_TOKEN;
+    testState.gatewayAuth = undefined;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    try {
+      await expect(withGatewayServer(async () => {})).rejects.toThrow(
+        /must not include "\." or "\.\." path segments/i,
+      );
+    } finally {
+      testState.gatewayAuth = previousGatewayAuth;
+      if (previousGatewayTokenEnv === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousGatewayTokenEnv;
+      }
+    }
   });
 
   it("allows startup when unresolved refs exist only on disabled surfaces", async () => {
@@ -621,7 +616,6 @@ describe("gateway hot reload", () => {
         hotReasons: ["models.providers.openai.apiKey"],
         reloadHooks: false,
         restartGmailWatcher: false,
-        restartBrowserControl: false,
         restartCron: false,
         restartHeartbeat: false,
         restartChannels: new Set(),
@@ -669,7 +663,6 @@ describe("gateway hot reload", () => {
         hotReasons: ["tools.web.search.gemini.apiKey"],
         reloadHooks: false,
         restartGmailWatcher: false,
-        restartBrowserControl: false,
         restartCron: false,
         restartHeartbeat: false,
         restartChannels: new Set(),
