@@ -36,7 +36,10 @@ export type MattermostWebSocketLike = {
 
 export type MattermostWebSocketFactory = (url: string) => MattermostWebSocketLike;
 
-const MattermostPostSchema = z.record(z.string(), z.unknown()) as unknown as z.ZodType<MattermostPost>;
+const MattermostPostSchema = z.record(
+  z.string(),
+  z.unknown(),
+) as unknown as z.ZodType<MattermostPost>;
 
 const MattermostEventPayloadSchema = z.object({
   event: z.string().optional(),
