@@ -165,6 +165,7 @@ function emitSessionsChanged(
             verboseLevel: sessionRow.verboseLevel,
             reasoningLevel: sessionRow.reasoningLevel,
             elevatedLevel: sessionRow.elevatedLevel,
+            sendPolicy: sessionRow.sendPolicy,
             systemSent: sessionRow.systemSent,
             abortedLastRun: sessionRow.abortedLastRun,
             inputTokens: sessionRow.inputTokens,
