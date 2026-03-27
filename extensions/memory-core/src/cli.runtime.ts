@@ -27,29 +27,20 @@ import {
   listMemoryFiles,
   normalizeExtraMemoryPaths,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import type {
-  MemoryCommandOptions,
-  MemorySearchCommandOptions,
-} from "./cli.types.js";
+import type { MemoryCommandOptions, MemorySearchCommandOptions } from "./cli.types.js";
 import { getMemorySearchManager } from "./memory/index.js";
 
 /**
  * Detect the kind of embedding error (shared logic with tools.shared.ts).
  * Inlined here to avoid circular deps in the runtime split.
  */
-function resolveEmbeddingErrorKind(
-  error: string,
-): "leaked" | "quota" | "invalid_key" | null {
+function resolveEmbeddingErrorKind(error: string): "leaked" | "quota" | "invalid_key" | null {
   const lower = error.toLowerCase();
 
   if (lower.includes("leaked")) {
     return "leaked";
   }
-  if (
-    lower.includes("quota") ||
-    lower.includes("rate limit") ||
-    lower.includes("429")
-  ) {
+  if (lower.includes("quota") || lower.includes("rate limit") || lower.includes("429")) {
     return "quota";
   }
   if (
@@ -68,10 +59,7 @@ function resolveEmbeddingErrorKind(
  * Return actionable remediation hint for common embedding errors.
  * Helps users fix broken memory search without reading source code.
  */
-function resolveEmbeddingErrorRemediation(
-  error: string,
-  provider?: string,
-): string | null {
+function resolveEmbeddingErrorRemediation(error: string, provider?: string): string | null {
   const kind = resolveEmbeddingErrorKind(error);
 
   if (!kind) {
@@ -105,12 +93,8 @@ function resolveEmbeddingErrorRemediation(
   }
 }
 
-type MemoryManager = NonNullable<
-  Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]
->;
-type MemoryManagerPurpose = Parameters<
-  typeof getMemorySearchManager
->[0]["purpose"];
+type MemoryManager = NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
+type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
 
 type MemorySourceName = "memory" | "sessions";
 
@@ -138,15 +122,12 @@ function getMemoryCommandSecretTargetIds(): Set<string> {
   ]);
 }
 
-async function loadMemoryCommandConfig(
-  commandName: string,
-): Promise<LoadedMemoryCommandConfig> {
-  const { resolvedConfig, diagnostics } =
-    await resolveCommandSecretRefsViaGateway({
-      config: loadConfig(),
-      commandName,
-      targetIds: getMemoryCommandSecretTargetIds(),
-    });
+async function loadMemoryCommandConfig(commandName: string): Promise<LoadedMemoryCommandConfig> {
+  const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
+    config: loadConfig(),
+    commandName,
+    targetIds: getMemoryCommandSecretTargetIds(),
+  });
   return {
     config: resolvedConfig,
     diagnostics,
@@ -171,11 +152,7 @@ function emitMemorySecretResolveDiagnostics(
   }
 }
 
-function formatSourceLabel(
-  source: string,
-  workspaceDir: string,
-  agentId: string,
-): string {
+function formatSourceLabel(source: string, workspaceDir: string, agentId: string): string {
   if (source === "memory") {
     return shortenHomeInString(
       `memory (MEMORY.md + ${path.join(workspaceDir, "memory")}${path.sep}*.md)`,
@@ -210,13 +187,8 @@ function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
   return [resolveDefaultAgentId(cfg)];
 }
 
-function formatExtraPaths(
-  workspaceDir: string,
-  extraPaths: string[],
-): string[] {
-  return normalizeExtraMemoryPaths(workspaceDir, extraPaths).map((entry) =>
-    shortenHomePath(entry),
-  );
+function formatExtraPaths(workspaceDir: string, extraPaths: string[]): string[] {
+  return normalizeExtraMemoryPaths(workspaceDir, extraPaths).map((entry) => shortenHomePath(entry));
 }
 
 async function withMemoryManagerForAgent(params: {
@@ -234,12 +206,9 @@ async function withMemoryManagerForAgent(params: {
   }
   await withManager<MemoryManager>({
     getManager: () => getMemorySearchManager(managerParams),
-    onMissing: (error) =>
-      defaultRuntime.log(error ?? "Memory search disabled."),
+    onMissing: (error) => defaultRuntime.log(error ?? "Memory search disabled."),
     onCloseError: (err) =>
-      defaultRuntime.error(
-        `Memory manager close failed: ${formatErrorMessage(err)}`,
-      ),
+      defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
     close: async (manager) => {
       await manager.close?.();
     },
@@ -247,9 +216,7 @@ async function withMemoryManagerForAgent(params: {
   });
 }
 
-async function checkReadableFile(
-  pathname: string,
-): Promise<{ exists: boolean; issue?: string }> {
+async function checkReadableFile(pathname: string): Promise<{ exists: boolean; issue?: string }> {
   try {
     await fs.access(pathname, fsSync.constants.R_OK);
     return { exists: true };
@@ -277,9 +244,7 @@ async function scanSessionFiles(agentId: string): Promise<SourceScan> {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
-      issues.push(
-        `sessions directory missing (${shortenHomePath(sessionsDir)})`,
-      );
+      issues.push(`sessions directory missing (${shortenHomePath(sessionsDir)})`);
       return { source: "sessions", totalFiles: 0, issues };
     }
     issues.push(
@@ -307,10 +272,7 @@ async function scanMemoryFiles(
     issues.push(alt.issue);
   }
 
-  const resolvedExtraPaths = normalizeExtraMemoryPaths(
-    workspaceDir,
-    extraPaths,
-  );
+  const resolvedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
   for (const extraPath of resolvedExtraPaths) {
     try {
       const stat = await fs.lstat(extraPath);
@@ -324,9 +286,7 @@ async function scanMemoryFiles(
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
-        issues.push(
-          `additional memory path missing (${shortenHomePath(extraPath)})`,
-        );
+        issues.push(`additional memory path missing (${shortenHomePath(extraPath)})`);
       } else {
         issues.push(
           `additional memory path not accessible (${shortenHomePath(extraPath)}): ${code ?? "error"}`,
@@ -390,9 +350,7 @@ async function scanMemoryFiles(
   return { source: "memory", totalFiles, issues };
 }
 
-async function summarizeQmdIndexArtifact(
-  manager: MemoryManager,
-): Promise<string | null> {
+async function summarizeQmdIndexArtifact(manager: MemoryManager): Promise<string | null> {
   const status = manager.status?.();
   if (!status || status.backend !== "qmd") {
     return null;
@@ -440,9 +398,7 @@ async function scanMemorySources(params: {
   }
   const issues = scans.flatMap((scan) => scan.issues);
   const totals = scans.map((scan) => scan.totalFiles);
-  const numericTotals = totals.filter(
-    (total): total is number => total !== null,
-  );
+  const numericTotals = totals.filter((total): total is number => total !== null);
   const totalFiles = totals.some((total) => total === null)
     ? null
     : numericTotals.reduce((sum, total) => sum + total, 0);
@@ -451,16 +407,13 @@ async function scanMemorySources(params: {
 
 export async function runMemoryStatus(opts: MemoryCommandOptions) {
   setVerbose(Boolean(opts.verbose));
-  const { config: cfg, diagnostics } =
-    await loadMemoryCommandConfig("memory status");
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory status");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentIds = resolveAgentIds(cfg, opts.agent);
   const allResults: Array<{
     agentId: string;
     status: ReturnType<MemoryManager["status"]>;
-    embeddingProbe?: Awaited<
-      ReturnType<MemoryManager["probeEmbeddingAvailability"]>
-    >;
+    embeddingProbe?: Awaited<ReturnType<MemoryManager["probeEmbeddingAvailability"]>>;
     indexError?: string;
     scan?: MemorySourceScan;
   }> = [];
@@ -479,17 +432,14 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         let indexError: string | undefined;
         const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
         if (deep) {
-          await withProgress(
-            { label: "Checking memory…", total: 2 },
-            async (progress) => {
-              progress.setLabel("Probing vector…");
-              await manager.probeVectorAvailability();
-              progress.tick();
-              progress.setLabel("Probing embeddings…");
-              embeddingProbe = await manager.probeEmbeddingAvailability();
-              progress.tick();
-            },
-          );
+          await withProgress({ label: "Checking memory…", total: 2 }, async (progress) => {
+            progress.setLabel("Probing vector…");
+            await manager.probeVectorAvailability();
+            progress.tick();
+            progress.setLabel("Probing embeddings…");
+            embeddingProbe = await manager.probeEmbeddingAvailability();
+            progress.tick();
+          });
           if (opts.index && syncFn) {
             await withProgressTotals(
               {
@@ -521,9 +471,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
               },
             );
           } else if (opts.index && !syncFn) {
-            defaultRuntime.log(
-              "Memory backend does not support manual reindex.",
-            );
+            defaultRuntime.log("Memory backend does not support manual reindex.");
           }
         } else {
           await manager.probeVectorAvailability();
@@ -570,22 +518,14 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         ? `${filesIndexed}/? files · ${chunksIndexed} chunks`
         : `${filesIndexed}/${totalFiles} files · ${chunksIndexed} chunks`;
     if (opts.index) {
-      const line = indexError
-        ? `Memory index failed: ${indexError}`
-        : "Memory index complete.";
+      const line = indexError ? `Memory index failed: ${indexError}` : "Memory index complete.";
       defaultRuntime.log(line);
     }
     const requestedProvider = status.requestedProvider ?? status.provider;
     const modelLabel = status.model ?? status.provider;
-    const storePath = status.dbPath
-      ? shortenHomePath(status.dbPath)
-      : "<unknown>";
-    const workspacePath = status.workspaceDir
-      ? shortenHomePath(status.workspaceDir)
-      : "<unknown>";
-    const sourceList = status.sources?.length
-      ? status.sources.join(", ")
-      : null;
+    const storePath = status.dbPath ? shortenHomePath(status.dbPath) : "<unknown>";
+    const workspacePath = status.workspaceDir ? shortenHomePath(status.workspaceDir) : "<unknown>";
+    const sourceList = status.sources?.length ? status.sources.join(", ") : null;
     const extraPaths = status.workspaceDir
       ? formatExtraPaths(status.workspaceDir, status.extraPaths ?? [])
       : [];
@@ -594,9 +534,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       `${label("Provider")} ${info(status.provider)} ${muted(`(requested: ${requestedProvider})`)}`,
       `${label("Model")} ${info(modelLabel)}`,
       sourceList ? `${label("Sources")} ${info(sourceList)}` : null,
-      extraPaths.length
-        ? `${label("Extra paths")} ${info(extraPaths.join(", "))}`
-        : null,
+      extraPaths.length ? `${label("Extra paths")} ${info(extraPaths.join(", "))}` : null,
       `${label("Indexed")} ${success(indexedLabel)}`,
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
       `${label("Store")} ${info(storePath)}`,
@@ -607,13 +545,8 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       const stateColor = embeddingProbe.ok ? theme.success : theme.warn;
       lines.push(`${label("Embeddings")} ${colorize(rich, stateColor, state)}`);
       if (embeddingProbe.error) {
-        lines.push(
-          `${label("Embeddings error")} ${warn(embeddingProbe.error)}`,
-        );
-        const remediation = resolveEmbeddingErrorRemediation(
-          embeddingProbe.error,
-          status.provider,
-        );
+        lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
+        const remediation = resolveEmbeddingErrorRemediation(embeddingProbe.error, status.provider);
         if (remediation) {
           lines.push(`${label("Fix")} ${muted(remediation)}`);
         }
@@ -649,18 +582,12 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
           : vectorState === "unavailable"
             ? theme.warn
             : theme.muted;
-      lines.push(
-        `${label("Vector")} ${colorize(rich, vectorColor, vectorState)}`,
-      );
+      lines.push(`${label("Vector")} ${colorize(rich, vectorColor, vectorState)}`);
       if (status.vector.dims) {
-        lines.push(
-          `${label("Vector dims")} ${info(String(status.vector.dims))}`,
-        );
+        lines.push(`${label("Vector dims")} ${info(String(status.vector.dims))}`);
       }
       if (status.vector.extensionPath) {
-        lines.push(
-          `${label("Vector path")} ${info(shortenHomePath(status.vector.extensionPath))}`,
-        );
+        lines.push(`${label("Vector path")} ${info(shortenHomePath(status.vector.extensionPath))}`);
       }
       if (status.vector.loadError) {
         lines.push(`${label("Vector error")} ${warn(status.vector.loadError)}`);
@@ -690,13 +617,9 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         status.cache.enabled && typeof status.cache.entries === "number"
           ? ` (${status.cache.entries} entries)`
           : "";
-      lines.push(
-        `${label("Embedding cache")} ${colorize(rich, cacheColor, cacheState)}${suffix}`,
-      );
+      lines.push(`${label("Embedding cache")} ${colorize(rich, cacheColor, cacheState)}${suffix}`);
       if (status.cache.enabled && typeof status.cache.maxEntries === "number") {
-        lines.push(
-          `${label("Cache cap")} ${info(String(status.cache.maxEntries))}`,
-        );
+        lines.push(`${label("Cache cap")} ${info(String(status.cache.maxEntries))}`);
       }
     }
     if (status.batch) {
@@ -729,8 +652,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
 
 export async function runMemoryIndex(opts: MemoryCommandOptions) {
   setVerbose(Boolean(opts.verbose));
-  const { config: cfg, diagnostics } =
-    await loadMemoryCommandConfig("memory index");
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory index");
   emitMemorySecretResolveDiagnostics(diagnostics);
   const agentIds = resolveAgentIds(cfg, opts.agent);
   for (const agentId of agentIds) {
@@ -743,8 +665,7 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
           if (opts.verbose) {
             const status = manager.status();
             const rich = isRich();
-            const heading = (text: string) =>
-              colorize(rich, theme.heading, text);
+            const heading = (text: string) => colorize(rich, theme.heading, text);
             const muted = (text: string) => colorize(rich, theme.muted, text);
             const info = (text: string) => colorize(rich, theme.info, text);
             const warn = (text: string) => colorize(rich, theme.warn, text);
@@ -755,8 +676,7 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
             const extraPaths = status.workspaceDir
               ? formatExtraPaths(status.workspaceDir, status.extraPaths ?? [])
               : [];
-            const requestedProvider =
-              status.requestedProvider ?? status.provider;
+            const requestedProvider = status.requestedProvider ?? status.provider;
             const modelLabel = status.model ?? status.provider;
             const lines = [
               `${heading("Memory Index")} ${muted(`(${agentId})`)}`,
@@ -764,12 +684,8 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
                 `(requested: ${requestedProvider})`,
               )}`,
               `${label("Model")} ${info(modelLabel)}`,
-              sourceLabels.length
-                ? `${label("Sources")} ${info(sourceLabels.join(", "))}`
-                : null,
-              extraPaths.length
-                ? `${label("Extra paths")} ${info(extraPaths.join(", "))}`
-                : null,
+              sourceLabels.length ? `${label("Sources")} ${info(sourceLabels.join(", "))}` : null,
+              extraPaths.length ? `${label("Extra paths")} ${info(extraPaths.join(", "))}` : null,
             ].filter(Boolean) as string[];
             if (status.fallback) {
               lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
@@ -811,9 +727,7 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
               : `${lastLabel} · elapsed ${elapsed}`;
           };
           if (!syncFn) {
-            defaultRuntime.log(
-              "Memory backend does not support manual reindex.",
-            );
+            defaultRuntime.log("Memory backend does not support manual reindex.");
             return;
           }
           await withProgressTotals(
@@ -870,14 +784,11 @@ export async function runMemorySearch(
 ) {
   const query = opts.query ?? queryArg;
   if (!query) {
-    defaultRuntime.error(
-      "Missing search query. Provide a positional query or use --query <text>.",
-    );
+    defaultRuntime.error("Missing search query. Provide a positional query or use --query <text>.");
     process.exitCode = 1;
     return;
   }
-  const { config: cfg, diagnostics } =
-    await loadMemoryCommandConfig("memory search");
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory search");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
   await withMemoryManagerForAgent({

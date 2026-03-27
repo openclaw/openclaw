@@ -95,10 +95,7 @@ export function createMemoryTool(params: {
   name: string;
   description: string;
   parameters: typeof MemorySearchSchema | typeof MemoryGetSchema;
-  execute: (ctx: {
-    cfg: OpenClawConfig;
-    agentId: string;
-  }) => AnyAgentTool["execute"];
+  execute: (ctx: { cfg: OpenClawConfig; agentId: string }) => AnyAgentTool["execute"];
 }): AnyAgentTool | null {
   const ctx = resolveMemoryToolContext(params.options);
   if (!ctx) {
@@ -131,11 +128,7 @@ function resolveEmbeddingErrorKind(
   }
 
   // Quota/rate limit exhaustion
-  if (
-    lower.includes("quota") ||
-    lower.includes("rate limit") ||
-    lower.includes("429")
-  ) {
+  if (lower.includes("quota") || lower.includes("rate limit") || lower.includes("429")) {
     return "quota";
   }
 
@@ -156,9 +149,7 @@ function resolveEmbeddingErrorKind(
  * Return actionable remediation hint for common embedding errors.
  * Helps users/agents fix broken memory search without reading source code.
  */
-function resolveEmbeddingErrorHint(
-  error: string | undefined,
-): string | undefined {
+function resolveEmbeddingErrorHint(error: string | undefined): string | undefined {
   const kind = resolveEmbeddingErrorKind(error);
 
   switch (kind) {
@@ -174,12 +165,8 @@ function resolveEmbeddingErrorHint(
 }
 
 export function buildMemorySearchUnavailableResult(error: string | undefined) {
-  const reason =
-    (error ?? "memory search unavailable").trim() ||
-    "memory search unavailable";
-  const isQuotaError = /insufficient_quota|quota|429/.test(
-    reason.toLowerCase(),
-  );
+  const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
+  const isQuotaError = /insufficient_quota|quota|429/.test(reason.toLowerCase());
   const warning = isQuotaError
     ? "Memory search is unavailable because the embedding provider quota is exhausted."
     : "Memory search is unavailable due to an embedding/provider error.";
