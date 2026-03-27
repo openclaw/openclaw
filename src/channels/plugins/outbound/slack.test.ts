@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 
-vi.mock("../../../../extensions/slack/src/send.js", () => ({
+vi.mock("../../../../extensions/slack/test-api.js", () => ({
   sendMessageSlack: vi.fn().mockResolvedValue({ messageId: "1234.5678", channelId: "C123" }),
 }));
 
@@ -10,7 +10,7 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
-import { sendMessageSlack } from "../../../../extensions/slack/src/send.js";
+import { sendMessageSlack } from "../../../../extensions/slack/test-api.js";
 import { slackOutbound } from "../../../../test/channel-outbounds.js";
 
 type SlackSendTextCtx = {
