@@ -100,7 +100,7 @@ export {
 export {
   __testing as discordThreadBindingTesting,
   createThreadBindingManager as createDiscordThreadBindingManager,
-} from "../../extensions/discord/src/monitor/thread-bindings.manager.js";
+} from "../../extensions/discord/runtime-api.js";
 export { getGateway } from "../../extensions/discord/runtime-api.js";
 export { getPresence } from "../../extensions/discord/runtime-api.js";
 export { readDiscordComponentSpec } from "../../extensions/discord/api.js";
