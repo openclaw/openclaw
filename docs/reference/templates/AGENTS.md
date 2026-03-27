@@ -105,7 +105,7 @@ Participate, don't dominate.
 
 ### 😊 React Like a Human!
 
-On platforms that support reactions (Discord, Slack), use emoji reactions naturally:
+On platforms that support reactions (Discord, Slack, Mattermost), use emoji reactions naturally:
 
 **React when:**
 
