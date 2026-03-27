@@ -211,19 +211,23 @@ export function renderExecApprovals(state: ExecApprovalsState) {
       </div>
 
       ${renderExecApprovalsTarget(state)}
-      ${!ready
-        ? html`<div class="row" style="margin-top: 12px; gap: 12px;">
+      ${
+        !ready
+          ? html`<div class="row" style="margin-top: 12px; gap: 12px;">
             <div class="muted">Load exec approvals to edit allowlists.</div>
             <button class="btn" ?disabled=${state.loading || !targetReady} @click=${state.onLoad}>
               ${state.loading ? "Loading…" : "Load approvals"}
             </button>
           </div>`
-        : html`
+          : html`
             ${renderExecApprovalsTabs(state)} ${renderExecApprovalsPolicy(state)}
-            ${state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE
-              ? nothing
-              : renderExecApprovalsAllowlist(state)}
-          `}
+            ${
+              state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE
+                ? nothing
+                : renderExecApprovalsAllowlist(state)
+            }
+          `
+      }
     </section>
   `;
 }
@@ -258,8 +262,9 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
               <option value="node" ?selected=${state.target === "node"}>Node</option>
             </select>
           </label>
-          ${state.target === "node"
-            ? html`
+          ${
+            state.target === "node"
+              ? html`
                 <label class="field">
                   <span>Node</span>
                   <select
@@ -280,12 +285,17 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
                   </select>
                 </label>
               `
-            : nothing}
+              : nothing
+          }
         </div>
       </div>
-      ${state.target === "node" && !hasNodes
-        ? html` <div class="muted">No nodes advertise exec approvals yet.</div> `
-        : nothing}
+      ${
+        state.target === "node" && !hasNodes
+          ? html`
+              <div class="muted">No nodes advertise exec approvals yet.</div>
+            `
+          : nothing
+      }
     </div>
   `;
 }
@@ -296,9 +306,9 @@ function renderExecApprovalsTabs(state: ExecApprovalsState) {
       <span class="label">Scope</span>
       <div class="row" style="gap: 8px; flex-wrap: wrap;">
         <button
-          class="btn btn--sm ${state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE
-            ? "active"
-            : ""}"
+          class="btn btn--sm ${
+            state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE ? "active" : ""
+          }"
           @click=${() => state.onSelectScope(EXEC_APPROVALS_DEFAULT_SCOPE)}
         >
           Defaults
@@ -359,11 +369,13 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
                 }
               }}
             >
-              ${!isDefaults
-                ? html`<option value="__default__" ?selected=${securityValue === "__default__"}>
+              ${
+                !isDefaults
+                  ? html`<option value="__default__" ?selected=${securityValue === "__default__"}>
                     Use default (${defaults.security})
                   </option>`
-                : nothing}
+                  : nothing
+              }
               ${SECURITY_OPTIONS.map(
                 (option) =>
                   html`<option value=${option.value} ?selected=${securityValue === option.value}>
@@ -397,11 +409,13 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
                 }
               }}
             >
-              ${!isDefaults
-                ? html`<option value="__default__" ?selected=${askValue === "__default__"}>
+              ${
+                !isDefaults
+                  ? html`<option value="__default__" ?selected=${askValue === "__default__"}>
                     Use default (${defaults.ask})
                   </option>`
-                : nothing}
+                  : nothing
+              }
               ${ASK_OPTIONS.map(
                 (option) =>
                   html`<option value=${option.value} ?selected=${askValue === option.value}>
@@ -417,9 +431,11 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
         <div class="list-main">
           <div class="list-title">Ask fallback</div>
           <div class="list-sub">
-            ${isDefaults
-              ? "Applied when the UI prompt is unavailable."
-              : `Default: ${defaults.askFallback}.`}
+            ${
+              isDefaults
+                ? "Applied when the UI prompt is unavailable."
+                : `Default: ${defaults.askFallback}.`
+            }
           </div>
         </div>
         <div class="list-meta">
@@ -437,11 +453,13 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
                 }
               }}
             >
-              ${!isDefaults
-                ? html`<option value="__default__" ?selected=${askFallbackValue === "__default__"}>
+              ${
+                !isDefaults
+                  ? html`<option value="__default__" ?selected=${askFallbackValue === "__default__"}>
                     Use default (${defaults.askFallback})
                   </option>`
-                : nothing}
+                  : nothing
+              }
               ${SECURITY_OPTIONS.map(
                 (option) =>
                   html`<option value=${option.value} ?selected=${askFallbackValue === option.value}>
@@ -457,11 +475,13 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
         <div class="list-main">
           <div class="list-title">Auto-allow skill CLIs</div>
           <div class="list-sub">
-            ${isDefaults
-              ? "Allow skill executables listed by the Gateway."
-              : autoIsDefault
-                ? `Using default (${defaults.autoAllowSkills ? "on" : "off"}).`
-                : `Override (${autoEffective ? "on" : "off"}).`}
+            ${
+              isDefaults
+                ? "Allow skill executables listed by the Gateway."
+                : autoIsDefault
+                  ? `Using default (${defaults.autoAllowSkills ? "on" : "off"}).`
+                  : `Override (${autoEffective ? "on" : "off"}).`
+            }
           </div>
         </div>
         <div class="list-meta">
@@ -477,15 +497,17 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
               }}
             />
           </label>
-          ${!isDefaults && !autoIsDefault
-            ? html`<button
+          ${
+            !isDefaults && !autoIsDefault
+              ? html`<button
                 class="btn btn--sm"
                 ?disabled=${state.disabled}
                 @click=${() => state.onRemove([...basePath, "autoAllowSkills"])}
               >
                 Use default
               </button>`
-            : nothing}
+              : nothing
+          }
         </div>
       </div>
     </div>
@@ -513,9 +535,13 @@ function renderExecApprovalsAllowlist(state: ExecApprovalsState) {
       </button>
     </div>
     <div class="list" style="margin-top: 12px;">
-      ${entries.length === 0
-        ? html` <div class="muted">No allowlist entries yet.</div> `
-        : entries.map((entry, index) => renderAllowlistEntry(state, entry, index))}
+      ${
+        entries.length === 0
+          ? html`
+              <div class="muted">No allowlist entries yet.</div>
+            `
+          : entries.map((entry, index) => renderAllowlistEntry(state, entry, index))
+      }
     </div>
   `;
 }

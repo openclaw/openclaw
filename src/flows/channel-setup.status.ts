@@ -30,7 +30,7 @@ export type ChannelStatusSummary = {
   statusLines: string[];
 };
 
-export type ChannelSetupSelectionContribution = FlowContribution<ChannelChoice> & {
+export type ChannelSetupSelectionContribution = FlowContribution & {
   kind: "channel";
   surface: "setup";
   channel: ChannelChoice;

@@ -30,6 +30,7 @@ export interface RecoveryLogger {
 }
 
 const MAX_RETRIES = 5;
+const MAX_RECOVERY_ENTRY_AGE_MS = 10 * 60_000;
 
 /** Backoff delays in milliseconds indexed by retry count (1-based). */
 const BACKOFF_MS: readonly number[] = [
@@ -137,6 +138,14 @@ export function isEntryEligibleForRecoveryRetry(
   return { eligible: false, remainingBackoffMs: nextEligibleAt - now };
 }
 
+export function isDeliveryExpired(
+  entry: Pick<QueuedDelivery, "enqueuedAt">,
+  now = Date.now(),
+  maxAgeMs = MAX_RECOVERY_ENTRY_AGE_MS,
+): boolean {
+  return now - entry.enqueuedAt > maxAgeMs;
+}
+
 export function isPermanentDeliveryError(error: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
 }
@@ -181,6 +190,15 @@ export async function recoverPendingDeliveries(opts: {
       continue;
     }
 
+    if (isDeliveryExpired(entry, now)) {
+      opts.log.warn(
+        `Delivery ${entry.id} is stale after ${now - entry.enqueuedAt}ms — moving to failed/ without retry`,
+      );
+      await moveEntryToFailedWithLogging(entry.id, opts.log, opts.stateDir);
+      summary.failed += 1;
+      continue;
+    }
+
     const retryEligibility = isEntryEligibleForRecoveryRetry(entry, now);
     if (!retryEligibility.eligible) {
       summary.deferredBackoff += 1;
@@ -219,4 +237,4 @@ export async function recoverPendingDeliveries(opts: {
   return summary;
 }
 
-export { MAX_RETRIES };
+export { MAX_RECOVERY_ENTRY_AGE_MS, MAX_RETRIES };

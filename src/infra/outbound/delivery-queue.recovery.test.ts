@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   enqueueDelivery,
   loadPendingDeliveries,
+  MAX_RECOVERY_ENTRY_AGE_MS,
   MAX_RETRIES,
   recoverPendingDeliveries,
 } from "./delivery-queue.js";
@@ -72,6 +73,37 @@ describe("delivery-queue recovery", () => {
     expect(result.skippedMaxRetries).toBe(1);
     expect(result.deferredBackoff).toBe(0);
     expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
+  });
+
+  it("moves stale queued entries to failed without retrying them", async () => {
+    vi.useFakeTimers();
+    const start = new Date("2026-03-14T07:00:00.000Z");
+    vi.setSystemTime(start);
+
+    const id = await enqueueDelivery(
+      { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
+      tmpDir(),
+    );
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: 1,
+      enqueuedAt: start.getTime() - MAX_RECOVERY_ENTRY_AGE_MS - 1,
+      lastAttemptAt: start.getTime(),
+    });
+
+    const deliver = vi.fn();
+    const log = createRecoveryLog();
+    const { result } = await runRecovery({ deliver, log });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      recovered: 0,
+      failed: 1,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+    });
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("is stale"));
+    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
+    vi.useRealTimers();
   });
 
   it("increments retryCount on failed recovery attempt", async () => {
@@ -247,7 +279,7 @@ describe("delivery-queue recovery", () => {
       { channel: "whatsapp", to: "+1", payloads: [{ text: "later" }] },
       tmpDir(),
     );
-    setQueuedEntryState(tmpDir(), id, { retryCount: 3, lastAttemptAt: start.getTime() });
+    setQueuedEntryState(tmpDir(), id, { retryCount: 1, lastAttemptAt: start.getTime() });
 
     const firstDeliver = vi.fn().mockResolvedValue([]);
     const firstRun = await runRecovery({ deliver: firstDeliver, maxRecoveryMs: 60_000 });
@@ -259,7 +291,7 @@ describe("delivery-queue recovery", () => {
     });
     expect(firstDeliver).not.toHaveBeenCalled();
 
-    vi.setSystemTime(new Date(start.getTime() + 600_000 + 1));
+    vi.setSystemTime(new Date(start.getTime() + 25_000 + 1));
     const secondDeliver = vi.fn().mockResolvedValue([]);
     const secondRun = await runRecovery({ deliver: secondDeliver, maxRecoveryMs: 60_000 });
     expect(secondRun.result).toEqual({
