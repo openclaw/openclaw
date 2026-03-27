@@ -25,6 +25,19 @@ const ERROR_PATTERNS = {
     /service[_ ]unavailable.*(?:overload|capacity|high[_ ]demand)|(?:overload|capacity|high[_ ]demand).*service[_ ]unavailable/i,
     "high demand",
   ],
+  serverError: [
+    "an error occurred while processing",
+    "internal server error",
+    "internal_error",
+    "server_error",
+    "service temporarily unavailable",
+    "service_unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "upstream error",
+    "upstream connect error",
+    "connection reset",
+  ],
   timeout: [
     "timeout",
     "timed out",
@@ -47,9 +60,9 @@ const ERROR_PATTERNS = {
     /\benotfound\b/i,
     /\beai_again\b/i,
     /without sending (?:any )?chunks?/i,
-    /\bstop reason:\s*(?:abort|error|malformed_response)\b/i,
-    /\breason:\s*(?:abort|error|malformed_response)\b/i,
-    /\bunhandled stop reason:\s*(?:abort|error|malformed_response)\b/i,
+    /\bstop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
+    /\breason:\s*(?:abort|error|malformed_response|network_error)\b/i,
+    /\bunhandled stop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
@@ -60,6 +73,7 @@ const ERROR_PATTERNS = {
     "plans & billing",
     "insufficient balance",
     "insufficient usd or diem balance",
+    /requires?\s+more\s+credits/i,
   ],
   authPermanent: [
     /api[_ ]?key[_ ]?(?:revoked|invalid|deactivated|deleted)/i,
@@ -90,6 +104,7 @@ const ERROR_PATTERNS = {
     /\b403\b/,
     "no credentials found",
     "no api key found",
+    /\bfailed to (?:extract|parse|validate|decode)\b.*\btoken\b/,
   ],
   format: [
     "string should match pattern",
@@ -166,4 +181,8 @@ export function isAuthErrorMessage(raw: string): boolean {
 
 export function isOverloadedErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
+}
+
+export function isServerErrorMessage(raw: string): boolean {
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.serverError);
 }

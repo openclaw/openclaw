@@ -1,5 +1,6 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { createPluginRuntimeMock } from "../../../../test/helpers/extensions/plugin-runtime-mock.js";
 import { setMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import type { MattermostClient, MattermostPost } from "./client.js";
@@ -434,12 +435,35 @@ describe("buildButtonAttachments", () => {
 });
 
 describe("createMattermostInteractionHandler", () => {
+  function setInteractionRuntime(
+    enqueueSystemEvent: (
+      text: string,
+      options: { sessionKey?: string | null; sessionId?: string | null; userId?: string | null },
+    ) => boolean = () => true,
+  ) {
+    setMattermostRuntime(
+      createPluginRuntimeMock({
+        system: {
+          enqueueSystemEvent,
+        },
+      }),
+    );
+  }
+
+  function createMattermostClientMock(
+    requestImpl: (path: string, init?: { method?: string }) => Promise<unknown>,
+  ): MattermostClient {
+    return {
+      baseUrl: "https://chat.example.com",
+      apiBaseUrl: "https://chat.example.com/api/v4",
+      token: "bot-token",
+      request: async <T>(path: string, init?: RequestInit) => (await requestImpl(path, init)) as T,
+      fetchImpl: vi.fn<typeof fetch>(),
+    };
+  }
+
   beforeEach(() => {
-    setMattermostRuntime({
-      system: {
-        enqueueSystemEvent: () => {},
-      },
-    } as unknown as Parameters<typeof setMattermostRuntime>[0]);
+    setInteractionRuntime();
     setInteractionSecret("acct", "bot-token");
   });
 
@@ -484,16 +508,119 @@ describe("createMattermostInteractionHandler", () => {
   function createRes(): ServerResponse & { headers: Record<string, string>; body: string } {
     const res = {
       statusCode: 200,
-      headers: {} as Record<string, string>,
+      headers: {},
       body: "",
-      setHeader(name: string, value: string) {
-        res.headers[name] = value;
+      setHeader(name: string, value: string | number | readonly string[]) {
+        res.headers[name] = Array.isArray(value) ? value.join(",") : String(value);
+        return res;
       },
-      end(chunk?: string) {
-        res.body = chunk ?? "";
+      end(
+        chunk?: string | Buffer | Uint8Array,
+        _encoding?: BufferEncoding | (() => void),
+        cb?: () => void,
+      ) {
+        res.body = chunk ? String(chunk) : "";
+        cb?.();
+        return res;
+      },
+    } as ServerResponse & { headers: Record<string, string>; body: string };
+    return res;
+  }
+
+  function createActionContext(actionId = "approve", channelId = "chan-1") {
+    const context = { action_id: actionId, __openclaw_channel_id: channelId };
+    return { context, token: generateInteractionToken(context, "acct") };
+  }
+
+  function createInteractionBody(params: {
+    context: Record<string, unknown>;
+    token: string;
+    channelId?: string;
+    postId?: string;
+    userId?: string;
+    userName?: string;
+  }) {
+    return {
+      user_id: params.userId ?? "user-1",
+      ...(params.userName ? { user_name: params.userName } : {}),
+      channel_id: params.channelId ?? "chan-1",
+      post_id: params.postId ?? "post-1",
+      context: { ...params.context, _token: params.token },
+    };
+  }
+
+  async function runHandler(
+    handler: ReturnType<typeof createMattermostInteractionHandler>,
+    params: {
+      body: unknown;
+      remoteAddress?: string;
+      headers?: Record<string, string>;
+    },
+  ) {
+    const req = createReq({
+      remoteAddress: params.remoteAddress,
+      headers: params.headers,
+      body: params.body,
+    });
+    const res = createRes();
+    await handler(req, res);
+    return res;
+  }
+
+  function expectForbiddenResponse(
+    res: ServerResponse & { body: string },
+    expectedMessage: string,
+  ) {
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toContain(expectedMessage);
+  }
+
+  function expectSuccessfulApprovalUpdate(
+    res: ServerResponse & { body: string },
+    requestLog?: Array<{ path: string; method?: string }>,
+  ) {
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe("{}");
+    if (requestLog) {
+      expect(requestLog).toEqual([
+        { path: "/posts/post-1", method: undefined },
+        { path: "/posts/post-1", method: "PUT" },
+      ]);
+    }
+  }
+
+  function createActionPost(params?: {
+    actionId?: string;
+    actionName?: string;
+    channelId?: string;
+    rootId?: string;
+  }): MattermostPost {
+    return {
+      id: "post-1",
+      channel_id: params?.channelId ?? "chan-1",
+      ...(params?.rootId ? { root_id: params.rootId } : {}),
+      message: "Choose",
+      props: {
+        attachments: [
+          {
+            actions: [
+              {
+                id: params?.actionId ?? "approve",
+                name: params?.actionName ?? "Approve",
+              },
+            ],
+          },
+        ],
       },
     };
-    return res as unknown as ServerResponse & { headers: Record<string, string>; body: string };
+  }
+
+  function createUnusedInteractionHandler() {
+    return createMattermostInteractionHandler({
+      client: createMattermostClientMock(async () => ({ message: "unused" })),
+      botUserId: "bot",
+      accountId: "acct",
+    });
   }
 
   async function runApproveInteraction(params?: {
@@ -503,77 +630,43 @@ describe("createMattermostInteractionHandler", () => {
     remoteAddress?: string;
     headers?: Record<string, string>;
   }) {
-    const context = { action_id: "approve", __openclaw_channel_id: "chan-1" };
-    const token = generateInteractionToken(context, "acct");
+    const { context, token } = createActionContext();
     const requestLog: Array<{ path: string; method?: string }> = [];
     const handler = createMattermostInteractionHandler({
-      client: {
-        request: async (path: string, init?: { method?: string }) => {
-          requestLog.push({ path, method: init?.method });
-          if (init?.method === "PUT") {
-            return { id: "post-1" };
-          }
-          return {
-            channel_id: "chan-1",
-            message: "Choose",
-            props: {
-              attachments: [
-                { actions: [{ id: "approve", name: params?.actionName ?? "Approve" }] },
-              ],
-            },
-          };
-        },
-      } as unknown as MattermostClient,
+      client: createMattermostClientMock(async (path: string, init?: { method?: string }) => {
+        requestLog.push({ path, method: init?.method });
+        if (init?.method === "PUT") {
+          return { id: "post-1" };
+        }
+        return createActionPost({ actionName: params?.actionName });
+      }),
       botUserId: "bot",
       accountId: "acct",
       allowedSourceIps: params?.allowedSourceIps,
       trustedProxies: params?.trustedProxies,
     });
 
-    const req = createReq({
+    const res = await runHandler(handler, {
       remoteAddress: params?.remoteAddress,
       headers: params?.headers,
-      body: {
-        user_id: "user-1",
-        user_name: "alice",
-        channel_id: "chan-1",
-        post_id: "post-1",
-        context: { ...context, _token: token },
-      },
+      body: createInteractionBody({ context, token, userName: "alice" }),
     });
-    const res = createRes();
-    await handler(req, res);
     return { res, requestLog };
   }
 
   async function runInvalidActionRequest(actionId: string) {
-    const context = { action_id: "approve", __openclaw_channel_id: "chan-1" };
-    const token = generateInteractionToken(context, "acct");
+    const { context, token } = createActionContext();
     const handler = createMattermostInteractionHandler({
-      client: {
-        request: async () => ({
-          channel_id: "chan-1",
-          message: "Choose",
-          props: {
-            attachments: [{ actions: [{ id: actionId, name: actionId }] }],
-          },
-        }),
-      } as unknown as MattermostClient,
+      client: createMattermostClientMock(async () =>
+        createActionPost({ actionId, actionName: actionId }),
+      ),
       botUserId: "bot",
       accountId: "acct",
     });
 
-    const req = createReq({
-      body: {
-        user_id: "user-1",
-        channel_id: "chan-1",
-        post_id: "post-1",
-        context: { ...context, _token: token },
-      },
+    return await runHandler(handler, {
+      body: createInteractionBody({ context, token }),
     });
-    const res = createRes();
-    await handler(req, res);
-    return res;
   }
 
   it("accepts callback requests from an allowlisted source IP", async () => {
@@ -582,12 +675,7 @@ describe("createMattermostInteractionHandler", () => {
       remoteAddress: "198.51.100.8",
     });
 
-    expect(res.statusCode).toBe(200);
-    expect(res.body).toBe("{}");
-    expect(requestLog).toEqual([
-      { path: "/posts/post-1", method: undefined },
-      { path: "/posts/post-1", method: "PUT" },
-    ]);
+    expectSuccessfulApprovalUpdate(res, requestLog);
   });
 
   it("accepts forwarded Mattermost source IPs from a trusted proxy", async () => {
@@ -603,46 +691,27 @@ describe("createMattermostInteractionHandler", () => {
   });
 
   it("rejects callback requests from non-allowlisted source IPs", async () => {
-    const context = { action_id: "approve", __openclaw_channel_id: "chan-1" };
-    const token = generateInteractionToken(context, "acct");
+    const { context, token } = createActionContext();
     const handler = createMattermostInteractionHandler({
-      client: {
-        request: async () => {
-          throw new Error("should not fetch post for rejected origins");
-        },
-      } as unknown as MattermostClient,
+      client: createMattermostClientMock(async () => {
+        throw new Error("should not fetch post for rejected origins");
+      }),
       botUserId: "bot",
       accountId: "acct",
       allowedSourceIps: ["127.0.0.1"],
     });
 
-    const req = createReq({
+    const res = await runHandler(handler, {
       remoteAddress: "198.51.100.8",
-      body: {
-        user_id: "user-1",
-        channel_id: "chan-1",
-        post_id: "post-1",
-        context: { ...context, _token: token },
-      },
+      body: createInteractionBody({ context, token }),
     });
-    const res = createRes();
-
-    await handler(req, res);
-
-    expect(res.statusCode).toBe(403);
-    expect(res.body).toContain("Forbidden origin");
+    expectForbiddenResponse(res, "Forbidden origin");
   });
 
   it("rejects requests with an invalid interaction token", async () => {
-    const handler = createMattermostInteractionHandler({
-      client: {
-        request: async () => ({ message: "unused" }),
-      } as unknown as MattermostClient,
-      botUserId: "bot",
-      accountId: "acct",
-    });
+    const handler = createUnusedInteractionHandler();
 
-    const req = createReq({
+    const res = await runHandler(handler, {
       body: {
         user_id: "user-1",
         channel_id: "chan-1",
@@ -650,72 +719,31 @@ describe("createMattermostInteractionHandler", () => {
         context: { action_id: "approve", _token: "deadbeef" },
       },
     });
-    const res = createRes();
-
-    await handler(req, res);
-
-    expect(res.statusCode).toBe(403);
-    expect(res.body).toContain("Invalid token");
+    expectForbiddenResponse(res, "Invalid token");
   });
 
   it("rejects requests when the signed channel does not match the callback payload", async () => {
-    const context = { action_id: "approve", __openclaw_channel_id: "chan-1" };
-    const token = generateInteractionToken(context, "acct");
-    const handler = createMattermostInteractionHandler({
-      client: {
-        request: async () => ({ message: "unused" }),
-      } as unknown as MattermostClient,
-      botUserId: "bot",
-      accountId: "acct",
+    const { context, token } = createActionContext();
+    const handler = createUnusedInteractionHandler();
+
+    const res = await runHandler(handler, {
+      body: createInteractionBody({ context, token, channelId: "chan-2" }),
     });
-
-    const req = createReq({
-      body: {
-        user_id: "user-1",
-        channel_id: "chan-2",
-        post_id: "post-1",
-        context: { ...context, _token: token },
-      },
-    });
-    const res = createRes();
-
-    await handler(req, res);
-
-    expect(res.statusCode).toBe(403);
-    expect(res.body).toContain("Channel mismatch");
+    expectForbiddenResponse(res, "Channel mismatch");
   });
 
   it("rejects requests when the fetched post does not belong to the callback channel", async () => {
-    const context = { action_id: "approve", __openclaw_channel_id: "chan-1" };
-    const token = generateInteractionToken(context, "acct");
+    const { context, token } = createActionContext();
     const handler = createMattermostInteractionHandler({
-      client: {
-        request: async () => ({
-          channel_id: "chan-9",
-          message: "Choose",
-          props: {
-            attachments: [{ actions: [{ id: "approve", name: "Approve" }] }],
-          },
-        }),
-      } as unknown as MattermostClient,
+      client: createMattermostClientMock(async () => createActionPost({ channelId: "chan-9" })),
       botUserId: "bot",
       accountId: "acct",
     });
 
-    const req = createReq({
-      body: {
-        user_id: "user-1",
-        channel_id: "chan-1",
-        post_id: "post-1",
-        context: { ...context, _token: token },
-      },
+    const res = await runHandler(handler, {
+      body: createInteractionBody({ context, token }),
     });
-    const res = createRes();
-
-    await handler(req, res);
-
-    expect(res.statusCode).toBe(403);
-    expect(res.body).toContain("Post/channel mismatch");
+    expectForbiddenResponse(res, "Post/channel mismatch");
   });
 
   it("rejects requests when the action is not present on the fetched post", async () => {
@@ -730,58 +758,59 @@ describe("createMattermostInteractionHandler", () => {
       actionName: "approve",
     });
 
+    expectSuccessfulApprovalUpdate(res, requestLog);
+  });
+
+  it("blocks button dispatch when the sender is not allowed for the action", async () => {
+    const { context, token } = createActionContext();
+    const dispatchButtonClick = vi.fn();
+    const handleInteraction = vi.fn();
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async (_path: string, init?: { method?: string }) =>
+        init?.method === "PUT" ? { id: "post-1" } : createActionPost(),
+      ),
+      botUserId: "bot",
+      accountId: "acct",
+      authorizeButtonClick: async () => ({
+        ok: false,
+        response: {
+          ephemeral_text: "blocked",
+        },
+      }),
+      handleInteraction,
+      dispatchButtonClick,
+    });
+
+    const res = await runHandler(handler, {
+      body: createInteractionBody({ context, token }),
+    });
+
     expect(res.statusCode).toBe(200);
-    expect(res.body).toBe("{}");
-    expect(requestLog).toEqual([
-      { path: "/posts/post-1", method: undefined },
-      { path: "/posts/post-1", method: "PUT" },
-    ]);
+    expect(res.body).toContain("blocked");
+    expect(handleInteraction).not.toHaveBeenCalled();
+    expect(dispatchButtonClick).not.toHaveBeenCalled();
   });
 
   it("forwards fetched post threading metadata to session and button callbacks", async () => {
     const enqueueSystemEvent = vi.fn();
-    setMattermostRuntime({
-      system: {
-        enqueueSystemEvent,
-      },
-    } as unknown as Parameters<typeof setMattermostRuntime>[0]);
-    const context = { action_id: "approve", __openclaw_channel_id: "chan-1" };
-    const token = generateInteractionToken(context, "acct");
+    setInteractionRuntime(enqueueSystemEvent);
+    const { context, token } = createActionContext();
     const resolveSessionKey = vi.fn().mockResolvedValue("session:thread:root-9");
     const dispatchButtonClick = vi.fn();
-    const fetchedPost: MattermostPost = {
-      id: "post-1",
-      channel_id: "chan-1",
-      root_id: "root-9",
-      message: "Choose",
-      props: {
-        attachments: [{ actions: [{ id: "approve", name: "Approve" }] }],
-      },
-    };
+    const fetchedPost = createActionPost({ rootId: "root-9" });
     const handler = createMattermostInteractionHandler({
-      client: {
-        request: async (_path: string, init?: { method?: string }) =>
-          init?.method === "PUT" ? { id: "post-1" } : fetchedPost,
-      } as unknown as MattermostClient,
+      client: createMattermostClientMock(async (_path: string, init?: { method?: string }) =>
+        init?.method === "PUT" ? { id: "post-1" } : fetchedPost,
+      ),
       botUserId: "bot",
       accountId: "acct",
       resolveSessionKey,
       dispatchButtonClick,
     });
 
-    const req = createReq({
-      body: {
-        user_id: "user-1",
-        user_name: "alice",
-        channel_id: "chan-1",
-        post_id: "post-1",
-        context: { ...context, _token: token },
-      },
+    const res = await runHandler(handler, {
+      body: createInteractionBody({ context, token, userName: "alice" }),
     });
-    const res = createRes();
-
-    await handler(req, res);
-
     expect(res.statusCode).toBe(200);
     expect(resolveSessionKey).toHaveBeenCalledWith({
       channelId: "chan-1",
@@ -803,45 +832,34 @@ describe("createMattermostInteractionHandler", () => {
   });
 
   it("lets a custom interaction handler short-circuit generic completion updates", async () => {
-    const context = { action_id: "mdlprov", __openclaw_channel_id: "chan-1" };
-    const token = generateInteractionToken(context, "acct");
+    const { context, token } = createActionContext("mdlprov");
     const requestLog: Array<{ path: string; method?: string }> = [];
     const handleInteraction = vi.fn().mockResolvedValue({
       ephemeral_text: "Only the original requester can use this picker.",
     });
     const dispatchButtonClick = vi.fn();
     const handler = createMattermostInteractionHandler({
-      client: {
-        request: async (path: string, init?: { method?: string }) => {
-          requestLog.push({ path, method: init?.method });
-          return {
-            id: "post-1",
-            channel_id: "chan-1",
-            message: "Choose",
-            props: {
-              attachments: [{ actions: [{ id: "mdlprov", name: "Browse providers" }] }],
-            },
-          };
-        },
-      } as unknown as MattermostClient,
+      client: createMattermostClientMock(async (path: string, init?: { method?: string }) => {
+        requestLog.push({ path, method: init?.method });
+        return createActionPost({
+          actionId: "mdlprov",
+          actionName: "Browse providers",
+        });
+      }),
       botUserId: "bot",
       accountId: "acct",
       handleInteraction,
       dispatchButtonClick,
     });
 
-    const req = createReq({
-      body: {
-        user_id: "user-2",
-        user_name: "alice",
-        channel_id: "chan-1",
-        post_id: "post-1",
-        context: { ...context, _token: token },
-      },
+    const res = await runHandler(handler, {
+      body: createInteractionBody({
+        context,
+        token,
+        userId: "user-2",
+        userName: "alice",
+      }),
     });
-    const res = createRes();
-
-    await handler(req, res);
 
     expect(res.statusCode).toBe(200);
     expect(res.body).toBe(

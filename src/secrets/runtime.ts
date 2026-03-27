@@ -12,6 +12,7 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
+import { migrateLegacyConfig } from "../config/legacy-migrate.js";
 import { resolveUserPath } from "../utils.js";
 import {
   collectCommandSecretAssignmentsFromSnapshot,
@@ -42,6 +43,19 @@ type SecretsRuntimeRefreshContext = {
   explicitAgentDirs: string[] | null;
   loadAuthStore: (agentDir?: string) => AuthProfileStore;
 };
+
+const RUNTIME_PATH_ENV_KEYS = [
+  "HOME",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "OPENCLAW_HOME",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_AGENT_DIR",
+  "PI_CODING_AGENT_DIR",
+  "OPENCLAW_TEST_FAST",
+] as const;
 
 let activeSnapshot: PreparedSecretsRuntimeSnapshot | null = null;
 let activeRefreshContext: SecretsRuntimeRefreshContext | null = null;
@@ -79,11 +93,14 @@ function clearActiveSecretsRuntimeState(): void {
   clearRuntimeAuthProfileStoreSnapshots();
 }
 
-function collectCandidateAgentDirs(config: OpenClawConfig): string[] {
+function collectCandidateAgentDirs(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
   const dirs = new Set<string>();
-  dirs.add(resolveUserPath(resolveOpenClawAgentDir()));
+  dirs.add(resolveUserPath(resolveOpenClawAgentDir(env), env));
   for (const agentId of listAgentIds(config)) {
-    dirs.add(resolveUserPath(resolveAgentDir(config, agentId)));
+    dirs.add(resolveUserPath(resolveAgentDir(config, agentId, env), env));
   }
   return [...dirs];
 }
@@ -92,11 +109,27 @@ function resolveRefreshAgentDirs(
   config: OpenClawConfig,
   context: SecretsRuntimeRefreshContext,
 ): string[] {
-  const configDerived = collectCandidateAgentDirs(config);
+  const configDerived = collectCandidateAgentDirs(config, context.env);
   if (!context.explicitAgentDirs || context.explicitAgentDirs.length === 0) {
     return configDerived;
   }
   return [...new Set([...context.explicitAgentDirs, ...configDerived])];
+}
+
+function mergeSecretsRuntimeEnv(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> | undefined,
+): Record<string, string | undefined> {
+  const merged = { ...(env ?? process.env) } as Record<string, string | undefined>;
+  for (const key of RUNTIME_PATH_ENV_KEYS) {
+    if (merged[key] !== undefined) {
+      continue;
+    }
+    const processValue = process.env[key];
+    if (processValue !== undefined) {
+      merged[key] = processValue;
+    }
+  }
+  return merged;
 }
 
 export async function prepareSecretsRuntimeSnapshot(params: {
@@ -105,11 +138,14 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   agentDirs?: string[];
   loadAuthStore?: (agentDir?: string) => AuthProfileStore;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
+  const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
   const sourceConfig = structuredClone(params.config);
-  const resolvedConfig = structuredClone(params.config);
+  const resolvedConfig = structuredClone(
+    migrateLegacyConfig(params.config).config ?? params.config,
+  );
   const context = createResolverContext({
     sourceConfig,
-    env: params.env ?? process.env,
+    env: runtimeEnv,
   });
 
   collectConfigAssignments({
@@ -119,8 +155,8 @@ export async function prepareSecretsRuntimeSnapshot(params: {
 
   const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
   const candidateDirs = params.agentDirs?.length
-    ? [...new Set(params.agentDirs.map((entry) => resolveUserPath(entry)))]
-    : collectCandidateAgentDirs(resolvedConfig);
+    ? [...new Set(params.agentDirs.map((entry) => resolveUserPath(entry, runtimeEnv)))]
+    : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
 
   const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   for (const agentDir of candidateDirs) {
@@ -158,7 +194,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     }),
   };
   preparedSnapshotRefreshContext.set(snapshot, {
-    env: { ...(params.env ?? process.env) } as Record<string, string | undefined>,
+    env: runtimeEnv,
     explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
     loadAuthStore,
   });

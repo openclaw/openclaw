@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/sglang-provider",
+  "version": "2026.3.26",
+  "private": true,
+  "description": "OpenClaw SGLang provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

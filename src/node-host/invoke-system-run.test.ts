@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, type Mock, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
-import { saveExecApprovals } from "../infra/exec-approvals.js";
+import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke, formatSystemRunAllowlistMissMessage } from "./invoke-system-run.js";
@@ -30,6 +31,29 @@ describe("formatSystemRunAllowlistMissMessage", () => {
 });
 
 describe("handleSystemRunInvoke mac app exec host routing", () => {
+  let testOpenClawHome = "";
+  let previousOpenClawHome: string | undefined;
+
+  beforeEach(() => {
+    previousOpenClawHome = process.env.OPENCLAW_HOME;
+    testOpenClawHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-host-home-"));
+    process.env.OPENCLAW_HOME = testOpenClawHome;
+    clearRuntimeConfigSnapshot();
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+    if (previousOpenClawHome === undefined) {
+      delete process.env.OPENCLAW_HOME;
+    } else {
+      process.env.OPENCLAW_HOME = previousOpenClawHome;
+    }
+    if (testOpenClawHome) {
+      fs.rmSync(testOpenClawHome, { recursive: true, force: true });
+      testOpenClawHome = "";
+    }
+  });
+
   function createLocalRunResult(stdout = "local-ok") {
     return {
       success: true,
@@ -336,6 +360,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     preferMacAppExecHost: boolean;
     runViaResponse?: ExecHostResponse | null;
     command?: string[];
+    env?: Record<string, string>;
     rawCommand?: string | null;
     systemRunPlan?: SystemRunApprovalPlan | null;
     cwd?: string;
@@ -391,6 +416,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       client: {} as never,
       params: {
         command: params.command ?? ["echo", "ok"],
+        env: params.env,
         rawCommand: params.rawCommand,
         systemRunPlan: params.systemRunPlan,
         cwd: params.cwd,
@@ -746,6 +772,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         security: "full",
         ask: "off",
       });
+      if (process.platform === "win32") {
+        expect(runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(sendInvokeResult, {
+          message: "SYSTEM_RUN_DENIED: approval requires a stable executable path",
+          exact: true,
+        });
+        return;
+      }
       expectCommandPinnedToCanonicalPath({
         runCommand,
         expected: fs.realpathSync(script),
@@ -779,6 +813,13 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             ask: "off",
           });
           expect(runCommand).not.toHaveBeenCalled();
+          if (process.platform === "win32") {
+            expectInvokeErrorMessage(sendInvokeResult, {
+              message: "SYSTEM_RUN_DENIED: approval requires a stable executable path",
+              exact: true,
+            });
+            return;
+          }
           expectInvokeErrorMessage(sendInvokeResult, {
             message: "SYSTEM_RUN_DENIED: approval cwd changed before execution",
             exact: true,
@@ -1091,6 +1132,65 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
   });
 
+  it("rejects blocked environment overrides before execution", async () => {
+    const { runCommand, sendInvokeResult } = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      security: "full",
+      ask: "off",
+      env: { CLASSPATH: "/tmp/evil-classpath" },
+    });
+
+    expect(runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(sendInvokeResult, {
+      message: "SYSTEM_RUN_DENIED: environment override rejected",
+    });
+    expectInvokeErrorMessage(sendInvokeResult, {
+      message: "CLASSPATH",
+    });
+  });
+
+  it("rejects blocked environment overrides for shell-wrapper commands", async () => {
+    const shellCommand =
+      process.platform === "win32"
+        ? ["cmd.exe", "/d", "/s", "/c", "echo ok"]
+        : ["/bin/sh", "-lc", "echo ok"];
+    const { runCommand, sendInvokeResult } = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      security: "full",
+      ask: "off",
+      command: shellCommand,
+      env: {
+        CLASSPATH: "/tmp/evil-classpath",
+        LANG: "C",
+      },
+    });
+
+    expect(runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(sendInvokeResult, {
+      message: "SYSTEM_RUN_DENIED: environment override rejected",
+    });
+    expectInvokeErrorMessage(sendInvokeResult, {
+      message: "CLASSPATH",
+    });
+  });
+
+  it("rejects invalid non-portable environment override keys before execution", async () => {
+    const { runCommand, sendInvokeResult } = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      security: "full",
+      ask: "off",
+      env: { "BAD-KEY": "x" },
+    });
+
+    expect(runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(sendInvokeResult, {
+      message: "SYSTEM_RUN_DENIED: environment override rejected",
+    });
+    expectInvokeErrorMessage(sendInvokeResult, {
+      message: "BAD-KEY",
+    });
+  });
+
   async function expectNestedEnvShellDenied(params: {
     depth: number;
     markerName: string;
@@ -1152,5 +1252,66 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       markerName: "pwned.txt",
       errorLabel: "runCommand should not be called for nested env depth overflow",
     });
+  });
+
+  it("requires explicit approval for inline eval when strictInlineEval is enabled", async () => {
+    setRuntimeConfigSnapshot({
+      tools: {
+        exec: {
+          strictInlineEval: true,
+        },
+      },
+    });
+    try {
+      const { runCommand, sendInvokeResult, sendNodeEvent } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command: ["python3", "-c", "print('hi')"],
+        security: "full",
+        ask: "off",
+      });
+
+      expect(runCommand).not.toHaveBeenCalled();
+      expect(sendNodeEvent).toHaveBeenCalledWith(
+        expect.anything(),
+        "exec.denied",
+        expect.objectContaining({ reason: "approval-required" }),
+      );
+      expectInvokeErrorMessage(sendInvokeResult, {
+        message: "python3 -c requires explicit approval in strictInlineEval mode",
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it("does not persist allow-always interpreter approvals when strictInlineEval is enabled", async () => {
+    setRuntimeConfigSnapshot({
+      tools: {
+        exec: {
+          strictInlineEval: true,
+        },
+      },
+    });
+    try {
+      await withTempApprovalsHome({
+        approvals: createAllowlistOnMissApprovals(),
+        run: async () => {
+          const { runCommand, sendInvokeResult } = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: ["python3", "-c", "print('hi')"],
+            security: "allowlist",
+            ask: "on-miss",
+            approved: true,
+            runCommand: vi.fn(async () => createLocalRunResult("inline-eval-ok")),
+          });
+
+          expect(runCommand).toHaveBeenCalledTimes(1);
+          expectInvokeOk(sendInvokeResult, { payloadContains: "inline-eval-ok" });
+          expect(loadExecApprovals().agents?.main?.allowlist ?? []).toEqual([]);
+        },
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 });

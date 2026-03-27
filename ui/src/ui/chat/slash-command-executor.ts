@@ -3,23 +3,28 @@
  * Calls gateway RPC methods and returns formatted results.
  */
 
-import type { ModelCatalogEntry } from "../../../../src/agents/model-catalog.js";
-import { resolveThinkingDefault } from "../../../../src/agents/model-selection.js";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
   normalizeVerboseLevel,
-} from "../../../../src/auto-reply/thinking.js";
-import type { HealthSummary } from "../../../../src/commands/health.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
+  resolveThinkingDefaultForModel,
+} from "../../../../src/auto-reply/thinking.shared.js";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../../src/routing/session-key.js";
+import { createChatModelOverride, resolvePreferredServerChatModel } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../types.ts";
+import type {
+  AgentsListResult,
+  ChatModelOverride,
+  GatewaySessionRow,
+  ModelCatalogEntry,
+  SessionsListResult,
+  SessionsPatchResult,
+} from "../types.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
 
 export type SlashCommandResult = {
@@ -35,19 +40,26 @@ export type SlashCommandResult = {
     | "clear"
     | "toggle-focus"
     | "navigate-usage";
+  /** Optional session-level directive changes that the caller should mirror locally. */
+  sessionPatch?: {
+    modelOverride?: ChatModelOverride | null;
+  };
 };
 
+export type SlashCommandContext = {
+  chatModelCatalog?: ModelCatalogEntry[];
+  modelCatalog?: ModelCatalogEntry[];
+};
 export async function executeSlashCommand(
   client: GatewayBrowserClient,
   sessionKey: string,
   commandName: string,
   args: string,
+  context: SlashCommandContext = {},
 ): Promise<SlashCommandResult> {
   switch (commandName) {
     case "help":
       return executeHelp();
-    case "status":
-      return await executeStatus(client);
     case "new":
       return { content: "Starting new session...", action: "new-session" };
     case "reset":
@@ -61,12 +73,14 @@ export async function executeSlashCommand(
     case "compact":
       return await executeCompact(client, sessionKey);
     case "model":
-      return await executeModel(client, sessionKey, args);
+      return await executeModel(client, sessionKey, args, context);
     case "think":
       return await executeThink(client, sessionKey, args);
+    case "fast":
+      return await executeFast(client, sessionKey, args);
     case "verbose":
       return await executeVerbose(client, sessionKey, args);
-    case "export":
+    case "export-session":
       return { content: "Exporting session...", action: "export" };
     case "usage":
       return await executeUsage(client, sessionKey);
@@ -100,27 +114,6 @@ function executeHelp(): SlashCommandResult {
   return { content: lines.join("\n") };
 }
 
-async function executeStatus(client: GatewayBrowserClient): Promise<SlashCommandResult> {
-  try {
-    const health = await client.request<HealthSummary>("health", {});
-    const status = health.ok ? "Healthy" : "Degraded";
-    const agentCount = health.agents?.length ?? 0;
-    const sessionCount = health.sessions?.count ?? 0;
-    const lines = [
-      `**System Status:** ${status}`,
-      `**Agents:** ${agentCount}`,
-      `**Sessions:** ${sessionCount}`,
-      `**Default Agent:** ${health.defaultAgentId || "none"}`,
-    ];
-    if (health.durationMs) {
-      lines.push(`**Response:** ${health.durationMs}ms`);
-    }
-    return { content: lines.join("\n") };
-  } catch (err) {
-    return { content: `Failed to fetch status: ${String(err)}` };
-  }
-}
-
 async function executeCompact(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -137,16 +130,18 @@ async function executeModel(
   client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
+  context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
+  const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
   if (!args) {
     try {
       const [sessions, models] = await Promise.all([
         client.request<SessionsListResult>("sessions.list", {}),
-        client.request<{ models: ModelCatalogEntry[] }>("models.list", {}),
+        modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
       ]);
       const session = resolveCurrentSession(sessions, sessionKey);
       const model = session?.model || sessions?.defaults?.model || "default";
-      const available = models?.models?.map((m: ModelCatalogEntry) => m.id) ?? [];
+      const available = models.map((m: ModelCatalogEntry) => m.id);
       const lines = [`**Current model:** \`${model}\``];
       if (available.length > 0) {
         lines.push(
@@ -163,8 +158,25 @@ async function executeModel(
   }
 
   try {
-    await client.request("sessions.patch", { key: sessionKey, model: args.trim() });
-    return { content: `Model set to \`${args.trim()}\`.`, action: "refresh" };
+    const [patched, resolvedModelCatalog] = await Promise.all([
+      client.request<SessionsPatchResult>("sessions.patch", {
+        key: sessionKey,
+        model: args.trim(),
+      }),
+      modelCatalog
+        ? Promise.resolve(modelCatalog)
+        : loadModelCatalog(client, { allowFailure: true }),
+    ]);
+    const resolvedValue = resolvePreferredServerChatModel(
+      patched.resolved?.model ?? args.trim(),
+      patched.resolved?.modelProvider,
+      resolvedModelCatalog,
+    ).value;
+    return {
+      content: `Model set to \`${args.trim()}\`.`,
+      action: "refresh",
+      sessionPatch: { modelOverride: createChatModelOverride(resolvedValue) },
+    };
   } catch (err) {
     return { content: `Failed to set model: ${String(err)}` };
   }
@@ -176,6 +188,7 @@ async function executeThink(
   args: string,
 ): Promise<SlashCommandResult> {
   const rawLevel = args.trim();
+
   if (!rawLevel) {
     try {
       const { session, models } = await loadThinkingCommandState(client, sessionKey);
@@ -219,6 +232,7 @@ async function executeVerbose(
   args: string,
 ): Promise<SlashCommandResult> {
   const rawLevel = args.trim();
+
   if (!rawLevel) {
     try {
       const session = await loadCurrentSession(client, sessionKey);
@@ -248,6 +262,44 @@ async function executeVerbose(
     };
   } catch (err) {
     return { content: `Failed to set verbose mode: ${String(err)}` };
+  }
+}
+
+async function executeFast(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+): Promise<SlashCommandResult> {
+  const rawMode = args.trim().toLowerCase();
+
+  if (!rawMode || rawMode === "status") {
+    try {
+      const session = await loadCurrentSession(client, sessionKey);
+      return {
+        content: formatDirectiveOptions(
+          `Current fast mode: ${resolveCurrentFastMode(session)}.`,
+          "status, on, off",
+        ),
+      };
+    } catch (err) {
+      return { content: `Failed to get fast mode: ${String(err)}` };
+    }
+  }
+
+  if (rawMode !== "on" && rawMode !== "off") {
+    return {
+      content: `Unrecognized fast mode "${args.trim()}". Valid levels: status, on, off.`,
+    };
+  }
+
+  try {
+    await client.request("sessions.patch", { key: sessionKey, fastMode: rawMode === "on" });
+    return {
+      content: `Fast mode ${rawMode === "on" ? "enabled" : "disabled"}.`,
+      action: "refresh",
+    };
+  } catch (err) {
+    return { content: `Failed to set fast mode: ${String(err)}` };
   }
 }
 
@@ -507,12 +559,27 @@ function resolveCurrentSession(
 async function loadThinkingCommandState(client: GatewayBrowserClient, sessionKey: string) {
   const [sessions, models] = await Promise.all([
     client.request<SessionsListResult>("sessions.list", {}),
-    client.request<{ models: ModelCatalogEntry[] }>("models.list", {}),
+    loadModelCatalog(client),
   ]);
   return {
     session: resolveCurrentSession(sessions, sessionKey),
-    models: models?.models ?? [],
+    models,
   };
+}
+
+async function loadModelCatalog(
+  client: GatewayBrowserClient,
+  opts?: { allowFailure?: boolean },
+): Promise<ModelCatalogEntry[]> {
+  try {
+    const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {});
+    return result?.models ?? [];
+  } catch (err) {
+    if (opts?.allowFailure) {
+      return [];
+    }
+    throw err;
+  }
 }
 
 function resolveCurrentThinkingLevel(
@@ -526,12 +593,15 @@ function resolveCurrentThinkingLevel(
   if (!session?.modelProvider || !session.model) {
     return "off";
   }
-  return resolveThinkingDefault({
-    cfg: {} as OpenClawConfig,
+  return resolveThinkingDefaultForModel({
     provider: session.modelProvider,
     model: session.model,
     catalog: models,
   });
+}
+
+function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "on" | "off" {
+  return session?.fastMode === true ? "on" : "off";
 }
 
 function fmtTokens(n: number): string {

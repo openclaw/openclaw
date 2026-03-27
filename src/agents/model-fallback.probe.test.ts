@@ -2,7 +2,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { registerLogTransport, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
@@ -15,23 +14,52 @@ vi.mock("./auth-profiles.js", () => ({
   resolveAuthProfileOrder: vi.fn(),
 }));
 
-import {
-  ensureAuthProfileStore,
-  getSoonestCooldownExpiry,
-  isProfileInCooldown,
-  resolveProfilesUnavailableReason,
-  resolveAuthProfileOrder,
-} from "./auth-profiles.js";
-import { _probeThrottleInternals, runWithModelFallback } from "./model-fallback.js";
+type AuthProfilesModule = typeof import("./auth-profiles.js");
+type ModelFallbackModule = typeof import("./model-fallback.js");
+type LoggerModule = typeof import("../logging/logger.js");
 
-const mockedEnsureAuthProfileStore = vi.mocked(ensureAuthProfileStore);
-const mockedGetSoonestCooldownExpiry = vi.mocked(getSoonestCooldownExpiry);
-const mockedIsProfileInCooldown = vi.mocked(isProfileInCooldown);
-const mockedResolveProfilesUnavailableReason = vi.mocked(resolveProfilesUnavailableReason);
-const mockedResolveAuthProfileOrder = vi.mocked(resolveAuthProfileOrder);
+let mockedEnsureAuthProfileStore: ReturnType<
+  typeof vi.mocked<AuthProfilesModule["ensureAuthProfileStore"]>
+>;
+let mockedGetSoonestCooldownExpiry: ReturnType<
+  typeof vi.mocked<AuthProfilesModule["getSoonestCooldownExpiry"]>
+>;
+let mockedIsProfileInCooldown: ReturnType<
+  typeof vi.mocked<AuthProfilesModule["isProfileInCooldown"]>
+>;
+let mockedResolveProfilesUnavailableReason: ReturnType<
+  typeof vi.mocked<AuthProfilesModule["resolveProfilesUnavailableReason"]>
+>;
+let mockedResolveAuthProfileOrder: ReturnType<
+  typeof vi.mocked<AuthProfilesModule["resolveAuthProfileOrder"]>
+>;
+let runWithModelFallback: ModelFallbackModule["runWithModelFallback"];
+let _probeThrottleInternals: ModelFallbackModule["_probeThrottleInternals"];
+let registerLogTransport: LoggerModule["registerLogTransport"];
+let resetLogger: LoggerModule["resetLogger"];
+let setLoggerOverride: LoggerModule["setLoggerOverride"];
 
 const makeCfg = makeModelFallbackCfg;
 let unregisterLogTransport: (() => void) | undefined;
+
+async function loadModelFallbackProbeModules() {
+  vi.resetModules();
+  const authProfilesModule = await import("./auth-profiles.js");
+  const loggerModule = await import("../logging/logger.js");
+  const modelFallbackModule = await import("./model-fallback.js");
+  mockedEnsureAuthProfileStore = vi.mocked(authProfilesModule.ensureAuthProfileStore);
+  mockedGetSoonestCooldownExpiry = vi.mocked(authProfilesModule.getSoonestCooldownExpiry);
+  mockedIsProfileInCooldown = vi.mocked(authProfilesModule.isProfileInCooldown);
+  mockedResolveProfilesUnavailableReason = vi.mocked(
+    authProfilesModule.resolveProfilesUnavailableReason,
+  );
+  mockedResolveAuthProfileOrder = vi.mocked(authProfilesModule.resolveAuthProfileOrder);
+  runWithModelFallback = modelFallbackModule.runWithModelFallback;
+  _probeThrottleInternals = modelFallbackModule._probeThrottleInternals;
+  registerLogTransport = loggerModule.registerLogTransport;
+  resetLogger = loggerModule.resetLogger;
+  setLoggerOverride = loggerModule.setLoggerOverride;
+}
 
 function expectFallbackUsed(
   result: { result: unknown; attempts: Array<{ reason?: string }> },
@@ -44,6 +72,20 @@ function expectFallbackUsed(
   expect(run).toHaveBeenCalledTimes(1);
   expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
   expect(result.attempts[0]?.reason).toBe("rate_limit");
+}
+
+function expectPrimarySkippedForReason(
+  result: { result: unknown; attempts: Array<{ reason?: string }> },
+  run: {
+    (...args: unknown[]): unknown;
+    mock: { calls: unknown[][] };
+  },
+  reason: string,
+) {
+  expect(result.result).toBe("ok");
+  expect(run).toHaveBeenCalledTimes(1);
+  expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+  expect(result.attempts[0]?.reason).toBe(reason);
 }
 
 function expectPrimaryProbeSuccess(
@@ -117,7 +159,8 @@ describe("runWithModelFallback – probe logic", () => {
       run,
     });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadModelFallbackProbeModules();
     realDateNow = Date.now;
     Date.now = vi.fn(() => NOW);
 
@@ -145,7 +188,7 @@ describe("runWithModelFallback – probe logic", () => {
       return [];
     });
     // Default: only openai profiles are in cooldown; fallback providers are available
-    mockedIsProfileInCooldown.mockImplementation((_store, profileId: string) => {
+    mockedIsProfileInCooldown.mockImplementation((_store: AuthProfileStore, profileId: string) => {
       return profileId.startsWith("openai");
     });
     mockedResolveProfilesUnavailableReason.mockReturnValue("rate_limit");
@@ -183,11 +226,7 @@ describe("runWithModelFallback – probe logic", () => {
     const run = vi.fn().mockResolvedValue("ok");
 
     const result = await runPrimaryCandidate(cfg, run);
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
-    expect(result.attempts[0]?.reason).toBe("billing");
+    expectPrimarySkippedForReason(result, run, "billing");
   });
 
   it("probes primary model when within 2-min margin of cooldown expiry", async () => {
@@ -319,6 +358,77 @@ describe("runWithModelFallback – probe logic", () => {
       reason: "overloaded",
       probeError: Object.assign(new Error("service overloaded"), { status: 503 }),
     });
+  });
+
+  it("keeps walking remaining fallbacks after an abort-wrapped RESOURCE_EXHAUSTED probe failure", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "google/gemini-3-flash-preview",
+            fallbacks: ["anthropic/claude-haiku-3-5", "deepseek/deepseek-chat"],
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+
+    mockedResolveAuthProfileOrder.mockImplementation(({ provider }: { provider: string }) => {
+      if (provider === "google") {
+        return ["google-profile-1"];
+      }
+      if (provider === "anthropic") {
+        return ["anthropic-profile-1"];
+      }
+      if (provider === "deepseek") {
+        return ["deepseek-profile-1"];
+      }
+      return [];
+    });
+    mockedIsProfileInCooldown.mockImplementation((_store: AuthProfileStore, profileId: string) =>
+      profileId.startsWith("google"),
+    );
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 30 * 1000);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("rate_limit");
+
+    // Simulate Google Vertex abort-wrapped RESOURCE_EXHAUSTED (the shape that was
+    // previously swallowed by shouldRethrowAbort before the fallback loop could continue)
+    const primaryAbort = Object.assign(new Error("request aborted"), {
+      name: "AbortError",
+      cause: {
+        error: {
+          code: 429,
+          message: "Resource has been exhausted (e.g. check quota).",
+          status: "RESOURCE_EXHAUSTED",
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(primaryAbort)
+      .mockRejectedValueOnce(
+        Object.assign(new Error("fallback still rate limited"), { status: 429 }),
+      )
+      .mockRejectedValueOnce(
+        Object.assign(new Error("final fallback still rate limited"), { status: 429 }),
+      );
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        run,
+      }),
+    ).rejects.toThrow(/All models failed \(3\)/);
+
+    // All three candidates must be attempted — the abort must not short-circuit
+    expect(run).toHaveBeenCalledTimes(3);
+
+    expect(run).toHaveBeenNthCalledWith(1, "google", "gemini-3-flash-preview", {
+      allowTransientCooldownProbe: true,
+    });
+    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5");
+    expect(run).toHaveBeenNthCalledWith(3, "deepseek", "deepseek-chat");
   });
 
   it("throttles probe when called within 30s interval", async () => {
@@ -540,10 +650,6 @@ describe("runWithModelFallback – probe logic", () => {
     const run = vi.fn().mockResolvedValue("ok");
 
     const result = await runPrimaryCandidate(cfg, run);
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
-    expect(result.attempts[0]?.reason).toBe("billing");
+    expectPrimarySkippedForReason(result, run, "billing");
   });
 });

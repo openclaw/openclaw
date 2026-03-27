@@ -32,39 +32,60 @@ const modelRegistryState = {
 };
 let previousExitCode: typeof process.exitCode;
 
-vi.mock("../config/config.js", () => ({
-  CONFIG_PATH: "/tmp/openclaw.json",
-  STATE_DIR: "/tmp/openclaw-state",
-  loadConfig,
-  readConfigFileSnapshotForWrite,
-  setRuntimeConfigSnapshot,
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    CONFIG_PATH: "/tmp/openclaw.json",
+    STATE_DIR: "/tmp/openclaw-state",
+    loadConfig,
+    readConfigFileSnapshotForWrite,
+    setRuntimeConfigSnapshot,
+  };
+});
 
-vi.mock("../agents/models-config.js", () => ({
-  ensureOpenClawModelsJson,
-}));
+vi.mock("../agents/models-config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/models-config.js")>();
+  return {
+    ...actual,
+    ensureOpenClawModelsJson,
+  };
+});
 
-vi.mock("../agents/agent-paths.js", () => ({
-  resolveOpenClawAgentDir,
-}));
+vi.mock("../agents/agent-paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/agent-paths.js")>();
+  return {
+    ...actual,
+    resolveOpenClawAgentDir,
+  };
+});
 
-vi.mock("../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore,
-  listProfilesForProvider,
-  resolveAuthProfileDisplayLabel,
-  resolveAuthStorePathForDisplay,
-  resolveProfileUnusableUntilForDisplay,
-}));
+vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/auth-profiles.js")>();
+  return {
+    ...actual,
+    ensureAuthProfileStore,
+    listProfilesForProvider,
+    resolveAuthProfileDisplayLabel,
+    resolveAuthStorePathForDisplay,
+    resolveProfileUnusableUntilForDisplay,
+  };
+});
 
-vi.mock("../agents/model-auth.js", () => ({
-  resolveEnvApiKey,
-  resolveAwsSdkEnvVarName,
-  hasUsableCustomProviderApiKey,
-  resolveUsableCustomProviderApiKey,
-  getCustomProviderApiKey,
-}));
+vi.mock("../agents/model-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/model-auth.js")>();
+  return {
+    ...actual,
+    resolveEnvApiKey,
+    resolveAwsSdkEnvVarName,
+    hasUsableCustomProviderApiKey,
+    resolveUsableCustomProviderApiKey,
+    getCustomProviderApiKey,
+  };
+});
 
-vi.mock("../agents/pi-model-discovery.js", () => {
+vi.mock("../agents/pi-model-discovery.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/pi-model-discovery.js")>();
   class MockModelRegistry {
     find(provider: string, id: string) {
       return (
@@ -89,24 +110,29 @@ vi.mock("../agents/pi-model-discovery.js", () => {
   }
 
   return {
+    ...actual,
     discoverAuthStorage: () => ({}) as unknown,
     discoverModels: () => new MockModelRegistry() as unknown,
   };
 });
 
-vi.mock("../agents/pi-embedded-runner/model.js", () => ({
-  resolveModelWithRegistry: ({
-    provider,
-    modelId,
-    modelRegistry,
-  }: {
-    provider: string;
-    modelId: string;
-    modelRegistry: { find: (provider: string, id: string) => unknown };
-  }) => {
-    return modelRegistry.find(provider, modelId);
-  },
-}));
+vi.mock("../agents/pi-embedded-runner/model.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/pi-embedded-runner/model.js")>();
+  return {
+    ...actual,
+    resolveModelWithRegistry: ({
+      provider,
+      modelId,
+      modelRegistry,
+    }: {
+      provider: string;
+      modelId: string;
+      modelRegistry: { find: (provider: string, id: string) => unknown };
+    }) => {
+      return modelRegistry.find(provider, modelId);
+    },
+  };
+});
 
 function makeRuntime() {
   return {
@@ -161,6 +187,30 @@ describe("models list/status", () => {
     name: "GPT-4.1 mini",
     input: ["text"],
     baseUrl: "https://api.openai.com/v1",
+    contextWindow: 128000,
+  };
+  const OPENAI_SPARK_MODEL = {
+    provider: "openai",
+    id: "gpt-5.3-codex-spark",
+    name: "GPT-5.3 Codex Spark",
+    input: ["text", "image"],
+    baseUrl: "https://api.openai.com/v1",
+    contextWindow: 128000,
+  };
+  const OPENAI_CODEX_SPARK_MODEL = {
+    provider: "openai-codex",
+    id: "gpt-5.3-codex-spark",
+    name: "GPT-5.3 Codex Spark",
+    input: ["text"],
+    baseUrl: "https://chatgpt.com/backend-api",
+    contextWindow: 128000,
+  };
+  const AZURE_OPENAI_SPARK_MODEL = {
+    provider: "azure-openai-responses",
+    id: "gpt-5.3-codex-spark",
+    name: "GPT-5.3 Codex Spark",
+    input: ["text", "image"],
+    baseUrl: "https://example.openai.azure.com/openai/v1",
     contextWindow: 128000,
   };
   const GOOGLE_ANTIGRAVITY_TEMPLATE_BASE = {
@@ -361,6 +411,34 @@ describe("models list/status", () => {
     await loadModelRegistry(resolvedConfig as never);
 
     expect(ensureOpenClawModelsJson).not.toHaveBeenCalled();
+  });
+
+  it("filters stale direct OpenAI spark rows from models list and registry views", async () => {
+    setDefaultModel("openai-codex/gpt-5.3-codex-spark");
+    modelRegistryState.models = [
+      OPENAI_SPARK_MODEL,
+      AZURE_OPENAI_SPARK_MODEL,
+      OPENAI_CODEX_SPARK_MODEL,
+    ];
+    modelRegistryState.available = [
+      OPENAI_SPARK_MODEL,
+      AZURE_OPENAI_SPARK_MODEL,
+      OPENAI_CODEX_SPARK_MODEL,
+    ];
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ all: true, json: true }, runtime);
+
+    const payload = parseJsonLog(runtime);
+    expect(payload.models.map((model: { key: string }) => model.key)).toEqual([
+      "openai-codex/gpt-5.3-codex-spark",
+    ]);
+
+    const loaded = await loadModelRegistry({} as never);
+    expect(loaded.models.map((model) => `${model.provider}/${model.id}`)).toEqual([
+      "openai-codex/gpt-5.3-codex-spark",
+    ]);
+    expect(Array.from(loaded.availableKeys ?? [])).toEqual(["openai-codex/gpt-5.3-codex-spark"]);
   });
 
   it("modelsListCommand persists using the write snapshot config when provided", async () => {

@@ -1,31 +1,36 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
+import * as execModule from "../../process/exec.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-
-const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../../process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
-}));
-
-import { createPluginRuntime } from "./index.js";
+import { VERSION } from "../../version.js";
+import {
+  clearGatewaySubagentRuntime,
+  createPluginRuntime,
+  setGatewaySubagentRuntime,
+} from "./index.js";
 
 describe("plugin runtime command execution", () => {
   beforeEach(() => {
-    runCommandWithTimeoutMock.mockClear();
+    vi.restoreAllMocks();
+    clearGatewaySubagentRuntime();
   });
 
   it("exposes runtime.system.runCommandWithTimeout by default", async () => {
     const commandResult = {
+      pid: 12345,
       stdout: "hello\n",
       stderr: "",
       code: 0,
       signal: null,
       killed: false,
+      noOutputTimedOut: false,
       termination: "exit" as const,
     };
-    runCommandWithTimeoutMock.mockResolvedValue(commandResult);
+    const runCommandWithTimeoutMock = vi
+      .spyOn(execModule, "runCommandWithTimeout")
+      .mockResolvedValue(commandResult);
 
     const runtime = createPluginRuntime();
     await expect(
@@ -35,7 +40,9 @@ describe("plugin runtime command execution", () => {
   });
 
   it("forwards runtime.system.runCommandWithTimeout errors", async () => {
-    runCommandWithTimeoutMock.mockRejectedValue(new Error("boom"));
+    const runCommandWithTimeoutMock = vi
+      .spyOn(execModule, "runCommandWithTimeout")
+      .mockRejectedValue(new Error("boom"));
     const runtime = createPluginRuntime();
     await expect(
       runtime.system.runCommandWithTimeout(["echo", "hello"], { timeoutMs: 1000 }),
@@ -49,9 +56,41 @@ describe("plugin runtime command execution", () => {
     expect(runtime.events.onSessionTranscriptUpdate).toBe(onSessionTranscriptUpdate);
   });
 
+  it("exposes runtime.mediaUnderstanding helpers and keeps stt as an alias", () => {
+    const runtime = createPluginRuntime();
+    expect(typeof runtime.mediaUnderstanding.runFile).toBe("function");
+    expect(typeof runtime.mediaUnderstanding.describeImageFile).toBe("function");
+    expect(typeof runtime.mediaUnderstanding.describeImageFileWithModel).toBe("function");
+    expect(typeof runtime.mediaUnderstanding.describeVideoFile).toBe("function");
+    expect(runtime.mediaUnderstanding.transcribeAudioFile).toBe(runtime.stt.transcribeAudioFile);
+  });
+
+  it("exposes runtime.imageGeneration helpers", () => {
+    const runtime = createPluginRuntime();
+    expect(typeof runtime.imageGeneration.generate).toBe("function");
+    expect(typeof runtime.imageGeneration.listProviders).toBe("function");
+  });
+
+  it("exposes runtime.webSearch helpers", () => {
+    const runtime = createPluginRuntime();
+    expect(typeof runtime.webSearch.listProviders).toBe("function");
+    expect(typeof runtime.webSearch.search).toBe("function");
+  });
+
   it("exposes runtime.system.requestHeartbeatNow", () => {
     const runtime = createPluginRuntime();
     expect(runtime.system.requestHeartbeatNow).toBe(requestHeartbeatNow);
+  });
+
+  it("exposes runtime.agent host helpers", () => {
+    const runtime = createPluginRuntime();
+    expect(runtime.agent.defaults).toEqual({
+      model: DEFAULT_MODEL,
+      provider: DEFAULT_PROVIDER,
+    });
+    expect(typeof runtime.agent.runEmbeddedPiAgent).toBe("function");
+    expect(typeof runtime.agent.resolveAgentDir).toBe("function");
+    expect(typeof runtime.agent.session.resolveSessionFilePath).toBe("function");
   });
 
   it("exposes runtime.modelAuth with getApiKeyForModel and resolveApiKeyForProvider", () => {
@@ -69,5 +108,43 @@ describe("plugin runtime command execution", () => {
     const runtime = createPluginRuntime();
     // Wrappers should NOT be the same reference as the raw functions
     expect(runtime.modelAuth.getApiKeyForModel).not.toBe(rawGetApiKey);
+  });
+
+  it("keeps subagent unavailable by default even after gateway initialization", async () => {
+    const runtime = createPluginRuntime();
+    setGatewaySubagentRuntime({
+      run: vi.fn(),
+      waitForRun: vi.fn(),
+      getSessionMessages: vi.fn(),
+      getSession: vi.fn(),
+      deleteSession: vi.fn(),
+    });
+
+    expect(() => runtime.subagent.run({ sessionKey: "s-1", message: "hello" })).toThrow(
+      "Plugin runtime subagent methods are only available during a gateway request.",
+    );
+  });
+
+  it("late-binds to the gateway subagent when explicitly enabled", async () => {
+    const run = vi.fn().mockResolvedValue({ runId: "run-1" });
+    const runtime = createPluginRuntime({ allowGatewaySubagentBinding: true });
+
+    setGatewaySubagentRuntime({
+      run,
+      waitForRun: vi.fn(),
+      getSessionMessages: vi.fn(),
+      getSession: vi.fn(),
+      deleteSession: vi.fn(),
+    });
+
+    await expect(runtime.subagent.run({ sessionKey: "s-2", message: "hello" })).resolves.toEqual({
+      runId: "run-1",
+    });
+    expect(run).toHaveBeenCalledWith({ sessionKey: "s-2", message: "hello" });
+  });
+
+  it("exposes runtime.version from the shared VERSION constant", () => {
+    const runtime = createPluginRuntime();
+    expect(runtime.version).toBe(VERSION);
   });
 });

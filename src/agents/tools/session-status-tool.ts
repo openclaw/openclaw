@@ -10,7 +10,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { loadCombinedSessionStoreForGateway } from "../../gateway/session-utils.js";
+import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
@@ -23,8 +23,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
-import { resolveAgentDir } from "../agent-scope.js";
+import { resolveAgentConfig, resolveAgentDir } from "../agent-scope.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { resolveModelAuthLabel } from "../model-auth-label.js";
 import { loadModelCatalog } from "../model-catalog.js";
@@ -43,7 +42,9 @@ import {
   createAgentToAgentPolicy,
   resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
+  resolveSessionReference,
   resolveSandboxedSessionToolContext,
+  resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
 
 const SessionStatusToolSchema = Type.Object({
@@ -56,29 +57,43 @@ function resolveSessionEntry(params: {
   keyRaw: string;
   alias: string;
   mainKey: string;
+  requesterInternalKey?: string;
+  includeAliasFallback?: boolean;
 }): { key: string; entry: SessionEntry } | null {
   const keyRaw = params.keyRaw.trim();
   if (!keyRaw) {
     return null;
   }
+  const includeAliasFallback = params.includeAliasFallback ?? true;
   const internal = resolveInternalSessionKey({
     key: keyRaw,
     alias: params.alias,
     mainKey: params.mainKey,
+    requesterInternalKey: params.requesterInternalKey,
   });
 
-  const candidates = new Set<string>([keyRaw, internal]);
+  const candidates: string[] = [keyRaw];
   if (!keyRaw.startsWith("agent:")) {
-    candidates.add(`agent:${DEFAULT_AGENT_ID}:${keyRaw}`);
-    candidates.add(`agent:${DEFAULT_AGENT_ID}:${internal}`);
+    candidates.push(`agent:${DEFAULT_AGENT_ID}:${keyRaw}`);
   }
-  if (keyRaw === "main") {
-    candidates.add(
-      buildAgentMainSessionKey({
-        agentId: DEFAULT_AGENT_ID,
-        mainKey: params.mainKey,
-      }),
-    );
+  if (includeAliasFallback && internal !== keyRaw) {
+    candidates.push(internal);
+  }
+  if (includeAliasFallback && !keyRaw.startsWith("agent:")) {
+    const agentInternal = `agent:${DEFAULT_AGENT_ID}:${internal}`;
+    const agentRaw = `agent:${DEFAULT_AGENT_ID}:${keyRaw}`;
+    if (agentInternal !== agentRaw) {
+      candidates.push(agentInternal);
+    }
+  }
+  if (includeAliasFallback && (keyRaw === "main" || keyRaw === "current")) {
+    const defaultMainKey = buildAgentMainSessionKey({
+      agentId: DEFAULT_AGENT_ID,
+      mainKey: params.mainKey,
+    });
+    if (!candidates.includes(defaultMainKey)) {
+      candidates.push(defaultMainKey);
+    }
   }
 
   for (const key of candidates) {
@@ -91,22 +106,16 @@ function resolveSessionEntry(params: {
   return null;
 }
 
-function resolveSessionKeyFromSessionId(params: {
-  cfg: OpenClawConfig;
-  sessionId: string;
-  agentId?: string;
-}): string | null {
-  const trimmed = params.sessionId.trim();
-  if (!trimmed) {
-    return null;
+function resolveStoreScopedRequesterKey(params: {
+  requesterKey: string;
+  agentId: string;
+  mainKey: string;
+}) {
+  const parsed = parseAgentSessionKey(params.requesterKey);
+  if (!parsed || parsed.agentId !== params.agentId) {
+    return params.requesterKey;
   }
-  const { store } = loadCombinedSessionStoreForGateway(params.cfg);
-  const matches = Object.entries(store).filter(
-    (entry): entry is [string, SessionEntry] =>
-      entry[1]?.sessionId === trimmed &&
-      (!params.agentId || resolveAgentIdFromSessionKey(entry[0]) === params.agentId),
-  );
-  return resolvePreferredSessionKeyForSessionIdMatches(matches, trimmed) ?? null;
+  return parsed.rest === params.mainKey ? params.mainKey : params.requesterKey;
 }
 
 async function resolveModelOverride(params: {
@@ -283,6 +292,11 @@ export function createSessionStatusTool(opts?: {
         : requesterAgentId;
       let storePath = resolveStorePath(cfg.session?.store, { agentId });
       let store = loadSessionStore(storePath);
+      let storeScopedRequesterKey = resolveStoreScopedRequesterKey({
+        requesterKey: effectiveRequesterKey,
+        agentId,
+        mainKey,
+      });
 
       // Resolve against the requester-scoped store first to avoid leaking default agent data.
       let resolved = resolveSessionEntry({
@@ -290,28 +304,63 @@ export function createSessionStatusTool(opts?: {
         keyRaw: requestedKeyRaw,
         alias,
         mainKey,
+        requesterInternalKey: storeScopedRequesterKey,
+        includeAliasFallback: requestedKeyRaw !== "current",
       });
 
-      if (!resolved && shouldResolveSessionIdInput(requestedKeyRaw)) {
-        const resolvedKey = resolveSessionKeyFromSessionId({
-          cfg,
-          sessionId: requestedKeyRaw,
-          agentId: a2aPolicy.enabled ? undefined : requesterAgentId,
+      if (
+        !resolved &&
+        (requestedKeyRaw === "current" || shouldResolveSessionIdInput(requestedKeyRaw))
+      ) {
+        const resolvedSession = await resolveSessionReference({
+          sessionKey: requestedKeyRaw,
+          alias,
+          mainKey,
+          requesterInternalKey: effectiveRequesterKey,
+          restrictToSpawned: opts?.sandboxed === true,
         });
-        if (resolvedKey) {
+        if (resolvedSession.ok && resolvedSession.resolvedViaSessionId) {
+          const visibleSession = await resolveVisibleSessionReference({
+            resolvedSession,
+            requesterSessionKey: effectiveRequesterKey,
+            restrictToSpawned: opts?.sandboxed === true,
+            visibilitySessionKey: requestedKeyRaw,
+          });
+          if (!visibleSession.ok) {
+            throw new Error("Session status visibility is restricted to the current session tree.");
+          }
           // If resolution points at another agent, enforce A2A policy before switching stores.
-          ensureAgentAccess(resolveAgentIdFromSessionKey(resolvedKey));
-          requestedKeyRaw = resolvedKey;
-          agentId = resolveAgentIdFromSessionKey(resolvedKey);
+          ensureAgentAccess(resolveAgentIdFromSessionKey(visibleSession.key));
+          requestedKeyRaw = visibleSession.key;
+          agentId = resolveAgentIdFromSessionKey(visibleSession.key);
           storePath = resolveStorePath(cfg.session?.store, { agentId });
           store = loadSessionStore(storePath);
+          storeScopedRequesterKey = resolveStoreScopedRequesterKey({
+            requesterKey: effectiveRequesterKey,
+            agentId,
+            mainKey,
+          });
           resolved = resolveSessionEntry({
             store,
             keyRaw: requestedKeyRaw,
             alias,
             mainKey,
+            requesterInternalKey: storeScopedRequesterKey,
           });
+        } else if (!resolvedSession.ok && opts?.sandboxed === true) {
+          throw new Error("Session status visibility is restricted to the current session tree.");
         }
+      }
+
+      if (!resolved && requestedKeyRaw === "current") {
+        resolved = resolveSessionEntry({
+          store,
+          keyRaw: requestedKeyRaw,
+          alias,
+          mainKey,
+          requesterInternalKey: storeScopedRequesterKey,
+          includeAliasFallback: true,
+        });
       }
 
       if (!resolved) {
@@ -319,7 +368,7 @@ export function createSessionStatusTool(opts?: {
         throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
       }
 
-      if (visibilityGuard && !requestedKeyRaw.startsWith("agent:")) {
+      if (visibilityGuard && !isExplicitAgentKey) {
         const access = visibilityGuard.check(
           normalizeVisibilityTargetSessionKey(resolved.key, agentId),
         );
@@ -365,7 +414,31 @@ export function createSessionStatusTool(opts?: {
       }
 
       const agentDir = resolveAgentDir(cfg, agentId);
-      const providerForCard = resolved.entry.providerOverride?.trim() || configured.provider;
+      const runtimeModelIdentity = resolveSessionModelIdentityRef(
+        cfg,
+        resolved.entry,
+        agentId,
+        `${configured.provider}/${configured.model}`,
+      );
+      const hasExplicitModelOverride = Boolean(
+        resolved.entry.providerOverride?.trim() || resolved.entry.modelOverride?.trim(),
+      );
+      const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
+      const runtimeModelForCard = runtimeModelIdentity.model.trim();
+      const defaultProviderForCard = hasExplicitModelOverride
+        ? configured.provider
+        : (runtimeProviderForCard ?? "");
+      const defaultModelForCard = hasExplicitModelOverride
+        ? configured.model
+        : runtimeModelForCard || configured.model;
+      // Preserve the "provider unknown" case for legacy runtime-only sessions so the
+      // status card does not synthesize a configured provider/model pair that never ran.
+      const statusSessionEntry =
+        !hasExplicitModelOverride && !runtimeProviderForCard && runtimeModelForCard
+          ? { ...resolved.entry, providerOverride: "" }
+          : resolved.entry;
+      const providerOverrideForCard = statusSessionEntry.providerOverride?.trim();
+      const providerForCard = providerOverrideForCard ?? defaultProviderForCard;
       const usageProvider = resolveUsageProviderId(providerForCard);
       let usageLine: string | undefined;
       if (usageProvider) {
@@ -402,7 +475,11 @@ export function createSessionStatusTool(opts?: {
 
       const queueSettings = resolveQueueSettings({
         cfg,
-        channel: resolved.entry.channel ?? resolved.entry.lastChannel ?? "unknown",
+        channel:
+          resolved.entry.channel ??
+          resolved.entry.lastChannel ??
+          resolved.entry.origin?.provider ??
+          "unknown",
         sessionEntry: resolved.entry,
       });
       const queueKey = resolved.key ?? resolved.entry.sessionId;
@@ -419,7 +496,10 @@ export function createSessionStatusTool(opts?: {
         : `🕒 Time zone: ${userTimezone}`;
 
       const agentDefaults = cfg.agents?.defaults ?? {};
-      const defaultLabel = `${configured.provider}/${configured.model}`;
+      const agentConfig = resolveAgentConfig(cfg, agentId);
+      const defaultLabel = defaultProviderForCard
+        ? `${defaultProviderForCard}/${defaultModelForCard}`
+        : defaultModelForCard;
       const agentModel =
         typeof agentDefaults.model === "object" && agentDefaults.model
           ? { ...agentDefaults.model, primary: defaultLabel }
@@ -429,16 +509,21 @@ export function createSessionStatusTool(opts?: {
         agent: {
           ...agentDefaults,
           model: agentModel,
+          thinkingDefault: agentConfig?.thinkingDefault ?? agentDefaults.thinkingDefault,
         },
         agentId,
-        sessionEntry: resolved.entry,
+        explicitConfiguredContextTokens:
+          typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
+            ? agentDefaults.contextTokens
+            : undefined,
+        sessionEntry: statusSessionEntry,
         sessionKey: resolved.key,
         sessionStorePath: storePath,
         groupActivation,
         modelAuth: resolveModelAuthLabel({
           provider: providerForCard,
           cfg,
-          sessionEntry: resolved.entry,
+          sessionEntry: statusSessionEntry,
           agentDir,
         }),
         usageLine,

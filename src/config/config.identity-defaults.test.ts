@@ -131,8 +131,8 @@ describe("config identity defaults", () => {
               api: "anthropic-messages",
               models: [
                 {
-                  id: "MiniMax-M2.5",
-                  name: "MiniMax M2.5",
+                  id: "MiniMax-M2.7",
+                  name: "MiniMax M2.7",
                   reasoning: false,
                   input: ["text"],
                   cost: {

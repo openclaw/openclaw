@@ -6,9 +6,9 @@ import type { SecretInput } from "../config/types.secrets.js";
 import {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
-  supportsMemoryMultimodalEmbeddings,
   type MemoryMultimodalSettings,
-} from "../memory/multimodal.js";
+} from "../plugin-sdk/memory-core-host-multimodal.js";
+import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
@@ -17,7 +17,7 @@ export type ResolvedMemorySearchConfig = {
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
   multimodal: MemoryMultimodalSettings;
-  provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "auto";
+  provider: string;
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
@@ -33,7 +33,7 @@ export type ResolvedMemorySearchConfig = {
   experimental: {
     sessionMemory: boolean;
   };
-  fallback: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
+  fallback: string;
   model: string;
   outputDimensionality?: number;
   local: {
@@ -61,6 +61,7 @@ export type ResolvedMemorySearchConfig = {
     sessions: {
       deltaBytes: number;
       deltaMessages: number;
+      postCompactionForce: boolean;
     };
   };
   query: {
@@ -87,11 +88,6 @@ export type ResolvedMemorySearchConfig = {
   };
 };
 
-const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
-const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
-const DEFAULT_VOYAGE_MODEL = "voyage-4-large";
-const DEFAULT_MISTRAL_MODEL = "mistral-embed";
-const DEFAULT_OLLAMA_MODEL = "nomic-embed-text";
 const DEFAULT_CHUNK_TOKENS = 400;
 const DEFAULT_CHUNK_OVERLAP = 80;
 const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
@@ -149,8 +145,12 @@ function mergeConfig(
   const sessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
   const provider = overrides?.provider ?? defaults?.provider ?? "auto";
+  const primaryAdapter = provider === "auto" ? undefined : getMemoryEmbeddingProvider(provider);
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
+  const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
+  const fallbackAdapter =
+    fallback && fallback !== "none" ? getMemoryEmbeddingProvider(fallback) : undefined;
   const hasRemoteConfig = Boolean(
     overrideRemote?.baseUrl ||
     overrideRemote?.apiKey ||
@@ -161,12 +161,9 @@ function mergeConfig(
   );
   const includeRemote =
     hasRemoteConfig ||
-    provider === "openai" ||
-    provider === "gemini" ||
-    provider === "voyage" ||
-    provider === "mistral" ||
-    provider === "ollama" ||
-    provider === "auto";
+    provider === "auto" ||
+    primaryAdapter?.transport !== "local" ||
+    fallbackAdapter?.transport === "remote";
   const batch = {
     enabled: overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? false,
     wait: overrideRemote?.batch?.wait ?? defaultRemote?.batch?.wait ?? true,
@@ -187,19 +184,7 @@ function mergeConfig(
         batch,
       }
     : undefined;
-  const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
-  const modelDefault =
-    provider === "gemini"
-      ? DEFAULT_GEMINI_MODEL
-      : provider === "openai"
-        ? DEFAULT_OPENAI_MODEL
-        : provider === "voyage"
-          ? DEFAULT_VOYAGE_MODEL
-          : provider === "mistral"
-            ? DEFAULT_MISTRAL_MODEL
-            : provider === "ollama"
-              ? DEFAULT_OLLAMA_MODEL
-              : undefined;
+  const modelDefault = provider === "auto" ? undefined : primaryAdapter?.defaultModel;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
   const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
   const local = {
@@ -248,6 +233,10 @@ function mergeConfig(
         overrides?.sync?.sessions?.deltaMessages ??
         defaults?.sync?.sessions?.deltaMessages ??
         DEFAULT_SESSION_DELTA_MESSAGES,
+      postCompactionForce:
+        overrides?.sync?.sessions?.postCompactionForce ??
+        defaults?.sync?.sessions?.postCompactionForce ??
+        true,
     },
   };
   const query = {
@@ -315,6 +304,7 @@ function mergeConfig(
   );
   const deltaBytes = clampInt(sync.sessions.deltaBytes, 0, Number.MAX_SAFE_INTEGER);
   const deltaMessages = clampInt(sync.sessions.deltaMessages, 0, Number.MAX_SAFE_INTEGER);
+  const postCompactionForce = sync.sessions.postCompactionForce;
   return {
     enabled,
     sources,
@@ -336,6 +326,7 @@ function mergeConfig(
       sessions: {
         deltaBytes,
         deltaMessages,
+        postCompactionForce,
       },
     },
     query: {
@@ -379,15 +370,16 @@ export function resolveMemorySearchConfig(
     return null;
   }
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
+  const multimodalProvider =
+    resolved.provider === "auto" ? undefined : getMemoryEmbeddingProvider(resolved.provider);
   if (
     multimodalActive &&
-    !supportsMemoryMultimodalEmbeddings({
-      provider: resolved.provider,
+    !multimodalProvider?.supportsMultimodalEmbeddings?.({
       model: resolved.model,
     })
   ) {
     throw new Error(
-      'agents.*.memorySearch.multimodal requires memorySearch.provider = "gemini" and model = "gemini-embedding-2-preview".',
+      "agents.*.memorySearch.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",
     );
   }
   if (multimodalActive && resolved.fallback !== "none") {

@@ -16,9 +16,12 @@ import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { auditGatewayServiceConfig } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
-import { trimToUndefined } from "../../gateway/credentials.js";
-import { resolveGatewayBindHost } from "../../gateway/net.js";
+import { isGatewaySecretRefUnavailableError, trimToUndefined } from "../../gateway/credentials.js";
 import { resolveGatewayProbeAuthWithSecretInputs } from "../../gateway/probe-auth.js";
+import {
+  inspectBestEffortPrimaryTailnetIPv4,
+  resolveBestEffortGatewayBindHostForDisplay,
+} from "../../infra/network-discovery-display.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import {
   formatPortDiagnostics,
@@ -26,9 +29,9 @@ import {
   type PortListener,
   type PortUsageStatus,
 } from "../../infra/ports.js";
-import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { loadGatewayTlsRuntime } from "../../infra/tls/gateway.js";
 import { probeGatewayStatus } from "./probe.js";
+import { inspectGatewayRestart } from "./restart-health.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
 
@@ -73,6 +76,16 @@ type ResolvedGatewayStatus = {
   probeUrlOverride: string | null;
 };
 
+function appendProbeNote(
+  existing: string | undefined,
+  extra: string | undefined,
+): string | undefined {
+  const values = [existing, extra].filter((value): value is string => Boolean(value?.trim()));
+  if (values.length === 0) {
+    return undefined;
+  }
+  return [...new Set(values)].join(" ");
+}
 export type DaemonStatus = {
   service: {
     label: string;
@@ -111,6 +124,11 @@ export type DaemonStatus = {
     ok: boolean;
     error?: string;
     url?: string;
+    authWarning?: string;
+  };
+  health?: {
+    healthy: boolean;
+    staleGatewayPids: number[];
   };
   extraServices: Array<{ label: string; detail: string; scope: string }>;
 };
@@ -123,6 +141,10 @@ function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: bool
     return false;
   }
   return true;
+}
+
+function parseGatewaySecretRefPathFromError(error: unknown): string | null {
+  return isGatewaySecretRefUnavailableError(error) ? error.path : null;
 }
 
 async function loadDaemonConfigContext(
@@ -191,18 +213,26 @@ async function resolveGatewayStatusSummary(params: {
     : "env/config";
   const bindMode: GatewayBindMode = params.daemonCfg.gateway?.bind ?? "loopback";
   const customBindHost = params.daemonCfg.gateway?.customBindHost;
-  const bindHost = await resolveGatewayBindHost(bindMode, customBindHost);
-  const tailnetIPv4 = pickPrimaryTailnetIPv4();
+  const { bindHost, warning: bindHostWarning } = await resolveBestEffortGatewayBindHostForDisplay({
+    bindMode,
+    customBindHost,
+    warningPrefix: "Status is using fallback network details because interface discovery failed",
+  });
+  const { tailnetIPv4, warning: tailnetWarning } = inspectBestEffortPrimaryTailnetIPv4({
+    warningPrefix: "Status could not inspect tailnet addresses",
+  });
   const probeHost = pickProbeHostForBind(bindMode, tailnetIPv4, customBindHost);
   const probeUrlOverride = trimToUndefined(params.rpcUrlOverride) ?? null;
   const scheme = params.daemonCfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   const probeUrl = probeUrlOverride ?? `${scheme}://${probeHost}:${daemonPort}`;
-  const probeNote =
+  let probeNote =
     !probeUrlOverride && bindMode === "lan"
       ? `bind=lan listens on 0.0.0.0 (all interfaces); probing via ${probeHost}.`
       : !probeUrlOverride && bindMode === "loopback"
         ? "Loopback-only gateway; only local clients can connect."
         : undefined;
+  probeNote = appendProbeNote(probeNote, bindHostWarning);
+  probeNote = appendProbeNote(probeNote, tailnetWarning);
 
   return {
     gateway: {
@@ -254,21 +284,26 @@ export async function gatherDaemonStatus(
   opts: {
     rpc: GatewayRpcOpts;
     probe: boolean;
+    requireRpc?: boolean;
     deep?: boolean;
   } & FindExtraGatewayServicesOptions,
 ): Promise<DaemonStatus> {
   const service = resolveGatewayService();
-  const [loaded, command, runtime] = await Promise.all([
-    service.isLoaded({ env: process.env }).catch(() => false),
-    service.readCommand(process.env).catch(() => null),
-    service.readRuntime(process.env).catch((err) => ({ status: "unknown", detail: String(err) })),
+  const command = await service.readCommand(process.env).catch(() => null);
+  const serviceEnv = command?.environment
+    ? ({
+        ...process.env,
+        ...command.environment,
+      } satisfies NodeJS.ProcessEnv)
+    : process.env;
+  const [loaded, runtime] = await Promise.all([
+    service.isLoaded({ env: serviceEnv }).catch(() => false),
+    service.readRuntime(serviceEnv).catch((err) => ({ status: "unknown", detail: String(err) })),
   ]);
   const configAudit = await auditGatewayServiceConfig({
     env: process.env,
     command,
   });
-
-  const serviceEnv = command?.environment ?? undefined;
   const {
     mergedDaemonEnv,
     cliCfg,
@@ -276,7 +311,7 @@ export async function gatherDaemonStatus(
     cliConfigSummary,
     daemonConfigSummary,
     configMismatch,
-  } = await loadDaemonConfigContext(serviceEnv);
+  } = await loadDaemonConfigContext(command?.environment);
   const { gateway, daemonPort, cliPort, probeUrlOverride } = await resolveGatewayStatusSummary({
     cliCfg,
     daemonCfg,
@@ -301,8 +336,11 @@ export async function gatherDaemonStatus(
   const tlsRuntime = shouldUseLocalTlsRuntime
     ? await loadGatewayTlsRuntime(daemonCfg.gateway?.tls)
     : undefined;
-  const daemonProbeAuth = opts.probe
-    ? await resolveGatewayProbeAuthWithSecretInputs({
+  let daemonProbeAuth: { token?: string; password?: string } | undefined;
+  let rpcAuthWarning: string | undefined;
+  if (opts.probe) {
+    try {
+      daemonProbeAuth = await resolveGatewayProbeAuthWithSecretInputs({
         cfg: daemonCfg,
         mode: daemonCfg.gateway?.mode === "remote" ? "remote" : "local",
         env: mergedDaemonEnv as NodeJS.ProcessEnv,
@@ -310,8 +348,16 @@ export async function gatherDaemonStatus(
           token: opts.rpc.token,
           password: opts.rpc.password,
         },
-      })
-    : undefined;
+      });
+    } catch (error) {
+      const refPath = parseGatewaySecretRefPathFromError(error);
+      if (!refPath) {
+        throw error;
+      }
+      daemonProbeAuth = undefined;
+      rpcAuthWarning = `${refPath} SecretRef is unavailable in this command path; probing without configured auth credentials.`;
+    }
+  }
 
   const rpc = opts.probe
     ? await probeGatewayStatus({
@@ -324,9 +370,21 @@ export async function gatherDaemonStatus(
             : undefined,
         timeoutMs,
         json: opts.rpc.json,
+        requireRpc: opts.requireRpc,
         configPath: daemonConfigSummary.path,
       })
     : undefined;
+  if (rpc?.ok) {
+    rpcAuthWarning = undefined;
+  }
+  const health =
+    opts.probe && loaded
+      ? await inspectGatewayRestart({
+          service,
+          port: daemonPort,
+          env: serviceEnv,
+        }).catch(() => undefined)
+      : undefined;
 
   let lastError: string | undefined;
   if (loaded && runtime?.status === "running" && portStatus && portStatus.status !== "busy") {
@@ -352,7 +410,23 @@ export async function gatherDaemonStatus(
     port: portStatus,
     ...(portCliStatus ? { portCli: portCliStatus } : {}),
     lastError,
-    ...(rpc ? { rpc: { ...rpc, url: gateway.probeUrl } } : {}),
+    ...(rpc
+      ? {
+          rpc: {
+            ...rpc,
+            url: gateway.probeUrl,
+            ...(rpcAuthWarning ? { authWarning: rpcAuthWarning } : {}),
+          },
+        }
+      : {}),
+    ...(health
+      ? {
+          health: {
+            healthy: health.healthy,
+            staleGatewayPids: health.staleGatewayPids,
+          },
+        }
+      : {}),
     extraServices,
   };
 }

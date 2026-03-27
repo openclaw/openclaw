@@ -8,27 +8,85 @@ import androidx.core.content.ContextCompat
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
-class LocationHandler(
+internal interface LocationDataSource {
+  fun hasFinePermission(context: Context): Boolean
+
+  fun hasCoarsePermission(context: Context): Boolean
+
+  suspend fun fetchLocation(
+    desiredProviders: List<String>,
+    maxAgeMs: Long?,
+    timeoutMs: Long,
+    isPrecise: Boolean,
+  ): LocationCaptureManager.Payload
+}
+
+private class DefaultLocationDataSource(
+  private val capture: LocationCaptureManager,
+) : LocationDataSource {
+  override fun hasFinePermission(context: Context): Boolean =
+    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+      PackageManager.PERMISSION_GRANTED
+
+  override fun hasCoarsePermission(context: Context): Boolean =
+    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+      PackageManager.PERMISSION_GRANTED
+
+  override suspend fun fetchLocation(
+    desiredProviders: List<String>,
+    maxAgeMs: Long?,
+    timeoutMs: Long,
+    isPrecise: Boolean,
+  ): LocationCaptureManager.Payload =
+    capture.getLocation(
+      desiredProviders = desiredProviders,
+      maxAgeMs = maxAgeMs,
+      timeoutMs = timeoutMs,
+      isPrecise = isPrecise,
+    )
+}
+
+class LocationHandler private constructor(
   private val appContext: Context,
-  private val location: LocationCaptureManager,
+  private val dataSource: LocationDataSource,
   private val json: Json,
   private val isForeground: () -> Boolean,
   private val locationPreciseEnabled: () -> Boolean,
 ) {
-  fun hasFineLocationPermission(): Boolean {
-    return (
-      ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
-      )
-  }
+  constructor(
+    appContext: Context,
+    location: LocationCaptureManager,
+    json: Json,
+    isForeground: () -> Boolean,
+    locationPreciseEnabled: () -> Boolean,
+  ) : this(
+    appContext = appContext,
+    dataSource = DefaultLocationDataSource(location),
+    json = json,
+    isForeground = isForeground,
+    locationPreciseEnabled = locationPreciseEnabled,
+  )
 
-  fun hasCoarseLocationPermission(): Boolean {
-    return (
-      ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
+  fun hasFineLocationPermission(): Boolean = dataSource.hasFinePermission(appContext)
+
+  fun hasCoarseLocationPermission(): Boolean = dataSource.hasCoarsePermission(appContext)
+
+  companion object {
+    internal fun forTesting(
+      appContext: Context,
+      dataSource: LocationDataSource,
+      json: Json = Json { ignoreUnknownKeys = true },
+      isForeground: () -> Boolean = { true },
+      locationPreciseEnabled: () -> Boolean = { true },
+    ): LocationHandler =
+      LocationHandler(
+        appContext = appContext,
+        dataSource = dataSource,
+        json = json,
+        isForeground = isForeground,
+        locationPreciseEnabled = locationPreciseEnabled,
       )
   }
 
@@ -39,7 +97,7 @@ class LocationHandler(
         message = "LOCATION_BACKGROUND_UNAVAILABLE: location requires OpenClaw to stay open",
       )
     }
-    if (!hasFineLocationPermission() && !hasCoarseLocationPermission()) {
+    if (!dataSource.hasFinePermission(appContext) && !dataSource.hasCoarsePermission(appContext)) {
       return GatewaySession.InvokeResult.error(
         code = "LOCATION_PERMISSION_REQUIRED",
         message = "LOCATION_PERMISSION_REQUIRED: grant Location permission",
@@ -49,9 +107,9 @@ class LocationHandler(
     val preciseEnabled = locationPreciseEnabled()
     val accuracy =
       when (desiredAccuracy) {
-        "precise" -> if (preciseEnabled && hasFineLocationPermission()) "precise" else "balanced"
+        "precise" -> if (preciseEnabled && dataSource.hasFinePermission(appContext)) "precise" else "balanced"
         "coarse" -> "coarse"
-        else -> if (preciseEnabled && hasFineLocationPermission()) "precise" else "balanced"
+        else -> if (preciseEnabled && dataSource.hasFinePermission(appContext)) "precise" else "balanced"
       }
     val providers =
       when (accuracy) {
@@ -61,7 +119,7 @@ class LocationHandler(
       }
     try {
       val payload =
-        location.getLocation(
+        dataSource.fetchLocation(
           desiredProviders = providers,
           maxAgeMs = maxAgeMs,
           timeoutMs = timeoutMs,

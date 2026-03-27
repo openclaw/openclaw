@@ -1,521 +1,440 @@
-import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadModelCatalog } from "../agents/model-catalog.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-import {
-  makeCfg,
-  makeJob,
-  withTempCronHome,
-  writeSessionStoreEntries,
-} from "./isolated-agent.test-harness.js";
-import type { CronJob } from "./types.js";
 
-const withTempHome = withTempCronHome;
+const {
+  loadModelCatalogMock,
+  getModelRefStatusMock,
+  normalizeModelSelectionMock,
+  resolveAllowedModelRefMock,
+  resolveConfiguredModelRefMock,
+  resolveHooksGmailModelMock,
+} = vi.hoisted(() => ({
+  loadModelCatalogMock: vi.fn(),
+  getModelRefStatusMock: vi.fn(),
+  normalizeModelSelectionMock: vi.fn((value: unknown) =>
+    typeof value === "string" && value.trim() ? value.trim() : undefined,
+  ),
+  resolveAllowedModelRefMock: vi.fn(),
+  resolveConfiguredModelRefMock: vi.fn(),
+  resolveHooksGmailModelMock: vi.fn(),
+}));
 
-function makeDeps() {
-  return {
-    sendMessageSlack: vi.fn(),
-    sendMessageWhatsApp: vi.fn(),
-    sendMessageTelegram: vi.fn(),
-    sendMessageDiscord: vi.fn(),
-    sendMessageSignal: vi.fn(),
-    sendMessageIMessage: vi.fn(),
-  };
-}
+vi.mock("../agents/model-catalog.js", () => ({
+  loadModelCatalog: loadModelCatalogMock,
+}));
 
-function mockEmbeddedOk() {
-  vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-    payloads: [{ text: "ok" }],
-    meta: {
-      durationMs: 5,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
-    },
-  });
-}
+vi.mock("../agents/model-selection.js", () => ({
+  getModelRefStatus: getModelRefStatusMock,
+  normalizeModelSelection: normalizeModelSelectionMock,
+  resolveAllowedModelRef: resolveAllowedModelRefMock,
+  resolveConfiguredModelRef: resolveConfiguredModelRefMock,
+  resolveHooksGmailModel: resolveHooksGmailModelMock,
+}));
 
-/**
- * Extract the provider and model from the last runEmbeddedPiAgent call.
- */
-function lastEmbeddedCall(): { provider?: string; model?: string } {
-  const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
-  expect(calls.length).toBeGreaterThan(0);
-  return calls.at(-1)?.[0] as { provider?: string; model?: string };
-}
+import { resolveCronModelSelection } from "./isolated-agent/model-selection.js";
 
 const DEFAULT_MESSAGE = "do it";
+const DEFAULT_PROVIDER = "anthropic";
+const DEFAULT_MODEL = "claude-opus-4-5";
 
-type TurnOptions = {
-  cfgOverrides?: Parameters<typeof makeCfg>[2];
-  jobPayload?: CronJob["payload"];
-  sessionKey?: string;
-  storeEntries?: Record<string, Record<string, unknown>>;
+type AgentTurnPayload = {
+  kind: "agentTurn";
+  message: string;
+  deliver?: boolean;
+  model?: string;
 };
 
-async function runTurnCore(home: string, options: TurnOptions = {}) {
-  const storePath = await writeSessionStoreEntries(home, {
-    "agent:main:main": {
-      sessionId: "main-session",
-      updatedAt: Date.now(),
-      lastProvider: "webchat",
-      lastTo: "",
-    },
-    ...options.storeEntries,
-  });
-  mockEmbeddedOk();
+type SelectModelOptions = {
+  cfg?: Record<string, unknown>;
+  agentConfigOverride?: {
+    subagents?: {
+      model?: unknown;
+    };
+  };
+  payload?: AgentTurnPayload;
+  sessionEntry?: {
+    modelOverride?: string;
+    providerOverride?: string;
+  };
+  isGmailHook?: boolean;
+};
 
-  const jobPayload = options.jobPayload ?? {
-    kind: "agentTurn" as const,
+function parseModelRef(raw: string): { provider: string; model: string } | { error: string } {
+  const trimmed = raw.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0 || slash === trimmed.length - 1) {
+    return { error: "invalid model" };
+  }
+
+  const providerRaw = trimmed.slice(0, slash).trim().toLowerCase();
+  const modelRaw = trimmed.slice(slash + 1).trim();
+  if (!providerRaw || !modelRaw) {
+    return { error: "invalid model" };
+  }
+
+  const provider = providerRaw === "bedrock" ? "amazon-bedrock" : providerRaw;
+  const model = provider === "anthropic" && modelRaw === "opus-4.5" ? "claude-opus-4-5" : modelRaw;
+  return { provider, model };
+}
+
+function resolveConfiguredModelForTest(cfg: Record<string, unknown>): {
+  provider: string;
+  model: string;
+} {
+  const modelValue = (cfg.agents as { defaults?: { model?: unknown } } | undefined)?.defaults
+    ?.model;
+  const rawModel =
+    typeof modelValue === "string"
+      ? modelValue
+      : typeof modelValue === "object" &&
+          modelValue &&
+          typeof (modelValue as { primary?: unknown }).primary === "string"
+        ? (modelValue as { primary: string }).primary
+        : undefined;
+
+  if (typeof rawModel === "string") {
+    const parsed = parseModelRef(rawModel);
+    if (!("error" in parsed)) {
+      return parsed;
+    }
+  }
+
+  return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
+}
+
+function defaultPayload(): AgentTurnPayload {
+  return {
+    kind: "agentTurn",
     message: DEFAULT_MESSAGE,
     deliver: false,
   };
+}
 
-  const res = await runCronIsolatedAgentTurn({
-    cfg: makeCfg(home, storePath, options.cfgOverrides),
-    deps: makeDeps(),
-    job: makeJob(jobPayload),
-    message: DEFAULT_MESSAGE,
-    sessionKey: options.sessionKey ?? "cron:job-1",
-    lane: "cron",
+async function selectModel(options: SelectModelOptions = {}) {
+  const cfg = options.cfg ?? {};
+  return resolveCronModelSelection({
+    cfg: cfg as never,
+    cfgWithAgentDefaults: cfg as never,
+    agentConfigOverride: options.agentConfigOverride,
+    sessionEntry: options.sessionEntry ?? {},
+    payload: options.payload ?? defaultPayload(),
+    isGmailHook: options.isGmailHook ?? false,
   });
-
-  return res;
 }
 
-/** Like runTurn but does NOT assert the embedded agent was called (for error paths). */
-async function runErrorTurn(home: string, options: TurnOptions = {}) {
-  const res = await runTurnCore(home, options);
-  return { res };
+async function expectSelectedModel(
+  options: SelectModelOptions,
+  expected: { provider: string; model: string },
+) {
+  const result = await selectModel(options);
+  expect(result).toEqual({ ok: true, ...expected });
 }
 
-async function runTurn(home: string, options: TurnOptions = {}) {
-  const res = await runTurnCore(home, options);
-  return { res, call: lastEmbeddedCall() };
+async function expectDefaultSelectedModel(options: SelectModelOptions = {}) {
+  await expectSelectedModel(options, { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL });
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 describe("cron model formatting and precedence edge cases", () => {
   beforeEach(() => {
-    vi.mocked(runEmbeddedPiAgent).mockClear();
-    vi.mocked(loadModelCatalog).mockResolvedValue([]);
+    vi.clearAllMocks();
+    loadModelCatalogMock.mockResolvedValue([]);
+    getModelRefStatusMock.mockReturnValue({ allowed: false });
+    resolveHooksGmailModelMock.mockReturnValue(null);
+    resolveConfiguredModelRefMock.mockImplementation(({ cfg }: { cfg?: Record<string, unknown> }) =>
+      resolveConfiguredModelForTest(cfg ?? {}),
+    );
+    resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
+      const parsed = parseModelRef(raw);
+      return "error" in parsed ? parsed : { ref: parsed };
+    });
   });
-
-  // ------ provider/model string splitting ------
 
   describe("parseModelRef formatting", () => {
     it("splits standard provider/model", async () => {
-      await withTempHome(async (home) => {
-        const { res, call } = await runTurn(home, {
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "openai/gpt-4.1-mini" },
-        });
-        expect(res.status).toBe("ok");
-        expect(call.provider).toBe("openai");
-        expect(call.model).toBe("gpt-4.1-mini");
-      });
+      await expectSelectedModel(
+        {
+          payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "openai/gpt-4.1-mini" },
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
     });
 
     it("handles leading/trailing whitespace in model string", async () => {
-      await withTempHome(async (home) => {
-        const { res, call } = await runTurn(home, {
-          jobPayload: {
+      await expectSelectedModel(
+        {
+          payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
             model: "  openai/gpt-4.1-mini  ",
           },
-        });
-        expect(res.status).toBe("ok");
-        expect(call.provider).toBe("openai");
-        expect(call.model).toBe("gpt-4.1-mini");
-      });
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
     });
 
     it("handles openrouter nested provider paths", async () => {
-      await withTempHome(async (home) => {
-        const { res, call } = await runTurn(home, {
-          jobPayload: {
+      await expectSelectedModel(
+        {
+          payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
             model: "openrouter/meta-llama/llama-3.3-70b:free",
           },
-        });
-        expect(res.status).toBe("ok");
-        expect(call.provider).toBe("openrouter");
-        expect(call.model).toBe("meta-llama/llama-3.3-70b:free");
-      });
+        },
+        { provider: "openrouter", model: "meta-llama/llama-3.3-70b:free" },
+      );
     });
 
     it("rejects model with trailing slash (empty model name)", async () => {
-      await withTempHome(async (home) => {
-        const { res } = await runErrorTurn(home, {
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "openai/" },
-        });
-        expect(res.status).toBe("error");
-        expect(res.error).toMatch(/invalid model/i);
-        expect(vi.mocked(runEmbeddedPiAgent)).not.toHaveBeenCalled();
-      });
+      await expect(
+        selectModel({
+          payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "openai/" },
+        }),
+      ).resolves.toEqual({ ok: false, error: "invalid model" });
     });
 
     it("rejects model with leading slash (empty provider)", async () => {
-      await withTempHome(async (home) => {
-        const { res } = await runErrorTurn(home, {
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "/gpt-4.1-mini" },
-        });
-        expect(res.status).toBe("error");
-        expect(res.error).toMatch(/invalid model/i);
-        expect(vi.mocked(runEmbeddedPiAgent)).not.toHaveBeenCalled();
-      });
+      await expect(
+        selectModel({
+          payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "/gpt-4.1-mini" },
+        }),
+      ).resolves.toEqual({ ok: false, error: "invalid model" });
     });
 
     it("normalizes provider casing", async () => {
-      await withTempHome(async (home) => {
-        const { res, call } = await runTurn(home, {
-          jobPayload: {
+      await expectSelectedModel(
+        {
+          payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
             model: "OpenAI/gpt-4.1-mini",
           },
-        });
-        expect(res.status).toBe("ok");
-        expect(call.provider).toBe("openai");
-        expect(call.model).toBe("gpt-4.1-mini");
-      });
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
     });
 
     it("normalizes anthropic model aliases", async () => {
-      await withTempHome(async (home) => {
-        const { res, call } = await runTurn(home, {
-          jobPayload: {
+      await expectSelectedModel(
+        {
+          payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
             model: "anthropic/opus-4.5",
           },
-        });
-        expect(res.status).toBe("ok");
-        expect(call.provider).toBe("anthropic");
-        expect(call.model).toBe("claude-opus-4-5");
-      });
+        },
+        { provider: "anthropic", model: "claude-opus-4-5" },
+      );
     });
 
     it("normalizes bedrock provider alias", async () => {
-      await withTempHome(async (home) => {
-        const { res, call } = await runTurn(home, {
-          jobPayload: {
+      await expectSelectedModel(
+        {
+          payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
             model: "bedrock/claude-sonnet-4-5",
           },
-        });
-        expect(res.status).toBe("ok");
-        expect(call.provider).toBe("amazon-bedrock");
-      });
+        },
+        { provider: "amazon-bedrock", model: "claude-sonnet-4-5" },
+      );
     });
   });
 
-  // ------ precedence: job payload > session override > default ------
-
   describe("model precedence isolation", () => {
-    it("job payload model overrides default (anthropic → openai)", async () => {
-      // Default in makeCfg is anthropic/claude-opus-4-5.
-      // Job payload sets openai/gpt-4.1-mini. Provider must be openai.
-      await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          jobPayload: {
+    it("job payload model overrides default (anthropic -> openai)", async () => {
+      await expectSelectedModel(
+        {
+          payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
             model: "openai/gpt-4.1-mini",
           },
-        });
-        expect(call.provider).toBe("openai");
-        expect(call.model).toBe("gpt-4.1-mini");
-      });
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
     });
 
     it("session override applies when no job payload model is present", async () => {
-      // No model in job payload. Session store has openai override.
-      // Provider must be openai, not the default anthropic.
-      await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
-          storeEntries: {
-            "agent:main:cron:job-1": {
-              sessionId: "existing-session",
-              updatedAt: Date.now(),
-              providerOverride: "openai",
-              modelOverride: "gpt-4.1-mini",
-            },
+      await expectSelectedModel(
+        {
+          sessionEntry: {
+            providerOverride: "openai",
+            modelOverride: "gpt-4.1-mini",
           },
-        });
-        expect(call.provider).toBe("openai");
-        expect(call.model).toBe("gpt-4.1-mini");
-      });
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
     });
 
     it("job payload model wins over conflicting session override", async () => {
-      // Job payload says anthropic. Session says openai. Job must win.
-      await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          jobPayload: {
+      await expectSelectedModel(
+        {
+          payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
             model: "anthropic/claude-sonnet-4-5",
             deliver: false,
           },
-          storeEntries: {
-            "agent:main:cron:job-1": {
-              sessionId: "existing-session",
-              updatedAt: Date.now(),
-              providerOverride: "openai",
-              modelOverride: "gpt-4.1-mini",
-            },
+          sessionEntry: {
+            providerOverride: "openai",
+            modelOverride: "gpt-4.1-mini",
           },
-        });
-        expect(call.provider).toBe("anthropic");
-        expect(call.model).toBe("claude-sonnet-4-5");
-      });
+        },
+        { provider: "anthropic", model: "claude-sonnet-4-5" },
+      );
     });
 
     it("falls through to default when no override is present", async () => {
-      await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
-        });
-        // makeCfg default is anthropic/claude-opus-4-5
-        expect(call.provider).toBe("anthropic");
-        expect(call.model).toBe("claude-opus-4-5");
-      });
+      await expectDefaultSelectedModel();
     });
   });
 
-  // ------ sequential runs with different overrides (the CI failure pattern) ------
-
   describe("sequential model switches (CI failure regression)", () => {
-    it("openai override → session openai → job anthropic: each step resolves correctly", async () => {
-      // This reproduces the exact pattern from the CI failure.
-      // Three sequential calls in one temp home, switching providers.
-      await withTempHome(async (home) => {
-        // Step 1: Job payload says openai
-        vi.mocked(runEmbeddedPiAgent).mockClear();
-        const step1 = await runTurn(home, {
-          jobPayload: {
+    it("openai override -> session openai -> job anthropic: each step resolves correctly", async () => {
+      await expectSelectedModel(
+        {
+          payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
             model: "openai/gpt-4.1-mini",
           },
-        });
-        expect(step1.call.provider).toBe("openai");
-        expect(step1.call.model).toBe("gpt-4.1-mini");
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
 
-        // Step 2: No job model, session store says openai
-        vi.mocked(runEmbeddedPiAgent).mockClear();
-        mockEmbeddedOk();
-        const step2 = await runTurn(home, {
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
-          storeEntries: {
-            "agent:main:cron:job-1": {
-              sessionId: "existing-session",
-              updatedAt: Date.now(),
-              providerOverride: "openai",
-              modelOverride: "gpt-4.1-mini",
-            },
+      await expectSelectedModel(
+        {
+          sessionEntry: {
+            providerOverride: "openai",
+            modelOverride: "gpt-4.1-mini",
           },
-        });
-        expect(step2.call.provider).toBe("openai");
-        expect(step2.call.model).toBe("gpt-4.1-mini");
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
 
-        // Step 3: Job payload says anthropic, session store still says openai
-        vi.mocked(runEmbeddedPiAgent).mockClear();
-        mockEmbeddedOk();
-        const step3 = await runTurn(home, {
-          jobPayload: {
+      await expectSelectedModel(
+        {
+          payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
             model: "anthropic/claude-opus-4-5",
             deliver: false,
           },
-          storeEntries: {
-            "agent:main:cron:job-1": {
-              sessionId: "existing-session",
-              updatedAt: Date.now(),
-              providerOverride: "openai",
-              modelOverride: "gpt-4.1-mini",
-            },
+          sessionEntry: {
+            providerOverride: "openai",
+            modelOverride: "gpt-4.1-mini",
           },
-        });
-        expect(step3.call.provider).toBe("anthropic");
-        expect(step3.call.model).toBe("claude-opus-4-5");
-      });
+        },
+        { provider: "anthropic", model: "claude-opus-4-5" },
+      );
     });
 
     it("provider does not leak between isolated sequential runs", async () => {
-      // Run with openai, then run with no override.
-      // Second run must get the default (anthropic), not leaked openai.
-      await withTempHome(async (home) => {
-        // Run 1: explicit openai
-        const r1 = await runTurn(home, {
-          jobPayload: {
+      await expectSelectedModel(
+        {
+          payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
             model: "openai/gpt-4.1-mini",
           },
-        });
-        expect(r1.call.provider).toBe("openai");
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
 
-        // Run 2: no override — must revert to default anthropic
-        vi.mocked(runEmbeddedPiAgent).mockClear();
-        mockEmbeddedOk();
-        const r2 = await runTurn(home, {
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
-        });
-        expect(r2.call.provider).toBe("anthropic");
-        expect(r2.call.model).toBe("claude-opus-4-5");
-      });
+      await expectDefaultSelectedModel();
     });
   });
 
-  // ------ forceNew session + stored model override interaction ------
-
-  describe("forceNew session preserves model overrides from store", () => {
-    it("new isolated session inherits stored modelOverride/providerOverride", async () => {
-      // Isolated cron uses forceNew=true, which creates a new sessionId.
-      // The stored modelOverride/providerOverride must still be read and applied
-      // (resolveCronSession spreads ...entry before overriding core fields).
-      await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
-          storeEntries: {
-            "agent:main:cron:job-1": {
-              sessionId: "old-session-id",
-              updatedAt: Date.now(),
-              providerOverride: "openai",
-              modelOverride: "gpt-4.1-mini",
-            },
+  describe("stored session overrides", () => {
+    it("stored modelOverride/providerOverride are applied", async () => {
+      await expectSelectedModel(
+        {
+          sessionEntry: {
+            providerOverride: "openai",
+            modelOverride: "gpt-4.1-mini",
           },
-        });
-        expect(call.provider).toBe("openai");
-        expect(call.model).toBe("gpt-4.1-mini");
-      });
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
     });
 
-    it("new isolated session uses default when store has no override", async () => {
-      await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
-          storeEntries: {
-            "agent:main:cron:job-1": {
-              sessionId: "old-session-id",
-              updatedAt: Date.now(),
-              // No providerOverride or modelOverride
-            },
-          },
-        });
-        expect(call.provider).toBe("anthropic");
-        expect(call.model).toBe("claude-opus-4-5");
-      });
+    it("default remains when store has no override", async () => {
+      await expectDefaultSelectedModel({ sessionEntry: {} });
     });
   });
-
-  // ------ whitespace / empty edge cases ------
 
   describe("whitespace and empty model strings", () => {
     it("whitespace-only model treated as unset (falls to default)", async () => {
-      await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "   " },
-        });
-        expect(call.provider).toBe("anthropic");
-        expect(call.model).toBe("claude-opus-4-5");
+      await expectDefaultSelectedModel({
+        payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "   " },
       });
     });
 
     it("empty string model treated as unset", async () => {
-      await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "" },
-        });
-        expect(call.provider).toBe("anthropic");
-        expect(call.model).toBe("claude-opus-4-5");
+      await expectDefaultSelectedModel({
+        payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "" },
       });
     });
 
     it("whitespace-only session modelOverride is ignored", async () => {
-      await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
-          storeEntries: {
-            "agent:main:cron:job-1": {
-              sessionId: "old",
-              updatedAt: Date.now(),
-              providerOverride: "openai",
-              modelOverride: "   ",
-            },
-          },
-        });
-        // Whitespace modelOverride should be ignored → default
-        expect(call.provider).toBe("anthropic");
-        expect(call.model).toBe("claude-opus-4-5");
+      await expectDefaultSelectedModel({
+        sessionEntry: {
+          providerOverride: "openai",
+          modelOverride: "   ",
+        },
       });
     });
   });
 
-  // ------ config default model as string vs object ------
-
   describe("config model format variations", () => {
     it("default model as string 'provider/model'", async () => {
-      await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          cfgOverrides: {
+      await expectSelectedModel(
+        {
+          cfg: {
             agents: {
               defaults: {
                 model: "openai/gpt-4.1",
               },
             },
           },
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
-        });
-        expect(call.provider).toBe("openai");
-        expect(call.model).toBe("gpt-4.1");
-      });
+        },
+        { provider: "openai", model: "gpt-4.1" },
+      );
     });
 
     it("default model as object with primary field", async () => {
-      await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          cfgOverrides: {
+      await expectSelectedModel(
+        {
+          cfg: {
             agents: {
               defaults: {
                 model: { primary: "openai/gpt-4.1" },
               },
             },
           },
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
-        });
-        expect(call.provider).toBe("openai");
-        expect(call.model).toBe("gpt-4.1");
-      });
+        },
+        { provider: "openai", model: "gpt-4.1" },
+      );
     });
 
     it("job override switches away from object default", async () => {
-      await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          cfgOverrides: {
+      await expectSelectedModel(
+        {
+          cfg: {
             agents: {
               defaults: {
                 model: { primary: "openai/gpt-4.1" },
               },
             },
           },
-          jobPayload: {
+          payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
             model: "anthropic/claude-sonnet-4-5",
           },
-        });
-        expect(call.provider).toBe("anthropic");
-        expect(call.model).toBe("claude-sonnet-4-5");
-      });
+        },
+        { provider: "anthropic", model: "claude-sonnet-4-5" },
+      );
     });
   });
 });

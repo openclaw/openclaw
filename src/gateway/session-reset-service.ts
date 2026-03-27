@@ -1,21 +1,25 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../auto-reply/reply/queue.js";
-import { closeTrackedBrowserTabsForSessions } from "../browser/session-tab-registry.js";
 import { loadConfig } from "../config/config.js";
 import {
   snapshotSessionOrigin,
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
-import { unbindThreadBindingsBySessionKey } from "../discord/monitor/thread-bindings.js";
+import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
+import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-runtime.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { createPluginRuntime } from "../plugins/runtime/index.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -25,36 +29,17 @@ import { ErrorCodes, errorShape } from "./protocol/index.js";
 import {
   archiveSessionTranscripts,
   loadSessionEntry,
-  pruneLegacyStoreKeys,
+  migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
+let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | undefined;
 
-function migrateAndPruneSessionStoreKey(params: {
-  cfg: ReturnType<typeof loadConfig>;
-  key: string;
-  store: Record<string, SessionEntry>;
-}) {
-  const target = resolveGatewaySessionStoreTarget({
-    cfg: params.cfg,
-    key: params.key,
-    store: params.store,
-  });
-  const primaryKey = target.canonicalKey;
-  if (!params.store[primaryKey]) {
-    const existingKey = target.storeKeys.find((candidate) => Boolean(params.store[candidate]));
-    if (existingKey) {
-      params.store[primaryKey] = params.store[existingKey];
-    }
-  }
-  pruneLegacyStoreKeys({
-    store: params.store,
-    canonicalKey: primaryKey,
-    candidates: target.storeKeys,
-  });
-  return { target, primaryKey, entry: params.store[primaryKey] };
+function getChannelRuntime() {
+  cachedChannelRuntime ??= createPluginRuntime().channel;
+  return cachedChannelRuntime;
 }
 
 function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
@@ -95,7 +80,8 @@ export async function emitSessionUnboundLifecycleEvent(params: {
   emitHooks?: boolean;
 }) {
   const targetKind = isSubagentSessionKey(params.targetSessionKey) ? "subagent" : "acp";
-  unbindThreadBindingsBySessionKey({
+  const channelRuntime = getChannelRuntime();
+  channelRuntime.discord.threadBindings.unbindBySessionKey({
     targetSessionKey: params.targetSessionKey,
     targetKind,
     reason: params.reason,
@@ -311,7 +297,11 @@ export async function performGatewaySessionReset(params: {
   let oldSessionId: string | undefined;
   let oldSessionFile: string | undefined;
   const next = await updateSessionStore(storePath, (store) => {
-    const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key: params.key, store });
+    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+      cfg,
+      key: params.key,
+      store,
+    });
     const currentEntry = store[primaryKey];
     const resetEntry = stripRuntimeModelState(currentEntry);
     const parsed = parseAgentSessionKey(primaryKey);
@@ -320,24 +310,70 @@ export async function performGatewaySessionReset(params: {
     oldSessionId = currentEntry?.sessionId;
     oldSessionFile = currentEntry?.sessionFile;
     const now = Date.now();
+    const nextSessionId = randomUUID();
+    const sessionFile = resolveSessionFilePath(
+      nextSessionId,
+      currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
+      resolveSessionFilePathOptions({
+        storePath,
+        agentId: sessionAgentId,
+      }),
+    );
     const nextEntry: SessionEntry = {
-      sessionId: randomUUID(),
+      sessionId: nextSessionId,
+      sessionFile,
       updatedAt: now,
       systemSent: false,
       abortedLastRun: false,
       thinkingLevel: currentEntry?.thinkingLevel,
+      fastMode: currentEntry?.fastMode,
       verboseLevel: currentEntry?.verboseLevel,
       reasoningLevel: currentEntry?.reasoningLevel,
+      elevatedLevel: currentEntry?.elevatedLevel,
+      ttsAuto: currentEntry?.ttsAuto,
+      execHost: currentEntry?.execHost,
+      execSecurity: currentEntry?.execSecurity,
+      execAsk: currentEntry?.execAsk,
+      execNode: currentEntry?.execNode,
       responseUsage: currentEntry?.responseUsage,
+      providerOverride: currentEntry?.providerOverride,
+      modelOverride: currentEntry?.modelOverride,
+      authProfileOverride: currentEntry?.authProfileOverride,
+      authProfileOverrideSource: currentEntry?.authProfileOverrideSource,
+      authProfileOverrideCompactionCount: currentEntry?.authProfileOverrideCompactionCount,
+      groupActivation: currentEntry?.groupActivation,
+      groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
+      chatType: currentEntry?.chatType,
       model: resolvedModel.model,
       modelProvider: resolvedModel.provider,
       contextTokens: resetEntry?.contextTokens,
       sendPolicy: currentEntry?.sendPolicy,
+      queueMode: currentEntry?.queueMode,
+      queueDebounceMs: currentEntry?.queueDebounceMs,
+      queueCap: currentEntry?.queueCap,
+      queueDrop: currentEntry?.queueDrop,
+      spawnedBy: currentEntry?.spawnedBy,
+      spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
+      parentSessionKey: currentEntry?.parentSessionKey,
+      forkedFromParent: currentEntry?.forkedFromParent,
+      spawnDepth: currentEntry?.spawnDepth,
+      subagentRole: currentEntry?.subagentRole,
+      subagentControlScope: currentEntry?.subagentControlScope,
       label: currentEntry?.label,
+      displayName: currentEntry?.displayName,
+      channel: currentEntry?.channel,
+      groupId: currentEntry?.groupId,
+      subject: currentEntry?.subject,
+      groupChannel: currentEntry?.groupChannel,
+      space: currentEntry?.space,
       origin: snapshotSessionOrigin(currentEntry),
+      deliveryContext: currentEntry?.deliveryContext,
       lastChannel: currentEntry?.lastChannel,
       lastTo: currentEntry?.lastTo,
+      lastAccountId: currentEntry?.lastAccountId,
+      lastThreadId: currentEntry?.lastThreadId,
       skillsSnapshot: currentEntry?.skillsSnapshot,
+      acp: currentEntry?.acp,
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,
@@ -354,6 +390,20 @@ export async function performGatewaySessionReset(params: {
     agentId: target.agentId,
     reason: "reset",
   });
+  fs.mkdirSync(path.dirname(next.sessionFile as string), { recursive: true });
+  if (!fs.existsSync(next.sessionFile as string)) {
+    const header = {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: next.sessionId,
+      timestamp: new Date().toISOString(),
+      cwd: process.cwd(),
+    };
+    fs.writeFileSync(next.sessionFile as string, `${JSON.stringify(header)}\n`, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+  }
   if (hadExistingEntry) {
     await emitSessionUnboundLifecycleEvent({
       targetSessionKey: target.canonicalKey ?? params.key,

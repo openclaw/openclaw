@@ -1,4 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../test-helpers/storage.ts";
+import {
+  applyResolvedTheme,
+  applySettings,
+  applySettingsFromUrl,
+  attachThemeListener,
+  setTabFromRoute,
+  syncThemeWithSettings,
+} from "./app-settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 
 type Tab =
@@ -21,8 +30,6 @@ type Tab =
   | "debug"
   | "logs";
 
-type AppSettingsModule = typeof import("./app-settings.ts");
-
 type SettingsHost = {
   settings: {
     gatewayUrl: string;
@@ -33,10 +40,12 @@ type SettingsHost = {
     themeMode: ThemeMode;
     chatFocusMode: boolean;
     chatShowThinking: boolean;
+    chatShowToolCalls: boolean;
     splitRatio: number;
     navCollapsed: boolean;
     navWidth: number;
     navGroupsCollapsed: Record<string, boolean>;
+    borderRadius: number;
   };
   theme: ThemeName & ThemeMode;
   themeMode: ThemeMode;
@@ -54,30 +63,51 @@ type SettingsHost = {
   themeMediaHandler: ((event: MediaQueryListEvent) => void) | null;
   logsPollInterval: number | null;
   debugPollInterval: number | null;
+  pendingGatewayUrl?: string | null;
+  pendingGatewayToken?: string | null;
 };
 
-function createStorageMock(): Storage {
-  const store = new Map<string, string>();
-  return {
-    get length() {
-      return store.size;
+function setTestWindowUrl(urlString: string) {
+  const current = new URL(urlString);
+  const history = {
+    replaceState: vi.fn((_state: unknown, _title: string, nextUrl: string | URL) => {
+      const next = new URL(String(nextUrl), current.toString());
+      current.href = next.toString();
+      current.protocol = next.protocol;
+      current.host = next.host;
+      current.pathname = next.pathname;
+      current.search = next.search;
+      current.hash = next.hash;
+    }),
+  };
+  const locationLike = {
+    get href() {
+      return current.toString();
     },
-    clear() {
-      store.clear();
+    get protocol() {
+      return current.protocol;
     },
-    getItem(key: string) {
-      return store.get(key) ?? null;
+    get host() {
+      return current.host;
     },
-    key(index: number) {
-      return Array.from(store.keys())[index] ?? null;
+    get pathname() {
+      return current.pathname;
     },
-    removeItem(key: string) {
-      store.delete(key);
+    get search() {
+      return current.search;
     },
-    setItem(key: string, value: string) {
-      store.set(key, String(value));
+    get hash() {
+      return current.hash;
     },
   };
+  vi.stubGlobal("window", {
+    location: locationLike,
+    history,
+    setInterval,
+    clearInterval,
+  } as unknown as Window & typeof globalThis);
+  vi.stubGlobal("location", locationLike as Location);
+  return { history, location: locationLike };
 }
 
 const createHost = (tab: Tab): SettingsHost => ({
@@ -90,10 +120,12 @@ const createHost = (tab: Tab): SettingsHost => ({
     themeMode: "system",
     chatFocusMode: false,
     chatShowThinking: true,
+    chatShowToolCalls: true,
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 220,
     navGroupsCollapsed: {},
+    borderRadius: 50,
   },
   theme: "claw" as unknown as ThemeName & ThemeMode,
   themeMode: "system",
@@ -111,53 +143,43 @@ const createHost = (tab: Tab): SettingsHost => ({
   themeMediaHandler: null,
   logsPollInterval: null,
   debugPollInterval: null,
+  pendingGatewayUrl: null,
+  pendingGatewayToken: null,
 });
 
 describe("setTabFromRoute", () => {
-  let appSettings: AppSettingsModule;
-
   beforeEach(() => {
-    vi.useFakeTimers();
-    vi.resetModules();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    vi.stubGlobal("window", {
-      setInterval,
-      clearInterval,
-    } as unknown as Window & typeof globalThis);
   });
 
   afterEach(() => {
-    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
-  it("starts and stops log polling based on the tab", async () => {
-    appSettings ??= await import("./app-settings.ts");
+  it("starts and stops log polling based on the tab", () => {
     const host = createHost("chat");
 
-    appSettings.setTabFromRoute(host, "logs");
+    setTabFromRoute(host, "logs");
     expect(host.logsPollInterval).not.toBeNull();
     expect(host.debugPollInterval).toBeNull();
 
-    appSettings.setTabFromRoute(host, "chat");
+    setTabFromRoute(host, "chat");
     expect(host.logsPollInterval).toBeNull();
   });
 
-  it("starts and stops debug polling based on the tab", async () => {
-    appSettings ??= await import("./app-settings.ts");
+  it("starts and stops debug polling based on the tab", () => {
     const host = createHost("chat");
 
-    appSettings.setTabFromRoute(host, "debug");
+    setTabFromRoute(host, "debug");
     expect(host.debugPollInterval).not.toBeNull();
     expect(host.logsPollInterval).toBeNull();
 
-    appSettings.setTabFromRoute(host, "chat");
+    setTabFromRoute(host, "chat");
     expect(host.debugPollInterval).toBeNull();
   });
 
-  it("re-resolves the active palette when only themeMode changes", async () => {
-    appSettings ??= await import("./app-settings.ts");
+  it("re-resolves the active palette when only themeMode changes", () => {
     const host = createHost("chat");
     host.settings.theme = "knot";
     host.settings.themeMode = "dark";
@@ -165,7 +187,7 @@ describe("setTabFromRoute", () => {
     host.themeMode = "dark";
     host.themeResolved = "openknot";
 
-    appSettings.applySettings(host, {
+    applySettings(host, {
       ...host.settings,
       themeMode: "light",
     });
@@ -175,21 +197,19 @@ describe("setTabFromRoute", () => {
     expect(host.themeResolved).toBe("openknot-light");
   });
 
-  it("syncs both theme family and mode from persisted settings", async () => {
-    appSettings ??= await import("./app-settings.ts");
+  it("syncs both theme family and mode from persisted settings", () => {
     const host = createHost("chat");
     host.settings.theme = "dash";
     host.settings.themeMode = "light";
 
-    appSettings.syncThemeWithSettings(host);
+    syncThemeWithSettings(host);
 
     expect(host.theme).toBe("dash");
     expect(host.themeMode).toBe("light");
     expect(host.themeResolved).toBe("dash-light");
   });
 
-  it("applies named system themes on OS preference changes", async () => {
-    appSettings ??= await import("./app-settings.ts");
+  it("applies named system themes on OS preference changes", () => {
     const listeners: Array<(event: MediaQueryListEvent) => void> = [];
     const matchMedia = vi.fn().mockReturnValue({
       matches: false,
@@ -199,26 +219,24 @@ describe("setTabFromRoute", () => {
       removeEventListener: vi.fn(),
     });
     vi.stubGlobal("matchMedia", matchMedia);
-    vi.stubGlobal("window", {
-      setInterval,
-      clearInterval,
-      matchMedia,
-    } as unknown as Window & typeof globalThis);
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: matchMedia,
+    });
 
     const host = createHost("chat");
     host.theme = "knot" as unknown as ThemeName & ThemeMode;
     host.themeMode = "system";
 
-    appSettings.attachThemeListener(host);
+    attachThemeListener(host);
     listeners[0]?.({ matches: true } as MediaQueryListEvent);
     expect(host.themeResolved).toBe("openknot");
 
     listeners[0]?.({ matches: false } as MediaQueryListEvent);
-    expect(host.themeResolved).toBe("openknot-light");
+    expect(host.themeResolved).toBe("openknot");
   });
 
-  it("normalizes light family themes to the shared light CSS token", async () => {
-    appSettings ??= await import("./app-settings.ts");
+  it("normalizes light family themes to the shared light CSS token", () => {
     const root = {
       dataset: {} as DOMStringMap,
       style: { colorScheme: "" } as CSSStyleDeclaration & { colorScheme: string },
@@ -226,10 +244,125 @@ describe("setTabFromRoute", () => {
     vi.stubGlobal("document", { documentElement: root } as Document);
 
     const host = createHost("chat");
-    appSettings.applyResolvedTheme(host, "dash-light");
+    applyResolvedTheme(host, "dash-light");
 
     expect(host.themeResolved).toBe("dash-light");
-    expect(root.dataset.theme).toBe("light");
+    expect(root.dataset.theme).toBe("dash-light");
     expect(root.style.colorScheme).toBe("light");
+  });
+});
+
+describe("applySettingsFromUrl", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
+    setTestWindowUrl("https://control.example/ui/overview");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("hydrates query token params and strips them from the URL", () => {
+    setTestWindowUrl("https://control.example/ui/overview?token=abc123");
+    const host = createHost("overview");
+    host.settings.gatewayUrl = "wss://control.example/openclaw";
+
+    applySettingsFromUrl(host);
+
+    expect(host.settings.token).toBe("abc123");
+    expect(window.location.search).toBe("");
+  });
+
+  it("keeps query token params pending when a gatewayUrl confirmation is required", () => {
+    setTestWindowUrl(
+      "https://control.example/ui/overview?gatewayUrl=wss://other-gateway.example/openclaw&token=abc123",
+    );
+    const host = createHost("overview");
+    host.settings.gatewayUrl = "wss://control.example/openclaw";
+
+    applySettingsFromUrl(host);
+
+    expect(host.settings.token).toBe("");
+    expect(host.pendingGatewayUrl).toBe("wss://other-gateway.example/openclaw");
+    expect(host.pendingGatewayToken).toBe("abc123");
+    expect(window.location.search).toBe("");
+  });
+
+  it("prefers fragment tokens over legacy query tokens when both are present", () => {
+    setTestWindowUrl("https://control.example/ui/overview?token=query-token#token=hash-token");
+    const host = createHost("overview");
+    host.settings.gatewayUrl = "wss://control.example/openclaw";
+
+    applySettingsFromUrl(host);
+
+    expect(host.settings.token).toBe("hash-token");
+    expect(window.location.search).toBe("");
+    expect(window.location.hash).toBe("");
+  });
+
+  it("resets stale persisted session selection to main when a token is supplied without a session", () => {
+    setTestWindowUrl("https://control.example/chat#token=test-token");
+    const host = createHost("chat");
+    host.settings = {
+      ...host.settings,
+      gatewayUrl: "ws://localhost:18789",
+      token: "",
+      sessionKey: "agent:test_old:main",
+      lastActiveSessionKey: "agent:test_old:main",
+    };
+    host.sessionKey = "agent:test_old:main";
+
+    applySettingsFromUrl(host);
+
+    expect(host.sessionKey).toBe("main");
+    expect(host.settings.sessionKey).toBe("main");
+    expect(host.settings.lastActiveSessionKey).toBe("main");
+  });
+
+  it("preserves an explicit session from the URL when token and session are both supplied", () => {
+    setTestWindowUrl(
+      "https://control.example/chat?session=agent%3Atest_new%3Amain#token=test-token",
+    );
+    const host = createHost("chat");
+    host.settings = {
+      ...host.settings,
+      gatewayUrl: "ws://localhost:18789",
+      token: "",
+      sessionKey: "agent:test_old:main",
+      lastActiveSessionKey: "agent:test_old:main",
+    };
+    host.sessionKey = "agent:test_old:main";
+
+    applySettingsFromUrl(host);
+
+    expect(host.sessionKey).toBe("agent:test_new:main");
+    expect(host.settings.sessionKey).toBe("agent:test_new:main");
+    expect(host.settings.lastActiveSessionKey).toBe("agent:test_new:main");
+  });
+
+  it("does not reset the current gateway session when a different gateway is pending confirmation", () => {
+    setTestWindowUrl(
+      "https://control.example/chat?gatewayUrl=ws%3A%2F%2Fgateway-b.example%3A18789#token=test-token",
+    );
+    const host = createHost("chat");
+    host.settings = {
+      ...host.settings,
+      gatewayUrl: "ws://gateway-a.example:18789",
+      token: "",
+      sessionKey: "agent:test_old:main",
+      lastActiveSessionKey: "agent:test_old:main",
+    };
+    host.sessionKey = "agent:test_old:main";
+
+    applySettingsFromUrl(host);
+
+    expect(host.sessionKey).toBe("agent:test_old:main");
+    expect(host.settings.sessionKey).toBe("agent:test_old:main");
+    expect(host.settings.lastActiveSessionKey).toBe("agent:test_old:main");
+    expect(host.pendingGatewayUrl).toBe("ws://gateway-b.example:18789");
+    expect(host.pendingGatewayToken).toBe("test-token");
   });
 });

@@ -14,7 +14,7 @@ const webMocks = vi.hoisted(() => ({
   readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
 }));
 
-vi.mock("../web/session.js", () => webMocks);
+vi.mock("../../extensions/whatsapp/runtime-api.js", () => webMocks);
 
 import { getReplyFromConfig } from "./reply.js";
 

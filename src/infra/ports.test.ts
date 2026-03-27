@@ -7,17 +7,19 @@ const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
-import { inspectPortUsage } from "./ports-inspect.js";
-import {
-  buildPortHints,
-  classifyPortListener,
-  ensurePortAvailable,
-  formatPortDiagnostics,
-  handlePortError,
-  PortInUseError,
-} from "./ports.js";
+
+let inspectPortUsage: typeof import("./ports-inspect.js").inspectPortUsage;
+let ensurePortAvailable: typeof import("./ports.js").ensurePortAvailable;
+let handlePortError: typeof import("./ports.js").handlePortError;
+let PortInUseError: typeof import("./ports.js").PortInUseError;
 
 const describeUnix = process.platform === "win32" ? describe.skip : describe;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ inspectPortUsage } = await import("./ports-inspect.js"));
+  ({ ensurePortAvailable, handlePortError, PortInUseError } = await import("./ports.js"));
+});
 
 describe("ports helpers", () => {
   it("ensurePortAvailable rejects when port busy", async () => {
@@ -60,32 +62,6 @@ describe("ports helpers", () => {
 
     const messages = runtime.error.mock.calls.map((call) => stripAnsi(String(call[0] ?? "")));
     expect(messages.join("\n")).toContain("another OpenClaw instance is already running");
-  });
-
-  it("classifies ssh and gateway listeners", () => {
-    expect(
-      classifyPortListener({ commandLine: "ssh -N -L 18789:127.0.0.1:18789 user@host" }, 18789),
-    ).toBe("ssh");
-    expect(
-      classifyPortListener(
-        {
-          commandLine: "node /Users/me/Projects/openclaw/dist/entry.js gateway",
-        },
-        18789,
-      ),
-    ).toBe("gateway");
-  });
-
-  it("formats port diagnostics with hints", () => {
-    const diagnostics = {
-      port: 18789,
-      status: "busy" as const,
-      listeners: [{ pid: 123, commandLine: "ssh -N -L 18789:127.0.0.1:18789" }],
-      hints: buildPortHints([{ pid: 123, commandLine: "ssh -N -L 18789:127.0.0.1:18789" }], 18789),
-    };
-    const lines = formatPortDiagnostics(diagnostics);
-    expect(lines[0]).toContain("Port 18789 is already in use");
-    expect(lines.some((line) => line.includes("SSH tunnel"))).toBe(true);
   });
 });
 

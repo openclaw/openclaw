@@ -53,7 +53,10 @@ function clearSupervisorHints() {
   }
 }
 
-function expectLaunchdSupervisedWithoutKickstart(params?: { launchJobLabel?: string }) {
+function expectLaunchdSupervisedWithoutKickstart(params?: {
+  launchJobLabel?: string;
+  detailContains?: string;
+}) {
   setPlatform("darwin");
   if (params?.launchJobLabel) {
     process.env.LAUNCH_JOB_LABEL = params.launchJobLabel;
@@ -61,6 +64,9 @@ function expectLaunchdSupervisedWithoutKickstart(params?: { launchJobLabel?: str
   process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
   const result = restartGatewayProcessWithFreshPid();
   expect(result.mode).toBe("supervised");
+  if (params?.detailContains) {
+    expect(result.detail).toContain(params.detailContains);
+  }
   expect(scheduleDetachedLaunchdRestartHandoffMock).toHaveBeenCalledWith({
     env: process.env,
     mode: "start-after-exit",
@@ -80,18 +86,10 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
   it("returns supervised when launchd hints are present on macOS (no kickstart)", () => {
     clearSupervisorHints();
-    setPlatform("darwin");
-    process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
-    const result = restartGatewayProcessWithFreshPid();
-    expect(result.mode).toBe("supervised");
-    expect(result.detail).toContain("launchd restart handoff");
-    expect(scheduleDetachedLaunchdRestartHandoffMock).toHaveBeenCalledWith({
-      env: process.env,
-      mode: "start-after-exit",
-      waitForPid: process.pid,
+    expectLaunchdSupervisedWithoutKickstart({
+      launchJobLabel: "ai.openclaw.gateway",
+      detailContains: "launchd restart handoff",
     });
-    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
-    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("returns supervised on macOS when launchd label is set (no kickstart)", () => {

@@ -1,4 +1,4 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk/feishu";
+import type { BaseProbeResult } from "../runtime-api.js";
 import type {
   FeishuConfigSchema,
   FeishuGroupSchema,
@@ -72,6 +72,8 @@ export type FeishuMessageInfo = {
   content: string;
   contentType: string;
   createTime?: number;
+  /** Feishu thread ID (omt_xxx) — present when the message belongs to a topic thread. */
+  threadId?: string;
 };
 
 export type FeishuProbeResult = BaseProbeResult<string> & {
