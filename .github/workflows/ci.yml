@@ -199,6 +199,71 @@ jobs:
       - name: Detect committed private keys
         run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-private-key
 
+      - name: Detect committed secrets in changed files
+        env:
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          run_scan() {
+            if [ "$#" -eq 0 ]; then
+              echo "No added or modified files to scan for secrets."
+              return 0
+            fi
+            printf 'Scanning %s changed files with detect-secrets.\n' "$#"
+            pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" detect-secrets --files "$@"
+          }
+
+          if [ -z "${BASE_SHA:-}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+            echo "No usable base SHA detected; scanning all files."
+            pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-secrets
+            exit 0
+          fi
+
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "Base SHA ${BASE_SHA} is unavailable; scanning all files."
+            pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-secrets
+            exit 0
+          fi
+
+          mapfile -t changed_files < <(
+            git diff --diff-filter=ACMR --name-only "${BASE_SHA}" HEAD \
+              | while IFS= read -r path; do
+                  if [ -f "$path" ]; then
+                    printf '%s\n' "$path"
+                  fi
+                done
+          )
+
+          run_scan "${changed_files[@]}"
+
+      - name: Detect secrets in PR title/body
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+
+          node --input-type=module <<'EOF'
+          const text = `${process.env.PR_TITLE ?? ""}\n${process.env.PR_BODY ?? ""}`;
+          const patterns = [
+            { name: "private-key-header", re: /-----BEGIN (?:EC|RSA|OPENSSH|DSA|PGP|PRIVATE) KEY-----/m },
+            { name: "openai-or-generic-sk-key", re: /\bsk-[A-Za-z0-9]{20,}\b/m },
+            { name: "github-personal-token", re: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/m },
+            { name: "google-api-key", re: /\bAIza[0-9A-Za-z\-_]{35}\b/m },
+            { name: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/m },
+            { name: "tokenized-url", re: /https?:\/\/\S*[?#]token=[A-Za-z0-9._-]{16,}/im },
+          ];
+
+          const matches = patterns.filter((pattern) => pattern.re.test(text));
+          if (matches.length > 0) {
+            const labels = matches.map((pattern) => pattern.name).join(", ");
+            console.error(`::error::Potential sensitive content detected in PR title/body (${labels}). Redact and retry.`);
+            process.exit(1);
+          }
+          EOF
+
       - name: Audit changed GitHub workflows with zizmor
         env:
           BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
