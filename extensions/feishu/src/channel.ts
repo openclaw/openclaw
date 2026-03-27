@@ -60,6 +60,7 @@ import {
 import {
   isFeishuExecApprovalClientEnabled,
   resolveFeishuExecApprovalTarget,
+  shouldSuppressLocalFeishuExecApprovalPrompt,
 } from "./exec-approvals.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -1093,6 +1094,8 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           isFeishuExecApprovalClientEnabled({ cfg, accountId })
             ? { kind: "enabled" }
             : { kind: "disabled" },
+        shouldSuppressLocalPrompt: ({ cfg, accountId, payload }) =>
+          shouldSuppressLocalFeishuExecApprovalPrompt({ cfg, accountId, payload }),
         hasConfiguredDmRoute: ({ cfg }) =>
           listFeishuAccountIds(cfg).some((accountId) => {
             if (!isFeishuExecApprovalClientEnabled({ cfg, accountId })) {

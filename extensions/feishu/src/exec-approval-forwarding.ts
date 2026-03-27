@@ -4,9 +4,55 @@ import {
   buildExecApprovalPendingReplyPayload,
   resolveExecApprovalCommandDisplay,
 } from "openclaw/plugin-sdk/infra-runtime";
-import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
+import { normalizeMessageChannel, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { compileSafeRegex, testRegexWithBoundedInput } from "openclaw/plugin-sdk/security-runtime";
 import { createExecApprovalCard } from "./card-ux-exec-approval.js";
-import { isFeishuExecApprovalClientEnabled } from "./exec-approvals.js";
+import {
+  getFeishuExecApprovalApprovers,
+  isFeishuExecApprovalClientEnabled,
+  resolveFeishuExecApprovalConfig,
+} from "./exec-approvals.js";
+
+function matchesFeishuFilters(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  request: ExecApprovalRequest;
+}): boolean {
+  const config = resolveFeishuExecApprovalConfig({ cfg: params.cfg, accountId: params.accountId });
+  if (!config?.enabled) {
+    return false;
+  }
+  if (
+    getFeishuExecApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }).length === 0
+  ) {
+    return false;
+  }
+  if (config.agentFilter?.length) {
+    const agentId =
+      params.request.request.agentId ??
+      parseAgentSessionKey(params.request.request.sessionKey)?.agentId;
+    if (!agentId || !config.agentFilter.includes(agentId)) {
+      return false;
+    }
+  }
+  if (config.sessionFilter?.length) {
+    const sessionKey = params.request.request.sessionKey;
+    if (!sessionKey) {
+      return false;
+    }
+    const matches = config.sessionFilter.some((pattern) => {
+      if (sessionKey.includes(pattern)) {
+        return true;
+      }
+      const regex = compileSafeRegex(pattern);
+      return regex ? testRegexWithBoundedInput(regex, sessionKey) : false;
+    });
+    if (!matches) {
+      return false;
+    }
+  }
+  return true;
+}
 
 export function shouldSuppressFeishuExecApprovalForwardingFallback(params: {
   cfg: OpenClawConfig;
@@ -23,7 +69,7 @@ export function shouldSuppressFeishuExecApprovalForwardingFallback(params: {
   }
   const accountId =
     params.target.accountId?.trim() || params.request.request.turnSourceAccountId?.trim();
-  return isFeishuExecApprovalClientEnabled({ cfg: params.cfg, accountId });
+  return matchesFeishuFilters({ cfg: params.cfg, accountId, request: params.request });
 }
 
 export function buildFeishuExecApprovalPendingPayload(params: {

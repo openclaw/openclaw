@@ -325,6 +325,17 @@ export async function handleFeishuCardAction(params: {
           accountId,
           chatType: envelope.c?.t ?? (event.context.chat_id ? "group" : "p2p"),
         });
+        // Send resolved card to give visual feedback that the action was processed
+        await sendCardFeishu({
+          cfg,
+          to: resolveCallbackTarget(event),
+          card: createExecApprovalResolvedCard({
+            approvalId,
+            decision: execApprovalDecision,
+            resolvedBy: event.operator.open_id,
+          }),
+          accountId,
+        }).catch(() => {});
         completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
         return;
       }
