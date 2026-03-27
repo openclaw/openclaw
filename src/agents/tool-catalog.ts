@@ -63,7 +63,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "apply_patch",
     label: "apply_patch",
-    description: "Patch files (OpenAI)",
+    description: "Patch files",
     sectionId: "fs",
     profiles: ["coding"],
   },
@@ -237,14 +237,6 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     id: "image_generate",
     label: "image_generate",
     description: "Image generation",
-    sectionId: "media",
-    profiles: ["coding"],
-    includeInOpenClawGroup: true,
-  },
-  {
-    id: "video_generate",
-    label: "video_generate",
-    description: "Video generation",
     sectionId: "media",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

@@ -87,10 +87,13 @@ export {
 } from "./status-helpers.js";
 export { extractToolSend } from "./tool-send.js";
 export {
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+  createFixedWindowRateLimiter,
   createWebhookInFlightLimiter,
   normalizeWebhookPath,
   readWebhookBodyOrReject,
   registerWebhookTargetWithPluginRoute,
+  resolveRequestClientIp,
   resolveWebhookTargets,
   resolveWebhookTargetWithAuthOrRejectSync,
   withResolvedWebhookRequestPipeline,

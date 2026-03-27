@@ -60,6 +60,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { makePrompter, makeRuntime } from "../setup/__tests__/test-utils.js";
 import {
@@ -380,30 +381,15 @@ describe("ensureChannelSetupPluginInstalled", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
     const registry = createEmptyPluginRegistry();
-    registry.plugins.push({
-      id: "loaded",
-      name: "loaded",
-      source: "/tmp/loaded.cjs",
-      origin: "bundled",
-      enabled: true,
-      status: "loaded",
-      toolNames: [],
-      hookNames: [],
-      channelIds: [],
-      providerIds: [],
-      speechProviderIds: [],
-      mediaUnderstandingProviderIds: [],
-      imageGenerationProviderIds: [],
-      videoGenerationProviderIds: [],
-      webSearchProviderIds: [],
-      gatewayMethods: [],
-      cliCommands: [],
-      services: [],
-      commands: [],
-      httpRoutes: 0,
-      hookCount: 0,
-      configSchema: true,
-    });
+    registry.plugins.push(
+      createPluginRecord({
+        id: "loaded",
+        name: "loaded",
+        source: "/tmp/loaded.cjs",
+        origin: "bundled",
+        configSchema: true,
+      }),
+    );
     setActivePluginRegistry(registry);
 
     reloadChannelSetupPluginRegistryForChannel({

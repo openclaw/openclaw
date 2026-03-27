@@ -20,6 +20,9 @@
       "cliDescription": "fal API key"
     }
   ],
+  "contracts": {
+    "imageGenerationProviders": ["fal"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

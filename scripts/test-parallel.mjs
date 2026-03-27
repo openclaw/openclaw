@@ -4,10 +4,15 @@ import {
   formatExplanation,
   formatPlanOutput,
 } from "./test-planner/executor.mjs";
-import { buildExecutionPlan, explainExecutionTarget } from "./test-planner/planner.mjs";
+import {
+  buildCIExecutionManifest,
+  buildExecutionPlan,
+  explainExecutionTarget,
+} from "./test-planner/planner.mjs";
 
 const parseCliArgs = (args) => {
   const wrapper = {
+    ciManifest: false,
     plan: false,
     explain: null,
     mode: null,
@@ -30,6 +35,10 @@ const parseCliArgs = (args) => {
     }
     if (arg === "--plan") {
       wrapper.plan = true;
+      continue;
+    }
+    if (arg === "--ci-manifest") {
+      wrapper.ciManifest = true;
       continue;
     }
     if (arg === "--help") {
@@ -102,13 +111,27 @@ if (rawCli.showHelp) {
     [
       "Usage: node scripts/test-parallel.mjs [wrapper flags] [-- vitest args]",
       "",
+      "Runs the planner-backed OpenClaw test wrapper.",
+      "",
       "Wrapper flags:",
-      "  --plan                 Print the resolved execution plan",
-      "  --explain <file>       Explain how a file is classified and run",
-      "  --surface <name>       Select a surface (repeatable or comma-separated)",
-      "  --files <pattern>      Add targeted files/patterns (repeatable)",
+      "  --plan                 Print the resolved execution plan and exit",
+      "  --ci-manifest          Print the planner-backed CI execution manifest as JSON and exit",
+      "  --explain <file>       Explain how a file is classified and run, then exit",
+      "  --surface <name>       Select a surface: unit, extensions, channels, gateway",
+      "  --files <pattern>      Add targeted files or path patterns (repeatable)",
       "  --mode <ci|local>      Override runtime mode",
-      "  --profile <name>       Override execution intent (normal|max|serial)",
+      "  --profile <name>       Override execution intent: normal, max, serial",
+      "  --help                 Show this help text",
+      "",
+      "Examples:",
+      "  node scripts/test-parallel.mjs",
+      "  node scripts/test-parallel.mjs --plan --surface unit --surface extensions",
+      "  node scripts/test-parallel.mjs --explain src/auto-reply/reply/followup-runner.test.ts",
+      "  node scripts/test-parallel.mjs --files src/foo.test.ts -- --reporter=dot",
+      "",
+      "Environment:",
+      "  OPENCLAW_TEST_LIST_LANES=1          Print the resolved plan before execution",
+      "  OPENCLAW_TEST_SHOW_POOL_DECISION=1  Include thread/fork pool decisions in diagnostics",
     ].join("\n"),
   );
   process.exit(0);
@@ -128,6 +151,12 @@ if (rawCli.explain) {
     { env: process.env },
   );
   console.log(formatExplanation(explanation));
+  process.exit(0);
+}
+
+if (rawCli.ciManifest) {
+  const manifest = buildCIExecutionManifest(undefined, { env: process.env });
+  console.log(`${JSON.stringify(manifest, null, 2)}\n`);
   process.exit(0);
 }
 

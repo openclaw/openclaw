@@ -2,29 +2,21 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import openAIPlugin from "../../../extensions/openai/index.js";
-import qwenPortalPlugin from "../../../extensions/qwen-portal-auth/index.js";
 import { createProviderUsageFetch, makeResponse } from "../../test-utils/provider-usage-fetch.js";
 import type { ProviderPlugin, ProviderRuntimeModel } from "../types.js";
 import { requireProviderContractProvider as requireBundledProviderContractProvider } from "./registry.js";
-import { registerProviders, requireProvider } from "./testkit.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
 const getOAuthApiKeyMock = vi.hoisted(() => vi.fn());
+const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 const getOAuthProvidersMock = vi.hoisted(() =>
   vi.fn(() => [
     { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
     { id: "google", envApiKey: "GOOGLE_API_KEY", oauthTokenEnv: "GOOGLE_OAUTH_TOKEN" }, // pragma: allowlist secret
     { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
-    {
-      id: "qwen-portal",
-      envApiKey: "QWEN_PORTAL_API_KEY",
-      oauthTokenEnv: "QWEN_PORTAL_OAUTH_TOKEN",
-    }, // pragma: allowlist secret
   ]),
 );
-const refreshQwenPortalCredentialsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@mariozechner/pi-ai/oauth", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
@@ -34,16 +26,13 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
     ...actual,
     getOAuthApiKey: getOAuthApiKeyMock,
     getOAuthProviders: getOAuthProvidersMock,
+    refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
   };
 });
 
-vi.mock("../../../extensions/qwen-portal-auth/refresh.js", async () => {
-  const actual = await vi.importActual<object>("../../../extensions/qwen-portal-auth/refresh.js");
-  return {
-    ...actual,
-    refreshQwenPortalCredentials: refreshQwenPortalCredentialsMock,
-  };
-});
+vi.mock("../../../extensions/openai/openai-codex-provider.runtime.js", () => ({
+  refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
+}));
 
 function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRuntimeModel, "id">) {
   return {
@@ -61,12 +50,6 @@ function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRun
 }
 
 function requireProviderContractProvider(providerId: string): ProviderPlugin {
-  if (providerId === "openai-codex") {
-    return requireProvider(registerProviders(openAIPlugin), providerId);
-  }
-  if (providerId === "qwen-portal") {
-    return requireProvider(registerProviders(qwenPortalPlugin), providerId);
-  }
   return requireBundledProviderContractProvider(providerId);
 }
 
@@ -74,35 +57,39 @@ describe("provider runtime contract", () => {
   beforeEach(() => {
     getOAuthApiKeyMock.mockReset();
     getOAuthProvidersMock.mockClear();
-    refreshQwenPortalCredentialsMock.mockReset();
+    refreshOpenAICodexTokenMock.mockReset();
   }, CONTRACT_SETUP_TIMEOUT_MS);
 
   describe("anthropic", () => {
-    it("owns anthropic 4.6 forward-compat resolution", () => {
-      const provider = requireProviderContractProvider("anthropic");
-      const model = provider.resolveDynamicModel?.({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4.6-20260219",
-        modelRegistry: {
-          find: (_provider: string, id: string) =>
-            id === "claude-sonnet-4.5-20260219"
-              ? createModel({
-                  id: id,
-                  api: "anthropic-messages",
-                  provider: "anthropic",
-                  baseUrl: "https://api.anthropic.com",
-                })
-              : null,
-        } as never,
-      });
+    it(
+      "owns anthropic 4.6 forward-compat resolution",
+      () => {
+        const provider = requireProviderContractProvider("anthropic");
+        const model = provider.resolveDynamicModel?.({
+          provider: "anthropic",
+          modelId: "claude-sonnet-4.6-20260219",
+          modelRegistry: {
+            find: (_provider: string, id: string) =>
+              id === "claude-sonnet-4.5-20260219"
+                ? createModel({
+                    id: id,
+                    api: "anthropic-messages",
+                    provider: "anthropic",
+                    baseUrl: "https://api.anthropic.com",
+                  })
+                : null,
+          } as never,
+        });
 
-      expect(model).toMatchObject({
-        id: "claude-sonnet-4.6-20260219",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        baseUrl: "https://api.anthropic.com",
-      });
-    });
+        expect(model).toMatchObject({
+          id: "claude-sonnet-4.6-20260219",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com",
+        });
+      },
+      CONTRACT_SETUP_TIMEOUT_MS,
+    );
 
     it("owns usage auth resolution", async () => {
       const provider = requireProviderContractProvider("anthropic");
@@ -539,21 +526,40 @@ describe("provider runtime contract", () => {
   });
 
   describe("openai-codex", () => {
-    it("owns refresh fallback for accountId extraction failures", async () => {
-      const provider = requireProviderContractProvider("openai-codex");
-      const credential = {
-        type: "oauth" as const,
-        provider: "openai-codex",
-        access: "cached-access-token",
-        refresh: "refresh-token",
-        expires: Date.now() - 60_000,
-      };
+    it(
+      "owns refresh fallback for accountId extraction failures",
+      async () => {
+        const provider = requireProviderContractProvider("openai-codex");
+        const credential = {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "cached-access-token",
+          refresh: "refresh-token",
+          expires: Date.now() - 60_000,
+        };
 
-      getOAuthApiKeyMock.mockReset();
-      getOAuthApiKeyMock.mockRejectedValueOnce(new Error("Failed to extract accountId from token"));
+        const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString(
+          "base64url",
+        );
+        const payload = Buffer.from(JSON.stringify({})).toString("base64url");
+        const accessTokenWithoutAccountId = `${header}.${payload}.sig`;
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn(async () =>
+          makeResponse(200, {
+            access_token: accessTokenWithoutAccountId,
+            refresh_token: "refreshed-refresh-token",
+            expires_in: 3600,
+          }),
+        ) as typeof fetch;
 
-      await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
-    });
+        try {
+          await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
+        } finally {
+          globalThis.fetch = originalFetch;
+        }
+      },
+      CONTRACT_SETUP_TIMEOUT_MS,
+    );
 
     it("owns forward-compat codex models", () => {
       const provider = requireProviderContractProvider("openai-codex");
@@ -630,29 +636,6 @@ describe("provider runtime contract", () => {
         windows: [{ label: "3h", usedPercent: 12, resetAt: 1_705_000_000 }],
         plan: "Plus",
       });
-    });
-  });
-
-  describe("qwen-portal", () => {
-    it("owns OAuth refresh", async () => {
-      const provider = requireProviderContractProvider("qwen-portal");
-      const credential = {
-        type: "oauth" as const,
-        provider: "qwen-portal",
-        access: "stale-access-token",
-        refresh: "refresh-token",
-        expires: Date.now() - 60_000,
-      };
-      const refreshed = {
-        ...credential,
-        access: "fresh-access-token",
-        expires: Date.now() + 60_000,
-      };
-
-      refreshQwenPortalCredentialsMock.mockReset();
-      refreshQwenPortalCredentialsMock.mockResolvedValueOnce(refreshed);
-
-      await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(refreshed);
     });
   });
 

@@ -3,7 +3,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { normalizePluginsConfig } from "./config-state.js";
@@ -17,11 +17,11 @@ export type PluginStatusReport = PluginRegistry & {
 };
 
 export type PluginCapabilityKind =
+  | "cli-backend"
   | "text-inference"
   | "speech"
   | "media-understanding"
   | "image-generation"
-  | "video-generation"
   | "web-search"
   | "channel";
 
@@ -125,7 +125,7 @@ function resolveReportedPluginVersion(
     return plugin.version;
   }
   return (
-    normalizeOpenClawVersionBase(resolveRuntimeServiceVersion(env)) ??
+    normalizeOpenClawVersionBase(resolveCompatibilityHostVersion(env)) ??
     normalizeOpenClawVersionBase(plugin.version) ??
     plugin.version
   );
@@ -162,11 +162,11 @@ export function buildPluginStatusReport(params?: {
 
 function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
   return [
+    { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
     { kind: "text-inference" as const, ids: plugin.providerIds },
     { kind: "speech" as const, ids: plugin.speechProviderIds },
     { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
     { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
-    { kind: "video-generation" as const, ids: plugin.videoGenerationProviderIds },
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
     { kind: "channel" as const, ids: plugin.channelIds },
   ].filter((entry) => entry.ids.length > 0);
