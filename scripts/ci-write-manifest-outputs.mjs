@@ -47,7 +47,6 @@ if (workflow === "ci") {
   writeOutput("has_changed_extensions", String(manifest.scope.hasChangedExtensions));
   writeOutput("changed_extensions_matrix", JSON.stringify(manifest.scope.changedExtensionsMatrix));
   writeOutput("run_build_artifacts", String(manifest.jobs.buildArtifacts.enabled));
-  writeOutput("run_release_check", String(manifest.jobs.releaseCheck.enabled));
   writeOutput("run_checks_fast", String(manifest.jobs.checksFast.enabled));
   writeOutput("checks_fast_matrix", JSON.stringify(manifest.jobs.checksFast.matrix));
   writeOutput("run_checks", String(manifest.jobs.checks.enabled));
