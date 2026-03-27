@@ -137,3 +137,6 @@ docs/superpowers
 
 # Deprecated changelog fragment workflow
 changelog/fragments/
+
+# Editor history
+.history/
