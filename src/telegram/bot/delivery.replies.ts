@@ -99,6 +99,7 @@ async function deliverTextReply(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  onMessageSent?: (messageId: number) => void;
 }): Promise<void> {
   const chunks = params.chunkText(params.replyText);
   for (let i = 0; i < chunks.length; i += 1) {
@@ -112,7 +113,7 @@ async function deliverTextReply(params: {
       replyToMode: params.replyToMode,
       progress: params.progress,
     });
-    await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
+    const messageId = await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
       replyToMessageId: replyToForChunk,
       replyQuoteText: params.replyQuoteText,
       thread: params.thread,
@@ -121,6 +122,7 @@ async function deliverTextReply(params: {
       linkPreview: params.linkPreview,
       replyMarkup: shouldAttachButtons ? params.replyMarkup : undefined,
     });
+    params.onMessageSent?.(messageId);
     markReplyApplied(params.progress, replyToForChunk);
     markDelivered(params.progress);
   }
@@ -138,6 +140,7 @@ async function sendPendingFollowUpText(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  onMessageSent?: (messageId: number) => void;
 }): Promise<void> {
   const chunks = params.chunkText(params.text);
   for (let i = 0; i < chunks.length; i += 1) {
@@ -147,7 +150,7 @@ async function sendPendingFollowUpText(params: {
       replyToMode: params.replyToMode,
       progress: params.progress,
     });
-    await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
+    const messageId = await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
       replyToMessageId: replyToForFollowUp,
       thread: params.thread,
       textMode: "html",
@@ -155,6 +158,7 @@ async function sendPendingFollowUpText(params: {
       linkPreview: params.linkPreview,
       replyMarkup: i === 0 ? params.replyMarkup : undefined,
     });
+    params.onMessageSent?.(messageId);
     markReplyApplied(params.progress, replyToForFollowUp);
     markDelivered(params.progress);
   }
@@ -440,6 +444,8 @@ export async function deliverReplies(params: {
   linkPreview?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
+  /** Callback invoked after each TG message is sent, with the message ID. */
+  onMessageSent?: (messageId: number) => void;
 }): Promise<{ delivered: boolean }> {
   const progress: DeliveryProgress = {
     hasReplied: false,
@@ -485,6 +491,7 @@ export async function deliverReplies(params: {
         replyToId,
         replyToMode: params.replyToMode,
         progress,
+        onMessageSent: params.onMessageSent,
       });
       continue;
     }
