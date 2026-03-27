@@ -538,7 +538,9 @@ Future evals should stay deterministic first:
 
 Contract tests verify that every registered plugin and channel conforms to its
 interface contract. They iterate over all discovered plugins and run a suite of
-shape and behavior assertions.
+shape and behavior assertions. The default `pnpm test` unit lane intentionally
+skips these shared seam and smoke files; run the contract commands explicitly
+when you touch shared channel or provider surfaces.
 
 ### Commands
 
@@ -548,7 +550,9 @@ shape and behavior assertions.
 
 ### Channel contracts
 
-Located in `src/channels/plugins/contracts/*.contract.test.ts`:
+Located in `src/channels/plugins/contracts/*.contract.test.ts`, with shared
+channel seam coverage in `src/channels/plugins/plugins-core.test.ts` and
+`src/security/dm-policy-channel-smoke.test.ts`:
 
 - **plugin** - Basic plugin shape (id, name, capabilities)
 - **setup** - Setup wizard contract
@@ -559,6 +563,12 @@ Located in `src/channels/plugins/contracts/*.contract.test.ts`:
 - **threading** - Thread ID handling
 - **directory** - Directory/roster API
 - **group-policy** - Group policy enforcement
+
+### Provider contracts
+
+Located in `src/plugins/contracts/*.contract.test.ts`, with shared provider
+seam coverage in `src/tts/tts.test.ts`.
+
 - **status** - Channel status probes
 - **registry** - Plugin registry shape
 
