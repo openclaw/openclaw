@@ -6,11 +6,8 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
-import {
-  countPendingDescendantRuns,
-  getLatestSubagentRunByChildSessionKey,
-  listSubagentRunsForRequester,
-} from "../../agents/subagent-registry.js";
+import { listControlledSubagentRuns } from "../../agents/subagent-control.js";
+import { countPendingDescendantRuns } from "../../agents/subagent-registry.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -32,7 +29,7 @@ import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "..
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
-import { resolveSubagentLabel, sortSubagentRuns } from "./subagents-utils.js";
+import { resolveSubagentLabel } from "./subagents-utils.js";
 
 // Some usage endpoints only work with CLI/session OAuth tokens, not API keys.
 // Skip those probes when the active auth mode cannot satisfy the endpoint.
@@ -190,19 +187,7 @@ export async function buildStatusReply(params: {
   if (sessionKey) {
     const { mainKey, alias } = resolveMainSessionAlias(cfg);
     const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
-    const seenChildSessionKeys = new Set<string>();
-    const runs = sortSubagentRuns(listSubagentRunsForRequester(requesterKey)).filter((entry) => {
-      if (seenChildSessionKeys.has(entry.childSessionKey)) {
-        return false;
-      }
-      const latest = getLatestSubagentRunByChildSessionKey(entry.childSessionKey);
-      const latestRequesterSessionKey = latest?.requesterSessionKey?.trim();
-      if (!latest || latest.runId !== entry.runId || latestRequesterSessionKey !== requesterKey) {
-        return false;
-      }
-      seenChildSessionKeys.add(entry.childSessionKey);
-      return true;
-    });
+    const runs = listControlledSubagentRuns(requesterKey);
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
     if (runs.length > 0) {
       const active = runs.filter(
