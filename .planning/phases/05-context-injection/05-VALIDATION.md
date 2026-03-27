@@ -15,13 +15,13 @@ created: 2026-03-27
 
 ## Test Infrastructure
 
-| Property | Value |
-|----------|-------|
-| **Framework** | vitest |
-| **Config file** | `vitest.config.ts` |
-| **Quick run command** | `pnpm test -- src/projects/capability-matcher.test.ts` |
+| Property               | Value                                                                                   |
+| ---------------------- | --------------------------------------------------------------------------------------- |
+| **Framework**          | vitest                                                                                  |
+| **Config file**        | `vitest.config.ts`                                                                      |
+| **Quick run command**  | `pnpm test -- src/projects/capability-matcher.test.ts`                                  |
 | **Full suite command** | `pnpm test -- src/projects/capability-matcher.test.ts src/agents/identity-file.test.ts` |
-| **Estimated runtime** | ~8 seconds |
+| **Estimated runtime**  | ~8 seconds                                                                              |
 
 ---
 
@@ -36,13 +36,13 @@ created: 2026-03-27
 
 ## Per-Task Verification Map
 
-| Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 05-01-01 | 01 | 1 | AGNT-04 | unit | `pnpm test -- src/projects/capability-matcher.test.ts` | ❌ W0 | ⬜ pending |
-| 05-01-02 | 01 | 1 | AGNT-04 | unit | `pnpm test -- src/agents/identity-file.test.ts` | ✅ existing | ⬜ pending |
-| 05-02-01 | 02 | 2 | AGNT-01, AGNT-02, AGNT-03 | integration | `pnpm test -- src/agents/bootstrap-files.test.ts` | ✅ existing | ⬜ pending |
+| Task ID  | Plan | Wave | Requirement               | Test Type   | Automated Command                                      | File Exists | Status     |
+| -------- | ---- | ---- | ------------------------- | ----------- | ------------------------------------------------------ | ----------- | ---------- |
+| 05-01-01 | 01   | 1    | AGNT-04                   | unit        | `pnpm test -- src/projects/capability-matcher.test.ts` | ❌ W0       | ⬜ pending |
+| 05-01-02 | 01   | 1    | AGNT-04                   | unit        | `pnpm test -- src/agents/identity-file.test.ts`        | ✅ existing | ⬜ pending |
+| 05-02-01 | 02   | 2    | AGNT-01, AGNT-02, AGNT-03 | integration | `pnpm test -- src/agents/bootstrap-files.test.ts`      | ✅ existing | ⬜ pending |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+_Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
 ---
 
@@ -50,13 +50,13 @@ created: 2026-03-27
 
 - [ ] `src/projects/capability-matcher.test.ts` — stubs for AGNT-04
 
-*Existing infrastructure (vitest, identity-file tests) covers remaining needs.*
+_Existing infrastructure (vitest, identity-file tests) covers remaining needs._
 
 ---
 
 ## Manual-Only Verifications
 
-*All phase behaviors have automated verification.*
+_All phase behaviors have automated verification._
 
 ---
 

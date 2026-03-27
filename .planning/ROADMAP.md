@@ -106,8 +106,12 @@
 2. An agent on a project-scoped channel receives PROJECT.md context via the bootstrap hook
 3. Existing AGENTS.md loading continues to work exactly as before (additive change only)
 4. An agent with `capabilities: [code, testing]` in its IDENTITY.md can be matched against task capability requirements
-   **Plans**: TBD
-   **Estimated complexity**: M
+   **Plans:** 2 plans
+   Plans:
+
+- [ ] 05-01-PLAN.md — Capability matcher and IDENTITY.md capabilities parsing (TDD)
+- [ ] 05-02-PLAN.md — CWD-based PROJECT.md walk-up and bootstrap hook injection
+      **Estimated complexity**: M
 
 ### Phase 6: Queue & Heartbeat
 
@@ -276,7 +280,7 @@ Phase 1 (Types & Schemas)
 | 2. File Structure & Scaffolding     | 2/2            | Complete    |            |
 | 3. Sync Pipeline                    | 2/2            | Complete    | -          |
 | 4. Concurrency                      | 0/2            | Planned     | -          |
-| 5. Context Injection                | 0/?            | Not started | -          |
+| 5. Context Injection                | 0/2            | Planned     | -          |
 | 6. Queue & Heartbeat                | 0/?            | Not started | -          |
 | 7. Gateway Service                  | 0/?            | Not started | -          |
 | 8. CLI Commands                     | 0/?            | Not started | -          |

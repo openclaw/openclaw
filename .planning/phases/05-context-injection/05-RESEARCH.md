@@ -18,6 +18,7 @@ The canonical path for agent bootstrap files is `resolveBootstrapFilesForRun()` 
 ### Hook System
 
 `src/hooks/internal-hooks.ts` provides:
+
 - `registerInternalHook(eventKey, handler)` — registers handlers in a globalThis singleton Map
 - `triggerInternalHook(event)` — runs all handlers for the event type
 - `AgentBootstrapHookContext` type — `{ workspaceDir, bootstrapFiles[], cfg?, sessionKey?, sessionId?, agentId? }`
@@ -28,6 +29,7 @@ Example bundled hook: `src/hooks/bundled/bootstrap-extra-files/handler.ts` — r
 ### WorkspaceBootstrapFile Type
 
 From `src/agents/workspace.ts`:
+
 - `WorkspaceBootstrapFileName` union type includes the valid bootstrap file names
 - `VALID_BOOTSTRAP_NAMES` array lists recognized names
 - `DEFAULT_IDENTITY_FILENAME = "IDENTITY.md"`
@@ -49,6 +51,7 @@ AGENTS.md pickup already happens in `resolveBootstrapFilesForRun()`. The functio
 ### Key Consideration
 
 PROJECT.md is NOT in `VALID_BOOTSTRAP_NAMES` currently. Options:
+
 - Add "PROJECT.md" to the union type and valid names array
 - Or treat it as a special-case injection outside the standard bootstrap file discovery
 - The second approach is cleaner since PROJECT.md lives in project dirs, not workspace dirs
@@ -62,6 +65,7 @@ When `runKind === "heartbeat"`, the existing filter keeps only HEARTBEAT.md. PRO
 ### Registration Pattern
 
 Follow `src/hooks/bundled/bootstrap-extra-files/handler.ts`:
+
 1. Create hook handler file
 2. Register via `registerInternalHook("agent:bootstrap", handler)`
 3. Handler reads agent config for `project` field
@@ -71,6 +75,7 @@ Follow `src/hooks/bundled/bootstrap-extra-files/handler.ts`:
 ### Deduplication
 
 If both cwd pickup and bootstrap hook find a PROJECT.md:
+
 - cwd version takes priority (per D-06)
 - Check `bootstrapFiles` for existing PROJECT.md before appending
 - Or append and let cwd override during merge
@@ -84,6 +89,7 @@ If both cwd pickup and bootstrap hook find a PROJECT.md:
 ### Current Parser
 
 `src/agents/identity-file.ts` — `parseIdentityMarkdown(content)`:
+
 - Parses `- key: value` bullets from markdown
 - Returns `AgentIdentityFile` with fields: `name`, `emoji`, `creature`, `vibe`, `theme`, `avatar`
 - Uses regex to match `^\s*[-*]\s*(\w+)\s*[:=]\s*(.+)` pattern
@@ -101,10 +107,11 @@ If both cwd pickup and bootstrap hook find a PROJECT.md:
 New file: `src/projects/capability-matcher.ts`
 
 ```typescript
-export function matchCapabilities(agentCaps: string[], taskCaps: string[]): boolean
+export function matchCapabilities(agentCaps: string[], taskCaps: string[]): boolean;
 ```
 
 Logic (per D-08, D-09):
+
 - If `taskCaps` is empty → any agent can claim (no restriction)
 - If `agentCaps` is empty → cannot claim capability-gated tasks (return false)
 - Otherwise: return true if ANY agentCap is in taskCaps (intersection check)
@@ -135,15 +142,15 @@ Logic (per D-08, D-09):
 
 ## File Impact Summary
 
-| File | Change Type | Description |
-|------|------------|-------------|
-| `src/agents/identity-file.ts` | Modify | Add `capabilities` to `AgentIdentityFile`, extend parser |
-| `src/agents/bootstrap-files.ts` | Modify | Add cwd walk-up for PROJECT.md |
-| New: `src/projects/capability-matcher.ts` | Create | `matchCapabilities()` utility |
-| New: `src/projects/capability-matcher.test.ts` | Create | Tests for matcher |
-| New: `src/agents/project-context-hook.ts` (or similar) | Create | Bootstrap hook for project-scoped channels |
-| `src/agents/identity-file.test.ts` or new test | Modify/Create | Tests for capabilities parsing |
-| `src/projects/index.ts` | Modify | Export capability matcher |
+| File                                                   | Change Type   | Description                                              |
+| ------------------------------------------------------ | ------------- | -------------------------------------------------------- |
+| `src/agents/identity-file.ts`                          | Modify        | Add `capabilities` to `AgentIdentityFile`, extend parser |
+| `src/agents/bootstrap-files.ts`                        | Modify        | Add cwd walk-up for PROJECT.md                           |
+| New: `src/projects/capability-matcher.ts`              | Create        | `matchCapabilities()` utility                            |
+| New: `src/projects/capability-matcher.test.ts`         | Create        | Tests for matcher                                        |
+| New: `src/agents/project-context-hook.ts` (or similar) | Create        | Bootstrap hook for project-scoped channels               |
+| `src/agents/identity-file.test.ts` or new test         | Modify/Create | Tests for capabilities parsing                           |
+| `src/projects/index.ts`                                | Modify        | Export capability matcher                                |
 
 ## Validation Architecture
 
@@ -156,9 +163,9 @@ Logic (per D-08, D-09):
 
 ### Success Criteria Mapping
 
-| Criterion | How to Verify |
-|-----------|--------------|
-| Agent in dir with PROJECT.md receives context | Test cwd walk-up returns PROJECT.md in bootstrap files |
+| Criterion                                          | How to Verify                                                          |
+| -------------------------------------------------- | ---------------------------------------------------------------------- |
+| Agent in dir with PROJECT.md receives context      | Test cwd walk-up returns PROJECT.md in bootstrap files                 |
 | Agent on project channel receives context via hook | Test bootstrap hook injects PROJECT.md when agent config has `project` |
-| AGENTS.md loading unchanged | Test existing bootstrap behavior preserved (no regression) |
-| Capability matching works | Test `matchCapabilities()` with various input combos |
+| AGENTS.md loading unchanged                        | Test existing bootstrap behavior preserved (no regression)             |
+| Capability matching works                          | Test `matchCapabilities()` with various input combos                   |

@@ -19,7 +19,12 @@ affects: [07-gateway-websocket, 08-cli-commands, 09-web-ui]
 
 tech-stack:
   added: []
-  patterns: ["EventEmitter-based service with start/stop lifecycle", "per-project debounce timers via Map", "chokidar awaitWriteFinish for partial write safety"]
+  patterns:
+    [
+      "EventEmitter-based service with start/stop lifecycle",
+      "per-project debounce timers via Map",
+      "chokidar awaitWriteFinish for partial write safety",
+    ]
 
 key-files:
   created:
@@ -56,6 +61,7 @@ completed: 2026-03-27
 - **Files modified:** 3
 
 ## Accomplishments
+
 - ProjectSyncService class with start/stop lifecycle that watches project markdown files
 - Chokidar watcher with awaitWriteFinish (200ms) prevents corrupt index from partial writes
 - Per-project debounce (300ms) batches rapid changes into single index update
@@ -73,11 +79,13 @@ Each task was committed atomically:
 3. **Task 3: Update barrel exports** - `afa296c` (feat)
 
 ## Files Created/Modified
+
 - `src/projects/sync-service.ts` - ProjectSyncService class with chokidar watcher, debounce, incremental index updates
 - `src/projects/sync-service.test.ts` - 7 integration tests covering discovery, reindex, cleanup, error handling, events
 - `src/projects/index.ts` - Barrel re-exports for sync-types, index-generator, and sync-service
 
 ## Decisions Made
+
 - 200ms stabilityThreshold for awaitWriteFinish balances responsiveness with write safety
 - 300ms per-project debounce prevents multiple rapid saves from triggering multiple reindexes
 - Incremental updates per file type (PROJECT.md, queue.md, task files) rather than full reindex on every change for performance
@@ -87,6 +95,7 @@ Each task was committed atomically:
 ### Auto-fixed Issues
 
 **1. [Rule 1 - Bug] Fixed chokidar FSWatcher type import**
+
 - **Found during:** Task 1
 - **Issue:** `chokidar.FSWatcher` namespace reference caused TS2503 error
 - **Fix:** Used named type import `type FSWatcher` from chokidar (matching existing codebase pattern in manager-sync-ops.ts)
@@ -100,17 +109,21 @@ Each task was committed atomically:
 **Impact on plan:** Trivial type import fix. No scope creep.
 
 ## Issues Encountered
+
 None
 
 ## User Setup Required
+
 None - no external service configuration required.
 
 ## Next Phase Readiness
+
 - Sync pipeline complete: types (Plan 01) + generators (Plan 01) + service (Plan 02)
 - ProjectSyncService ready for Gateway WebSocket integration (Phase 7)
 - CLI reindex command can call discoverProjects() + generateAllIndexes() (Phase 8)
 - All exports available via `src/projects/index.ts` barrel
 
 ---
-*Phase: 03-sync-pipeline*
-*Completed: 2026-03-27*
+
+_Phase: 03-sync-pipeline_
+_Completed: 2026-03-27_

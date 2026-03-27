@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
+import { parseProjectFrontmatter, parseTaskFrontmatter } from "./frontmatter.js";
 import {
   generateAllIndexes,
   generateBoardIndex,
@@ -10,7 +11,6 @@ import {
   generateTaskIndex,
   writeIndexFile,
 } from "./index-generator.js";
-import { parseProjectFrontmatter, parseTaskFrontmatter } from "./frontmatter.js";
 import { parseQueue } from "./queue-parser.js";
 import type { SyncEvent } from "./sync-types.js";
 import type { TaskFrontmatter } from "./types.js";
@@ -48,7 +48,9 @@ export class ProjectSyncService extends EventEmitter {
     for (const entry of entries) {
       const entryPath = path.join(this.projectsRoot, entry);
       const stat = await fs.stat(entryPath).catch(() => null);
-      if (!stat?.isDirectory()) continue;
+      if (!stat?.isDirectory()) {
+        continue;
+      }
 
       // Check if this is a project directory
       const hasProjectMd = await fs
@@ -72,7 +74,9 @@ export class ProjectSyncService extends EventEmitter {
       for (const sub of subEntries) {
         const subPath = path.join(subProjectsDir, sub);
         const subStat = await fs.stat(subPath).catch(() => null);
-        if (!subStat?.isDirectory()) continue;
+        if (!subStat?.isDirectory()) {
+          continue;
+        }
 
         const subHasProjectMd = await fs
           .access(path.join(subPath, "PROJECT.md"))
@@ -136,16 +140,24 @@ export class ProjectSyncService extends EventEmitter {
   }
 
   private handleFileChange(filePath: string): void {
-    if (!filePath.endsWith(".md")) return;
+    if (!filePath.endsWith(".md")) {
+      return;
+    }
     const resolved = this.resolveProjectDir(filePath);
-    if (!resolved) return;
+    if (!resolved) {
+      return;
+    }
     this.scheduleUpdate(resolved.projectName, filePath, "change");
   }
 
   private handleFileDelete(filePath: string): void {
-    if (!filePath.endsWith(".md")) return;
+    if (!filePath.endsWith(".md")) {
+      return;
+    }
     const resolved = this.resolveProjectDir(filePath);
-    if (!resolved) return;
+    if (!resolved) {
+      return;
+    }
     this.scheduleUpdate(resolved.projectName, filePath, "delete");
   }
 
@@ -178,7 +190,9 @@ export class ProjectSyncService extends EventEmitter {
     action: "change" | "delete",
   ): Promise<void> {
     const resolved = this.resolveProjectDir(filePath);
-    if (!resolved) return;
+    if (!resolved) {
+      return;
+    }
     const { projectDir } = resolved;
     const indexDir = path.join(projectDir, ".index");
     const basename = path.basename(filePath);
@@ -234,7 +248,7 @@ export class ProjectSyncService extends EventEmitter {
   /**
    * Regenerate board.json by reading all task files and project columns.
    */
-  private async regenerateBoard(projectDir: string, projectName: string): Promise<void> {
+  private async regenerateBoard(projectDir: string, _projectName: string): Promise<void> {
     const tasksDir = path.join(projectDir, "tasks");
     const indexDir = path.join(projectDir, ".index");
 
@@ -254,7 +268,7 @@ export class ProjectSyncService extends EventEmitter {
     const validTasks: TaskFrontmatter[] = [];
     try {
       const entries = await fs.readdir(tasksDir);
-      const taskFiles = entries.filter((f) => /^TASK-\d+\.md$/.test(f)).sort();
+      const taskFiles = entries.filter((f) => /^TASK-\d+\.md$/.test(f)).toSorted();
 
       for (const taskFile of taskFiles) {
         try {
@@ -279,14 +293,16 @@ export class ProjectSyncService extends EventEmitter {
    * Resolve a file path to its project directory and name.
    * Handles both top-level projects and sub-projects.
    */
-  private resolveProjectDir(
-    filePath: string,
-  ): { projectName: string; projectDir: string } | null {
+  private resolveProjectDir(filePath: string): { projectName: string; projectDir: string } | null {
     const relative = path.relative(this.projectsRoot, filePath);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      return null;
+    }
 
     const parts = relative.split(path.sep);
-    if (parts.length < 1) return null;
+    if (parts.length < 1) {
+      return null;
+    }
 
     // Check if this is a sub-project path: <project>/sub-projects/<child>/...
     if (parts.length >= 3 && parts[1] === "sub-projects") {

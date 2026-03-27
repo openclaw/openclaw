@@ -10,8 +10,8 @@ import {
   generateTaskIndex,
   writeIndexFile,
 } from "./index-generator.js";
-import type { ProjectFrontmatter, TaskFrontmatter } from "./types.js";
 import type { ParsedQueue } from "./queue-parser.js";
+import type { ProjectFrontmatter, TaskFrontmatter } from "./types.js";
 
 describe("index-generator", () => {
   let tmpDir: string;
@@ -355,9 +355,7 @@ updated: "2026-01-01"
       const boardJson = JSON.parse(
         await fs.readFile(path.join(projectDir, ".index", "board.json"), "utf-8"),
       );
-      const allTasks = boardJson.columns.flatMap(
-        (c: { tasks: unknown[] }) => c.tasks,
-      );
+      const allTasks = boardJson.columns.flatMap((c: { tasks: unknown[] }) => c.tasks);
       expect(allTasks).toHaveLength(1);
 
       // TASK-001.json should exist, TASK-002.json should not

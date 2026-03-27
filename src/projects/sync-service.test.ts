@@ -102,10 +102,7 @@ describe("ProjectSyncService", () => {
       const projects = await service.discoverProjects();
 
       expect(projects).toHaveLength(2);
-      expect(projects.sort()).toEqual([
-        path.join(tmpDir, "alpha"),
-        path.join(tmpDir, "beta"),
-      ]);
+      expect(projects.toSorted()).toEqual([path.join(tmpDir, "alpha"), path.join(tmpDir, "beta")]);
     });
 
     it("finds sub-project directories", async () => {
@@ -184,9 +181,7 @@ describe("ProjectSyncService", () => {
       await fs.rm(path.join(projectDir, ".index"), { recursive: true, force: true });
 
       // Verify it is gone
-      await expect(
-        fs.access(path.join(projectDir, ".index")),
-      ).rejects.toThrow();
+      await expect(fs.access(path.join(projectDir, ".index"))).rejects.toThrow();
 
       // Re-generate using generateAllIndexes directly
       const events = await generateAllIndexes(projectDir);

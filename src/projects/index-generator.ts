@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseProjectFrontmatter, parseTaskFrontmatter } from "./frontmatter.js";
 import { parseQueue } from "./queue-parser.js";
+import type { ParsedQueue } from "./queue-parser.js";
 import type {
   BoardIndex,
   BoardTaskEntry,
@@ -12,7 +13,6 @@ import type {
   TaskIndex,
 } from "./sync-types.js";
 import type { ProjectFrontmatter, TaskFrontmatter } from "./types.js";
-import type { ParsedQueue } from "./queue-parser.js";
 
 /**
  * Transform parsed project frontmatter into a JSON-serializable ProjectIndex.
@@ -127,7 +127,7 @@ export async function generateAllIndexes(projectDir: string): Promise<SyncEvent[
   let taskFiles: string[] = [];
   try {
     const entries = await fs.readdir(tasksDir);
-    taskFiles = entries.filter((f) => /^TASK-\d+\.md$/.test(f)).sort();
+    taskFiles = entries.filter((f) => /^TASK-\d+\.md$/.test(f)).toSorted();
   } catch {
     // tasks/ missing -- no tasks to index
   }

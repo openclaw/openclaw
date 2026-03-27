@@ -42,47 +42,57 @@ Safe concurrent queue.md writes using file-level locking so multiple agents don'
 </decisions>
 
 <canonical_refs>
+
 ## Canonical References
 
 **Downstream agents MUST read these before planning or implementing.**
 
 ### Existing file lock (CRITICAL — reuse this)
+
 - `src/plugin-sdk/file-lock.ts` — `acquireFileLock()`, `withFileLock()`, `FileLockOptions`, `FileLockHandle`. Production file lock with PID+timestamp, stale detection, retry, re-entrant support.
 
 ### Phase 1 deliverables (parsing layer)
+
 - `src/projects/queue-parser.ts` — `parseQueueDocument()` for reading queue.md sections
 - `src/projects/frontmatter.ts` — `parseQueueFrontmatter()` for queue frontmatter
 - `src/projects/schemas.ts` — Zod schemas for validation
 - `src/projects/types.ts` — TypeScript types
 
 ### Phase 2 deliverables (project structure)
+
 - `src/projects/scaffold.ts` — `ProjectManager` for project paths
 - `src/projects/templates.ts` — `generateQueueMd()` for queue content format
 
 ### Home directory
+
 - `src/infra/home-dir.ts` — `resolveEffectiveHomeDir()` for project path resolution
 
 ### Design spec
+
 - `docs/superpowers/specs/2026-03-26-project-management-design.md` — Original design spec
 
 </canonical_refs>
 
 <code_context>
+
 ## Existing Code Insights
 
 ### Reusable Assets
+
 - `src/plugin-sdk/file-lock.ts` — Full file lock implementation with `acquireFileLock()`, `withFileLock()`, stale detection, PID tracking, retry with backoff
 - `src/projects/queue-parser.ts` — Parses queue.md into typed sections (Available, Claimed, Done, Blocked)
 - `src/projects/frontmatter.ts` — Parses queue frontmatter
 - `src/shared/pid-alive.ts` — `isPidAlive()` used by file-lock for stale detection
 
 ### Established Patterns
+
 - File lock uses `fs.open(path, 'wx')` for atomic exclusive create
 - Lock payload: `{ pid: number, createdAt: string }` as JSON
 - `withFileLock(path, options, fn)` wraps acquire/release around async callback
 - Retry with exponential backoff + jitter (`computeDelayMs`)
 
 ### Integration Points
+
 - `src/projects/index.ts` — new queue manager exports added here
 - QueueManager consumed by Phase 6 (agent heartbeat) for task claiming
 - Lock files appear as `queue.md.lock` sidecar files in project directories
@@ -107,5 +117,5 @@ None — discussion stayed within phase scope
 
 ---
 
-*Phase: 04-concurrency*
-*Context gathered: 2026-03-27*
+_Phase: 04-concurrency_
+_Context gathered: 2026-03-27_

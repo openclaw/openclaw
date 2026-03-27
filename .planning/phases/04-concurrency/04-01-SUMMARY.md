@@ -34,6 +34,7 @@ QueueManager class with lock-protected claimTask/releaseTask/moveTask operations
 ## What Was Built
 
 ### QueueManager Class (`src/projects/queue-manager.ts`)
+
 - `readQueue()` - reads and parses queue.md without lock
 - `claimTask(taskId, agentId)` - lock-protected move from Available to Claimed with agent metadata
 - `releaseTask(taskId)` - lock-protected move from Claimed back to Available, stripping agent metadata
@@ -41,21 +42,25 @@ QueueManager class with lock-protected claimTask/releaseTask/moveTask operations
 - All mutating methods use `lockedWriteOp` which holds the file lock for the entire read-modify-write cycle and validates persistence by re-reading after write
 
 ### Serialization (`serializeQueue`)
+
 - Converts ParsedQueue back to markdown format
 - Round-trips cleanly with parseQueue (parse -> serialize -> parse = identical data)
 - Preserves YAML frontmatter, section headings, and bracket metadata format
 
 ### Error Types
+
 - `QueueLockError` - wraps file-lock timeout errors with project directory context
 - `QueueValidationError` - thrown when task not found in expected section or post-write validation fails
 
 ### Lock Configuration (`QUEUE_LOCK_OPTIONS`)
+
 - 3 retries with exponential backoff (factor 2, 50-200ms range, randomized)
 - 60-second stale lock auto-clear (via existing file-lock.ts)
 
 ## Test Coverage
 
 16 test cases across 7 describe blocks:
+
 - `serializeQueue`: round-trip, frontmatter, sections, bracket metadata, bare entries
 - `QueueManager.claimTask`: happy path, error case, persistence validation
 - `QueueManager.releaseTask`: happy path with metadata stripping, error case
@@ -70,9 +75,9 @@ None - plan executed exactly as written. Test file already existed from a prior 
 
 ## Commits
 
-| Commit | Type | Description |
-|--------|------|-------------|
-| ab4dfeb | test | Add failing tests for QueueManager (RED) |
+| Commit  | Type | Description                                                          |
+| ------- | ---- | -------------------------------------------------------------------- |
+| ab4dfeb | test | Add failing tests for QueueManager (RED)                             |
 | 0e17509 | feat | Implement QueueManager with lock-protected read-modify-write (GREEN) |
 
 ## Known Stubs

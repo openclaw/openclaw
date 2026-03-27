@@ -15,13 +15,13 @@ created: 2026-03-27
 
 ## Test Infrastructure
 
-| Property | Value |
-|----------|-------|
-| **Framework** | vitest |
-| **Config file** | `vitest.config.ts` |
-| **Quick run command** | `pnpm test -- src/projects/queue-manager.test.ts` |
+| Property               | Value                                             |
+| ---------------------- | ------------------------------------------------- |
+| **Framework**          | vitest                                            |
+| **Config file**        | `vitest.config.ts`                                |
+| **Quick run command**  | `pnpm test -- src/projects/queue-manager.test.ts` |
 | **Full suite command** | `pnpm test -- src/projects/queue-manager.test.ts` |
-| **Estimated runtime** | ~5 seconds |
+| **Estimated runtime**  | ~5 seconds                                        |
 
 ---
 
@@ -36,14 +36,14 @@ created: 2026-03-27
 
 ## Per-Task Verification Map
 
-| Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 04-01-01 | 01 | 1 | CONC-01, CONC-02, CONC-03 | unit + integration | `pnpm test -- src/projects/queue-manager.test.ts` | ❌ W0 | ⬜ pending |
-| 04-01-02 | 01 | 1 | CONC-04 | unit | `pnpm test -- src/projects/queue-manager.test.ts` | ❌ W0 | ⬜ pending |
-| 04-01-03 | 01 | 1 | CONC-05 | unit | `pnpm test -- src/projects/queue-manager.test.ts` | ❌ W0 | ⬜ pending |
-| 04-02-01 | 02 | 1 | CONC-01 | concurrent | `pnpm test -- src/projects/queue-manager.test.ts` | ❌ W0 | ⬜ pending |
+| Task ID  | Plan | Wave | Requirement               | Test Type          | Automated Command                                 | File Exists | Status     |
+| -------- | ---- | ---- | ------------------------- | ------------------ | ------------------------------------------------- | ----------- | ---------- |
+| 04-01-01 | 01   | 1    | CONC-01, CONC-02, CONC-03 | unit + integration | `pnpm test -- src/projects/queue-manager.test.ts` | ❌ W0       | ⬜ pending |
+| 04-01-02 | 01   | 1    | CONC-04                   | unit               | `pnpm test -- src/projects/queue-manager.test.ts` | ❌ W0       | ⬜ pending |
+| 04-01-03 | 01   | 1    | CONC-05                   | unit               | `pnpm test -- src/projects/queue-manager.test.ts` | ❌ W0       | ⬜ pending |
+| 04-02-01 | 02   | 1    | CONC-01                   | concurrent         | `pnpm test -- src/projects/queue-manager.test.ts` | ❌ W0       | ⬜ pending |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+_Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
 ---
 
@@ -51,13 +51,13 @@ created: 2026-03-27
 
 - [ ] `src/projects/queue-manager.test.ts` — stubs for CONC-01 through CONC-05
 
-*Existing infrastructure (vitest, file-lock test helpers) covers framework needs.*
+_Existing infrastructure (vitest, file-lock test helpers) covers framework needs._
 
 ---
 
 ## Manual-Only Verifications
 
-*All phase behaviors have automated verification.*
+_All phase behaviors have automated verification._
 
 ---
 

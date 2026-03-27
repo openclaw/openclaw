@@ -19,7 +19,12 @@ affects: [03-sync-pipeline, 07-gateway-websocket, 09-projects-tab]
 
 tech-stack:
   added: []
-  patterns: ["atomic write via temp+rename", "pure function index generation", "graceful skip on invalid frontmatter"]
+  patterns:
+    [
+      "atomic write via temp+rename",
+      "pure function index generation",
+      "graceful skip on invalid frontmatter",
+    ]
 
 key-files:
   created:
@@ -57,6 +62,7 @@ completed: 2026-03-27
 - **Files modified:** 3
 
 ## Accomplishments
+
 - SyncEvent discriminated union with 5 event types for downstream Gateway/UI consumption
 - Pure index generators for project, task, board, and queue JSON shapes
 - Atomic write helper ensuring no half-written .index/ files
@@ -72,11 +78,13 @@ Each task was committed atomically:
 3. **Task 2 GREEN: Index generator implementation** - `5633831` (feat)
 
 ## Files Created/Modified
+
 - `src/projects/sync-types.ts` - SyncEvent union type, ProjectIndex, TaskIndex, BoardIndex, QueueIndex shape types
 - `src/projects/index-generator.ts` - 6 exported functions: generateProjectIndex, generateTaskIndex, generateBoardIndex, generateQueueIndex, writeIndexFile, generateAllIndexes
 - `src/projects/index-generator.test.ts` - 10 unit tests covering all generators and edge cases
 
 ## Decisions Made
+
 - BoardTaskEntry extracted as a named interface rather than inline type for reusability
 - Tasks with unknown columns fall back to first column (not dropped) for data preservation
 - Project name derived from directory basename for SyncEvent.project field
@@ -86,6 +94,7 @@ Each task was committed atomically:
 None - plan executed exactly as written.
 
 ## Issues Encountered
+
 - Dependencies not installed in worktree (node_modules missing); resolved by running `pnpm install` per CLAUDE.md guidelines
 
 ## User Setup Required
@@ -93,10 +102,12 @@ None - plan executed exactly as written.
 None - no external service configuration required.
 
 ## Next Phase Readiness
+
 - sync-types.ts and index-generator.ts ready for Plan 02 (sync service with file watcher)
 - All index shape types exported for Gateway WebSocket events (Phase 07)
 - generateAllIndexes can be called by CLI reindex command (Phase 08)
 
 ---
-*Phase: 03-sync-pipeline*
-*Completed: 2026-03-27*
+
+_Phase: 03-sync-pipeline_
+_Completed: 2026-03-27_
