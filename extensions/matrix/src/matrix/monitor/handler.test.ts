@@ -428,6 +428,26 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(recordInboundSession).toHaveBeenCalled();
   });
 
+  it("does not fetch self displayName for plain-text room mentions", async () => {
+    const getMemberDisplayName = vi.fn(async () => "Tom Servo");
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      mentionRegexes: [/\btom servo\b/i],
+      getMemberDisplayName,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$plain-text-mention",
+        body: "Tom Servo: hello",
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalled();
+    expect(getMemberDisplayName).not.toHaveBeenCalledWith("!room:example.org", "@bot:example.org");
+  });
+
   it("drops forged metadata-only mentions before agent routing", async () => {
     const { handler, recordInboundSession, resolveAgentRoute } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
