@@ -215,9 +215,18 @@ export function enableConsoleCapture(): void {
   }
 
   let logger: ReturnType<typeof getLogger> | null = null;
+  let loggerInitializing = false;
   const getLoggerLazy = () => {
     if (!logger) {
-      logger = getLogger();
+      if (loggerInitializing) {
+        return null;
+      } // Break re-entrant recursion
+      loggerInitializing = true;
+      try {
+        logger = getLogger();
+      } finally {
+        loggerInitializing = false;
+      }
     }
     return logger;
   };
@@ -252,19 +261,21 @@ export function enableConsoleCapture(): void {
         : "";
       try {
         const resolvedLogger = getLoggerLazy();
-        // Map console levels to file logger
-        if (level === "trace") {
-          resolvedLogger.trace(formatted);
-        } else if (level === "debug") {
-          resolvedLogger.debug(formatted);
-        } else if (level === "info") {
-          resolvedLogger.info(formatted);
-        } else if (level === "warn") {
-          resolvedLogger.warn(formatted);
-        } else if (level === "error" || level === "fatal") {
-          resolvedLogger.error(formatted);
-        } else {
-          resolvedLogger.info(formatted);
+        if (resolvedLogger) {
+          // Map console levels to file logger
+          if (level === "trace") {
+            resolvedLogger.trace(formatted);
+          } else if (level === "debug") {
+            resolvedLogger.debug(formatted);
+          } else if (level === "info") {
+            resolvedLogger.info(formatted);
+          } else if (level === "warn") {
+            resolvedLogger.warn(formatted);
+          } else if (level === "error" || level === "fatal") {
+            resolvedLogger.error(formatted);
+          } else {
+            resolvedLogger.info(formatted);
+          }
         }
       } catch {
         // never block console output on logging failures

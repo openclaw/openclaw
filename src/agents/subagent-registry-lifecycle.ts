@@ -27,6 +27,7 @@ import {
   resolveAnnounceRetryDelayMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
+import { isRunClaimedByInterceptor } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function createSubagentRegistryLifecycleController(params: {
@@ -484,6 +485,10 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     if (!completeParams.triggerCleanup || suppressedForSteerRestart) {
+      return;
+    }
+    // Mission interceptor: if a mission claims this run, skip per-subagent announce.
+    if (isRunClaimedByInterceptor(completeParams.runId, entry)) {
       return;
     }
     startSubagentAnnounceCleanupFlow(completeParams.runId, entry);

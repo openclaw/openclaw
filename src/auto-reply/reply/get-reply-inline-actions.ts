@@ -1,5 +1,6 @@
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
+import { detectSkillNameFromBody, setActiveSkillTurn } from "../../agents/skill-turn-guard.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -202,6 +203,12 @@ export async function handleInlineActions(params: {
           skillCommands,
         })
       : null;
+  const detectedSkillFromBody = detectSkillNameFromBody(command.commandBodyNormalized);
+  setActiveSkillTurn({
+    sessionKey,
+    agentId,
+    skillName: skillInvocation?.command.skillName ?? detectedSkillFromBody,
+  });
   if (skillInvocation) {
     if (!command.isAuthorizedSender) {
       logVerbose(

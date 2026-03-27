@@ -397,6 +397,7 @@ export async function runPreparedReply(
     : threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
+  const agentSkillPromptMode = cfg.agents?.list?.find((a) => a.id === agentId)?.skillPromptMode;
   const skillResult =
     process.env.OPENCLAW_TEST_FAST === "1"
       ? {
@@ -416,6 +417,8 @@ export async function runPreparedReply(
             workspaceDir,
             cfg,
             skillFilter: opts?.skillFilter,
+            skillPromptMode: agentSkillPromptMode,
+            messageText: baseBodyTrimmed,
           });
         })();
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;

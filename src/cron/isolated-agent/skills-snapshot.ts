@@ -28,10 +28,14 @@ export function resolveCronSkillsSnapshot(params: {
     return existingSnapshot;
   }
 
+  const agentSkillPromptMode = params.config.agents?.list?.find(
+    (a) => a.id === params.agentId,
+  )?.skillPromptMode;
   return buildWorkspaceSkillSnapshot(params.workspaceDir, {
     config: params.config,
     skillFilter,
     eligibility: { remote: getRemoteSkillEligibility() },
     snapshotVersion,
+    skillPromptMode: agentSkillPromptMode,
   });
 }

@@ -34,6 +34,182 @@ const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = new Set<string>();
 
+// ── JIT Skill Suite helpers ─────────────────────────────────────────
+
+/**
+ * Resolve JIT subcommand files from a skill suite's router.json.
+ * Returns alwaysInject + dependency files + the matched subcommand file,
+ * or null if the skill is not a JIT suite or the subcommand doesn't match.
+ */
+function resolveJitSubcommandFiles(
+  skillBaseDir: string,
+  subcommandHint: string,
+): Array<{ name: string; content: string }> | null {
+  const routerPath = path.join(skillBaseDir, "router.json");
+  let manifest: { alwaysInject?: string[]; subcommands?: Record<string, { dependsOn?: string[] }> };
+  try {
+    manifest = JSON.parse(fs.readFileSync(routerPath, "utf-8"));
+  } catch {
+    return null; // Not a JIT skill suite
+  }
+
+  const subcommands = manifest.subcommands ?? {};
+  if (!subcommands[subcommandHint]) return null;
+
+  // Resolve dependency chain (breadth-first)
+  const toLoad = new Set<string>();
+  const queue = [subcommandHint];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (toLoad.has(current)) continue;
+    toLoad.add(current);
+    const deps = subcommands[current]?.dependsOn ?? [];
+    for (const dep of deps) {
+      if (!toLoad.has(dep)) queue.push(dep);
+    }
+  }
+
+  const alwaysInject = manifest.alwaysInject ?? [];
+  const files: Array<{ name: string; content: string }> = [];
+
+  for (const name of alwaysInject) {
+    const filePath = path.join(skillBaseDir, `${name}.md`);
+    try {
+      files.push({ name, content: fs.readFileSync(filePath, "utf-8") });
+    } catch {
+      // Skip missing alwaysInject files
+    }
+  }
+
+  // Load dependency files, then the target subcommand last
+  const ordered = [...toLoad].filter((s) => s !== subcommandHint);
+  ordered.push(subcommandHint);
+  for (const name of ordered) {
+    const filePath = path.join(skillBaseDir, `${name}.md`);
+    try {
+      files.push({ name, content: fs.readFileSync(filePath, "utf-8") });
+    } catch {
+      // Skip missing subcommand files
+    }
+  }
+
+  return files.length > 0 ? files : null;
+}
+
+/**
+ * Auto-detect the best subcommand from a JIT skill suite's router.json
+ * by matching message text against each subcommand's keywords.
+ */
+export function autoDetectSubcommandFromRouter(
+  skillBaseDir: string,
+  messageText: string,
+): string | undefined {
+  const routerPath = path.join(skillBaseDir, "router.json");
+  let manifest: {
+    subcommands?: Record<string, { keywords?: string[]; isSystem?: boolean }>;
+  };
+  try {
+    manifest = JSON.parse(fs.readFileSync(routerPath, "utf-8"));
+  } catch {
+    return undefined;
+  }
+
+  const subcommands = manifest.subcommands;
+  if (!subcommands) return undefined;
+
+  const text = messageText.toLowerCase();
+  let bestSub: string | undefined;
+  let bestScore = 0;
+
+  for (const [subName, subMeta] of Object.entries(subcommands)) {
+    if (subMeta.isSystem) continue;
+    const keywords = subMeta.keywords ?? [];
+    let score = 0;
+    for (const kw of keywords) {
+      if (text.includes(kw.toLowerCase())) {
+        score++;
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestSub = subName;
+    }
+  }
+
+  return bestSub;
+}
+
+/**
+ * Embed full SKILL.md content inline in the prompt.
+ * When subcommandHint is set, JIT skill suites load only the relevant subcommand files.
+ * When messageText is provided and no explicit subcommandHint, auto-detects from router.json.
+ */
+function formatInlineSkillsPrompt(
+  skills: Skill[],
+  subcommandHint?: string,
+  messageText?: string,
+): string {
+  const visible = skills.filter((s) => !s.disableModelInvocation);
+  if (visible.length === 0) return "";
+
+  console.log(
+    `[skills] formatInlineSkillsPrompt: skills=${visible.map((s) => s.name).join(",")} hint=${subcommandHint ?? "none"} msgTextLen=${messageText?.length ?? 0}`,
+  );
+
+  const lines: string[] = [
+    "\n\nThe following skill workflows are embedded for your reference.",
+    "If exactly one skill matches your task: follow its workflow step-by-step.",
+    "If multiple could apply: choose the most specific one.",
+    "If none clearly apply: proceed normally.",
+    "IMPORTANT: Follow matched skill steps EXACTLY. Do NOT skip steps or improvise.",
+    "",
+    "<skill_workflows>",
+  ];
+  for (const skill of visible) {
+    // JIT: resolve subcommand hint — explicit takes priority, then auto-detect from message text
+    const resolvedHint =
+      subcommandHint ??
+      (messageText ? autoDetectSubcommandFromRouter(skill.baseDir, messageText) : undefined);
+    if (resolvedHint) {
+      const jitFiles = resolveJitSubcommandFiles(skill.baseDir, resolvedHint);
+      if (jitFiles) {
+        console.log(
+          `[skills] JIT subcommand resolved: skill=${skill.name} hint=${resolvedHint} source=${subcommandHint ? "explicit" : "auto-detect"} files=${jitFiles.map((f) => f.name).join(",")}`,
+        );
+        lines.push(`<skill name="${skill.name}" subcommand="${resolvedHint}">`);
+        for (const file of jitFiles) {
+          lines.push(`## ${file.name}`);
+          lines.push(file.content.replace(/^---[\s\S]*?---\s*/, "").trim());
+          lines.push("");
+        }
+        lines.push("</skill>\n");
+        continue;
+      }
+      console.log(`[skills] JIT subcommand: no match for skill=${skill.name} hint=${resolvedHint}`);
+    }
+
+    // Default: embed full SKILL.md
+    let content: string;
+    try {
+      content = fs.readFileSync(skill.filePath, "utf-8");
+    } catch {
+      lines.push(`<skill name="${skill.name}" status="unreadable">`);
+      lines.push(`  Could not read ${skill.filePath}`);
+      lines.push("</skill>\n");
+      continue;
+    }
+    // Strip YAML frontmatter
+    const stripped = content.replace(/^---[\s\S]*?---\s*/, "").trim();
+    lines.push(`<skill name="${skill.name}">`);
+    lines.push(stripped);
+    lines.push("</skill>\n");
+  }
+  lines.push("</skill_workflows>");
+  return lines.join("\n");
+}
+
+// ── End JIT helpers ─────────────────────────────────────────────────
+
 /**
  * Replace the user's home directory prefix with `~` in skill file paths
  * to reduce system prompt token usage. Models understand `~` expansion,
@@ -614,8 +790,56 @@ function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawCon
 
 export function buildWorkspaceSkillSnapshot(
   workspaceDir: string,
-  opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
+  opts?: WorkspaceSkillBuildOptions & {
+    snapshotVersion?: number;
+    /** "reference" (default): name/path only; "inline": embed full SKILL.md content */
+    skillPromptMode?: "reference" | "inline";
+    /** JIT subcommand hint for selective loading */
+    subcommandHint?: string;
+    /** Message text for auto-detecting subcommand from router.json */
+    messageText?: string;
+  },
 ): SkillSnapshot {
+  const mode = opts?.skillPromptMode ?? "reference";
+
+  if (mode === "inline") {
+    // Inline mode: embed full skill content with JIT subcommand support
+    const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
+    const eligible = filterSkillEntries(
+      skillEntries,
+      opts?.config,
+      opts?.skillFilter,
+      opts?.eligibility,
+    );
+    const promptEntries = eligible.filter(
+      (entry) => entry.invocation?.disableModelInvocation !== true,
+    );
+    const resolvedSkills = promptEntries.map((entry) => entry.skill);
+    const remoteNote = opts?.eligibility?.remote?.note?.trim();
+    console.log(
+      `[skills] buildWorkspaceSkillSnapshot: mode=inline skills=${resolvedSkills.map((s) => s.name).join(",")} hint=${opts?.subcommandHint ?? "none"} msgText=${opts?.messageText ? "yes" : "no"}`,
+    );
+    const prompt = [
+      remoteNote,
+      formatInlineSkillsPrompt(resolvedSkills, opts?.subcommandHint, opts?.messageText),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const skillFilter = normalizeSkillFilter(opts?.skillFilter);
+    return {
+      prompt,
+      skills: eligible.map((entry) => ({
+        name: entry.skill.name,
+        primaryEnv: entry.metadata?.primaryEnv,
+        requiredEnv: entry.metadata?.requires?.env?.slice(),
+      })),
+      ...(skillFilter === undefined ? {} : { skillFilter }),
+      resolvedSkills,
+      version: opts?.snapshotVersion,
+    };
+  }
+
+  // Reference mode (default): use existing path with budget limits
   const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
   const skillFilter = normalizeSkillFilter(opts?.skillFilter);
   return {

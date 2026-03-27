@@ -46,6 +46,12 @@ export async function ensureSkillSnapshot(params: {
   cfg: OpenClawConfig;
   /** If provided, only load skills with these names (for per-channel skill filtering) */
   skillFilter?: string[];
+  /** "reference" (default): name/path only; "inline": embed full SKILL.md content */
+  skillPromptMode?: "reference" | "inline";
+  /** JIT skill subcommand hint — passed to buildWorkspaceSkillSnapshot for selective loading */
+  subcommandHint?: string;
+  /** Message text for auto-detecting subcommand from router.json when no explicit hint */
+  messageText?: string;
 }): Promise<{
   sessionEntry?: SessionEntry;
   skillsSnapshot?: SessionEntry["skillsSnapshot"];
@@ -71,6 +77,9 @@ export async function ensureSkillSnapshot(params: {
     workspaceDir,
     cfg,
     skillFilter,
+    skillPromptMode,
+    subcommandHint,
+    messageText,
   } = params;
 
   let nextEntry = sessionEntry;
@@ -94,6 +103,9 @@ export async function ensureSkillSnapshot(params: {
             skillFilter,
             eligibility: { remote: remoteEligibility },
             snapshotVersion,
+            skillPromptMode,
+            subcommandHint,
+            messageText,
           })
         : current.skillsSnapshot;
     nextEntry = {
@@ -113,6 +125,9 @@ export async function ensureSkillSnapshot(params: {
         skillFilter,
         eligibility: { remote: remoteEligibility },
         snapshotVersion,
+        skillPromptMode,
+        subcommandHint,
+        messageText,
       })
     : (nextEntry?.skillsSnapshot ??
       (isFirstTurnInSession
@@ -122,6 +137,9 @@ export async function ensureSkillSnapshot(params: {
             skillFilter,
             eligibility: { remote: remoteEligibility },
             snapshotVersion,
+            skillPromptMode,
+            subcommandHint,
+            messageText,
           })));
   if (
     skillsSnapshot &&

@@ -499,12 +499,17 @@ async function agentCommandInternal(
     const needsSkillsSnapshot = isNewSession || !sessionEntry?.skillsSnapshot;
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
     const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
+    const agentSkillPromptMode = cfg.agents?.list?.find(
+      (a) => a.id === sessionAgentId,
+    )?.skillPromptMode;
     const skillsSnapshot = needsSkillsSnapshot
       ? buildWorkspaceSkillSnapshot(workspaceDir, {
           config: cfg,
           eligibility: { remote: getRemoteSkillEligibility() },
           snapshotVersion: skillsSnapshotVersion,
           skillFilter,
+          skillPromptMode: agentSkillPromptMode,
+          messageText: body,
         })
       : sessionEntry?.skillsSnapshot;
 

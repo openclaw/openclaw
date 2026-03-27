@@ -53,6 +53,26 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+type RunCompletionInterceptor = (runId: string, entry: SubagentRunRecord) => boolean;
+let runCompletionInterceptor: RunCompletionInterceptor | null = null;
+
+/**
+ * Register a callback that is invoked when a subagent run completes.
+ * If the callback returns `true`, the run is "claimed" and the normal
+ * per-subagent announce flow is skipped (mission system uses this).
+ */
+export function setRunCompletionInterceptor(fn: RunCompletionInterceptor) {
+  runCompletionInterceptor = fn;
+}
+
+/**
+ * Check whether the run completion interceptor claims a given run.
+ * Called from the lifecycle controller before starting announce cleanup.
+ */
+export function isRunClaimedByInterceptor(runId: string, entry: SubagentRunRecord): boolean {
+  return runCompletionInterceptor?.(runId, entry) ?? false;
+}
 export {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,

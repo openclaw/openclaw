@@ -7,6 +7,7 @@ import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plu
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import { evaluateSkillTurnToolCall } from "./skill-turn-guard.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -125,6 +126,17 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+
+  // Skill-turn guard: block spawn tools if delegate_run wasn't called first.
+  const guardReason = evaluateSkillTurnToolCall({
+    sessionKey: args.ctx?.sessionKey,
+    agentId: args.ctx?.agentId,
+    toolName: args.toolName,
+    toolParams: args.params,
+  });
+  if (guardReason) {
+    return { blocked: true, reason: guardReason };
+  }
 
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
