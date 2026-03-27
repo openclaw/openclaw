@@ -12,6 +12,7 @@ tools_deny_json="${OPENCLAW_TOOLS_DENY_JSON:-}"
 exec_host="${OPENCLAW_EXEC_HOST:-}"
 exec_security="${OPENCLAW_EXEC_SECURITY:-}"
 exec_ask="${OPENCLAW_EXEC_ASK:-}"
+exec_ask_fallback="${OPENCLAW_EXEC_ASK_FALLBACK:-$exec_security}"
 
 if [ -z "${OPENCLAW_CONFIG_PATH:-}" ]; then
   state_dir="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
@@ -62,6 +63,64 @@ fi
 
 if [ -n "$exec_ask" ]; then
   node /app/openclaw.mjs config set tools.exec.ask "$exec_ask" >/dev/null
+fi
+
+if [ -n "$exec_security" ] || [ -n "$exec_ask" ] || [ -n "$exec_ask_fallback" ]; then
+  # Host-side exec approvals can be stricter than tools.exec.*, so keep both in sync.
+  node <<'EOF'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const homeDir = process.env.HOME ?? "";
+const approvalsPath = path.join(homeDir, ".openclaw", "exec-approvals.json");
+const nextSecurity = process.env.OPENCLAW_EXEC_SECURITY ?? "";
+const nextAsk = process.env.OPENCLAW_EXEC_ASK ?? "";
+const nextAskFallback = process.env.OPENCLAW_EXEC_ASK_FALLBACK ?? nextSecurity;
+
+let file = { version: 1, agents: {} };
+try {
+  const raw = fs.readFileSync(approvalsPath, "utf8");
+  const parsed = JSON.parse(raw);
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    file = parsed;
+  }
+} catch {}
+
+file.version = 1;
+if (!file.defaults || typeof file.defaults !== "object" || Array.isArray(file.defaults)) {
+  file.defaults = {};
+}
+if (!file.agents || typeof file.agents !== "object" || Array.isArray(file.agents)) {
+  file.agents = {};
+}
+
+const mainAgent =
+  file.agents.main && typeof file.agents.main === "object" && !Array.isArray(file.agents.main)
+    ? file.agents.main
+    : {};
+
+const applyPolicy = (target) => {
+  if (nextSecurity) {
+    target.security = nextSecurity;
+  }
+  if (nextAsk) {
+    target.ask = nextAsk;
+  }
+  if (nextAskFallback) {
+    target.askFallback = nextAskFallback;
+  }
+  return target;
+};
+
+file.defaults = applyPolicy(file.defaults);
+file.agents.main = applyPolicy(mainAgent);
+
+fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+fs.writeFileSync(approvalsPath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+try {
+  fs.chmodSync(approvalsPath, 0o600);
+} catch {}
+EOF
 fi
 
 exec node /app/openclaw.mjs gateway run --allow-unconfigured --bind "$bind" --port "$port"
