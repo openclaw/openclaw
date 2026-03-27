@@ -46,8 +46,11 @@ describe("xai stream wrappers", () => {
     expect(captureWrappedModelId({ modelId: "grok-3", fastMode: false })).toBe("grok-3");
   });
 
-  it("strips function.strict from tool payloads", () => {
+  it("strips unsupported strict and reasoning controls from tool payloads", () => {
     const payload = {
+      reasoning: "high",
+      reasoningEffort: "high",
+      reasoning_effort: "high",
       tools: [
         {
           type: "function",
@@ -75,6 +78,9 @@ describe("xai stream wrappers", () => {
       {},
     );
 
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload).not.toHaveProperty("reasoningEffort");
+    expect(payload).not.toHaveProperty("reasoning_effort");
     expect(payload.tools[0]?.function).not.toHaveProperty("strict");
   });
 });

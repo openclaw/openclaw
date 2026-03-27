@@ -47,6 +47,9 @@ export function createXaiToolPayloadCompatibilityWrapper(
           if (Array.isArray(payloadObj.tools)) {
             payloadObj.tools = payloadObj.tools.map((tool) => stripUnsupportedStrictFlag(tool));
           }
+          delete payloadObj.reasoning;
+          delete payloadObj.reasoningEffort;
+          delete payloadObj.reasoning_effort;
         }
         return originalOnPayload?.(payload, model);
       },
