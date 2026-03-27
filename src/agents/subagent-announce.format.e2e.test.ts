@@ -191,6 +191,7 @@ describe("subagent announce formatting", () => {
   let previousFastTestEnv: string | undefined;
   let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
   let matrixPlugin: (typeof import("../../extensions/matrix/src/channel.js"))["matrixPlugin"];
+  let feishuPlugin: (typeof import("../../extensions/feishu/src/channel.js"))["feishuPlugin"];
 
   beforeAll(async () => {
     // Set FAST_TEST_MODE before importing the module to ensure the module-level
@@ -200,6 +201,7 @@ describe("subagent announce formatting", () => {
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
     ({ matrixPlugin } = await import("../../extensions/matrix/src/channel.js"));
+    ({ feishuPlugin } = await import("../../extensions/feishu/src/channel.js"));
     ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
   });
 
@@ -316,7 +318,10 @@ describe("subagent announce formatting", () => {
     sessionStore = {};
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "matrix", plugin: matrixPlugin, source: "test" }]),
+      createTestRegistry([
+        { pluginId: "matrix", plugin: matrixPlugin, source: "test" },
+        { pluginId: "feishu", plugin: feishuPlugin, source: "test" },
+      ]),
     );
     setConfigOverride({
       session: {
@@ -1222,6 +1227,79 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.channel).toBe("slack");
     expect(call?.params?.to).toBe("channel:C123");
     expect(call?.params?.threadId).toBeUndefined();
+  });
+
+  it("prefers subagent delivery-target hook over bound Feishu conversation routing", async () => {
+    sendSpy.mockClear();
+    agentSpy.mockClear();
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-feishu-bound",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-feishu-bound",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "SESSION_OK" }] }],
+    });
+    subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
+      sessionKey === "agent:main:main" ? 1 : 0,
+    );
+    hasSubagentDeliveryTargetHook = true;
+    subagentDeliveryTargetHookMock.mockResolvedValueOnce({
+      origin: {
+        channel: "feishu",
+        accountId: "acct-feishu",
+        to: "user:ou_88f9c13d939d7ed24c5943ac9714953a",
+      },
+    });
+    registerSessionBindingAdapter({
+      channel: "feishu",
+      accountId: "acct-feishu",
+      listBySession: (targetSessionKey: string) =>
+        targetSessionKey === "agent:main:subagent:test"
+          ? [
+              {
+                bindingId: "feishu:acct-feishu:ou_88f9c13d939d7ed24c5943ac9714953a",
+                targetSessionKey,
+                targetKind: "subagent",
+                conversation: {
+                  channel: "feishu",
+                  accountId: "acct-feishu",
+                  conversationId: "ou_88f9c13d939d7ed24c5943ac9714953a",
+                },
+                status: "active",
+                boundAt: Date.now(),
+              },
+            ]
+          : [],
+      resolveByConversation: () => null,
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-feishu-hook-priority",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "feishu",
+        to: "user:ou_88f9c13d939d7ed24c5943ac9714953a",
+        accountId: "acct-feishu",
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("feishu");
+    expect(call?.params?.to).toBe("user:ou_88f9c13d939d7ed24c5943ac9714953a");
+    expect(call?.params?.threadId).toBeUndefined();
+    expect(hookRunSubagentDeliveryTargetMock).toHaveBeenCalledTimes(1);
   });
 
   it("routes manual completion announce agent delivery for telegram forum topics", async () => {
