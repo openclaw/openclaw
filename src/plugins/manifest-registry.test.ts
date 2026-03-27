@@ -358,7 +358,7 @@ describe("loadPluginManifestRegistry", () => {
       }),
     );
   });
-  it("normalizes legacy top-level capability fields into contracts", () => {
+  it("does not promote legacy top-level capability fields into contracts", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "openai",
@@ -375,11 +375,7 @@ describe("loadPluginManifestRegistry", () => {
       origin: "bundled",
     });
 
-    expect(registry.plugins[0]?.contracts).toEqual({
-      speechProviders: ["openai"],
-      mediaUnderstandingProviders: ["openai", "openai-codex"],
-      imageGenerationProviders: ["openai"],
-    });
+    expect(registry.plugins[0]?.contracts).toBeUndefined();
   });
   it("skips plugins whose minHostVersion is newer than the current host", () => {
     const dir = makeTempDir();
