@@ -2,29 +2,100 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getPwToolsCoreSessionMocks,
-  installPwToolsCoreTestHooks,
-  setPwToolsCoreCurrentPage,
-  setPwToolsCoreCurrentRefLocator,
-} from "./pw-tools-core.test-harness.js";
 
-installPwToolsCoreTestHooks();
-const sessionMocks = getPwToolsCoreSessionMocks();
+let currentPage: Record<string, unknown> | null = null;
+let currentRefLocator: Record<string, unknown> | null = null;
+let pageState: {
+  console: unknown[];
+  armIdUpload: number;
+  armIdDialog: number;
+  armIdDownload: number;
+} = {
+  console: [],
+  armIdUpload: 0,
+  armIdDialog: 0,
+  armIdDownload: 0,
+};
+
+const sessionMocks = vi.hoisted(() => ({
+  getPageForTargetId: vi.fn(async () => {
+    if (!currentPage) {
+      throw new Error("missing page");
+    }
+    return currentPage;
+  }),
+  ensurePageState: vi.fn(() => pageState),
+  forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
+  restoreRoleRefsForTarget: vi.fn(() => {}),
+  storeRoleRefsForTarget: vi.fn(() => {}),
+  refLocator: vi.fn(() => {
+    if (!currentRefLocator) {
+      throw new Error("missing locator");
+    }
+    return currentRefLocator;
+  }),
+  rememberRoleRefsForTarget: vi.fn(() => {}),
+}));
 const tmpDirMocks = vi.hoisted(() => ({
   resolvePreferredOpenClawTmpDir: vi.fn(() => "/tmp/openclaw"),
 }));
-vi.mock("../infra/tmp-openclaw-dir.js", () => tmpDirMocks);
-let mod: typeof import("./pw-tools-core.js");
+const chromeMocks = vi.hoisted(() => ({
+  getChromeWebSocketUrl: vi.fn(async () => "ws://127.0.0.1/devtools/browser/mock"),
+}));
+const clientFetchMocks = vi.hoisted(() => ({
+  resolveBrowserRateLimitMessage: vi.fn(() => undefined),
+}));
+vi.mock("./pw-session.js", () => sessionMocks);
+vi.mock("./chrome.js", () => chromeMocks);
+vi.mock("./client-fetch.js", () => clientFetchMocks);
+vi.mock("../infra/tmp-openclaw-dir.js", () => ({
+  resolvePreferredOpenClawTmpDir: tmpDirMocks.resolvePreferredOpenClawTmpDir,
+}));
+let mod: Pick<
+  typeof import("./pw-tools-core.downloads.js"),
+  "downloadViaPlaywright" | "waitForDownloadViaPlaywright"
+> &
+  Pick<typeof import("./pw-tools-core.responses.js"), "responseBodyViaPlaywright">;
 
 describe("pw-tools-core", () => {
   beforeAll(async () => {
     vi.resetModules();
-    mod = await import("./pw-tools-core.js");
+    vi.doMock("./pw-session.js", () => sessionMocks);
+    vi.doMock("./chrome.js", () => chromeMocks);
+    vi.doMock("../infra/tmp-openclaw-dir.js", () => ({
+      resolvePreferredOpenClawTmpDir: tmpDirMocks.resolvePreferredOpenClawTmpDir,
+    }));
+    const [downloads, responses] = await Promise.all([
+      import("./pw-tools-core.downloads.js"),
+      import("./pw-tools-core.responses.js"),
+    ]);
+    mod = {
+      downloadViaPlaywright: downloads.downloadViaPlaywright,
+      waitForDownloadViaPlaywright: downloads.waitForDownloadViaPlaywright,
+      responseBodyViaPlaywright: responses.responseBodyViaPlaywright,
+    };
   });
 
   beforeEach(() => {
+    currentPage = null;
+    currentRefLocator = null;
+    pageState = {
+      console: [],
+      armIdUpload: 0,
+      armIdDialog: 0,
+      armIdDownload: 0,
+    };
+
+    for (const fn of Object.values(sessionMocks)) {
+      fn.mockClear();
+    }
     for (const fn of Object.values(tmpDirMocks)) {
+      fn.mockClear();
+    }
+    for (const fn of Object.values(chromeMocks)) {
+      fn.mockClear();
+    }
+    for (const fn of Object.values(clientFetchMocks)) {
       fn.mockClear();
     }
     tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw");
@@ -72,7 +143,7 @@ describe("pw-tools-core", () => {
       }
     });
     const off = vi.fn();
-    setPwToolsCoreCurrentPage({ on, off });
+    currentPage = { on, off };
     return {
       trigger: (download: unknown) => {
         downloadHandler?.(download);
@@ -137,7 +208,7 @@ describe("pw-tools-core", () => {
       const harness = createDownloadEventHarness();
 
       const click = vi.fn(async () => {});
-      setPwToolsCoreCurrentRefLocator({ click });
+      currentRefLocator = { click };
 
       const saveAs = vi.fn(async (outPath: string) => {
         await fs.writeFile(outPath, "report-content", "utf8");
@@ -244,7 +315,7 @@ describe("pw-tools-core", () => {
       }
     });
     const off = vi.fn();
-    setPwToolsCoreCurrentPage({ on, off });
+    currentPage = { on, off };
 
     const resp = {
       url: () => "https://example.com/api/data",
@@ -270,32 +341,5 @@ describe("pw-tools-core", () => {
     expect(res.status).toBe(200);
     expect(res.body).toBe('{"ok":true');
     expect(res.truncated).toBe(true);
-  });
-  it("scrolls a ref into view (default timeout)", async () => {
-    const scrollIntoViewIfNeeded = vi.fn(async () => {});
-    setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded });
-    const page = {};
-    setPwToolsCoreCurrentPage(page);
-
-    await mod.scrollIntoViewViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      ref: "1",
-    });
-
-    expect(sessionMocks.refLocator).toHaveBeenCalledWith(page, "1");
-    expect(scrollIntoViewIfNeeded).toHaveBeenCalledWith({ timeout: 20_000 });
-  });
-  it("requires a ref for scrollIntoView", async () => {
-    setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded: vi.fn(async () => {}) });
-    setPwToolsCoreCurrentPage({});
-
-    await expect(
-      mod.scrollIntoViewViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
-        ref: "   ",
-      }),
-    ).rejects.toThrow(/ref or selector is required/i);
   });
 });

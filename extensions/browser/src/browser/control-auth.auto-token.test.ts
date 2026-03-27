@@ -4,6 +4,25 @@ import type { OpenClawConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn<() => OpenClawConfig>(),
+  resolveGatewayAuth: vi.fn(
+    ({
+      authConfig,
+    }: {
+      authConfig?: NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]> | undefined;
+    }) => {
+      const token =
+        typeof authConfig?.token === "string"
+          ? authConfig.token
+          : typeof authConfig?.token === "object"
+            ? undefined
+            : undefined;
+      const password = typeof authConfig?.password === "string" ? authConfig.password : undefined;
+      return {
+        token,
+        password,
+      };
+    },
+  ),
   ensureGatewayStartupAuth: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
     cfg: {
       ...cfg,
@@ -25,16 +44,16 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: mocks.loadConfig,
-  };
-});
+vi.mock("../config/config.js", () => ({
+  loadConfig: mocks.loadConfig,
+}));
 
 vi.mock("../gateway/startup-auth.js", () => ({
   ensureGatewayStartupAuth: mocks.ensureGatewayStartupAuth,
+}));
+
+vi.mock("../gateway/auth.js", () => ({
+  resolveGatewayAuth: mocks.resolveGatewayAuth,
 }));
 
 let ensureBrowserControlAuth: typeof import("./control-auth.js").ensureBrowserControlAuth;
@@ -74,6 +93,7 @@ describe("ensureBrowserControlAuth", () => {
     ({ ensureBrowserControlAuth } = await import("./control-auth.js"));
     vi.restoreAllMocks();
     mocks.loadConfig.mockClear();
+    mocks.resolveGatewayAuth.mockClear();
     mocks.ensureGatewayStartupAuth.mockClear();
   });
 
