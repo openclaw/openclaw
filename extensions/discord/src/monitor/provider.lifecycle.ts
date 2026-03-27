@@ -82,13 +82,13 @@ export async function runDiscordGatewayLifecycle(params: {
       if (decision !== "stop") {
         return "continue";
       }
-      // Don't throw for expected shutdown events — intentional disconnect
-      // (reconnect-exhausted with maxAttempts=0) and disallowed-intents are
-      // both handled without crashing the provider.
-      if (
-        event.type === "disallowed-intents" ||
-        (lifecycleStopping && event.type === "reconnect-exhausted")
-      ) {
+      // Don't throw for expected shutdown events. disallowed-intents and
+      // reconnect-exhausted are both handled without crashing the provider.
+      // reconnect-exhausted must never throw: when the health monitor aborts a
+      // stale socket it sets maxAttempts=0 and disconnects, but lifecycleStopping
+      // may not be true yet (race). Even for unexpected WS drops the right
+      // response is a graceful stop — the health monitor handles reconnection.
+      if (event.type === "disallowed-intents" || event.type === "reconnect-exhausted") {
         return "stop";
       }
       throw event.err;
