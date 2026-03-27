@@ -251,7 +251,12 @@ export function createSessionsListTool(opts?: {
                 )
             : undefined,
           thinkingLevel: typeof entry.thinkingLevel === "string" ? entry.thinkingLevel : undefined,
+          fastMode: typeof entry.fastMode === "boolean" ? entry.fastMode : undefined,
           verboseLevel: typeof entry.verboseLevel === "string" ? entry.verboseLevel : undefined,
+          reasoningLevel:
+            typeof entry.reasoningLevel === "string" ? entry.reasoningLevel : undefined,
+          elevatedLevel: typeof entry.elevatedLevel === "string" ? entry.elevatedLevel : undefined,
+          responseUsage: typeof entry.responseUsage === "string" ? entry.responseUsage : undefined,
           systemSent: typeof entry.systemSent === "boolean" ? entry.systemSent : undefined,
           abortedLastRun:
             typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined,

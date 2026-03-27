@@ -1,3 +1,4 @@
+import { createSyntheticSourceInfo } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { resolveSkillsPromptForRun } from "./skills.js";
 import type { SkillEntry } from "./skills/types.js";
@@ -17,13 +18,9 @@ describe("resolveSkillsPromptForRun", () => {
         description: "Demo",
         filePath: "/app/skills/demo-skill/SKILL.md",
         baseDir: "/app/skills/demo-skill",
-        sourceInfo: {
-          path: "/app/skills/demo-skill/SKILL.md",
+        sourceInfo: createSyntheticSourceInfo("/app/skills/demo-skill/SKILL.md", {
           source: "openclaw-bundled",
-          scope: "project",
-          origin: "top-level",
-          baseDir: "/app/skills/demo-skill",
-        },
+        }),
         disableModelInvocation: false,
       },
       frontmatter: {},

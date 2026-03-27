@@ -1,6 +1,5 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
-import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-defaults.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
@@ -69,8 +68,6 @@ type ConfigSetOperation = {
   assignedRef?: SecretRef;
 };
 
-const OLLAMA_API_KEY_PATH: PathSegment[] = ["models", "providers", "ollama", "apiKey"];
-const OLLAMA_PROVIDER_PATH: PathSegment[] = ["models", "providers", "ollama"];
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
 const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
 const CONFIG_SET_EXAMPLE_VALUE = formatCliCommand(
@@ -335,24 +332,6 @@ function pathEquals(path: PathSegment[], expected: PathSegment[]): boolean {
   return (
     path.length === expected.length && path.every((segment, index) => segment === expected[index])
   );
-}
-
-function ensureValidOllamaProviderForApiKeySet(
-  root: Record<string, unknown>,
-  path: PathSegment[],
-): void {
-  if (!pathEquals(path, OLLAMA_API_KEY_PATH)) {
-    return;
-  }
-  const existing = getAtPath(root, OLLAMA_PROVIDER_PATH);
-  if (existing.found) {
-    return;
-  }
-  setAtPath(root, OLLAMA_PROVIDER_PATH, {
-    baseUrl: OLLAMA_DEFAULT_BASE_URL,
-    api: "ollama",
-    models: [],
-  });
 }
 
 function pruneInactiveGatewayAuthCredentials(params: {
@@ -1006,7 +985,6 @@ export async function runConfigSet(opts: {
     // This prevents runtime defaults from leaking into the written config file (issue #6070)
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
     for (const operation of operations) {
-      ensureValidOllamaProviderForApiKeySet(next, operation.setPath);
       setAtPath(next, operation.setPath, operation.value);
     }
     const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({

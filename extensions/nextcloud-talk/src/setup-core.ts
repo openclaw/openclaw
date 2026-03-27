@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   applyAccountNameToChannelSection,
-  createZodSetupInputValidator,
+  createSetupInputPresenceValidator,
   patchScopedAccountConfig,
 } from "openclaw/plugin-sdk/setup";
 import {
@@ -17,7 +17,6 @@ import type { ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
 import { type ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
-import { z } from "zod";
 import {
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
@@ -33,15 +32,6 @@ type NextcloudSetupInput = ChannelSetupInput & {
   secretFile?: string;
 };
 type NextcloudTalkSection = NonNullable<CoreConfig["channels"]>["nextcloud-talk"];
-
-const NextcloudSetupInputSchema = z
-  .object({
-    useEnv: z.boolean().optional(),
-    baseUrl: z.string().optional(),
-    secret: z.string().optional(),
-    secretFile: z.string().optional(),
-  })
-  .passthrough() as z.ZodType<NextcloudSetupInput>;
 
 export function normalizeNextcloudTalkBaseUrl(value: string | undefined): string {
   return value?.trim().replace(/\/+$/, "") ?? "";
@@ -192,16 +182,15 @@ export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
       accountId,
       name,
     }),
-  validateInput: createZodSetupInputValidator({
-    schema: NextcloudSetupInputSchema,
+  validateInput: createSetupInputPresenceValidator({
+    defaultAccountOnlyEnvError:
+      "NEXTCLOUD_TALK_BOT_SECRET can only be used for the default account.",
     validate: ({ accountId, input }) => {
-      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-        return "NEXTCLOUD_TALK_BOT_SECRET can only be used for the default account.";
-      }
-      if (!input.useEnv && !input.secret && !input.secretFile) {
+      const setupInput = input as NextcloudSetupInput;
+      if (!setupInput.useEnv && !setupInput.secret && !setupInput.secretFile) {
         return "Nextcloud Talk requires bot secret or --secret-file (or --use-env).";
       }
-      if (!input.baseUrl) {
+      if (!setupInput.baseUrl) {
         return "Nextcloud Talk requires --base-url.";
       }
       return null;

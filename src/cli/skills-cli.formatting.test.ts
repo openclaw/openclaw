@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createSyntheticSourceInfo } from "@mariozechner/pi-coding-agent";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import type { SkillEntry } from "../agents/skills.js";
@@ -38,15 +39,11 @@ describe("skills-cli (e2e)", () => {
           description: "Capture UI screenshots",
           filePath: path.join(baseDir, "SKILL.md"),
           baseDir,
-          sourceInfo: {
-            path: path.join(baseDir, "SKILL.md"),
+          sourceInfo: createSyntheticSourceInfo(path.join(baseDir, "SKILL.md"), {
             source: "openclaw-bundled",
-            scope: "project",
-            origin: "top-level",
-            baseDir,
-          },
+          }),
           disableModelInvocation: false,
-        } as SkillEntry["skill"],
+        },
         frontmatter: {},
         metadata: { emoji: "📸" },
       },

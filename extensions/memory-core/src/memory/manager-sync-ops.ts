@@ -25,12 +25,15 @@ import {
   type SessionFileEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
+  buildFileEntry,
   ensureDir,
   ensureMemoryIndexSchema,
   hashText,
   isFileMissingError,
   listMemoryFiles,
+  loadSqliteVecExtension,
   normalizeExtraMemoryPaths,
+  requireNodeSqlite,
   runWithConcurrency,
   type MemoryFileEntry,
   type MemorySource,
@@ -43,9 +46,6 @@ import {
   type EmbeddingProviderRuntime,
   resolveEmbeddingProviderFallbackModel,
 } from "./embeddings.js";
-import { buildFileEntry } from "./internal.js";
-import { loadSqliteVecExtension } from "./sqlite-vec.js";
-import { requireNodeSqlite } from "./sqlite.js";
 
 type MemoryIndexMeta = {
   model: string;

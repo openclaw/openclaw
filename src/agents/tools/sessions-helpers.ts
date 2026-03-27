@@ -73,7 +73,11 @@ export type SessionListRow = {
   runtimeMs?: number;
   childSessions?: string[];
   thinkingLevel?: string;
+  fastMode?: boolean;
   verboseLevel?: string;
+  reasoningLevel?: string;
+  elevatedLevel?: string;
+  responseUsage?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   sendPolicy?: string;

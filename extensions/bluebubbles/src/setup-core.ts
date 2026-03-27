@@ -1,5 +1,5 @@
 import {
-  createZodSetupInputValidator,
+  createSetupInputPresenceValidator,
   createTopLevelChannelDmPolicySetter,
   normalizeAccountId,
   patchScopedAccountConfig,
@@ -8,20 +8,12 @@ import {
   type DmPolicy,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
-import { z } from "zod";
 import { applyBlueBubblesConnectionConfig } from "./config-apply.js";
 
 const channel = "bluebubbles" as const;
 const setBlueBubblesTopLevelDmPolicy = createTopLevelChannelDmPolicySetter({
   channel,
 });
-
-const BlueBubblesSetupInputSchema = z
-  .object({
-    httpUrl: z.string().optional(),
-    password: z.string().optional(),
-  })
-  .passthrough();
 
 export function setBlueBubblesDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy): OpenClawConfig {
   return setBlueBubblesTopLevelDmPolicy(cfg, dmPolicy);
@@ -51,8 +43,7 @@ export const blueBubblesSetupAdapter: ChannelSetupAdapter = {
       accountId,
       name,
     }),
-  validateInput: createZodSetupInputValidator({
-    schema: BlueBubblesSetupInputSchema,
+  validateInput: createSetupInputPresenceValidator({
     validate: ({ input }) => {
       if (!input.httpUrl && !input.password) {
         return "BlueBubbles requires --http-url and --password.";
