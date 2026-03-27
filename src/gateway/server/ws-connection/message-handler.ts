@@ -24,6 +24,7 @@ import { rawDataToString } from "../../../infra/ws.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
+  isBrowserOperatorUiClient,
   isGatewayCliClient,
   isOperatorUiClient,
   isWebchatClient,
@@ -406,8 +407,9 @@ export function attachGatewayWsMessageHandler(params: {
         connectParams.scopes = scopes;
 
         const isControlUi = isOperatorUiClient(connectParams.client);
+        const isBrowserOperatorUi = isBrowserOperatorUiClient(connectParams.client);
         const isWebchat = isWebchatConnect(connectParams);
-        if (enforceOriginCheckForAnyClient || isControlUi || isWebchat) {
+        if (enforceOriginCheckForAnyClient || isBrowserOperatorUi || isWebchat) {
           const hostHeaderOriginFallbackEnabled =
             configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
           const originCheck = checkBrowserOrigin({

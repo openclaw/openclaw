@@ -299,9 +299,7 @@ export function registerControlUiAndPairingSuite(): void {
 
   test("allows localhost tui without device identity when insecure auth is enabled", async () => {
     testState.gatewayControlUi = { allowInsecureAuth: true };
-    const { server, ws, prevToken } = await startServerWithClient("secret", {
-      wsHeaders: { origin: "http://127.0.0.1" },
-    });
+    const { server, ws, prevToken } = await startServerWithClient("secret");
     await connectControlUiWithoutDeviceAndExpectOk({
       ws,
       token: "secret",
