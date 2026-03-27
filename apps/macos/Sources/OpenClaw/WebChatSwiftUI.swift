@@ -126,6 +126,13 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             timeoutMs: 10000)
     }
 
+    func compactSession(sessionKey: String) async throws {
+        _ = try await GatewayConnection.shared.request(
+            method: "sessions.compact",
+            params: ["key": AnyCodable(sessionKey)],
+            timeoutMs: 10000)
+    }
+
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
         AsyncStream { continuation in
             let task = Task {

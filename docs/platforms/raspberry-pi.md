@@ -4,7 +4,7 @@ read_when:
   - Setting up OpenClaw on a Raspberry Pi
   - Running OpenClaw on ARM devices
   - Building a cheap always-on personal AI
-title: "Raspberry Pi"
+title: "Raspberry Pi (Platform)"
 ---
 
 # OpenClaw on Raspberry Pi
@@ -33,7 +33,7 @@ Perfect for:
 **Minimum specs:** 1GB RAM, 1 core, 500MB disk  
 **Recommended:** 2GB+ RAM, 64-bit OS, 16GB+ SD card (or USB SSD)
 
-## What You'll Need
+## What you need
 
 - Raspberry Pi 4 or 5 (2GB+ recommended)
 - MicroSD card (16GB+) or USB SSD (better performance)
@@ -321,7 +321,7 @@ Since the Pi is just the Gateway (models run in the cloud), use API-based models
 
 ## Auto-Start on Boot
 
-The setup wizard sets this up, but to verify:
+Onboarding sets this up, but to verify:
 
 ```bash
 # Check service is enabled
@@ -354,7 +354,7 @@ free -h
 - Disable unused services: `sudo systemctl disable cups bluetooth avahi-daemon`
 - Check CPU throttling: `vcgencmd get_throttled` (should return `0x0`)
 
-### Service Won't Start
+### Service will not start
 
 ```bash
 # Check logs

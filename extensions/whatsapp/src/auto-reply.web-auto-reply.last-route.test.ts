@@ -1,12 +1,21 @@
 import "./test-helpers.js";
-import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
-import { buildMentionConfig } from "./auto-reply/mentions.js";
-import { createEchoTracker } from "./auto-reply/monitor/echo.js";
-import { awaitBackgroundTasks } from "./auto-reply/monitor/last-route.js";
-import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
+
+const updateLastRouteInBackgroundMock = vi.hoisted(() => vi.fn());
+let awaitBackgroundTasks: typeof import("./auto-reply/monitor/last-route.js").awaitBackgroundTasks;
+let buildMentionConfig: typeof import("./auto-reply/mentions.js").buildMentionConfig;
+let createEchoTracker: typeof import("./auto-reply/monitor/echo.js").createEchoTracker;
+let createWebOnMessageHandler: typeof import("./auto-reply/monitor/on-message.js").createWebOnMessageHandler;
+
+vi.mock("./auto-reply/monitor/last-route.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./auto-reply/monitor/last-route.js")>();
+  return {
+    ...actual,
+    updateLastRouteInBackground: (...args: unknown[]) => updateLastRouteInBackgroundMock(...args),
+  };
+});
 
 function makeCfg(storePath: string): OpenClawConfig {
   return {
@@ -86,15 +95,17 @@ function buildInboundMessage(params: {
   };
 }
 
-async function readStoredRoutes(storePath: string) {
-  return JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
-    string,
-    { lastChannel?: string; lastTo?: string; lastAccountId?: string }
-  >;
-}
-
 describe("web auto-reply last-route", () => {
   installWebAutoReplyUnitTestHooks();
+
+  beforeEach(async () => {
+    vi.resetModules();
+    updateLastRouteInBackgroundMock.mockClear();
+    ({ awaitBackgroundTasks } = await import("./auto-reply/monitor/last-route.js"));
+    ({ buildMentionConfig } = await import("./auto-reply/mentions.js"));
+    ({ createEchoTracker } = await import("./auto-reply/monitor/echo.js"));
+    ({ createWebOnMessageHandler } = await import("./auto-reply/monitor/on-message.js"));
+  });
 
   it("updates last-route for direct chats without senderE164", async () => {
     const now = Date.now();
@@ -118,9 +129,12 @@ describe("web auto-reply last-route", () => {
 
     await awaitBackgroundTasks(backgroundTasks);
 
-    const stored = await readStoredRoutes(store.storePath);
-    expect(stored[mainSessionKey]?.lastChannel).toBe("whatsapp");
-    expect(stored[mainSessionKey]?.lastTo).toBe("+1000");
+    expect(updateLastRouteInBackgroundMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        to: "+1000",
+      }),
+    );
 
     await store.cleanup();
   });
@@ -151,10 +165,13 @@ describe("web auto-reply last-route", () => {
 
     await awaitBackgroundTasks(backgroundTasks);
 
-    const stored = await readStoredRoutes(store.storePath);
-    expect(stored[groupSessionKey]?.lastChannel).toBe("whatsapp");
-    expect(stored[groupSessionKey]?.lastTo).toBe("123@g.us");
-    expect(stored[groupSessionKey]?.lastAccountId).toBe("work");
+    expect(updateLastRouteInBackgroundMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        to: "123@g.us",
+        accountId: "work",
+      }),
+    );
 
     await store.cleanup();
   });

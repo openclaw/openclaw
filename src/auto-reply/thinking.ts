@@ -5,6 +5,7 @@ import {
   listThinkingLevels as listThinkingLevelsFallback,
   normalizeProviderId,
   resolveThinkingDefaultForModel as resolveThinkingDefaultForModelFallback,
+  supportsBuiltInXHighThinking,
 } from "./thinking.shared.js";
 import type { ThinkLevel, ThinkingCatalogEntry } from "./thinking.shared.js";
 export {
@@ -33,9 +34,12 @@ import {
   resolveProviderBinaryThinking,
   resolveProviderDefaultThinkingLevel,
   resolveProviderXHighThinking,
-} from "../plugins/provider-runtime.js";
+} from "../plugins/provider-thinking.js";
 
 export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
+  if (isBinaryThinkingProviderFallback(provider)) {
+    return true;
+  }
   const normalizedProvider = normalizeProviderId(provider);
   if (!normalizedProvider) {
     return false;
@@ -58,6 +62,9 @@ export function supportsXHighThinking(provider?: string | null, model?: string |
   const modelKey = model?.trim().toLowerCase();
   if (!modelKey) {
     return false;
+  }
+  if (supportsBuiltInXHighThinking(provider, modelKey)) {
+    return true;
   }
   const providerKey = normalizeProviderId(provider);
   if (providerKey) {

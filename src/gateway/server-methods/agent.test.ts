@@ -1,14 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentHandlers } from "./agent.js";
+import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
+  loadGatewaySessionRow: vi.fn(),
   updateSessionStore: vi.fn(),
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
   performGatewaySessionReset: vi.fn(),
+  getLatestSubagentRunByChildSessionKey: vi.fn(),
+  replaceSubagentRunAfterSteer: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
 }));
 
@@ -17,6 +21,7 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadSessionEntry: mocks.loadSessionEntry,
+    loadGatewaySessionRow: mocks.loadGatewaySessionRow,
   };
 });
 
@@ -62,6 +67,14 @@ vi.mock("../../infra/agent-events.js", () => ({
   onAgentEvent: vi.fn(),
 }));
 
+vi.mock("../../agents/subagent-registry-read.js", () => ({
+  getLatestSubagentRunByChildSessionKey: mocks.getLatestSubagentRunByChildSessionKey,
+}));
+
+vi.mock("../session-subagent-reactivation.runtime.js", () => ({
+  replaceSubagentRunAfterSteer: mocks.replaceSubagentRunAfterSteer,
+}));
+
 vi.mock("../session-reset-service.js", () => ({
   performGatewaySessionReset: (...args: unknown[]) =>
     (mocks.performGatewaySessionReset as (...args: unknown[]) => unknown)(...args),
@@ -86,6 +99,8 @@ const makeContext = (): GatewayRequestContext =>
     dedupe: new Map(),
     addChatRun: vi.fn(),
     logGateway: { info: vi.fn(), error: vi.fn() },
+    broadcastToConnIds: vi.fn(),
+    getSessionEventSubscriberConnIds: () => new Set(),
   }) as unknown as GatewayRequestContext;
 
 type AgentHandlerArgs = Parameters<typeof agentHandlers.agent>[0];
@@ -93,6 +108,26 @@ type AgentParams = AgentHandlerArgs["params"];
 
 type AgentIdentityGetHandlerArgs = Parameters<(typeof agentHandlers)["agent.identity.get"]>[0];
 type AgentIdentityGetParams = AgentIdentityGetHandlerArgs["params"];
+
+async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs = 5) {
+  vi.useFakeTimers();
+  try {
+    let lastError: unknown;
+    for (let elapsed = 0; elapsed <= timeoutMs; elapsed += stepMs) {
+      try {
+        assertion();
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(stepMs);
+    }
+    throw lastError ?? new Error("assertion did not pass in time");
+  } finally {
+    vi.useRealTimers();
+  }
+}
 
 function mockMainSessionEntry(entry: Record<string, unknown>, cfg: Record<string, unknown> = {}) {
   mocks.loadSessionEntry.mockReturnValue({
@@ -155,7 +190,7 @@ function resetTimeConfig() {
 }
 
 async function expectResetCall(expectedMessage: string) {
-  await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+  await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
   expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
   const call = readLastAgentCommandCall();
   expect(call?.message).toBe(expectedMessage);
@@ -303,6 +338,107 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.acp).toEqual(existingAcpMeta);
   });
 
+  it("forwards provider and model overrides for admin-scoped callers", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "test override",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        idempotencyKey: "test-idem-model-override",
+      },
+      {
+        reqId: "test-idem-model-override",
+        client: {
+          connect: {
+            scopes: ["operator.admin"],
+          },
+        } as AgentHandlerArgs["client"],
+      },
+    );
+
+    const lastCall = mocks.agentCommand.mock.calls.at(-1);
+    expect(lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+      }),
+    );
+  });
+
+  it("rejects provider and model overrides for write-scoped callers", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "test override",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        idempotencyKey: "test-idem-model-override-write",
+      },
+      {
+        reqId: "test-idem-model-override-write",
+        client: {
+          connect: {
+            scopes: ["operator.write"],
+          },
+        } as AgentHandlerArgs["client"],
+        respond,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "provider/model overrides are not authorized for this caller.",
+      }),
+    );
+  });
+
+  it("forwards provider and model overrides when internal override authorization is set", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "test override",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        idempotencyKey: "test-idem-model-override-internal",
+      },
+      {
+        reqId: "test-idem-model-override-internal",
+        client: {
+          connect: {
+            scopes: ["operator.write"],
+          },
+          internal: {
+            allowModelOverride: true,
+          },
+        } as AgentHandlerArgs["client"],
+      },
+    );
+
+    const lastCall = mocks.agentCommand.mock.calls.at(-1);
+    expect(lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        senderIsOwner: false,
+      }),
+    );
+  });
+
   it("preserves cliSessionIds from existing session entry", async () => {
     const existingCliSessionIds = { "claude-cli": "abc-123-def" };
     const existingClaudeCliSessionId = "abc-123-def";
@@ -316,6 +452,150 @@ describe("gateway agent handler", () => {
     expect(capturedEntry).toBeDefined();
     expect(capturedEntry?.cliSessionIds).toEqual(existingCliSessionIds);
     expect(capturedEntry?.claudeCliSessionId).toBe(existingClaudeCliSessionId);
+  });
+
+  it("reactivates completed subagent sessions and broadcasts send updates", async () => {
+    const childSessionKey = "agent:main:subagent:followup";
+    const completedRun = {
+      runId: "run-old",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "initial task",
+      cleanup: "keep" as const,
+      createdAt: 1,
+      startedAt: 2,
+      endedAt: 3,
+      outcome: { status: "ok" as const },
+    };
+
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "sess-followup",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: childSessionKey,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        [childSessionKey]: {
+          sessionId: "sess-followup",
+          updatedAt: Date.now(),
+        },
+      };
+      return await updater(store);
+    });
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
+    mocks.replaceSubagentRunAfterSteer.mockReturnValueOnce(true);
+    mocks.loadGatewaySessionRow.mockReturnValueOnce({
+      status: "running",
+      startedAt: 123,
+      endedAt: undefined,
+      runtimeMs: 10,
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const respond = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    await invokeAgent(
+      {
+        message: "follow-up",
+        sessionKey: childSessionKey,
+        idempotencyKey: "run-new",
+      },
+      {
+        respond,
+        context: {
+          dedupe: new Map(),
+          addChatRun: vi.fn(),
+          logGateway: { info: vi.fn(), error: vi.fn() },
+          broadcastToConnIds,
+          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        } as unknown as GatewayRequestContext,
+      },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "run-new",
+        status: "accepted",
+      }),
+      undefined,
+      { runId: "run-new" },
+    );
+    expectSubagentFollowupReactivation({
+      replaceSubagentRunAfterSteerMock: mocks.replaceSubagentRunAfterSteer,
+      broadcastToConnIds,
+      completedRun,
+      childSessionKey,
+    });
+  });
+
+  it("includes live session setting metadata in agent send events", async () => {
+    mockMainSessionEntry({
+      sessionId: "sess-main",
+      updatedAt: Date.now(),
+      fastMode: true,
+      sendPolicy: "deny",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          fastMode: true,
+          sendPolicy: "deny",
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.loadGatewaySessionRow.mockReturnValue({
+      fastMode: true,
+      sendPolicy: "deny",
+      totalTokens: 12,
+      status: "running",
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const broadcastToConnIds = vi.fn();
+    await invokeAgent(
+      {
+        message: "test",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-live-settings",
+      },
+      {
+        context: {
+          dedupe: new Map(),
+          addChatRun: vi.fn(),
+          logGateway: { info: vi.fn(), error: vi.fn() },
+          broadcastToConnIds,
+          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        } as unknown as GatewayRequestContext,
+      },
+    );
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        reason: "send",
+        fastMode: true,
+        sendPolicy: "deny",
+        totalTokens: 12,
+        status: "running",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
   });
 
   it("injects a timestamp into the message passed to agentCommand", async () => {
@@ -334,7 +614,7 @@ describe("gateway agent handler", () => {
     );
 
     // Wait for the async agentCommand call
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
 
     const callArgs = mocks.agentCommand.mock.calls[0][0];
     expect(callArgs.message).toBe("[Wed 2026-01-28 20:30 EST] Is it the weekend?");
@@ -375,7 +655,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as
       | { senderIsOwner?: boolean }
       | undefined;
@@ -400,7 +680,7 @@ describe("gateway agent handler", () => {
       { reqId: "strict-1" },
     );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
@@ -456,7 +736,7 @@ describe("gateway agent handler", () => {
       },
       { reqId: "workspace-forwarded-1" },
     );
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const spawnedCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as { workspaceDir?: string };
     expect(spawnedCall.workspaceDir).toBe("/tmp/inherited");
   });
@@ -498,7 +778,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
       channel?: string;
       messageChannel?: string;
@@ -575,10 +855,13 @@ describe("gateway agent handler", () => {
         sessionKey: "agent:main:main",
         idempotencyKey: "test-idem-new",
       },
-      { reqId: "4" },
+      {
+        reqId: "4",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
     );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
     expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
     const call = readLastAgentCommandCall();
     // Message is now dynamically built with current date — check key substrings
@@ -603,7 +886,10 @@ describe("gateway agent handler", () => {
         sessionKey: "agent:main:main",
         idempotencyKey: "test-idem-reset-suffix",
       },
-      { reqId: "4b" },
+      {
+        reqId: "4b",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
     );
 
     const call = await expectResetCall("[Wed 2026-01-28 20:30 EST] check status");
@@ -629,6 +915,34 @@ describe("gateway agent handler", () => {
       undefined,
       expect.objectContaining({
         message: expect.stringContaining("malformed session key"),
+      }),
+    );
+  });
+
+  it("rejects /reset for write-scoped gateway callers", async () => {
+    mockMainSessionEntry({ sessionId: "existing-session-id" });
+    mocks.performGatewaySessionReset.mockClear();
+    mocks.agentCommand.mockClear();
+
+    const respond = await invokeAgent(
+      {
+        message: "/reset",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-reset-write-scope",
+      },
+      {
+        reqId: "4c",
+        client: { connect: { scopes: ["operator.write"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect(mocks.performGatewaySessionReset).not.toHaveBeenCalled();
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "missing scope: operator.admin",
       }),
     );
   });

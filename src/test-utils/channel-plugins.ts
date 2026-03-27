@@ -7,7 +7,7 @@ import type {
 } from "../channels/plugins/types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 
-type TestChannelRegistration = {
+export type TestChannelRegistration = {
   pluginId: string;
   plugin: unknown;
   source: string;
@@ -26,12 +26,16 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
     enabled: true,
   })),
   providers: [],
+  speechProviders: [],
+  mediaUnderstandingProviders: [],
+  imageGenerationProviders: [],
   webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
   cliRegistrars: [],
   services: [],
   commands: [],
+  conversationBindingResolvedHandlers: [],
   diagnostics: [],
 });
 
@@ -73,7 +77,7 @@ export const createMSTeamsTestPluginBase = (): Pick<
     meta: {
       ...base.meta,
       selectionLabel: "Microsoft Teams (Bot Framework)",
-      blurb: "Bot Framework; enterprise support.",
+      blurb: "Teams SDK; enterprise support.",
       aliases: ["teams"],
     },
   };

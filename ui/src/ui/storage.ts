@@ -1,4 +1,5 @@
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
+const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 const MAX_SCOPED_SESSION_ENTRIES = 10;
@@ -24,6 +25,22 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 
+export const BORDER_RADIUS_STOPS = [0, 25, 50, 75, 100] as const;
+export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
+
+function snapBorderRadius(value: number): BorderRadiusStop {
+  let best: BorderRadiusStop = BORDER_RADIUS_STOPS[0];
+  let bestDist = Math.abs(value - best);
+  for (const stop of BORDER_RADIUS_STOPS) {
+    const dist = Math.abs(value - stop);
+    if (dist < bestDist) {
+      best = stop;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
 export type UiSettings = {
   gatewayUrl: string;
   token: string;
@@ -38,6 +55,7 @@ export type UiSettings = {
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
+  borderRadius: number; // Corner roundness (0–100, default 50)
   locale?: string;
 };
 
@@ -189,6 +207,7 @@ export function loadSettings(): UiSettings {
     navCollapsed: false,
     navWidth: 220,
     navGroupsCollapsed: {},
+    borderRadius: 50,
   };
 
   try {
@@ -197,7 +216,7 @@ export function loadSettings(): UiSettings {
     const raw =
       storage?.getItem(scopedKey) ??
       storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
-      storage?.getItem("openclaw.control.settings.v1");
+      storage?.getItem(LEGACY_SETTINGS_KEY);
     if (!raw) {
       return defaults;
     }
@@ -246,6 +265,12 @@ export function loadSettings(): UiSettings {
         typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed
           : defaults.navGroupsCollapsed,
+      borderRadius:
+        typeof parsed.borderRadius === "number" &&
+        parsed.borderRadius >= 0 &&
+        parsed.borderRadius <= 100
+          ? snapBorderRadius(parsed.borderRadius)
+          : defaults.borderRadius,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };
     if ("token" in parsed) {
@@ -305,8 +330,16 @@ function persistSettings(next: UiSettings) {
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     navGroupsCollapsed: next.navGroupsCollapsed,
+    borderRadius: next.borderRadius,
     sessionsByGateway,
     ...(next.locale ? { locale: next.locale } : {}),
   };
-  storage?.setItem(scopedKey, JSON.stringify(persisted));
+  const serialized = JSON.stringify(persisted);
+  try {
+    storage?.setItem(scopedKey, serialized);
+    storage?.setItem(LEGACY_SETTINGS_KEY, serialized);
+  } catch {
+    // best-effort — quota exceeded or security restrictions should not
+    // prevent in-memory settings and visual updates from being applied
+  }
 }

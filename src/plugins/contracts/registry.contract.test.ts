@@ -1,65 +1,85 @@
 import { describe, expect, it } from "vitest";
+import { resolveBundledWebSearchPluginIds } from "../bundled-web-search.js";
+import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import {
+  imageGenerationProviderContractRegistry,
+  mediaUnderstandingProviderContractRegistry,
   pluginRegistrationContractRegistry,
-  providerContractRegistry,
-  webSearchProviderContractRegistry,
+  providerContractLoadError,
+  providerContractPluginIds,
+  speechProviderContractRegistry,
 } from "./registry.js";
 
-function findProviderIdsForPlugin(pluginId: string) {
-  return providerContractRegistry
-    .filter((entry) => entry.pluginId === pluginId)
-    .map((entry) => entry.provider.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function findWebSearchIdsForPlugin(pluginId: string) {
-  return webSearchProviderContractRegistry
-    .filter((entry) => entry.pluginId === pluginId)
-    .map((entry) => entry.provider.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function findRegistrationForPlugin(pluginId: string) {
-  const entry = pluginRegistrationContractRegistry.find(
-    (candidate) => candidate.pluginId === pluginId,
-  );
-  if (!entry) {
-    throw new Error(`plugin registration contract missing for ${pluginId}`);
-  }
-  return entry;
-}
+const REGISTRY_CONTRACT_TIMEOUT_MS = 300_000;
 
 describe("plugin contract registry", () => {
+  it("loads bundled non-provider capability registries without import-time failure", () => {
+    expect(providerContractLoadError).toBeUndefined();
+    expect(pluginRegistrationContractRegistry.length).toBeGreaterThan(0);
+  });
+
   it("does not duplicate bundled provider ids", () => {
-    const ids = providerContractRegistry.map((entry) => entry.provider.id);
+    const ids = pluginRegistrationContractRegistry.flatMap((entry) => entry.providerIds);
     expect(ids).toEqual([...new Set(ids)]);
   });
 
   it("does not duplicate bundled web search provider ids", () => {
-    const ids = webSearchProviderContractRegistry.map((entry) => entry.provider.id);
+    const ids = pluginRegistrationContractRegistry.flatMap((entry) => entry.webSearchProviderIds);
     expect(ids).toEqual([...new Set(ids)]);
   });
 
-  it("keeps multi-provider plugin ownership explicit", () => {
-    expect(findProviderIdsForPlugin("google")).toEqual(["google", "google-gemini-cli"]);
-    expect(findProviderIdsForPlugin("minimax")).toEqual(["minimax", "minimax-portal"]);
-    expect(findProviderIdsForPlugin("openai")).toEqual(["openai", "openai-codex"]);
+  it(
+    "does not duplicate bundled speech provider ids",
+    { timeout: REGISTRY_CONTRACT_TIMEOUT_MS },
+    () => {
+      const ids = speechProviderContractRegistry.map((entry) => entry.provider.id);
+      expect(ids).toEqual([...new Set(ids)]);
+    },
+  );
+
+  it("does not duplicate bundled media provider ids", () => {
+    const ids = mediaUnderstandingProviderContractRegistry.map((entry) => entry.provider.id);
+    expect(ids).toEqual([...new Set(ids)]);
   });
 
-  it("keeps bundled web search ownership explicit", () => {
-    expect(findWebSearchIdsForPlugin("brave")).toEqual(["brave"]);
-    expect(findWebSearchIdsForPlugin("firecrawl")).toEqual(["firecrawl"]);
-    expect(findWebSearchIdsForPlugin("google")).toEqual(["gemini"]);
-    expect(findWebSearchIdsForPlugin("moonshot")).toEqual(["kimi"]);
-    expect(findWebSearchIdsForPlugin("perplexity")).toEqual(["perplexity"]);
-    expect(findWebSearchIdsForPlugin("xai")).toEqual(["grok"]);
+  it("covers every bundled provider plugin discovered from manifests", () => {
+    const bundledProviderPluginIds = loadPluginManifestRegistry({})
+      .plugins.filter((plugin) => plugin.origin === "bundled" && plugin.providers.length > 0)
+      .map((plugin) => plugin.id)
+      .toSorted((left, right) => left.localeCompare(right));
+
+    expect(providerContractPluginIds).toEqual(bundledProviderPluginIds);
   });
 
-  it("keeps bundled provider and web search tool ownership explicit", () => {
-    expect(findRegistrationForPlugin("firecrawl")).toMatchObject({
-      providerIds: [],
-      webSearchProviderIds: ["firecrawl"],
-      toolNames: ["firecrawl_search", "firecrawl_scrape"],
-    });
+  it("covers every bundled speech plugin discovered from manifests", () => {
+    const bundledSpeechPluginIds = loadPluginManifestRegistry({})
+      .plugins.filter(
+        (plugin) =>
+          plugin.origin === "bundled" && (plugin.contracts?.speechProviders?.length ?? 0) > 0,
+      )
+      .map((plugin) => plugin.id)
+      .toSorted((left, right) => left.localeCompare(right));
+
+    expect(
+      [...new Set(speechProviderContractRegistry.map((entry) => entry.pluginId))].toSorted(
+        (left, right) => left.localeCompare(right),
+      ),
+    ).toEqual(bundledSpeechPluginIds);
+  });
+
+  it("covers every bundled web search plugin from the shared resolver", () => {
+    const bundledWebSearchPluginIds = resolveBundledWebSearchPluginIds({});
+
+    expect(
+      pluginRegistrationContractRegistry
+        .filter((entry) => entry.webSearchProviderIds.length > 0)
+        .map((entry) => entry.pluginId)
+        .toSorted((left, right) => left.localeCompare(right)),
+    ).toEqual(bundledWebSearchPluginIds);
+  });
+
+  it("does not duplicate bundled image-generation provider ids", () => {
+    const ids = imageGenerationProviderContractRegistry.map((entry) => entry.provider.id);
+    expect(ids).toEqual([...new Set(ids)]);
   });
 });

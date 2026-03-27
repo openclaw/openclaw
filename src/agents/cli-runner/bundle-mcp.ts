@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,43 +6,21 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import {
+  extractMcpServerMap,
   loadEnabledBundleMcpConfig,
   type BundleMcpConfig,
-  type BundleMcpServerConfig,
 } from "../../plugins/bundle-mcp.js";
-import { isRecord } from "../../utils.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
+  mcpConfigHash?: string;
 };
-
-function extractServerMap(raw: unknown): Record<string, BundleMcpServerConfig> {
-  if (!isRecord(raw)) {
-    return {};
-  }
-  const nested = isRecord(raw.mcpServers)
-    ? raw.mcpServers
-    : isRecord(raw.servers)
-      ? raw.servers
-      : raw;
-  if (!isRecord(nested)) {
-    return {};
-  }
-  const result: Record<string, BundleMcpServerConfig> = {};
-  for (const [serverName, serverRaw] of Object.entries(nested)) {
-    if (!isRecord(serverRaw)) {
-      continue;
-    }
-    result[serverName] = { ...serverRaw };
-  }
-  return result;
-}
 
 async function readExternalMcpConfig(configPath: string): Promise<BundleMcpConfig> {
   try {
     const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as unknown;
-    return { mcpServers: extractServerMap(raw) };
+    return { mcpServers: extractMcpServerMap(raw) };
   } catch {
     return { mcpServers: {} };
   }
@@ -86,13 +65,13 @@ function injectMcpConfigArgs(args: string[] | undefined, mcpConfigPath: string):
 }
 
 export async function prepareCliBundleMcpConfig(params: {
-  backendId: string;
+  enabled: boolean;
   backend: CliBackendConfig;
   workspaceDir: string;
   config?: OpenClawConfig;
   warn?: (message: string) => void;
 }): Promise<PreparedCliBundleMcpConfig> {
-  if (params.backendId !== "claude-cli") {
+  if (!params.enabled) {
     return { backend: params.backend };
   }
 
@@ -119,13 +98,13 @@ export async function prepareCliBundleMcpConfig(params: {
   }
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
 
-  if (Object.keys(mergedConfig.mcpServers).length === 0) {
-    return { backend: params.backend };
-  }
-
+  // Always pass an explicit strict MCP config for background claude-cli runs.
+  // Otherwise Claude may inherit ambient user/global MCP servers (for example
+  // Playwright) and spawn unexpected background processes.
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-"));
   const mcpConfigPath = path.join(tempDir, "mcp.json");
-  await fs.writeFile(mcpConfigPath, `${JSON.stringify(mergedConfig, null, 2)}\n`, "utf-8");
+  const serializedConfig = `${JSON.stringify(mergedConfig, null, 2)}\n`;
+  await fs.writeFile(mcpConfigPath, serializedConfig, "utf-8");
 
   return {
     backend: {
@@ -136,6 +115,7 @@ export async function prepareCliBundleMcpConfig(params: {
         mcpConfigPath,
       ),
     },
+    mcpConfigHash: crypto.createHash("sha256").update(serializedConfig).digest("hex"),
     cleanup: async () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     },

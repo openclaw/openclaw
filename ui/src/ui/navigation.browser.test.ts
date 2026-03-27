@@ -14,6 +14,26 @@ function nextFrame() {
   });
 }
 
+function findConfirmButton(app: ReturnType<typeof mountApp>) {
+  return Array.from(app.querySelectorAll<HTMLButtonElement>("button")).find(
+    (button) => button.textContent?.trim() === "Confirm",
+  );
+}
+
+async function confirmPendingGatewayChange(app: ReturnType<typeof mountApp>) {
+  const confirmButton = findConfirmButton(app);
+  expect(confirmButton).not.toBeUndefined();
+  confirmButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  await app.updateComplete;
+}
+
+function expectConfirmedGatewayChange(app: ReturnType<typeof mountApp>) {
+  expect(app.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
+  expect(app.settings.token).toBe("abc123");
+  expect(window.location.search).toBe("");
+  expect(window.location.hash).toBe("");
+}
+
 describe("control UI routing", () => {
   it("hydrates the tab from the location", async () => {
     const app = mountApp("/sessions");
@@ -315,11 +335,11 @@ describe("control UI routing", () => {
     expect(container.scrollTop).toBe(maxScroll);
   });
 
-  it("strips query token params without importing them", async () => {
+  it("hydrates token from query params and strips them", async () => {
     const app = mountApp("/ui/overview?token=abc123");
     await app.updateComplete;
 
-    expect(app.settings.token).toBe("");
+    expect(app.settings.token).toBe("abc123");
     expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
       undefined,
     );
@@ -392,17 +412,23 @@ describe("control UI routing", () => {
     expect(app.settings.gatewayUrl).not.toBe("wss://other-gateway.example/openclaw");
     expect(app.settings.token).toBe("");
 
-    const confirmButton = Array.from(app.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Confirm",
+    await confirmPendingGatewayChange(app);
+
+    expectConfirmedGatewayChange(app);
+  });
+
+  it("keeps a query token pending until the gateway URL change is confirmed", async () => {
+    const app = mountApp(
+      "/ui/overview?gatewayUrl=wss://other-gateway.example/openclaw&token=abc123",
     );
-    expect(confirmButton).not.toBeUndefined();
-    confirmButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await app.updateComplete;
 
-    expect(app.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
-    expect(app.settings.token).toBe("abc123");
-    expect(window.location.search).toBe("");
-    expect(window.location.hash).toBe("");
+    expect(app.settings.gatewayUrl).not.toBe("wss://other-gateway.example/openclaw");
+    expect(app.settings.token).toBe("");
+
+    await confirmPendingGatewayChange(app);
+
+    expectConfirmedGatewayChange(app);
   });
 
   it("restores the token after a same-tab refresh", async () => {

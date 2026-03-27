@@ -6,11 +6,11 @@ const mocks = vi.hoisted(() => ({
   dispatchChannelMessageAction: vi.fn(),
   sendMessage: vi.fn(),
   sendPoll: vi.fn(),
-  getAgentScopedMediaLocalRoots: vi.fn(() => ["/tmp/agent-roots"]),
+  getAgentScopedMediaLocalRootsForSources: vi.fn(() => ["/tmp/agent-roots"]),
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
 }));
 
-vi.mock("../../channels/plugins/message-actions.js", () => ({
+vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
   dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
 }));
 
@@ -24,7 +24,7 @@ vi.mock("../../media/local-roots.js", async (importOriginal) => {
   return {
     ...actual,
     getDefaultMediaLocalRoots: mocks.getDefaultMediaLocalRoots,
-    getAgentScopedMediaLocalRoots: mocks.getAgentScopedMediaLocalRoots,
+    getAgentScopedMediaLocalRootsForSources: mocks.getAgentScopedMediaLocalRootsForSources,
   };
 });
 
@@ -32,7 +32,10 @@ vi.mock("../../config/sessions.js", () => ({
   appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
 }));
 
-import { executePollAction, executeSendAction } from "./outbound-send-service.js";
+type OutboundSendServiceModule = typeof import("./outbound-send-service.js");
+
+let executePollAction: OutboundSendServiceModule["executePollAction"];
+let executeSendAction: OutboundSendServiceModule["executeSendAction"];
 
 describe("executeSendAction", () => {
   function pluginActionResult(messageId: string) {
@@ -42,7 +45,7 @@ describe("executeSendAction", () => {
       continuePrompt: "",
       output: "",
       sessionId: "s1",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
     };
   }
@@ -88,12 +91,14 @@ describe("executeSendAction", () => {
     });
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ executePollAction, executeSendAction } = await import("./outbound-send-service.js"));
     mocks.dispatchChannelMessageAction.mockClear();
     mocks.sendMessage.mockClear();
     mocks.sendPoll.mockClear();
     mocks.getDefaultMediaLocalRoots.mockClear();
-    mocks.getAgentScopedMediaLocalRoots.mockClear();
+    mocks.getAgentScopedMediaLocalRootsForSources.mockClear();
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
   });
 
@@ -138,13 +143,41 @@ describe("executeSendAction", () => {
         params: {},
         dryRun: false,
       },
-      to: "channel:123",
-      question: "Lunch?",
-      options: ["Pizza", "Sushi"],
-      maxSelections: 1,
+      resolveCorePoll: () => ({
+        to: "channel:123",
+        question: "Lunch?",
+        options: ["Pizza", "Sushi"],
+        maxSelections: 1,
+      }),
     });
 
     expect(result.handledBy).toBe("plugin");
+    expect(mocks.sendPoll).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke shared poll parsing before plugin poll dispatch", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("poll-plugin"));
+    const resolveCorePoll = vi.fn(() => {
+      throw new Error("shared poll fallback should not run");
+    });
+
+    const result = await executePollAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: {
+          pollQuestion: "Lunch?",
+          pollOption: ["Pizza", "Sushi"],
+          pollDurationSeconds: 90,
+          pollPublic: true,
+        },
+        dryRun: false,
+      },
+      resolveCorePoll,
+    });
+
+    expect(result.handledBy).toBe("plugin");
+    expect(resolveCorePoll).not.toHaveBeenCalled();
     expect(mocks.sendPoll).not.toHaveBeenCalled();
   });
 
@@ -163,12 +196,43 @@ describe("executeSendAction", () => {
       message: "hello",
     });
 
-    expect(mocks.getAgentScopedMediaLocalRoots).toHaveBeenCalledWith({}, "agent-1");
+    expect(mocks.getAgentScopedMediaLocalRootsForSources).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "agent-1",
+      mediaSources: [],
+    });
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaLocalRoots: ["/tmp/agent-roots"],
       }),
     );
+  });
+
+  it("passes concrete media sources when widening plugin dispatch roots", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: {
+          to: "channel:123",
+          message: "hello",
+          media: "/Users/peter/Pictures/photo.png",
+        },
+        agentId: "agent-1",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+      mediaUrl: "/Users/peter/Pictures/photo.png",
+    });
+
+    expect(mocks.getAgentScopedMediaLocalRootsForSources).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "agent-1",
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
   });
 
   it("passes mirror idempotency keys through plugin-handled sends", async () => {
@@ -265,13 +329,15 @@ describe("executeSendAction", () => {
         accountId: "acc-1",
         dryRun: false,
       },
-      to: "channel:123",
-      question: "Lunch?",
-      options: ["Pizza", "Sushi"],
-      maxSelections: 1,
-      durationSeconds: 300,
-      threadId: "thread-1",
-      isAnonymous: true,
+      resolveCorePoll: () => ({
+        to: "channel:123",
+        question: "Lunch?",
+        options: ["Pizza", "Sushi"],
+        maxSelections: 1,
+        durationSeconds: 300,
+        threadId: "thread-1",
+        isAnonymous: true,
+      }),
     });
 
     expect(mocks.sendPoll).toHaveBeenCalledWith(
@@ -316,11 +382,13 @@ describe("executeSendAction", () => {
           mode: GATEWAY_CLIENT_MODES.BACKEND,
         },
       },
-      to: "channel:123",
-      question: "Lunch?",
-      options: ["Pizza", "Sushi"],
-      maxSelections: 1,
-      durationHours: 6,
+      resolveCorePoll: () => ({
+        to: "channel:123",
+        question: "Lunch?",
+        options: ["Pizza", "Sushi"],
+        maxSelections: 1,
+        durationHours: 6,
+      }),
     });
 
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();

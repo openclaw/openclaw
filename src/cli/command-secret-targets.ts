@@ -1,4 +1,9 @@
-import { listSecretTargetRegistryEntries } from "../secrets/target-registry.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalAccountId } from "../routing/session-key.js";
+import {
+  discoverConfigSecretTargetsByIds,
+  listSecretTargetRegistryEntries,
+} from "../secrets/target-registry.js";
 
 function idsByPrefix(prefixes: readonly string[]): string[] {
   return listSecretTargetRegistryEntries()
@@ -8,10 +13,6 @@ function idsByPrefix(prefixes: readonly string[]): string[] {
 }
 
 const COMMAND_SECRET_TARGETS = {
-  memory: [
-    "agents.defaults.memorySearch.remote.apiKey",
-    "agents.list[].memorySearch.remote.apiKey",
-  ],
   qrRemote: ["gateway.remote.token", "gateway.remote.password"],
   channels: idsByPrefix(["channels."]),
   models: idsByPrefix(["models.providers."]),
@@ -37,8 +38,63 @@ function toTargetIdSet(values: readonly string[]): Set<string> {
   return new Set(values);
 }
 
-export function getMemoryCommandSecretTargetIds(): Set<string> {
-  return toTargetIdSet(COMMAND_SECRET_TARGETS.memory);
+function normalizeScopedChannelId(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function selectChannelTargetIds(channel?: string): Set<string> {
+  if (!channel) {
+    return toTargetIdSet(COMMAND_SECRET_TARGETS.channels);
+  }
+  return toTargetIdSet(
+    COMMAND_SECRET_TARGETS.channels.filter((id) => id.startsWith(`channels.${channel}.`)),
+  );
+}
+
+function pathTargetsScopedChannelAccount(params: {
+  pathSegments: readonly string[];
+  channel: string;
+  accountId: string;
+}): boolean {
+  const [root, channelId, accountRoot, accountId] = params.pathSegments;
+  if (root !== "channels" || channelId !== params.channel) {
+    return false;
+  }
+  if (accountRoot !== "accounts") {
+    return true;
+  }
+  return accountId === params.accountId;
+}
+
+export function getScopedChannelsCommandSecretTargets(params: {
+  config: OpenClawConfig;
+  channel?: string | null;
+  accountId?: string | null;
+}): {
+  targetIds: Set<string>;
+  allowedPaths?: Set<string>;
+} {
+  const channel = normalizeScopedChannelId(params.channel);
+  const targetIds = selectChannelTargetIds(channel);
+  const normalizedAccountId = normalizeOptionalAccountId(params.accountId);
+  if (!channel || !normalizedAccountId) {
+    return { targetIds };
+  }
+
+  const allowedPaths = new Set<string>();
+  for (const target of discoverConfigSecretTargetsByIds(params.config, targetIds)) {
+    if (
+      pathTargetsScopedChannelAccount({
+        pathSegments: target.pathSegments,
+        channel,
+        accountId: normalizedAccountId,
+      })
+    ) {
+      allowedPaths.add(target.path);
+    }
+  }
+  return { targetIds, allowedPaths };
 }
 
 export function getQrRemoteCommandSecretTargetIds(): Set<string> {

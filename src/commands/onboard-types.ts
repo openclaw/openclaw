@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { SecretInputMode } from "../plugins/provider-auth-types.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export type OnboardMode = "local" | "remote";
@@ -6,9 +7,9 @@ export type BuiltInAuthChoice =
   // Legacy alias for `setup-token` (kept for backwards CLI compatibility).
   | "oauth"
   | "setup-token"
-  | "claude-cli"
   | "token"
   | "chutes"
+  | "deepseek-api-key"
   | "openai-codex"
   | "openai-api-key"
   | "openrouter-api-key"
@@ -23,7 +24,6 @@ export type BuiltInAuthChoice =
   | "venice-api-key"
   | "together-api-key"
   | "huggingface-api-key"
-  | "codex-cli"
   | "apiKey"
   | "gemini-api-key"
   | "google-gemini-cli"
@@ -41,12 +41,13 @@ export type BuiltInAuthChoice =
   | "opencode-go"
   | "github-copilot"
   | "copilot-proxy"
-  | "qwen-portal"
   | "xai-api-key"
   | "mistral-api-key"
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "modelstudio-standard-api-key-cn"
+  | "modelstudio-standard-api-key"
   | "modelstudio-api-key-cn"
   | "modelstudio-api-key"
   | "custom-api-key"
@@ -57,6 +58,7 @@ export type BuiltInAuthChoiceGroupId =
   | "openai"
   | "anthropic"
   | "chutes"
+  | "deepseek"
   | "google"
   | "copilot"
   | "openrouter"
@@ -72,7 +74,6 @@ export type BuiltInAuthChoiceGroupId =
   | "synthetic"
   | "venice"
   | "mistral"
-  | "qwen"
   | "together"
   | "huggingface"
   | "qianfan"
@@ -90,7 +91,7 @@ export type NodeManagerChoice = "npm" | "pnpm" | "bun";
 export type ChannelChoice = ChannelId;
 // Legacy alias (pre-rename).
 export type ProviderChoice = ChannelChoice;
-export type SecretInputMode = "plaintext" | "ref"; // pragma: allowlist secret
+export type { SecretInputMode } from "../plugins/provider-auth-types.js";
 
 export type OnboardOptions = {
   mode?: OnboardMode;
@@ -114,6 +115,7 @@ export type OnboardOptions = {
   /** API key persistence mode for setup flows (default: plaintext). */
   secretInputMode?: SecretInputMode;
   anthropicApiKey?: string;
+  deepseekApiKey?: string;
   openaiApiKey?: string;
   mistralApiKey?: string;
   openrouterApiKey?: string;
@@ -139,6 +141,8 @@ export type OnboardOptions = {
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
+  modelstudioStandardApiKeyCn?: string;
+  modelstudioStandardApiKey?: string;
   modelstudioApiKeyCn?: string;
   modelstudioApiKey?: string;
   customBaseUrl?: string;

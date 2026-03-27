@@ -78,12 +78,67 @@ describe("normalizePluginsConfig", () => {
     expect(result.entries["voice-call"]?.hooks).toBeUndefined();
   });
 
+  it("normalizes plugin subagent override policy settings", () => {
+    const result = normalizePluginsConfig({
+      entries: {
+        "voice-call": {
+          subagent: {
+            allowModelOverride: true,
+            allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.4"],
+          },
+        },
+      },
+    });
+    expect(result.entries["voice-call"]?.subagent).toEqual({
+      allowModelOverride: true,
+      hasAllowedModelsConfig: true,
+      allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"],
+    });
+  });
+
+  it("preserves explicit subagent allowlist intent even when all entries are invalid", () => {
+    const result = normalizePluginsConfig({
+      entries: {
+        "voice-call": {
+          subagent: {
+            allowModelOverride: true,
+            allowedModels: [42, null, "anthropic"],
+          } as unknown as { allowModelOverride: boolean; allowedModels: string[] },
+        },
+      },
+    });
+    expect(result.entries["voice-call"]?.subagent).toEqual({
+      allowModelOverride: true,
+      hasAllowedModelsConfig: true,
+      allowedModels: ["anthropic"],
+    });
+  });
+
+  it("keeps explicit invalid subagent allowlist config visible to callers", () => {
+    const result = normalizePluginsConfig({
+      entries: {
+        "voice-call": {
+          subagent: {
+            allowModelOverride: "nope",
+            allowedModels: [42, null],
+          } as unknown as { allowModelOverride: boolean; allowedModels: string[] },
+        },
+      },
+    });
+    expect(result.entries["voice-call"]?.subagent).toEqual({
+      hasAllowedModelsConfig: true,
+    });
+  });
+
   it("normalizes legacy plugin ids to their merged bundled plugin id", () => {
     const result = normalizePluginsConfig({
-      allow: ["openai-codex", "minimax-portal-auth"],
-      deny: ["openai-codex", "minimax-portal-auth"],
+      allow: ["openai-codex", "google-gemini-cli", "minimax-portal-auth"],
+      deny: ["openai-codex", "google-gemini-cli", "minimax-portal-auth"],
       entries: {
         "openai-codex": {
+          enabled: true,
+        },
+        "google-gemini-cli": {
           enabled: true,
         },
         "minimax-portal-auth": {
@@ -92,9 +147,10 @@ describe("normalizePluginsConfig", () => {
       },
     });
 
-    expect(result.allow).toEqual(["openai", "minimax"]);
-    expect(result.deny).toEqual(["openai", "minimax"]);
+    expect(result.allow).toEqual(["openai", "google", "minimax"]);
+    expect(result.deny).toEqual(["openai", "google", "minimax"]);
     expect(result.entries.openai?.enabled).toBe(true);
+    expect(result.entries.google?.enabled).toBe(true);
     expect(result.entries.minimax?.enabled).toBe(false);
   });
 });
@@ -137,6 +193,16 @@ describe("resolveEffectiveEnableState", () => {
 });
 
 describe("resolveEnableState", () => {
+  it("enables bundled plugins only when manifest metadata marks them enabled by default", () => {
+    expect(resolveEnableState("openai", "bundled", normalizePluginsConfig({}))).toEqual({
+      enabled: false,
+      reason: "bundled (disabled by default)",
+    });
+    expect(resolveEnableState("openai", "bundled", normalizePluginsConfig({}), true)).toEqual({
+      enabled: true,
+    });
+  });
+
   it("keeps the selected memory slot plugin enabled even when omitted from plugins.allow", () => {
     const state = resolveEnableState(
       "memory-core",
@@ -214,8 +280,13 @@ describe("resolveEnableState", () => {
     });
   });
 
-  it("keeps bundled provider plugins enabled when they are bundled-default providers", () => {
-    const state = resolveEnableState("google", "bundled", normalizePluginsConfig({}));
+  it("keeps bundled plugins enabled when manifest metadata marks them enabled by default", () => {
+    const state = resolveEnableState("google", "bundled", normalizePluginsConfig({}), true);
+    expect(state).toEqual({ enabled: true });
+  });
+
+  it("allows bundled plugins to opt into default enablement from manifest metadata", () => {
+    const state = resolveEnableState("profile-aware", "bundled", normalizePluginsConfig({}), true);
     expect(state).toEqual({ enabled: true });
   });
 });

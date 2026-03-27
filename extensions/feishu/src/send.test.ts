@@ -1,12 +1,5 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  buildStructuredCard,
-  editMessageFeishu,
-  getMessageFeishu,
-  listFeishuThreadMessages,
-  resolveFeishuCardTemplate,
-} from "./send.js";
+import type { ClawdbotConfig } from "../runtime-api.js";
 
 const {
   mockClientGet,
@@ -28,6 +21,7 @@ vi.mock("./client.js", () => ({
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: mockResolveFeishuAccount,
+  resolveFeishuRuntimeAccount: mockResolveFeishuAccount,
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -41,8 +35,22 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
+let buildStructuredCard: typeof import("./send.js").buildStructuredCard;
+let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
+let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
+let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
+let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
+
 describe("getMessageFeishu", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      buildStructuredCard,
+      editMessageFeishu,
+      getMessageFeishu,
+      listFeishuThreadMessages,
+      resolveFeishuCardTemplate,
+    } = await import("./send.js"));
     vi.clearAllMocks();
     mockResolveFeishuAccount.mockReturnValue({
       accountId: "default",

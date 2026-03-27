@@ -1,12 +1,9 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-} from "../../config/model-input.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
+import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
 
-export type ImageModelConfig = { primary?: string; fallbacks?: string[] };
+export type ImageModelConfig = ToolModelConfig;
 
 export function decodeDataUrl(dataUrl: string): {
   buffer: Buffer;
@@ -55,12 +52,7 @@ export function coerceImageAssistantText(params: {
 }
 
 export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
-  const primary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.imageModel);
-  const fallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.imageModel);
-  return {
-    ...(primary?.trim() ? { primary: primary.trim() } : {}),
-    ...(fallbacks.length > 0 ? { fallbacks } : {}),
-  };
+  return coerceToolModelConfig(cfg?.agents?.defaults?.imageModel);
 }
 
 export function resolveProviderVisionModelFromConfig(params: {
@@ -71,18 +63,7 @@ export function resolveProviderVisionModelFromConfig(params: {
     | { models?: Array<{ id?: string; input?: string[] }> }
     | undefined;
   const models = providerCfg?.models ?? [];
-  const preferMinimaxVl =
-    params.provider === "minimax"
-      ? models.find(
-          (m) =>
-            (m?.id ?? "").trim() === "MiniMax-VL-01" &&
-            Array.isArray(m?.input) &&
-            m.input.includes("image"),
-        )
-      : null;
-  const picked =
-    preferMinimaxVl ??
-    models.find((m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"));
+  const picked = models.find((m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"));
   const id = (picked?.id ?? "").trim();
   return id ? `${params.provider}/${id}` : null;
 }

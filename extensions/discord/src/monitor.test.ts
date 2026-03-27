@@ -1,6 +1,6 @@
 import { ChannelType, type Guild } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { typedCases } from "../../../src/test-utils/typed-cases.js";
+import { typedCases } from "../../../test/helpers/extensions/typed-cases.js";
 import {
   allowListMatches,
   buildDiscordMediaPayload,
@@ -18,7 +18,12 @@ import {
   sanitizeDiscordThreadName,
   shouldEmitDiscordReactionNotification,
 } from "./monitor.js";
-import { DiscordMessageListener, DiscordReactionListener } from "./monitor/listeners.js";
+type DiscordReactionEvent = Parameters<
+  import("./monitor/listeners.js").DiscordReactionListener["handle"]
+>[0];
+type DiscordReactionClient = Parameters<
+  import("./monitor/listeners.js").DiscordReactionListener["handle"]
+>[1];
 
 const readAllowFromStoreMock = vi.hoisted(() => vi.fn());
 
@@ -60,6 +65,11 @@ function createAutoThreadMentionContext() {
   });
   return { guildInfo, channelConfig };
 }
+
+beforeEach(() => {
+  vi.useRealTimers();
+  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+});
 
 describe("registerDiscordListener", () => {
   class FakeListener {}
@@ -888,17 +898,20 @@ const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
     channel: "discord",
     accountId: "acc-1",
     sessionKey: "discord:acc-1:dm:user-1",
+    mainSessionKey: "discord:acc-1:dm:user-1",
+    lastRoutePolicy: "session" as const,
+    matchedBy: "default" as const,
     ...(typeof params === "object" && params !== null ? { _params: params } : {}),
   })),
 }));
 
-vi.mock("../../../src/infra/system-events.js", () => ({
-  enqueueSystemEvent: enqueueSystemEventSpy,
-}));
+const infraRuntimeModule = await import("openclaw/plugin-sdk/infra-runtime");
+vi.spyOn(infraRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueSystemEventSpy);
 
-vi.mock("../../../src/routing/resolve-route.js", () => ({
-  resolveAgentRoute: resolveAgentRouteMock,
-}));
+const routingModule = await import("openclaw/plugin-sdk/routing");
+vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRouteMock);
+
+const { DiscordMessageListener, DiscordReactionListener } = await import("./monitor/listeners.js");
 
 function makeReactionEvent(overrides?: {
   guildId?: string;
@@ -940,7 +953,7 @@ function makeReactionEvent(overrides?: {
     message: {
       fetch: messageFetch,
     },
-  } as unknown as Parameters<DiscordReactionListener["handle"]>[0];
+  } as DiscordReactionEvent;
 }
 
 function makeReactionClient(options?: {
@@ -962,7 +975,7 @@ function makeReactionClient(options?: {
       }
       return { type: channelType, name: channelName, parentId };
     }),
-  } as unknown as Parameters<DiscordReactionListener["handle"]>[1];
+  } as unknown as DiscordReactionClient;
 }
 
 function makeReactionListenerParams(overrides?: {
@@ -1140,6 +1153,9 @@ describe("discord DM reaction handling", () => {
       channel: "discord",
       accountId: "acc-1",
       sessionKey: "discord:acc-1:guild-123:channel-1",
+      mainSessionKey: "discord:acc-1:guild-123:channel-1",
+      lastRoutePolicy: "session",
+      matchedBy: "default",
     });
 
     const data = makeReactionEvent({

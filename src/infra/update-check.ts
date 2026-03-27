@@ -3,6 +3,7 @@ import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
+import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
 
 export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
@@ -36,6 +37,13 @@ export type RegistryStatus = {
 export type NpmTagStatus = {
   tag: string;
   version: string | null;
+  error?: string;
+};
+
+export type NpmPackageTargetStatus = {
+  target: string;
+  version: string | null;
+  nodeEngine: string | null;
   error?: string;
 };
 
@@ -107,36 +115,37 @@ export async function checkGitUpdateStatus(params: {
     fetchOk: null,
   };
 
-  const branchRes = await runCommandWithTimeout(
-    ["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"],
-    { timeoutMs },
-  ).catch(() => null);
+  const [branchRes, shaRes, tagRes, upstreamRes, dirtyRes] = await Promise.all([
+    runCommandWithTimeout(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"], {
+      timeoutMs,
+    }).catch(() => null),
+    runCommandWithTimeout(["git", "-C", root, "rev-parse", "HEAD"], {
+      timeoutMs,
+    }).catch(() => null),
+    runCommandWithTimeout(["git", "-C", root, "describe", "--tags", "--exact-match"], {
+      timeoutMs,
+    }).catch(() => null),
+    runCommandWithTimeout(["git", "-C", root, "rev-parse", "--abbrev-ref", "@{upstream}"], {
+      timeoutMs,
+    }).catch(() => null),
+    runCommandWithTimeout(
+      ["git", "-C", root, "status", "--porcelain", "--", ":!dist/control-ui/"],
+      {
+        timeoutMs,
+      },
+    ).catch(() => null),
+  ]);
   if (!branchRes || branchRes.code !== 0) {
     return { ...base, error: branchRes?.stderr?.trim() || "git unavailable" };
   }
   const branch = branchRes.stdout.trim() || null;
 
-  const shaRes = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "HEAD"], {
-    timeoutMs,
-  }).catch(() => null);
   const sha = shaRes && shaRes.code === 0 ? shaRes.stdout.trim() : null;
 
-  const tagRes = await runCommandWithTimeout(
-    ["git", "-C", root, "describe", "--tags", "--exact-match"],
-    { timeoutMs },
-  ).catch(() => null);
   const tag = tagRes && tagRes.code === 0 ? tagRes.stdout.trim() : null;
 
-  const upstreamRes = await runCommandWithTimeout(
-    ["git", "-C", root, "rev-parse", "--abbrev-ref", "@{upstream}"],
-    { timeoutMs },
-  ).catch(() => null);
   const upstream = upstreamRes && upstreamRes.code === 0 ? upstreamRes.stdout.trim() : null;
 
-  const dirtyRes = await runCommandWithTimeout(
-    ["git", "-C", root, "status", "--porcelain", "--", ":!dist/control-ui/"],
-    { timeoutMs },
-  ).catch(() => null);
   const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
 
   const fetchOk = params.fetch
@@ -293,27 +302,46 @@ export async function fetchNpmLatestVersion(params?: {
   };
 }
 
-export async function fetchNpmTagVersion(params: {
-  tag: string;
+export async function fetchNpmPackageTargetStatus(params: {
+  target: string;
   timeoutMs?: number;
-}): Promise<NpmTagStatus> {
-  const timeoutMs = params?.timeoutMs ?? 3500;
-  const tag = params.tag;
+}): Promise<NpmPackageTargetStatus> {
+  const timeoutMs = params.timeoutMs ?? 3500;
+  const target = params.target;
   try {
     const res = await fetchWithTimeout(
-      `https://registry.npmjs.org/openclaw/${encodeURIComponent(tag)}`,
+      `https://registry.npmjs.org/openclaw/${encodeURIComponent(target)}`,
       {},
       Math.max(250, timeoutMs),
     );
     if (!res.ok) {
-      return { tag, version: null, error: `HTTP ${res.status}` };
+      return { target, version: null, nodeEngine: null, error: `HTTP ${res.status}` };
     }
-    const json = (await res.json()) as { version?: unknown };
+    const json = (await res.json()) as {
+      version?: unknown;
+      engines?: { node?: unknown };
+    };
     const version = typeof json?.version === "string" ? json.version : null;
-    return { tag, version };
+    const nodeEngine = typeof json?.engines?.node === "string" ? json.engines.node : null;
+    return { target, version, nodeEngine };
   } catch (err) {
-    return { tag, version: null, error: String(err) };
+    return { target, version: null, nodeEngine: null, error: String(err) };
   }
+}
+
+export async function fetchNpmTagVersion(params: {
+  tag: string;
+  timeoutMs?: number;
+}): Promise<NpmTagStatus> {
+  const res = await fetchNpmPackageTargetStatus({
+    target: params.tag,
+    timeoutMs: params.timeoutMs,
+  });
+  return {
+    tag: params.tag,
+    version: res.version,
+    error: res.error,
+  };
 }
 
 export async function resolveNpmChannelTag(params: {
@@ -341,109 +369,10 @@ export async function resolveNpmChannelTag(params: {
 }
 
 export function compareSemverStrings(a: string | null, b: string | null): number | null {
-  const pa = parseComparableSemver(a);
-  const pb = parseComparableSemver(b);
-  if (!pa || !pb) {
-    return null;
-  }
-  if (pa.major !== pb.major) {
-    return pa.major < pb.major ? -1 : 1;
-  }
-  if (pa.minor !== pb.minor) {
-    return pa.minor < pb.minor ? -1 : 1;
-  }
-  if (pa.patch !== pb.patch) {
-    return pa.patch < pb.patch ? -1 : 1;
-  }
-  return comparePrerelease(pa.prerelease, pb.prerelease);
-}
-
-type ComparableSemver = {
-  major: number;
-  minor: number;
-  patch: number;
-  prerelease: string[] | null;
-};
-
-function parseComparableSemver(version: string | null): ComparableSemver | null {
-  if (!version) {
-    return null;
-  }
-  const normalized = normalizeLegacyDotBetaVersion(version.trim());
-  const match = /^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(
-    normalized,
+  return compareComparableSemver(
+    parseComparableSemver(a, { normalizeLegacyDotBeta: true }),
+    parseComparableSemver(b, { normalizeLegacyDotBeta: true }),
   );
-  if (!match) {
-    return null;
-  }
-  const [, major, minor, patch, prereleaseRaw] = match;
-  if (!major || !minor || !patch) {
-    return null;
-  }
-  return {
-    major: Number.parseInt(major, 10),
-    minor: Number.parseInt(minor, 10),
-    patch: Number.parseInt(patch, 10),
-    prerelease: prereleaseRaw ? prereleaseRaw.split(".").filter(Boolean) : null,
-  };
-}
-
-function normalizeLegacyDotBetaVersion(version: string): string {
-  const trimmed = version.trim();
-  const dotBetaMatch = /^([vV]?[0-9]+\.[0-9]+\.[0-9]+)\.beta(?:\.([0-9A-Za-z.-]+))?$/.exec(trimmed);
-  if (!dotBetaMatch) {
-    return trimmed;
-  }
-  const base = dotBetaMatch[1];
-  const suffix = dotBetaMatch[2];
-  return suffix ? `${base}-beta.${suffix}` : `${base}-beta`;
-}
-
-function comparePrerelease(a: string[] | null, b: string[] | null): number {
-  if (!a?.length && !b?.length) {
-    return 0;
-  }
-  if (!a?.length) {
-    return 1;
-  }
-  if (!b?.length) {
-    return -1;
-  }
-
-  const max = Math.max(a.length, b.length);
-  for (let i = 0; i < max; i += 1) {
-    const ai = a[i];
-    const bi = b[i];
-    if (ai == null && bi == null) {
-      return 0;
-    }
-    if (ai == null) {
-      return -1;
-    }
-    if (bi == null) {
-      return 1;
-    }
-    if (ai === bi) {
-      continue;
-    }
-
-    const aiNumeric = /^[0-9]+$/.test(ai);
-    const biNumeric = /^[0-9]+$/.test(bi);
-    if (aiNumeric && biNumeric) {
-      const aiNum = Number.parseInt(ai, 10);
-      const biNum = Number.parseInt(bi, 10);
-      return aiNum < biNum ? -1 : 1;
-    }
-    if (aiNumeric && !biNumeric) {
-      return -1;
-    }
-    if (!aiNumeric && biNumeric) {
-      return 1;
-    }
-    return ai < bi ? -1 : 1;
-  }
-
-  return 0;
 }
 
 export async function checkUpdateStatus(params: {
@@ -463,20 +392,24 @@ export async function checkUpdateStatus(params: {
     };
   }
 
-  const pm = await detectPackageManager(root);
-  const gitRoot = await detectGitRoot(root);
+  const [pm, gitRoot, registry] = await Promise.all([
+    detectPackageManager(root),
+    detectGitRoot(root),
+    params.includeRegistry ? fetchNpmLatestVersion({ timeoutMs }) : Promise.resolve(undefined),
+  ]);
   const isGit = gitRoot && path.resolve(gitRoot) === root;
 
   const installKind: UpdateCheckResult["installKind"] = isGit ? "git" : "package";
-  const git = isGit
-    ? await checkGitUpdateStatus({
-        root,
-        timeoutMs,
-        fetch: Boolean(params.fetchGit),
-      })
-    : undefined;
-  const deps = await checkDepsStatus({ root, manager: pm });
-  const registry = params.includeRegistry ? await fetchNpmLatestVersion({ timeoutMs }) : undefined;
+  const [git, deps] = await Promise.all([
+    isGit
+      ? checkGitUpdateStatus({
+          root,
+          timeoutMs,
+          fetch: Boolean(params.fetchGit),
+        })
+      : Promise.resolve(undefined),
+    checkDepsStatus({ root, manager: pm }),
+  ]);
 
   return {
     root,

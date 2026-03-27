@@ -158,6 +158,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Skills");
   });
 
+  it("omits the heartbeat section when no heartbeat prompt is provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "full",
+      heartbeatPrompt: undefined,
+    });
+
+    expect(prompt).not.toContain("## Heartbeats");
+    expect(prompt).not.toContain("HEARTBEAT_OK");
+    expect(prompt).not.toContain("Read HEARTBEAT.md");
+  });
+
   it("includes safety guardrails in full prompts", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -534,16 +546,13 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it("renders bootstrap truncation warning even when no context files are injected", () => {
+  it("omits project context when no context files are injected", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      bootstrapTruncationWarningLines: ["AGENTS.md: 200 raw -> 0 injected"],
       contextFiles: [],
     });
 
-    expect(prompt).toContain("# Project Context");
-    expect(prompt).toContain("⚠ Bootstrap truncation warning:");
-    expect(prompt).toContain("- AGENTS.md: 200 raw -> 0 injected");
+    expect(prompt).not.toContain("# Project Context");
   });
 
   it("summarizes the message tool when available", () => {

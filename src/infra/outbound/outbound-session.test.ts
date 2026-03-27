@@ -41,9 +41,45 @@ describe("resolveOutboundSessionRoute", () => {
         from?: string;
         to?: string;
         threadId?: string | number;
-        chatType?: "direct" | "group";
+        chatType?: "channel" | "direct" | "group";
       };
     }> = [
+      {
+        name: "WhatsApp group jid",
+        cfg: baseConfig,
+        channel: "whatsapp",
+        target: "120363040000000000@g.us",
+        expected: {
+          sessionKey: "agent:main:whatsapp:group:120363040000000000@g.us",
+          from: "120363040000000000@g.us",
+          to: "120363040000000000@g.us",
+          chatType: "group",
+        },
+      },
+      {
+        name: "Matrix room target",
+        cfg: baseConfig,
+        channel: "matrix",
+        target: "room:!ops:matrix.example",
+        expected: {
+          sessionKey: "agent:main:matrix:channel:!ops:matrix.example",
+          from: "matrix:channel:!ops:matrix.example",
+          to: "room:!ops:matrix.example",
+          chatType: "channel",
+        },
+      },
+      {
+        name: "MSTeams conversation target",
+        cfg: baseConfig,
+        channel: "msteams",
+        target: "conversation:19:meeting_abc@thread.tacv2",
+        expected: {
+          sessionKey: "agent:main:msteams:channel:19:meeting_abc@thread.tacv2",
+          from: "msteams:channel:19:meeting_abc@thread.tacv2",
+          to: "conversation:19:meeting_abc@thread.tacv2",
+          chatType: "channel",
+        },
+      },
       {
         name: "Slack thread",
         cfg: baseConfig,
@@ -116,6 +152,18 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
       {
+        name: "Nextcloud Talk room target",
+        cfg: baseConfig,
+        channel: "nextcloud-talk",
+        target: "room:opsroom42",
+        expected: {
+          sessionKey: "agent:main:nextcloud-talk:group:opsroom42",
+          from: "nextcloud-talk:room:opsroom42",
+          to: "nextcloud-talk:opsroom42",
+          chatType: "group",
+        },
+      },
+      {
         name: "BlueBubbles chat_* prefix stripping",
         cfg: baseConfig,
         channel: "bluebubbles",
@@ -126,6 +174,18 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
       {
+        name: "Zalo direct target",
+        cfg: perChannelPeerCfg,
+        channel: "zalo",
+        target: "zl:123456",
+        expected: {
+          sessionKey: "agent:main:zalo:direct:123456",
+          from: "zalo:123456",
+          to: "zalo:123456",
+          chatType: "direct",
+        },
+      },
+      {
         name: "Zalo Personal DM target",
         cfg: perChannelPeerCfg,
         channel: "zalouser",
@@ -133,6 +193,30 @@ describe("resolveOutboundSessionRoute", () => {
         expected: {
           sessionKey: "agent:main:zalouser:direct:123456",
           chatType: "direct",
+        },
+      },
+      {
+        name: "Nostr prefixed target",
+        cfg: perChannelPeerCfg,
+        channel: "nostr",
+        target: "nostr:npub1example",
+        expected: {
+          sessionKey: "agent:main:nostr:direct:npub1example",
+          from: "nostr:npub1example",
+          to: "nostr:npub1example",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Tlon group target",
+        cfg: baseConfig,
+        channel: "tlon",
+        target: "group:~zod/main",
+        expected: {
+          sessionKey: "agent:main:tlon:group:chat/~zod/main",
+          from: "tlon:group:chat/~zod/main",
+          to: "tlon:chat/~zod/main",
+          chatType: "group",
         },
       },
       {
@@ -181,6 +265,30 @@ describe("resolveOutboundSessionRoute", () => {
           chatType: "direct",
         },
       },
+      {
+        name: "Slack user DM target",
+        cfg: perChannelPeerCfg,
+        channel: "slack",
+        target: "user:U12345ABC",
+        expected: {
+          sessionKey: "agent:main:slack:direct:u12345abc",
+          from: "slack:U12345ABC",
+          to: "user:U12345ABC",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Slack channel target without thread",
+        cfg: baseConfig,
+        channel: "slack",
+        target: "channel:C999XYZ",
+        expected: {
+          sessionKey: "agent:main:slack:channel:c999xyz",
+          from: "slack:channel:C999XYZ",
+          to: "channel:C999XYZ",
+          chatType: "channel",
+        },
+      },
     ];
 
     for (const testCase of cases) {
@@ -226,6 +334,30 @@ describe("resolveOutboundSessionRoute", () => {
       from: "discord:123",
       to: "user:123",
       chatType: "direct",
+    });
+  });
+
+  it("uses resolved Discord channel targets to route bare numeric ids as channels without thread suffixes", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+      channel: "discord",
+      agentId: "main",
+      target: "456",
+      threadId: "789",
+      resolvedTarget: {
+        to: "channel:456",
+        kind: "channel",
+        source: "directory",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:discord:channel:456",
+      baseSessionKey: "agent:main:discord:channel:456",
+      from: "discord:channel:456",
+      to: "channel:456",
+      chatType: "channel",
+      threadId: "789",
     });
   });
 

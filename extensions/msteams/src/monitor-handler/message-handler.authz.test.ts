@@ -1,5 +1,5 @@
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/msteams";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import { setMSTeamsRuntime } from "../runtime.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
@@ -7,6 +7,7 @@ import { createMSTeamsMessageHandler } from "./message-handler.js";
 describe("msteams monitor handler authz", () => {
   function createDeps(cfg: OpenClawConfig) {
     const readAllowFromStore = vi.fn(async () => ["attacker-aad"]);
+    const upsertPairingRequest = vi.fn(async () => null);
     setMSTeamsRuntime({
       logging: { shouldLogVerbose: () => false },
       channel: {
@@ -22,7 +23,7 @@ describe("msteams monitor handler authz", () => {
         },
         pairing: {
           readAllowFromStore,
-          upsertPairingRequest: vi.fn(async () => null),
+          upsertPairingRequest,
         },
         text: {
           hasControlCommand: () => false,
@@ -56,7 +57,7 @@ describe("msteams monitor handler authz", () => {
       } as unknown as MSTeamsMessageHandlerDeps["log"],
     };
 
-    return { conversationStore, deps, readAllowFromStore };
+    return { conversationStore, deps, readAllowFromStore, upsertPairingRequest };
   }
 
   it("does not treat DM pairing-store entries as group allowlist entries", async () => {
@@ -151,5 +152,48 @@ describe("msteams monitor handler authz", () => {
     } as unknown as Parameters<typeof handler>[0]);
 
     expect(conversationStore.upsert).not.toHaveBeenCalled();
+  });
+
+  it("keeps the DM pairing path wired through shared access resolution", async () => {
+    const { deps, upsertPairingRequest } = createDeps({
+      channels: {
+        msteams: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "msg-pairing",
+        type: "message",
+        text: "hello",
+        from: {
+          id: "new-user-id",
+          aadObjectId: "new-user-aad",
+          name: "New User",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "a:personal-chat",
+          conversationType: "personal",
+        },
+        channelData: {},
+        attachments: [],
+      },
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(upsertPairingRequest).toHaveBeenCalledWith({
+      channel: "msteams",
+      accountId: "default",
+      id: "new-user-aad",
+      meta: { name: "New User" },
+    });
   });
 });

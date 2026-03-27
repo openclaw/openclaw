@@ -1,4 +1,4 @@
-// Narrow plugin-sdk surface for the bundled irc plugin.
+// Private helper surface for the bundled irc plugin.
 // Keep this list additive and scoped to symbols used under extensions/irc.
 
 export { resolveControlCommandGate } from "../channels/command-gating.js";
@@ -23,7 +23,7 @@ export { patchScopedAccountConfig } from "../channels/plugins/setup-helpers.js";
 export type { BaseProbeResult } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { getChatChannelMeta } from "../channels/registry.js";
-export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
+export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 export {
@@ -58,24 +58,20 @@ export type { OpenClawPluginApi } from "../plugins/types.js";
 export { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 export type { RuntimeEnv } from "../runtime.js";
 export { createAccountStatusSink, runPassiveAccountLifecycle } from "./channel-lifecycle.js";
-export {
-  listIrcAccountIds,
-  resolveDefaultIrcAccountId,
-  resolveIrcAccount,
-} from "../../extensions/irc/src/accounts.js";
+export { listIrcAccountIds, resolveDefaultIrcAccountId, resolveIrcAccount } from "./irc-surface.js";
 export {
   readStoreAllowFromForDmPolicy,
   resolveEffectiveAllowFromLists,
 } from "../security/dm-policy-shared.js";
 export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export { createScopedPairingAccess } from "./pairing-access.js";
-export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
+export { createChannelPairingController } from "./channel-pairing.js";
 export { dispatchInboundReplyWithBase } from "./inbound-reply-dispatch.js";
-export { ircSetupAdapter, ircSetupWizard } from "../../extensions/irc/src/setup-surface.js";
+export { ircSetupAdapter, ircSetupWizard } from "./irc-surface.js";
 export type { OutboundReplyPayload } from "./reply-payload.js";
 export {
   createNormalizedOutboundDeliverer,
+  deliverFormattedTextWithAttachments,
   formatTextWithAttachmentLinks,
   resolveOutboundMediaUrls,
 } from "./reply-payload.js";

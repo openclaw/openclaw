@@ -1,14 +1,15 @@
 import type { RunOptions } from "@grammyjs/runner";
-import { resolveAgentMaxConcurrent } from "../../../src/config/agent-limits.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { loadConfig } from "../../../src/config/config.js";
-import { waitForAbortSignal } from "../../../src/infra/abort-signal.js";
-import { formatErrorMessage } from "../../../src/infra/errors.js";
-import { registerUnhandledRejectionHandler } from "../../../src/infra/unhandled-rejections.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+import { resolveAgentMaxConcurrent } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
+import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
+import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { TelegramExecApprovalHandler } from "./exec-approvals-handler.js";
+import { resolveTelegramTransport } from "./fetch.js";
 import {
   isRecoverableTelegramNetworkError,
   isTelegramPollingNetworkError,
@@ -90,8 +91,10 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     const activeRunner = pollingSession?.activeRunner;
     if (isNetworkError && isTelegramPollingError && activeRunner && activeRunner.isRunning()) {
       pollingSession?.markForceRestarted();
+      pollingSession?.markTransportDirty();
       pollingSession?.abortActiveFetch();
       void activeRunner.stop().catch(() => {});
+      log("[telegram][diag] marking transport dirty after polling network failure");
       log(
         `[telegram] Restarting polling after unhandled network error: ${formatErrorMessage(err)}`,
       );
@@ -178,6 +181,14 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       return;
     }
 
+    // Preserve sticky IPv4 fallback state across clean/conflict restarts.
+    // Dirty polling cycles rebuild transport inside TelegramPollingSession.
+    const createTelegramTransportForPolling = () =>
+      resolveTelegramTransport(proxyFetch, {
+        network: account.config.network,
+      });
+    const telegramTransport = createTelegramTransportForPolling();
+
     pollingSession = new TelegramPollingSession({
       token,
       config: cfg,
@@ -189,6 +200,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       getLastUpdateId: () => lastUpdateId,
       persistUpdateId,
       log,
+      telegramTransport,
+      createTelegramTransport: createTelegramTransportForPolling,
     });
     await pollingSession.runUntilAbort();
   } finally {

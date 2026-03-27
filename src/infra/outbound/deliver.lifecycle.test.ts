@@ -15,10 +15,12 @@ import {
   whatsappChunkConfig,
 } from "./deliver.test-helpers.js";
 
-const { deliverOutboundPayloads } = await import("./deliver.js");
+type DeliverModule = typeof import("./deliver.js");
+
+let deliverOutboundPayloads: DeliverModule["deliverOutboundPayloads"];
 
 async function runChunkedWhatsAppDelivery(params?: {
-  mirror?: Parameters<typeof deliverOutboundPayloads>[0]["mirror"];
+  mirror?: Parameters<DeliverModule["deliverOutboundPayloads"]>[0]["mirror"];
 }) {
   return await runChunkedWhatsAppDeliveryHelper({
     deliverOutboundPayloads,
@@ -75,7 +77,9 @@ function expectSuccessfulWhatsAppInternalHookPayload(
 }
 
 describe("deliverOutboundPayloads lifecycle", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ deliverOutboundPayloads } = await import("./deliver.js"));
     resetDeliverTestState();
     resetDeliverTestMocks({ includeSessionMocks: true });
   });

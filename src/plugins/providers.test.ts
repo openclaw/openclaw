@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveOwningPluginIdsForProvider, resolvePluginProviders } from "./providers.js";
 
 const loadOpenClawPluginsMock = vi.fn();
 const loadPluginManifestRegistryMock = vi.fn();
@@ -12,8 +11,12 @@ vi.mock("./manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...args: unknown[]) => loadPluginManifestRegistryMock(...args),
 }));
 
+let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
+let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProviders;
+
 describe("resolvePluginProviders", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     loadOpenClawPluginsMock.mockReset();
     loadOpenClawPluginsMock.mockReturnValue({
       providers: [{ pluginId: "google", provider: { id: "demo-provider" } }],
@@ -29,6 +32,8 @@ describe("resolvePluginProviders", () => {
       ],
       diagnostics: [],
     });
+    ({ resolveOwningPluginIdsForProvider } = await import("./providers.js"));
+    ({ resolvePluginProviders } = await import("./providers.runtime.js"));
   });
 
   it("forwards an explicit env to plugin loading", () => {
@@ -65,6 +70,11 @@ describe("resolvePluginProviders", () => {
         config: expect.objectContaining({
           plugins: expect.objectContaining({
             allow: expect.arrayContaining(["openrouter", "google", "kilocode", "moonshot"]),
+            entries: expect.objectContaining({
+              google: { enabled: true },
+              kilocode: { enabled: true },
+              moonshot: { enabled: true },
+            }),
           }),
         }),
         cache: false,
@@ -84,12 +94,40 @@ describe("resolvePluginProviders", () => {
           plugins: expect.objectContaining({
             enabled: true,
             allow: expect.arrayContaining(["google", "moonshot"]),
+            entries: expect.objectContaining({
+              google: { enabled: true },
+              moonshot: { enabled: true },
+            }),
           }),
         }),
         cache: false,
         activate: false,
       }),
     );
+  });
+
+  it("does not leak host Vitest env into an explicit non-Vitest env", () => {
+    const previousVitest = process.env.VITEST;
+    process.env.VITEST = "1";
+    try {
+      resolvePluginProviders({
+        env: {} as NodeJS.ProcessEnv,
+        bundledProviderVitestCompat: true,
+      });
+
+      expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: undefined,
+          env: {},
+        }),
+      );
+    } finally {
+      if (previousVitest === undefined) {
+        delete process.env.VITEST;
+      } else {
+        process.env.VITEST = previousVitest;
+      }
+    }
   });
 
   it("does not reintroduce the retired google auth plugin id into compat allowlists", () => {

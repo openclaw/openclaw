@@ -3,8 +3,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -18,6 +20,13 @@ type LockPayload = {
   configPath: string;
   startTime?: number;
 };
+
+const LockPayloadSchema = z.object({
+  pid: z.number(),
+  createdAt: z.string(),
+  configPath: z.string(),
+  startTime: z.number().optional(),
+}) as z.ZodType<LockPayload>;
 
 export type GatewayLockHandle = {
   lockPath: string;
@@ -33,6 +42,9 @@ export type GatewayLockOptions = {
   allowInTests?: boolean;
   platform?: NodeJS.Platform;
   port?: number;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  lockDir?: string;
 };
 
 export class GatewayLockError extends Error {
@@ -139,33 +151,16 @@ async function resolveGatewayOwnerStatus(
 async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
   try {
     const raw = await fs.readFile(lockPath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<LockPayload>;
-    if (typeof parsed.pid !== "number") {
-      return null;
-    }
-    if (typeof parsed.createdAt !== "string") {
-      return null;
-    }
-    if (typeof parsed.configPath !== "string") {
-      return null;
-    }
-    const startTime = typeof parsed.startTime === "number" ? parsed.startTime : undefined;
-    return {
-      pid: parsed.pid,
-      createdAt: parsed.createdAt,
-      configPath: parsed.configPath,
-      startTime,
-    };
+    return safeParseJsonWithSchema(LockPayloadSchema, raw);
   } catch {
     return null;
   }
 }
 
-function resolveGatewayLockPath(env: NodeJS.ProcessEnv) {
+function resolveGatewayLockPath(env: NodeJS.ProcessEnv, lockDir = resolveGatewayLockDir()) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
   const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
-  const lockDir = resolveGatewayLockDir();
   const lockPath = path.join(lockDir, `gateway.${hash}.lock`);
   return { lockPath, configPath };
 }
@@ -187,19 +182,22 @@ export async function acquireGatewayLock(
   const staleMs = opts.staleMs ?? DEFAULT_STALE_MS;
   const platform = opts.platform ?? process.platform;
   const port = opts.port;
-  const { lockPath, configPath } = resolveGatewayLockPath(env);
+  const now = opts.now ?? Date.now;
+  const sleep =
+    opts.sleep ?? (async (ms: number) => await new Promise((resolve) => setTimeout(resolve, ms)));
+  const { lockPath, configPath } = resolveGatewayLockPath(env, opts.lockDir);
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
-  const startedAt = Date.now();
+  const startedAt = now();
   let lastPayload: LockPayload | null = null;
 
-  while (Date.now() - startedAt < timeoutMs) {
+  while (now() - startedAt < timeoutMs) {
     try {
       const handle = await fs.open(lockPath, "wx");
       const startTime = platform === "linux" ? readLinuxStartTime(process.pid) : null;
       const payload: LockPayload = {
         pid: process.pid,
-        createdAt: new Date().toISOString(),
+        createdAt: new Date(now()).toISOString(),
         configPath,
       };
       if (typeof startTime === "number" && Number.isFinite(startTime)) {
@@ -233,12 +231,12 @@ export async function acquireGatewayLock(
         let stale = false;
         if (lastPayload?.createdAt) {
           const createdAt = Date.parse(lastPayload.createdAt);
-          stale = Number.isFinite(createdAt) ? Date.now() - createdAt > staleMs : false;
+          stale = Number.isFinite(createdAt) ? now() - createdAt > staleMs : false;
         }
         if (!stale) {
           try {
             const st = await fs.stat(lockPath);
-            stale = Date.now() - st.mtimeMs > staleMs;
+            stale = now() - st.mtimeMs > staleMs;
           } catch {
             // On Windows or locked filesystems we may be unable to stat the
             // lock file even though the existing gateway is still healthy.
@@ -253,7 +251,7 @@ export async function acquireGatewayLock(
         }
       }
 
-      await new Promise((r) => setTimeout(r, pollIntervalMs));
+      await sleep(pollIntervalMs);
     }
   }
 

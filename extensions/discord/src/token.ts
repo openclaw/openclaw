@@ -1,7 +1,8 @@
-import type { BaseTokenResolution } from "../../../src/channels/plugins/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { normalizeResolvedSecretInputString } from "../../../src/config/types.secrets.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 
 export type DiscordTokenSource = "env" | "config" | "none";
 
@@ -23,19 +24,7 @@ export function resolveDiscordToken(
 ): DiscordTokenResolution {
   const accountId = normalizeAccountId(opts.accountId);
   const discordCfg = cfg?.channels?.discord;
-  const resolveAccountCfg = (id: string) => {
-    const accounts = discordCfg?.accounts;
-    if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) {
-      return undefined;
-    }
-    const direct = accounts[id];
-    if (direct) {
-      return direct;
-    }
-    const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === id);
-    return matchKey ? accounts[matchKey] : undefined;
-  };
-  const accountCfg = resolveAccountCfg(accountId);
+  const accountCfg = resolveAccountEntry(discordCfg?.accounts, accountId);
   const hasAccountToken = Boolean(
     accountCfg &&
     Object.prototype.hasOwnProperty.call(accountCfg as Record<string, unknown>, "token"),

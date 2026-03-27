@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  stripInlineDirectiveTagsForDelivery,
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "./directive-tags.js";
@@ -22,6 +23,29 @@ describe("stripInlineDirectiveTagsForDisplay", () => {
   test("does not mutate plain text", () => {
     const input = "  keep leading and trailing whitespace  ";
     const result = stripInlineDirectiveTagsForDisplay(input);
+    expect(result.changed).toBe(false);
+    expect(result.text).toBe(input);
+  });
+});
+
+describe("stripInlineDirectiveTagsForDelivery", () => {
+  test("removes directives and surrounding whitespace for outbound text", () => {
+    const input = "hello [[reply_to_current]] world [[audio_as_voice]]";
+    const result = stripInlineDirectiveTagsForDelivery(input);
+    expect(result.changed).toBe(true);
+    expect(result.text).toBe("hello world");
+  });
+
+  test("preserves intentional multi-space formatting away from directives", () => {
+    const input = "a  b [[reply_to:123]] c   d";
+    const result = stripInlineDirectiveTagsForDelivery(input);
+    expect(result.changed).toBe(true);
+    expect(result.text).toBe("a  b c   d");
+  });
+
+  test("does not trim plain text when no directive tags are present", () => {
+    const input = "  keep leading and trailing whitespace  ";
+    const result = stripInlineDirectiveTagsForDelivery(input);
     expect(result.changed).toBe(false);
     expect(result.text).toBe(input);
   });

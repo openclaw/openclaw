@@ -26,6 +26,10 @@ import {
 } from "@buape/carbon";
 import { ButtonStyle, MessageFlags, TextInputStyle } from "discord-api-types/v10";
 
+// Some test-only module graphs partially mock `@buape/carbon` and can drop `Modal`.
+// Keep dynamic form definitions loadable instead of crashing unrelated suites.
+const ModalBase: typeof Modal = (Modal ?? class {}) as typeof Modal;
+
 export const DISCORD_COMPONENT_CUSTOM_ID_KEY = "occomp";
 export const DISCORD_MODAL_CUSTOM_ID_KEY = "ocmodal";
 export const DISCORD_COMPONENT_ATTACHMENT_PREFIX = "attachment://";
@@ -47,6 +51,8 @@ export type DiscordComponentButtonSpec = {
   style?: DiscordComponentButtonStyle;
   url?: string;
   callbackData?: string;
+  /** Internal use only: bypass dynamic component ids with a fixed custom id. */
+  internalCustomId?: string;
   emoji?: {
     name: string;
     id?: string;
@@ -715,16 +721,27 @@ function createButtonComponent(params: {
     return { component: new DynamicLinkButton() };
   }
   const componentId = params.componentId ?? createShortId("btn_");
-  const customId = buildDiscordComponentCustomId({
-    componentId,
-    modalId: params.modalId,
-  });
+  const internalCustomId =
+    typeof params.spec.internalCustomId === "string" && params.spec.internalCustomId.trim()
+      ? params.spec.internalCustomId.trim()
+      : undefined;
+  const customId =
+    internalCustomId ??
+    buildDiscordComponentCustomId({
+      componentId,
+      modalId: params.modalId,
+    });
   class DynamicButton extends Button {
     label = params.spec.label;
     customId = customId;
     style = style;
     emoji = params.spec.emoji;
     disabled = params.spec.disabled ?? false;
+  }
+  if (internalCustomId) {
+    return {
+      component: new DynamicButton(),
+    };
   }
   return {
     component: new DynamicButton(),
@@ -1126,7 +1143,7 @@ export function buildDiscordComponentMessageFlags(
   return hasV2 ? MessageFlags.IsComponentsV2 : undefined;
 }
 
-export class DiscordFormModal extends Modal {
+export class DiscordFormModal extends ModalBase {
   title: string;
   customId: string;
   components: Array<Label | TextDisplay>;

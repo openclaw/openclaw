@@ -30,6 +30,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { restoreTerminalState } from "../terminal/restore.js";
 import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
+import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
@@ -50,6 +51,7 @@ export async function finalizeSetupWizard(
   options: FinalizeOnboardingOptions,
 ): Promise<{ launchedTui: boolean }> {
   const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
+  let gatewayProbe: { ok: boolean; detail?: string } = { ok: true };
 
   const withWizardProgress = async <T>(
     label: string,
@@ -231,15 +233,33 @@ export async function finalizeSetupWizard(
       basePath: undefined,
     });
     // Daemon install/restart can briefly flap the WS; wait a bit so health check doesn't false-fail.
-    await waitForGatewayReachable({
+    gatewayProbe = await waitForGatewayReachable({
       url: probeLinks.wsUrl,
       token: settings.gatewayToken,
       deadlineMs: 15_000,
     });
-    try {
-      await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
-    } catch (err) {
-      runtime.error(formatHealthCheckFailure(err));
+    if (gatewayProbe.ok) {
+      try {
+        await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
+      } catch (err) {
+        runtime.error(formatHealthCheckFailure(err));
+        await prompter.note(
+          [
+            "Docs:",
+            "https://docs.openclaw.ai/gateway/health",
+            "https://docs.openclaw.ai/gateway/troubleshooting",
+          ].join("\n"),
+          "Health check help",
+        );
+      }
+    } else if (installDaemon) {
+      runtime.error(
+        formatHealthCheckFailure(
+          new Error(
+            gatewayProbe.detail ?? `gateway did not become reachable at ${probeLinks.wsUrl}`,
+          ),
+        ),
+      );
       await prompter.note(
         [
           "Docs:",
@@ -247,6 +267,17 @@ export async function finalizeSetupWizard(
           "https://docs.openclaw.ai/gateway/troubleshooting",
         ].join("\n"),
         "Health check help",
+      );
+    } else {
+      await prompter.note(
+        [
+          "Gateway not detected yet.",
+          "Setup was run without Gateway service install, so no background gateway is expected.",
+          `Start now: ${formatCliCommand("openclaw gateway run")}`,
+          `Or rerun with: ${formatCliCommand("openclaw onboard --install-daemon")}`,
+          `Or skip this probe next time: ${formatCliCommand("openclaw onboard --skip-health")}`,
+        ].join("\n"),
+        "Gateway",
       );
     }
   }
@@ -303,11 +334,13 @@ export async function finalizeSetupWizard(
     }
   }
 
-  const gatewayProbe = await probeGatewayReachable({
-    url: links.wsUrl,
-    token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-    password: settings.authMode === "password" ? resolvedGatewayPassword : "",
-  });
+  if (opts.skipHealth || !gatewayProbe.ok) {
+    gatewayProbe = await probeGatewayReachable({
+      url: links.wsUrl,
+      token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+      password: settings.authMode === "password" ? resolvedGatewayPassword : "",
+    });
+  }
   const gatewayStatusLine = gatewayProbe.ok
     ? "Gateway: reachable"
     : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
@@ -445,6 +478,7 @@ export async function finalizeSetupWizard(
 
   const shouldOpenControlUi =
     !opts.skipUi &&
+    gatewayProbe.ok &&
     settings.authMode === "token" &&
     Boolean(settings.gatewayToken) &&
     hatchChoice === null;
@@ -483,13 +517,14 @@ export async function finalizeSetupWizard(
 
   const webSearchProvider = nextConfig.tools?.web?.search?.provider;
   const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
+  const configuredSearchProviders = listConfiguredWebSearchProviders({ config: nextConfig });
   if (webSearchProvider) {
-    const { SEARCH_PROVIDER_OPTIONS, resolveExistingKey, hasExistingKey, hasKeyInEnv } =
+    const { resolveExistingKey, hasExistingKey, hasKeyInEnv } =
       await import("../commands/onboard-search.js");
-    const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === webSearchProvider);
+    const entry = configuredSearchProviders.find((e) => e.id === webSearchProvider);
     const label = entry?.label ?? webSearchProvider;
-    const storedKey = resolveExistingKey(nextConfig, webSearchProvider);
-    const keyConfigured = hasExistingKey(nextConfig, webSearchProvider);
+    const storedKey = entry ? resolveExistingKey(nextConfig, webSearchProvider) : undefined;
+    const keyConfigured = entry ? hasExistingKey(nextConfig, webSearchProvider) : false;
     const envAvailable = entry ? hasKeyInEnv(entry) : false;
     const hasKey = keyConfigured || envAvailable;
     const keySource = storedKey
@@ -497,9 +532,20 @@ export async function finalizeSetupWizard(
       : keyConfigured
         ? "API key: configured via secret reference."
         : envAvailable
-          ? `API key: provided via ${entry?.envKeys.join(" / ")} env var.`
+          ? `API key: provided via ${entry?.envVars.join(" / ")} env var.`
           : undefined;
-    if (webSearchEnabled !== false && hasKey) {
+    if (!entry) {
+      await prompter.note(
+        [
+          `Web search provider ${label} is selected but unavailable under the current plugin policy.`,
+          "web_search will not work until the provider is re-enabled or a different provider is selected.",
+          `  ${formatCliCommand("openclaw configure --section web")}`,
+          "",
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    } else if (webSearchEnabled !== false && hasKey) {
       await prompter.note(
         [
           "Web search is enabled, so your agent can look things up online when needed.",
@@ -536,10 +582,9 @@ export async function finalizeSetupWizard(
   } else {
     // Legacy configs may have a working key (e.g. apiKey or BRAVE_API_KEY) without
     // an explicit provider. Runtime auto-detects these, so avoid saying "skipped".
-    const { SEARCH_PROVIDER_OPTIONS, hasExistingKey, hasKeyInEnv } =
-      await import("../commands/onboard-search.js");
-    const legacyDetected = SEARCH_PROVIDER_OPTIONS.find(
-      (e) => hasExistingKey(nextConfig, e.value) || hasKeyInEnv(e),
+    const { hasExistingKey, hasKeyInEnv } = await import("../commands/onboard-search.js");
+    const legacyDetected = configuredSearchProviders.find(
+      (e) => hasExistingKey(nextConfig, e.id) || hasKeyInEnv(e),
     );
     if (legacyDetected) {
       await prompter.note(

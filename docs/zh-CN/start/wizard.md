@@ -1,10 +1,10 @@
 ---
 read_when:
-  - 运行或配置设置向导
+  - 运行或配置 CLI 新手引导
   - 设置一台新机器
 sidebarTitle: "Onboarding: CLI"
-summary: CLI 设置向导：用于 Gateway 网关、工作区、渠道和 Skills 的引导式设置
-title: 设置向导（CLI）
+summary: CLI 新手引导：用于 Gateway 网关、工作区、渠道和 Skills 的引导式设置
+title: CLI 新手引导
 x-i18n:
   generated_at: "2026-03-16T06:28:38Z"
   model: gpt-5.4
@@ -14,9 +14,9 @@ x-i18n:
   workflow: 15
 ---
 
-# 设置向导（CLI）
+# CLI 新手引导
 
-设置向导是在 macOS、
+CLI 新手引导是在 macOS、
 Linux 或 Windows（通过 WSL2；强烈推荐）上设置 OpenClaw 的**推荐**方式。
 它可在一次引导式流程中配置本地 Gateway 网关或远程 Gateway 网关连接，以及渠道、Skills
 和工作区默认值。
@@ -42,7 +42,7 @@ openclaw agents add <name>
 </Note>
 
 <Tip>
-设置向导包含一个 web search 步骤，你可以选择一个提供商
+CLI 新手引导包含一个 web search 步骤，你可以选择一个提供商
 （Perplexity、Brave、Gemini、Grok 或 Kimi），并粘贴你的 API 密钥，以便智能体
 可以使用 `web_search`。你也可以稍后通过
 `openclaw configure --section web` 进行配置。文档：[Web 工具](/tools/web)。
@@ -50,7 +50,7 @@ openclaw agents add <name>
 
 ## 快速开始与高级模式
 
-向导开始时会让你选择**快速开始**（默认值）或**高级模式**（完全控制）。
+新手引导开始时会让你选择**快速开始**（默认值）或**高级模式**（完全控制）。
 
 <Tabs>
   <Tab title="快速开始（默认值）">
@@ -68,7 +68,7 @@ openclaw agents add <name>
   </Tab>
 </Tabs>
 
-## 向导会配置什么
+## 新手引导会配置什么
 
 **本地模式（默认）**会引导你完成以下步骤：
 
@@ -91,9 +91,9 @@ openclaw agents add <name>
 7. **Skills** —— 安装推荐的 Skills 和可选依赖项。
 
 <Note>
-重新运行向导**不会**清除任何内容，除非你显式选择 **Reset**（或传入 `--reset`）。
+重新运行新手引导**不会**清除任何内容，除非你显式选择 **Reset**（或传入 `--reset`）。
 CLI `--reset` 默认会重置配置、凭证和会话；如需包含工作区，请使用 `--reset-scope full`。
-如果配置无效或包含旧版键，向导会先要求你运行 `openclaw doctor`。
+如果配置无效或包含旧版键，新手引导会先要求你运行 `openclaw doctor`。
 </Note>
 
 **远程模式**只会配置本地客户端以连接到其他地方的 Gateway 网关。
@@ -102,7 +102,7 @@ CLI `--reset` 默认会重置配置、凭证和会话；如需包含工作区，
 ## 添加另一个智能体
 
 使用 `openclaw agents add <name>` 创建一个单独的智能体，它拥有自己的工作区、
-会话和认证配置文件。不带 `--workspace` 运行会启动向导。
+会话和认证配置文件。不带 `--workspace` 运行会启动新手引导。
 
 它会设置：
 
@@ -113,7 +113,7 @@ CLI `--reset` 默认会重置配置、凭证和会话；如需包含工作区，
 说明：
 
 - 默认工作区遵循 `~/.openclaw/workspace-<agentId>`。
-- 添加 `bindings` 以路由入站消息（向导可以完成这项操作）。
+- 添加 `bindings` 以路由入站消息（新手引导可以完成这项操作）。
 - 非交互式标志：`--model`、`--agent-dir`、`--bind`、`--non-interactive`。
 
 ## 完整参考
@@ -122,7 +122,7 @@ CLI `--reset` 默认会重置配置、凭证和会话；如需包含工作区，
 [CLI 设置参考](/start/wizard-cli-reference)。
 有关非交互式示例，请参见 [CLI 自动化](/start/wizard-cli-automation)。
 有关更深入的技术参考（包括 RPC 细节），请参见
-[向导参考](/reference/wizard)。
+[新手引导参考](/reference/wizard)。
 
 ## 相关文档
 

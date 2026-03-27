@@ -1,18 +1,19 @@
 import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
+import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import {
+  fetchWithSsrFGuard,
+  withTrustedEnvProxyGuardedFetchMode,
+} from "openclaw/plugin-sdk/infra-runtime";
+import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import {
   chunkMarkdownTextWithMode,
   resolveChunkMode,
   resolveTextChunkLimit,
-} from "../../../src/auto-reply/chunk.js";
-import { isSilentReplyText } from "../../../src/auto-reply/tokens.js";
-import { loadConfig, type OpenClawConfig } from "../../../src/config/config.js";
-import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
-import { logVerbose } from "../../../src/globals.js";
-import {
-  fetchWithSsrFGuard,
-  withTrustedEnvProxyGuardedFetchMode,
-} from "../../../src/infra/net/fetch-guard.js";
-import { loadWebMedia } from "../../whatsapp/src/media.js";
+} from "openclaw/plugin-sdk/reply-runtime";
+import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { markdownTablesToBlockKitAttachment } from "./block-kit-tables.js";
@@ -20,14 +21,15 @@ import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks, markdownToSlackMrkdwnWithTables } from "./format.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
-
-const SLACK_TEXT_LIMIT = 4000;
 const SLACK_UPLOAD_SSRF_POLICY = {
   allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
   allowRfc2544BenchmarkRange: true,
 };
+const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
+const slackDmChannelCache = new Map<string, string>();
 
 type SlackRecipient =
   | {
@@ -50,11 +52,15 @@ type SlackSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  uploadFileName?: string;
+  uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
   client?: WebClient;
   threadTs?: string;
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
+  /** Override the markdown table mode (useful for testing without plugin registry). */
+  tableMode?: import("openclaw/plugin-sdk/config-runtime").MarkdownTableMode;
 };
 
 function hasCustomIdentity(identity?: SlackSendIdentity): boolean {
@@ -170,10 +176,31 @@ function parseRecipient(raw: string): SlackRecipient {
   return { kind: target.kind, id: target.id };
 }
 
+function createSlackDmCacheKey(params: {
+  accountId?: string;
+  token: string;
+  recipientId: string;
+}): string {
+  return `${params.accountId ?? "default"}:${params.token}:${params.recipientId}`;
+}
+
+function setSlackDmChannelCache(key: string, channelId: string): void {
+  if (slackDmChannelCache.has(key)) {
+    slackDmChannelCache.delete(key);
+  } else if (slackDmChannelCache.size >= SLACK_DM_CHANNEL_CACHE_MAX) {
+    const oldest = slackDmChannelCache.keys().next().value;
+    if (oldest) {
+      slackDmChannelCache.delete(oldest);
+    }
+  }
+  slackDmChannelCache.set(key, channelId);
+}
+
 async function resolveChannelId(
   client: WebClient,
   recipient: SlackRecipient,
-): Promise<{ channelId: string; isDm?: boolean }> {
+  params: { accountId?: string; token: string },
+): Promise<{ channelId: string; isDm?: boolean; cacheHit?: boolean }> {
   // Bare Slack user IDs (U-prefix) may arrive with kind="channel" when the
   // target string had no explicit prefix (parseSlackTarget defaults bare IDs
   // to "channel"). chat.postMessage tolerates user IDs directly, but
@@ -184,18 +211,34 @@ async function resolveChannelId(
   if (!isUserId) {
     return { channelId: recipient.id };
   }
+  const cacheKey = createSlackDmCacheKey({
+    accountId: params.accountId,
+    token: params.token,
+    recipientId: recipient.id,
+  });
+  const cachedChannelId = slackDmChannelCache.get(cacheKey);
+  if (cachedChannelId) {
+    return { channelId: cachedChannelId, isDm: true, cacheHit: true };
+  }
   const response = await client.conversations.open({ users: recipient.id });
   const channelId = response.channel?.id;
   if (!channelId) {
     throw new Error("Failed to open Slack DM channel");
   }
-  return { channelId, isDm: true };
+  setSlackDmChannelCache(cacheKey, channelId);
+  return { channelId, isDm: true, cacheHit: false };
+}
+
+export function clearSlackDmChannelCache(): void {
+  slackDmChannelCache.clear();
 }
 
 async function uploadSlackFile(params: {
   client: WebClient;
   channelId: string;
   mediaUrl: string;
+  uploadFileName?: string;
+  uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
   caption?: string;
   threadTs?: string;
@@ -205,11 +248,13 @@ async function uploadSlackFile(params: {
     maxBytes: params.maxBytes,
     localRoots: params.mediaLocalRoots,
   });
+  const uploadFileName = params.uploadFileName ?? fileName ?? "upload";
+  const uploadTitle = params.uploadTitle ?? uploadFileName;
   // Use the 3-step upload flow (getUploadURLExternal -> POST -> completeUploadExternal)
   // instead of files.uploadV2 which relies on the deprecated files.upload endpoint
   // and can fail with missing_scope even when files:write is granted.
   const uploadUrlResp = await params.client.files.getUploadURLExternal({
-    filename: fileName ?? "upload",
+    filename: uploadFileName,
     length: buffer.length,
   });
   if (!uploadUrlResp.ok || !uploadUrlResp.upload_url || !uploadUrlResp.file_id) {
@@ -240,7 +285,7 @@ async function uploadSlackFile(params: {
 
   // Complete the upload and share to channel/thread
   const completeResp = await params.client.files.completeUploadExternal({
-    files: [{ id: uploadUrlResp.file_id, title: fileName ?? "upload" }],
+    files: [{ id: uploadUrlResp.file_id, title: uploadTitle }],
     channel_id: params.channelId,
     ...(params.caption ? { initial_comment: params.caption } : {}),
     ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
@@ -279,7 +324,10 @@ export async function sendMessageSlack(
   });
   const client = opts.client ?? createSlackWebClient(token);
   const recipient = parseRecipient(to);
-  const { channelId } = await resolveChannelId(client, recipient);
+  const { channelId } = await resolveChannelId(client, recipient, {
+    accountId: account.accountId,
+    token,
+  });
   if (blocks) {
     if (opts.mediaUrl) {
       throw new Error("Slack send does not support blocks with mediaUrl");
@@ -298,9 +346,11 @@ export async function sendMessageSlack(
       channelId,
     };
   }
-  const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);
+  const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId, {
+    fallbackLimit: SLACK_TEXT_LIMIT,
+  });
   const chunkLimit = Math.min(textLimit, SLACK_TEXT_LIMIT);
-  const tableMode = resolveMarkdownTableMode({
+  const tableMode = opts.tableMode ?? resolveMarkdownTableMode({
     cfg,
     channel: "slack",
     accountId: account.accountId,
@@ -317,7 +367,7 @@ export async function sendMessageSlack(
   const chunks: string[] = [];
 
   if (tableMode === "block") {
-    const allTables: import("../../../src/markdown/ir.js").MarkdownTableData[] = [];
+    const allTables: import("openclaw/plugin-sdk/text-runtime").MarkdownTableData[] = [];
     for (const markdown of markdownChunks) {
       const result = markdownToSlackMrkdwnWithTables(markdown, chunkLimit, { tableMode });
       chunks.push(...result.chunks);
@@ -334,13 +384,13 @@ export async function sendMessageSlack(
     );
   }
 
-  if (!chunks.length && trimmedMessage) {
-    // When block-mode tables consumed all content, don't fall back to raw
-    // pipe-delimited markdown — the tables will render via attachments.
-    if (!(tableMode === "block" && tableAttachments?.length)) {
-      chunks.push(trimmedMessage);
-    }
-  }
+  // Use upstream's fallback resolver for non-table chunks.
+  // For block-mode tables, handle fallback ourselves to avoid injecting
+  // raw pipe-delimited markdown when tables consumed all content.
+  const resolvedChunks =
+    tableMode === "block" && tableAttachments?.length
+      ? chunks.length ? chunks : [" "]
+      : resolveTextChunksWithFallback(trimmedMessage, chunks);
   const mediaMaxBytes =
     typeof account.config.mediaMaxMb === "number"
       ? account.config.mediaMaxMb * 1024 * 1024
@@ -348,11 +398,13 @@ export async function sendMessageSlack(
 
   let lastMessageId = "";
   if (opts.mediaUrl) {
-    const [firstChunk, ...rest] = chunks;
+    const [firstChunk, ...rest] = resolvedChunks;
     lastMessageId = await uploadSlackFile({
       client,
       channelId,
       mediaUrl: opts.mediaUrl,
+      uploadFileName: opts.uploadFileName,
+      uploadTitle: opts.uploadTitle,
       mediaLocalRoots: opts.mediaLocalRoots,
       caption: firstChunk,
       threadTs: opts.threadTs,
@@ -388,14 +440,12 @@ export async function sendMessageSlack(
   } else {
     // Send text chunks. Attach Block Kit tables to the last chunk
     // so the table renders at the end of the message.
-    const tableOnlyFallback = tableAttachments?.length ? " " : "";
-    const allChunks = chunks.length ? chunks : [tableOnlyFallback];
-    for (let i = 0; i < allChunks.length; i++) {
-      const isLastChunk = i === allChunks.length - 1;
+    for (let i = 0; i < resolvedChunks.length; i++) {
+      const isLastChunk = i === resolvedChunks.length - 1;
       const response = await postSlackMessageBestEffort({
         client,
         channelId,
-        text: allChunks[i] ?? "",
+        text: resolvedChunks[i] ?? "",
         threadTs: opts.threadTs,
         identity: opts.identity,
         ...(isLastChunk && tableAttachments ? { attachments: tableAttachments } : {}),

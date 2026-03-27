@@ -1,16 +1,24 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createConfiguredBindingConversationRuntimeModuleMock } from "../../../test/helpers/extensions/configured-binding-runtime.js";
 
-const ensureConfiguredAcpBindingSessionMock = vi.hoisted(() => vi.fn());
-const resolveConfiguredAcpBindingRecordMock = vi.hoisted(() => vi.fn());
+const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
+const recordInboundSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../src/acp/persistent-bindings.js", () => ({
-  ensureConfiguredAcpBindingSession: (...args: unknown[]) =>
-    ensureConfiguredAcpBindingSessionMock(...args),
-  resolveConfiguredAcpBindingRecord: (...args: unknown[]) =>
-    resolveConfiguredAcpBindingRecordMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  return {
+    ...(await createConfiguredBindingConversationRuntimeModuleMock(
+      {
+        ensureConfiguredBindingRouteReadyMock,
+        resolveConfiguredBindingRouteMock,
+      },
+      importOriginal,
+    )),
+    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+  };
+});
 
-import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
 
 function createConfiguredTelegramBinding() {
   return {
@@ -43,15 +51,99 @@ function createConfiguredTelegramBinding() {
   } as const;
 }
 
+function createConfiguredTelegramRoute() {
+  const configuredBinding = createConfiguredTelegramBinding();
+  return {
+    bindingResolution: {
+      conversation: {
+        channel: "telegram",
+        accountId: "work",
+        conversationId: "-1001234567890:topic:42",
+        parentConversationId: "-1001234567890",
+      },
+      compiledBinding: {
+        channel: "telegram",
+        accountPattern: "work",
+        binding: {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "telegram",
+            accountId: "work",
+            peer: {
+              kind: "group",
+              id: "-1001234567890:topic:42",
+            },
+          },
+        },
+        bindingConversationId: "-1001234567890:topic:42",
+        target: {
+          conversationId: "-1001234567890:topic:42",
+          parentConversationId: "-1001234567890",
+        },
+        agentId: "codex",
+        provider: {
+          compileConfiguredBinding: () => ({
+            conversationId: "-1001234567890:topic:42",
+            parentConversationId: "-1001234567890",
+          }),
+          matchInboundConversation: () => ({
+            conversationId: "-1001234567890:topic:42",
+            parentConversationId: "-1001234567890",
+          }),
+        },
+        targetFactory: {
+          driverId: "acp",
+          materialize: () => ({
+            record: configuredBinding.record,
+            statefulTarget: {
+              kind: "stateful",
+              driverId: "acp",
+              sessionKey: configuredBinding.record.targetSessionKey,
+              agentId: configuredBinding.spec.agentId,
+            },
+          }),
+        },
+      },
+      match: {
+        conversationId: "-1001234567890:topic:42",
+        parentConversationId: "-1001234567890",
+      },
+      record: configuredBinding.record,
+      statefulTarget: {
+        kind: "stateful",
+        driverId: "acp",
+        sessionKey: configuredBinding.record.targetSessionKey,
+        agentId: configuredBinding.spec.agentId,
+      },
+    },
+    configuredBinding,
+    boundSessionKey: configuredBinding.record.targetSessionKey,
+    route: {
+      agentId: "codex",
+      accountId: "work",
+      channel: "telegram",
+      sessionKey: configuredBinding.record.targetSessionKey,
+      mainSessionKey: "agent:codex:main",
+      matchedBy: "binding.channel",
+      lastRoutePolicy: "bound",
+    },
+  } as const;
+}
+
 describe("buildTelegramMessageContext ACP configured bindings", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ buildTelegramMessageContextForTest } =
+      await import("./bot-message-context.test-harness.js"));
+  });
+
   beforeEach(() => {
-    ensureConfiguredAcpBindingSessionMock.mockReset();
-    resolveConfiguredAcpBindingRecordMock.mockReset();
-    resolveConfiguredAcpBindingRecordMock.mockReturnValue(createConfiguredTelegramBinding());
-    ensureConfiguredAcpBindingSessionMock.mockResolvedValue({
-      ok: true,
-      sessionKey: "agent:codex:acp:binding:telegram:work:abc123",
-    });
+    ensureConfiguredBindingRouteReadyMock.mockReset();
+    recordInboundSessionMock.mockClear();
+    resolveConfiguredBindingRouteMock.mockReset();
+    resolveConfiguredBindingRouteMock.mockReturnValue(createConfiguredTelegramRoute());
+    ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
   });
 
   it("treats configured topic bindings as explicit route matches on non-default accounts", async () => {
@@ -68,7 +160,10 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     expect(ctx?.route.accountId).toBe("work");
     expect(ctx?.route.matchedBy).toBe("binding.channel");
     expect(ctx?.route.sessionKey).toBe("agent:codex:acp:binding:telegram:work:abc123");
-    expect(ensureConfiguredAcpBindingSessionMock).toHaveBeenCalledTimes(1);
+    expect(recordInboundSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      updateLastRoute: undefined,
+    });
+    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips ACP session initialization when topic access is denied", async () => {
@@ -86,8 +181,8 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     });
 
     expect(ctx).toBeNull();
-    expect(resolveConfiguredAcpBindingRecordMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredAcpBindingSessionMock).not.toHaveBeenCalled();
+    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
   });
 
   it("defers ACP session initialization for unauthorized control commands", async () => {
@@ -109,14 +204,13 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     });
 
     expect(ctx).toBeNull();
-    expect(resolveConfiguredAcpBindingRecordMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredAcpBindingSessionMock).not.toHaveBeenCalled();
+    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
   });
 
   it("drops inbound processing when configured ACP binding initialization fails", async () => {
-    ensureConfiguredAcpBindingSessionMock.mockResolvedValue({
+    ensureConfiguredBindingRouteReadyMock.mockResolvedValue({
       ok: false,
-      sessionKey: "agent:codex:acp:binding:telegram:work:abc123",
       error: "gateway unavailable",
     });
 
@@ -130,7 +224,7 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     });
 
     expect(ctx).toBeNull();
-    expect(resolveConfiguredAcpBindingRecordMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredAcpBindingSessionMock).toHaveBeenCalledTimes(1);
+    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
   });
 });

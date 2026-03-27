@@ -1,6 +1,6 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-import { danger } from "../../../../../src/globals.js";
-import { enqueueSystemEvent } from "../../../../../src/infra/system-events.js";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackReactionEvent } from "../types.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";

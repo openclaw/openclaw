@@ -1,5 +1,5 @@
-import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
-import { resolveFeishuAccount } from "./accounts.js";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { decodeFeishuCardAction, buildFeishuCardActionTextFallback } from "./card-interaction.js";
 import {
@@ -174,7 +174,7 @@ export async function handleFeishuCardAction(params: {
   accountId?: string;
 }): Promise<void> {
   const { cfg, event, runtime, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const log = runtime?.log ?? console.log;
   const decoded = decodeFeishuCardAction({ event });
   const claimedToken = beginFeishuCardActionToken({

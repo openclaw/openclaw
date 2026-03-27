@@ -16,7 +16,7 @@ import {
   calculateTotalPages,
   getModelsPageSize,
   type ProviderInfo,
-} from "../../plugin-sdk-internal/telegram.js";
+} from "../../plugin-sdk/telegram-runtime.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";

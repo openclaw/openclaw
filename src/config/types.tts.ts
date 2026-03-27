@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = string;
 
 export type TtsMode = "final" | "all";
 
@@ -25,20 +25,10 @@ export type TtsModelOverrideConfig = {
   allowSeed?: boolean;
 };
 
-export type TtsConfig = {
-  /** Auto-TTS mode (preferred). */
-  auto?: TtsAutoMode;
-  /** Legacy: enable auto-TTS when `auto` is not set. */
-  enabled?: boolean;
-  /** Apply TTS to final replies only or to all replies (tool/block/final). */
-  mode?: TtsMode;
-  /** Primary TTS provider (fallbacks are automatic). */
-  provider?: TtsProvider;
-  /** Optional model override for TTS auto-summary (provider/model or alias). */
-  summaryModel?: string;
-  /** Allow the model to override TTS parameters. */
-  modelOverrides?: TtsModelOverrideConfig;
-  /** ElevenLabs configuration. */
+export type TtsProviderConfigMap = Record<string, Record<string, unknown>>;
+
+export type LegacyTtsConfigCompat = {
+  /** Legacy ElevenLabs configuration. Prefer providers.elevenlabs. */
   elevenlabs?: {
     apiKey?: SecretInput;
     baseUrl?: string;
@@ -55,7 +45,7 @@ export type TtsConfig = {
       speed?: number;
     };
   };
-  /** OpenAI configuration. */
+  /** Legacy OpenAI configuration. Prefer providers.openai. */
   openai?: {
     apiKey?: SecretInput;
     baseUrl?: string;
@@ -66,9 +56,9 @@ export type TtsConfig = {
     /** System-level instructions for the TTS model (gpt-4o-mini-tts only). */
     instructions?: string;
   };
-  /** Microsoft Edge (node-edge-tts) configuration. */
+  /** Legacy alias for Microsoft speech configuration. Prefer providers.microsoft. */
   edge?: {
-    /** Explicitly allow Edge TTS usage (no API key required). */
+    /** Explicitly allow Microsoft speech usage (no API key required). */
     enabled?: boolean;
     voice?: string;
     lang?: string;
@@ -80,6 +70,36 @@ export type TtsConfig = {
     proxy?: string;
     timeoutMs?: number;
   };
+  /** Legacy Microsoft speech configuration. Prefer providers.microsoft. */
+  microsoft?: {
+    enabled?: boolean;
+    voice?: string;
+    lang?: string;
+    outputFormat?: string;
+    pitch?: string;
+    rate?: string;
+    volume?: string;
+    saveSubtitles?: boolean;
+    proxy?: string;
+    timeoutMs?: number;
+  };
+};
+
+export type TtsConfig = LegacyTtsConfigCompat & {
+  /** Auto-TTS mode (preferred). */
+  auto?: TtsAutoMode;
+  /** Legacy: enable auto-TTS when `auto` is not set. */
+  enabled?: boolean;
+  /** Apply TTS to final replies only or to all replies (tool/block/final). */
+  mode?: TtsMode;
+  /** Primary TTS provider (fallbacks are automatic). */
+  provider?: TtsProvider;
+  /** Optional model override for TTS auto-summary (provider/model or alias). */
+  summaryModel?: string;
+  /** Allow the model to override TTS parameters. */
+  modelOverrides?: TtsModelOverrideConfig;
+  /** Provider-specific TTS settings keyed by speech provider id. */
+  providers?: TtsProviderConfigMap;
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
   /** Hard cap for text sent to TTS (chars). */

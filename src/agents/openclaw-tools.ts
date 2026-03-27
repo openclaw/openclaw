@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { callGateway } from "../gateway/call.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
@@ -7,11 +8,11 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
-import { createBrowserTool } from "./tools/browser-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
+import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
@@ -26,6 +27,17 @@ import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
+
+type OpenClawToolsDeps = {
+  callGateway: typeof callGateway;
+  config?: OpenClawConfig;
+};
+
+const defaultOpenClawToolsDeps: OpenClawToolsDeps = {
+  callGateway,
+};
+
+let openClawToolsDeps: OpenClawToolsDeps = defaultOpenClawToolsDeps;
 
 export function createOpenClawTools(
   options?: {
@@ -80,8 +92,11 @@ export function createOpenClawTools(
     spawnWorkspaceDir?: string;
     /** Callback invoked when sessions_yield tool is called. */
     onYield?: (message: string) => Promise<void> | void;
+    /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
+    allowGatewaySubagentBinding?: boolean;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
+  const resolvedConfig = options?.config ?? openClawToolsDeps.config;
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
   const spawnWorkspaceDir = resolveWorkspaceRoot(
     options?.spawnWorkspaceDir ?? options?.workspaceDir,
@@ -101,6 +116,13 @@ export function createOpenClawTools(
         modelHasVision: options?.modelHasVision,
       })
     : null;
+  const imageGenerateTool = createImageGenerateTool({
+    config: options?.config,
+    agentDir: options?.agentDir,
+    workspaceDir,
+    sandbox,
+    fsPolicy: options?.fsPolicy,
+  });
   const pdfTool = options?.agentDir?.trim()
     ? createPdfTool({
         config: options?.config,
@@ -125,6 +147,7 @@ export function createOpenClawTools(
     : createMessageTool({
         agentAccountId: options?.agentAccountId,
         agentSessionKey: options?.agentSessionKey,
+        sessionId: options?.sessionId,
         config: options?.config,
         currentChannelId: options?.currentChannelId,
         currentChannelProvider: options?.agentChannel,
@@ -137,11 +160,6 @@ export function createOpenClawTools(
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
   const tools: AnyAgentTool[] = [
-    createBrowserTool({
-      sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
-      allowHostControl: options?.allowHostBrowserControl,
-      agentSessionKey: options?.agentSessionKey,
-    }),
     createCanvasTool({ config: options?.config }),
     createNodesTool({
       agentSessionKey: options?.agentSessionKey,
@@ -161,6 +179,7 @@ export function createOpenClawTools(
       agentChannel: options?.agentChannel,
       config: options?.config,
     }),
+    ...(imageGenerateTool ? [imageGenerateTool] : []),
     createGatewayTool({
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
@@ -172,18 +191,21 @@ export function createOpenClawTools(
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
-      config: options?.config,
+      config: resolvedConfig,
+      callGateway: openClawToolsDeps.callGateway,
     }),
     createSessionsHistoryTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
-      config: options?.config,
+      config: resolvedConfig,
+      callGateway: openClawToolsDeps.callGateway,
     }),
     createSessionsSendTool({
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel,
       sandboxed: options?.sandboxed,
-      config: options?.config,
+      config: resolvedConfig,
+      callGateway: openClawToolsDeps.callGateway,
     }),
     createSessionsYieldTool({
       sessionId: options?.sessionId,
@@ -207,7 +229,7 @@ export function createOpenClawTools(
     }),
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
-      config: options?.config,
+      config: resolvedConfig,
       sandboxed: options?.sandboxed,
     }),
     ...(webSearchTool ? [webSearchTool] : []),
@@ -227,6 +249,10 @@ export function createOpenClawTools(
       }),
       sessionKey: options?.agentSessionKey,
       sessionId: options?.sessionId,
+      browser: {
+        sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
+        allowHostControl: options?.allowHostBrowserControl,
+      },
       messageChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,
       requesterSenderId: options?.requesterSenderId ?? undefined,
@@ -235,7 +261,19 @@ export function createOpenClawTools(
     },
     existingToolNames: new Set(tools.map((tool) => tool.name)),
     toolAllowlist: options?.pluginToolAllowlist,
+    allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
   });
 
   return [...tools, ...pluginTools];
 }
+
+export const __testing = {
+  setDepsForTest(overrides?: Partial<OpenClawToolsDeps>) {
+    openClawToolsDeps = overrides
+      ? {
+          ...defaultOpenClawToolsDeps,
+          ...overrides,
+        }
+      : defaultOpenClawToolsDeps;
+  },
+};

@@ -1,5 +1,5 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
-import { resolveFeishuAccount } from "./accounts.js";
+import type { ClawdbotConfig } from "../runtime-api.js";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 
 export type FeishuReaction = {
@@ -10,7 +10,7 @@ export type FeishuReaction = {
 };
 
 function resolveConfiguredFeishuClient(params: { cfg: ClawdbotConfig; accountId?: string }) {
-  const account = resolveFeishuAccount(params);
+  const account = resolveFeishuRuntimeAccount(params);
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }

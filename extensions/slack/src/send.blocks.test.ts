@@ -4,6 +4,8 @@ import { createSlackSendTestClient, installSlackBlockTestMocks } from "./blocks.
 installSlackBlockTestMocks();
 const { sendMessageSlack } = await import("./send.js");
 
+
+
 describe("sendMessageSlack NO_REPLY guard", () => {
   it("suppresses NO_REPLY text before any Slack API call", async () => {
     const client = createSlackSendTestClient();
@@ -47,6 +49,26 @@ describe("sendMessageSlack NO_REPLY guard", () => {
 
     expect(client.chat.postMessage).toHaveBeenCalled();
     expect(result.messageId).toBe("171234.567");
+  });
+});
+
+describe("sendMessageSlack chunking", () => {
+  it("keeps 4205-character text in a single Slack post by default", async () => {
+    const client = createSlackSendTestClient();
+    const message = "a".repeat(4205);
+
+    await sendMessageSlack("channel:C123", message, {
+      token: "xoxb-test",
+      client,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C123",
+        text: message,
+      }),
+    );
   });
 });
 
@@ -175,11 +197,15 @@ describe("sendMessageSlack blocks", () => {
 });
 
 describe("sendMessageSlack Block Kit table attachments", () => {
+  // These tests use tableMode: "block" explicitly because the channel plugin
+  // registry isn't initialized in unit tests, so resolveMarkdownTableMode
+  // can't resolve "slack" to its production default ("block").
   it("does not send raw pipe-table markdown for table-only messages", async () => {
     const client = createSlackSendTestClient();
     await sendMessageSlack("channel:C123", "| A | B |\n|---|---|\n| 1 | 2 |", {
       token: "xoxb-test",
       client,
+      tableMode: "block",
     });
 
     const calls = client.chat.postMessage.mock.calls;
@@ -197,7 +223,7 @@ describe("sendMessageSlack Block Kit table attachments", () => {
     await sendMessageSlack(
       "channel:C123",
       "Here is a table:\n\n| Name | Age |\n|------|-----|\n| Alice | 30 |",
-      { token: "xoxb-test", client },
+      { token: "xoxb-test", client, tableMode: "block" },
     );
 
     const calls = client.chat.postMessage.mock.calls;
@@ -214,7 +240,7 @@ describe("sendMessageSlack Block Kit table attachments", () => {
     await sendMessageSlack(
       "channel:C123",
       "Before the table\n\n| X |\n|---|\n| 1 |\n\nAfter the table",
-      { token: "xoxb-test", client },
+      { token: "xoxb-test", client, tableMode: "block" },
     );
 
     const calls = client.chat.postMessage.mock.calls;

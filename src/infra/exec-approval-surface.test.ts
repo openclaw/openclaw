@@ -5,58 +5,38 @@ const getChannelPluginMock = vi.hoisted(() => vi.fn());
 const listChannelPluginsMock = vi.hoisted(() => vi.fn());
 const normalizeMessageChannelMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: (...args: unknown[]) => loadConfigMock(...args),
-}));
+type ExecApprovalSurfaceModule = typeof import("./exec-approval-surface.js");
 
-vi.mock("../channels/plugins/index.js", () => ({
-  getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
-  listChannelPlugins: (...args: unknown[]) => listChannelPluginsMock(...args),
-}));
+let hasConfiguredExecApprovalDmRoute: ExecApprovalSurfaceModule["hasConfiguredExecApprovalDmRoute"];
+let resolveExecApprovalInitiatingSurfaceState: ExecApprovalSurfaceModule["resolveExecApprovalInitiatingSurfaceState"];
 
-vi.mock("../../extensions/discord/src/channel.js", () => ({
-  discordPlugin: {},
-}));
-
-vi.mock("../../extensions/telegram/src/channel.js", () => ({
-  telegramPlugin: {},
-}));
-
-vi.mock("../../extensions/slack/src/channel.js", () => ({
-  slackPlugin: {},
-}));
-
-vi.mock("../../extensions/whatsapp/src/channel.js", () => ({
-  whatsappPlugin: {},
-}));
-
-vi.mock("../../extensions/signal/src/channel.js", () => ({
-  signalPlugin: {},
-}));
-
-vi.mock("../../extensions/imessage/src/channel.js", () => ({
-  imessagePlugin: {},
-}));
-
-vi.mock("../utils/message-channel.js", () => ({
-  INTERNAL_MESSAGE_CHANNEL: "web",
-  normalizeMessageChannel: (...args: unknown[]) => normalizeMessageChannelMock(...args),
-}));
-
-import {
-  hasConfiguredExecApprovalDmRoute,
-  resolveExecApprovalInitiatingSurfaceState,
-} from "./exec-approval-surface.js";
+async function loadExecApprovalSurfaceModule() {
+  vi.resetModules();
+  loadConfigMock.mockReset();
+  getChannelPluginMock.mockReset();
+  listChannelPluginsMock.mockReset();
+  normalizeMessageChannelMock.mockReset();
+  normalizeMessageChannelMock.mockImplementation((value?: string | null) =>
+    typeof value === "string" ? value.trim().toLowerCase() : undefined,
+  );
+  vi.doMock("../config/config.js", () => ({
+    loadConfig: (...args: unknown[]) => loadConfigMock(...args),
+  }));
+  vi.doMock("../channels/plugins/index.js", () => ({
+    getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+    listChannelPlugins: (...args: unknown[]) => listChannelPluginsMock(...args),
+  }));
+  vi.doMock("../utils/message-channel.js", () => ({
+    INTERNAL_MESSAGE_CHANNEL: "web",
+    normalizeMessageChannel: (...args: unknown[]) => normalizeMessageChannelMock(...args),
+  }));
+  ({ hasConfiguredExecApprovalDmRoute, resolveExecApprovalInitiatingSurfaceState } =
+    await import("./exec-approval-surface.js"));
+}
 
 describe("resolveExecApprovalInitiatingSurfaceState", () => {
-  beforeEach(() => {
-    loadConfigMock.mockReset();
-    getChannelPluginMock.mockReset();
-    listChannelPluginsMock.mockReset();
-    normalizeMessageChannelMock.mockReset();
-    normalizeMessageChannelMock.mockImplementation((value?: string | null) =>
-      typeof value === "string" ? value.trim().toLowerCase() : undefined,
-    );
+  beforeEach(async () => {
+    await loadExecApprovalSurfaceModule();
   });
 
   it("treats web UI, terminal UI, and missing channels as enabled", () => {
@@ -154,8 +134,8 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
 });
 
 describe("hasConfiguredExecApprovalDmRoute", () => {
-  beforeEach(() => {
-    listChannelPluginsMock.mockReset();
+  beforeEach(async () => {
+    await loadExecApprovalSurfaceModule();
   });
 
   it("returns true when any enabled account routes approvals to DM or both", () => {

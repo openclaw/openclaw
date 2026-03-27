@@ -1,11 +1,10 @@
-import { fetchGeminiUsage } from "../../src/infra/provider-usage.fetch.js";
-import { buildOauthProviderAuthResult } from "../../src/plugin-sdk/provider-auth-result.js";
 import type {
   OpenClawPluginApi,
   ProviderAuthContext,
   ProviderFetchUsageSnapshotContext,
-} from "../../src/plugins/types.js";
-import { loginGeminiCliOAuth } from "./oauth.js";
+} from "openclaw/plugin-sdk/plugin-entry";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
+import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
 
 const PROVIDER_ID = "google-gemini-cli";
@@ -82,6 +81,7 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
 
           const spin = ctx.prompter.progress("Starting Gemini CLI OAuth…");
           try {
+            const { loginGeminiCliOAuth } = await import("./oauth.runtime.js");
             const result = await loginGeminiCliOAuth({
               isRemote: ctx.isRemote,
               openUrl: ctx.openUrl,
