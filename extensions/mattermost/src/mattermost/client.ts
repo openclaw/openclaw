@@ -1,4 +1,5 @@
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/infra-runtime";
+import { z } from "openclaw/plugin-sdk/zod";
 
 export type MattermostClient = {
   baseUrl: string;
@@ -25,17 +26,21 @@ export type MattermostChannel = {
   team_id?: string | null;
 };
 
-export type MattermostPost = {
-  id: string;
-  user_id?: string | null;
-  channel_id?: string | null;
-  message?: string | null;
-  file_ids?: string[] | null;
-  type?: string | null;
-  root_id?: string | null;
-  create_at?: number | null;
-  props?: Record<string, unknown> | null;
-};
+export const MattermostPostSchema = z
+  .object({
+    id: z.string(),
+    user_id: z.string().nullable().optional(),
+    channel_id: z.string().nullable().optional(),
+    message: z.string().nullable().optional(),
+    file_ids: z.array(z.string()).nullable().optional(),
+    type: z.string().nullable().optional(),
+    root_id: z.string().nullable().optional(),
+    create_at: z.number().nullable().optional(),
+    props: z.record(z.string(), z.unknown()).nullable().optional(),
+  })
+  .passthrough();
+
+export type MattermostPost = z.infer<typeof MattermostPostSchema>;
 
 export type MattermostFileInfo = {
   id: string;
