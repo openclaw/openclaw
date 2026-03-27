@@ -1,6 +1,5 @@
 import type { Server } from "node:http";
 import express from "express";
-import { createSubsystemLogger, loadConfig } from "openclaw/plugin-sdk/browser-support";
 import { resolveBrowserConfig } from "./browser/config.js";
 import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "./browser/control-auth.js";
 import { registerBrowserRoutes } from "./browser/routes/index.js";
@@ -11,6 +10,8 @@ import {
   installBrowserAuthMiddleware,
   installBrowserCommonMiddleware,
 } from "./browser/server-middleware.js";
+import { loadConfig } from "./config/config.js";
+import { createSubsystemLogger } from "./logging/subsystem.js";
 import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
 
 let state: BrowserServerState | null = null;
