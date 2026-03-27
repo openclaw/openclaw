@@ -6,16 +6,22 @@ import type {
   TextContent,
   ToolCall,
   Tool,
+  Usage,
 } from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
-import { OLLAMA_DEFAULT_BASE_URL } from "./ollama-defaults.js";
+import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/agent-runtime";
+import type {
+  OpenClawConfig,
+  ProviderRuntimeModel,
+  ProviderWrapStreamFnContext,
+} from "openclaw/plugin-sdk/plugin-entry";
+import { DEFAULT_CONTEXT_TOKENS, normalizeProviderId } from "openclaw/plugin-sdk/provider-models";
 import {
-  buildAssistantMessage as buildStreamAssistantMessage,
-  buildStreamErrorAssistantMessage,
-  buildUsageWithNoCost,
-} from "./stream-message-shared.js";
+  createMoonshotThinkingWrapper,
+  resolveMoonshotThinkingType,
+} from "openclaw/plugin-sdk/provider-stream";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime";
+import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 
 const log = createSubsystemLogger("ollama-stream");
 
@@ -36,7 +42,214 @@ export function resolveOllamaBaseUrlForRun(params: {
   return OLLAMA_NATIVE_BASE_URL;
 }
 
-// ── Ollama /api/chat request types ──────────────────────────────────────────
+function resolveConfiguredOllamaProviderConfig(params: {
+  config?: OpenClawConfig;
+  providerId?: string;
+}) {
+  const providerId = params.providerId?.trim();
+  if (!providerId) {
+    return undefined;
+  }
+  const providers = params.config?.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  const direct = providers[providerId];
+  if (direct) {
+    return direct;
+  }
+  const normalized = normalizeProviderId(providerId);
+  for (const [candidateId, candidate] of Object.entries(providers)) {
+    if (normalizeProviderId(candidateId) === normalized) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+export function isOllamaCompatProvider(model: {
+  provider?: string;
+  baseUrl?: string;
+  api?: string;
+}): boolean {
+  const providerId = normalizeProviderId(model.provider ?? "");
+  if (providerId === "ollama") {
+    return true;
+  }
+  if (!model.baseUrl) {
+    return false;
+  }
+  try {
+    const parsed = new URL(model.baseUrl);
+    const hostname = parsed.hostname.toLowerCase();
+    const isLocalhost =
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1" ||
+      hostname === "[::1]";
+    if (isLocalhost && parsed.port === "11434") {
+      return true;
+    }
+
+    // Allow remote/LAN Ollama OpenAI-compatible endpoints when the provider id
+    // itself indicates Ollama usage (for example "my-ollama").
+    const providerHintsOllama = providerId.includes("ollama");
+    const isOllamaPort = parsed.port === "11434";
+    const isOllamaCompatPath = parsed.pathname === "/" || /^\/v1\/?$/i.test(parsed.pathname);
+    return providerHintsOllama && isOllamaPort && isOllamaCompatPath;
+  } catch {
+    return false;
+  }
+}
+
+export function resolveOllamaCompatNumCtxEnabled(params: {
+  config?: OpenClawConfig;
+  providerId?: string;
+}): boolean {
+  return resolveConfiguredOllamaProviderConfig(params)?.injectNumCtxForOpenAICompat ?? true;
+}
+
+export function shouldInjectOllamaCompatNumCtx(params: {
+  model: { api?: string; provider?: string; baseUrl?: string };
+  config?: OpenClawConfig;
+  providerId?: string;
+}): boolean {
+  if (params.model.api !== "openai-completions") {
+    return false;
+  }
+  if (!isOllamaCompatProvider(params.model)) {
+    return false;
+  }
+  return resolveOllamaCompatNumCtxEnabled({
+    config: params.config,
+    providerId: params.providerId,
+  });
+}
+
+export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: number): StreamFn {
+  const streamFn = baseFn ?? streamSimple;
+  return (model, context, options) =>
+    streamFn(model, context, {
+      ...options,
+      onPayload: (payload: unknown) => {
+        if (!payload || typeof payload !== "object") {
+          return options?.onPayload?.(payload, model);
+        }
+        const payloadRecord = payload as Record<string, unknown>;
+        if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
+          payloadRecord.options = {};
+        }
+        (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
+        return options?.onPayload?.(payload, model);
+      },
+    });
+}
+
+function resolveOllamaCompatNumCtx(model: ProviderRuntimeModel): number {
+  return Math.max(1, Math.floor(model.contextWindow ?? model.maxTokens ?? DEFAULT_CONTEXT_TOKENS));
+}
+
+function isOllamaCloudKimiModelRef(modelId: string): boolean {
+  const normalizedModelId = modelId.trim().toLowerCase();
+  return normalizedModelId.startsWith("kimi-k") && normalizedModelId.includes(":cloud");
+}
+
+export function createConfiguredOllamaCompatNumCtxWrapper(
+  ctx: ProviderWrapStreamFnContext,
+): StreamFn | undefined {
+  let streamFn = ctx.streamFn;
+  const model = ctx.model;
+
+  if (model) {
+    const providerId =
+      typeof model.provider === "string" && model.provider.trim().length > 0
+        ? model.provider
+        : ctx.provider;
+    if (
+      shouldInjectOllamaCompatNumCtx({
+        model,
+        config: ctx.config,
+        providerId,
+      })
+    ) {
+      streamFn = wrapOllamaCompatNumCtx(streamFn, resolveOllamaCompatNumCtx(model));
+    }
+  }
+
+  if (normalizeProviderId(ctx.provider) === "ollama" && isOllamaCloudKimiModelRef(ctx.modelId)) {
+    const thinkingType = resolveMoonshotThinkingType({
+      configuredThinking: ctx.extraParams?.thinking,
+      thinkingLevel: ctx.thinkingLevel,
+    });
+    streamFn = createMoonshotThinkingWrapper(streamFn, thinkingType);
+  }
+
+  return streamFn;
+}
+
+type StreamModelDescriptor = {
+  api: string;
+  provider: string;
+  id: string;
+};
+
+function buildUsageWithNoCost(params: {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  totalTokens?: number;
+}): Usage {
+  const input = params.input ?? 0;
+  const output = params.output ?? 0;
+  const cacheRead = params.cacheRead ?? 0;
+  const cacheWrite = params.cacheWrite ?? 0;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens: params.totalTokens ?? input + output,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+}
+
+function buildStreamAssistantMessage(params: {
+  model: StreamModelDescriptor;
+  content: AssistantMessage["content"];
+  stopReason: StopReason;
+  usage: Usage;
+  timestamp?: number;
+}): AssistantMessage {
+  return {
+    role: "assistant",
+    content: params.content,
+    stopReason: params.stopReason,
+    api: params.model.api,
+    provider: params.model.provider,
+    model: params.model.id,
+    usage: params.usage,
+    timestamp: params.timestamp ?? Date.now(),
+  };
+}
+
+function buildStreamErrorAssistantMessage(params: {
+  model: StreamModelDescriptor;
+  errorMessage: string;
+  timestamp?: number;
+}): AssistantMessage & { stopReason: "error"; errorMessage: string } {
+  return {
+    ...buildStreamAssistantMessage({
+      model: params.model,
+      content: [],
+      stopReason: "error",
+      usage: buildUsageWithNoCost({}),
+      timestamp: params.timestamp,
+    }),
+    stopReason: "error",
+    errorMessage: params.errorMessage,
+  };
+}
 
 interface OllamaChatRequest {
   model: string;
@@ -194,8 +407,6 @@ function parseJsonPreservingUnsafeIntegers(input: string): unknown {
   return JSON.parse(quoteUnsafeIntegerLiterals(input)) as unknown;
 }
 
-// ── Ollama /api/chat response types ─────────────────────────────────────────
-
 interface OllamaChatResponse {
   model: string;
   created_at: string;
@@ -215,8 +426,6 @@ interface OllamaChatResponse {
   eval_count?: number;
   eval_duration?: number;
 }
-
-// ── Message conversion ──────────────────────────────────────────────────────
 
 type InputContentPart =
   | { type: "text"; text: string }
@@ -273,9 +482,7 @@ export function convertToOllamaMessages(
   }
 
   for (const msg of messages) {
-    const { role } = msg;
-
-    if (role === "user") {
+    if (msg.role === "user") {
       const text = extractTextContent(msg.content);
       const images = extractOllamaImages(msg.content);
       result.push({
@@ -283,7 +490,10 @@ export function convertToOllamaMessages(
         content: text,
         ...(images.length > 0 ? { images } : {}),
       });
-    } else if (role === "assistant") {
+      continue;
+    }
+
+    if (msg.role === "assistant") {
       const text = extractTextContent(msg.content);
       const toolCalls = extractToolCalls(msg.content);
       result.push({
@@ -291,9 +501,10 @@ export function convertToOllamaMessages(
         content: text,
         ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
       });
-    } else if (role === "tool" || role === "toolResult") {
-      // SDK uses "toolResult" (camelCase) for tool result messages.
-      // Ollama API expects "tool" role with tool_name per the native spec.
+      continue;
+    }
+
+    if (msg.role === "tool" || msg.role === "toolResult") {
       const text = extractTextContent(msg.content);
       const toolName =
         typeof (msg as { toolName?: unknown }).toolName === "string"
@@ -309,8 +520,6 @@ export function convertToOllamaMessages(
 
   return result;
 }
-
-// ── Tool extraction ─────────────────────────────────────────────────────────
 
 function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
   if (!tools || !Array.isArray(tools)) {
@@ -333,16 +542,11 @@ function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
   return result;
 }
 
-// ── Response conversion ─────────────────────────────────────────────────────
-
 export function buildAssistantMessage(
   response: OllamaChatResponse,
-  modelInfo: { api: string; provider: string; id: string },
+  modelInfo: StreamModelDescriptor,
 ): AssistantMessage {
   const content: (TextContent | ToolCall)[] = [];
-
-  // Native Ollama reasoning fields are internal model output. The reply text
-  // must come from `content`; reasoning visibility is controlled elsewhere.
   const text = response.message.content || "";
   if (text) {
     content.push({ type: "text", text });
@@ -350,31 +554,26 @@ export function buildAssistantMessage(
 
   const toolCalls = response.message.tool_calls;
   if (toolCalls && toolCalls.length > 0) {
-    for (const tc of toolCalls) {
+    for (const toolCall of toolCalls) {
       content.push({
         type: "toolCall",
         id: `ollama_call_${randomUUID()}`,
-        name: tc.function.name,
-        arguments: tc.function.arguments,
+        name: toolCall.function.name,
+        arguments: toolCall.function.arguments,
       });
     }
   }
 
-  const hasToolCalls = toolCalls && toolCalls.length > 0;
-  const stopReason: StopReason = hasToolCalls ? "toolUse" : "stop";
-
   return buildStreamAssistantMessage({
     model: modelInfo,
     content,
-    stopReason,
+    stopReason: toolCalls && toolCalls.length > 0 ? "toolUse" : "stop",
     usage: buildUsageWithNoCost({
       input: response.prompt_eval_count ?? 0,
       output: response.eval_count ?? 0,
     }),
   });
 }
-
-// ── NDJSON streaming parser ─────────────────────────────────────────────────
 
 export async function* parseNdjsonStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -413,13 +612,10 @@ export async function* parseNdjsonStream(
   }
 }
 
-// ── Main StreamFn factory ───────────────────────────────────────────────────
-
 function resolveOllamaChatUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim().replace(/\/+$/, "");
   const normalizedBase = trimmed.replace(/\/v1$/i, "");
-  const apiBase = normalizedBase || OLLAMA_NATIVE_BASE_URL;
-  return `${apiBase}/api/chat`;
+  return `${normalizedBase || OLLAMA_NATIVE_BASE_URL}/api/chat`;
 }
 
 function resolveOllamaModelHeaders(model: {
@@ -446,11 +642,8 @@ export function createOllamaStreamFn(
           context.messages ?? [],
           context.systemPrompt,
         );
-
         const ollamaTools = extractOllamaTools(context.tools);
 
-        // Ollama defaults to num_ctx=4096 which is too small for large
-        // system prompts + many tool definitions. Use model's contextWindow.
         const ollamaOptions: Record<string, unknown> = { num_ctx: model.contextWindow ?? 65536 };
         if (typeof options?.temperature === "number") {
           ollamaOptions.temperature = options.temperature;
@@ -458,14 +651,6 @@ export function createOllamaStreamFn(
         if (typeof options?.maxTokens === "number") {
           ollamaOptions.num_predict = options.maxTokens;
         }
-
-        const body: OllamaChatRequest = {
-          model: model.id,
-          messages: ollamaMessages,
-          stream: true,
-          ...(ollamaTools.length > 0 ? { tools: ollamaTools } : {}),
-          options: ollamaOptions,
-        };
 
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
@@ -482,15 +667,20 @@ export function createOllamaStreamFn(
         const response = await fetch(chatUrl, {
           method: "POST",
           headers,
-          body: JSON.stringify(body),
+          body: JSON.stringify({
+            model: model.id,
+            messages: ollamaMessages,
+            stream: true,
+            ...(ollamaTools.length > 0 ? { tools: ollamaTools } : {}),
+            options: ollamaOptions,
+          } satisfies OllamaChatRequest),
           signal: options?.signal,
         });
 
         if (!response.ok) {
           const errorText = await response.text().catch(() => "unknown error");
-          throw new Error(`Ollama API error ${response.status}: ${errorText}`);
+          throw new Error(`${response.status} ${errorText}`);
         }
-
         if (!response.body) {
           throw new Error("Ollama API returned empty response body");
         }
@@ -504,13 +694,9 @@ export function createOllamaStreamFn(
           if (chunk.message?.content) {
             accumulatedContent += chunk.message.content;
           }
-
-          // Ollama sends tool_calls in intermediate (done:false) chunks,
-          // NOT in the final done:true chunk. Collect from all chunks.
           if (chunk.message?.tool_calls) {
             accumulatedToolCalls.push(...chunk.message.tool_calls);
           }
-
           if (chunk.done) {
             finalResponse = chunk;
             break;
@@ -531,30 +717,18 @@ export function createOllamaStreamFn(
           provider: model.provider,
           id: model.id,
         });
-
-        const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
-          assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop";
-
         stream.push({
           type: "done",
-          reason,
+          reason: assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop",
           message: assistantMessage,
         });
       } catch (err) {
-        let errorMessage = err instanceof Error ? err.message : String(err);
-        // Include nested cause for better diagnostics (e.g. undici wraps
-        // network errors as `TypeError: fetch failed` with the real error
-        // in `.cause`).
-        if (err instanceof Error && err.cause instanceof Error && err.cause.message) {
-          errorMessage = `${errorMessage}: ${err.cause.message}`;
-          log.warn(`Ollama fetch error cause: ${err.cause.message}`);
-        }
         stream.push({
           type: "error",
           reason: "error",
           error: buildStreamErrorAssistantMessage({
             model,
-            errorMessage,
+            errorMessage: err instanceof Error ? err.message : String(err),
           }),
         });
       } finally {
@@ -571,10 +745,9 @@ export function createConfiguredOllamaStreamFn(params: {
   model: { baseUrl?: string; headers?: unknown };
   providerBaseUrl?: string;
 }): StreamFn {
-  const modelBaseUrl = typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined;
   return createOllamaStreamFn(
     resolveOllamaBaseUrlForRun({
-      modelBaseUrl,
+      modelBaseUrl: typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined,
       providerBaseUrl: params.providerBaseUrl,
     }),
     resolveOllamaModelHeaders(params.model),

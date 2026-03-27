@@ -1,14 +1,10 @@
-import type { ModelDefinitionConfig } from "../config/types.models.js";
-import { OLLAMA_DEFAULT_BASE_URL } from "./ollama-defaults.js";
-
-export const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
-export const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
-export const OLLAMA_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
+import {
+  OLLAMA_DEFAULT_BASE_URL,
+  OLLAMA_DEFAULT_CONTEXT_WINDOW,
+  OLLAMA_DEFAULT_COST,
+  OLLAMA_DEFAULT_MAX_TOKENS,
+} from "./defaults.js";
 
 export type OllamaTagModel = {
   name: string;
@@ -32,14 +28,6 @@ export type OllamaModelWithContext = OllamaTagModel & {
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
 
-/**
- * Derive the Ollama native API base URL from a configured base URL.
- *
- * Users typically configure `baseUrl` with a `/v1` suffix (e.g.
- * `http://192.168.20.14:11434/v1`) for the OpenAI-compatible endpoint.
- * The native Ollama API lives at the root (e.g. `/api/tags`), so we
- * strip the `/v1` suffix when present.
- */
 export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
   if (!configuredBaseUrl) {
     return OLLAMA_DEFAULT_BASE_URL;
@@ -100,12 +88,10 @@ export async function enrichOllamaModelsWithContext(
   return enriched;
 }
 
-/** Heuristic: treat models with "r1", "reasoning", or "think" in the name as reasoning models. */
 export function isReasoningModelHeuristic(modelId: string): boolean {
   return /r1|reasoning|think|reason/i.test(modelId);
 }
 
-/** Build a ModelDefinitionConfig for an Ollama model with default values. */
 export function buildOllamaModelDefinition(
   modelId: string,
   contextWindow?: number,
@@ -121,7 +107,6 @@ export function buildOllamaModelDefinition(
   };
 }
 
-/** Fetch the model list from a running Ollama instance. */
 export async function fetchOllamaModels(
   baseUrl: string,
 ): Promise<{ reachable: boolean; models: OllamaTagModel[] }> {

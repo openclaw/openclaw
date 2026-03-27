@@ -1,7 +1,6 @@
 [
   "index",
   "core",
-  "ollama-setup",
   "provider-setup",
   "sandbox",
   "self-hosted-provider-setup",
@@ -152,5 +151,6 @@
   "whatsapp-core",
   "whatsapp-shared",
   "zalo",
-  "zalouser"
+  "zalouser",
+  "zod"
 ]

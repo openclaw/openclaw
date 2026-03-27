@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildPluginConfigSchema } from "openclaw/plugin-sdk/core";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 import type { OpenClawPluginConfigSchema } from "../runtime-api.js";
 
 export const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;

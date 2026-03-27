@@ -8,8 +8,7 @@
     "fake-indexeddb": "^6.2.5",
     "markdown-it": "14.1.1",
     "matrix-js-sdk": "41.2.0",
-    "music-metadata": "^11.12.3",
-    "zod": "^4.3.6"
+    "music-metadata": "^11.12.3"
   },
   "devDependencies": {
     "openclaw": "workspace:*"

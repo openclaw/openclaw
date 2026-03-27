@@ -6,7 +6,7 @@ import {
   buildAssistantMessage,
   parseNdjsonStream,
   resolveOllamaBaseUrlForRun,
-} from "./ollama-stream.js";
+} from "../../extensions/ollama/src/stream.js";
 
 describe("convertToOllamaMessages", () => {
   it("converts user text messages", () => {
@@ -497,6 +497,31 @@ describe("createOllamaStreamFn", () => {
         });
       },
     );
+  });
+
+  it("surfaces non-2xx HTTP response as status-prefixed error", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => {
+      return new Response("Service Unavailable", {
+        status: 503,
+        statusText: "Service Unavailable",
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+      const events = await collectStreamEvents(stream);
+
+      const errorEvent = events.find((e) => e.type === "error") as
+        | { type: "error"; error: { errorMessage?: string } }
+        | undefined;
+      expect(errorEvent).toBeDefined();
+      // The error message must start with the HTTP status code so that
+      // extractLeadingHttpStatus can parse it for failover/retry logic.
+      expect(errorEvent!.error.errorMessage).toMatch(/^503\b/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("drops thinking chunks when no final content is emitted", async () => {
