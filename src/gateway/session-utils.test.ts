@@ -1511,6 +1511,71 @@ describe("listSessionsFromStore search", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  test("does not replace the current runtime model when transcript fallback is only for missing pricing", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-pricing-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const now = Date.now();
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+    } as unknown as OpenClawConfig;
+    fs.writeFileSync(
+      path.join(tmpDir, "sess-pricing.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-pricing" }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: 2_000,
+              output: 500,
+              cacheRead: 1_200,
+              cost: { total: 0.007725 },
+            },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const result = listSessionsFromStore({
+        cfg,
+        storePath,
+        store: {
+          "agent:main:main": {
+            sessionId: "sess-pricing",
+            updatedAt: now,
+            modelProvider: "openai",
+            model: "gpt-5.4",
+            contextTokens: 200_000,
+            totalTokens: 3_200,
+            totalTokensFresh: true,
+            inputTokens: 2_000,
+            outputTokens: 500,
+            cacheRead: 1_200,
+          } as SessionEntry,
+        },
+        opts: {},
+      });
+
+      expect(result.sessions[0]).toMatchObject({
+        key: "agent:main:main",
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        totalTokens: 3_200,
+        totalTokensFresh: true,
+        contextTokens: 200_000,
+      });
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("listSessionsFromStore subagent metadata", () => {
