@@ -17,12 +17,16 @@ import {
 } from "../utils/message-channel.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import { resolveExecApprovalSessionTarget } from "./exec-approval-session-target.js";
-import type {
-  ExecApprovalDecision,
-  ExecApprovalRequest,
-  ExecApprovalResolved,
-} from "./exec-approvals.js";
+import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
+import {
+  approvalDecisionLabel,
+  buildPluginApprovalExpiredMessage,
+  buildPluginApprovalRequestMessage,
+  buildPluginApprovalResolvedMessage,
+  type PluginApprovalRequest,
+  type PluginApprovalResolved,
+} from "./plugin-approvals.js";
 
 const log = createSubsystemLogger("gateway/exec-approvals");
 export type { ExecApprovalRequest, ExecApprovalResolved };
@@ -38,6 +42,8 @@ type PendingApproval = {
 export type ExecApprovalForwarder = {
   handleRequested: (request: ExecApprovalRequest) => Promise<boolean>;
   handleResolved: (resolved: ExecApprovalResolved) => Promise<void>;
+  handlePluginApprovalRequested?: (request: PluginApprovalRequest) => Promise<boolean>;
+  handlePluginApprovalResolved?: (resolved: PluginApprovalResolved) => Promise<void>;
   stop: () => void;
 };
 
@@ -182,15 +188,7 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   return lines.join("\n");
 }
 
-function decisionLabel(decision: ExecApprovalDecision): string {
-  if (decision === "allow-once") {
-    return "allowed once";
-  }
-  if (decision === "allow-always") {
-    return "allowed always";
-  }
-  return "denied";
-}
+const decisionLabel = approvalDecisionLabel;
 
 function buildResolvedMessage(resolved: ExecApprovalResolved) {
   const base = `✅ Exec approval ${decisionLabel(resolved.decision)}.`;
@@ -475,7 +473,186 @@ export function createExecApprovalForwarder(
     pending.clear();
   };
 
-  return { handleRequested, handleResolved, stop };
+  const toSyntheticExecRequestFromPlugin = (params: {
+    id: string;
+    request: PluginApprovalRequest["request"];
+    createdAtMs: number;
+    expiresAtMs: number;
+  }): ExecApprovalRequest => ({
+    id: params.id,
+    request: {
+      command: params.request.title,
+      agentId: params.request.agentId ?? null,
+      sessionKey: params.request.sessionKey ?? null,
+      turnSourceChannel: params.request.turnSourceChannel ?? null,
+      turnSourceTo: params.request.turnSourceTo ?? null,
+      turnSourceAccountId: params.request.turnSourceAccountId ?? null,
+      turnSourceThreadId: params.request.turnSourceThreadId ?? null,
+    },
+    createdAtMs: params.createdAtMs,
+    expiresAtMs: params.expiresAtMs,
+  });
+
+  const pluginPending = new Map<string, PendingApproval>();
+
+  const handlePluginApprovalRequested = async (
+    request: PluginApprovalRequest,
+  ): Promise<boolean> => {
+    const cfg = getConfig();
+    const config = cfg.approvals?.plugin;
+    const syntheticExecRequest = toSyntheticExecRequestFromPlugin({
+      id: request.id,
+      request: request.request,
+      createdAtMs: request.createdAtMs,
+      expiresAtMs: request.expiresAtMs,
+    });
+
+    const filteredTargets = [
+      ...(shouldForward({ config, request: syntheticExecRequest })
+        ? resolveForwardTargets({
+            cfg,
+            config,
+            request: syntheticExecRequest,
+            resolveSessionTarget,
+          })
+        : []),
+    ].filter(
+      (target) => !shouldSkipForwardingFallback({ target, cfg, request: syntheticExecRequest }),
+    );
+
+    if (filteredTargets.length === 0) {
+      return false;
+    }
+
+    const expiresInMs = Math.max(0, request.expiresAtMs - nowMs());
+    const timeoutId = setTimeout(() => {
+      void (async () => {
+        const entry = pluginPending.get(request.id);
+        if (!entry) {
+          return;
+        }
+        pluginPending.delete(request.id);
+        const expiredText = buildPluginApprovalExpiredMessage(request);
+        await deliverToTargets({
+          cfg,
+          targets: entry.targets,
+          buildPayload: () => ({ text: expiredText }),
+          deliver,
+        });
+      })();
+    }, expiresInMs);
+    timeoutId.unref?.();
+
+    const pendingEntry: PendingApproval = {
+      request: syntheticExecRequest,
+      targets: filteredTargets,
+      timeoutId,
+    };
+    pluginPending.set(request.id, pendingEntry);
+
+    void deliverToTargets({
+      cfg,
+      targets: filteredTargets,
+      buildPayload: (target) => {
+        const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+        const adapterPayload = channel
+          ? getChannelPlugin(channel)?.execApprovals?.buildPluginPendingPayload?.({
+              cfg,
+              request,
+              target,
+              nowMs: nowMs(),
+            })
+          : null;
+        return adapterPayload ?? { text: buildPluginApprovalRequestMessage(request, nowMs()) };
+      },
+      beforeDeliver: async (target, payload) => {
+        const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+        if (!channel) {
+          return;
+        }
+        await getChannelPlugin(channel)?.execApprovals?.beforeDeliverPending?.({
+          cfg,
+          target,
+          payload,
+        });
+      },
+      deliver,
+      shouldSend: () => pluginPending.get(request.id) === pendingEntry,
+    }).catch((err) => {
+      log.error(`plugin approvals: failed to deliver request ${request.id}: ${String(err)}`);
+    });
+    return true;
+  };
+
+  const handlePluginApprovalResolved = async (resolved: PluginApprovalResolved) => {
+    const cfg = getConfig();
+    const entry = pluginPending.get(resolved.id);
+    if (entry) {
+      if (entry.timeoutId) {
+        clearTimeout(entry.timeoutId);
+      }
+      pluginPending.delete(resolved.id);
+    }
+    let targets = entry?.targets;
+    if (!targets && resolved.request) {
+      const syntheticExecRequest = toSyntheticExecRequestFromPlugin({
+        id: resolved.id,
+        request: resolved.request,
+        createdAtMs: resolved.ts,
+        expiresAtMs: resolved.ts,
+      });
+      const config = cfg.approvals?.plugin;
+      targets = [
+        ...(shouldForward({ config, request: syntheticExecRequest })
+          ? resolveForwardTargets({
+              cfg,
+              config,
+              request: syntheticExecRequest,
+              resolveSessionTarget,
+            })
+          : []),
+      ].filter(
+        (target) => !shouldSkipForwardingFallback({ target, cfg, request: syntheticExecRequest }),
+      );
+    }
+    if (!targets || targets.length === 0) {
+      return;
+    }
+    await deliverToTargets({
+      cfg,
+      targets,
+      buildPayload: (target) => {
+        const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+        const adapterPayload = channel
+          ? getChannelPlugin(channel)?.execApprovals?.buildPluginResolvedPayload?.({
+              cfg,
+              resolved,
+              target,
+            })
+          : null;
+        return adapterPayload ?? { text: buildPluginApprovalResolvedMessage(resolved) };
+      },
+      deliver,
+    });
+  };
+
+  const stopAll = () => {
+    stop();
+    for (const entry of pluginPending.values()) {
+      if (entry.timeoutId) {
+        clearTimeout(entry.timeoutId);
+      }
+    }
+    pluginPending.clear();
+  };
+
+  return {
+    handleRequested,
+    handleResolved,
+    handlePluginApprovalRequested,
+    handlePluginApprovalResolved,
+    stop: stopAll,
+  };
 }
 
 export function shouldForwardExecApproval(params: {

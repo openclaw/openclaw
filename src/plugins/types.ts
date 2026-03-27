@@ -1966,10 +1966,35 @@ export type PluginHookBeforeToolCallEvent = {
   toolCallId?: string;
 };
 
+export const PluginApprovalResolutions = {
+  ALLOW_ONCE: "allow-once",
+  ALLOW_ALWAYS: "allow-always",
+  DENY: "deny",
+  TIMEOUT: "timeout",
+  CANCELLED: "cancelled",
+} as const;
+
+export type PluginApprovalResolution =
+  (typeof PluginApprovalResolutions)[keyof typeof PluginApprovalResolutions];
+
 export type PluginHookBeforeToolCallResult = {
   params?: Record<string, unknown>;
   block?: boolean;
   blockReason?: string;
+  requireApproval?: {
+    title: string;
+    description: string;
+    severity?: "info" | "warning" | "critical";
+    timeoutMs?: number;
+    timeoutBehavior?: "allow" | "deny";
+    /** Set automatically by the hook runner — plugins should not set this. */
+    pluginId?: string;
+    /**
+     * Best-effort callback invoked with the final outcome after approval resolves, times out, or is cancelled.
+     * OpenClaw does not await this callback before allowing or denying the tool call.
+     */
+    onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
+  };
 };
 
 // after_tool_call hook
