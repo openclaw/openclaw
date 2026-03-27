@@ -871,6 +871,19 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = streamSimple;
       }
 
+      // The streamFn overrides above replace the custom streamFn that
+      // createAgentSession installs – that custom function was the only
+      // path that called modelRegistry.getApiKeyAndHeaders() to inject
+      // the API key into stream-function options.  Without this, the
+      // bare streamSimple receives no apiKey, falls back to env-var
+      // lookup, and throws "No API key for provider: <name>".
+      //
+      // Wire agent.getApiKey so pi-agent-core's agentLoop can resolve
+      // the runtime key (set by initializeAuthProfile / setRuntimeApiKey)
+      // and pass it through to the stream function.
+      activeSession.agent.getApiKey = (provider: string) =>
+        params.authStorage.getApiKey(provider, { includeFallback: false });
+
       const { effectiveExtraParams } = applyExtraParamsToAgent(
         activeSession.agent,
         params.config,
