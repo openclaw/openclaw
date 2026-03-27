@@ -75,6 +75,25 @@ describe("createTeamsReplyStreamController", () => {
     expect(streamInstances[0]?.finalize).toHaveBeenCalled();
   });
 
+  it("uses fallback even when onPartialReply fires after stream finalized", () => {
+    const ctrl = createController();
+
+    // First text segment: streaming tokens arrive
+    ctrl.onPartialReply({ text: "First segment" });
+
+    // First segment complete: preparePayload suppresses and finalizes stream
+    const result1 = ctrl.preparePayload({ text: "First segment" });
+    expect(result1).toBeUndefined();
+    expect(streamInstances[0]?.isFinalized).toBe(true);
+
+    // Post-tool partial replies fire again (stream.update is a no-op since finalized)
+    ctrl.onPartialReply({ text: "Second segment" });
+
+    // Must still use fallback because stream is finalized and can't deliver
+    const result2 = ctrl.preparePayload({ text: "Second segment" });
+    expect(result2).toEqual({ text: "Second segment" });
+  });
+
   it("still strips text from media payloads when stream handled text", () => {
     const ctrl = createController();
     ctrl.onPartialReply({ text: "Some text" });

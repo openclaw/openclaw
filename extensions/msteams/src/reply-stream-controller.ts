@@ -54,7 +54,7 @@ export function createTeamsReplyStreamController(params: {
     },
 
     preparePayload(payload: ReplyPayload): ReplyPayload | undefined {
-      if (!stream || !streamReceivedTokens || !stream.hasContent) {
+      if (!stream || !streamReceivedTokens || !stream.hasContent || stream.isFinalized) {
         return payload;
       }
 
