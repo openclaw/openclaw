@@ -630,6 +630,26 @@ describe("POST /tools/invoke", () => {
     expect(resMain.status).toBe(200);
   });
 
+  it.each([
+    "agent:main:subagent:worker",
+    "agent:main:cron:daily",
+    "agent:main:acp:session-1",
+  ])("rejects internal session key override %s", async (sessionKey) => {
+    allowAgentsListForMain();
+
+    const res = await invokeAgentsListAuthed({ sessionKey });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({
+      error: {
+        type: "invalid_request_error",
+        message: "tools.invoke does not allow internal session keys",
+      },
+    });
+    expect(lastCreateOpenClawToolsContext).toBeUndefined();
+    expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
+  });
+
   it("maps tool input/auth errors to 400/403 and unexpected execution errors to 500", async () => {
     cfg = {
       ...cfg,
