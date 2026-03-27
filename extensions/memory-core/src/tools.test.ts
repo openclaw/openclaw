@@ -23,7 +23,8 @@ describe("memory_search unavailable payloads", () => {
     expectUnavailableMemorySearchDetails(result.details, {
       error: "openai embeddings failed: 429 insufficient_quota",
       warning: "Memory search is unavailable because the embedding provider quota is exhausted.",
-      action: "Embedding provider quota exhausted. Wait and retry, or switch provider via `openclaw configure`.",
+      action:
+        "Embedding provider quota exhausted. Wait and retry, or switch provider via `openclaw configure`.",
     });
   });
 
