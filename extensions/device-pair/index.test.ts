@@ -773,7 +773,7 @@ describe("device-pair /pair approve", () => {
     });
   });
 
-  it("fails closed when gateway scopes are absent", async () => {
+  it("fails closed for internal gateway callers when scopes are absent", async () => {
     vi.mocked(listDevicePairing).mockResolvedValueOnce({
       pending: [
         {
@@ -808,5 +808,58 @@ describe("device-pair /pair approve", () => {
     expect(result).toEqual({
       text: "⚠️ This command requires operator.admin to approve this pairing request.",
     });
+  });
+
+  it("preserves approvals for non-gateway command surfaces", async () => {
+    vi.mocked(listDevicePairing).mockResolvedValueOnce({
+      pending: [
+        {
+          requestId: "req-1",
+          deviceId: "victim-phone",
+          publicKey: "victim-public-key",
+          displayName: "Victim Phone",
+          platform: "ios",
+          ts: Date.now(),
+        },
+      ],
+      paired: [],
+    });
+    vi.mocked(approveDevicePairing).mockResolvedValueOnce({
+      status: "approved",
+      requestId: "req-1",
+      device: {
+        deviceId: "victim-phone",
+        publicKey: "victim-public-key",
+        displayName: "Victim Phone",
+        platform: "ios",
+        role: "operator",
+        roles: ["operator"],
+        scopes: ["operator.admin"],
+        approvedScopes: ["operator.admin"],
+        tokens: {
+          operator: {
+            token: "token-1",
+            role: "operator",
+            scopes: ["operator.admin"],
+            createdAtMs: Date.now(),
+          },
+        },
+        createdAtMs: Date.now(),
+        approvedAtMs: Date.now(),
+      },
+    });
+
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "telegram",
+        args: "approve latest",
+        commandBody: "/pair approve latest",
+        gatewayClientScopes: undefined,
+      }),
+    );
+
+    expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1");
+    expect(result).toEqual({ text: "✅ Paired Victim Phone (ios)." });
   });
 });
