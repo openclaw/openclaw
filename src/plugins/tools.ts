@@ -5,7 +5,7 @@ import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import { getActivePluginRegistry, getActivePluginRegistryKey } from "./runtime.js";
-import type { OpenClawPluginToolContext } from "./types.js";
+import type { OpenClawPluginToolContext, OpenClawPluginToolExecuteContext } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
@@ -25,6 +25,46 @@ export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): 
   if (meta) {
     pluginToolMeta.set(target, meta);
   }
+}
+
+/**
+ * Build the lightweight execution context forwarded to plugin tool `execute`
+ * calls as the third argument.  This contains only identity/session fields —
+ * never config or secrets.
+ */
+function buildExecuteContext(ctx: OpenClawPluginToolContext): OpenClawPluginToolExecuteContext {
+  return {
+    agentId: ctx.agentId,
+    sessionKey: ctx.sessionKey,
+    sessionId: ctx.sessionId,
+    messageChannel: ctx.messageChannel,
+    agentAccountId: ctx.agentAccountId,
+    sandboxed: ctx.sandboxed,
+  };
+}
+
+/**
+ * Wrap a plugin tool's `execute` method so the tool-context is forwarded as
+ * the third argument: `execute(callId, params, context)`.
+ *
+ * This is the "Level 1" injection path — plugins that declare a third parameter
+ * on their execute function receive identity context (agentId, sessionKey, etc.)
+ * automatically, without needing to close over the factory context or rely on
+ * environment variables.
+ */
+function wrapToolWithExecuteContext(
+  tool: AnyAgentTool,
+  execCtx: OpenClawPluginToolExecuteContext,
+): AnyAgentTool {
+  const original = tool.execute;
+  if (!original) return tool;
+  return Object.create(tool, {
+    execute: {
+      value: (callId: string, params: unknown) => original.call(tool, callId, params, execCtx),
+      writable: true,
+      configurable: true,
+    },
+  });
 }
 
 function normalizeAllowlist(list?: string[]) {
@@ -88,6 +128,7 @@ export function resolvePluginTools(params: {
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolName(tool)));
   const allowlist = normalizeAllowlist(params.toolAllowlist);
   const blockedPlugins = new Set<string>();
+  const execCtx = buildExecuteContext(params.context);
 
   for (const entry of registry.tools) {
     if (blockedPlugins.has(entry.pluginId)) {
@@ -153,11 +194,12 @@ export function resolvePluginTools(params: {
       }
       nameSet.add(tool.name);
       existing.add(tool.name);
-      pluginToolMeta.set(tool, {
+      const wrapped = wrapToolWithExecuteContext(tool, execCtx);
+      pluginToolMeta.set(wrapped, {
         pluginId: entry.pluginId,
         optional: entry.optional,
       });
-      tools.push(tool);
+      tools.push(wrapped);
     }
   }
 
