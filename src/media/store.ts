@@ -229,7 +229,8 @@ async function downloadToFile(
             }
           });
           pipeline(res, out)
-            .then(() => {
+            .then(async () => {
+              await enforceMediaFileMode(dest);
               const sniffBuffer = Buffer.concat(sniffChunks, Math.min(sniffLen, 16384));
               const rawHeader = res.headers["content-type"];
               const headerMime = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
@@ -285,15 +286,20 @@ function buildSavedMediaResult(params: {
   };
 }
 
+async function enforceMediaFileMode(filePath: string): Promise<void> {
+  await fs.chmod(filePath, MEDIA_FILE_MODE);
+}
+
 async function writeSavedMediaBuffer(params: {
   dir: string;
   id: string;
   buffer: Buffer;
 }): Promise<string> {
   const dest = path.join(params.dir, params.id);
-  await retryAfterRecreatingDir(params.dir, () =>
-    fs.writeFile(dest, params.buffer, { mode: MEDIA_FILE_MODE }),
-  );
+  await retryAfterRecreatingDir(params.dir, async () => {
+    await fs.writeFile(dest, params.buffer, { mode: MEDIA_FILE_MODE });
+    await enforceMediaFileMode(dest);
+  });
   return dest;
 }
 
@@ -366,6 +372,7 @@ export async function saveMediaSource(
     const id = buildSavedMediaId({ baseId, ext });
     const finalDest = path.join(dir, id);
     await fs.rename(tempDest, finalDest);
+    await enforceMediaFileMode(finalDest);
     return buildSavedMediaResult({ dir, id, size, contentType: mime });
   }
   // local path
