@@ -9,7 +9,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
-import { applyMergePatch } from "../../config/merge-patch.js";
+import { getAutoModelForMessage } from "../../hooks/auto-model-router.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -236,6 +236,24 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+
+  // Auto model routing based on message complexity
+  // Apply routing after session state is initialized but before other overrides
+  const triggerMessage = finalized.Body || triggerBodyNormalized || "";
+  const autoModelResult = getAutoModelForMessage(triggerMessage, cfg);
+  if (autoModelResult && !hasResolvedHeartbeatModelOverride) {
+    const resolved = resolveModelRefFromString({
+      raw: autoModelResult.model,
+      defaultProvider,
+      aliasIndex,
+    });
+    if (resolved) {
+      provider = resolved.ref.provider;
+      model = resolved.ref.model;
+      // Use defaultRuntime.log instead of direct call
+      defaultRuntime.log(`[auto-model-router] Selected model: ${provider}/${model}`);
+    }
+  }
 
   if (resetTriggered && bodyStripped?.trim()) {
     const { applyResetModelOverride } = await loadSessionResetModelRuntime();
