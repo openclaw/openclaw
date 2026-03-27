@@ -49,9 +49,7 @@ function shouldBypassConfigGuard(commandPath: string[]): boolean {
   if (CONFIG_GUARD_BYPASS_COMMANDS.has(primary)) {
     return true;
   }
-  // config validate is the explicit validation command; let it render
-  // validation failures directly without preflight guard output duplication.
-  if (primary === "config" && secondary === "validate") {
+  if (primary === "config" && (secondary === "validate" || secondary === "schema")) {
     return true;
   }
   return false;

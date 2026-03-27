@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -7,11 +6,6 @@ import { typedCases } from "../../test-utils/typed-cases.js";
 import { DirectoryCache } from "./directory-cache.js";
 import { buildOutboundResultEnvelope } from "./envelope.js";
 import type { OutboundDeliveryJson } from "./format.js";
-import {
-  applyCrossContextDecoration,
-  buildCrossContextDecoration,
-  enforceCrossContextPolicy,
-} from "./outbound-policy.js";
 import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
 
 beforeEach(() => {
@@ -134,67 +128,6 @@ describe("buildOutboundResultEnvelope", () => {
     for (const testCase of cases) {
       expect(buildOutboundResultEnvelope(testCase.input), testCase.name).toEqual(testCase.expected);
     }
-  });
-});
-
-const slackConfig = {
-  channels: {
-    slack: {
-      botToken: "xoxb-test",
-      appToken: "xapp-test",
-    },
-  },
-} as OpenClawConfig;
-
-const discordConfig = {
-  channels: {
-    discord: {},
-  },
-} as OpenClawConfig;
-
-describe("outbound policy", () => {
-  beforeEach(() => {
-    setDefaultChannelPluginRegistryForTests();
-  });
-
-  it("allows cross-provider sends when enabled", () => {
-    const cfg = {
-      ...slackConfig,
-      tools: {
-        message: { crossContext: { allowAcrossProviders: true } },
-      },
-    } as OpenClawConfig;
-
-    expect(() =>
-      enforceCrossContextPolicy({
-        cfg,
-        channel: "telegram",
-        action: "send",
-        args: { to: "telegram:@ops" },
-        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
-      }),
-    ).not.toThrow();
-  });
-
-  it("uses components when available and preferred", async () => {
-    const decoration = await buildCrossContextDecoration({
-      cfg: discordConfig,
-      channel: "discord",
-      target: "123",
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "discord" },
-    });
-
-    expect(decoration).not.toBeNull();
-    const applied = applyCrossContextDecoration({
-      message: "hello",
-      decoration: decoration!,
-      preferComponents: true,
-    });
-
-    expect(applied.usedComponents).toBe(true);
-    expect(applied.componentsBuilder).toBeDefined();
-    expect(applied.componentsBuilder?.("hello").length).toBeGreaterThan(0);
-    expect(applied.message).toBe("hello");
   });
 });
 

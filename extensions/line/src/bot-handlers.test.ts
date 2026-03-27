@@ -1,6 +1,6 @@
 import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LineAccountConfig } from "./types.js";
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
@@ -20,11 +20,15 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   upsertPairingRequestMock: vi.fn(async () => ({ code: "CODE", created: true })),
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
-  resolvePairingIdLabel: () => "lineUserId",
-  readChannelAllowFromStore: readAllowFromStoreMock,
-  upsertChannelPairingRequest: upsertPairingRequestMock,
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    resolvePairingIdLabel: () => "lineUserId",
+    readChannelAllowFromStore: readAllowFromStoreMock,
+    upsertChannelPairingRequest: upsertPairingRequestMock,
+  };
+});
 
 vi.mock("./download.js", () => ({
   downloadLineMedia: async () => {
@@ -209,8 +213,12 @@ async function startInflightReplayDuplicate(params: {
 }
 
 describe("handleLineWebhookEvents", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
+    ({ handleLineWebhookEvents, createLineWebhookReplayCache } = await import("./bot-handlers.js"));
+  });
+
+  beforeEach(() => {
     buildLineMessageContextMock.mockReset();
     buildLineMessageContextMock.mockImplementation(async () => ({
       ctxPayload: { From: "line:group:group-1" },
@@ -225,7 +233,6 @@ describe("handleLineWebhookEvents", () => {
     readAllowFromStoreMock.mockImplementation(async () => [] as string[]);
     upsertPairingRequestMock.mockReset();
     upsertPairingRequestMock.mockImplementation(async () => ({ code: "CODE", created: true }));
-    ({ handleLineWebhookEvents, createLineWebhookReplayCache } = await import("./bot-handlers.js"));
   });
   it("blocks group messages when groupPolicy is disabled", async () => {
     const processMessage = vi.fn();

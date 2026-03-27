@@ -3,12 +3,26 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
-import { buildMemoryPromptSection, registerMemoryPromptSection } from "../memory/prompt-section.js";
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
+import { clearPluginDiscoveryCache } from "./discovery.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createHookRunner } from "./hooks.js";
 import { __testing, clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.js";
+import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
+import {
+  getMemoryEmbeddingProvider,
+  listMemoryEmbeddingProviders,
+  registerMemoryEmbeddingProvider,
+} from "./memory-embedding-providers.js";
+import {
+  buildMemoryPromptSection,
+  getMemoryRuntime,
+  registerMemoryFlushPlanResolver,
+  registerMemoryPromptSection,
+  registerMemoryRuntime,
+  resolveMemoryFlushPlan,
+} from "./memory-state.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
@@ -521,6 +535,8 @@ function expectEscapingEntryRejected(params: {
 
 afterEach(() => {
   clearPluginLoaderCache();
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
   resetDiagnosticEventsForTest();
   if (prevBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -1030,6 +1046,7 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     const scoped = loadOpenClawPlugins({
       cache: false,
       activate: false,
+      pluginSdkResolution: "dist",
       config: {
         plugins: {
           enabled: true,
@@ -1044,9 +1061,30 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     expect(scoped.providers.map((entry) => entry.provider.id)).toEqual(["deepseek"]);
   });
 
-  it("does not replace the active memory prompt section during non-activating loads", () => {
+  it("does not replace active memory plugin registries during non-activating loads", () => {
     useNoBundledPlugins();
+    registerMemoryEmbeddingProvider({
+      id: "active",
+      create: async () => ({ provider: null }),
+    });
     registerMemoryPromptSection(() => ["active memory section"]);
+    registerMemoryFlushPlanResolver(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 2,
+      reserveTokensFloor: 3,
+      prompt: "active",
+      systemPrompt: "active",
+      relativePath: "memory/active.md",
+    }));
+    const activeRuntime = {
+      async getMemorySearchManager() {
+        return { manager: null, error: "active" };
+      },
+      resolveMemoryBackendConfig() {
+        return { backend: "builtin" as const };
+      },
+    };
+    registerMemoryRuntime(activeRuntime);
     const plugin = writePlugin({
       id: "snapshot-memory",
       filename: "snapshot-memory.cjs",
@@ -1054,7 +1092,27 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         id: "snapshot-memory",
         kind: "memory",
         register(api) {
+          api.registerMemoryEmbeddingProvider({
+            id: "snapshot",
+            create: async () => ({ provider: null }),
+          });
           api.registerMemoryPromptSection(() => ["snapshot memory section"]);
+          api.registerMemoryFlushPlan(() => ({
+            softThresholdTokens: 10,
+            forceFlushTranscriptBytes: 20,
+            reserveTokensFloor: 30,
+            prompt: "snapshot",
+            systemPrompt: "snapshot",
+            relativePath: "memory/snapshot.md",
+          }));
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "snapshot" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "qmd", qmd: {} };
+            },
+          });
         },
       };`,
     });
@@ -1077,9 +1135,12 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
       "active memory section",
     ]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
+    expect(getMemoryRuntime()).toBe(activeRuntime);
+    expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
   });
 
-  it("clears a newly-registered memory prompt section when plugin register fails", () => {
+  it("clears newly-registered memory plugin registries when plugin register fails", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "failing-memory",
@@ -1088,7 +1149,27 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         id: "failing-memory",
         kind: "memory",
         register(api) {
+          api.registerMemoryEmbeddingProvider({
+            id: "failed",
+            create: async () => ({ provider: null }),
+          });
           api.registerMemoryPromptSection(() => ["stale failure section"]);
+          api.registerMemoryFlushPlan(() => ({
+            softThresholdTokens: 10,
+            forceFlushTranscriptBytes: 20,
+            reserveTokensFloor: 30,
+            prompt: "failed",
+            systemPrompt: "failed",
+            relativePath: "memory/failed.md",
+          }));
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "failed" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
           throw new Error("memory register failed");
         },
       };`,
@@ -1109,6 +1190,9 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
 
     expect(registry.plugins.find((entry) => entry.id === "failing-memory")?.status).toBe("error");
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
+    expect(resolveMemoryFlushPlan({})).toBeNull();
+    expect(getMemoryRuntime()).toBeUndefined();
+    expect(listMemoryEmbeddingProviders()).toEqual([]);
   });
 
   it("throws when activate:false is used without cache:false", () => {
@@ -1741,6 +1825,24 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
           ).toBe(true);
         },
       },
+      {
+        label: "requires cli backend ids",
+        pluginId: "cli-backend-missing-id",
+        body: `module.exports = { id: "cli-backend-missing-id", register(api) {
+  api.registerCliBackend({ id: "   ", config: { command: "claude" } });
+} };`,
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(registry.cliBackends).toHaveLength(0);
+          expect(
+            registry.diagnostics.some(
+              (diag) =>
+                diag.level === "error" &&
+                diag.pluginId === "cli-backend-missing-id" &&
+                diag.message === "cli backend registration missing id",
+            ),
+          ).toBe(true);
+        },
+      },
     ] as const;
 
     for (const scenario of scenarios) {
@@ -1858,6 +1960,21 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         duplicateMessage: "cli command already registered: shared-cli (cli-owner-a)",
         assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
           expect(registry.cliRegistrars[0]?.pluginId).toBe("cli-owner-a");
+        },
+      },
+      {
+        label: "plugin cli backend ids",
+        ownerA: "cli-backend-owner-a",
+        ownerB: "cli-backend-owner-b",
+        buildBody: (ownerId: string) => `module.exports = { id: "${ownerId}", register(api) {
+  api.registerCliBackend({ id: "shared-cli-backend", config: { command: "backend-${ownerId}" } });
+} };`,
+        selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
+          registry.cliBackends?.length ?? 0,
+        duplicateMessage:
+          "cli backend already registered: shared-cli-backend (cli-backend-owner-a)",
+        assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(registry.cliBackends?.[0]?.pluginId).toBe("cli-backend-owner-a");
         },
       },
     ] as const;
@@ -2704,50 +2821,81 @@ module.exports = {
     }
   });
 
-  it("warns about open allowlists for discoverable plugins once per plugin set", () => {
+  it("warns about open allowlists only for auto-discovered plugins", () => {
     useNoBundledPlugins();
     clearPluginLoaderCache();
     const scenarios = [
       {
-        label: "single load warns",
-        pluginId: "warn-open-allow",
+        label: "explicit config path stays quiet",
+        pluginId: "warn-open-allow-config",
         loads: 1,
-        expectedWarnings: 1,
+        expectedWarnings: 0,
+        loadRegistry: (warnings: string[]) => {
+          const plugin = writePlugin({
+            id: "warn-open-allow-config",
+            body: `module.exports = { id: "warn-open-allow-config", register() {} };`,
+          });
+          return loadOpenClawPlugins({
+            cache: false,
+            logger: createWarningLogger(warnings),
+            config: {
+              plugins: {
+                load: { paths: [plugin.file] },
+              },
+            },
+          });
+        },
       },
       {
-        label: "repeated identical loads dedupe warning",
-        pluginId: "warn-open-allow-once",
+        label: "workspace discovery warns once",
+        pluginId: "warn-open-allow-workspace",
         loads: 2,
         expectedWarnings: 1,
+        loadRegistry: (() => {
+          const workspaceDir = makeTempDir();
+          const workspaceExtDir = path.join(
+            workspaceDir,
+            ".openclaw",
+            "extensions",
+            "warn-open-allow-workspace",
+          );
+          mkdirSafe(workspaceExtDir);
+          writePlugin({
+            id: "warn-open-allow-workspace",
+            body: `module.exports = { id: "warn-open-allow-workspace", register() {} };`,
+            dir: workspaceExtDir,
+            filename: "index.cjs",
+          });
+          return (warnings: string[]) =>
+            loadOpenClawPlugins({
+              cache: false,
+              workspaceDir,
+              logger: createWarningLogger(warnings),
+              config: {
+                plugins: {
+                  enabled: true,
+                },
+              },
+            });
+        })(),
       },
     ] as const;
 
     for (const scenario of scenarios) {
-      const plugin = writePlugin({
-        id: scenario.pluginId,
-        body: `module.exports = { id: "${scenario.pluginId}", register() {} };`,
-      });
       const warnings: string[] = [];
-      const options = {
-        cache: false,
-        logger: createWarningLogger(warnings),
-        config: {
-          plugins: {
-            load: { paths: [plugin.file] },
-          },
-        },
-      };
 
       for (let index = 0; index < scenario.loads; index += 1) {
-        loadOpenClawPlugins(options);
+        scenario.loadRegistry(warnings);
       }
 
       const openAllowWarnings = warnings.filter((msg) => msg.includes("plugins.allow is empty"));
       expect(openAllowWarnings, scenario.label).toHaveLength(scenario.expectedWarnings);
-      expect(
-        openAllowWarnings.some((msg) => msg.includes(scenario.pluginId)),
-        scenario.label,
-      ).toBe(true);
+      if (scenario.expectedWarnings > 0) {
+        expect(
+          openAllowWarnings.some((msg) => msg.includes(scenario.pluginId)),
+          scenario.label,
+        ).toBe(true);
+      }
     }
   });
 
@@ -3306,14 +3454,40 @@ export const runtimeValue = helperValue;`,
 });
 
 describe("clearPluginLoaderCache", () => {
-  it("resets the registered memory prompt section builder", () => {
+  it("resets registered memory plugin registries", () => {
+    registerMemoryEmbeddingProvider({
+      id: "stale",
+      create: async () => ({ provider: null }),
+    });
     registerMemoryPromptSection(() => ["stale memory section"]);
+    registerMemoryFlushPlanResolver(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 2,
+      reserveTokensFloor: 3,
+      prompt: "stale",
+      systemPrompt: "stale",
+      relativePath: "memory/stale.md",
+    }));
+    registerMemoryRuntime({
+      async getMemorySearchManager() {
+        return { manager: null };
+      },
+      resolveMemoryBackendConfig() {
+        return { backend: "builtin" as const };
+      },
+    });
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
       "stale memory section",
     ]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/stale.md");
+    expect(getMemoryRuntime()).toBeDefined();
+    expect(getMemoryEmbeddingProvider("stale")).toBeDefined();
 
     clearPluginLoaderCache();
 
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
+    expect(resolveMemoryFlushPlan({})).toBeNull();
+    expect(getMemoryRuntime()).toBeUndefined();
+    expect(getMemoryEmbeddingProvider("stale")).toBeUndefined();
   });
 });

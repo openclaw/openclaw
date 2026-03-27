@@ -1,5 +1,6 @@
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
@@ -208,7 +209,10 @@ export function stripMentions(
   agentId?: string,
 ): string {
   let result = text;
-  const providerId = ctx.Provider ? normalizeChannelId(ctx.Provider) : null;
+  const providerId =
+    (ctx.Provider ? normalizeChannelId(ctx.Provider) : null) ??
+    (ctx.Provider?.trim().toLowerCase() as ChannelId | undefined) ??
+    null;
   const providerMentions = providerId ? getChannelPlugin(providerId)?.mentions : undefined;
   const configRegexes = compileMentionPatternsCached({
     patterns: normalizeMentionPatterns(resolveMentionPatterns(cfg, agentId)),

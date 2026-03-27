@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveRetryConfig, retryAsync } from "./retry.js";
 
 async function runRetryAfterCase(params: {
@@ -28,7 +28,37 @@ async function runRetryAfterCase(params: {
   }
 }
 
+async function runRetryNumberCase<T>(
+  fn: ReturnType<typeof vi.fn<() => Promise<T>>>,
+  attempts: number,
+  initialDelayMs: number,
+): Promise<T> {
+  vi.clearAllTimers();
+  vi.useFakeTimers();
+  try {
+    const promise = retryAsync(fn, attempts, initialDelayMs);
+    const settled = promise.then(
+      (value) => ({ ok: true as const, value }),
+      (error) => ({ ok: false as const, error }),
+    );
+    await vi.runAllTimersAsync();
+    const result = await settled;
+    if (result.ok) {
+      return result.value;
+    }
+    throw result.error;
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+}
+
 afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+});
+
+beforeEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
 });
@@ -43,14 +73,14 @@ describe("retryAsync", () => {
 
   it("retries then succeeds", async () => {
     const fn = vi.fn().mockRejectedValueOnce(new Error("fail1")).mockResolvedValueOnce("ok");
-    const result = await retryAsync(fn, 3, 1);
+    const result = await runRetryNumberCase(fn, 3, 1);
     expect(result).toBe("ok");
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
   it("propagates after exhausting retries", async () => {
     const fn = vi.fn().mockRejectedValue(new Error("boom"));
-    await expect(retryAsync(fn, 2, 1)).rejects.toThrow("boom");
+    await expect(runRetryNumberCase(fn, 2, 1)).rejects.toThrow("boom");
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
@@ -67,13 +97,23 @@ describe("retryAsync", () => {
     const err = new Error("boom");
     const fn = vi.fn().mockRejectedValueOnce(err).mockResolvedValueOnce("ok");
     const onRetry = vi.fn();
-    const res = await retryAsync(fn, {
-      attempts: 2,
-      minDelayMs: 0,
-      maxDelayMs: 0,
-      label: "telegram",
-      onRetry,
-    });
+    vi.clearAllTimers();
+    vi.useFakeTimers();
+    let res: string;
+    try {
+      const promise: Promise<string> = retryAsync(fn, {
+        attempts: 2,
+        minDelayMs: 0,
+        maxDelayMs: 0,
+        label: "telegram",
+        onRetry,
+      });
+      await vi.runAllTimersAsync();
+      res = await promise;
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
     expect(res).toBe("ok");
     expect(onRetry).toHaveBeenCalledWith(
       expect.objectContaining({

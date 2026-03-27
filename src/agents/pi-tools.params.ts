@@ -32,6 +32,23 @@ export const CLAUDE_PARAM_GROUPS = {
   ],
 } as const;
 
+type ClaudeParamAlias = {
+  original: string;
+  alias: string;
+};
+
+const CLAUDE_PARAM_ALIASES: ClaudeParamAlias[] = [
+  { original: "path", alias: "file_path" },
+  { original: "path", alias: "filePath" },
+  { original: "path", alias: "file" },
+  { original: "oldText", alias: "old_string" },
+  { original: "oldText", alias: "old_text" },
+  { original: "oldText", alias: "oldString" },
+  { original: "newText", alias: "new_string" },
+  { original: "newText", alias: "new_text" },
+  { original: "newText", alias: "newString" },
+];
+
 function extractStructuredText(value: unknown, depth = 0): string | undefined {
   if (depth > 6) {
     return undefined;
@@ -82,6 +99,37 @@ function normalizeTextLikeParam(record: Record<string, unknown>, key: string) {
   }
 }
 
+function normalizeClaudeParamAliases(record: Record<string, unknown>) {
+  for (const { original, alias } of CLAUDE_PARAM_ALIASES) {
+    if (alias in record && !(original in record)) {
+      record[original] = record[alias];
+    }
+    delete record[alias];
+  }
+}
+
+function addClaudeParamAliasesToSchema(params: {
+  properties: Record<string, unknown>;
+  required: string[];
+}): boolean {
+  let changed = false;
+  for (const { original, alias } of CLAUDE_PARAM_ALIASES) {
+    if (!(original in params.properties)) {
+      continue;
+    }
+    if (!(alias in params.properties)) {
+      params.properties[alias] = params.properties[original];
+      changed = true;
+    }
+    const idx = params.required.indexOf(original);
+    if (idx !== -1) {
+      params.required.splice(idx, 1);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 // Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
 // Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
 // This prevents models trained on Claude Code from getting stuck in tool-call loops.
@@ -91,23 +139,7 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   }
   const record = params as Record<string, unknown>;
   const normalized = { ...record };
-  const aliasPairs: Array<{ original: string; alias: string }> = [
-    { original: "path", alias: "file_path" },
-    { original: "path", alias: "filePath" },
-    { original: "path", alias: "file" },
-    { original: "oldText", alias: "old_string" },
-    { original: "oldText", alias: "old_text" },
-    { original: "oldText", alias: "oldString" },
-    { original: "newText", alias: "new_string" },
-    { original: "newText", alias: "new_text" },
-    { original: "newText", alias: "newString" },
-  ];
-  for (const { original, alias } of aliasPairs) {
-    if (alias in normalized && !(original in normalized)) {
-      normalized[original] = normalized[alias];
-    }
-    delete normalized[alias];
-  }
+  normalizeClaudeParamAliases(normalized);
   // Some providers/models emit text payloads as structured blocks instead of raw strings.
   // Normalize these for write/edit so content matching and writes stay deterministic.
   normalizeTextLikeParam(normalized, "content");
@@ -130,34 +162,7 @@ export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAg
   const required = Array.isArray(schema.required)
     ? schema.required.filter((key): key is string => typeof key === "string")
     : [];
-  let changed = false;
-
-  const aliasPairs: Array<{ original: string; alias: string }> = [
-    { original: "path", alias: "file_path" },
-    { original: "path", alias: "filePath" },
-    { original: "path", alias: "file" },
-    { original: "oldText", alias: "old_string" },
-    { original: "oldText", alias: "old_text" },
-    { original: "oldText", alias: "oldString" },
-    { original: "newText", alias: "new_string" },
-    { original: "newText", alias: "new_text" },
-    { original: "newText", alias: "newString" },
-  ];
-
-  for (const { original, alias } of aliasPairs) {
-    if (!(original in properties)) {
-      continue;
-    }
-    if (!(alias in properties)) {
-      properties[alias] = properties[original];
-      changed = true;
-    }
-    const idx = required.indexOf(original);
-    if (idx !== -1) {
-      required.splice(idx, 1);
-      changed = true;
-    }
-  }
+  const changed = addClaudeParamAliasesToSchema({ properties, required });
 
   if (!changed) {
     return tool;

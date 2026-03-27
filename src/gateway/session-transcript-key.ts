@@ -3,6 +3,7 @@ import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import {
   loadCombinedSessionStoreForGateway,
   resolveGatewaySessionStoreTarget,
@@ -74,6 +75,7 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
     return cachedKey;
   }
 
+  const matchingEntries: Array<[string, SessionEntry]> = [];
   for (const [key, entry] of Object.entries(store)) {
     if (!entry?.sessionId || key === cachedKey) {
       continue;
@@ -86,8 +88,54 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
         targetPath,
       })
     ) {
-      TRANSCRIPT_SESSION_KEY_CACHE.set(targetPath, key);
-      return key;
+      matchingEntries.push([key, entry]);
+    }
+  }
+
+  if (matchingEntries.length > 0) {
+    const matchesBySessionId = new Map<string, Array<[string, SessionEntry]>>();
+    for (const entry of matchingEntries) {
+      const sessionId = entry[1].sessionId;
+      if (!sessionId) {
+        continue;
+      }
+      const group = matchesBySessionId.get(sessionId);
+      if (group) {
+        group.push(entry);
+      } else {
+        matchesBySessionId.set(sessionId, [entry]);
+      }
+    }
+
+    const resolvedMatches = Array.from(matchesBySessionId.entries())
+      .map(([sessionId, matches]) => {
+        const resolvedKey =
+          resolvePreferredSessionKeyForSessionIdMatches(matches, sessionId) ?? matches[0]?.[0];
+        const resolvedEntry = resolvedKey
+          ? matches.find(([key]) => key === resolvedKey)?.[1]
+          : undefined;
+        return resolvedKey && resolvedEntry
+          ? {
+              key: resolvedKey,
+              updatedAt: resolvedEntry.updatedAt ?? 0,
+            }
+          : undefined;
+      })
+      .filter((match): match is { key: string; updatedAt: number } => match !== undefined);
+
+    const sortedResolvedMatches = [...resolvedMatches].toSorted(
+      (a, b) => b.updatedAt - a.updatedAt,
+    );
+    const [freshestMatch, secondFreshestMatch] = sortedResolvedMatches;
+    const resolvedKey =
+      resolvedMatches.length === 1
+        ? freshestMatch?.key
+        : (freshestMatch?.updatedAt ?? 0) > (secondFreshestMatch?.updatedAt ?? 0)
+          ? freshestMatch?.key
+          : undefined;
+    if (resolvedKey) {
+      TRANSCRIPT_SESSION_KEY_CACHE.set(targetPath, resolvedKey);
+      return resolvedKey;
     }
   }
 

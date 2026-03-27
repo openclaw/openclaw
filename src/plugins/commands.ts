@@ -8,6 +8,7 @@
 import { parseExplicitTargetForChannel } from "../channels/plugins/target-parsing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
+import { parseTelegramTarget } from "../plugin-sdk/telegram-runtime.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
@@ -118,6 +119,29 @@ function stripPrefix(raw: string | undefined, prefix: string): string | undefine
   return raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
 }
 
+function parseDiscordBindingTarget(raw: string | undefined): {
+  conversationId: string;
+} | null {
+  if (!raw) {
+    return null;
+  }
+  if (raw.startsWith("slash:")) {
+    return null;
+  }
+  const normalized = raw.startsWith("discord:") ? raw.slice("discord:".length) : raw;
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.startsWith("channel:")) {
+    const id = normalized.slice("channel:".length).trim();
+    return id ? { conversationId: `channel:${id}` } : null;
+  }
+  if (normalized.startsWith("user:")) {
+    const id = normalized.slice("user:".length).trim();
+    return id ? { conversationId: `user:${id}` } : null;
+  }
+  return /^\d+$/.test(normalized.trim()) ? { conversationId: `user:${normalized.trim()}` } : null;
+}
 function resolveBindingConversationFromCommand(params: {
   channel: string;
   from?: string;
@@ -138,34 +162,38 @@ function resolveBindingConversationFromCommand(params: {
       return null;
     }
     const target = parseExplicitTargetForChannel("telegram", rawTarget);
-    if (!target) {
+    const fallbackTarget = target ? null : parseTelegramTarget(rawTarget);
+    if (!target && !fallbackTarget) {
       return null;
     }
     return {
       channel: "telegram",
       accountId,
-      conversationId: target.to,
-      threadId: params.messageThreadId ?? target.threadId,
+      conversationId: target?.to ?? fallbackTarget?.chatId ?? "",
+      threadId: params.messageThreadId ?? target?.threadId ?? fallbackTarget?.messageThreadId,
     };
   }
   if (params.channel === "discord") {
-    const source = params.from ?? params.to;
-    const rawTarget = source?.startsWith("discord:channel:")
-      ? stripPrefix(source, "discord:")
-      : source?.startsWith("discord:user:")
-        ? stripPrefix(source, "discord:")
-        : source;
+    const source =
+      params.to?.startsWith("slash:") || !params.to?.trim()
+        ? (params.from ?? params.to)
+        : params.to;
+    const rawTarget = source?.startsWith("discord:") ? stripPrefix(source, "discord:") : source;
     if (!rawTarget || rawTarget.startsWith("slash:")) {
       return null;
     }
-    const target = parseExplicitTargetForChannel("discord", rawTarget);
+    const target =
+      parseExplicitTargetForChannel("discord", rawTarget) ?? parseDiscordBindingTarget(rawTarget);
     if (!target) {
       return null;
     }
     return {
       channel: "discord",
       accountId,
-      conversationId: `${target.chatType === "direct" ? "user" : "channel"}:${target.to}`,
+      conversationId:
+        "conversationId" in target
+          ? target.conversationId
+          : `${target.chatType === "direct" ? "user" : "channel"}:${target.to}`,
     };
   }
   return null;

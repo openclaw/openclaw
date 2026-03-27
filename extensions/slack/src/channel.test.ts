@@ -1,22 +1,23 @@
 import { Type } from "@sinclair/typebox";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { slackPlugin } from "./channel.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import type { OpenClawConfig } from "./runtime-api.js";
+import { setSlackRuntime } from "./runtime.js";
 
 const handleSlackActionMock = vi.fn();
 
-vi.mock("./runtime.js", () => ({
-  getSlackRuntime: () => ({
+beforeEach(async () => {
+  handleSlackActionMock.mockReset();
+  setSlackRuntime({
     channel: {
       slack: {
         handleSlackAction: handleSlackActionMock,
       },
     },
-  }),
-}));
-
-import { slackPlugin } from "./channel.js";
+  } as never);
+});
 
 async function getSlackConfiguredState(cfg: OpenClawConfig) {
   const account = slackPlugin.config.resolveAccount(cfg, "default");
@@ -55,7 +56,7 @@ function requireSlackSendMedia() {
 }
 
 function requireSlackSendPayload() {
-  const sendPayload = slackOutbound.sendPayload;
+  const sendPayload = slackPlugin.outbound?.sendPayload ?? slackOutbound.sendPayload;
   if (!sendPayload) {
     throw new Error("slack outbound.sendPayload unavailable");
   }
@@ -343,6 +344,77 @@ describe("slackPlugin outbound", () => {
     );
     expect(result).toEqual({ channel: "slack", messageId: "m-final" });
   });
+
+  it("renders shared interactive payloads into Slack Block Kit via plugin outbound", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-interactive" });
+    const sendPayload = requireSlackSendPayload();
+
+    const result = await sendPayload({
+      cfg,
+      to: "user:U123",
+      text: "",
+      payload: {
+        text: "Slack interactive smoke.",
+        interactive: {
+          blocks: [
+            {
+              type: "text",
+              text: "Slack interactive smoke.",
+            },
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Approve", value: "approve" },
+                { label: "Reject", value: "reject" },
+              ],
+            },
+            {
+              type: "select",
+              placeholder: "Choose a target",
+              options: [
+                { label: "Canary", value: "canary" },
+                { label: "Production", value: "production" },
+              ],
+            },
+          ],
+        },
+      },
+      accountId: "default",
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledWith(
+      "user:U123",
+      "Slack interactive smoke.",
+      expect.objectContaining({
+        blocks: [
+          expect.objectContaining({
+            type: "section",
+          }),
+          expect.objectContaining({
+            type: "actions",
+            elements: [
+              expect.objectContaining({ type: "button", value: "approve" }),
+              expect.objectContaining({ type: "button", value: "reject" }),
+            ],
+          }),
+          expect.objectContaining({
+            type: "actions",
+            elements: [
+              expect.objectContaining({
+                type: "static_select",
+                options: [
+                  expect.objectContaining({ value: "canary" }),
+                  expect.objectContaining({ value: "production" }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(result).toEqual({ channel: "slack", messageId: "m-interactive" });
+  });
 });
 
 describe("slackPlugin directory", () => {
@@ -397,6 +469,9 @@ describe("slackPlugin agentPrompt", () => {
       },
     });
 
+    expect(hints).toContain(
+      "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
+    );
     expect(hints).toContain(
       "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
     );

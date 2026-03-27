@@ -1,5 +1,5 @@
 ---
-summary: "Use ACP runtime sessions for Pi, Claude Code, Codex, OpenCode, Gemini CLI, and other harness agents"
+summary: "Use ACP runtime sessions for Codex, Claude Code, Cursor, Gemini CLI, OpenClaw ACP, and other harness agents"
 read_when:
   - Running coding harnesses through ACP
   - Setting up thread-bound ACP sessions on thread-capable channels
@@ -11,7 +11,7 @@ title: "ACP Agents"
 
 # ACP agents
 
-[Agent Client Protocol (ACP)](https://agentclientprotocol.com/) sessions let OpenClaw run external coding harnesses (for example Pi, Claude Code, Codex, OpenCode, and Gemini CLI) through an ACP backend plugin.
+[Agent Client Protocol (ACP)](https://agentclientprotocol.com/) sessions let OpenClaw run external coding harnesses (for example Pi, Claude Code, Codex, Cursor, Copilot, OpenClaw ACP, OpenCode, Gemini CLI, and other supported ACPX harnesses) through an ACP backend plugin.
 
 If you ask OpenClaw in plain language to "run this in Codex" or "start Claude Code in a thread", OpenClaw should route that request to the ACP runtime (not the native sub-agent runtime).
 
@@ -441,14 +441,23 @@ Equivalent operations:
 
 Current acpx built-in harness aliases:
 
-- `pi`
 - `claude`
 - `codex`
-- `opencode`
+- `copilot`
+- `cursor` (Cursor CLI: `cursor-agent acp`)
+- `droid`
 - `gemini`
+- `iflow`
+- `kilocode`
 - `kimi`
+- `kiro`
+- `openclaw`
+- `opencode`
+- `pi`
+- `qwen`
 
 When OpenClaw uses the acpx backend, prefer these values for `agentId` unless your acpx config defines custom agent aliases.
+If your local Cursor install still exposes ACP as `agent acp`, override the `cursor` agent command in your acpx config instead of changing the built-in default.
 
 Direct acpx CLI usage can also target arbitrary adapters via `--agent <command>`, but that raw escape hatch is an acpx CLI feature (not the normal OpenClaw `agentId` path).
 
@@ -464,7 +473,22 @@ Core ACP baseline:
     dispatch: { enabled: true },
     backend: "acpx",
     defaultAgent: "codex",
-    allowedAgents: ["pi", "claude", "codex", "opencode", "gemini", "kimi"],
+    allowedAgents: [
+      "claude",
+      "codex",
+      "copilot",
+      "cursor",
+      "droid",
+      "gemini",
+      "iflow",
+      "kilocode",
+      "kimi",
+      "kiro",
+      "openclaw",
+      "opencode",
+      "pi",
+      "qwen",
+    ],
     maxConcurrentSessions: 8,
     stream: {
       coalesceIdleMs: 300,

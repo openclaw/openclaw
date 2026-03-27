@@ -12,6 +12,7 @@ JSON_OUTPUT=0
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-npm-update.XXXXXX)"
 MAIN_TGZ_DIR="$(mktemp -d)"
 MAIN_TGZ_PATH=""
+WINDOWS_UPDATE_SCRIPT_PATH=""
 SERVER_PID=""
 HOST_IP=""
 HOST_PORT=""
@@ -165,6 +166,108 @@ pack_main_tgz() {
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
 }
 
+write_windows_update_script() {
+  WINDOWS_UPDATE_SCRIPT_PATH="$MAIN_TGZ_DIR/openclaw-main-update.ps1"
+  cat >"$WINDOWS_UPDATE_SCRIPT_PATH" <<'EOF'
+param(
+  [Parameter(Mandatory = $true)][string]$TgzUrl,
+  [Parameter(Mandatory = $true)][string]$HeadShort,
+  [Parameter(Mandatory = $true)][string]$SessionId,
+  [Parameter(Mandatory = $true)][string]$LogPath,
+  [Parameter(Mandatory = $true)][string]$DonePath
+)
+
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
+
+function Invoke-Logged {
+  param(
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)][scriptblock]$Command
+  )
+
+  $previousErrorActionPreference = $ErrorActionPreference
+  $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    $PSNativeCommandUseErrorActionPreference = $false
+    & $Command *>> $LogPath
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+  }
+
+  if ($exitCode -ne 0) {
+    throw "$Label failed with exit code $exitCode"
+  }
+}
+
+function Invoke-CaptureLogged {
+  param(
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)][scriptblock]$Command
+  )
+
+  $previousErrorActionPreference = $ErrorActionPreference
+  $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    $PSNativeCommandUseErrorActionPreference = $false
+    $output = & $Command 2>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+  }
+
+  if ($null -ne $output) {
+    $output | Tee-Object -FilePath $LogPath -Append | Out-Null
+  }
+
+  if ($exitCode -ne 0) {
+    throw "$Label failed with exit code $exitCode"
+  }
+
+  return ($output | Out-String).Trim()
+}
+
+try {
+  $env:PATH = "$env:LOCALAPPDATA\OpenClaw\deps\portable-git\cmd;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\mingw64\bin;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\usr\bin;$env:PATH"
+  $tgz = Join-Path $env:TEMP 'openclaw-main-update.tgz'
+  Remove-Item $tgz, $LogPath, $DonePath -Force -ErrorAction SilentlyContinue
+  Invoke-Logged 'download current tgz' { curl.exe -fsSL $TgzUrl -o $tgz }
+  Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --no-fund --no-audit }
+  $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
+  $version = Invoke-CaptureLogged 'openclaw --version' { & $openclaw --version }
+  if ($version -notmatch [regex]::Escape($HeadShort)) {
+    throw "version mismatch: expected substring $HeadShort"
+  }
+  Invoke-Logged 'openclaw models set' { & $openclaw models set openai/gpt-5.4 }
+  # Windows can keep the old hashed dist modules alive across in-place global npm upgrades.
+  # Restart the gateway/service before verifying status or the next agent turn.
+  Invoke-Logged 'openclaw gateway restart' { & $openclaw gateway restart }
+  Start-Sleep -Seconds 5
+  Invoke-Logged 'openclaw gateway status' { & $openclaw gateway status --deep --require-rpc }
+  Invoke-CaptureLogged 'openclaw agent' { & $openclaw agent --agent main --session-id $SessionId --message 'Reply with exact ASCII text OK only.' --json } | Out-Null
+  $exitCode = $LASTEXITCODE
+  if ($null -eq $exitCode) {
+    $exitCode = 0
+  }
+  Set-Content -Path $DonePath -Value ([string]$exitCode)
+  exit $exitCode
+} catch {
+  if (Test-Path $LogPath) {
+    Add-Content -Path $LogPath -Value ($_ | Out-String)
+  } else {
+    ($_ | Out-String) | Set-Content -Path $LogPath
+  }
+  Set-Content -Path $DonePath -Value '1'
+  exit 1
+}
+EOF
+}
+
 start_server() {
   HOST_IP="$(resolve_host_ip)"
   HOST_PORT="$(allocate_host_port)"
@@ -197,6 +300,7 @@ import sys
 
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
 matches = re.findall(r"OpenClaw [^\r\n]+", text)
+matches = [match for match in matches if re.search(r"OpenClaw \d", match)]
 print(matches[-1] if matches else "")
 PY
 }
@@ -217,48 +321,137 @@ PY
   prlctl exec "$WINDOWS_VM" --current-user powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded"
 }
 
+host_timeout_exec() {
+  local timeout_s="$1"
+  shift
+  HOST_TIMEOUT_S="$timeout_s" python3 - "$@" <<'PY'
+import os
+import subprocess
+import sys
+
+timeout = int(os.environ["HOST_TIMEOUT_S"])
+args = sys.argv[1:]
+
+try:
+    completed = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+except subprocess.TimeoutExpired as exc:
+    if exc.stdout:
+        sys.stdout.buffer.write(exc.stdout)
+    if exc.stderr:
+        sys.stderr.buffer.write(exc.stderr)
+    sys.stderr.write(f"host timeout after {timeout}s\n")
+    raise SystemExit(124)
+
+if completed.stdout:
+    sys.stdout.buffer.write(completed.stdout)
+if completed.stderr:
+    sys.stderr.buffer.write(completed.stderr)
+raise SystemExit(completed.returncode)
+PY
+}
+
+guest_powershell_poll() {
+  local timeout_s="$1"
+  local script="$2"
+  local encoded
+  encoded="$(
+    SCRIPT_CONTENT="$script" python3 - <<'PY'
+import base64
+import os
+
+script = "$ProgressPreference = 'SilentlyContinue'\n" + os.environ["SCRIPT_CONTENT"]
+payload = script.encode("utf-16le")
+print(base64.b64encode(payload).decode("ascii"))
+PY
+  )"
+  host_timeout_exec "$timeout_s" prlctl exec "$WINDOWS_VM" --current-user powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded"
+}
+
 run_windows_script_via_log() {
-  local script_body="$1"
-  local runner_name log_name done_name done_status
+  local script_url="$1"
+  local tgz_url="$2"
+  local head_short="$3"
+  local session_id="$4"
+  local runner_name log_name done_name done_status launcher_state
+  local start_seconds poll_deadline startup_checked poll_rc state_rc log_rc
   runner_name="openclaw-update-$RANDOM-$RANDOM.ps1"
   log_name="openclaw-update-$RANDOM-$RANDOM.log"
   done_name="openclaw-update-$RANDOM-$RANDOM.done"
+  start_seconds="$SECONDS"
+  poll_deadline=$((SECONDS + 900))
+  startup_checked=0
 
   guest_powershell "$(cat <<EOF
 \$runner = Join-Path \$env:TEMP '$runner_name'
 \$log = Join-Path \$env:TEMP '$log_name'
 \$done = Join-Path \$env:TEMP '$done_name'
 Remove-Item \$runner, \$log, \$done -Force -ErrorAction SilentlyContinue
-@'
-\$ErrorActionPreference = 'Stop'
-\$PSNativeCommandUseErrorActionPreference = \$false
-\$log = Join-Path \$env:TEMP '$log_name'
-\$done = Join-Path \$env:TEMP '$done_name'
-try {
-$script_body
-  Set-Content -Path \$done -Value ([string]\$LASTEXITCODE)
-} catch {
-  if (Test-Path \$log) {
-    Add-Content -Path \$log -Value (\$_ | Out-String)
-  } else {
-    (\$_ | Out-String) | Set-Content -Path \$log
-  }
-  Set-Content -Path \$done -Value '1'
-}
-'@ | Set-Content -Path \$runner
-Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', \$runner) -WindowStyle Hidden | Out-Null
+curl.exe -fsSL '$script_url' -o \$runner
+Start-Process powershell.exe -ArgumentList @(
+  '-NoProfile',
+  '-ExecutionPolicy', 'Bypass',
+  '-File', \$runner,
+  '-TgzUrl', '$tgz_url',
+  '-HeadShort', '$head_short',
+  '-SessionId', '$session_id',
+  '-LogPath', \$log,
+  '-DonePath', \$done
+) -WindowStyle Hidden | Out-Null
 EOF
 )"
 
   while :; do
+    set +e
     done_status="$(
-      guest_powershell "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
+      guest_powershell_poll 20 "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
     )"
+    poll_rc=$?
+    set -e
     done_status="${done_status//$'\r'/}"
+    if [[ $poll_rc -ne 0 ]]; then
+      warn "windows update helper poll failed; retrying"
+      if (( SECONDS >= poll_deadline )); then
+        warn "windows update helper timed out while polling done file"
+        return 1
+      fi
+      sleep 2
+      continue
+    fi
     if [[ -n "$done_status" ]]; then
-      guest_powershell "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      set +e
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      log_rc=$?
+      set -e
+      if [[ $log_rc -ne 0 ]]; then
+        warn "windows update helper log drain failed after completion"
+      fi
       [[ "$done_status" == "0" ]]
       return $?
+    fi
+    if [[ "$startup_checked" -eq 0 && $((SECONDS - start_seconds)) -ge 20 ]]; then
+      set +e
+      launcher_state="$(
+        guest_powershell_poll 20 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; 'runner=' + (Test-Path \$runner) + ' log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done)"
+      )"
+      state_rc=$?
+      set -e
+      launcher_state="${launcher_state//$'\r'/}"
+      startup_checked=1
+      if [[ $state_rc -eq 0 && "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
+        warn "windows update helper failed to materialize guest files"
+        return 1
+      fi
+    fi
+    if (( SECONDS >= poll_deadline )); then
+      set +e
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      log_rc=$?
+      set -e
+      if [[ $log_rc -ne 0 ]]; then
+        warn "windows update helper log drain failed after timeout"
+      fi
+      warn "windows update helper timed out waiting for done file"
+      return 1
     fi
     sleep 2
   done
@@ -293,30 +486,8 @@ EOF
 run_windows_update() {
   local tgz_url="$1"
   local head_short="$2"
-  run_windows_script_via_log "$(cat <<EOF
-\$env:PATH = "\$env:LOCALAPPDATA\OpenClaw\deps\portable-git\cmd;\$env:LOCALAPPDATA\OpenClaw\deps\portable-git\mingw64\bin;\$env:LOCALAPPDATA\OpenClaw\deps\portable-git\usr\bin;\$env:PATH"
-\$tgz = Join-Path \$env:TEMP 'openclaw-main-update.tgz'
-curl.exe -fsSL '$tgz_url' -o \$tgz >> \$log 2>&1
-npm.cmd install -g \$tgz --no-fund --no-audit >> \$log 2>&1
-\$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
-\$version = & \$openclaw --version
-\$version | Tee-Object -FilePath \$log -Append
-if (\$version -notmatch '$head_short') {
-  throw 'version mismatch: expected substring $head_short'
-}
-& \$openclaw models set openai/gpt-5.4 >> \$log 2>&1
-# Windows can keep the old hashed dist modules alive across in-place global npm upgrades.
-# Restart the gateway/service before verifying status or the next agent turn.
-& \$openclaw gateway restart >> \$log 2>&1
-Start-Sleep -Seconds 5
-& \$openclaw gateway status --deep --require-rpc >> \$log 2>&1
-\$output = & \$openclaw agent --agent main --session-id parallels-npm-update-windows-$head_short --message 'Reply with exact ASCII text OK only.' --json 2>&1
-if (\$null -ne \$output) {
-  \$output | ForEach-Object { \$_ } | Tee-Object -FilePath \$log -Append
-}
-exit \$LASTEXITCODE
-EOF
-)"
+  local script_url="$3"
+  run_windows_script_via_log "$script_url" "$tgz_url" "$head_short" "parallels-npm-update-windows-$head_short"
 }
 
 run_linux_update() {
@@ -421,14 +592,16 @@ wait_job "Linux fresh" "$linux_fresh_pid" && LINUX_FRESH_STATUS="pass" || LINUX_
 [[ "$LINUX_FRESH_STATUS" == "pass" ]] || die "Linux fresh baseline failed"
 
 pack_main_tgz
+write_windows_update_script
 start_server
 
 tgz_url="http://$HOST_IP:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
+windows_update_script_url="http://$HOST_IP:$HOST_PORT/$(basename "$WINDOWS_UPDATE_SCRIPT_PATH")"
 
 say "Run same-guest update to current main"
 run_macos_update "$tgz_url" "$CURRENT_HEAD_SHORT" >"$RUN_DIR/macos-update.log" 2>&1 &
 macos_update_pid=$!
-run_windows_update "$tgz_url" "$CURRENT_HEAD_SHORT" >"$RUN_DIR/windows-update.log" 2>&1 &
+run_windows_update "$tgz_url" "$CURRENT_HEAD_SHORT" "$windows_update_script_url" >"$RUN_DIR/windows-update.log" 2>&1 &
 windows_update_pid=$!
 run_linux_update "$tgz_url" "$CURRENT_HEAD_SHORT" >"$RUN_DIR/linux-update.log" 2>&1 &
 linux_update_pid=$!

@@ -1,71 +1,76 @@
 import { describe, vi } from "vitest";
-import { discordOutbound } from "../../../../extensions/discord/src/outbound-adapter.js";
-import { whatsappOutbound } from "../../../../extensions/whatsapp/src/outbound-adapter.js";
-import { sendMessageZalo } from "../../../../extensions/zalo/src/send.js";
-import { sendMessageZalouser } from "../../../../extensions/zalouser/src/send.js";
-import { parseZalouserOutboundTarget } from "../../../../extensions/zalouser/src/session-route.js";
+import { discordOutbound } from "../../../../extensions/discord/test-api.js";
+import { whatsappOutbound } from "../../../../extensions/whatsapp/test-api.js";
+import { sendMessageZalo } from "../../../../extensions/zalo/test-api.js";
+import {
+  sendMessageZalouser,
+  parseZalouserOutboundTarget,
+} from "../../../../extensions/zalouser/test-api.js";
 import {
   chunkTextForOutbound as chunkZaloTextForOutbound,
   sendPayloadWithChunkedTextAndMedia as sendZaloPayloadWithChunkedTextAndMedia,
 } from "../../../../src/plugin-sdk/zalo.js";
 import { sendPayloadWithChunkedTextAndMedia as sendZalouserPayloadWithChunkedTextAndMedia } from "../../../../src/plugin-sdk/zalouser.js";
-import { slackOutbound } from "../../../../test/channel-outbounds.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import { createDirectTextMediaOutbound } from "../outbound/direct-text-media.js";
 import {
+  createSlackOutboundPayloadHarness,
   installChannelOutboundPayloadContractSuite,
   primeChannelOutboundSendMock,
 } from "./suites.js";
 
-vi.mock("../../../../extensions/zalo/src/send.js", () => ({
-  sendMessageZalo: vi.fn().mockResolvedValue({ ok: true, messageId: "zl-1" }),
-}));
+vi.mock("../../../../extensions/zalo/test-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../extensions/zalo/test-api.js")>();
+  return {
+    ...actual,
+    sendMessageZalo: vi.fn().mockResolvedValue({ ok: true, messageId: "zl-1" }),
+  };
+});
 
 // This suite only validates payload adaptation. Keep zalouser's runtime-only
 // ZCA import graph mocked so local contract runs don't depend on native socket
 // deps being resolved through the extension runtime seam.
-vi.mock("../../../../extensions/zalouser/src/accounts.js", () => ({
-  listZalouserAccountIds: vi.fn(() => ["default"]),
-  resolveDefaultZalouserAccountId: vi.fn(() => "default"),
-  resolveZalouserAccountSync: vi.fn(() => ({
-    accountId: "default",
-    profile: "default",
-    name: "test",
-    enabled: true,
-    authenticated: true,
-    config: {},
-  })),
-  getZcaUserInfo: vi.fn(async () => null),
-  checkZcaAuthenticated: vi.fn(async () => false),
-}));
-
-vi.mock("../../../../extensions/zalouser/src/zalo-js.js", () => ({
-  checkZaloAuthenticated: vi.fn(async () => false),
-  getZaloUserInfo: vi.fn(async () => null),
-  listZaloFriendsMatching: vi.fn(async () => []),
-  listZaloGroupMembers: vi.fn(async () => []),
-  listZaloGroupsMatching: vi.fn(async () => []),
-  logoutZaloProfile: vi.fn(async () => {}),
-  resolveZaloAllowFromEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
-    entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
-  ),
-  resolveZaloGroupsByEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
-    entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
-  ),
-  startZaloQrLogin: vi.fn(async () => ({
-    message: "qr pending",
-    qrDataUrl: undefined,
-  })),
-  waitForZaloQrLogin: vi.fn(async () => ({
-    connected: false,
-    message: "login pending",
-  })),
-}));
-
-vi.mock("../../../../extensions/zalouser/src/send.js", () => ({
-  sendMessageZalouser: vi.fn().mockResolvedValue({ ok: true, messageId: "zlu-1" }),
-  sendReactionZalouser: vi.fn().mockResolvedValue({ ok: true }),
-}));
+vi.mock("../../../../extensions/zalouser/test-api.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../extensions/zalouser/test-api.js")>();
+  return {
+    ...actual,
+    listZalouserAccountIds: vi.fn(() => ["default"]),
+    resolveDefaultZalouserAccountId: vi.fn(() => "default"),
+    resolveZalouserAccountSync: vi.fn(() => ({
+      accountId: "default",
+      profile: "default",
+      name: "test",
+      enabled: true,
+      authenticated: true,
+      config: {},
+    })),
+    getZcaUserInfo: vi.fn(async () => null),
+    checkZcaAuthenticated: vi.fn(async () => false),
+    checkZaloAuthenticated: vi.fn(async () => false),
+    getZaloUserInfo: vi.fn(async () => null),
+    listZaloFriendsMatching: vi.fn(async () => []),
+    listZaloGroupMembers: vi.fn(async () => []),
+    listZaloGroupsMatching: vi.fn(async () => []),
+    logoutZaloProfile: vi.fn(async () => {}),
+    resolveZaloAllowFromEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
+      entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
+    ),
+    resolveZaloGroupsByEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
+      entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
+    ),
+    startZaloQrLogin: vi.fn(async () => ({
+      message: "qr pending",
+      qrDataUrl: undefined,
+    })),
+    waitForZaloQrLogin: vi.fn(async () => ({
+      connected: false,
+      message: "login pending",
+    })),
+    sendMessageZalouser: vi.fn().mockResolvedValue({ ok: true, messageId: "zlu-1" }),
+    sendReactionZalouser: vi.fn().mockResolvedValue({ ok: true }),
+  };
+});
 
 type PayloadHarnessParams = {
   payload: ReplyPayload;
@@ -81,29 +86,6 @@ function buildChannelSendResult(channel: string, result: Record<string, unknown>
 
 const mockedSendZalo = vi.mocked(sendMessageZalo);
 const mockedSendZalouser = vi.mocked(sendMessageZalouser);
-
-function createSlackHarness(params: PayloadHarnessParams) {
-  const sendSlack = vi.fn();
-  primeChannelOutboundSendMock(
-    sendSlack,
-    { messageId: "sl-1", channelId: "C12345", ts: "1234.5678" },
-    params.sendResults,
-  );
-  const ctx = {
-    cfg: {},
-    to: "C12345",
-    text: "",
-    payload: params.payload,
-    deps: {
-      sendSlack,
-    },
-  };
-  return {
-    run: async () => await slackOutbound.sendPayload!(ctx),
-    sendMock: sendSlack,
-    to: ctx.to,
-  };
-}
 
 function createDiscordHarness(params: PayloadHarnessParams) {
   const sendDiscord = vi.fn();
@@ -263,7 +245,7 @@ describe("channel outbound payload contract", () => {
     installChannelOutboundPayloadContractSuite({
       channel: "slack",
       chunking: { mode: "passthrough", longTextLength: 5000 },
-      createHarness: createSlackHarness,
+      createHarness: createSlackOutboundPayloadHarness,
     });
   });
 

@@ -1,34 +1,15 @@
 import os from "node:os";
 import path from "node:path";
-import {
-  consumeRootOptionToken,
-  FLAG_TERMINATOR,
-  isValueToken,
-} from "../infra/cli-root-options.js";
+import { FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { getPrimaryCommand } from "./argv.js";
 import { isValidProfileName } from "./profile-utils.js";
+import { forwardConsumedCliRootOption } from "./root-option-forward.js";
+import { takeCliRootOptionValue } from "./root-option-value.js";
 
 export type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
-
-function takeValue(
-  raw: string,
-  next: string | undefined,
-): {
-  value: string | null;
-  consumedNext: boolean;
-} {
-  if (raw.includes("=")) {
-    const [, value] = raw.split("=", 2);
-    const trimmed = (value ?? "").trim();
-    return { value: trimmed || null, consumedNext: false };
-  }
-  const consumedNext = isValueToken(next);
-  const trimmed = consumedNext ? next!.trim() : "";
-  return { value: trimmed || null, consumedNext };
-}
 
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   if (argv.length < 2) {
@@ -68,7 +49,7 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
         return { ok: false, error: "Cannot combine --dev with --profile" };
       }
       const next = args[i + 1];
-      const { value, consumedNext } = takeValue(arg, next);
+      const { value, consumedNext } = takeCliRootOptionValue(arg, next);
       if (consumedNext) {
         i += 1;
       }
@@ -85,14 +66,8 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
       continue;
     }
 
-    const consumedRootOption = consumeRootOptionToken(args, i);
+    const consumedRootOption = forwardConsumedCliRootOption(args, i, out);
     if (consumedRootOption > 0) {
-      for (let offset = 0; offset < consumedRootOption; offset += 1) {
-        const token = args[i + offset];
-        if (token !== undefined) {
-          out.push(token);
-        }
-      }
       i += consumedRootOption - 1;
       continue;
     }

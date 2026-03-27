@@ -284,6 +284,7 @@ export async function gatherDaemonStatus(
   opts: {
     rpc: GatewayRpcOpts;
     probe: boolean;
+    requireRpc?: boolean;
     deep?: boolean;
   } & FindExtraGatewayServicesOptions,
 ): Promise<DaemonStatus> {
@@ -369,6 +370,7 @@ export async function gatherDaemonStatus(
             : undefined,
         timeoutMs,
         json: opts.rpc.json,
+        requireRpc: opts.requireRpc,
         configPath: daemonConfigSummary.path,
       })
     : undefined;

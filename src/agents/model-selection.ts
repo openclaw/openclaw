@@ -6,12 +6,14 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride,
 } from "./agent-scope.js";
+import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { normalizeGoogleModelId, normalizeXaiModelId } from "./model-id-normalization.js";
@@ -23,7 +25,12 @@ import {
   normalizeProviderIdForAuth,
 } from "./provider-id.js";
 
-const log = createSubsystemLogger("model-selection");
+let log: ReturnType<typeof createSubsystemLogger> | null = null;
+
+function getLog(): ReturnType<typeof createSubsystemLogger> {
+  log ??= createSubsystemLogger("model-selection");
+  return log;
+}
 
 export type ModelRef = {
   provider: string;
@@ -75,10 +82,9 @@ export {
 
 export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
   const normalized = normalizeProviderId(provider);
-  if (normalized === "claude-cli") {
-    return true;
-  }
-  if (normalized === "codex-cli") {
+  if (
+    resolveRuntimeCliBackends().some((backend) => normalizeProviderId(backend.id) === normalized)
+  ) {
     return true;
   }
   const backends = cfg?.agents?.defaults?.cliBackends ?? {};
@@ -292,7 +298,7 @@ export function resolveConfiguredModelRef(params: {
 
       // Default to anthropic if no provider is specified, but warn as this is deprecated.
       const safeTrimmed = sanitizeForLog(trimmed);
-      log.warn(
+      getLog().warn(
         `Model "${safeTrimmed}" specified without provider. Falling back to "anthropic/${safeTrimmed}". Please use "anthropic/${safeTrimmed}" in your config.`,
       );
       return { provider: "anthropic", model: trimmed };
@@ -310,29 +316,20 @@ export function resolveConfiguredModelRef(params: {
     // User specified a model but it could not be resolved — warn before falling back.
     const safe = sanitizeForLog(trimmed);
     const safeFallback = sanitizeForLog(`${params.defaultProvider}/${params.defaultModel}`);
-    log.warn(`Model "${safe}" could not be resolved. Falling back to default "${safeFallback}".`);
+    getLog().warn(
+      `Model "${safe}" could not be resolved. Falling back to default "${safeFallback}".`,
+    );
   }
   // Before falling back to the hardcoded default, check if the default provider
   // is actually available. If it isn't but other providers are configured, prefer
   // the first configured provider's first model to avoid reporting a stale default
   // from a removed provider. (See #38880)
-  const configuredProviders = params.cfg.models?.providers;
-  if (configuredProviders && typeof configuredProviders === "object") {
-    const hasDefaultProvider = Boolean(configuredProviders[params.defaultProvider]);
-    if (!hasDefaultProvider) {
-      const availableProvider = Object.entries(configuredProviders).find(
-        ([, providerCfg]) =>
-          providerCfg &&
-          Array.isArray(providerCfg.models) &&
-          providerCfg.models.length > 0 &&
-          providerCfg.models[0]?.id,
-      );
-      if (availableProvider) {
-        const [providerName, providerCfg] = availableProvider;
-        const firstModel = providerCfg.models[0];
-        return { provider: providerName, model: firstModel.id };
-      }
-    }
+  const fallbackProvider = resolveConfiguredProviderFallback({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
+  if (fallbackProvider) {
+    return fallbackProvider;
   }
   return { provider: params.defaultProvider, model: params.defaultModel };
 }

@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
 import { Type } from "@sinclair/typebox";
 import OpenAI from "openai";
+import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/infra-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
@@ -168,6 +169,7 @@ class Embeddings {
     if (this.dimensions) {
       params.dimensions = this.dimensions;
     }
+    ensureGlobalUndiciEnvProxyDispatcher();
     const response = await this.client.embeddings.create(params);
     return response.data[0].embedding;
   }
