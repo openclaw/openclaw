@@ -244,7 +244,7 @@ node --require /tmp/patch.js openclaw.mjs config set channels.slack.allowFrom "$
 node --require /tmp/patch.js openclaw.mjs config set channels.slack.groupPolicy '"open"'
 node --require /tmp/patch.js openclaw.mjs config set tools.profile full
 node --require /tmp/patch.js openclaw.mjs mcp set rag-search '{"url":"https://retrieval-mcp-server.internal.lemonforest-578b1773.eastus.azurecontainerapps.io/mcp","transport":"streamable-http"}'
-node --require /tmp/patch.js openclaw.mjs mcp set asireon-function-call '{"url":"https://asireon-func-mcp.internal.lemonforest-578b1773.eastus.azurecontainerapps.io","transport":"streamable-http"}'
+node --require /tmp/patch.js openclaw.mjs mcp set asireon-function-call '{"url":"https://asireon-func-mcp.internal.lemonforest-578b1773.eastus.azurecontainerapps.io/mcp","transport":"streamable-http"}'
 exec node --require /tmp/patch.js openclaw.mjs gateway --allow-unconfigured --bind lan
             '''
           ]
