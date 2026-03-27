@@ -4792,7 +4792,7 @@
           "exportName": "buildOptionalSecretInputSchema",
           "kind": "function",
           "source": {
-            "line": 18,
+            "line": 20,
             "path": "src/plugin-sdk/secret-input.ts"
           }
         },
@@ -4801,7 +4801,7 @@
           "exportName": "buildSecretInputArraySchema",
           "kind": "function",
           "source": {
-            "line": 23,
+            "line": 25,
             "path": "src/plugin-sdk/secret-input.ts"
           }
         },
@@ -4810,7 +4810,7 @@
           "exportName": "buildSecretInputSchema",
           "kind": "function",
           "source": {
-            "line": 11,
+            "line": 54,
             "path": "src/plugin-sdk/secret-input-schema.ts"
           }
         },
@@ -4830,6 +4830,15 @@
           "source": {
             "line": 144,
             "path": "src/config/types.secrets.ts"
+          }
+        },
+        {
+          "declaration": "export function normalizeSecretInput(value: unknown): string;",
+          "exportName": "normalizeSecretInput",
+          "kind": "function",
+          "source": {
+            "line": 16,
+            "path": "src/utils/normalize-secret-input.ts"
           }
         },
         {
