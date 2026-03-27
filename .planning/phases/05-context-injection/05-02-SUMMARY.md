@@ -16,7 +16,12 @@ affects: [06-queue-heartbeat, 09-web-ui]
 
 tech-stack:
   added: []
-  patterns: [cwd-walk-up-with-boundary, internal-hook-registration-at-module-scope, bootstrap-file-deduplication]
+  patterns:
+    [
+      cwd-walk-up-with-boundary,
+      internal-hook-registration-at-module-scope,
+      bootstrap-file-deduplication,
+    ]
 
 key-files:
   created:
@@ -55,6 +60,7 @@ completed: 2026-03-27
 - **Files modified:** 5
 
 ## Accomplishments
+
 - CWD-based PROJECT.md walk-up finds nearest PROJECT.md from agent workspace directory, stopping at ~/.openclaw/projects/ root
 - Bootstrap hook injects PROJECT.md for project-scoped channels via agents.list[].project config field
 - Deduplication ensures only one PROJECT.md in bootstrap files when both cwd and hook paths fire
@@ -69,6 +75,7 @@ Each task was committed atomically:
 2. **Task 2: Bootstrap hook for project-scoped channels and tests** - `7aeeede` (feat)
 
 ## Files Created/Modified
+
 - `src/agents/bootstrap-files.ts` - Added findProjectMdFromCwd helper and integration into resolveBootstrapFilesForRun
 - `src/agents/workspace.ts` - Added PROJECT.md to WorkspaceBootstrapFileName union and DEFAULT_PROJECT_FILENAME constant
 - `src/agents/project-context-hook.ts` - New file: registerProjectContextHook for channel-based PROJECT.md injection
@@ -76,6 +83,7 @@ Each task was committed atomically:
 - `src/agents/bootstrap-files.test.ts` - Added 7 tests for PROJECT.md injection scenarios
 
 ## Decisions Made
+
 - Extended WorkspaceBootstrapFileName union to include PROJECT.md rather than using unsafe type assertions
 - Hook reads per-agent config (agents.list[].project) not a global field, allowing different agents to serve different projects
 - registerProjectContextHook is called at module scope in bootstrap-hooks.ts, following the same side-effect pattern as other internal hook registrations
@@ -85,18 +93,23 @@ Each task was committed atomically:
 None - plan executed exactly as written.
 
 ## Issues Encountered
+
 None
 
 ## User Setup Required
+
 None - no external service configuration required.
 
 ## Known Stubs
+
 None - all data paths are wired to real sources.
 
 ## Next Phase Readiness
+
 - Context injection pipeline complete: agents in project directories and agents with project config both receive PROJECT.md
 - Ready for Phase 06 (queue and heartbeat) which depends on agent context being available
 
 ---
-*Phase: 05-context-injection*
-*Completed: 2026-03-27*
+
+_Phase: 05-context-injection_
+_Completed: 2026-03-27_

@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import YAML from "yaml";
-import type { ScanAndClaimResult } from "./heartbeat-scanner.js";
 import { scanAndClaimTask } from "./heartbeat-scanner.js";
 
 /**
@@ -42,8 +41,12 @@ async function setupProjectDir(opts: {
   let queue = `---\nupdated: "2026-03-27"\n---\n\n## Available\n\n`;
   for (const t of available) {
     const meta: string[] = [];
-    if (t.priority) meta.push(`priority: ${t.priority}`);
-    if (t.capabilities?.length) meta.push(`capabilities: ${t.capabilities.join(", ")}`);
+    if (t.priority) {
+      meta.push(`priority: ${t.priority}`);
+    }
+    if (t.capabilities?.length) {
+      meta.push(`capabilities: ${t.capabilities.join(", ")}`);
+    }
     const metaStr = meta.length ? ` [${meta.join(", ")}]` : "";
     queue += `- ${t.id}${metaStr}\n`;
   }
@@ -499,7 +502,9 @@ describe("integration", () => {
       projectDir: dir,
     });
     expect(claimResult.type).toBe("claimed");
-    if (claimResult.type !== "claimed") throw new Error("expected claimed");
+    if (claimResult.type !== "claimed") {
+      throw new Error("expected claimed");
+    }
     expect(claimResult.task.id).toBe("TASK-001");
     expect(claimResult.task.content).toContain("Integration test task");
 
@@ -528,7 +533,9 @@ describe("integration", () => {
     expect(resumeResult.type).toBe("resumed");
 
     // Step 5: Verify resumed result has same task and checkpoint data
-    if (resumeResult.type !== "resumed") throw new Error("expected resumed");
+    if (resumeResult.type !== "resumed") {
+      throw new Error("expected resumed");
+    }
     expect(resumeResult.task.id).toBe("TASK-001");
     expect(resumeResult.task.content).toContain("Integration test task");
     expect(resumeResult.checkpoint.claimed_by).toBe("agent-int-1");

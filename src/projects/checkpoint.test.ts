@@ -1,13 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
-import path from "node:path";
 import os from "node:os";
-import {
-  checkpointPath,
-  createCheckpoint,
-  readCheckpoint,
-  writeCheckpoint,
-} from "./checkpoint.js";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { checkpointPath, createCheckpoint, readCheckpoint, writeCheckpoint } from "./checkpoint.js";
 
 describe("checkpoint", () => {
   let tmpDir: string;
@@ -21,9 +16,7 @@ describe("checkpoint", () => {
   });
 
   it("checkpointPath replaces .md with .checkpoint.json", () => {
-    expect(checkpointPath("tasks/TASK-005.md")).toBe(
-      "tasks/TASK-005.checkpoint.json",
-    );
+    expect(checkpointPath("tasks/TASK-005.md")).toBe("tasks/TASK-005.checkpoint.json");
   });
 
   it("createCheckpoint returns initial fields correctly", () => {
@@ -42,7 +35,7 @@ describe("checkpoint", () => {
     expect(cp.files_modified).toEqual([]);
     expect(cp.failed_approaches).toEqual([]);
     expect(cp.log).toHaveLength(1);
-    expect(cp.log[0]!.action).toBe("Claimed task");
+    expect(cp.log[0].action).toBe("Claimed task");
     expect(cp.notes).toBe("");
   });
 
@@ -118,9 +111,7 @@ describe("checkpoint", () => {
     cp.last_step = "Implemented feature X";
     cp.next_action = "Write tests";
     cp.files_modified = ["src/foo.ts"];
-    cp.failed_approaches = [
-      { approach: "Used library Y", reason: "Too slow" },
-    ];
+    cp.failed_approaches = [{ approach: "Used library Y", reason: "Too slow" }];
     cp.notes = "Some notes";
 
     await writeCheckpoint(filePath, cp);

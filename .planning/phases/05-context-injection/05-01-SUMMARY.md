@@ -53,6 +53,7 @@ completed: 2026-03-27
 - **Files modified:** 5
 
 ## Accomplishments
+
 - Created matchCapabilities() with ANY-match semantics (agent needs >= 1 overlapping capability)
 - Extended AgentIdentityFile with capabilities?: string[] parsed from IDENTITY.md
 - Full test coverage: 6 matcher tests + 5 capabilities parsing tests (all green)
@@ -64,6 +65,7 @@ Each task was committed atomically:
 1. **Task 1: Capability matcher and IDENTITY.md capabilities parsing** - `fd54a2d` (feat)
 
 ## Files Created/Modified
+
 - `src/projects/capability-matcher.ts` - matchCapabilities() utility with ANY-match logic
 - `src/projects/capability-matcher.test.ts` - 6 test cases covering all match/no-match scenarios
 - `src/projects/index.ts` - Barrel re-export of matchCapabilities
@@ -71,6 +73,7 @@ Each task was committed atomically:
 - `src/agents/identity-file.test.ts` - 5 capabilities parsing test cases
 
 ## Decisions Made
+
 - ANY-match logic per D-08: agent qualifies if it has at least one of the task's required capabilities
 - Empty taskCaps means no restriction (any agent can claim) per D-08
 - Empty agentCaps cannot claim capability-gated tasks per D-09
@@ -81,15 +84,19 @@ Each task was committed atomically:
 None - plan executed exactly as written. Tests and identity-file.test.ts capabilities block were pre-existing (written by RED phase of a prior agent run).
 
 ## Issues Encountered
+
 None
 
 ## User Setup Required
+
 None - no external service configuration required.
 
 ## Next Phase Readiness
+
 - matchCapabilities() ready for heartbeat task pickup (Phase 6) and CLI (Phase 8)
 - AgentIdentityFile.capabilities available for agent context injection
 
 ---
-*Phase: 05-context-injection*
-*Completed: 2026-03-27*
+
+_Phase: 05-context-injection_
+_Completed: 2026-03-27_

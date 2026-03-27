@@ -64,12 +64,7 @@ export type { QueueSection } from "./queue-manager.js";
 export { matchCapabilities } from "./capability-matcher.js";
 
 // Checkpoint (interruption/resume support)
-export {
-  createCheckpoint,
-  readCheckpoint,
-  writeCheckpoint,
-  checkpointPath,
-} from "./checkpoint.js";
+export { createCheckpoint, readCheckpoint, writeCheckpoint, checkpointPath } from "./checkpoint.js";
 export type { CheckpointData } from "./checkpoint.js";
 
 // Heartbeat scanner (agent task pickup)

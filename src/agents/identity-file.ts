@@ -75,7 +75,10 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
       identity.avatar = value;
     }
     if (label === "capabilities") {
-      const caps = value.split(",").map((s) => s.trim()).filter(Boolean);
+      const caps = value
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
       if (caps.length > 0) {
         identity.capabilities = caps;
       }

@@ -43,6 +43,7 @@ Heartbeat scanner implementing scanAndClaimTask with priority sorting, dependenc
 ## What Was Built
 
 The `scanAndClaimTask` function is the core autonomous task pickup engine. On each heartbeat, agents:
+
 1. Check for an active checkpoint to resume (short-circuit)
 2. If idle, scan queue.md for Available tasks matching their capabilities
 3. Filter by dependency satisfaction (ALL depends_on must be done)
@@ -61,7 +62,9 @@ The `scanAndClaimTask` function is the core autonomous task pickup engine. On ea
 ## TDD Execution
 
 ### RED Phase
+
 Wrote 14 test cases in `heartbeat-scanner.test.ts` covering:
+
 - Idle scenarios (empty queue, nonexistent directory)
 - Claim with correct task selection
 - QueueManager.claimTask integration (verified via queue.md content)
@@ -76,17 +79,19 @@ Wrote 14 test cases in `heartbeat-scanner.test.ts` covering:
 - Graceful handling of corrupted checkpoint JSON
 
 ### GREEN Phase
+
 Implemented `heartbeat-scanner.ts` with the full algorithm. All 14 tests passed.
 
 ### REFACTOR Phase
+
 No structural refactoring needed -- helper functions (`findActiveCheckpoint`, `filterClaimableTasks`, `sortByPriority`, `checkAllDepsDone`) were already extracted during GREEN phase.
 
 ## Commits
 
-| Hash | Message |
-|------|---------|
-| 80b305b | test(06-02): add failing tests for heartbeat scanner |
-| ed4eed9 | feat(06-02): implement heartbeat scanner with scanAndClaimTask |
+| Hash    | Message                                                            |
+| ------- | ------------------------------------------------------------------ |
+| 80b305b | test(06-02): add failing tests for heartbeat scanner               |
+| ed4eed9 | feat(06-02): implement heartbeat scanner with scanAndClaimTask     |
 | 913b639 | refactor(06-02): apply oxfmt formatting to heartbeat scanner files |
 
 ## Deviations from Plan
@@ -94,6 +99,7 @@ No structural refactoring needed -- helper functions (`findActiveCheckpoint`, `f
 ### Auto-fixed Issues
 
 **1. [Rule 2 - Missing functionality] Checkpoint types defined inline**
+
 - **Found during:** Task 1 GREEN phase
 - **Issue:** `src/projects/checkpoint.ts` does not exist yet (Plan 01 parallel execution)
 - **Fix:** Defined CheckpointData interface and helpers (checkpointPath, createCheckpoint, writeCheckpoint, readCheckpoint) inline in heartbeat-scanner.ts with compatible signatures

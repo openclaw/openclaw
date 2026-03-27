@@ -3,11 +3,13 @@
 ## Heartbeat System Architecture
 
 ### Entry Point
+
 - `src/infra/heartbeat-runner.ts` — `runHeartbeatOnce(opts)` is the main entry point
 - Called from the cron/timer system on a configurable interval (default 30m)
 - Returns `HeartbeatRunResult` with `status: "skipped" | "ok" | "error"` and `reason`
 
 ### Heartbeat Flow (runHeartbeatOnce)
+
 1. Load config, resolve agent ID from session key
 2. Check enabled/disabled gates (areHeartbeatsEnabled, isHeartbeatEnabledForAgent, interval check)
 3. Check active hours and queue size (skip if requests in-flight)
@@ -19,7 +21,9 @@
 9. Process reply, deliver outbound payloads
 
 ### Pre-Heartbeat Scan Integration Point
+
 The scan should happen between step 4 (preflight) and step 7 (prompt building). At this point:
+
 - Agent ID is resolved (`agentId` variable)
 - Config is loaded (`cfg` variable)
 - We know the heartbeat is going to fire (preflight passed)
@@ -28,6 +32,7 @@ The scan should happen between step 4 (preflight) and step 7 (prompt building). 
 The scan result should influence the prompt built in step 7. If a task is claimed/resumed, the heartbeat prompt should include task context instead of the default "Read HEARTBEAT.md" prompt.
 
 ### Prompt Building
+
 ```typescript
 // Lines 516-521 of heartbeat-runner.ts
 const basePrompt = hasExecCompletion
@@ -42,22 +47,25 @@ The scan prompt should be a new branch: if task claimed/resumed, use a task-spec
 ## Queue Manager (Phase 4 Deliverable)
 
 ### Available Methods
+
 - `claimTask(projectDir, taskId, agentId)` — Lock-protected claim. Moves entry from Available to Claimed in queue.md. Updates task frontmatter (claimed_by, claimed_at, status).
 - `releaseTask(projectDir, taskId)` — Move back from Claimed to Available
 - `moveTask(projectDir, taskId, fromSection, toSection)` — Move between any sections
 - `readQueue(projectDir)` — Read and parse queue.md
 
 ### Lock Mechanism
+
 - Uses `withFileLock` from `src/plugin-sdk/file-lock.ts`
 - Lock file: `queue.md.lock` sidecar
 - 3 retries, exponential backoff (50ms-200ms), 60s stale threshold
 - Throws `QueueLockError` when retries exhausted
 
 ### QueueEntry Type
+
 ```typescript
 interface QueueEntry {
-  id: string;      // e.g., "TASK-005"
-  title: string;   // Task title from queue line
+  id: string; // e.g., "TASK-005"
+  title: string; // Task title from queue line
   section: string; // "available" | "claimed" | "done" | "blocked"
 }
 ```
@@ -65,11 +73,13 @@ interface QueueEntry {
 ## Capability Matching (Phase 5 Deliverable)
 
 ### matchCapabilities(agentCapabilities, taskCapabilities)
+
 - Returns `true` if agent has at least ONE matching capability (ANY-match)
 - Returns `true` if task has no capability requirements (empty array)
 - Returns `false` if task has requirements but agent has no capabilities
 
 ### Agent Capabilities Source
+
 - Parsed from IDENTITY.md by `parseIdentityMarkdown()`
 - Format: `- capabilities: code, testing, ui` (bullet with comma-separated values)
 - Returns `capabilities?: string[]` on `AgentIdentityFile`
@@ -77,6 +87,7 @@ interface QueueEntry {
 ## Task File Structure
 
 ### Frontmatter (TaskFrontmatterSchema)
+
 ```yaml
 id: TASK-005
 title: Fix authentication bug
@@ -93,7 +104,9 @@ parent: null | parent-project
 ```
 
 ### Checkpoint JSON Sidecar (New in Phase 6)
+
 File: `tasks/TASK-005.checkpoint.json`
+
 ```json
 {
   "status": "in-progress",
@@ -119,6 +132,7 @@ File: `tasks/TASK-005.checkpoint.json`
 ### New File: `src/projects/heartbeat-scanner.ts`
 
 ### Core Function: `scanAndClaimTask(opts)`
+
 ```typescript
 interface ScanAndClaimResult {
   type: "claimed" | "resumed" | "idle";
@@ -130,10 +144,11 @@ async function scanAndClaimTask(opts: {
   agentId: string;
   cfg: OpenClawConfig;
   workspaceDir: string;
-}): Promise<ScanAndClaimResult>
+}): Promise<ScanAndClaimResult>;
 ```
 
 ### Algorithm
+
 1. Resolve project directory from agent config (`agents.project` field) or cwd walk-up
 2. Check for active task: scan `tasks/*.checkpoint.json` for `claimed_by === agentId && status === "in-progress"`
 3. If active task found → return `{ type: "resumed", task, checkpoint }` (AGNT-08 short-circuit)
@@ -148,20 +163,26 @@ async function scanAndClaimTask(opts: {
 5. If no claimable task → return `{ type: "idle" }`
 
 ### Dependency Resolution
+
 - For each task in Available, read `depends_on` from frontmatter
 - For each dependency ID, find the task file and check its `status` field
 - ALL must be `"done"` for the task to be claimable
 - Missing dependency files → treat as not done (safe default)
 
 ### Priority Sorting
+
 ```typescript
 const PRIORITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
-tasks.sort((a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] || a.queuePosition - b.queuePosition);
+tasks.sort(
+  (a, b) =>
+    PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] || a.queuePosition - b.queuePosition,
+);
 ```
 
 ## Testing Strategy
 
 ### Unit Tests for heartbeat-scanner.ts
+
 1. `scanAndClaimTask returns "idle" when no projects configured`
 2. `scanAndClaimTask returns "idle" when queue has no Available tasks`
 3. `scanAndClaimTask returns "claimed" with highest priority task`
@@ -174,9 +195,11 @@ tasks.sort((a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] || 
 10. `scanAndClaimTask no capabilities agent cannot claim gated tasks`
 
 ### Integration Point Test
+
 11. `heartbeat runner uses scan result to modify prompt` (mock scanAndClaimTask)
 
 ### Checkpoint JSON Tests
+
 12. `checkpoint.json created with correct initial schema`
 13. `checkpoint.json read correctly on resume`
 14. `corrupted checkpoint.json handled gracefully`
@@ -184,21 +207,25 @@ tasks.sort((a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] || 
 ## Validation Architecture
 
 ### Dimension 1: Correctness
+
 - Queue scanning finds and claims correct tasks
 - Dependency resolution blocks correctly
 - Priority ordering is deterministic
 
 ### Dimension 2: Safety
+
 - Lock-protected claiming prevents double-claims
 - Checkpoint file writes are atomic (write to temp, rename)
 - Corrupted checkpoints don't crash heartbeat
 
 ### Dimension 3: Integration
+
 - Heartbeat runner correctly calls scanner before prompt building
 - Scanner uses existing QueueManager and matchCapabilities
 - Prompt injection includes full task content + checkpoint data
 
 ### Dimension 4: Edge Cases
+
 - Empty queue, no projects, no IDENTITY.md, corrupted checkpoint
 - Agent with no capabilities, task with no dependencies
 - Multiple projects (future) vs single project (current)

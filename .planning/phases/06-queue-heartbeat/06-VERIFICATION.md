@@ -37,77 +37,77 @@ human_verification: []
 
 ### Observable Truths
 
-| #   | Truth                                                                                   | Status      | Evidence                                                                                               |
-| --- | --------------------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------ |
-| 1   | On heartbeat, an idle agent scans queue.md and claims an Available task matching its capabilities | ✓ VERIFIED  | scanAndClaimTask wired into heartbeat-runner.ts (lines 663-682), 14/14 scanner tests pass             |
-| 2   | An agent with an active claimed task skips queue scanning on subsequent heartbeats      | ✓ VERIFIED  | findActiveCheckpoint short-circuits before queue scan; test "returns resumed when active checkpoint exists" passes |
-| 3   | A task with depends_on is not claimable until all dependencies reach Done status        | ✓ VERIFIED  | checkAllDepsDone in heartbeat-scanner.ts; tests "skips tasks with depends_on" and "claims task when ALL deps done" pass |
-| 4   | After context compaction, an agent can resume work using checkpoint and log sections    | ⚠ PARTIAL   | Resume flow works via JSON sidecar, but sidecar written with non-atomic writeFile (inline) not the atomic checkpoint.ts implementation |
-| 5   | Task claiming updates queue.md with lock protection                                     | ✓ VERIFIED  | QueueManager.claimTask used (line 150 heartbeat-scanner.ts); test "calls QueueManager.claimTask" passes |
+| #   | Truth                                                                                             | Status     | Evidence                                                                                                                               |
+| --- | ------------------------------------------------------------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | On heartbeat, an idle agent scans queue.md and claims an Available task matching its capabilities | ✓ VERIFIED | scanAndClaimTask wired into heartbeat-runner.ts (lines 663-682), 14/14 scanner tests pass                                              |
+| 2   | An agent with an active claimed task skips queue scanning on subsequent heartbeats                | ✓ VERIFIED | findActiveCheckpoint short-circuits before queue scan; test "returns resumed when active checkpoint exists" passes                     |
+| 3   | A task with depends_on is not claimable until all dependencies reach Done status                  | ✓ VERIFIED | checkAllDepsDone in heartbeat-scanner.ts; tests "skips tasks with depends_on" and "claims task when ALL deps done" pass                |
+| 4   | After context compaction, an agent can resume work using checkpoint and log sections              | ⚠ PARTIAL  | Resume flow works via JSON sidecar, but sidecar written with non-atomic writeFile (inline) not the atomic checkpoint.ts implementation |
+| 5   | Task claiming updates queue.md with lock protection                                               | ✓ VERIFIED | QueueManager.claimTask used (line 150 heartbeat-scanner.ts); test "calls QueueManager.claimTask" passes                                |
 
 **Score:** 4/5 truths verified (Truth 4 is partial due to non-atomic inline writeCheckpoint)
 
 ### Required Artifacts
 
-| Artifact                                  | Expected                                                   | Status       | Details                                                                                                          |
-| ----------------------------------------- | ---------------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `src/projects/checkpoint.ts`              | CheckpointData type, createCheckpoint, readCheckpoint, writeCheckpoint, checkpointPath | ✓ VERIFIED   | All 5 exports present, atomic rename implemented, 8 tests pass                                                   |
-| `src/projects/checkpoint.test.ts`         | Unit tests for checkpoint CRUD and error handling          | ✓ VERIFIED   | 8 tests pass: path derivation, creation, write, read, round-trip, error cases                                    |
-| `src/projects/heartbeat-scanner.ts`       | scanAndClaimTask, ScanAndClaimResult, ScanAndClaimOpts     | ✓ VERIFIED   | All exports present, PRIORITY_ORDER defined, all key imports wired, 14 tests pass                                |
-| `src/projects/heartbeat-scanner.test.ts`  | 14 unit tests + 1 integration test                         | ✓ VERIFIED   | 15 tests (14 unit + 1 integration describe block), all pass                                                      |
-| `src/infra/heartbeat-runner.ts`           | Pre-heartbeat scan integration                             | ✓ VERIFIED   | buildTaskPrompt, taskScanResult, scanAndClaimTask call, try/catch guard all present                              |
-| `src/projects/index.ts`                   | Barrel exports for checkpoint and heartbeat-scanner        | ✓ VERIFIED   | Lines 66-77 export createCheckpoint, readCheckpoint, writeCheckpoint, checkpointPath, CheckpointData, scanAndClaimTask, ScanAndClaimResult, ScanAndClaimOpts |
+| Artifact                                 | Expected                                                                               | Status     | Details                                                                                                                                                      |
+| ---------------------------------------- | -------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/projects/checkpoint.ts`             | CheckpointData type, createCheckpoint, readCheckpoint, writeCheckpoint, checkpointPath | ✓ VERIFIED | All 5 exports present, atomic rename implemented, 8 tests pass                                                                                               |
+| `src/projects/checkpoint.test.ts`        | Unit tests for checkpoint CRUD and error handling                                      | ✓ VERIFIED | 8 tests pass: path derivation, creation, write, read, round-trip, error cases                                                                                |
+| `src/projects/heartbeat-scanner.ts`      | scanAndClaimTask, ScanAndClaimResult, ScanAndClaimOpts                                 | ✓ VERIFIED | All exports present, PRIORITY_ORDER defined, all key imports wired, 14 tests pass                                                                            |
+| `src/projects/heartbeat-scanner.test.ts` | 14 unit tests + 1 integration test                                                     | ✓ VERIFIED | 15 tests (14 unit + 1 integration describe block), all pass                                                                                                  |
+| `src/infra/heartbeat-runner.ts`          | Pre-heartbeat scan integration                                                         | ✓ VERIFIED | buildTaskPrompt, taskScanResult, scanAndClaimTask call, try/catch guard all present                                                                          |
+| `src/projects/index.ts`                  | Barrel exports for checkpoint and heartbeat-scanner                                    | ✓ VERIFIED | Lines 66-77 export createCheckpoint, readCheckpoint, writeCheckpoint, checkpointPath, CheckpointData, scanAndClaimTask, ScanAndClaimResult, ScanAndClaimOpts |
 
 ### Key Link Verification
 
-| From                                 | To                                              | Via                                          | Status      | Details                                                                                 |
-| ------------------------------------ | ----------------------------------------------- | -------------------------------------------- | ----------- | --------------------------------------------------------------------------------------- |
-| `src/infra/heartbeat-runner.ts`      | `src/projects/heartbeat-scanner.ts`             | import scanAndClaimTask, call before prompt  | ✓ WIRED     | Lines 51, 678, 688-689 confirm import and usage with conditional prompt override        |
-| `src/infra/heartbeat-runner.ts`      | `src/agents/identity-file.ts`                   | parseIdentityMarkdown for agent capabilities | ✓ WIRED     | Lines 50, 673 confirm import and usage reading IDENTITY.md capabilities                 |
-| `src/projects/heartbeat-scanner.ts`  | `src/projects/queue-manager.ts`                 | QueueManager.claimTask for lock-protected write | ✓ WIRED  | Line 5 import, lines 122, 150 usage                                                     |
-| `src/projects/heartbeat-scanner.ts`  | `src/projects/capability-matcher.ts`            | matchCapabilities for filtering claimable tasks | ✓ WIRED  | Line 4 import, line 248 usage                                                           |
-| `src/projects/heartbeat-scanner.ts`  | `src/projects/frontmatter.ts`                   | parseTaskFrontmatter for depends_on and status | ✓ WIRED   | Line 5 import, lines 239, 270 usage                                                     |
-| `src/projects/heartbeat-scanner.ts`  | `src/projects/checkpoint.ts`                    | import checkpoint helpers instead of inline  | ✗ NOT WIRED | heartbeat-scanner.ts has NO import from checkpoint.ts; all checkpoint helpers are duplicated inline with non-atomic writeFile |
-| `src/projects/index.ts`              | `src/projects/heartbeat-scanner.ts`             | barrel export                                | ✓ WIRED     | Lines 75-77 export scanAndClaimTask, ScanAndClaimResult, ScanAndClaimOpts              |
-| `src/projects/index.ts`              | `src/projects/checkpoint.ts`                    | barrel export                                | ✓ WIRED     | Lines 66-73 export all checkpoint functions and CheckpointData type                     |
+| From                                | To                                   | Via                                             | Status      | Details                                                                                                                       |
+| ----------------------------------- | ------------------------------------ | ----------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `src/infra/heartbeat-runner.ts`     | `src/projects/heartbeat-scanner.ts`  | import scanAndClaimTask, call before prompt     | ✓ WIRED     | Lines 51, 678, 688-689 confirm import and usage with conditional prompt override                                              |
+| `src/infra/heartbeat-runner.ts`     | `src/agents/identity-file.ts`        | parseIdentityMarkdown for agent capabilities    | ✓ WIRED     | Lines 50, 673 confirm import and usage reading IDENTITY.md capabilities                                                       |
+| `src/projects/heartbeat-scanner.ts` | `src/projects/queue-manager.ts`      | QueueManager.claimTask for lock-protected write | ✓ WIRED     | Line 5 import, lines 122, 150 usage                                                                                           |
+| `src/projects/heartbeat-scanner.ts` | `src/projects/capability-matcher.ts` | matchCapabilities for filtering claimable tasks | ✓ WIRED     | Line 4 import, line 248 usage                                                                                                 |
+| `src/projects/heartbeat-scanner.ts` | `src/projects/frontmatter.ts`        | parseTaskFrontmatter for depends_on and status  | ✓ WIRED     | Line 5 import, lines 239, 270 usage                                                                                           |
+| `src/projects/heartbeat-scanner.ts` | `src/projects/checkpoint.ts`         | import checkpoint helpers instead of inline     | ✗ NOT WIRED | heartbeat-scanner.ts has NO import from checkpoint.ts; all checkpoint helpers are duplicated inline with non-atomic writeFile |
+| `src/projects/index.ts`             | `src/projects/heartbeat-scanner.ts`  | barrel export                                   | ✓ WIRED     | Lines 75-77 export scanAndClaimTask, ScanAndClaimResult, ScanAndClaimOpts                                                     |
+| `src/projects/index.ts`             | `src/projects/checkpoint.ts`         | barrel export                                   | ✓ WIRED     | Lines 66-73 export all checkpoint functions and CheckpointData type                                                           |
 
 ### Data-Flow Trace (Level 4)
 
-| Artifact                            | Data Variable     | Source                               | Produces Real Data | Status       |
-| ----------------------------------- | ----------------- | ------------------------------------ | ------------------ | ------------ |
-| `heartbeat-runner.ts` prompt        | taskScanResult    | scanAndClaimTask -> QueueManager.readQueue | Yes              | ✓ FLOWING    |
-| `heartbeat-scanner.ts` resume path  | checkpoint        | readCheckpoint from .checkpoint.json  | Yes                | ✓ FLOWING    |
-| `heartbeat-runner.ts` buildTaskPrompt | result.task.content | fs.readFile of task .md file       | Yes                | ✓ FLOWING    |
+| Artifact                              | Data Variable       | Source                                     | Produces Real Data | Status    |
+| ------------------------------------- | ------------------- | ------------------------------------------ | ------------------ | --------- |
+| `heartbeat-runner.ts` prompt          | taskScanResult      | scanAndClaimTask -> QueueManager.readQueue | Yes                | ✓ FLOWING |
+| `heartbeat-scanner.ts` resume path    | checkpoint          | readCheckpoint from .checkpoint.json       | Yes                | ✓ FLOWING |
+| `heartbeat-runner.ts` buildTaskPrompt | result.task.content | fs.readFile of task .md file               | Yes                | ✓ FLOWING |
 
 ### Behavioral Spot-Checks
 
-| Behavior                                                          | Command                                                         | Result           | Status  |
-| ----------------------------------------------------------------- | --------------------------------------------------------------- | ---------------- | ------- |
-| checkpoint.ts module exports all 5 required symbols               | grep -c "export" src/projects/checkpoint.ts                     | 5 exports found  | ✓ PASS  |
-| heartbeat-scanner.ts exports scanAndClaimTask, ScanAndClaimResult, ScanAndClaimOpts | grep "^export" src/projects/heartbeat-scanner.ts | 7 exports confirmed | ✓ PASS |
-| All 23 tests pass (8 checkpoint + 14 scanner + 1 integration)     | pnpm test -- checkpoint.test.ts heartbeat-scanner.test.ts        | 23/23 passed     | ✓ PASS  |
-| Build type-checks pass                                            | pnpm build                                                       | Exit 0           | ✓ PASS  |
-| heartbeat-runner.ts integrates scanAndClaimTask                   | grep "scanAndClaimTask" src/infra/heartbeat-runner.ts           | Lines 51, 678, 688 | ✓ PASS |
-| heartbeat-scanner.ts does NOT import from checkpoint.ts           | grep "from.*checkpoint" src/projects/heartbeat-scanner.ts       | No output        | ✗ FAIL (inline duplication) |
+| Behavior                                                                            | Command                                                    | Result              | Status                      |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------- | ------------------- | --------------------------- |
+| checkpoint.ts module exports all 5 required symbols                                 | grep -c "export" src/projects/checkpoint.ts                | 5 exports found     | ✓ PASS                      |
+| heartbeat-scanner.ts exports scanAndClaimTask, ScanAndClaimResult, ScanAndClaimOpts | grep "^export" src/projects/heartbeat-scanner.ts           | 7 exports confirmed | ✓ PASS                      |
+| All 23 tests pass (8 checkpoint + 14 scanner + 1 integration)                       | pnpm test -- checkpoint.test.ts heartbeat-scanner.test.ts  | 23/23 passed        | ✓ PASS                      |
+| Build type-checks pass                                                              | pnpm build                                                 | Exit 0              | ✓ PASS                      |
+| heartbeat-runner.ts integrates scanAndClaimTask                                     | grep "scanAndClaimTask" src/infra/heartbeat-runner.ts      | Lines 51, 678, 688  | ✓ PASS                      |
+| heartbeat-scanner.ts does NOT import from checkpoint.ts                             | grep "from.\*checkpoint" src/projects/heartbeat-scanner.ts | No output           | ✗ FAIL (inline duplication) |
 
 ### Requirements Coverage
 
-| Requirement | Source Plan | Description                                                                              | Status       | Evidence                                                                                           |
-| ----------- | ----------- | ---------------------------------------------------------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------- |
-| AGNT-05     | 06-02, 06-03 | On heartbeat, agents scan queue.md for Available tasks matching their capabilities       | ✓ SATISFIED  | scanAndClaimTask in heartbeat-runner.ts pre-heartbeat block; 14 scanner tests cover all scenarios  |
-| AGNT-06     | 06-02       | Agents claim tasks by updating queue.md (Available to Claimed) with lock protection      | ✓ SATISFIED  | QueueManager.claimTask called (line 150 heartbeat-scanner.ts); test confirms queue.md updated      |
-| AGNT-07     | 06-01       | Task files include checkpoint and log sections for interruption/resume across compactions | ⚠ PARTIAL   | Checkpoint JSON sidecar (.checkpoint.json) implements interruption/resume (D-09 design decision), but REQUIREMENTS.md still shows as Pending; literal "in task files" vs sidecar approach is a documentation inconsistency |
-| AGNT-08     | 06-02       | Agent with an active claimed task skips queue scanning on heartbeat (short-circuit)      | ✓ SATISFIED  | findActiveCheckpoint scans .checkpoint.json files, returns resumed before queue scan; test 10 passes |
-| AGNT-09     | 06-02       | Task dependencies checked during claim -- tasks with unfinished depends_on are skipped   | ✓ SATISFIED  | checkAllDepsDone in heartbeat-scanner.ts; tests 6 and 7 verify ALL deps must be done              |
+| Requirement | Source Plan  | Description                                                                               | Status      | Evidence                                                                                                                                                                                                                   |
+| ----------- | ------------ | ----------------------------------------------------------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AGNT-05     | 06-02, 06-03 | On heartbeat, agents scan queue.md for Available tasks matching their capabilities        | ✓ SATISFIED | scanAndClaimTask in heartbeat-runner.ts pre-heartbeat block; 14 scanner tests cover all scenarios                                                                                                                          |
+| AGNT-06     | 06-02        | Agents claim tasks by updating queue.md (Available to Claimed) with lock protection       | ✓ SATISFIED | QueueManager.claimTask called (line 150 heartbeat-scanner.ts); test confirms queue.md updated                                                                                                                              |
+| AGNT-07     | 06-01        | Task files include checkpoint and log sections for interruption/resume across compactions | ⚠ PARTIAL   | Checkpoint JSON sidecar (.checkpoint.json) implements interruption/resume (D-09 design decision), but REQUIREMENTS.md still shows as Pending; literal "in task files" vs sidecar approach is a documentation inconsistency |
+| AGNT-08     | 06-02        | Agent with an active claimed task skips queue scanning on heartbeat (short-circuit)       | ✓ SATISFIED | findActiveCheckpoint scans .checkpoint.json files, returns resumed before queue scan; test 10 passes                                                                                                                       |
+| AGNT-09     | 06-02        | Task dependencies checked during claim -- tasks with unfinished depends_on are skipped    | ✓ SATISFIED | checkAllDepsDone in heartbeat-scanner.ts; tests 6 and 7 verify ALL deps must be done                                                                                                                                       |
 
 **Requirement AGNT-07 notes:** REQUIREMENTS.md traceability table marks AGNT-07 as "Pending" with an unchecked checkbox despite 06-01-SUMMARY.md declaring `requirements-completed: [AGNT-07]`. The implementation uses a JSON sidecar approach (D-09: "Task .md stays clean for humans"), which functionally satisfies the resumption goal but diverges from the literal requirement text ("Task files include checkpoint and log sections"). This is a documentation gap, not a functional gap.
 
 ### Anti-Patterns Found
 
-| File                                  | Line  | Pattern                          | Severity | Impact                                                                                              |
-| ------------------------------------- | ----- | -------------------------------- | -------- | --------------------------------------------------------------------------------------------------- |
-| `src/projects/heartbeat-scanner.ts`   | 11-67 | Inline duplicate checkpoint code | ⚠ Warning | Maintains its own CheckpointData, checkpointPath, createCheckpoint, writeCheckpoint, readCheckpoint instead of importing from checkpoint.ts. The inline writeCheckpoint (line 55-57) uses fs.writeFile without atomic rename, bypassing the atomicity guarantee in checkpoint.ts. |
-| `src/projects/heartbeat-scanner.ts`   | 55-57 | Non-atomic writeCheckpoint       | 🛑 Blocker | Inline writeCheckpoint skips temp-file+rename pattern: `await fs.writeFile(filePath, ..., "utf8")` vs checkpoint.ts which uses temp+rename. Under concurrent access, this can produce a partial read. The canonical implementation in checkpoint.ts is correct but never called. |
+| File                                | Line  | Pattern                          | Severity   | Impact                                                                                                                                                                                                                                                                            |
+| ----------------------------------- | ----- | -------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/projects/heartbeat-scanner.ts` | 11-67 | Inline duplicate checkpoint code | ⚠ Warning  | Maintains its own CheckpointData, checkpointPath, createCheckpoint, writeCheckpoint, readCheckpoint instead of importing from checkpoint.ts. The inline writeCheckpoint (line 55-57) uses fs.writeFile without atomic rename, bypassing the atomicity guarantee in checkpoint.ts. |
+| `src/projects/heartbeat-scanner.ts` | 55-57 | Non-atomic writeCheckpoint       | 🛑 Blocker | Inline writeCheckpoint skips temp-file+rename pattern: `await fs.writeFile(filePath, ..., "utf8")` vs checkpoint.ts which uses temp+rename. Under concurrent access, this can produce a partial read. The canonical implementation in checkpoint.ts is correct but never called.  |
 
 ### Human Verification Required
 

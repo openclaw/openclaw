@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { matchCapabilities } from "./capability-matcher.js";
 import {
   type CheckpointData,
   checkpointPath,
@@ -8,7 +9,6 @@ import {
   readCheckpoint,
   writeCheckpoint,
 } from "./checkpoint.js";
-import { matchCapabilities } from "./capability-matcher.js";
 import { parseTaskFrontmatter } from "./frontmatter.js";
 import { QueueManager } from "./queue-manager.js";
 import type { TaskFrontmatter } from "./types.js";
@@ -64,7 +64,9 @@ export async function scanAndClaimTask(opts: ScanAndClaimOpts): Promise<ScanAndC
 
   // Step 1: Check for active checkpoint (resume short-circuit)
   const resumed = await findActiveCheckpoint(projectDir, agentId);
-  if (resumed) return resumed;
+  if (resumed) {
+    return resumed;
+  }
 
   // Step 2-5: Scan queue and claim
   try {
@@ -138,9 +140,15 @@ async function findActiveCheckpoint(
     const checkpoint = await readCheckpoint(cpFilePath);
 
     // Skip corrupted or non-matching checkpoints
-    if (!checkpoint) continue;
-    if (checkpoint.claimed_by !== agentId) continue;
-    if (checkpoint.status !== "in-progress") continue;
+    if (!checkpoint) {
+      continue;
+    }
+    if (checkpoint.claimed_by !== agentId) {
+      continue;
+    }
+    if (checkpoint.status !== "in-progress") {
+      continue;
+    }
 
     // Found an active task -- read the matching .md file
     const taskId = cpFile.replace(".checkpoint.json", "");
@@ -201,7 +209,9 @@ async function filterClaimableTasks(
     // Dependency check: ALL depends_on must be "done"
     if (fm.depends_on.length > 0) {
       const allDone = await checkAllDepsDone(fm.depends_on, tasksDir);
-      if (!allDone) continue;
+      if (!allDone) {
+        continue;
+      }
     }
 
     claimable.push({ id: taskId, priority: fm.priority });
@@ -233,7 +243,7 @@ function sortByPriority(
   tasks: Array<{ id: string; priority: string }>,
 ): Array<{ id: string; priority: string }> {
   // Slice to avoid mutating input, then stable sort
-  return [...tasks].sort((a, b) => {
+  return [...tasks].toSorted((a, b) => {
     const pa = PRIORITY_ORDER[a.priority] ?? 3;
     const pb = PRIORITY_ORDER[b.priority] ?? 3;
     return pa - pb;

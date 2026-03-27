@@ -21,7 +21,9 @@ function projectContextBootstrapHandler(context: AgentBootstrapHookContext): voi
   }
 
   const projectName = resolveProjectFromConfig(context);
-  if (!projectName) return;
+  if (!projectName) {
+    return;
+  }
 
   const projectMdPath = path.join(os.homedir(), ".openclaw", "projects", projectName, "PROJECT.md");
 
@@ -44,16 +46,22 @@ function projectContextBootstrapHandler(context: AgentBootstrapHookContext): voi
  */
 function resolveProjectFromConfig(context: AgentBootstrapHookContext): string | undefined {
   const cfg = context.cfg;
-  if (!cfg) return undefined;
+  if (!cfg) {
+    return undefined;
+  }
 
   // Access agents.list to find the agent's config entry
   const agentsList = (cfg as Record<string, unknown>).agents as
     | { list?: Array<Record<string, unknown>> }
     | undefined;
-  if (!agentsList?.list) return undefined;
+  if (!agentsList?.list) {
+    return undefined;
+  }
 
   const agentId = context.agentId;
-  if (!agentId) return undefined;
+  if (!agentId) {
+    return undefined;
+  }
 
   const agentEntry = agentsList.list.find((a) => a.id === agentId);
   if (agentEntry?.project && typeof agentEntry.project === "string") {

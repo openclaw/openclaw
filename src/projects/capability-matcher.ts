@@ -6,8 +6,12 @@
  * Empty agentCaps = cannot claim capability-gated tasks.
  */
 export function matchCapabilities(agentCaps: string[], taskCaps: string[]): boolean {
-	if (taskCaps.length === 0) return true;
-	if (agentCaps.length === 0) return false;
-	const taskSet = new Set(taskCaps);
-	return agentCaps.some((cap) => taskSet.has(cap));
+  if (taskCaps.length === 0) {
+    return true;
+  }
+  if (agentCaps.length === 0) {
+    return false;
+  }
+  const taskSet = new Set(taskCaps);
+  return agentCaps.some((cap) => taskSet.has(cap));
 }

@@ -58,6 +58,7 @@ completed: 2026-03-27
 - **Files modified:** 3
 
 ## Accomplishments
+
 - Integrated pre-heartbeat task scan into runHeartbeatOnce: agents now automatically discover and claim tasks before heartbeat fires
 - Built task prompt helper that injects full task content, checkpoint JSON, and failed approaches into the heartbeat prompt
 - Exported all Phase 6 modules (checkpoint + heartbeat scanner) from projects barrel for downstream consumers
@@ -71,11 +72,13 @@ Each task was committed atomically:
 2. **Task 2: Barrel exports and integration test** - `2b5da27` (feat)
 
 ## Files Created/Modified
+
 - `src/infra/heartbeat-runner.ts` - Added imports, buildTaskPrompt helper, pre-heartbeat scan block, and conditional prompt resolution
 - `src/projects/index.ts` - Added barrel exports for checkpoint and heartbeat-scanner modules
 - `src/projects/heartbeat-scanner.test.ts` - Added integration test for full claim-then-resume flow
 
 ## Decisions Made
+
 - Task scan runs after preflight checks (we know heartbeat will fire) and before prompt building (scan result influences prompt)
 - When a task is claimed or resumed, it fully replaces the normal heartbeat prompt -- no mixing of task context with regular heartbeat
 - Agent capabilities are read from IDENTITY.md in the workspace directory; empty capabilities used if IDENTITY.md is missing
@@ -86,6 +89,7 @@ Each task was committed atomically:
 None - plan executed exactly as written.
 
 ## Issues Encountered
+
 - Wave 1 source files (checkpoint.ts, heartbeat-scanner.ts) were not present in the worktree and had to be checked out from the main branch before integration could proceed
 - Index.ts has type errors for modules from other phases (scaffold, sync-service, etc.) that are not yet merged into this worktree -- these are expected and unrelated to this plan's changes
 
@@ -94,6 +98,7 @@ None - plan executed exactly as written.
 None - no external service configuration required.
 
 ## Next Phase Readiness
+
 - Heartbeat scanner integration complete -- agents can now discover, claim, and resume tasks automatically
 - Ready for gateway CLI commands (Phase 7) and kanban board (Phase 9) to consume the barrel exports
 - All Phase 6 deliverables (checkpoint, scanner, integration) are complete
@@ -103,5 +108,6 @@ None - no external service configuration required.
 All files exist. All commits verified.
 
 ---
-*Phase: 06-queue-heartbeat*
-*Completed: 2026-03-27*
+
+_Phase: 06-queue-heartbeat_
+_Completed: 2026-03-27_

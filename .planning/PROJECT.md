@@ -90,7 +90,7 @@ Agents and humans can seamlessly track, claim, and execute project work through 
 | Markdown + auto-generated JSON                 | Agents write markdown natively; UI reads JSON for speed; single source of truth | — Pending |
 | Projects at `~/.openclaw/projects/`            | Central location alongside existing config; not per-repo                        | — Pending |
 | PROJECT.md (not AGENTS.md) for project context | Avoids collision with industry-standard AGENTS.md in repos; unambiguous         | — Pending |
-| Capability tags over agent name matching       | More flexible; agents can fulfill multiple roles                                | Phase 5  |
+| Capability tags over agent name matching       | More flexible; agents can fulfill multiple roles                                | Phase 5   |
 | File-level .lock for queue writes              | Simple concurrency without database; lock held only during brief write          | — Pending |
 | Configurable columns with defaults             | Projects have different needs; Backlog/In Progress/Review/Done as default       | — Pending |
 | Configurable dashboard widgets                 | No one-size-fits-all; good defaults with per-project override                   | — Pending |

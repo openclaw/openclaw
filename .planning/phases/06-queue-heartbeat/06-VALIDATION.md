@@ -15,13 +15,13 @@ created: 2026-03-27
 
 ## Test Infrastructure
 
-| Property | Value |
-|----------|-------|
-| **Framework** | Vitest (V8 coverage, forks pool) |
-| **Config file** | vitest.config.ts (existing) |
-| **Quick run command** | `pnpm test -- src/projects/heartbeat-scanner.test.ts` |
+| Property               | Value                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------- |
+| **Framework**          | Vitest (V8 coverage, forks pool)                                                      |
+| **Config file**        | vitest.config.ts (existing)                                                           |
+| **Quick run command**  | `pnpm test -- src/projects/heartbeat-scanner.test.ts`                                 |
 | **Full suite command** | `pnpm test -- src/projects/heartbeat-scanner.test.ts src/projects/checkpoint.test.ts` |
-| **Estimated runtime** | ~15 seconds |
+| **Estimated runtime**  | ~15 seconds                                                                           |
 
 ---
 
@@ -36,13 +36,13 @@ created: 2026-03-27
 
 ## Per-Task Verification Map
 
-| Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 06-01-01 | 01 | 1 | AGNT-07 | unit | `pnpm test -- src/projects/checkpoint.test.ts` | ❌ W0 | ⬜ pending |
-| 06-02-01 | 02 | 1 | AGNT-05, AGNT-06, AGNT-08, AGNT-09 | unit | `pnpm test -- src/projects/heartbeat-scanner.test.ts` | ❌ W0 | ⬜ pending |
-| 06-03-01 | 03 | 2 | AGNT-05 | integration | `pnpm test -- src/projects/heartbeat-scanner.test.ts -t "integration"` | ❌ W0 | ⬜ pending |
+| Task ID  | Plan | Wave | Requirement                        | Test Type   | Automated Command                                                      | File Exists | Status     |
+| -------- | ---- | ---- | ---------------------------------- | ----------- | ---------------------------------------------------------------------- | ----------- | ---------- |
+| 06-01-01 | 01   | 1    | AGNT-07                            | unit        | `pnpm test -- src/projects/checkpoint.test.ts`                         | ❌ W0       | ⬜ pending |
+| 06-02-01 | 02   | 1    | AGNT-05, AGNT-06, AGNT-08, AGNT-09 | unit        | `pnpm test -- src/projects/heartbeat-scanner.test.ts`                  | ❌ W0       | ⬜ pending |
+| 06-03-01 | 03   | 2    | AGNT-05                            | integration | `pnpm test -- src/projects/heartbeat-scanner.test.ts -t "integration"` | ❌ W0       | ⬜ pending |
 
-*Status: ⬜ pending / ✅ green / ❌ red / ⚠️ flaky*
+_Status: ⬜ pending / ✅ green / ❌ red / ⚠️ flaky_
 
 ---
 
@@ -51,13 +51,13 @@ created: 2026-03-27
 - Existing test infrastructure covers all phase requirements (Vitest, forks pool, V8 coverage)
 - No additional framework setup needed
 
-*Existing infrastructure covers all phase requirements.*
+_Existing infrastructure covers all phase requirements._
 
 ---
 
 ## Manual-Only Verifications
 
-*All phase behaviors have automated verification.*
+_All phase behaviors have automated verification._
 
 ---
 

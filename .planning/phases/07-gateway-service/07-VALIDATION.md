@@ -15,13 +15,13 @@ created: 2026-03-27
 
 ## Test Infrastructure
 
-| Property | Value |
-|----------|-------|
-| **Framework** | Vitest with V8 coverage |
-| **Config file** | `vitest.config.ts` |
-| **Quick run command** | `pnpm test -- src/gateway/server-projects.test.ts src/gateway/server-methods/projects.test.ts` |
-| **Full suite command** | `pnpm test` |
-| **Estimated runtime** | ~5 seconds (scoped), ~120 seconds (full) |
+| Property               | Value                                                                                          |
+| ---------------------- | ---------------------------------------------------------------------------------------------- |
+| **Framework**          | Vitest with V8 coverage                                                                        |
+| **Config file**        | `vitest.config.ts`                                                                             |
+| **Quick run command**  | `pnpm test -- src/gateway/server-projects.test.ts src/gateway/server-methods/projects.test.ts` |
+| **Full suite command** | `pnpm test`                                                                                    |
+| **Estimated runtime**  | ~5 seconds (scoped), ~120 seconds (full)                                                       |
 
 ---
 
@@ -36,14 +36,14 @@ created: 2026-03-27
 
 ## Per-Task Verification Map
 
-| Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 07-01-01 | 01 | 1 | GATE-01 | unit | `pnpm test -- src/gateway/server-projects.test.ts` | ❌ W0 | ⬜ pending |
-| 07-01-02 | 01 | 1 | GATE-03 | unit | `pnpm test -- src/gateway/server-projects.test.ts` | ❌ W0 | ⬜ pending |
-| 07-02-01 | 02 | 1 | GATE-02 | unit | `pnpm test -- src/gateway/server-methods/projects.test.ts` | ❌ W0 | ⬜ pending |
-| 07-02-02 | 02 | 1 | GATE-04 | integration | `pnpm test -- src/gateway/method-scopes.test.ts` | ✅ | ⬜ pending |
+| Task ID  | Plan | Wave | Requirement | Test Type   | Automated Command                                          | File Exists | Status     |
+| -------- | ---- | ---- | ----------- | ----------- | ---------------------------------------------------------- | ----------- | ---------- |
+| 07-01-01 | 01   | 1    | GATE-01     | unit        | `pnpm test -- src/gateway/server-projects.test.ts`         | ❌ W0       | ⬜ pending |
+| 07-01-02 | 01   | 1    | GATE-03     | unit        | `pnpm test -- src/gateway/server-projects.test.ts`         | ❌ W0       | ⬜ pending |
+| 07-02-01 | 02   | 1    | GATE-02     | unit        | `pnpm test -- src/gateway/server-methods/projects.test.ts` | ❌ W0       | ⬜ pending |
+| 07-02-02 | 02   | 1    | GATE-04     | integration | `pnpm test -- src/gateway/method-scopes.test.ts`           | ✅          | ⬜ pending |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+_Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
 ---
 

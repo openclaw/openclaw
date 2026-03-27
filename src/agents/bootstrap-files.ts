@@ -90,9 +90,13 @@ function findProjectMdFromCwd(workspaceDir: string): WorkspaceBootstrapFile | nu
     }
 
     // Stop at projects root — don't walk above it (per D-01)
-    if (current === projectsRoot) break;
+    if (current === projectsRoot) {
+      break;
+    }
     const parent = path.dirname(current);
-    if (parent === current) break;
+    if (parent === current) {
+      break;
+    }
     current = parent;
   }
   return null;
