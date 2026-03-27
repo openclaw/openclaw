@@ -5,6 +5,7 @@ export type McpServerConfig = {
   cwd?: string;
   workingDirectory?: string;
   url?: string;
+  connectionTimeoutMs?: number;
   [key: string]: unknown;
 };
 

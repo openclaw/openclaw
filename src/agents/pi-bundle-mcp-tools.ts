@@ -29,8 +29,26 @@ type BundleMcpSession = {
   detachStderr?: () => void;
 };
 
+const DEFAULT_CONNECTION_TIMEOUT_MS = 30_000;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function connectWithTimeout(
+  client: Client,
+  transport: Transport,
+  timeoutMs: number,
+): Promise<void> {
+  return Promise.race([
+    client.connect(transport),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`MCP server connection timed out after ${timeoutMs}ms`)),
+        timeoutMs,
+      ),
+    ),
+  ]);
 }
 
 async function listAllTools(client: Client) {
@@ -138,6 +156,7 @@ function resolveHeaders(headers?: Record<string, string>): Record<string, string
 async function createHttpSession(
   serverName: string,
   config: { url: string; transport: string; headers?: Record<string, string> },
+  timeoutMs: number = DEFAULT_CONNECTION_TIMEOUT_MS,
 ): Promise<{ client: Client; transport: Transport; transportType: BundleMcpTransportType }> {
   const url = new URL(config.url);
   const headers = resolveHeaders(config.headers);
@@ -166,7 +185,7 @@ async function createHttpSession(
     {},
   );
   try {
-    await client.connect(transport);
+    await connectWithTimeout(client, transport, timeoutMs);
   } catch (error) {
     await transport.close().catch(() => {});
     throw error;
@@ -229,10 +248,17 @@ function resolveHttpServerConfig(
       reason: `HTTP MCP server requires explicit transport: "streamable-http" or "sse" (got ${JSON.stringify(transport)})`,
     };
   }
+  let parsed: URL;
   try {
-    new URL(url);
+    parsed = new URL(url);
   } catch {
     return { ok: false, reason: `invalid URL: ${redactUrl(url)}` };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return {
+      ok: false,
+      reason: `URL scheme "${parsed.protocol}" is not supported — only http: and https: are allowed`,
+    };
   }
   const headers = isRecord(rawServer.headers)
     ? Object.fromEntries(
@@ -340,10 +366,16 @@ export async function createBundleMcpToolRuntime(params: {
           );
         }
 
+        const httpTimeoutMs =
+          isRecord(rawServer) && typeof rawServer.connectionTimeoutMs === "number" && rawServer.connectionTimeoutMs > 0
+            ? rawServer.connectionTimeoutMs
+            : DEFAULT_CONNECTION_TIMEOUT_MS;
+
         try {
           const { client, transport, transportType } = await createHttpSession(
-            serverName,
+            safeServerName,
             httpConfig,
+            httpTimeoutMs,
           );
           const session: BundleMcpSession = {
             serverName,
@@ -405,6 +437,11 @@ export async function createBundleMcpToolRuntime(params: {
         },
         {},
       );
+      const stdioTimeoutMs =
+        isRecord(rawServer) && typeof rawServer.connectionTimeoutMs === "number" && rawServer.connectionTimeoutMs > 0
+          ? rawServer.connectionTimeoutMs
+          : DEFAULT_CONNECTION_TIMEOUT_MS;
+
       const session: BundleMcpSession = {
         serverName,
         client,
@@ -414,7 +451,7 @@ export async function createBundleMcpToolRuntime(params: {
       };
 
       try {
-        await client.connect(transport);
+        await connectWithTimeout(client, transport, stdioTimeoutMs);
         const listedTools = await listAllTools(client);
         sessions.push(session);
         registerTools({
