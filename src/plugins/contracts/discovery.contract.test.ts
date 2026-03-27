@@ -142,14 +142,6 @@ describe("provider discovery contract", () => {
         buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
       };
     });
-    vi.doMock("openclaw/plugin-sdk/ollama-setup", async () => {
-      const actual = await vi.importActual<object>("openclaw/plugin-sdk/ollama-setup");
-      return {
-        ...actual,
-        buildOllamaProvider: (...args: unknown[]) => buildOllamaProviderMock(...args),
-      };
-    });
-
     ({ runProviderCatalog } = await import("../provider-discovery.js"));
     const [
       { default: githubCopilotPlugin },
