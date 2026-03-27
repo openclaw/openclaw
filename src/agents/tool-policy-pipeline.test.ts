@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import * as logger from "../logger.js";
 import {
   applyToolPolicyPipeline,
@@ -38,6 +38,10 @@ describe("tool-policy-pipeline", () => {
   beforeEach(() => {
     resetToolPolicyWarningCacheForTest();
     logInfoSpy.mockClear();
+  });
+
+  afterAll(() => {
+    logInfoSpy.mockRestore();
   });
 
   test("strips allowlists that would otherwise disable core tools", () => {
