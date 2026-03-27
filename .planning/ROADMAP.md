@@ -50,10 +50,10 @@
 1. A new project at `~/.openclaw/projects/<name>/` contains PROJECT.md, queue.md, and a tasks/ directory
 2. Sub-project folders can be created one level deep under a parent project with the same internal structure
 3. Creating a new task file auto-assigns a sequential ID (TASK-001, TASK-002, etc.) unique within its project
-   **Plans:** 2 plans
+   **Plans:** 1/2 plans executed
    Plans:
 
-- [ ] 02-01-PLAN.md — Template generation and ProjectManager with create() method
+- [x] 02-01-PLAN.md — Template generation and ProjectManager with create() method
 - [ ] 02-02-PLAN.md — Sub-project creation and sequential task ID generation
       **Estimated complexity**: S
 
@@ -265,7 +265,7 @@ Phase 1 (Types & Schemas)
 | Phase                               | Plans Complete | Status            | Completed  |
 | ----------------------------------- | -------------- | ----------------- | ---------- |
 | 1. Types & Schemas                  | 3/3            | Complete          | 2026-03-26 |
-| 2. File Structure & Scaffolding     | 0/2            | Planning complete | -          |
+| 2. File Structure & Scaffolding     | 1/2 | In Progress|  |
 | 3. Sync Pipeline                    | 0/?            | Not started       | -          |
 | 4. Concurrency                      | 0/?            | Not started       | -          |
 | 5. Context Injection                | 0/?            | Not started       | -          |
