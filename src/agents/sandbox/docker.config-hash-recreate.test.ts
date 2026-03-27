@@ -275,14 +275,14 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(createCall?.args).toContain(`openclaw.configHash=${expectedHash}`);
 
     const bindArgs = collectDockerFlagValues(createCall?.args ?? [], "-v");
-    const workspaceMountIdx = bindArgs.indexOf("/tmp/workspace:/workspace");
+    const workspaceMountIdx = bindArgs.indexOf("/tmp/workspace:/workspace:rw");
     const customMountIdx = bindArgs.indexOf("/tmp/workspace-shared/USER.md:/workspace/USER.md:ro");
     expect(workspaceMountIdx).toBeGreaterThanOrEqual(0);
     expect(customMountIdx).toBeGreaterThan(workspaceMountIdx);
   });
 
   it.each([
-    { workspaceAccess: "rw" as const, expectedMainMount: "/tmp/workspace:/workspace" },
+    { workspaceAccess: "rw" as const, expectedMainMount: "/tmp/workspace:/workspace:rw" },
     { workspaceAccess: "ro" as const, expectedMainMount: "/tmp/workspace:/workspace:ro" },
     { workspaceAccess: "none" as const, expectedMainMount: "/tmp/workspace:/workspace:ro" },
   ])(

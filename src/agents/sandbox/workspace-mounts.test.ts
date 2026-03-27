@@ -3,7 +3,7 @@ import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
 
 describe("appendWorkspaceMountArgs", () => {
   it.each([
-    { access: "rw" as const, expected: "/tmp/workspace:/workspace" },
+    { access: "rw" as const, expected: "/tmp/workspace:/workspace:rw" },
     { access: "ro" as const, expected: "/tmp/workspace:/workspace:ro" },
     { access: "none" as const, expected: "/tmp/workspace:/workspace:ro" },
   ])("sets main mount permissions for workspaceAccess=$access", ({ access, expected }) => {
@@ -44,6 +44,42 @@ describe("appendWorkspaceMountArgs", () => {
     });
 
     const mounts = args.filter((arg) => arg.startsWith("/tmp/"));
-    expect(mounts).toEqual(["/tmp/workspace:/workspace"]);
+    expect(mounts).toEqual(["/tmp/workspace:/workspace:rw"]);
+  });
+
+  it.each([
+    { propagation: "private" as const, expected: "/tmp/workspace:/workspace:rw" },
+    { propagation: "rslave" as const, expected: "/tmp/workspace:/workspace:rw,rslave" },
+    { propagation: "rshared" as const, expected: "/tmp/workspace:/workspace:rw,rshared" },
+  ])(
+    "appends propagation mode to workspace mount for workspaceMountPropagation=$propagation",
+    ({ propagation, expected }) => {
+      const args: string[] = [];
+      appendWorkspaceMountArgs({
+        args,
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/agent-workspace",
+        workdir: "/workspace",
+        workspaceAccess: "rw",
+        workspaceMountPropagation: propagation,
+      });
+
+      expect(args).toContain(expected);
+    },
+  );
+
+  it("does not append propagation to agent workspace mount", () => {
+    const args: string[] = [];
+    appendWorkspaceMountArgs({
+      args,
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/agent-workspace",
+      workdir: "/workspace",
+      workspaceAccess: "rw",
+      workspaceMountPropagation: "rslave",
+    });
+
+    expect(args).toContain("/tmp/workspace:/workspace:rw,rslave");
+    expect(args).toContain("/tmp/agent-workspace:/agent");
   });
 });
