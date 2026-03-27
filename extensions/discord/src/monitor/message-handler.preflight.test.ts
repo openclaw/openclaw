@@ -484,6 +484,7 @@ describe("preflightDiscordMessage", () => {
 
     expect(restGet).toHaveBeenCalledTimes(1);
     expect(result).toBeNull();
+    expect(pluralkitModule.fetchPluralKitMessageInfo).not.toHaveBeenCalled();
   });
 
   it("bypasses mention gating in bound threads for allowed bot senders", async () => {
