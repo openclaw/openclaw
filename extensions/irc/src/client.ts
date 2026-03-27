@@ -304,11 +304,14 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
       // CAP negotiation for draft/multiline
       if (line.command === "CAP" && line.params[1] === "LS") {
+        // params[2] === "*" means more chunks coming; wait for final chunk
+        if (line.params[2] === "*") {
+          continue;
+        }
         const caps = (line.trailing ?? "").toLowerCase();
         if (caps.includes("draft/multiline")) {
           sendRaw(`CAP REQ draft/multiline`);
         } else {
-          capNegotiationComplete = true;
           resolveCapComplete?.();
           sendRaw(`CAP END`);
         }
@@ -321,7 +324,6 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
         if (acked.includes("draft/multiline")) {
           multilineCap = true;
         }
-        capNegotiationComplete = true;
         resolveCapComplete?.();
         sendRaw(`CAP END`);
         continue;
@@ -329,7 +331,6 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
       if (line.command === "CAP" && line.params[1] === "NAK") {
         // Server rejected our CAP request, end negotiation
-        capNegotiationComplete = true;
         resolveCapComplete?.();
         sendRaw(`CAP END`);
         continue;
