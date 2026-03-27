@@ -47,6 +47,11 @@ export async function clearSessionAuthProfileOverride(params: {
   }
 }
 
+export type ResolvedAuthProfile = {
+  authProfileId: string | undefined;
+  authProfileIdSource: "user" | "auto" | undefined;
+};
+
 export async function resolveSessionAuthProfileOverride(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -56,7 +61,14 @@ export async function resolveSessionAuthProfileOverride(params: {
   sessionKey?: string;
   storePath?: string;
   isNewSession: boolean;
-}): Promise<string | undefined> {
+  /** True when images triggered a model switch to imageModel.
+   *  In that case, preserve the saved auth profile even if provider differs. */
+  hasAppliedImageModelOverride?: boolean;
+  /** The agent's default provider. Used to determine if the image model switch
+   *  is a true cross-provider switch (imageProvider !== defaultProvider).
+   *  Only cross-provider switches should skip persistence. */
+  defaultProvider?: string;
+}): Promise<ResolvedAuthProfile> {
   const {
     cfg,
     provider,
@@ -66,9 +78,14 @@ export async function resolveSessionAuthProfileOverride(params: {
     sessionKey,
     storePath,
     isNewSession,
+    hasAppliedImageModelOverride,
+    defaultProvider,
   } = params;
   if (!sessionEntry || !sessionStore || !sessionKey) {
-    return sessionEntry?.authProfileOverride;
+    return {
+      authProfileId: sessionEntry?.authProfileOverride,
+      authProfileIdSource: sessionEntry?.authProfileOverrideSource,
+    };
   }
 
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
@@ -80,18 +97,40 @@ export async function resolveSessionAuthProfileOverride(params: {
     current = undefined;
   }
 
+  // When image model is temporarily switched to a different provider, track
+  // whether we skipped clearing the session due to hasAppliedImageModelOverride.
+  // This is used later to prevent persisting the image provider's profile,
+  // which would overwrite the user's saved text-provider credential.
+  let clearedDueToProviderMismatch = false;
+
   if (current && !isProfileForProvider({ provider, profileId: current, store })) {
-    await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+    // Skip persisting clear when image model is temporarily switched.
+    // The provider mismatch is transient and should not clear saved credentials.
+    // However, we must clear the local variable so subsequent logic picks
+    // a correct profile for the image provider instead of returning the
+    // mismatched text-provider profile via the "user" source early return.
+    if (!hasAppliedImageModelOverride) {
+      await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+    }
+    clearedDueToProviderMismatch = true;
     current = undefined;
   }
 
   if (current && order.length > 0 && !order.includes(current)) {
-    await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+    // The current profile is not in the order (e.g., after auth.order changes).
+    // Skip persisting clear when image model is temporarily switched to a DIFFERENT provider.
+    // However, if the provider is the same, we SHOULD persist the clear/rotation
+    // so the session converges to a valid profile instead of repeating the recovery path.
+    // Only set clearedDueToProviderMismatch when there was an actual provider mismatch
+    // (set in the earlier block), not when the profile just fell out of the order.
+    if (!hasAppliedImageModelOverride || !clearedDueToProviderMismatch) {
+      await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+    }
     current = undefined;
   }
 
   if (order.length === 0) {
-    return undefined;
+    return { authProfileId: undefined, authProfileIdSource: undefined };
   }
 
   const pickFirstAvailable = () =>
@@ -124,8 +163,23 @@ export async function resolveSessionAuthProfileOverride(params: {
         ? "user"
         : undefined);
   if (source === "user" && current && !isNewSession) {
-    return current;
+    return { authProfileId: current, authProfileIdSource: "user" };
   }
+
+  // When image model is temporarily switched to a DIFFERENT provider, we still need
+  // to rotate auth profiles for the image provider, but we should NOT persist the
+  // change to the session since the provider switch is transient.
+  // The current stored profile is for the original provider and should be preserved.
+  // However, if the image provider is the SAME as the original provider, we should
+  // persist normally since there's no transient switch.
+  // Use clearedDueToProviderMismatch to detect when we had a mismatch, since current
+  // is set to undefined in those branches before skipPersist is evaluated.
+  // CRITICAL: Only skip persistence when this is a true cross-provider switch
+  // (imageProvider !== defaultProvider). When the image model is on the same provider
+  // as the default, we should persist clear/rotation so the session converges.
+  const isCrossProviderImageSwitch =
+    hasAppliedImageModelOverride && defaultProvider !== undefined && provider !== defaultProvider;
+  const skipPersist = isCrossProviderImageSwitch && clearedDueToProviderMismatch;
 
   let next = current;
   if (isNewSession) {
@@ -137,8 +191,24 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   if (!next) {
-    return current;
+    return { authProfileId: current, authProfileIdSource: source };
   }
+
+  // Skip persisting auth profile changes when image model is temporarily switched
+  // to a different provider. The current stored profile is for the original provider
+  // and should be preserved for when the session returns to the original provider
+  // after the image turn.
+  // Return source "auto" for the transient profile so downstream run setup treats
+  // it as auto-selected rather than user-locked, enabling normal rotation/cooldown.
+  // Save and restore the original authProfileOverrideSource so the next normal turn
+  // (after the image turn completes) still respects a user-locked profile.
+  if (skipPersist) {
+    const originalSource = sessionEntry.authProfileOverrideSource;
+    const result = { authProfileId: next, authProfileIdSource: "auto" as const };
+    sessionEntry.authProfileOverrideSource = originalSource;
+    return result;
+  }
+
   const shouldPersist =
     next !== sessionEntry.authProfileOverride ||
     sessionEntry.authProfileOverrideSource !== "auto" ||
@@ -158,5 +228,5 @@ export async function resolveSessionAuthProfileOverride(params: {
     }
   }
 
-  return next;
+  return { authProfileId: next, authProfileIdSource: "auto" };
 }

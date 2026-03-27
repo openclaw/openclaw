@@ -130,6 +130,9 @@ type RunPreparedReplyParams = {
   storePath?: string;
   workspaceDir: string;
   abortedLastRun: boolean;
+  /** True when images triggered a model switch to imageModel.
+   *  Used to preserve auth profile overrides during temporary model switches. */
+  hasAppliedImageModelOverride?: boolean;
 };
 
 export async function runPreparedReply(
@@ -179,6 +182,7 @@ export async function runPreparedReply(
     resolvedElevatedLevel,
     execOverrides,
     abortedLastRun,
+    hasAppliedImageModelOverride,
   } = params;
   let currentSystemSent = systemSent;
 
@@ -441,7 +445,15 @@ export async function runPreparedReply(
     const aborted = abortEmbeddedPiRun(activeSessionId ?? preparedSessionState.sessionId);
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
-  let authProfileId = await resolveSessionAuthProfileOverride({
+const queueKey = sessionKey ?? sessionIdFinal;
+  const isActive = isEmbeddedPiRunActive(sessionIdFinal);
+  const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
+  const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
+  const shouldFollowup =
+    resolvedQueue.mode === "followup" ||
+    resolvedQueue.mode === "collect" ||
+    resolvedQueue.mode === "steer-backlog";
+  let authProfileResolved = await resolveSessionAuthProfileOverride({
     cfg,
     provider,
     agentDir,
@@ -450,9 +462,12 @@ export async function runPreparedReply(
     sessionKey,
     storePath,
     isNewSession,
+    hasAppliedImageModelOverride,
+    defaultProvider,
   });
+  let authProfileId = authProfileResolved.authProfileId;
+  let authProfileIdSource = authProfileResolved.authProfileIdSource;
   const { runReplyAgent } = await loadAgentRunnerRuntime();
-  const queueKey = sessionKey ?? sessionIdFinal;
   preparedSessionState = resolvePreparedSessionState();
   const resolveActiveQueueSessionId = () =>
     resolveActiveEmbeddedRunSessionId(sessionKey) ?? preparedSessionState.sessionId;
@@ -468,11 +483,6 @@ export async function runPreparedReply(
     };
   };
   let { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
-  const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
-  const shouldFollowup =
-    resolvedQueue.mode === "followup" ||
-    resolvedQueue.mode === "collect" ||
-    resolvedQueue.mode === "steer-backlog";
   const activeRunQueueAction = resolveActiveRunQueueAction({
     isActive,
     isHeartbeat: opts?.isHeartbeat === true,
@@ -491,7 +501,7 @@ export async function runPreparedReply(
       await waitForEmbeddedPiRunEnd(activeSessionIdBeforeWait);
     }
     preparedSessionState = resolvePreparedSessionState();
-    authProfileId = await resolveSessionAuthProfileOverride({
+    authProfileResolved = await resolveSessionAuthProfileOverride({
       cfg,
       provider,
       agentDir,
@@ -500,7 +510,11 @@ export async function runPreparedReply(
       sessionKey,
       storePath,
       isNewSession,
+      hasAppliedImageModelOverride,
+      defaultProvider,
     });
+    authProfileId = authProfileResolved.authProfileId;
+    authProfileIdSource = authProfileResolved.authProfileIdSource;
     preparedSessionState = resolvePreparedSessionState();
     ({ prefixedCommandBody, queuedBody } = await rebuildPromptBodies());
     ({ activeSessionId, isActive, isStreaming } = resolveQueueBusyState());
@@ -511,7 +525,6 @@ export async function runPreparedReply(
       };
     }
   }
-  const authProfileIdSource = preparedSessionState.sessionEntry?.authProfileOverrideSource;
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
@@ -580,6 +593,9 @@ export async function runPreparedReply(
         modelId: model,
       })
         ? { enforceFinalTag: true }
+        : {}),
+      ...(opts?.modelOverrideFallbacks !== undefined
+        ? { imageModelFallbacks: opts.modelOverrideFallbacks }
         : {}),
     },
   };

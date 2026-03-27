@@ -130,7 +130,10 @@ export function installReplyRuntimeMocks(mocks: ReplyRuntimeMocks) {
 
   vi.mock("../agents/auth-profiles/session-override.js", () => ({
     clearSessionAuthProfileOverride: vi.fn(),
-    resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
+    resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue({
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    }),
   }));
 
   vi.mock("../commands-registry.runtime.js", () => ({
