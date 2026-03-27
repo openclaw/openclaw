@@ -1444,6 +1444,73 @@ describe("listSessionsFromStore search", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  test("keeps the selected override model when runtime identity was intentionally cleared", () => {
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-session-utils-cleared-runtime-model-"),
+    );
+    const storePath = path.join(tmpDir, "sessions.json");
+    const now = Date.now();
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        list: [{ id: "main", default: true }],
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    fs.writeFileSync(
+      path.join(tmpDir, "sess-override.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-override" }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: 2_000,
+              output: 500,
+              cacheRead: 1_200,
+              cost: { total: 0.007725 },
+            },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const result = listSessionsFromStore({
+        cfg,
+        storePath,
+        store: {
+          "agent:main:main": {
+            sessionId: "sess-override",
+            updatedAt: now,
+            providerOverride: "openai",
+            modelOverride: "gpt-5.4",
+            totalTokens: 0,
+            totalTokensFresh: false,
+          } as SessionEntry,
+        },
+        opts: {},
+      });
+
+      expect(result.sessions[0]).toMatchObject({
+        key: "agent:main:main",
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        totalTokens: 3_200,
+        totalTokensFresh: true,
+      });
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("listSessionsFromStore subagent metadata", () => {
