@@ -26,8 +26,8 @@ import {
 import { createTelegramThreadBindingManager } from "../../../plugin-sdk/telegram-runtime.js";
 import {
   bundledChannelPlugins,
-  bundledChannelRuntimeSetters,
   requireBundledChannelPlugin,
+  setBundledChannelRuntime,
 } from "../bundled.js";
 import type { ChannelPlugin } from "../types.js";
 import {
@@ -177,7 +177,7 @@ const sendMessageMatrixMock = vi.hoisted(() =>
   })),
 );
 
-bundledChannelRuntimeSetters.setTelegramRuntime({
+setBundledChannelRuntime("telegram", {
   channel: {
     telegram: {
       messageActions: {
@@ -187,7 +187,7 @@ bundledChannelRuntimeSetters.setTelegramRuntime({
   },
 } as never);
 
-bundledChannelRuntimeSetters.setDiscordRuntime({
+setBundledChannelRuntime("discord", {
   channel: {
     discord: {
       messageActions: {
@@ -197,7 +197,7 @@ bundledChannelRuntimeSetters.setDiscordRuntime({
   },
 } as never);
 
-bundledChannelRuntimeSetters.setLineRuntime({
+setBundledChannelRuntime("line", {
   channel: {
     line: {
       listLineAccountIds,
