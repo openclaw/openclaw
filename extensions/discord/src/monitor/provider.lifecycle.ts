@@ -83,9 +83,13 @@ export async function runDiscordGatewayLifecycle(params: {
         return "continue";
       }
       // Don't throw for expected shutdown events. `reconnect-exhausted` can be
-      // queued before teardown flips `lifecycleStopping`, so treat it as a
-      // graceful stop here and let the health monitor own reconnect behavior.
-      if (event.type === "disallowed-intents" || event.type === "reconnect-exhausted") {
+      // queued just before an abort-driven shutdown flips `lifecycleStopping`,
+      // so only suppress it when shutdown is already underway.
+      if (
+        event.type === "disallowed-intents" ||
+        (event.type === "reconnect-exhausted" &&
+          (lifecycleStopping || params.abortSignal?.aborted === true))
+      ) {
         return "stop";
       }
       throw event.err;
