@@ -3,7 +3,10 @@ export async function createConfiguredBindingConversationRuntimeModuleMock(
     ensureConfiguredBindingRouteReadyMock: (...args: unknown[]) => unknown;
     resolveConfiguredBindingRouteMock: (...args: unknown[]) => unknown;
   },
-  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/conversation-runtime")>,
+  importOriginal: () => Promise<{
+    ensureConfiguredBindingRouteReady: (...args: unknown[]) => unknown;
+    resolveConfiguredBindingRoute: (...args: unknown[]) => unknown;
+  }>,
 ) {
   const actual = await importOriginal();
   return {

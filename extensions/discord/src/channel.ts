@@ -17,13 +17,7 @@ import {
   createRuntimeOutboundDelegates,
   resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/infra-runtime";
-import {
-  buildOutboundBaseSessionKey,
-  normalizeMessageChannel,
-  normalizeOutboundThreadId,
-  resolveThreadSessionKeys,
-  type RoutePeer,
-} from "openclaw/plugin-sdk/routing";
+import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -51,7 +45,8 @@ import {
   normalizeDiscordMessagingTarget,
   normalizeDiscordOutboundTarget,
 } from "./normalize.js";
-import { probeDiscord, type DiscordProbe } from "./probe.js";
+import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
+import type { DiscordProbe } from "./probe.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import {
   buildTokenChannelStatusSummary,
@@ -79,10 +74,16 @@ type DiscordSendFn = ReturnType<
 let discordProviderRuntimePromise:
   | Promise<typeof import("./monitor/provider.runtime.js")>
   | undefined;
+let discordProbeRuntimePromise: Promise<typeof import("./probe.runtime.js")> | undefined;
 
 async function loadDiscordProviderRuntime() {
   discordProviderRuntimePromise ??= import("./monitor/provider.runtime.js");
   return await discordProviderRuntimePromise;
+}
+
+async function loadDiscordProbeRuntime() {
+  discordProbeRuntimePromise ??= import("./probe.runtime.js");
+  return await discordProbeRuntimePromise;
 }
 
 const meta = getChatChannelMeta("discord");
@@ -234,81 +235,6 @@ function parseDiscordExplicitTarget(raw: string) {
   }
 }
 
-function buildDiscordBaseSessionKey(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  accountId?: string | null;
-  peer: RoutePeer;
-}) {
-  return buildOutboundBaseSessionKey({ ...params, channel: "discord" });
-}
-
-function resolveDiscordOutboundTargetKindHint(params: {
-  target: string;
-  resolvedTarget?: { kind: string };
-}): "user" | "channel" | undefined {
-  const resolvedKind = params.resolvedTarget?.kind;
-  if (resolvedKind === "user") {
-    return "user";
-  }
-  if (resolvedKind === "group" || resolvedKind === "channel") {
-    return "channel";
-  }
-
-  const target = params.target.trim();
-  if (/^channel:/i.test(target)) {
-    return "channel";
-  }
-  if (/^(user:|discord:|@|<@!?)/i.test(target)) {
-    return "user";
-  }
-  return undefined;
-}
-
-function resolveDiscordOutboundSessionRoute(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  accountId?: string | null;
-  target: string;
-  resolvedTarget?: { kind: string };
-  replyToId?: string | null;
-  threadId?: string | number | null;
-}) {
-  const parsed = parseDiscordTarget(params.target, {
-    defaultKind: resolveDiscordOutboundTargetKindHint(params),
-  });
-  if (!parsed) {
-    return null;
-  }
-  const isDm = parsed.kind === "user";
-  const peer: RoutePeer = {
-    kind: isDm ? "direct" : "channel",
-    id: parsed.id,
-  };
-  const baseSessionKey = buildDiscordBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    accountId: params.accountId,
-    peer,
-  });
-  const explicitThreadId = normalizeOutboundThreadId(params.threadId);
-  const threadCandidate = explicitThreadId ?? normalizeOutboundThreadId(params.replyToId);
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey,
-    threadId: threadCandidate,
-    useSuffix: false,
-  });
-  return {
-    sessionKey: threadKeys.sessionKey,
-    baseSessionKey,
-    peer,
-    chatType: isDm ? ("direct" as const) : ("channel" as const),
-    from: isDm ? `discord:${parsed.id}` : `discord:channel:${parsed.id}`,
-    to: isDm ? `user:${parsed.id}` : `channel:${parsed.id}`,
-    threadId: explicitThreadId ?? undefined,
-  };
-}
-
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> =
   createChatChannelPlugin<ResolvedDiscordAccount, DiscordProbe>({
     base: {
@@ -444,7 +370,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         buildChannelSummary: ({ snapshot }) =>
           buildTokenChannelStatusSummary(snapshot, { includeMode: false }),
         probeAccount: async ({ account, timeoutMs }) =>
-          probeDiscord(account.token, timeoutMs, {
+          (await loadDiscordProbeRuntime()).probeDiscord(account.token, timeoutMs, {
             includeApplication: true,
           }),
         formatCapabilitiesProbe: ({ probe }) => {
@@ -590,7 +516,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           const token = account.token.trim();
           let discordBotLabel = "";
           try {
-            const probe = await probeDiscord(token, 2500, {
+            const probe = await (
+              await loadDiscordProbeRuntime()
+            ).probeDiscord(token, 2500, {
               includeApplication: true,
             });
             const username = probe.ok ? probe.bot?.username?.trim() : null;

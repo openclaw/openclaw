@@ -3,7 +3,6 @@ import type { IncomingMessage } from "node:http";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   buildAllowedModelSet,
-  isCliProvider,
   modelKey,
   parseModelRef,
   resolveDefaultModelForAgent,
@@ -103,11 +102,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
     agentId: params.agentId,
   });
   const normalized = modelKey(parsed.provider, parsed.model);
-  if (
-    !isCliProvider(parsed.provider, cfg) &&
-    !allowed.allowAny &&
-    !allowed.allowedKeys.has(normalized)
-  ) {
+  if (!allowed.allowAny && !allowed.allowedKeys.has(normalized)) {
     return {
       errorMessage: `Model '${normalized}' is not allowed for agent '${params.agentId}'.`,
     };

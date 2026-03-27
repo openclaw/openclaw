@@ -55,9 +55,7 @@ function renderSessionSummary(
 ) {
   const usage = filteredUsage || session.usage;
   if (!usage) {
-    return html`
-      <div class="usage-empty-block">${t("usage.details.noUsageData")}</div>
-    `;
+    return html` <div class="usage-empty-block">${t("usage.details.noUsageData")}</div> `;
   }
 
   const formatTs = (ts?: number): string =>
@@ -116,7 +114,13 @@ function renderSessionSummary(
     })) ?? [];
 
   return html`
-    ${badges.length > 0 ? html`<div class="usage-badges">${badges.map((b) => html`<span class="usage-badge">${b}</span>`)}</div>` : nothing}
+    ${
+      badges.length > 0
+        ? html`<div class="usage-badges">
+          ${badges.map((b) => html`<span class="usage-badge">${b}</span>`)}
+        </div>`
+        : nothing
+    }
     <div class="session-summary-grid">
       <div class="stat session-summary-card">
         <div class="session-summary-title">${t("usage.overview.messages")}</div>
@@ -141,9 +145,14 @@ function renderSessionSummary(
       <div class="stat session-summary-card">
         <div class="session-summary-title">${t("usage.details.duration")}</div>
         <div class="stat-value session-summary-value">
-          ${formatDurationCompact(usage.durationMs, { spaced: true }) ?? t("usage.common.emptyValue")}
+          ${
+            formatDurationCompact(usage.durationMs, { spaced: true }) ??
+            t("usage.common.emptyValue")
+          }
         </div>
-        <div class="session-summary-meta">${formatTs(usage.firstActivity)} → ${formatTs(usage.lastActivity)}</div>
+        <div class="session-summary-meta">
+          ${formatTs(usage.firstActivity)} → ${formatTs(usage.lastActivity)}
+        </div>
       </div>
     </div>
     <div class="usage-insights-grid usage-insights-grid--tight">
@@ -277,9 +286,13 @@ function renderSessionDetailPanel(
           ${
             usage
               ? html`
-            <span><strong>${formatTokens(headerStats.totalTokens)}</strong> ${t("usage.metrics.tokens").toLowerCase()}${cursorIndicator}</span>
-            <span><strong>${formatCost(headerStats.totalCost)}</strong>${cursorIndicator}</span>
-          `
+                <span
+                  ><strong>${formatTokens(headerStats.totalTokens)}</strong> ${t(
+                    "usage.metrics.tokens",
+                  ).toLowerCase()}${cursorIndicator}</span
+                >
+                <span><strong>${formatCost(headerStats.totalCost)}</strong>${cursorIndicator}</span>
+              `
               : nothing
           }
         </div>
@@ -331,7 +344,12 @@ function renderSessionDetailPanel(
             hasRange ? timeSeriesCursorStart : null,
             hasRange ? timeSeriesCursorEnd : null,
           )}
-          ${renderContextPanel(session.contextWeight, usage, contextExpanded, onToggleContextExpanded)}
+          ${renderContextPanel(
+            session.contextWeight,
+            usage,
+            contextExpanded,
+            onToggleContextExpanded,
+          )}
         </div>
       </div>
     </div>
@@ -473,12 +491,15 @@ function renderTimeSeriesCompact(
           ${
             hasSelection
               ? html`
-            <div class="chart-toggle small">
-              <button class="btn btn--sm toggle-btn active" @click=${() => onCursorRangeChange?.(null, null)}>
-                ${t("usage.details.reset")}
-              </button>
-            </div>
-          `
+                <div class="chart-toggle small">
+                  <button
+                    class="btn btn--sm toggle-btn active"
+                    @click=${() => onCursorRangeChange?.(null, null)}
+                  >
+                    ${t("usage.details.reset")}
+                  </button>
+                </div>
+              `
               : nothing
           }
           <div class="chart-toggle small">
@@ -498,37 +519,60 @@ function renderTimeSeriesCompact(
           ${
             !isCumulative
               ? html`
-                  <div class="chart-toggle small">
-                    <button
-                      class="btn btn--sm toggle-btn ${breakdownMode === "total" ? "active" : ""}"
-                      @click=${() => onBreakdownChange("total")}
-                    >
-                      ${t("usage.daily.total")}
-                    </button>
-                    <button
-                      class="btn btn--sm toggle-btn ${breakdownMode === "by-type" ? "active" : ""}"
-                      @click=${() => onBreakdownChange("by-type")}
-                    >
-                      ${t("usage.daily.byType")}
-                    </button>
-                  </div>
-                `
+                <div class="chart-toggle small">
+                  <button
+                    class="btn btn--sm toggle-btn ${breakdownMode === "total" ? "active" : ""}"
+                    @click=${() => onBreakdownChange("total")}
+                  >
+                    ${t("usage.daily.total")}
+                  </button>
+                  <button
+                    class="btn btn--sm toggle-btn ${breakdownMode === "by-type" ? "active" : ""}"
+                    @click=${() => onBreakdownChange("by-type")}
+                  >
+                    ${t("usage.daily.byType")}
+                  </button>
+                </div>
+              `
               : nothing
           }
         </div>
       </div>
       <div class="timeseries-chart-wrapper">
-        <svg 
-          viewBox="0 0 ${width} ${height + 18}" 
-          class="timeseries-svg"
-        >
+        <svg viewBox="0 0 ${width} ${height + 18}" class="timeseries-svg">
           <!-- Y axis -->
-          <line x1="${padding.left}" y1="${padding.top}" x2="${padding.left}" y2="${padding.top + chartHeight}" stroke="var(--border)" />
+          <line
+            x1="${padding.left}"
+            y1="${padding.top}"
+            x2="${padding.left}"
+            y2="${padding.top + chartHeight}"
+            stroke="var(--border)"
+          />
           <!-- X axis -->
-          <line x1="${padding.left}" y1="${padding.top + chartHeight}" x2="${width - padding.right}" y2="${padding.top + chartHeight}" stroke="var(--border)" />
+          <line
+            x1="${padding.left}"
+            y1="${padding.top + chartHeight}"
+            x2="${width - padding.right}"
+            y2="${padding.top + chartHeight}"
+            stroke="var(--border)"
+          />
           <!-- Y axis labels -->
-          <text x="${padding.left - 4}" y="${padding.top + 5}" text-anchor="end" class="ts-axis-label">${formatTokens(maxValue)}</text>
-          <text x="${padding.left - 4}" y="${padding.top + chartHeight}" text-anchor="end" class="ts-axis-label">0</text>
+          <text
+            x="${padding.left - 4}"
+            y="${padding.top + 5}"
+            text-anchor="end"
+            class="ts-axis-label"
+          >
+            ${formatTokens(maxValue)}
+          </text>
+          <text
+            x="${padding.left - 4}"
+            y="${padding.top + chartHeight}"
+            text-anchor="end"
+            class="ts-axis-label"
+          >
+            0
+          </text>
           <!-- X axis labels (first and last) -->
           ${
             points.length > 0
@@ -677,12 +721,16 @@ function renderTimeSeriesCompact(
           };
 
           return html`
-            <div class="chart-handle-zone chart-handle-left" 
-                 style="left: ${leftHandlePos};"
-                 @mousedown=${makeDragHandler("left")}></div>
-            <div class="chart-handle-zone chart-handle-right" 
-                 style="left: ${rightHandlePos};"
-                 @mousedown=${makeDragHandler("right")}></div>
+            <div
+              class="chart-handle-zone chart-handle-left"
+              style="left: ${leftHandlePos};"
+              @mousedown=${makeDragHandler("left")}
+            ></div>
+            <div
+              class="chart-handle-zone chart-handle-right"
+              style="left: ${rightHandlePos};"
+              @mousedown=${makeDragHandler("right")}
+            ></div>
           `;
         })()}
       </div>
@@ -696,44 +744,71 @@ function renderTimeSeriesCompact(
                   end: String(rangeEndIdx),
                   total: String(points.length),
                 })}
-              </span> ·
-              ${new Date(rangeStartTs).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}–${new Date(rangeEndTs).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })} · 
-              ${formatTokens(filteredOutput + filteredInput + filteredCacheRead + filteredCacheWrite)} · 
-              ${formatCost(filteredPoints.reduce((s, p) => s + (p.cost || 0), 0))}
+              </span>
+              ·
+              ${new Date(rangeStartTs).toLocaleTimeString(undefined, {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}–${new Date(rangeEndTs).toLocaleTimeString(undefined, {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+              ·
+              ${formatTokens(
+                filteredOutput + filteredInput + filteredCacheRead + filteredCacheWrite,
+              )}
+              · ${formatCost(filteredPoints.reduce((s, p) => s + (p.cost || 0), 0))}
             `
-            : html`${points.length} ${t("usage.overview.messagesAbbrev")} · ${formatTokens(cumTokens)} · ${formatCost(cumCost)}`
+            : html`${points.length} ${t("usage.overview.messagesAbbrev")} · ${formatTokens(cumTokens)}
+            · ${formatCost(cumCost)}`
         }
       </div>
       ${
         breakdownByType
           ? html`
-              <div class="timeseries-breakdown">
-                <div class="card-title usage-section-title">${t("usage.breakdown.tokensByType")}</div>
-                <div class="cost-breakdown-bar cost-breakdown-bar--compact">
-                  <div class="cost-segment output" style="width: ${pct(filteredOutput, totalTypeTokens).toFixed(1)}%"></div>
-                  <div class="cost-segment input" style="width: ${pct(filteredInput, totalTypeTokens).toFixed(1)}%"></div>
-                  <div class="cost-segment cache-write" style="width: ${pct(filteredCacheWrite, totalTypeTokens).toFixed(1)}%"></div>
-                  <div class="cost-segment cache-read" style="width: ${pct(filteredCacheRead, totalTypeTokens).toFixed(1)}%"></div>
+            <div class="timeseries-breakdown">
+              <div class="card-title usage-section-title">${t("usage.breakdown.tokensByType")}</div>
+              <div class="cost-breakdown-bar cost-breakdown-bar--compact">
+                <div
+                  class="cost-segment output"
+                  style="width: ${pct(filteredOutput, totalTypeTokens).toFixed(1)}%"
+                ></div>
+                <div
+                  class="cost-segment input"
+                  style="width: ${pct(filteredInput, totalTypeTokens).toFixed(1)}%"
+                ></div>
+                <div
+                  class="cost-segment cache-write"
+                  style="width: ${pct(filteredCacheWrite, totalTypeTokens).toFixed(1)}%"
+                ></div>
+                <div
+                  class="cost-segment cache-read"
+                  style="width: ${pct(filteredCacheRead, totalTypeTokens).toFixed(1)}%"
+                ></div>
+              </div>
+              <div class="cost-breakdown-legend">
+                <div class="legend-item" title=${t("usage.details.assistantOutputTokens")}>
+                  <span class="legend-dot output"></span>${t("usage.breakdown.output")}
+                  ${formatTokens(filteredOutput)}
                 </div>
-                <div class="cost-breakdown-legend">
-                  <div class="legend-item" title=${t("usage.details.assistantOutputTokens")}>
-                    <span class="legend-dot output"></span>${t("usage.breakdown.output")} ${formatTokens(filteredOutput)}
-                  </div>
-                  <div class="legend-item" title=${t("usage.details.userToolInputTokens")}>
-                    <span class="legend-dot input"></span>${t("usage.breakdown.input")} ${formatTokens(filteredInput)}
-                  </div>
-                  <div class="legend-item" title=${t("usage.details.tokensWrittenToCache")}>
-                    <span class="legend-dot cache-write"></span>${t("usage.breakdown.cacheWrite")} ${formatTokens(filteredCacheWrite)}
-                  </div>
-                  <div class="legend-item" title=${t("usage.details.tokensReadFromCache")}>
-                    <span class="legend-dot cache-read"></span>${t("usage.breakdown.cacheRead")} ${formatTokens(filteredCacheRead)}
-                  </div>
+                <div class="legend-item" title=${t("usage.details.userToolInputTokens")}>
+                  <span class="legend-dot input"></span>${t("usage.breakdown.input")}
+                  ${formatTokens(filteredInput)}
                 </div>
-                <div class="cost-breakdown-total">
-                  ${t("usage.breakdown.total")}: ${formatTokens(totalTypeTokens)}
+                <div class="legend-item" title=${t("usage.details.tokensWrittenToCache")}>
+                  <span class="legend-dot cache-write"></span>${t("usage.breakdown.cacheWrite")}
+                  ${formatTokens(filteredCacheWrite)}
+                </div>
+                <div class="legend-item" title=${t("usage.details.tokensReadFromCache")}>
+                  <span class="legend-dot cache-read"></span>${t("usage.breakdown.cacheRead")}
+                  ${formatTokens(filteredCacheRead)}
                 </div>
               </div>
-            `
+              <div class="cost-breakdown-total">
+                ${t("usage.breakdown.total")}: ${formatTokens(totalTypeTokens)}
+              </div>
+            </div>
+          `
           : nothing
       }
     </div>
@@ -791,62 +866,92 @@ function renderContextPanel(
   return html`
     <div class="context-details-panel">
       <div class="context-breakdown-header">
-        <div class="card-title usage-section-title">${t("usage.details.systemPromptBreakdown")}</div>
+        <div class="card-title usage-section-title">
+          ${t("usage.details.systemPromptBreakdown")}
+        </div>
         ${
           hasMore
             ? html`<button class="btn btn--sm" @click=${onToggleExpanded}>
-                ${showAll ? t("usage.details.collapse") : t("usage.details.expandAll")}
-              </button>`
+              ${showAll ? t("usage.details.collapse") : t("usage.details.expandAll")}
+            </button>`
             : nothing
         }
       </div>
-      <p class="context-weight-desc">
-        ${contextPct || t("usage.details.baseContextPerMessage")}
-      </p>
+      <p class="context-weight-desc">${contextPct || t("usage.details.baseContextPerMessage")}</p>
       <div class="context-stacked-bar">
-        <div class="context-segment system" style="width: ${pct(systemTokens, totalContextTokens).toFixed(1)}%" title="${t("usage.details.system")}: ~${formatTokens(systemTokens)}"></div>
-        <div class="context-segment skills" style="width: ${pct(skillsTokens, totalContextTokens).toFixed(1)}%" title="${t("usage.details.skills")}: ~${formatTokens(skillsTokens)}"></div>
-        <div class="context-segment tools" style="width: ${pct(toolsTokens, totalContextTokens).toFixed(1)}%" title="${t("usage.details.tools")}: ~${formatTokens(toolsTokens)}"></div>
-        <div class="context-segment files" style="width: ${pct(filesTokens, totalContextTokens).toFixed(1)}%" title="${t("usage.details.files")}: ~${formatTokens(filesTokens)}"></div>
+        <div
+          class="context-segment system"
+          style="width: ${pct(systemTokens, totalContextTokens).toFixed(1)}%"
+          title="${t("usage.details.system")}: ~${formatTokens(systemTokens)}"
+        ></div>
+        <div
+          class="context-segment skills"
+          style="width: ${pct(skillsTokens, totalContextTokens).toFixed(1)}%"
+          title="${t("usage.details.skills")}: ~${formatTokens(skillsTokens)}"
+        ></div>
+        <div
+          class="context-segment tools"
+          style="width: ${pct(toolsTokens, totalContextTokens).toFixed(1)}%"
+          title="${t("usage.details.tools")}: ~${formatTokens(toolsTokens)}"
+        ></div>
+        <div
+          class="context-segment files"
+          style="width: ${pct(filesTokens, totalContextTokens).toFixed(1)}%"
+          title="${t("usage.details.files")}: ~${formatTokens(filesTokens)}"
+        ></div>
       </div>
       <div class="context-legend">
-        <span class="legend-item"><span class="legend-dot system"></span>${t("usage.details.systemShort")} ~${formatTokens(systemTokens)}</span>
-        <span class="legend-item"><span class="legend-dot skills"></span>${t("usage.details.skills")} ~${formatTokens(skillsTokens)}</span>
-        <span class="legend-item"><span class="legend-dot tools"></span>${t("usage.details.tools")} ~${formatTokens(toolsTokens)}</span>
-        <span class="legend-item"><span class="legend-dot files"></span>${t("usage.details.files")} ~${formatTokens(filesTokens)}</span>
+        <span class="legend-item"
+          ><span class="legend-dot system"></span>${t("usage.details.systemShort")}
+          ~${formatTokens(systemTokens)}</span
+        >
+        <span class="legend-item"
+          ><span class="legend-dot skills"></span>${t("usage.details.skills")}
+          ~${formatTokens(skillsTokens)}</span
+        >
+        <span class="legend-item"
+          ><span class="legend-dot tools"></span>${t("usage.details.tools")}
+          ~${formatTokens(toolsTokens)}</span
+        >
+        <span class="legend-item"
+          ><span class="legend-dot files"></span>${t("usage.details.files")}
+          ~${formatTokens(filesTokens)}</span
+        >
       </div>
-      <div class="context-total">${t("usage.breakdown.total")}: ~${formatTokens(totalContextTokens)}</div>
+      <div class="context-total">
+        ${t("usage.breakdown.total")}: ~${formatTokens(totalContextTokens)}
+      </div>
       <div class="context-breakdown-grid">
         ${
           skillsList.length > 0
             ? (() => {
                 const more = skillsList.length - skillsTop.length;
                 return html`
-                  <div class="context-breakdown-card">
-                    <div class="context-breakdown-title">
-                      ${t("usage.details.skills")} (${skillsList.length})
-                    </div>
-                    <div class="context-breakdown-list">
-                      ${skillsTop.map(
-                        (s) => html`
-                          <div class="context-breakdown-item">
-                            <span class="mono">${s.name}</span>
-                            <span class="muted">~${formatTokens(charsToTokens(s.blockChars))}</span>
-                          </div>
-                        `,
-                      )}
-                    </div>
-                    ${
-                      more > 0
-                        ? html`
-                            <div class="context-breakdown-more">
-                              ${t("usage.sessions.more", { count: String(more) })}
-                            </div>
-                          `
-                        : nothing
-                    }
+                <div class="context-breakdown-card">
+                  <div class="context-breakdown-title">
+                    ${t("usage.details.skills")} (${skillsList.length})
                   </div>
-                `;
+                  <div class="context-breakdown-list">
+                    ${skillsTop.map(
+                      (s) => html`
+                        <div class="context-breakdown-item">
+                          <span class="mono">${s.name}</span>
+                          <span class="muted">~${formatTokens(charsToTokens(s.blockChars))}</span>
+                        </div>
+                      `,
+                    )}
+                  </div>
+                  ${
+                    more > 0
+                      ? html`
+                        <div class="context-breakdown-more">
+                          ${t("usage.sessions.more", { count: String(more) })}
+                        </div>
+                      `
+                      : nothing
+                  }
+                </div>
+              `;
               })()
             : nothing
         }
@@ -855,31 +960,33 @@ function renderContextPanel(
             ? (() => {
                 const more = toolsList.length - toolsTop.length;
                 return html`
-                  <div class="context-breakdown-card">
-                    <div class="context-breakdown-title">
-                      ${t("usage.details.tools")} (${toolsList.length})
-                    </div>
-                    <div class="context-breakdown-list">
-                      ${toolsTop.map(
-                        (t) => html`
-                          <div class="context-breakdown-item">
-                            <span class="mono">${t.name}</span>
-                            <span class="muted">~${formatTokens(charsToTokens(t.summaryChars + t.schemaChars))}</span>
-                          </div>
-                        `,
-                      )}
-                    </div>
-                    ${
-                      more > 0
-                        ? html`
-                            <div class="context-breakdown-more">
-                              ${t("usage.sessions.more", { count: String(more) })}
-                            </div>
-                          `
-                        : nothing
-                    }
+                <div class="context-breakdown-card">
+                  <div class="context-breakdown-title">
+                    ${t("usage.details.tools")} (${toolsList.length})
                   </div>
-                `;
+                  <div class="context-breakdown-list">
+                    ${toolsTop.map(
+                      (t) => html`
+                        <div class="context-breakdown-item">
+                          <span class="mono">${t.name}</span>
+                          <span class="muted"
+                            >~${formatTokens(charsToTokens(t.summaryChars + t.schemaChars))}</span
+                          >
+                        </div>
+                      `,
+                    )}
+                  </div>
+                  ${
+                    more > 0
+                      ? html`
+                        <div class="context-breakdown-more">
+                          ${t("usage.sessions.more", { count: String(more) })}
+                        </div>
+                      `
+                      : nothing
+                  }
+                </div>
+              `;
               })()
             : nothing
         }
@@ -888,31 +995,33 @@ function renderContextPanel(
             ? (() => {
                 const more = filesList.length - filesTop.length;
                 return html`
-                  <div class="context-breakdown-card">
-                    <div class="context-breakdown-title">
-                      ${t("usage.details.files")} (${filesList.length})
-                    </div>
-                    <div class="context-breakdown-list">
-                      ${filesTop.map(
-                        (f) => html`
-                          <div class="context-breakdown-item">
-                            <span class="mono">${f.name}</span>
-                            <span class="muted">~${formatTokens(charsToTokens(f.injectedChars))}</span>
-                          </div>
-                        `,
-                      )}
-                    </div>
-                    ${
-                      more > 0
-                        ? html`
-                            <div class="context-breakdown-more">
-                              ${t("usage.sessions.more", { count: String(more) })}
-                            </div>
-                          `
-                        : nothing
-                    }
+                <div class="context-breakdown-card">
+                  <div class="context-breakdown-title">
+                    ${t("usage.details.files")} (${filesList.length})
                   </div>
-                `;
+                  <div class="context-breakdown-list">
+                    ${filesTop.map(
+                      (f) => html`
+                        <div class="context-breakdown-item">
+                          <span class="mono">${f.name}</span>
+                          <span class="muted"
+                            >~${formatTokens(charsToTokens(f.injectedChars))}</span
+                          >
+                        </div>
+                      `,
+                    )}
+                  </div>
+                  ${
+                    more > 0
+                      ? html`
+                        <div class="context-breakdown-more">
+                          ${t("usage.sessions.more", { count: String(more) })}
+                        </div>
+                      `
+                      : nothing
+                  }
+                </div>
+              `;
               })()
             : nothing
         }
@@ -1035,10 +1144,18 @@ function renderSessionLogsCompact(
               ),
             )}
         >
-          <option value="user" ?selected=${roleSelected.has("user")}>${t("usage.overview.user")}</option>
-          <option value="assistant" ?selected=${roleSelected.has("assistant")}>${t("usage.overview.assistant")}</option>
-          <option value="tool" ?selected=${roleSelected.has("tool")}>${t("usage.details.tool")}</option>
-          <option value="toolResult" ?selected=${roleSelected.has("toolResult")}>${t("usage.details.toolResult")}</option>
+          <option value="user" ?selected=${roleSelected.has("user")}>
+            ${t("usage.overview.user")}
+          </option>
+          <option value="assistant" ?selected=${roleSelected.has("assistant")}>
+            ${t("usage.overview.assistant")}
+          </option>
+          <option value="tool" ?selected=${roleSelected.has("tool")}>
+            ${t("usage.details.tool")}
+          </option>
+          <option value="toolResult" ?selected=${roleSelected.has("toolResult")}>
+            ${t("usage.details.toolResult")}
+          </option>
         </select>
         <select
           multiple
@@ -1072,9 +1189,7 @@ function renderSessionLogsCompact(
           .value=${filters.query}
           @input=${(event: Event) => onFilterQueryChange((event.target as HTMLInputElement).value)}
         />
-        <button class="btn btn--sm" @click=${onFilterClear}>
-          ${t("usage.filters.clear")}
-        </button>
+        <button class="btn btn--sm" @click=${onFilterClear}>${t("usage.filters.clear")}</button>
       </div>
       <div class="session-logs-list">
         ${filteredEntries.map((entry) => {
@@ -1087,16 +1202,16 @@ function renderSessionLogsCompact(
                 ? t("usage.overview.assistant")
                 : t("usage.details.tool");
           return html`
-          <div class="session-log-entry ${roleClass}">
-            <div class="session-log-meta">
-              <span class="session-log-role">${roleLabel}</span>
-              <span>${new Date(log.timestamp).toLocaleString()}</span>
-              ${log.tokens ? html`<span>${formatTokens(log.tokens)}</span>` : nothing}
-            </div>
-            <div class="session-log-content">${cleanContent}</div>
-            ${
-              toolInfo.tools.length > 0
-                ? html`
+            <div class="session-log-entry ${roleClass}">
+              <div class="session-log-meta">
+                <span class="session-log-role">${roleLabel}</span>
+                <span>${new Date(log.timestamp).toLocaleString()}</span>
+                ${log.tokens ? html`<span>${formatTokens(log.tokens)}</span>` : nothing}
+              </div>
+              <div class="session-log-content">${cleanContent}</div>
+              ${
+                toolInfo.tools.length > 0
+                  ? html`
                     <details class="session-log-tools" ?open=${expandedAll}>
                       <summary>${toolInfo.summary}</summary>
                       <div class="session-log-tools-list">
@@ -1108,18 +1223,18 @@ function renderSessionLogsCompact(
                       </div>
                     </details>
                   `
-                : nothing
-            }
-          </div>
-        `;
+                  : nothing
+              }
+            </div>
+          `;
         })}
         ${
           filteredEntries.length === 0
             ? html`
-                <div class="usage-empty-block usage-empty-block--compact">
-                  ${t("usage.details.noMessagesMatch")}
-                </div>
-              `
+              <div class="usage-empty-block usage-empty-block--compact">
+                ${t("usage.details.noMessagesMatch")}
+              </div>
+            `
             : nothing
         }
       </div>

@@ -1,12 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import {
-  buildStructuredCard,
-  editMessageFeishu,
-  getMessageFeishu,
-  listFeishuThreadMessages,
-  resolveFeishuCardTemplate,
-} from "./send.js";
 
 const {
   mockClientGet,
@@ -42,8 +35,22 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
+let buildStructuredCard: typeof import("./send.js").buildStructuredCard;
+let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
+let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
+let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
+let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
+
 describe("getMessageFeishu", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      buildStructuredCard,
+      editMessageFeishu,
+      getMessageFeishu,
+      listFeishuThreadMessages,
+      resolveFeishuCardTemplate,
+    } = await import("./send.js"));
     vi.clearAllMocks();
     mockResolveFeishuAccount.mockReturnValue({
       accountId: "default",
