@@ -273,4 +273,71 @@ describe("createNodesTool screen_record duration guardrails", () => {
     });
     expect(JSON.stringify(result?.content ?? [])).not.toContain("MEDIA:");
   });
+
+  it("uses operator.admin to approve exec-capable node pair requests", async () => {
+    gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, params, extra) => {
+      if (method === "node.pair.list") {
+        return {
+          pending: [
+            {
+              requestId: "req-1",
+              commands: ["system.run"],
+            },
+          ],
+        };
+      }
+      if (method === "node.pair.approve") {
+        return { ok: true, method, params, extra };
+      }
+      throw new Error(`unexpected method: ${String(method)}`);
+    });
+    const tool = createNodesTool();
+
+    await tool.execute("call-1", {
+      action: "approve",
+      requestId: "req-1",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(1, "node.pair.list", {}, {});
+    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+      2,
+      "node.pair.approve",
+      {},
+      { requestId: "req-1" },
+      { scopes: ["operator.admin"] },
+    );
+  });
+
+  it("uses operator.write to approve non-exec node pair requests", async () => {
+    gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, params, extra) => {
+      if (method === "node.pair.list") {
+        return {
+          pending: [
+            {
+              requestId: "req-1",
+              commands: ["canvas.snapshot"],
+            },
+          ],
+        };
+      }
+      if (method === "node.pair.approve") {
+        return { ok: true, method, params, extra };
+      }
+      throw new Error(`unexpected method: ${String(method)}`);
+    });
+    const tool = createNodesTool();
+
+    await tool.execute("call-1", {
+      action: "approve",
+      requestId: "req-1",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+      2,
+      "node.pair.approve",
+      {},
+      { requestId: "req-1" },
+      { scopes: ["operator.write"] },
+    );
+  });
 });
