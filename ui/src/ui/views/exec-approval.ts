@@ -74,9 +74,11 @@ export function renderExecApprovalPrompt(state: AppViewState) {
             <div class="exec-approval-title">${title}</div>
             <div class="exec-approval-sub">${remaining}</div>
           </div>
-          ${queueCount > 1
-            ? html`<div class="exec-approval-queue">${queueCount} pending</div>`
-            : nothing}
+          ${
+            queueCount > 1
+              ? html`<div class="exec-approval-queue">${queueCount} pending</div>`
+              : nothing
+          }
         </div>
         ${isPlugin ? renderPluginBody(active) : renderExecBody(request)}
         ${state.execApprovalError

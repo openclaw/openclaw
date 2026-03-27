@@ -506,7 +506,8 @@ Useful env vars:
 
 ## Docs sanity
 
-Run docs checks after doc edits: `pnpm docs:list`.
+Run docs checks after doc edits: `pnpm check:docs`.
+Run full Mintlify anchor validation when you need in-page heading checks too: `pnpm docs:check-links:anchors`.
 
 ## Offline regression (CI-safe)
 
