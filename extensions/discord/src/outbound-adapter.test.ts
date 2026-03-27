@@ -72,6 +72,52 @@ describe("discordOutbound", () => {
     });
   });
 
+  it("keeps explicit cross-channel text sends on the explicit target from thread context", async () => {
+    mockDiscordBoundThreadManager(hoisted);
+
+    const result = await discordOutbound.sendText?.({
+      cfg: {},
+      to: "channel:other-9",
+      text: "cross-channel",
+      accountId: "default",
+      threadId: "thread-1",
+      replyToId: "reply-1",
+    });
+
+    expect(hoisted.sendWebhookMessageDiscordMock).not.toHaveBeenCalled();
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:other-9",
+      "cross-channel",
+      expect.objectContaining({
+        accountId: "default",
+        replyTo: "reply-1",
+      }),
+    );
+    expect(result).toEqual({
+      channel: "discord",
+      messageId: "msg-1",
+      channelId: "ch-1",
+    });
+  });
+
+  it("keeps explicit current parent channel targets threaded", async () => {
+    mockDiscordBoundThreadManager(hoisted);
+
+    const result = await discordOutbound.sendText?.({
+      cfg: {},
+      to: "channel:parent-1",
+      text: "stay in thread",
+      accountId: "default",
+      threadId: "thread-1",
+    });
+
+    expectDiscordThreadBotSend({
+      hoisted,
+      text: "stay in thread",
+      result,
+    });
+  });
+
   it("uses webhook persona delivery for bound thread text replies", async () => {
     mockDiscordBoundThreadManager(hoisted);
     const cfg = {
