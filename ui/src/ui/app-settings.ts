@@ -1,3 +1,4 @@
+import { looksLikeSessionId } from "../../../src/sessions/session-id.js";
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import { refreshChat } from "./app-chat.ts";
@@ -38,10 +39,6 @@ import { resolveTheme, type ResolvedTheme, type ThemeMode, type ThemeName } from
 import type { AgentsListResult, AttentionItem } from "./types.ts";
 import { resetChatViewState } from "./views/chat.ts";
 
-function looksLikeUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
-
 export function normalizeChatUrlSessionKey(sessionKey: string | undefined | null): string {
   const raw = (sessionKey ?? "").trim();
   if (!raw) {
@@ -55,7 +52,7 @@ export function normalizeChatUrlSessionKey(sessionKey: string | undefined | null
     return raw;
   }
   const rest = parsed.rest.trim();
-  if (!looksLikeUuid(rest)) {
+  if (!looksLikeSessionId(rest)) {
     return raw;
   }
   return rest;

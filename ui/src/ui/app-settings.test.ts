@@ -185,6 +185,12 @@ describe("normalizeChatUrlSessionKey", () => {
     );
   });
 
+  it("normalizes future UUID variants that still match the gateway session id format", () => {
+    expect(normalizeChatUrlSessionKey("agent:main:0195b01b-3d4c-7abc-cdef-1234567890ab")).toBe(
+      "0195b01b-3d4c-7abc-cdef-1234567890ab",
+    );
+  });
+
   it("leaves normal structured channel session keys alone", () => {
     expect(normalizeChatUrlSessionKey("agent:main:telegram:direct:user123")).toBe(
       "agent:main:telegram:direct:user123",
