@@ -7,11 +7,11 @@ import type { OpenClawConfig } from "../../src/config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../src/config/model-input.js";
 import {
   buildKilocodeModelDefinition,
-  KILOCODE_DEFAULT_MODEL_ID,
   KILOCODE_DEFAULT_CONTEXT_WINDOW,
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_DEFAULT_COST,
-} from "../../src/plugin-sdk/provider-models.js";
+  KILOCODE_DEFAULT_MODEL_ID,
+} from "../../src/plugin-sdk/kilocode.js";
 import { captureEnv } from "../../test/helpers/extensions/env.js";
 import {
   applyKilocodeProviderConfig,
