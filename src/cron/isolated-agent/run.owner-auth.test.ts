@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
+import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import {
   loadRunCronIsolatedAgentTurn,
   resetRunCronIsolatedAgentTurnHarness,
@@ -7,6 +8,8 @@ import {
   runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
+
+const RUN_OWNER_AUTH_TIMEOUT_MS = 300_000;
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
@@ -55,11 +58,21 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", previousFastTestEnv);
   });
 
-  it("passes senderIsOwner=true to isolated cron agent runs", async () => {
-    await runCronIsolatedAgentTurn(makeParams());
+  it(
+    "passes senderIsOwner=true to isolated cron agent runs",
+    { timeout: RUN_OWNER_AUTH_TIMEOUT_MS },
+    async () => {
+      await runCronIsolatedAgentTurn(makeParams());
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const senderIsOwner = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.senderIsOwner;
-    expect(senderIsOwner).toBe(true);
-  });
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      const senderIsOwner = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.senderIsOwner;
+      expect(senderIsOwner).toBe(true);
+
+      const toolNames = createOpenClawCodingTools({ senderIsOwner }).map(
+        (tool: { name: string }) => tool.name,
+      );
+      expect(toolNames).toContain("cron");
+      expect(toolNames).toContain("gateway");
+    },
+  );
 });
