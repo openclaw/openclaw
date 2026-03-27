@@ -42,13 +42,32 @@ function isFullWidthCodePoint(codePoint: number): boolean {
   );
 }
 
-const emojiLikePattern = /[\p{Extended_Pictographic}\p{Regional_Indicator}\u20e3]/u;
+const EMOJI_PRESENTATION_RE = /\p{Emoji_Presentation}/u;
+const REGIONAL_INDICATOR_RE = /\p{Regional_Indicator}/u;
+
+function isWideEmojiGrapheme(grapheme: string): boolean {
+  if (
+    grapheme.includes("\u200d") ||
+    grapheme.includes("\uFE0F") ||
+    grapheme.includes("\u20E3")
+  ) {
+    return true;
+  }
+
+  for (const char of grapheme) {
+    if (EMOJI_PRESENTATION_RE.test(char) || REGIONAL_INDICATOR_RE.test(char)) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 function graphemeWidth(grapheme: string): number {
   if (!grapheme) {
     return 0;
   }
-  if (emojiLikePattern.test(grapheme)) {
+  if (isWideEmojiGrapheme(grapheme)) {
     return 2;
   }
 

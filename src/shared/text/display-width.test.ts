@@ -14,4 +14,11 @@ describe("shared/text/display-width", () => {
     expect(displayWidth("🇺🇸")).toBe(2);
     expect(displayWidth("✈️")).toBe(2);
   });
+
+  it("keeps text-presentation symbols narrow without emoji selectors", () => {
+    expect(displayWidth("©")).toBe(1);
+    expect(displayWidth("™")).toBe(1);
+    expect(displayWidth("❤")).toBe(1);
+    expect(displayWidth("✈")).toBe(1);
+  });
 });

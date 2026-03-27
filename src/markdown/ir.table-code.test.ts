@@ -124,4 +124,17 @@ describe("markdownToIR tableMode code - style overlap", () => {
       ),
     );
   });
+
+  it("does not overestimate text-presentation symbols in code tables", () => {
+    const md = `
+| I | L |
+|---|---|
+| © | x |
+| A | y |
+`.trim();
+
+    const ir = markdownToIR(md, { tableMode: "code" });
+
+    expect(ir.text).toBe(["| I | L |", "| --- | --- |", "| © | x |", "| A | y |", ""].join("\n"));
+  });
 });
