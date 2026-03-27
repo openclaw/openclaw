@@ -40,7 +40,11 @@ function createCopilotPayloadCompatibilityWrapper(
     return streamFn(model, context, {
       ...options,
       onPayload: (payload) => {
-        if (isCopilotReasoningUnsupportedModel(model.id) && payload && typeof payload === "object") {
+        if (
+          isCopilotReasoningUnsupportedModel(model.id) &&
+          payload &&
+          typeof payload === "object"
+        ) {
           const payloadObj = payload as Record<string, unknown>;
           delete payloadObj.reasoning;
           delete payloadObj.reasoning_effort;
