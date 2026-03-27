@@ -393,6 +393,7 @@ describe("argv helpers", () => {
     const nonMutatingArgv = [
       ["node", "openclaw", "status"],
       ["node", "openclaw", "health"],
+      ["node", "openclaw", "logs", "--follow"],
       ["node", "openclaw", "sessions"],
       ["node", "openclaw", "config", "get", "update"],
       ["node", "openclaw", "config", "unset", "update"],
@@ -415,6 +416,7 @@ describe("argv helpers", () => {
   });
 
   it.each([
+    { path: ["logs"], expected: false },
     { path: ["status"], expected: false },
     { path: ["update", "status"], expected: false },
     { path: ["config", "get"], expected: false },
