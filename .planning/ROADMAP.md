@@ -109,7 +109,7 @@
    **Plans:** 2 plans
    Plans:
 
-- [ ] 05-01-PLAN.md — Capability matcher and IDENTITY.md capabilities parsing (TDD)
+- [x] 05-01-PLAN.md — Capability matcher and IDENTITY.md capabilities parsing (TDD)
 - [ ] 05-02-PLAN.md — CWD-based PROJECT.md walk-up and bootstrap hook injection
       **Estimated complexity**: M
 
