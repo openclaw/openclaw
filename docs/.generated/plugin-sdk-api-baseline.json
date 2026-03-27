@@ -2393,7 +2393,7 @@
           "exportName": "formatDocsLink",
           "kind": "function",
           "source": {
-            "line": 5,
+            "line": 9,
             "path": "src/terminal/links.ts"
           }
         },
@@ -3180,7 +3180,7 @@
           "exportName": "createChannelPluginBase",
           "kind": "function",
           "source": {
-            "line": 437,
+            "line": 447,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3189,16 +3189,16 @@
           "exportName": "createChatChannelPlugin",
           "kind": "function",
           "source": {
-            "line": 414,
+            "line": 424,
             "path": "src/plugin-sdk/core.ts"
           }
         },
         {
-          "declaration": "export function defineChannelPluginEntry<TPlugin>({ id, name, description, plugin, configSchema, setRuntime, registerFull, }: DefineChannelPluginEntryOptions<TPlugin>): DefinedPluginEntry;",
+          "declaration": "export function defineChannelPluginEntry<TPlugin>({ id, name, description, plugin, configSchema, setRuntime, registerFull, }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin>;",
           "exportName": "defineChannelPluginEntry",
           "kind": "function",
           "source": {
-            "line": 246,
+            "line": 251,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3207,7 +3207,7 @@
           "exportName": "definePluginEntry",
           "kind": "function",
           "source": {
-            "line": 91,
+            "line": 129,
             "path": "src/plugin-sdk/plugin-entry.ts"
           }
         },
@@ -3216,7 +3216,7 @@
           "exportName": "defineSetupPluginEntry",
           "kind": "function",
           "source": {
-            "line": 277,
+            "line": 287,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -4028,7 +4028,7 @@
           "exportName": "definePluginEntry",
           "kind": "function",
           "source": {
-            "line": 91,
+            "line": 129,
             "path": "src/plugin-sdk/plugin-entry.ts"
           }
         },
@@ -4449,24 +4449,6 @@
           }
         },
         {
-          "declaration": "export function applyCloudflareAiGatewayConfig(cfg: OpenClawConfig, params?: { accountId?: string | undefined; gatewayId?: string | undefined; } | undefined): OpenClawConfig;",
-          "exportName": "applyCloudflareAiGatewayConfig",
-          "kind": "function",
-          "source": {
-            "line": 85,
-            "path": "extensions/cloudflare-ai-gateway/onboard.ts"
-          }
-        },
-        {
-          "declaration": "export function applyCloudflareAiGatewayProviderConfig(cfg: OpenClawConfig, params?: { accountId?: string | undefined; gatewayId?: string | undefined; } | undefined): OpenClawConfig;",
-          "exportName": "applyCloudflareAiGatewayProviderConfig",
-          "kind": "function",
-          "source": {
-            "line": 41,
-            "path": "extensions/cloudflare-ai-gateway/onboard.ts"
-          }
-        },
-        {
           "declaration": "export function applyOnboardAuthAgentModelsAndProviders(cfg: OpenClawConfig, params: { agentModels: Record<string, AgentModelEntryConfig>; providers: Record<string, ModelProviderConfig>; }): OpenClawConfig;",
           "exportName": "applyOnboardAuthAgentModelsAndProviders",
           "kind": "function",
@@ -4530,24 +4512,6 @@
           }
         },
         {
-          "declaration": "export function applyVercelAiGatewayConfig(cfg: OpenClawConfig): OpenClawConfig;",
-          "exportName": "applyVercelAiGatewayConfig",
-          "kind": "function",
-          "source": {
-            "line": 27,
-            "path": "extensions/vercel-ai-gateway/onboard.ts"
-          }
-        },
-        {
-          "declaration": "export function applyVercelAiGatewayProviderConfig(cfg: OpenClawConfig): OpenClawConfig;",
-          "exportName": "applyVercelAiGatewayProviderConfig",
-          "kind": "function",
-          "source": {
-            "line": 8,
-            "path": "extensions/vercel-ai-gateway/onboard.ts"
-          }
-        },
-        {
           "declaration": "export function createDefaultModelPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | ... 4 more ... | \"ollama\"; ... 4 more ...; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
           "exportName": "createDefaultModelPresetAppliers",
           "kind": "function",
@@ -4590,24 +4554,6 @@
           "source": {
             "line": 38,
             "path": "src/plugins/provider-onboarding-config.ts"
-          }
-        },
-        {
-          "declaration": "export const CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF: \"cloudflare-ai-gateway/claude-sonnet-4-5\";",
-          "exportName": "CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF",
-          "kind": "const",
-          "source": {
-            "line": 5,
-            "path": "src/agents/cloudflare-ai-gateway.ts"
-          }
-        },
-        {
-          "declaration": "export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF: \"vercel-ai-gateway/anthropic/claude-opus-4.6\";",
-          "exportName": "VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF",
-          "kind": "const",
-          "source": {
-            "line": 6,
-            "path": "extensions/vercel-ai-gateway/onboard.ts"
           }
         },
         {
