@@ -15,7 +15,7 @@ describe("xai onboard", () => {
     const cfg = applyXaiConfig({});
     expect(cfg.models?.providers?.xai).toMatchObject({
       baseUrl: "https://api.x.ai/v1",
-      api: "openai-completions",
+      api: "openai-responses",
     });
     expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(XAI_DEFAULT_MODEL_REF);
   });
@@ -31,7 +31,7 @@ describe("xai onboard", () => {
     );
 
     expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
-    expect(cfg.models?.providers?.xai?.api).toBe("openai-completions");
+    expect(cfg.models?.providers?.xai?.api).toBe("openai-responses");
     expect(cfg.models?.providers?.xai?.apiKey).toBe("old-key");
     expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual(
       expect.arrayContaining([
