@@ -13,6 +13,16 @@ import {
   registerSessionBindingAdapter,
 } from "../../infra/outbound/session-binding-service.js";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryKey,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
@@ -505,6 +515,33 @@ describe("initSessionState RawBody", () => {
     },
   );
 
+  it("keeps custom reset triggers working when the trigger uses a non-canonical command alias", async () => {
+    const root = await makeCaseDir("openclaw-rawbody-reset-custom-alias-");
+    const storePath = path.join(root, "sessions.json");
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/dock_telegram"],
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "/dock_telegram KeepThisCase",
+        CommandBody: "/dock_telegram KeepThisCase",
+        ChatType: "direct",
+        SessionKey: "agent:main:telegram:dm:s1",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.bodyStripped).toBe("KeepThisCase");
+  });
+
   it("does not rotate local session state for /new on bound ACP sessions", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-reset-");
     const storePath = path.join(root, "sessions.json");
@@ -765,6 +802,104 @@ describe("initSessionState RawBody", () => {
       expect(result.isNewSession).toBe(true);
       expect(result.sessionId).not.toBe(existingSessionId);
       expect(captured).toHaveLength(0);
+    },
+  );
+
+  it.each(["/new", "/reset"])(
+    "keeps automatic reset hooks enabled for %s on native-command surfaces when commands.text is disabled",
+    async (commandBody) => {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const pluginRegistryState = Symbol.for("openclaw.pluginRegistryState");
+      const runtimeState = (
+        globalThis as typeof globalThis & {
+          [pluginRegistryState]?: {
+            registry?: Parameters<typeof setActivePluginRegistry>[0] | null;
+            key?: string | null;
+          };
+        }
+      )[pluginRegistryState];
+      const previousRegistry = getActivePluginRegistry() ?? runtimeState?.registry ?? null;
+      const previousRegistryKey = getActivePluginRegistryKey() ?? runtimeState?.key ?? null;
+      try {
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "discord",
+              source: "test",
+              plugin: createChannelTestPluginBase({
+                id: "discord",
+                capabilities: { nativeCommands: true, chatTypes: ["direct", "group"] },
+              }),
+            },
+          ]),
+        );
+        const root = await makeCaseDir("openclaw-rawbody-stale-text-disabled-");
+        const storePath = path.join(root, "sessions.json");
+        const sessionKey = "agent:main:discord:channel:stale-text-disabled";
+        const existingSessionId = "session-existing";
+        const captured: string[] = [];
+        registerInternalHook("session:daily_reset", async (event) => {
+          captured.push(`${event.type}:${event.action}`);
+        });
+        registerInternalHook("session:idle_reset", async (event) => {
+          captured.push(`${event.type}:${event.action}`);
+        });
+
+        await writeSessionStoreFast(storePath, {
+          [sessionKey]: {
+            sessionId: existingSessionId,
+            updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+            systemSent: true,
+          },
+        });
+
+        const cfg = {
+          commands: {
+            text: false,
+          },
+          session: {
+            store: storePath,
+            resetTriggers: ["/fresh"],
+            reset: {
+              mode: "daily",
+              atHour: 4,
+              idleMinutes: 120,
+            },
+          },
+          channels: {
+            discord: {
+              allowFrom: ["*"],
+            },
+          },
+        } as OpenClawConfig;
+
+        const result = await initSessionState({
+          ctx: {
+            RawBody: commandBody,
+            CommandBody: commandBody,
+            Provider: "discord",
+            Surface: "discord",
+            CommandSource: "text",
+            SenderId: "12345",
+            From: "discord:12345",
+            To: "channel:stale-text-disabled",
+            SessionKey: sessionKey,
+          },
+          cfg,
+          commandAuthorized: true,
+        });
+
+        expect(result.resetTriggered).toBe(false);
+        expect(result.isNewSession).toBe(true);
+        expect(result.sessionId).not.toBe(existingSessionId);
+        expect(captured).toEqual(["session:daily_reset"]);
+      } finally {
+        if (previousRegistry) {
+          setActivePluginRegistry(previousRegistry, previousRegistryKey ?? undefined);
+        } else {
+          resetPluginRuntimeStateForTest();
+        }
+      }
     },
   );
 

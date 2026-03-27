@@ -37,7 +37,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
-import { normalizeCommandBody } from "../commands-registry.js";
+import { normalizeCommandBody, shouldHandleTextCommands } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { parseDiscordParentChannelFromSessionKey } from "./discord-parent-channel.js";
@@ -194,6 +194,12 @@ function isAcpInPlaceResetCommand(commandBodyLower: string): boolean {
   );
 }
 
+function shouldCanonicalizeResetTrigger(triggerLower: string): boolean {
+  return ACP_IN_PLACE_RESET_COMMANDS.includes(
+    triggerLower as (typeof ACP_IN_PLACE_RESET_COMMANDS)[number],
+  );
+}
+
 function resolveAutomaticSessionResetAction(params: {
   updatedAt: number;
   now: number;
@@ -315,6 +321,11 @@ export async function initSessionState(params: {
   const strippedForReset = isGroup
     ? stripMentions(triggerBodyNormalized, ctx, cfg, agentId)
     : triggerBodyNormalized;
+  const textResetCommandsEnabled = shouldHandleTextCommands({
+    cfg,
+    surface: ctx.Surface ?? ctx.Provider ?? "",
+    commandSource: ctx.CommandSource,
+  });
   const normalizedTrimmedBody = normalizeCommandBody(trimmedBody, {
     botUsername: ctx.BotUsername,
   });
@@ -332,24 +343,42 @@ export async function initSessionState(params: {
 
   // Reset triggers are configured as lowercased commands (e.g. "/new"), but users may type
   // "/NEW" etc. Match case-insensitively while keeping the original casing for any stripped body.
-  const trimmedBodyLower = normalizedTrimmedBody.toLowerCase();
-  const strippedForResetLower = normalizedStrippedForReset.toLowerCase();
+  const trimmedBodyLower = trimmedBody.toLowerCase();
+  const strippedForResetLower = strippedForReset.toLowerCase();
+  const normalizedTrimmedBodyLower = normalizedTrimmedBody.toLowerCase();
+  const normalizedStrippedForResetLower = normalizedStrippedForReset.toLowerCase();
   const manualResetCommandRequested =
     resetAuthorized &&
-    (isAcpInPlaceResetCommand(trimmedBodyLower) || isAcpInPlaceResetCommand(strippedForResetLower));
+    textResetCommandsEnabled &&
+    (isAcpInPlaceResetCommand(normalizedTrimmedBodyLower) ||
+      isAcpInPlaceResetCommand(normalizedStrippedForResetLower));
   suppressAutomaticResetHook = manualResetCommandRequested;
 
   for (const trigger of resetTriggers) {
     if (!trigger) {
       continue;
     }
-    if (!resetAuthorized) {
+    if (!resetAuthorized || !textResetCommandsEnabled) {
       break;
     }
     const triggerLower = trigger.toLowerCase();
+    const canonicalizeTrigger = shouldCanonicalizeResetTrigger(triggerLower);
     const trimmedMatchesTrigger = matchesCommandToken(trimmedBodyLower, triggerLower);
     const strippedMatchesTrigger = matchesCommandToken(strippedForResetLower, triggerLower);
-    if (trimmedMatchesTrigger || strippedMatchesTrigger) {
+    const normalizedTrimmedMatchesTrigger =
+      canonicalizeTrigger && matchesCommandToken(normalizedTrimmedBodyLower, triggerLower);
+    const normalizedStrippedMatchesTrigger =
+      canonicalizeTrigger && matchesCommandToken(normalizedStrippedForResetLower, triggerLower);
+    const matchedBodyContext = strippedMatchesTrigger
+      ? { body: strippedForReset, lower: strippedForResetLower }
+      : normalizedStrippedMatchesTrigger
+        ? { body: normalizedStrippedForReset, lower: normalizedStrippedForResetLower }
+        : trimmedMatchesTrigger
+          ? { body: trimmedBody, lower: trimmedBodyLower }
+          : normalizedTrimmedMatchesTrigger
+            ? { body: normalizedTrimmedBody, lower: normalizedTrimmedBodyLower }
+            : undefined;
+    if (matchedBodyContext) {
       if (shouldBypassAcpResetForTrigger(triggerLower)) {
         // ACP-bound conversations handle /new and /reset in command handling
         // so the bound ACP runtime can be reset in place without rotating the
@@ -359,9 +388,9 @@ export async function initSessionState(params: {
       }
       isNewSession = true;
       bodyStripped =
-        strippedForResetLower === triggerLower
+        matchedBodyContext.lower === triggerLower
           ? ""
-          : normalizedStrippedForReset.slice(trigger.length).trimStart();
+          : matchedBodyContext.body.slice(trigger.length).trimStart();
       resetTriggered = true;
       break;
     }
