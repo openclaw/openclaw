@@ -2,6 +2,29 @@ import { describe, expect, it } from "vitest";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 
 describe("schema validator", () => {
+  it("can apply JSON Schema defaults while validating", () => {
+    const res = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.defaults",
+      schema: {
+        type: "object",
+        properties: {
+          mode: {
+            type: "string",
+            default: "auto",
+          },
+        },
+        additionalProperties: false,
+      },
+      value: {},
+      applyDefaults: true,
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.value).toEqual({ mode: "auto" });
+    }
+  });
+
   it("includes allowed values in enum validation errors", () => {
     const res = validateJsonSchemaValue({
       cacheKey: "schema-validator.test.enum",
