@@ -17,7 +17,7 @@ let runtimeStub: {
   stop: ReturnType<typeof vi.fn>;
 };
 
-vi.mock("../../extensions/voice-call/src/runtime.js", () => ({
+vi.mock("../../extensions/voice-call/runtime-entry.js", () => ({
   createVoiceCallRuntime: vi.fn(async () => runtimeStub),
 }));
 
