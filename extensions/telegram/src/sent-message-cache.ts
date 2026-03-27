@@ -8,7 +8,12 @@ import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 type CacheEntry = {
-  timestamps: Map<number, number>;
+  timestamps: Map<number, { recordedAt: number; metadata?: SentMessageMetadata }>;
+};
+
+export type SentMessageMetadata = {
+  sessionKey?: string;
+  messageThreadId?: number;
 };
 
 /**
@@ -23,10 +28,31 @@ function getChatKey(chatId: number | string): string {
   return String(chatId);
 }
 
+function normalizeSentMessageMetadata(
+  metadata?: SentMessageMetadata,
+): SentMessageMetadata | undefined {
+  if (!metadata) {
+    return undefined;
+  }
+  const sessionKey = metadata.sessionKey?.trim() || undefined;
+  const threadCandidate = metadata.messageThreadId;
+  const messageThreadId =
+    typeof threadCandidate === "number" && Number.isFinite(threadCandidate) && threadCandidate > 0
+      ? Math.trunc(threadCandidate)
+      : undefined;
+  if (!sessionKey && messageThreadId == null) {
+    return undefined;
+  }
+  return {
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(messageThreadId != null ? { messageThreadId } : {}),
+  };
+}
+
 function cleanupExpired(entry: CacheEntry): void {
   const now = Date.now();
-  for (const [msgId, timestamp] of entry.timestamps) {
-    if (now - timestamp > TTL_MS) {
+  for (const [msgId, record] of entry.timestamps) {
+    if (now - record.recordedAt > TTL_MS) {
       entry.timestamps.delete(msgId);
     }
   }
@@ -35,14 +61,21 @@ function cleanupExpired(entry: CacheEntry): void {
 /**
  * Record a message ID as sent by the bot.
  */
-export function recordSentMessage(chatId: number | string, messageId: number): void {
+export function recordSentMessage(
+  chatId: number | string,
+  messageId: number,
+  metadata?: SentMessageMetadata,
+): void {
   const key = getChatKey(chatId);
   let entry = sentMessages.get(key);
   if (!entry) {
     entry = { timestamps: new Map() };
     sentMessages.set(key, entry);
   }
-  entry.timestamps.set(messageId, Date.now());
+  entry.timestamps.set(messageId, {
+    recordedAt: Date.now(),
+    metadata: normalizeSentMessageMetadata(metadata),
+  });
   // Periodic cleanup
   if (entry.timestamps.size > 100) {
     cleanupExpired(entry);
@@ -61,6 +94,24 @@ export function wasSentByBot(chatId: number | string, messageId: number): boolea
   // Clean up expired entries on read
   cleanupExpired(entry);
   return entry.timestamps.has(messageId);
+}
+
+/**
+ * Recover lightweight routing metadata for a previously sent bot message.
+ * Callback payloads for Telegram DM topics can omit thread fields, so we keep
+ * enough state here to route follow-up button presses back to the same session.
+ */
+export function getSentMessageMetadata(
+  chatId: number | string,
+  messageId: number,
+): SentMessageMetadata | undefined {
+  const key = getChatKey(chatId);
+  const entry = sentMessages.get(key);
+  if (!entry) {
+    return undefined;
+  }
+  cleanupExpired(entry);
+  return entry.timestamps.get(messageId)?.metadata;
 }
 
 /**

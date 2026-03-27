@@ -40,7 +40,10 @@ import {
 } from "../../../src/plugins/conversation-binding.js";
 import { dispatchPluginInteractiveHandler } from "../../../src/plugins/interactive.js";
 import { resolveAgentRoute } from "../../../src/routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../../../src/routing/session-key.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveThreadSessionKeys,
+} from "../../../src/routing/session-key.js";
 import { applyFutureThreadModelDefault } from "../../../src/sessions/future-thread-defaults.js";
 import { applyModelOverrideToSessionEntry } from "../../../src/sessions/model-overrides.js";
 import { resolveFutureThreadParentSessionKey } from "../../../src/sessions/session-key-utils.js";
@@ -95,7 +98,7 @@ import {
   type ProviderInfo,
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
-import { wasSentByBot } from "./sent-message-cache.js";
+import { getSentMessageMetadata, recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
 
 const APPROVE_CALLBACK_DATA_RE =
   /^\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+(allow-once|allow-always|deny)\b/i;
@@ -314,12 +317,44 @@ export const registerTelegramHandlers = ({
     messageThreadId?: number;
     resolvedThreadId?: number;
     senderId?: string | number;
+    sessionKey?: string;
   }): {
     agentId: string;
     sessionEntry: ReturnType<typeof loadSessionStore>[string] | undefined;
     sessionKey: string;
     model?: string;
   } => {
+    const explicitSessionKey = params.sessionKey?.trim();
+    if (explicitSessionKey) {
+      const agentId =
+        resolveAgentIdFromSessionKey(explicitSessionKey) || resolveDefaultAgentId(cfg);
+      const storePath = resolveStorePath(cfg.session?.store, { agentId });
+      const store = loadSessionStore(storePath);
+      const entry = resolveSessionStoreEntry({ store, sessionKey: explicitSessionKey }).existing;
+      const storedOverride = resolveStoredModelOverride({
+        sessionEntry: entry,
+        sessionStore: store,
+        sessionKey: explicitSessionKey,
+      });
+      if (storedOverride) {
+        return {
+          agentId,
+          sessionEntry: entry,
+          sessionKey: explicitSessionKey,
+          model: storedOverride.provider
+            ? `${storedOverride.provider}/${storedOverride.model}`
+            : storedOverride.model,
+        };
+      }
+      const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId });
+      return {
+        agentId,
+        sessionEntry: entry,
+        sessionKey: explicitSessionKey,
+        model: `${resolvedDefault.provider}/${resolvedDefault.model}`,
+      };
+    }
+
     const resolvedThreadId =
       params.resolvedThreadId ??
       resolveTelegramForumThreadId({
@@ -1206,7 +1241,10 @@ export const registerTelegramHandlers = ({
         }
       }
 
-      const messageThreadId = resolveTelegramInboundThreadId(callbackMessage);
+      const cachedCallbackMessageMeta = getSentMessageMetadata(chatId, callbackMessage.message_id);
+      const messageThreadId =
+        resolveTelegramInboundThreadId(callbackMessage) ??
+        cachedCallbackMessageMeta?.messageThreadId;
       const isForum = callbackMessage.chat.is_forum === true;
       const callbackThreadParams =
         buildTelegramThreadParams(
@@ -1400,6 +1438,7 @@ export const registerTelegramHandlers = ({
           messageThreadId,
           resolvedThreadId,
           senderId,
+          sessionKey: cachedCallbackMessageMeta?.sessionKey,
         });
         const modelData = await buildModelsProviderData(cfg, sessionState.agentId);
         const { byProvider, providers } = modelData;
@@ -1417,7 +1456,22 @@ export const registerTelegramHandlers = ({
               try {
                 await deleteCallbackMessage();
               } catch {}
-              await replyToCallbackChat(text, keyboard ? { reply_markup: keyboard } : undefined);
+              const fallbackMessage = await replyToCallbackChat(
+                text,
+                keyboard ? { reply_markup: keyboard } : undefined,
+              );
+              const fallbackMessageId =
+                typeof fallbackMessage?.message_id === "number"
+                  ? fallbackMessage.message_id
+                  : undefined;
+              if (fallbackMessageId != null) {
+                // Preserve callback routing on the replacement message so later
+                // button presses still land in the same DM-topic session.
+                recordSentMessage(chatId, fallbackMessageId, {
+                  sessionKey: sessionState.sessionKey,
+                  messageThreadId,
+                });
+              }
             } else if (!errStr.includes("message is not modified")) {
               throw editErr;
             }

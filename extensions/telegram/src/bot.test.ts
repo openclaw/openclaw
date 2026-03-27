@@ -19,6 +19,7 @@ import {
   getOnHandler,
   listSkillCommandsForAgents,
   onSpy,
+  recordSentMessage,
   replySpy,
   sendMessageSpy,
   setMyCommandsSpy,
@@ -658,6 +659,86 @@ describe("createTelegramBot", () => {
       expect(entry?.providerOverride).toBeUndefined();
       expect(entry?.modelOverride).toBeUndefined();
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-default-1");
+    } finally {
+      await rm(storePath, { force: true });
+    }
+  });
+
+  it("routes DM topic model callbacks through cached sent-message metadata when Telegram omits thread fields", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-model-dm-topic-${process.pid}-${Date.now()}.json`;
+    const baseSessionKey = "agent:main:telegram:default:direct:12345";
+    const threadSessionKey = `${baseSessionKey}:thread:12345:99`;
+
+    await rm(storePath, { force: true });
+    try {
+      createTelegramBot({
+        token: "tok",
+        config: {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-sonnet-4-6",
+              models: {
+                "anthropic/claude-sonnet-4-6": {},
+                "openai-codex/gpt-5.4": {},
+              },
+            },
+          },
+          channels: {
+            telegram: {
+              dmPolicy: "open",
+              allowFrom: ["*"],
+            },
+          },
+          session: {
+            store: storePath,
+          },
+        },
+      });
+
+      // Telegram can drop DM-topic thread fields on callback payloads, so the
+      // handler must recover the original thread session from the sent-message cache.
+      recordSentMessage(12345, 77, {
+        sessionKey: threadSessionKey,
+        messageThreadId: 99,
+      });
+
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      expect(callbackHandler).toBeDefined();
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-model-dm-topic-1",
+          data: "mdl_sel_openai-codex/gpt-5.4",
+          from: { id: 12345, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 12345, type: "private" },
+            date: 1736380800,
+            message_id: 77,
+            text: "Current: anthropic/claude-sonnet-4-6",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+      expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
+        "✅ Model changed to **openai-codex/gpt-5.4**",
+      );
+
+      const store = loadSessionStore(storePath, { skipCache: true });
+      expect(store[threadSessionKey]?.providerOverride).toBe("openai-codex");
+      expect(store[threadSessionKey]?.modelOverride).toBe("gpt-5.4");
+      expect(store[baseSessionKey]?.providerOverride).toBeUndefined();
+      expect(store[baseSessionKey]?.modelOverride).toBeUndefined();
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-dm-topic-1");
     } finally {
       await rm(storePath, { force: true });
     }

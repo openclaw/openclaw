@@ -6,7 +6,12 @@ import {
   importTelegramSendModule,
   installTelegramSendTestHooks,
 } from "./send.test-harness.js";
-import { clearSentMessageCache, recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
+import {
+  clearSentMessageCache,
+  getSentMessageMetadata,
+  recordSentMessage,
+  wasSentByBot,
+} from "./sent-message-cache.js";
 
 installTelegramSendTestHooks();
 
@@ -84,6 +89,24 @@ describe("sent-message-cache", () => {
     recordSentMessage("123", 1);
     expect(wasSentByBot("123", 1)).toBe(true);
     expect(wasSentByBot(123, 1)).toBe(true);
+  });
+
+  it("stores normalized routing metadata for sent messages", () => {
+    recordSentMessage("123", 1, {
+      sessionKey: "  agent:main:telegram:default:direct:123:thread:123:99  ",
+      messageThreadId: 99.8,
+    });
+    recordSentMessage(123, 2, {
+      sessionKey: "   ",
+      messageThreadId: 0,
+    });
+
+    expect(getSentMessageMetadata(123, 1)).toEqual({
+      sessionKey: "agent:main:telegram:default:direct:123:thread:123:99",
+      messageThreadId: 99,
+    });
+    expect(getSentMessageMetadata("123", 2)).toBeUndefined();
+    expect(getSentMessageMetadata("999", 1)).toBeUndefined();
   });
 
   it("clears cache", () => {

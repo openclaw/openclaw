@@ -91,15 +91,56 @@ vi.mock("../../../src/infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventSpy,
 }));
 
-const sentMessageCacheHoisted = vi.hoisted(() => ({
-  wasSentByBot: vi.fn(() => false),
-}));
+const sentMessageCacheHoisted = vi.hoisted(() => {
+  const sentMessages = new Map<
+    string,
+    Map<number, { sessionKey?: string; messageThreadId?: number }>
+  >();
+
+  const getChatKey = (chatId: number | string) => String(chatId);
+
+  const recordSentMessage = vi.fn(
+    (
+      chatId: number | string,
+      messageId: number,
+      metadata?: { sessionKey?: string; messageThreadId?: number },
+    ) => {
+      const chatKey = getChatKey(chatId);
+      const existing = sentMessages.get(chatKey) ?? new Map();
+      existing.set(messageId, metadata ?? {});
+      sentMessages.set(chatKey, existing);
+    },
+  );
+
+  const wasSentByBot = vi.fn((chatId: number | string, messageId: number) => {
+    return sentMessages.get(getChatKey(chatId))?.has(messageId) ?? false;
+  });
+
+  const getSentMessageMetadata = vi.fn((chatId: number | string, messageId: number) => {
+    return sentMessages.get(getChatKey(chatId))?.get(messageId);
+  });
+
+  const clearSentMessageCache = vi.fn(() => {
+    sentMessages.clear();
+  });
+
+  return {
+    recordSentMessage,
+    wasSentByBot,
+    getSentMessageMetadata,
+    clearSentMessageCache,
+  };
+});
+export const recordSentMessage = sentMessageCacheHoisted.recordSentMessage;
 export const wasSentByBot = sentMessageCacheHoisted.wasSentByBot;
+export const getSentMessageMetadata = sentMessageCacheHoisted.getSentMessageMetadata;
+export const clearSentMessageCache = sentMessageCacheHoisted.clearSentMessageCache;
 
 vi.mock("./sent-message-cache.js", () => ({
+  getSentMessageMetadata,
+  recordSentMessage,
   wasSentByBot,
-  recordSentMessage: vi.fn(),
-  clearSentMessageCache: vi.fn(),
+  clearSentMessageCache,
 }));
 
 // All spy variables used inside vi.mock("grammy", ...) must be created via
@@ -331,8 +372,10 @@ beforeEach(() => {
   sendMessageDraftSpy.mockReset();
   sendMessageDraftSpy.mockResolvedValue(true);
   enqueueSystemEventSpy.mockReset();
-  wasSentByBot.mockReset();
-  wasSentByBot.mockReturnValue(false);
+  clearSentMessageCache();
+  recordSentMessage.mockClear();
+  getSentMessageMetadata.mockClear();
+  wasSentByBot.mockClear();
   listSkillCommandsForAgents.mockReset();
   listSkillCommandsForAgents.mockReturnValue([]);
   middlewareUseSpy.mockReset();

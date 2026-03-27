@@ -30,6 +30,7 @@ import {
   wrapFileReferencesInHtml,
 } from "../format.js";
 import { buildInlineKeyboard } from "../send.js";
+import { recordSentMessage } from "../sent-message-cache.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramSendParams,
@@ -668,6 +669,19 @@ export async function deliverReplies(params: {
         runtime: params.runtime,
         firstDeliveredMessageId,
       });
+      if (
+        firstDeliveredMessageId != null &&
+        (params.sessionKeyForInternalHooks || params.thread?.id != null)
+      ) {
+        // Telegram callback payloads for DM-topic buttons can drop thread fields.
+        // Persist the originating session/thread alongside the sent message id so
+        // later button presses can be routed back to the correct session.
+        recordSentMessage(params.chatId, firstDeliveredMessageId, {
+          sessionKey: params.sessionKeyForInternalHooks,
+          messageThreadId:
+            typeof params.thread?.id === "number" ? Math.trunc(params.thread.id) : undefined,
+        });
+      }
 
       emitMessageSentHooks({
         hookRunner,
