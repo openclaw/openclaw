@@ -1,5 +1,6 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
+import type { FailoverRetriesConfig } from "./types.auth.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -120,6 +121,8 @@ export type CliBackendConfig = {
 export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
+  /** Optional retry settings for model fallback retries. */
+  retries?: FailoverRetriesConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageModel?: AgentModelConfig;
   /** Optional image-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */

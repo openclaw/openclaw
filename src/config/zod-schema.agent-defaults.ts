@@ -13,10 +13,12 @@ import {
   HumanDelaySchema,
   TypingModeSchema,
 } from "./zod-schema.core.js";
+import { FailoverRetriesSchema } from "./zod-schema.failover.js";
 
 export const AgentDefaultsSchema = z
   .object({
     model: AgentModelSchema.optional(),
+    retries: FailoverRetriesSchema,
     imageModel: AgentModelSchema.optional(),
     imageGenerationModel: AgentModelSchema.optional(),
     pdfModel: AgentModelSchema.optional(),

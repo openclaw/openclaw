@@ -679,7 +679,7 @@ export async function runWithModelFallback<T>(params: {
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
-  const retryConfig = params.cfg?.agents?.retries;
+  const retryConfig = params.cfg?.agents?.defaults?.retries ?? params.cfg?.auth?.retries;
   const now = Date.now();
 
   const hasFallbackCandidates = candidates.length > 1;

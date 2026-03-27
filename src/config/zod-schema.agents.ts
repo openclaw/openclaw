@@ -2,12 +2,10 @@ import { z } from "zod";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 import { TranscribeAudioSchema } from "./zod-schema.core.js";
-import { FailoverRetriesSchema } from "./zod-schema.failover.js";
 
 export const AgentsSchema = z
   .object({
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
-    retries: FailoverRetriesSchema,
     list: z.array(AgentEntrySchema).optional(),
   })
   .strict()
