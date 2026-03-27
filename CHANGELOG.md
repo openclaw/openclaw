@@ -97,6 +97,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/inbound claims: pass full inbound attachment arrays through `inbound_claim` hook metadata while keeping the legacy singular media attachment fields for compatibility. (#55452) Thanks @huntharo.
 - Plugins/Matrix: preserve sender filenames for inbound media by forwarding `originalFilename` to `saveMediaBuffer`. (#55692) thanks @esrehmki.
 - Matrix/mentions: recognize `matrix.to` mentions whose visible label uses the bot's room display name, so `requireMention: true` rooms respond correctly in modern Matrix clients. (#55393) thanks @nickludlam.
+- Ollama/thinking off: route `thinkingLevel=off` through the live Ollama extension request path so thinking-capable Ollama models now receive top-level `think: false` instead of silently generating hidden reasoning tokens. (#53200) Thanks @BruceMacD.
 
 ## 2026.3.24
 
