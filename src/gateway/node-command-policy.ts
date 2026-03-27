@@ -160,7 +160,7 @@ const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{
   { id: "ios", tokens: ["iphone", "ipad", "ios"] },
   { id: "android", tokens: ["android"] },
   { id: "macos", tokens: ["mac"] },
-  { id: "visionos", tokens: ["visionos", "headset", "vision pro"] },
+  { id: "visionos", tokens: ["visionos", "vision pro"] },
   { id: "windows", tokens: ["windows"] },
   { id: "linux", tokens: ["linux"] },
 ] as const;
