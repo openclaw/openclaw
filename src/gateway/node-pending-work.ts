@@ -181,6 +181,11 @@ export function acknowledgeNodePendingWork(params: { nodeId: string; itemIds: st
   if (removedItemIds.length > 0) {
     state.revision += 1;
   }
+  // Evict empty node state to prevent unbounded Map growth from
+  // disconnected nodes that never enqueue new work.
+  if (state.itemsById.size === 0) {
+    stateByNodeId.delete(nodeId);
+  }
   return { revision: state.revision, removedItemIds };
 }
 
