@@ -1,18 +1,18 @@
 /**
  * Feishu message recall handler.
- * 
+ *
  * Handles im.message.recall_v1 events by deleting the corresponding bot reply
  * messages that were sent in response to the recalled user message.
- * 
+ *
  * Architecture:
  * - user_message_id → bot_reply_message_id[] mapping is stored in memory
  * - On outbound send: registerMapping(userMsgId, botMsgId)
  * - On recall event: deleteBotReplies(userMsgId)
  */
 
-import { createFeishuClient } from "./client.js";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { createFeishuClient } from "./client.js";
 
 // In-memory mapping: user message ID → bot reply message IDs
 // One user message may trigger multiple bot replies
@@ -40,7 +40,7 @@ export async function deleteBotReplies(params: {
 }): Promise<void> {
   const { cfg, recalledUserMessageId, accountId, log = console.log } = params;
   const botMessageIds = userToBotMessageMap.get(recalledUserMessageId);
-  
+
   if (!botMessageIds || botMessageIds.length === 0) {
     log(`feishu[recall]: no bot replies found for recalled message ${recalledUserMessageId}`);
     return;
@@ -77,10 +77,18 @@ export async function deleteBotReplies(params: {
     }
   }
 
-  // Clean up mapping after processing
-  userToBotMessageMap.delete(recalledUserMessageId);
-
-  log(`feishu[recall]: recall processed for ${recalledUserMessageId} — deleted ${deletedCount}, failed ${failedCount}`);
+  // Only clean up mapping if all messages were deleted (or already gone)
+  // If some failed with transient errors, keep them for retry on next recall event
+  if (failedCount === 0) {
+    userToBotMessageMap.delete(recalledUserMessageId);
+    log(
+      `feishu[recall]: recall processed for ${recalledUserMessageId} — deleted ${deletedCount}, mapping cleared`,
+    );
+  } else {
+    log(
+      `feishu[recall]: recall processed for ${recalledUserMessageId} — deleted ${deletedCount}, failed ${failedCount}, mapping retained for retry`,
+    );
+  }
 }
 
 /**
