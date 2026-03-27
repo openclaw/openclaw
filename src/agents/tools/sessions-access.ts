@@ -200,8 +200,6 @@ export async function createSessionVisibilityGuard(params: {
   const check = (targetSessionKey: string): SessionAccessResult => {
     const targetAgentId = resolveAgentIdFromSessionKey(targetSessionKey);
     const isCrossAgent = targetAgentId !== requesterAgentId;
-
-    // In tree mode, spawned children are always reachable regardless of agent id.
     if (params.visibility === "tree") {
       if (targetSessionKey === params.requesterSessionKey || spawnedKeys?.has(targetSessionKey)) {
         return { allowed: true };
