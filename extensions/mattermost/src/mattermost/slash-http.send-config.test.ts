@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { ServerResponse, type IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/mattermost";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -108,7 +108,7 @@ import { createSlashCommandHttpHandler } from "./slash-http.js";
 
 function createRequest(body = "token=valid-token"): IncomingMessage {
   const req = new PassThrough();
-  const incoming = req as unknown as IncomingMessage;
+  const incoming = req as PassThrough & IncomingMessage;
   incoming.method = "POST";
   incoming.headers = {
     "content-type": "application/x-www-form-urlencoded",
@@ -124,13 +124,38 @@ function createResponse(): {
   getBody: () => string;
 } {
   let body = "";
-  const res = {
-    statusCode: 200,
-    setHeader() {},
-    end(chunk?: string | Buffer) {
+  class TestServerResponse extends ServerResponse {
+    override setHeader() {
+      return this;
+    }
+
+    override end(): this;
+    override end(cb: () => void): this;
+    override end(chunk: string | Buffer | Uint8Array, cb?: () => void): this;
+    override end(
+      chunk: string | Buffer | Uint8Array,
+      encoding: BufferEncoding,
+      cb?: () => void,
+    ): this;
+    override end(
+      chunkOrCb?: string | Buffer | Uint8Array | (() => void),
+      encodingOrCb?: BufferEncoding | (() => void),
+      cb?: () => void,
+    ): this {
+      const chunk = typeof chunkOrCb === "function" ? undefined : chunkOrCb;
+      const callback =
+        typeof chunkOrCb === "function"
+          ? chunkOrCb
+          : typeof encodingOrCb === "function"
+            ? encodingOrCb
+            : cb;
       body = chunk ? String(chunk) : "";
-    },
-  } as unknown as ServerResponse;
+      callback?.();
+      return this;
+    }
+  }
+
+  const res = new TestServerResponse(createRequest(""));
   return {
     res,
     getBody: () => body,
