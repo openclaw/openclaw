@@ -1,6 +1,5 @@
 import type { ChannelSetupAdapter, OpenClawConfig } from "openclaw/plugin-sdk/setup";
-import { createZodSetupInputValidator } from "openclaw/plugin-sdk/setup";
-import { z } from "zod";
+import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup";
 import { hasLineCredentials, parseLineAllowFromId } from "./account-helpers.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -11,16 +10,6 @@ import {
 } from "./setup-runtime-api.js";
 
 const channel = "line" as const;
-
-const LineSetupInputSchema = z
-  .object({
-    useEnv: z.boolean().optional(),
-    channelAccessToken: z.string().optional(),
-    channelSecret: z.string().optional(),
-    tokenFile: z.string().optional(),
-    secretFile: z.string().optional(),
-  })
-  .passthrough();
 
 export function patchLineAccountConfig(params: {
   cfg: OpenClawConfig;
@@ -92,20 +81,19 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
       accountId,
       patch: name?.trim() ? { name: name.trim() } : {},
     }),
-  validateInput: createZodSetupInputValidator({
-    schema: LineSetupInputSchema,
-    validate: ({ accountId, input }) => {
-      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-        return "LINE_CHANNEL_ACCESS_TOKEN can only be used for the default account.";
-      }
-      if (!input.useEnv && !input.channelAccessToken && !input.tokenFile) {
-        return "LINE requires channelAccessToken or --token-file (or --use-env).";
-      }
-      if (!input.useEnv && !input.channelSecret && !input.secretFile) {
-        return "LINE requires channelSecret or --secret-file (or --use-env).";
-      }
-      return null;
-    },
+  validateInput: createSetupInputPresenceValidator({
+    defaultAccountOnlyEnvError:
+      "LINE_CHANNEL_ACCESS_TOKEN can only be used for the default account.",
+    whenNotUseEnv: [
+      {
+        someOf: ["channelAccessToken", "tokenFile"],
+        message: "LINE requires channelAccessToken or --token-file (or --use-env).",
+      },
+      {
+        someOf: ["channelSecret", "secretFile"],
+        message: "LINE requires channelSecret or --secret-file (or --use-env).",
+      },
+    ],
   }),
   applyAccountConfig: ({ cfg, accountId, input }) => {
     const typedInput = input as {

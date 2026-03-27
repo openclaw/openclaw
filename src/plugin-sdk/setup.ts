@@ -28,6 +28,7 @@ export {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
   createEnvPatchedAccountSetupAdapter,
+  createSetupInputPresenceValidator,
   createPatchedAccountSetupAdapter,
   createZodSetupInputValidator,
   migrateBaseNameToDefaultAccount,
