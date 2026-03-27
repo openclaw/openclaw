@@ -1277,10 +1277,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "system provenance fields are reserved for the ACP bridge",
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, "system provenance fields require admin scope"),
       );
       return;
     }
