@@ -465,6 +465,13 @@ export function classifyFailoverReasonFromHttpStatus(
   status: number | undefined,
   message?: string,
 ): FailoverReason | null {
+  if (
+    message &&
+    (typeof status !== "number" || !Number.isFinite(status) || status >= 500) &&
+    isStructuredServerErrorMessage(message)
+  ) {
+    return "server_error";
+  }
   if (typeof status !== "number" || !Number.isFinite(status)) {
     return null;
   }
@@ -845,6 +852,14 @@ function isJsonApiInternalServerError(raw: string): boolean {
   return API_ERROR_TRANSIENT_SIGNALS_RE.test(raw);
 }
 
+function isStructuredServerErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const value = raw.toLowerCase();
+  return value.includes('"type":"server_error"') || value.includes('"code":"server_error"');
+}
+
 export function parseImageDimensionError(raw: string): {
   maxDimensionPx?: number;
   messageIndex?: number;
@@ -979,6 +994,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return isBillingErrorMessage(raw) ? "billing" : "rate_limit";
+  }
+  if (isStructuredServerErrorMessage(raw)) {
+    return "server_error";
   }
   if (isRateLimitErrorMessage(raw)) {
     return "rate_limit";

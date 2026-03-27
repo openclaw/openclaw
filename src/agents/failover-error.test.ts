@@ -39,6 +39,9 @@ const GROQ_TOO_MANY_REQUESTS_MESSAGE =
   "429 Too Many Requests: Too many requests were sent in a given timeframe.";
 const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
   "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance.";
+// Structured OpenAI-compatible server_error payload shape seen in Codex/OpenAI runs.
+const OPENAI_SERVER_ERROR_PAYLOAD =
+  'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 describe("failover-error", () => {
   it("infers failover reason from HTTP status", () => {
@@ -397,6 +400,10 @@ describe("failover-error", () => {
     expect(resolveFailoverStatus("overloaded")).toBe(503);
   });
 
+  it("maps server_error to a 500 fallback status", () => {
+    expect(resolveFailoverStatus("server_error")).toBe(500);
+  });
+
   it("coerces format errors with a 400 status", () => {
     const err = coerceToFailoverError("invalid request format", {
       provider: "google",
@@ -421,6 +428,12 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 403, message: "api key revoked" })).toBe(
       "auth_permanent",
     );
+  });
+
+  it("keeps explicit 4xx status classification ahead of server_error markers", () => {
+    const payload = '{"type":"error","error":{"type":"server_error","code":"server_error"}}';
+    expect(resolveFailoverReasonFromError({ status: 401, message: payload })).toBe("auth");
+    expect(resolveFailoverReasonFromError({ status: 402, message: payload })).toBe("billing");
   });
 
   it("resolveFailoverStatus maps auth_permanent to 403", () => {
@@ -466,5 +479,22 @@ describe("failover-error", () => {
     const described = describeFailoverError(123);
     expect(described.message).toBe("123");
     expect(described.reason).toBeUndefined();
+  });
+
+  it("classifies OpenAI-compatible server_error payloads at the error boundary", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: OPENAI_SERVER_ERROR_PAYLOAD,
+      }),
+    ).toBe("server_error");
+
+    const err = coerceToFailoverError(
+      {
+        message: OPENAI_SERVER_ERROR_PAYLOAD,
+      },
+      { provider: "openai-codex", model: "gpt-5.4" },
+    );
+    expect(err?.reason).toBe("server_error");
+    expect(err?.status).toBe(500);
   });
 });
