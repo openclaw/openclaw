@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
@@ -274,6 +274,31 @@ function summarizeSessionContext(messages: AgentMessage[]): {
     totalTextChars,
     totalImageBlocks,
     maxMessageTextChars,
+  };
+}
+
+export function wrapStreamFnWithModelRegistryAuth(
+  streamFn: StreamFn,
+  resolvedApiKey: string | undefined,
+): StreamFn {
+  return (model, context, options) => {
+    const modelHeaders =
+      model.headers && typeof model.headers === "object" && !Array.isArray(model.headers)
+        ? (model.headers as Record<string, string>)
+        : undefined;
+
+    if (!resolvedApiKey && !modelHeaders) {
+      return streamFn(model, context, options);
+    }
+
+    return streamFn(model, context, {
+      ...options,
+      ...(resolvedApiKey && options?.apiKey === undefined ? { apiKey: resolvedApiKey } : {}),
+      headers: {
+        ...(modelHeaders ?? {}),
+        ...(options?.headers ?? {}),
+      },
+    });
   };
 }
 
@@ -850,8 +875,18 @@ export async function runEmbeddedAttempt(
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
+      const resolvedAttemptApiKey = await params.modelRegistry
+        .getApiKey(params.model)
+        .then((apiKey) => (typeof apiKey === "string" && apiKey.length > 0 ? apiKey : undefined))
+        .catch(() => undefined);
+      const setBaseStreamFn = (streamFn: StreamFn) => {
+        activeSession.agent.streamFn = wrapStreamFnWithModelRegistryAuth(
+          streamFn,
+          resolvedAttemptApiKey,
+        );
+      };
       if (providerStreamFn) {
-        activeSession.agent.streamFn = providerStreamFn;
+        setBaseStreamFn(providerStreamFn);
       } else if (
         shouldUseOpenAIWebSocketTransport({
           provider: params.provider,
@@ -860,20 +895,22 @@ export async function runEmbeddedAttempt(
       ) {
         const wsApiKey = await params.authStorage.getApiKey(params.provider);
         if (wsApiKey) {
-          activeSession.agent.streamFn = createOpenAIWebSocketStreamFn(wsApiKey, params.sessionId, {
-            signal: runAbortController.signal,
-          });
+          setBaseStreamFn(
+            createOpenAIWebSocketStreamFn(wsApiKey, params.sessionId, {
+              signal: runAbortController.signal,
+            }),
+          );
         } else {
           log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
-          activeSession.agent.streamFn = streamSimple;
+          setBaseStreamFn(streamSimple);
         }
       } else if (params.model.provider === "anthropic-vertex") {
         // Anthropic Vertex AI: inject AnthropicVertex client into pi-ai's
         // streamAnthropic for GCP IAM auth instead of Anthropic API keys.
-        activeSession.agent.streamFn = createAnthropicVertexStreamFnForModel(params.model);
+        setBaseStreamFn(createAnthropicVertexStreamFnForModel(params.model));
       } else {
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
-        activeSession.agent.streamFn = streamSimple;
+        setBaseStreamFn(streamSimple);
       }
 
       const { effectiveExtraParams } = applyExtraParamsToAgent(

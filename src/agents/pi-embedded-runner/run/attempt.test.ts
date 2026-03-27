@@ -24,6 +24,7 @@ import {
   stripSessionsYieldArtifacts,
   shouldInjectHeartbeatPrompt,
   decodeHtmlEntitiesInObject,
+  wrapStreamFnWithModelRegistryAuth,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
@@ -302,6 +303,88 @@ describe("composeSystemPromptWithHookContext", () => {
     expect(turns[2]?.prompt.startsWith("hello once more")).toBe(true);
     expect(turns[0]?.prompt).toContain("[Bootstrap truncation warning]");
     expect(turns[2]?.prompt).toContain("[Bootstrap truncation warning]");
+  });
+});
+
+describe("wrapStreamFnWithModelRegistryAuth", () => {
+  it("injects request auth from modelRegistry into custom stream overrides", async () => {
+    const calls: Array<{ apiKey?: string; headers?: Record<string, string> }> = [];
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      calls.push({
+        apiKey: options?.apiKey,
+        headers: options?.headers,
+      });
+      return createFakeStream({ events: [], resultMessage: {} });
+    });
+    const wrapped = wrapStreamFnWithModelRegistryAuth(baseStreamFn as never, "sk-runtime-test");
+
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-test",
+        headers: { Authorization: null, "X-Model": "1" },
+      } as never,
+      { messages: [] } as never,
+      { headers: { "X-Caller": "2" } } as never,
+    );
+
+    expect(calls).toEqual([
+      {
+        apiKey: "sk-runtime-test",
+        headers: {
+          Authorization: null,
+          "X-Model": "1",
+          "X-Caller": "2",
+        },
+      },
+    ]);
+  });
+
+  it("preserves an explicit caller apiKey", async () => {
+    const calls: Array<{ apiKey?: string }> = [];
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      calls.push({ apiKey: options?.apiKey });
+      return createFakeStream({ events: [], resultMessage: {} });
+    });
+    const wrapped = wrapStreamFnWithModelRegistryAuth(baseStreamFn as never, "sk-runtime-test");
+
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-test",
+      } as never,
+      { messages: [] } as never,
+      { apiKey: "sk-caller" } as never,
+    );
+
+    expect(calls).toEqual([{ apiKey: "sk-caller" }]);
+  });
+
+  it("falls back to the original call when no request auth is available", async () => {
+    const calls: Array<{ apiKey?: string; headers?: Record<string, string> }> = [];
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      calls.push({
+        apiKey: options?.apiKey,
+        headers: options?.headers,
+      });
+      return createFakeStream({ events: [], resultMessage: {} });
+    });
+    const wrapped = wrapStreamFnWithModelRegistryAuth(baseStreamFn as never, undefined);
+
+    const originalOptions = { headers: { "X-Caller": "2" } };
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-test",
+      } as never,
+      { messages: [] } as never,
+      originalOptions as never,
+    );
+
+    expect(calls).toEqual([{ apiKey: undefined, headers: { "X-Caller": "2" } }]);
   });
 });
 
