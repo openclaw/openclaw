@@ -14,7 +14,6 @@ import { VIEWER_LOADER_PATH } from "./viewer-assets.js";
 const DEFAULT_FILE_NAME = "diff.txt";
 const MAX_PATCH_FILE_COUNT = 128;
 const MAX_PATCH_TOTAL_LINES = 120_000;
-ensurePierreThemesRegistered();
 
 function escapeCssString(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
