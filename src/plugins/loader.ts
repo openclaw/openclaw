@@ -8,11 +8,6 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  clearMemoryPromptSection,
-  getMemoryPromptSectionBuilder,
-  restoreMemoryPromptSection,
-} from "../memory/prompt-section.js";
 import { resolveUserPath } from "../utils.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { clearPluginCommands } from "./command-registry-state.js";
@@ -27,6 +22,18 @@ import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { clearPluginInteractiveHandlers } from "./interactive.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import {
+  clearMemoryEmbeddingProviders,
+  listRegisteredMemoryEmbeddingProviders,
+  restoreRegisteredMemoryEmbeddingProviders,
+} from "./memory-embedding-providers.js";
+import {
+  clearMemoryPluginState,
+  getMemoryFlushPlanResolver,
+  getMemoryPromptSectionBuilder,
+  getMemoryRuntime,
+  restoreMemoryPluginState,
+} from "./memory-state.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { resolvePluginCacheInputs } from "./roots.js";
@@ -97,7 +104,10 @@ export class PluginLoadFailureError extends Error {
 
 type CachedPluginState = {
   registry: PluginRegistry;
+  memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
+  memoryFlushPlanResolver: ReturnType<typeof getMemoryFlushPlanResolver>;
   memoryPromptBuilder: ReturnType<typeof getMemoryPromptSectionBuilder>;
+  memoryRuntime: ReturnType<typeof getMemoryRuntime>;
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
@@ -113,7 +123,6 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
   "media",
   "tts",
   "stt",
-  "tools",
   "channel",
   "events",
   "logging",
@@ -124,7 +133,8 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
 export function clearPluginLoaderCache(): void {
   registryCache.clear();
   openAllowlistWarningCache.clear();
-  clearMemoryPromptSection();
+  clearMemoryEmbeddingProviders();
+  clearMemoryPluginState();
 }
 
 const defaultLogger = () => createSubsystemLogger("plugins");
@@ -240,9 +250,10 @@ function validatePluginConfig(params: {
     schema,
     cacheKey,
     value: params.value ?? {},
+    applyDefaults: true,
   });
   if (result.ok) {
-    return { ok: true, value: params.value as Record<string, unknown> | undefined };
+    return { ok: true, value: result.value as Record<string, unknown> | undefined };
   }
   return { ok: false, errors: result.errors.map((error) => error.text) };
 }
@@ -347,6 +358,7 @@ function createPluginRecord(params: {
     toolNames: [],
     hookNames: [],
     channelIds: [],
+    cliBackendIds: [],
     providerIds: [],
     speechProviderIds: [],
     mediaUnderstandingProviderIds: [],
@@ -707,7 +719,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
-      restoreMemoryPromptSection(cached.memoryPromptBuilder);
+      restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
+      restoreMemoryPluginState({
+        promptBuilder: cached.memoryPromptBuilder,
+        flushPlanResolver: cached.memoryFlushPlanResolver,
+        runtime: cached.memoryRuntime,
+      });
       if (shouldActivate) {
         activatePluginRegistry(cached.registry, cacheKey);
       }
@@ -720,7 +737,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (shouldActivate) {
     clearPluginCommands();
     clearPluginInteractiveHandlers();
-    clearMemoryPromptSection();
+    clearMemoryPluginState();
   }
 
   // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
@@ -1218,7 +1235,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       hookPolicy: entry?.hooks,
       registrationMode,
     });
+    const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
+    const previousMemoryFlushPlanResolver = getMemoryFlushPlanResolver();
     const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
+    const previousMemoryRuntime = getMemoryRuntime();
 
     try {
       const result = register(api);
@@ -1232,12 +1252,22 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
       // Snapshot loads should not replace process-global runtime prompt state.
       if (!shouldActivate) {
-        restoreMemoryPromptSection(previousMemoryPromptBuilder);
+        restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
+        restoreMemoryPluginState({
+          promptBuilder: previousMemoryPromptBuilder,
+          flushPlanResolver: previousMemoryFlushPlanResolver,
+          runtime: previousMemoryRuntime,
+        });
       }
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
     } catch (err) {
-      restoreMemoryPromptSection(previousMemoryPromptBuilder);
+      restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
+      restoreMemoryPluginState({
+        promptBuilder: previousMemoryPromptBuilder,
+        flushPlanResolver: previousMemoryFlushPlanResolver,
+        runtime: previousMemoryRuntime,
+      });
       recordPluginError({
         logger,
         registry,
@@ -1273,7 +1303,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     setCachedPluginRegistry(cacheKey, {
       registry,
+      memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
+      memoryFlushPlanResolver: getMemoryFlushPlanResolver(),
       memoryPromptBuilder: getMemoryPromptSectionBuilder(),
+      memoryRuntime: getMemoryRuntime(),
     });
   }
   if (shouldActivate) {

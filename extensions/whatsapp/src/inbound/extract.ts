@@ -11,11 +11,13 @@ import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identit
 import { parseVcard } from "../vcard.js";
 
 const MESSAGE_WRAPPER_KEYS = [
+  "botInvokeMessage",
   "ephemeralMessage",
   "viewOnceMessage",
   "viewOnceMessageV2",
   "viewOnceMessageV2Extension",
   "documentWithCaptionMessage",
+  "groupMentionedMessage",
 ] as const;
 
 const MESSAGE_CONTENT_KEYS = [

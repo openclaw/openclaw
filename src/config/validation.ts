@@ -21,6 +21,7 @@ import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
+import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import {
   listLegacyWebSearchConfigPaths,
@@ -253,7 +254,8 @@ export function validateConfigObjectRaw(
       issues: validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue)),
     };
   }
-  const duplicates = findDuplicateAgentDirs(validated.data as OpenClawConfig);
+  const validatedConfig = validated.data as OpenClawConfig;
+  const duplicates = findDuplicateAgentDirs(validatedConfig);
   if (duplicates.length > 0) {
     return {
       ok: false,
@@ -265,17 +267,17 @@ export function validateConfigObjectRaw(
       ],
     };
   }
-  const avatarIssues = validateIdentityAvatar(validated.data as OpenClawConfig);
+  const avatarIssues = validateIdentityAvatar(validatedConfig);
   if (avatarIssues.length > 0) {
     return { ok: false, issues: avatarIssues };
   }
-  const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validated.data as OpenClawConfig);
+  const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validatedConfig);
   if (gatewayTailscaleBindIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleBindIssues };
   }
   return {
     ok: true,
-    config: validated.data as OpenClawConfig,
+    config: validatedConfig,
   };
 }
 
@@ -350,6 +352,12 @@ function validateConfigObjectWithPluginsBase(
     registry: ReturnType<typeof loadPluginManifestRegistry>;
     knownIds?: Set<string>;
     normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
+    channelSchemas?: Map<
+      string,
+      {
+        schema?: Record<string, unknown>;
+      }
+    >;
   };
 
   let registryInfo: RegistryInfo | null = null;
@@ -441,6 +449,67 @@ function validateConfigObjectWithPluginsBase(
     return info.normalizedPlugins;
   };
 
+  const ensureChannelSchemas = (): Map<
+    string,
+    {
+      schema?: Record<string, unknown>;
+    }
+  > => {
+    const info = ensureRegistry();
+    if (!info.channelSchemas) {
+      info.channelSchemas = new Map(
+        collectChannelSchemaMetadata(info.registry).map(
+          (entry) => [entry.id, { schema: entry.configSchema }] as const,
+        ),
+      );
+    }
+    return info.channelSchemas;
+  };
+
+  let mutatedConfig = config;
+  let channelsCloned = false;
+  let pluginsCloned = false;
+  let pluginEntriesCloned = false;
+
+  const replaceChannelConfig = (channelId: string, nextValue: unknown) => {
+    if (!channelsCloned) {
+      mutatedConfig = {
+        ...mutatedConfig,
+        channels: {
+          ...mutatedConfig.channels,
+        },
+      };
+      channelsCloned = true;
+    }
+    (mutatedConfig.channels as Record<string, unknown>)[channelId] = nextValue;
+  };
+
+  const replacePluginEntryConfig = (pluginId: string, nextValue: Record<string, unknown>) => {
+    if (!pluginsCloned) {
+      mutatedConfig = {
+        ...mutatedConfig,
+        plugins: {
+          ...mutatedConfig.plugins,
+        },
+      };
+      pluginsCloned = true;
+    }
+    if (!pluginEntriesCloned) {
+      mutatedConfig.plugins = {
+        ...mutatedConfig.plugins,
+        entries: {
+          ...mutatedConfig.plugins?.entries,
+        },
+      };
+      pluginEntriesCloned = true;
+    }
+    const currentEntry = mutatedConfig.plugins?.entries?.[pluginId];
+    mutatedConfig.plugins!.entries![pluginId] = {
+      ...currentEntry,
+      config: nextValue,
+    };
+  };
+
   const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
 
   if (config.channels && isRecord(config.channels)) {
@@ -462,7 +531,32 @@ function validateConfigObjectWithPluginsBase(
           path: `channels.${trimmed}`,
           message: `unknown channel id: ${trimmed}`,
         });
+        continue;
       }
+
+      const channelSchema = ensureChannelSchemas().get(trimmed)?.schema;
+      if (!channelSchema) {
+        continue;
+      }
+      const result = validateJsonSchemaValue({
+        schema: channelSchema,
+        cacheKey: `channel:${trimmed}`,
+        value: config.channels[trimmed],
+        applyDefaults: true,
+      });
+      if (!result.ok) {
+        for (const error of result.errors) {
+          issues.push({
+            path:
+              error.path === "<root>" ? `channels.${trimmed}` : `channels.${trimmed}.${error.path}`,
+            message: `invalid config: ${error.message}`,
+            allowedValues: error.allowedValues,
+            allowedValuesHiddenCount: error.allowedValuesHiddenCount,
+          });
+        }
+        continue;
+      }
+      replaceChannelConfig(trimmed, result.value);
     }
   }
 
@@ -518,7 +612,7 @@ function validateConfigObjectWithPluginsBase(
     if (issues.length > 0) {
       return { ok: false, issues, warnings };
     }
-    return { ok: true, config, warnings };
+    return { ok: true, config: mutatedConfig, warnings };
   }
 
   const { registry } = ensureRegistry();
@@ -638,6 +732,7 @@ function validateConfigObjectWithPluginsBase(
           schema: record.configSchema,
           cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
           value: entry?.config ?? {},
+          applyDefaults: true,
         });
         if (!res.ok) {
           for (const error of res.errors) {
@@ -648,6 +743,8 @@ function validateConfigObjectWithPluginsBase(
               allowedValuesHiddenCount: error.allowedValuesHiddenCount,
             });
           }
+        } else if (entry || entryHasConfig) {
+          replacePluginEntryConfig(pluginId, res.value as Record<string, unknown>);
         }
       } else if (record.format === "bundle") {
         // Compatible bundles currently expose no native OpenClaw config schema.
@@ -672,5 +769,5 @@ function validateConfigObjectWithPluginsBase(
     return { ok: false, issues, warnings };
   }
 
-  return { ok: true, config, warnings };
+  return { ok: true, config: mutatedConfig, warnings };
 }

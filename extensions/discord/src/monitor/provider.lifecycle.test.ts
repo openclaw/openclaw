@@ -1,9 +1,28 @@
 import { EventEmitter } from "node:events";
-import type { Client } from "@buape/carbon";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayPlugin } from "@buape/carbon/gateway";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 import type { WaitForDiscordGatewayStopParams } from "../monitor.gateway.js";
+import type { MutableDiscordGateway } from "./gateway-handle.js";
 import type { DiscordGatewayEvent } from "./gateway-supervisor.js";
+
+type LifecycleParams = Parameters<
+  typeof import("./provider.lifecycle.js").runDiscordGatewayLifecycle
+>[0];
+type MockGateway = {
+  isConnected: boolean;
+  options: GatewayPlugin["options"];
+  disconnect: Mock<() => void>;
+  connect: Mock<(resume?: boolean) => void>;
+  state?: {
+    sessionId?: string | null;
+    resumeGatewayUrl?: string | null;
+    sequence?: number | null;
+  };
+  sequence?: number | null;
+  emitter: EventEmitter;
+  ws?: EventEmitter & { terminate?: () => void };
+};
 
 const {
   attachDiscordGatewayLoggingMock,
@@ -43,6 +62,7 @@ vi.mock("./gateway-registry.js", () => ({
 
 describe("runDiscordGatewayLifecycle", () => {
   beforeEach(() => {
+    vi.resetModules();
     attachDiscordGatewayLoggingMock.mockClear();
     getDiscordGatewayEmitterMock.mockClear();
     waitForDiscordGatewayStopMock.mockClear();
@@ -57,20 +77,15 @@ describe("runDiscordGatewayLifecycle", () => {
     stop?: () => Promise<void>;
     isDisallowedIntentsError?: (err: unknown) => boolean;
     pendingGatewayEvents?: DiscordGatewayEvent[];
-    gateway?: {
-      isConnected?: boolean;
-      options?: Record<string, unknown>;
-      disconnect?: () => void;
-      connect?: (resume?: boolean) => void;
-      state?: {
-        sessionId?: string | null;
-        resumeGatewayUrl?: string | null;
-        sequence?: number | null;
-      };
-      sequence?: number | null;
-      emitter?: EventEmitter;
-    };
+    gateway?: MockGateway;
   }) => {
+    const gateway =
+      params?.gateway ??
+      (() => {
+        const defaultGateway = createGatewayHarness().gateway;
+        defaultGateway.isConnected = true;
+        return defaultGateway;
+      })();
     const start = vi.fn(params?.start ?? (async () => undefined));
     const stop = vi.fn(params?.stop ?? (async () => undefined));
     const threadStop = vi.fn();
@@ -95,7 +110,7 @@ describe("runDiscordGatewayLifecycle", () => {
         return "continue";
       }),
       dispose: vi.fn(),
-      emitter: params?.gateway?.emitter,
+      emitter: gateway.emitter,
     };
     const statusSink = vi.fn();
     const runtime: RuntimeEnv = {
@@ -113,9 +128,7 @@ describe("runDiscordGatewayLifecycle", () => {
       statusSink,
       lifecycleParams: {
         accountId: params?.accountId ?? "default",
-        client: {
-          getPlugin: vi.fn((name: string) => (name === "gateway" ? params?.gateway : undefined)),
-        } as unknown as Client,
+        gateway: gateway as unknown as MutableDiscordGateway,
         runtime,
         isDisallowedIntentsError: params?.isDisallowedIntentsError ?? (() => false),
         voiceManager: null,
@@ -125,7 +138,7 @@ describe("runDiscordGatewayLifecycle", () => {
         gatewaySupervisor,
         statusSink,
         abortSignal: undefined as AbortSignal | undefined,
-      },
+      } satisfies LifecycleParams,
     };
   };
 
@@ -152,15 +165,17 @@ describe("runDiscordGatewayLifecycle", () => {
       sequence?: number | null;
     };
     sequence?: number | null;
-  }) {
+    ws?: EventEmitter & { terminate?: () => void };
+  }): { emitter: EventEmitter; gateway: MockGateway } {
     const emitter = new EventEmitter();
-    const gateway = {
+    const gateway: MockGateway = {
       isConnected: false,
-      options: {},
+      options: { intents: 0 } as GatewayPlugin["options"],
       disconnect: vi.fn(),
       connect: vi.fn(),
       ...(params?.state ? { state: params.state } : {}),
       ...(params?.sequence !== undefined ? { sequence: params.sequence } : {}),
+      ...(params?.ws ? { ws: params.ws } : {}),
       emitter,
     };
     return { emitter, gateway };
@@ -182,6 +197,23 @@ describe("runDiscordGatewayLifecycle", () => {
       message: String(err),
       shouldStopLifecycle: type !== "other",
     };
+  }
+
+  function expectGatewaySessionStateCleared(gateway: {
+    state?: {
+      sessionId?: string | null;
+      resumeGatewayUrl?: string | null;
+      sequence?: number | null;
+    };
+    sequence?: number | null;
+  }) {
+    if (!gateway.state) {
+      throw new Error("gateway state was not initialized");
+    }
+    expect(gateway.state.sessionId).toBeNull();
+    expect(gateway.state.resumeGatewayUrl).toBeNull();
+    expect(gateway.state.sequence).toBeNull();
+    expect(gateway.sequence).toBeNull();
   }
 
   it("cleans up thread bindings when exec approvals startup fails", async () => {
@@ -284,6 +316,222 @@ describe("runDiscordGatewayLifecycle", () => {
       expect(gateway.disconnect).toHaveBeenCalledTimes(1);
       expect(gateway.connect).toHaveBeenCalledTimes(1);
       expect(gateway.connect).toHaveBeenCalledWith(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears resume state and suppresses socket-driven auto-resume during forced startup reconnects", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const pendingGatewayEvents: DiscordGatewayEvent[] = [];
+      const socket = new EventEmitter();
+      const { emitter, gateway } = createGatewayHarness({
+        state: {
+          sessionId: "stale-session",
+          resumeGatewayUrl: "wss://gateway.discord.gg",
+          sequence: 123,
+        },
+        sequence: 123,
+        ws: socket,
+      });
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+      socket.on("error", (err) => {
+        pendingGatewayEvents.push({
+          type: "other",
+          err,
+          message: String(err),
+          shouldStopLifecycle: false,
+        });
+      });
+      socket.on("close", () => {
+        gateway.connect(true);
+      });
+      gateway.disconnect.mockImplementation(() => {
+        setTimeout(() => {
+          socket.emit(
+            "error",
+            new Error("WebSocket was closed before the connection was established"),
+          );
+          socket.emit("close", 1006, "");
+        }, 1);
+      });
+      gateway.connect.mockImplementation((resume?: boolean) => {
+        if (resume === false) {
+          setTimeout(() => {
+            gateway.isConnected = true;
+          }, 1_000);
+        }
+      });
+
+      const { lifecycleParams, runtimeError } = createLifecycleHarness({
+        gateway,
+        pendingGatewayEvents,
+      });
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      await vi.advanceTimersByTimeAsync(17_000);
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+
+      expect(gateway.connect).toHaveBeenCalledTimes(1);
+      expect(gateway.connect).toHaveBeenCalledWith(false);
+      expect(runtimeError).not.toHaveBeenCalledWith(
+        expect.stringContaining("WebSocket was closed before the connection was established"),
+      );
+      expectGatewaySessionStateCleared(gateway);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for forced terminate to close the old socket before reconnecting", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const socket = Object.assign(new EventEmitter(), {
+        terminate: vi.fn(() => {
+          setTimeout(() => {
+            socket.emit(
+              "error",
+              new Error("WebSocket was closed before the connection was established"),
+            );
+            socket.emit("close", 1006, "");
+          }, 1);
+        }),
+      });
+      const { emitter, gateway } = createGatewayHarness({ ws: socket });
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      gateway.connect.mockImplementation((_resume?: boolean) => {
+        setTimeout(() => {
+          gateway.isConnected = true;
+        }, 1_000);
+      });
+
+      const { lifecycleParams, runtimeError } = createLifecycleHarness({ gateway });
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      await vi.advanceTimersByTimeAsync(15_000 + 5_000 + 1_500);
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+
+      expect(socket.terminate).toHaveBeenCalledTimes(1);
+      expect(gateway.connect).toHaveBeenCalledTimes(1);
+      expect(gateway.connect).toHaveBeenCalledWith(false);
+      expect(runtimeError).toHaveBeenCalledWith(
+        expect.stringContaining("attempting forced terminate before giving up"),
+      );
+      expect(runtimeError).not.toHaveBeenCalledWith(
+        expect.stringContaining("WebSocket was closed before the connection was established"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails closed when forced terminate still does not close the old socket", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const socket = Object.assign(new EventEmitter(), {
+        terminate: vi.fn(() => {
+          setTimeout(() => {
+            socket.emit(
+              "error",
+              new Error("WebSocket was closed before the connection was established"),
+            );
+          }, 1);
+        }),
+      });
+      const { emitter, gateway } = createGatewayHarness({ ws: socket });
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      const { lifecycleParams, start, stop, threadStop, runtimeError, gatewaySupervisor } =
+        createLifecycleHarness({ gateway });
+
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      lifecyclePromise.catch(() => {});
+      await vi.advanceTimersByTimeAsync(15_000 + 5_000 + 1_500);
+      await expect(lifecyclePromise).rejects.toThrow(
+        "discord gateway socket did not close within 5000ms before reconnect",
+      );
+
+      expect(socket.terminate).toHaveBeenCalledTimes(1);
+      expect(gateway.connect).not.toHaveBeenCalled();
+      expect(runtimeError).toHaveBeenCalledWith(
+        expect.stringContaining("force-stopping instead of opening a parallel socket"),
+      );
+      expect(runtimeError).not.toHaveBeenCalledWith(
+        expect.stringContaining("WebSocket was closed before the connection was established"),
+      );
+      expectLifecycleCleanup({
+        start,
+        stop,
+        threadStop,
+        waitCalls: 0,
+        gatewaySupervisor,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not reconnect after lifecycle shutdown begins during socket drain", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const socket = new EventEmitter();
+      const { emitter, gateway } = createGatewayHarness({ ws: socket });
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      gateway.disconnect.mockImplementation(() => {
+        setTimeout(() => {
+          socket.emit("close", 1000, "");
+        }, 1_000);
+      });
+
+      const abortController = new AbortController();
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+      lifecycleParams.abortSignal = abortController.signal;
+
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      await vi.advanceTimersByTimeAsync(15_100);
+      abortController.abort();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+
+      expect(gateway.connect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats drain timeout as a graceful stop after lifecycle abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const socket = new EventEmitter();
+      const { emitter, gateway } = createGatewayHarness({ ws: socket });
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+      const abortController = new AbortController();
+      const { lifecycleParams, start, stop, threadStop, runtimeError, gatewaySupervisor } =
+        createLifecycleHarness({ gateway });
+      lifecycleParams.abortSignal = abortController.signal;
+
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      await vi.advanceTimersByTimeAsync(15_100);
+      abortController.abort();
+      await vi.advanceTimersByTimeAsync(5_500);
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+
+      expect(gateway.connect).not.toHaveBeenCalled();
+      expect(runtimeError).not.toHaveBeenCalledWith(
+        expect.stringContaining("gateway socket did not close within 5000ms before reconnect"),
+      );
+      expectLifecycleCleanup({
+        start,
+        stop,
+        threadStop,
+        waitCalls: 1,
+        gatewaySupervisor,
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -452,13 +700,7 @@ describe("runDiscordGatewayLifecycle", () => {
       expect(gateway.connect).toHaveBeenNthCalledWith(1, true);
       expect(gateway.connect).toHaveBeenNthCalledWith(2, true);
       expect(gateway.connect).toHaveBeenNthCalledWith(3, false);
-      if (!gateway.state) {
-        throw new Error("gateway state was not initialized");
-      }
-      expect(gateway.state.sessionId).toBeNull();
-      expect(gateway.state.resumeGatewayUrl).toBeNull();
-      expect(gateway.state.sequence).toBeNull();
-      expect(gateway.sequence).toBeNull();
+      expectGatewaySessionStateCleared(gateway);
     } finally {
       vi.useRealTimers();
     }
@@ -571,12 +813,56 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
+  it("does not suppress reconnect-exhausted already queued before shutdown", async () => {
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const pendingGatewayEvents: DiscordGatewayEvent[] = [];
+    const abortController = new AbortController();
+
+    const emitter = new EventEmitter();
+    const gateway: MockGateway = {
+      isConnected: true,
+      options: { intents: 0, reconnect: { maxAttempts: 50 } } as GatewayPlugin["options"],
+      disconnect: vi.fn(),
+      connect: vi.fn(),
+      emitter,
+    };
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+    const { lifecycleParams, runtimeLog, runtimeError } = createLifecycleHarness({
+      gateway,
+      pendingGatewayEvents,
+    });
+    lifecycleParams.abortSignal = abortController.signal;
+
+    // Start lifecycle; it yields at execApprovalsHandler.start(). We then
+    // queue a reconnect-exhausted event and abort. The lifecycle resumes and
+    // drains the queued fatal event before shutdown teardown flips
+    // lifecycleStopping, so the event still rejects the run.
+    const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+
+    pendingGatewayEvents.push(
+      createGatewayEvent(
+        "reconnect-exhausted",
+        "Max reconnect attempts (0) reached after code 1005",
+      ),
+    );
+    abortController.abort();
+
+    await expect(lifecyclePromise).rejects.toThrow(
+      "Max reconnect attempts (0) reached after code 1005",
+    );
+    expect(runtimeLog).not.toHaveBeenCalledWith(
+      expect.stringContaining("ignoring expected reconnect-exhausted during shutdown"),
+    );
+    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("Max reconnect attempts"));
+  });
+
   it("does not push connected: true when abortSignal is already aborted", async () => {
     const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const emitter = new EventEmitter();
-    const gateway = {
+    const gateway: MockGateway = {
       isConnected: true,
-      options: { reconnect: { maxAttempts: 3 } },
+      options: { intents: 0, reconnect: { maxAttempts: 3 } } as GatewayPlugin["options"],
       disconnect: vi.fn(),
       connect: vi.fn(),
       emitter,

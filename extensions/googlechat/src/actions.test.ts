@@ -47,7 +47,7 @@ describe("googlechat message actions", () => {
     ]);
 
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toEqual({
-      actions: ["send", "react", "reactions"],
+      actions: ["send", "upload-file", "react", "reactions"],
     });
   });
 
@@ -114,6 +114,77 @@ describe("googlechat message actions", () => {
       details: {
         ok: true,
         to: "spaces/AAA",
+      },
+    });
+  });
+
+  it("routes upload-file through the same attachment upload path with filename override", async () => {
+    const { googlechatMessageActions } = await import("./actions.js");
+
+    resolveGoogleChatAccount.mockReturnValue({
+      credentialSource: "service-account",
+      config: { mediaMaxMb: 5 },
+    });
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/BBB");
+    const loadWebMedia = vi.fn(async () => ({
+      buffer: Buffer.from("local-bytes"),
+      fileName: "local.txt",
+      contentType: "text/plain",
+    }));
+    getGoogleChatRuntime.mockReturnValue({
+      channel: {
+        media: {
+          fetchRemoteMedia: vi.fn(),
+        },
+      },
+      media: {
+        loadWebMedia,
+      },
+    });
+    uploadGoogleChatAttachment.mockResolvedValue({
+      attachmentUploadToken: "token-2",
+    });
+    sendGoogleChatMessage.mockResolvedValue({
+      messageName: "spaces/BBB/messages/msg-2",
+    });
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    const result = await googlechatMessageActions.handleAction({
+      action: "upload-file",
+      params: {
+        to: "spaces/BBB",
+        path: "/tmp/local.txt",
+        message: "notes",
+        filename: "renamed.txt",
+      },
+      cfg: {},
+      accountId: "default",
+      mediaLocalRoots: ["/tmp"],
+    } as never);
+
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "/tmp/local.txt",
+      expect.objectContaining({ localRoots: ["/tmp"] }),
+    );
+    expect(uploadGoogleChatAttachment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        space: "spaces/BBB",
+        filename: "renamed.txt",
+      }),
+    );
+    expect(sendGoogleChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        space: "spaces/BBB",
+        text: "notes",
+        attachments: [{ attachmentUploadToken: "token-2", contentName: "renamed.txt" }],
+      }),
+    );
+    expect(result).toMatchObject({
+      details: {
+        ok: true,
+        to: "spaces/BBB",
       },
     });
   });
