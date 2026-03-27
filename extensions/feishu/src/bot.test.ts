@@ -122,12 +122,12 @@ function createConfiguredFeishuRoute(): NonNullable<ConfiguredBindingRoute> {
       mainSessionKey: "agent:codex:main",
       lastRoutePolicy: "session",
       matchedBy: "binding.channel",
-    },
+    } as ResolvedAgentRoute,
   };
 }
 
 function createConfiguredBindingReadiness(ok: boolean, error?: string): BindingReadiness {
-  return ok ? { ok: true } : { ok: false, error: error ?? "unknown error" };
+  return (ok ? { ok: true } : { ok: false, error: error ?? "unknown error" }) as BindingReadiness;
 }
 
 function createBoundConversation(): NonNullable<BoundConversation> {
@@ -156,6 +156,12 @@ function buildDefaultResolveRoute(): ResolvedAgentRoute {
     lastRoutePolicy: "session",
     matchedBy: "default",
   };
+}
+
+function createUnboundConfiguredRoute(
+  route: NonNullable<ConfiguredBindingRoute>["route"],
+): ConfiguredBindingRoute {
+  return { bindingResolution: null, route };
 }
 
 const resolveAgentRouteMock: PluginRuntime["channel"]["routing"]["resolveAgentRoute"] = (params) =>
@@ -310,7 +316,8 @@ describe("handleFeishuMessage ACP routing", () => {
             resolveStorePath: resolveStorePathMock,
           },
           reply: {
-            resolveEnvelopeFormatOptions: resolveEnvelopeFormatOptionsMock,
+            resolveEnvelopeFormatOptions:
+              resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
             formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
             finalizeInboundContext: finalizeInboundContextMock as never,
             dispatchReplyFromConfig: vi.fn().mockResolvedValue({
@@ -513,7 +520,8 @@ describe("handleFeishuMessage command authorization", () => {
             resolveStorePath: resolveStorePathMock,
           },
           reply: {
-            resolveEnvelopeFormatOptions: resolveEnvelopeFormatOptionsMock,
+            resolveEnvelopeFormatOptions:
+              resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
             formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
             finalizeInboundContext: mockFinalizeInboundContext as never,
             dispatchReplyFromConfig: mockDispatchReplyFromConfig,
