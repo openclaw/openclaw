@@ -121,6 +121,8 @@ export function resolveSandboxDockerConfig(params: {
     dns: agentDocker?.dns ?? globalDocker?.dns,
     extraHosts: agentDocker?.extraHosts ?? globalDocker?.extraHosts,
     binds: binds.length ? binds : undefined,
+    workspaceMountPropagation:
+      agentDocker?.workspaceMountPropagation ?? globalDocker?.workspaceMountPropagation,
     ...resolveDangerousSandboxDockerBooleans(agentDocker, globalDocker),
   };
 }
