@@ -55,7 +55,12 @@ vi.mock("./channel.runtime.js", () => ({
   },
 }));
 
-import { feishuPlugin } from "./channel.js";
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
+}));
+
+let feishuPlugin: typeof import("./channel.js").feishuPlugin;
 
 function getDescribedActions(cfg: OpenClawConfig): string[] {
   return [...(feishuPlugin.actions?.describeMessageTool?.({ cfg })?.actions ?? [])];
@@ -97,6 +102,11 @@ async function expectLegacyFeishuCardPayloadRejected(cfg: OpenClawConfig, card: 
 }
 
 describe("feishuPlugin.status.probeAccount", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ feishuPlugin } = await import("./channel.js"));
+  });
+
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {
       channels: {

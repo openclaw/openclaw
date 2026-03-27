@@ -9,6 +9,7 @@ vi.mock("./send-target.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
+  setFeishuRuntime: vi.fn(),
   getFeishuRuntime: () => ({
     channel: {
       text: {
@@ -19,7 +20,13 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-import { sendCardFeishu, sendMessageFeishu } from "./send.js";
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
+}));
+
+let sendCardFeishu: typeof import("./send.js").sendCardFeishu;
+let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 
 describe("Feishu reply fallback for withdrawn/deleted targets", () => {
   const replyMock = vi.fn();
@@ -35,7 +42,9 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     expect(result.messageId).toBe(expectedMessageId);
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ sendCardFeishu, sendMessageFeishu } = await import("./send.js"));
     vi.clearAllMocks();
     resolveFeishuSendTargetMock.mockReturnValue({
       client: {

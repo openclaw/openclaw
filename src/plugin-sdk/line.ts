@@ -31,14 +31,14 @@ export {
   normalizeAccountId,
   resolveDefaultLineAccountId,
   resolveLineAccount,
-} from "../../extensions/line/api.js";
-export { LineConfigSchema } from "../../extensions/line/api.js";
+} from "../../extensions/line/runtime-api.js";
+export { LineConfigSchema } from "../../extensions/line/runtime-api.js";
 export type {
   LineChannelData,
   LineConfig,
   ResolvedLineAccount,
-} from "../../extensions/line/api.js";
-export type { LineProbeResult } from "../../extensions/line/api.js";
+} from "../../extensions/line/runtime-api.js";
+export type { LineProbeResult } from "../../extensions/line/runtime-api.js";
 export {
   createActionCard,
   createAgendaCard,
@@ -52,5 +52,5 @@ export {
   createReceiptCard,
   type CardAction,
   type ListItem,
-} from "../../extensions/line/api.js";
-export { processLineMessage } from "../../extensions/line/api.js";
+} from "../../extensions/line/runtime-api.js";
+export { processLineMessage } from "../../extensions/line/runtime-api.js";

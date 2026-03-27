@@ -1,10 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { registerFeishuBitableTools } from "./bitable.js";
-import { registerFeishuDriveTools } from "./drive.js";
-import { registerFeishuPermTools } from "./perm.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
-import { registerFeishuWikiTools } from "./wiki.js";
 
 const createFeishuClientMock = vi.fn((account: { appId?: string } | undefined) => ({
   __appId: account?.appId,
@@ -13,6 +9,11 @@ const createFeishuClientMock = vi.fn((account: { appId?: string } | undefined) =
 vi.mock("./client.js", () => ({
   createFeishuClient: (account: { appId?: string } | undefined) => createFeishuClientMock(account),
 }));
+
+let registerFeishuBitableTools: typeof import("./bitable.js").registerFeishuBitableTools;
+let registerFeishuDriveTools: typeof import("./drive.js").registerFeishuDriveTools;
+let registerFeishuPermTools: typeof import("./perm.js").registerFeishuPermTools;
+let registerFeishuWikiTools: typeof import("./wiki.js").registerFeishuWikiTools;
 
 function createConfig(params: {
   toolsA?: {
@@ -50,7 +51,16 @@ function createConfig(params: {
 }
 
 describe("feishu tool account routing", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ registerFeishuBitableTools, registerFeishuDriveTools, registerFeishuPermTools } =
+      await import("./bitable.js").then(async ({ registerFeishuBitableTools }) => ({
+        registerFeishuBitableTools,
+        ...(await import("./drive.js")),
+        ...(await import("./perm.js")),
+        ...(await import("./wiki.js")),
+      })));
+    ({ registerFeishuWikiTools } = await import("./wiki.js"));
     vi.clearAllMocks();
   });
 
