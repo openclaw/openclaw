@@ -1,3 +1,4 @@
+import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -377,12 +378,28 @@ export async function dispatchCronDelivery(
       delivery,
     });
     try {
-      const payloadsForDelivery =
+      const rawPayloads =
         deliveryPayloads.length > 0
           ? deliveryPayloads
           : synthesizedText
             ? [{ text: synthesizedText }]
             : [];
+      // Apply responsePrefix to outbound payloads (same pattern as heartbeat runner).
+      // Prefix is display-only; awareness events (queueCronAwarenessSystemEvent)
+      // intentionally use un-prefixed outputText/synthesizedText.
+      const { responsePrefix } = resolveEffectiveMessagesConfig(
+        params.cfgWithAgentDefaults,
+        params.agentId,
+        { channel: delivery.channel, accountId: delivery.accountId },
+      );
+      const payloadsForDelivery = responsePrefix
+        ? rawPayloads.map((p) => {
+            if (!p.text || p.text.startsWith(responsePrefix)) {
+              return p;
+            }
+            return { ...p, text: `${responsePrefix} ${p.text}` };
+          })
+        : rawPayloads;
       if (payloadsForDelivery.length === 0) {
         return null;
       }
