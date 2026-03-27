@@ -1,8 +1,8 @@
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { z } from "openclaw/plugin-sdk/zod";
 import WebSocket from "ws";
-import { z } from "zod";
 import type { ChannelAccountSnapshot, RuntimeEnv } from "../runtime-api.js";
-import type { MattermostPost } from "./client.js";
+import { MattermostPostSchema, type MattermostPost } from "./client.js";
 import { rawDataToString } from "./monitor-helpers.js";
 
 export type MattermostEventPayload = {
@@ -35,11 +35,6 @@ export type MattermostWebSocketLike = {
 };
 
 export type MattermostWebSocketFactory = (url: string) => MattermostWebSocketLike;
-
-const MattermostPostSchema = z.record(
-  z.string(),
-  z.unknown(),
-) as unknown as z.ZodType<MattermostPost>;
 
 const MattermostEventPayloadSchema = z.object({
   event: z.string().optional(),
