@@ -297,6 +297,7 @@ async function handleImageMessage(params: ZaloImageMessageParams): Promise<void>
   const authorization = await authorizeZaloMessage({
     ...params,
     text: caption,
+    // Use a sentinel so auth sees this as an inbound image before the download happens.
     mediaPath: photo_url ? "__pending_media__" : undefined,
     mediaType: undefined,
   });
