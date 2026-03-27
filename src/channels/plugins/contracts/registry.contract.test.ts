@@ -1,27 +1,19 @@
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { discordSessionBindingAdapterChannels } from "../../../../extensions/discord/runtime-api.js";
+import { feishuSessionBindingAdapterChannels } from "../../../../extensions/feishu/api.js";
+import { matrixSessionBindingAdapterChannels } from "../../../../extensions/matrix/api.js";
+import { telegramSessionBindingAdapterChannels } from "../../../../extensions/telegram/runtime-api.js";
 import { sessionBindingContractChannelIds } from "./manifest.js";
 
-const sessionBindingAdapterFiles = [
-  "../../../../extensions/discord/src/monitor/thread-bindings.manager.ts",
-  "../../../../extensions/feishu/src/thread-bindings.ts",
-  "../../../../extensions/matrix/src/matrix/thread-bindings.ts",
-  "../../../../extensions/telegram/src/thread-bindings.ts",
-] as const;
-
 function discoverSessionBindingChannels() {
-  const channels = new Set<string>();
-  for (const relativePath of sessionBindingAdapterFiles) {
-    const filePath = path.resolve(import.meta.dirname, relativePath);
-    const source = fs.readFileSync(filePath, "utf8");
-    for (const match of source.matchAll(
-      /registerSessionBindingAdapter\(\{[\s\S]*?channel:\s*"([^"]+)"/g,
-    )) {
-      channels.add(match[1]);
-    }
-  }
-  return [...channels].toSorted();
+  return [
+    ...new Set([
+      ...discordSessionBindingAdapterChannels,
+      ...feishuSessionBindingAdapterChannels,
+      ...matrixSessionBindingAdapterChannels,
+      ...telegramSessionBindingAdapterChannels,
+    ]),
+  ].toSorted();
 }
 
 describe("channel contract registry", () => {

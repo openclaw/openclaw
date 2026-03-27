@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
-import type { MemoryProviderStatus } from "../memory/types.js";
+import type { MemoryProviderStatus } from "../plugin-sdk/memory-core-host-engine-storage.js";
 import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
 
 export { getTailnetHostname };

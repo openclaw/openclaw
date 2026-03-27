@@ -3,13 +3,17 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import type { OpenClawPluginCliCommandDescriptor } from "./types.js";
 import type { PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
-function loadPluginCliRegistry(cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) {
+function loadPluginCliRegistry(
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+) {
   const config = cfg ?? loadConfig();
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   const logger: PluginLogger = {
@@ -27,6 +31,7 @@ function loadPluginCliRegistry(cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) {
       workspaceDir,
       env,
       logger,
+      ...loaderOptions,
     }),
   };
 }
@@ -58,8 +63,9 @@ export function registerPluginCliCommands(
   program: Command,
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
+  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
 ) {
-  const { config, workspaceDir, logger, registry } = loadPluginCliRegistry(cfg, env);
+  const { config, workspaceDir, logger, registry } = loadPluginCliRegistry(cfg, env, loaderOptions);
 
   const existingCommands = new Set(program.commands.map((cmd) => cmd.name()));
 

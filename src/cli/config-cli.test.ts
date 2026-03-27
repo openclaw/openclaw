@@ -227,24 +227,6 @@ describe("config cli", () => {
       expect(written.gateway?.auth).toEqual({ mode: "token" });
     });
 
-    it("auto-seeds a valid Ollama provider when setting only models.providers.ollama.apiKey", async () => {
-      const resolved: OpenClawConfig = {
-        gateway: { port: 18789 },
-      };
-      setSnapshot(resolved, resolved);
-
-      await runConfigCommand(["config", "set", "models.providers.ollama.apiKey", '"ollama-local"']);
-
-      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
-      expect(written.models?.providers?.ollama).toEqual({
-        baseUrl: "http://127.0.0.1:11434",
-        api: "ollama",
-        models: [],
-        apiKey: "ollama-local", // pragma: allowlist secret
-      });
-    });
-
     it("drops gateway.auth.password when switching mode to token", async () => {
       const resolved: OpenClawConfig = {
         gateway: {

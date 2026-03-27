@@ -31,10 +31,9 @@ vi.mock("node:fs", async (importOriginal) => {
     ...actual,
     existsSync: (p: string) =>
       isFixturePath(p) ? state.entries.has(abs(p)) : actual.existsSync(p),
-    readFileSync: (p: string, encoding?: unknown) => {
+    readFileSync: (p: string, encoding?: BufferEncoding) => {
       if (!isFixturePath(p)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return actual.readFileSync(p as any, encoding as any) as unknown;
+        return actual.readFileSync(p, encoding);
       }
       const entry = state.entries.get(abs(p));
       if (!entry || entry.kind !== "file") {
@@ -44,8 +43,7 @@ vi.mock("node:fs", async (importOriginal) => {
     },
     statSync: (p: string) => {
       if (!isFixturePath(p)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return actual.statSync(p as any) as unknown;
+        return actual.statSync(p);
       }
       const entry = state.entries.get(abs(p));
       if (!entry) {
@@ -74,10 +72,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   const wrapped = {
     ...actual,
-    readFile: async (p: string, encoding?: unknown) => {
+    readFile: async (p: string, encoding?: BufferEncoding) => {
       if (!isFixturePath(p)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return (await actual.readFile(p as any, encoding as any)) as unknown;
+        return await actual.readFile(p, encoding);
       }
       const entry = state.entries.get(abs(p));
       if (!entry || entry.kind !== "file") {
