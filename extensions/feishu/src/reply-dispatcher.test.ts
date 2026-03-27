@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+type StreamingSessionStub = {
+  active: boolean;
+  start: ReturnType<typeof vi.fn>;
+  update: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn>;
+  isActive: ReturnType<typeof vi.fn>;
+};
+
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const getFeishuRuntimeMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
@@ -11,7 +19,7 @@ const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
-const streamingInstances = vi.hoisted(() => [] as any[]);
+const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,
@@ -667,16 +675,16 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     let shouldFailStart = true;
 
     // Intercept streaming instance creation to make first start() reject
-    const origPush = streamingInstances.push;
-    streamingInstances.push = function (this: any[], ...args: any[]) {
+    const origPush = streamingInstances.push.bind(streamingInstances);
+    streamingInstances.push = (...args: StreamingSessionStub[]) => {
       if (shouldFailStart) {
         args[0].start = vi
           .fn()
           .mockRejectedValue(new Error("Create card request failed with HTTP 400"));
         shouldFailStart = false;
       }
-      return origPush.apply(this, args);
-    } as any;
+      return origPush(...args);
+    };
 
     try {
       createFeishuReplyDispatcher({
