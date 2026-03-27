@@ -94,6 +94,7 @@ describe("configureGatewayForSetup", () => {
     const result = await runGatewayConfig();
 
     expect(result.settings.gatewayToken).toBe("generated-token");
+    expect(result.nextConfig.gateway?.remote?.token).toBe("generated-token");
     expect(result.nextConfig.gateway?.nodes?.denyCommands).toEqual(DEFAULT_DANGEROUS_NODE_COMMANDS);
   });
 
@@ -260,6 +261,11 @@ describe("configureGatewayForSetup", () => {
 
       expect(result.nextConfig.gateway?.auth?.mode).toBe("token");
       expect(result.nextConfig.gateway?.auth?.token).toEqual({
+        source: "env",
+        provider: "default",
+        id: "OPENCLAW_GATEWAY_TOKEN",
+      });
+      expect(result.nextConfig.gateway?.remote?.token).toEqual({
         source: "env",
         provider: "default",
         id: "OPENCLAW_GATEWAY_TOKEN",
