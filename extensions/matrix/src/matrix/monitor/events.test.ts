@@ -698,7 +698,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(body).toContain("SAS decimal: 4321 8765 2109");
   });
 
-  it("prefers the most recent verification DM over the canonical active DM for unmapped SAS summaries", async () => {
+  it("prefers the canonical active DM over the most recent verification room for unmapped SAS summaries", async () => {
     const { sendMessage, roomEventListener, verificationSummaryListener } = createHarness({
       joinedMembersByRoom: {
         "!dm-active:example.org": ["@alice:example.org", "@bot:example.org"],
@@ -763,7 +763,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
         "SAS decimal: 2468 1357 9753",
       ),
     );
-    expect((sasCall?.[0] ?? "") as string).toBe("!dm-current:example.org");
+    expect((sasCall?.[0] ?? "") as string).toBe("!dm-active:example.org");
   });
 
   it("retries SAS notice lookup when start arrives before SAS payload is available", async () => {
@@ -884,6 +884,68 @@ describe("registerMatrixMonitorEvents verification routing", () => {
 
     verificationSummaryListener({
       id: "verification-explicit-room",
+      otherUserId: "@alice:example.org",
+      isSelfVerification: false,
+      initiatedByMe: false,
+      phase: 3,
+      phaseName: "started",
+      pending: true,
+      methods: ["m.sas.v1"],
+      canAccept: false,
+      hasSas: true,
+      sas: {
+        decimal: [6158, 1986, 3513],
+        emoji: [
+          ["🎁", "Gift"],
+          ["🌍", "Globe"],
+          ["🐴", "Horse"],
+        ],
+      },
+      hasReciprocateQr: false,
+      completed: false,
+      createdAt: new Date("2026-02-25T21:42:54.000Z").toISOString(),
+      updatedAt: new Date("2026-02-25T21:42:55.000Z").toISOString(),
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+    expect((sendMessage.mock.calls as unknown[][])[0]?.[0]).toBe("!dm:example.org");
+  });
+
+  it("prefers the active direct room over a stale remembered strict room for unmapped summaries", async () => {
+    const { sendMessage, roomEventListener, verificationSummaryListener } = createHarness({
+      joinedMembersByRoom: {
+        "!fallback:example.org": ["@alice:example.org", "@bot:example.org"],
+        "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
+      },
+      memberStateByRoomUser: {
+        "!dm:example.org": {
+          "@alice:example.org": { is_direct: true },
+        },
+      },
+    });
+    if (!verificationSummaryListener) {
+      throw new Error("verification.summary listener was not registered");
+    }
+
+    roomEventListener("!fallback:example.org", {
+      event_id: "$start-fallback",
+      sender: "@alice:example.org",
+      type: "m.key.verification.start",
+      origin_server_ts: Date.now(),
+      content: {
+        "m.relates_to": { event_id: "$req-fallback" },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+    sendMessage.mockClear();
+
+    verificationSummaryListener({
+      id: "verification-stale-room",
       otherUserId: "@alice:example.org",
       isSelfVerification: false,
       initiatedByMe: false,

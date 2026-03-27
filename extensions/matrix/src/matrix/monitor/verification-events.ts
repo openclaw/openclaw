@@ -428,6 +428,12 @@ export function createMatrixVerificationEventRouter(params: {
     }
     const recentRoomId = trimMaybeString(verificationUserRooms.get(remoteUserId));
     const activeRoomId = await resolveActiveDirectRoomId(remoteUserId);
+    if (recentRoomId && activeRoomId && recentRoomId === activeRoomId) {
+      return recentRoomId;
+    }
+    if (activeRoomId) {
+      return activeRoomId;
+    }
     if (
       recentRoomId &&
       (await isStrictDirectRoom({
@@ -438,7 +444,7 @@ export function createMatrixVerificationEventRouter(params: {
     ) {
       return recentRoomId;
     }
-    return activeRoomId;
+    return null;
   }
 
   async function routeVerificationSummary(summary: MatrixVerificationSummaryLike): Promise<void> {
