@@ -476,8 +476,7 @@ describe("config strict validation", () => {
   it("flags legacy config entries without auto-migrating", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
-        agents: { list: [{ id: "pi" }] },
-        routing: { allowFrom: ["+15555550123"] },
+        memorySearch: { provider: "local", fallback: "none" },
       });
 
       const snap = await readConfigFileSnapshot();
