@@ -85,6 +85,9 @@ export async function runBackgroundCapabilityProbe(params: {
       finalStatus = "react";
     }
 
+    // Plain assistant text without a native tool call or explicit ReAct markers is inconclusive.
+    // Leaving the cache as "unknown" avoids sticky false negatives for tool-capable models that
+    // reply with a refusal, safety text, or otherwise non-compliant probe output.
     // Only update if we got a definitive result (not unknown)
     if (finalStatus !== "unknown") {
       await updateModelCapability(configDir, providerId, modelId, finalStatus);
