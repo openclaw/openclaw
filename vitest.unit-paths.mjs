@@ -24,9 +24,6 @@ export const unitTestAdditionalExcludePatterns = [
   "src/commands/**",
   "src/channels/plugins/contracts/**",
   "src/plugins/contracts/**",
-  "src/channels/plugins/plugins-core.test.ts",
-  "src/security/dm-policy-channel-smoke.test.ts",
-  "src/tts/tts.test.ts",
 ];
 
 const sharedBaseExcludePatterns = [
