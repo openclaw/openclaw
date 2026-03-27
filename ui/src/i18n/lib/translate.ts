@@ -109,6 +109,28 @@ class I18nManager {
   }
 
   public t(key: string, params?: Record<string, string>): string {
+    const value = this.getValue(key);
+
+    if (typeof value !== "string") {
+      return key;
+    }
+
+    if (params) {
+      return value.replace(/\{(\w+)\}/g, (_, k) => params[k] || `{${k}}`);
+    }
+
+    return value;
+  }
+
+  public getObject(key: string): Record<string, unknown> | undefined {
+    const value = this.getValue(key);
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return value as Record<string, unknown>;
+    }
+    return undefined;
+  }
+
+  private getValue(key: string): unknown {
     const keys = key.split(".");
     let value: unknown = this.translations[this.locale] || this.translations[DEFAULT_LOCALE];
 
@@ -134,17 +156,10 @@ class I18nManager {
       }
     }
 
-    if (typeof value !== "string") {
-      return key;
-    }
-
-    if (params) {
-      return value.replace(/\{(\w+)\}/g, (_, k) => params[k] || `{${k}}`);
-    }
-
     return value;
   }
 }
 
 export const i18n = new I18nManager();
 export const t = (key: string, params?: Record<string, string>) => i18n.t(key, params);
+export const getTranslationObject = (key: string) => i18n.getObject(key);

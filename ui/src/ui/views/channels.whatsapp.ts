@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/lib/translate.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { WhatsAppStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
@@ -18,41 +19,44 @@ export function renderWhatsAppCard(params: {
   const configured = resolveChannelConfigured("whatsapp", props);
 
   return renderSingleAccountChannelCard({
-    title: "WhatsApp",
-    subtitle: "Link WhatsApp Web and monitor connection health.",
+    title: t("channels.whatsappTitle"),
+    subtitle: t("channels.whatsappSubtitle"),
     accountCountLabel,
     statusRows: [
-      { label: "Configured", value: formatNullableBoolean(configured) },
-      { label: "Linked", value: whatsapp?.linked ? "Yes" : "No" },
-      { label: "Running", value: whatsapp?.running ? "Yes" : "No" },
-      { label: "Connected", value: whatsapp?.connected ? "Yes" : "No" },
+      { label: t("channels.whatsappConfigured"), value: formatNullableBoolean(configured) },
+      { label: t("channels.whatsappLinked"), value: whatsapp?.linked ? t("channels.statusYes") : t("channels.statusNo") },
+      { label: t("channels.whatsappRunning"), value: whatsapp?.running ? t("channels.statusYes") : t("channels.statusNo") },
+      { label: t("channels.whatsappConnected"), value: whatsapp?.connected ? t("channels.statusYes") : t("channels.statusNo") },
       {
-        label: "Last connect",
+        label: t("channels.whatsappLastConnect"),
         value: whatsapp?.lastConnectedAt
           ? formatRelativeTimestamp(whatsapp.lastConnectedAt)
-          : "n/a",
+          : t("channels.statusNa"),
       },
       {
-        label: "Last message",
-        value: whatsapp?.lastMessageAt ? formatRelativeTimestamp(whatsapp.lastMessageAt) : "n/a",
+        label: t("channels.whatsappLastMessage"),
+        value: whatsapp?.lastMessageAt ? formatRelativeTimestamp(whatsapp.lastMessageAt) : t("channels.statusNa"),
       },
       {
-        label: "Auth age",
-        value: whatsapp?.authAgeMs != null ? formatDurationHuman(whatsapp.authAgeMs) : "n/a",
+        label: t("channels.whatsappAuthAge"),
+        value: whatsapp?.authAgeMs != null ? formatDurationHuman(whatsapp.authAgeMs) : t("channels.statusNa"),
       },
     ],
     lastError: whatsapp?.lastError,
     extraContent: html`
       ${
         props.whatsappMessage
-          ? html`<div class="callout" style="margin-top: 12px;">${props.whatsappMessage}</div>`
+          ? html`<div class="callout" style="margin-top: 12px;">
+              ${props.whatsappMessage}
+            </div>`
           : nothing
       }
+
       ${
         props.whatsappQrDataUrl
           ? html`<div class="qr-wrap">
-            <img src=${props.whatsappQrDataUrl} alt="WhatsApp QR" />
-          </div>`
+              <img src=${props.whatsappQrDataUrl} alt=${t("channels.whatsappTitle")} />
+            </div>`
           : nothing
       }
     `,
@@ -63,26 +67,32 @@ export function renderWhatsAppCard(params: {
         ?disabled=${props.whatsappBusy}
         @click=${() => props.onWhatsAppStart(false)}
       >
-        ${props.whatsappBusy ? "Working…" : "Show QR"}
+        ${props.whatsappBusy ? t("channels.whatsappWorking") : t("channels.whatsappShowQr")}
       </button>
       <button
         class="btn"
         ?disabled=${props.whatsappBusy}
         @click=${() => props.onWhatsAppStart(true)}
       >
-        Relink
+        ${t("channels.whatsappRelink")}
       </button>
-      <button class="btn" ?disabled=${props.whatsappBusy} @click=${() => props.onWhatsAppWait()}>
-        Wait for scan
+      <button
+        class="btn"
+        ?disabled=${props.whatsappBusy}
+        @click=${() => props.onWhatsAppWait()}
+      >
+        ${t("channels.whatsappWaitForScan")}
       </button>
       <button
         class="btn danger"
         ?disabled=${props.whatsappBusy}
         @click=${() => props.onWhatsAppLogout()}
       >
-        Logout
+        ${t("channels.whatsappLogout")}
       </button>
-      <button class="btn" @click=${() => props.onRefresh(true)}>Refresh</button>
+      <button class="btn" @click=${() => props.onRefresh(true)}>
+        ${t("channels.whatsappRefresh")}
+      </button>
     </div>`,
   });
 }

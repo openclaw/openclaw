@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/lib/translate.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -88,46 +89,44 @@ export function renderAgentOverview(params: {
 
   return html`
     <section class="card">
-      <div class="card-title">Overview</div>
-      <div class="card-sub">Workspace paths and identity metadata.</div>
+      <div class="card-title">${t("overview.agents.tabs.overview")}</div>
+      <div class="card-sub">${t("overview.agents.agentContextSubtitle")}</div>
 
       <div class="agents-overview-grid" style="margin-top: 16px;">
         <div class="agent-kv">
-          <div class="label">Workspace</div>
+          <div class="label">${t("overview.agents.workspaceLabel")}</div>
           <div>
             <button
               type="button"
               class="workspace-link mono"
               @click=${() => onSelectPanel("files")}
-              title="Open Files tab"
-            >
-              ${workspace}
-            </button>
+              title=${t("overview.agents.openFilesTab")}
+            >${workspace}</button>
           </div>
         </div>
         <div class="agent-kv">
-          <div class="label">Primary Model</div>
+          <div class="label">${t("overview.agents.primaryModel")}</div>
           <div class="mono">${model}</div>
         </div>
         <div class="agent-kv">
-          <div class="label">Skills Filter</div>
-          <div>${skillFilter ? `${skillCount} selected` : "all skills"}</div>
+          <div class="label">${t("overview.agents.skillsFilter")}</div>
+          <div>${skillFilter ? t("overview.agents.selectedCount", { n: skillCount }) : t("overview.agents.allSkills")}</div>
         </div>
       </div>
 
       ${
         configDirty
           ? html`
-              <div class="callout warn" style="margin-top: 16px">You have unsaved config changes.</div>
+              <div class="callout warn" style="margin-top: 16px">${t("overview.agents.unsavedChanges")}</div>
             `
           : nothing
       }
 
       <div class="agent-model-select" style="margin-top: 20px;">
-        <div class="label">Model Selection</div>
+        <div class="label">${t("overview.agents.modelSelection")}</div>
         <div class="agent-model-fields">
           <label class="field">
-            <span>Primary model${isDefault ? " (default)" : ""}</span>
+            <span>${t("overview.agents.primaryModel")}${isDefault ? ` (${t("overview.agents.default")})` : ""}</span>
             <select
               .value=${isDefault ? (effectivePrimary ?? "") : (entryPrimary ?? "")}
               ?disabled=${disabled}
@@ -137,29 +136,26 @@ export function renderAgentOverview(params: {
               ${
                 isDefault
                   ? html`
-                      <option value="">Not set</option>
+                      <option value="">${t("overview.agents.notSet")}</option>
                     `
                   : html`
-                    <option value="">
-                      ${defaultPrimary ? `Inherit default (${defaultPrimary})` : "Inherit default"}
-                    </option>
-                  `
+                      <option value="">
+                        ${defaultPrimary ? t("overview.agents.inheritDefaultWithValue", { value: defaultPrimary }) : t("overview.agents.inheritDefault")}
+                      </option>
+                    `
               }
               ${buildModelOptions(configForm, effectivePrimary ?? undefined, params.modelCatalog)}
             </select>
           </label>
           <div class="field">
-            <span>Fallbacks</span>
-            <div
-              class="agent-chip-input"
-              @click=${(e: Event) => {
-                const container = e.currentTarget as HTMLElement;
-                const input = container.querySelector("input");
-                if (input) {
-                  input.focus();
-                }
-              }}
-            >
+            <span>${t("overview.agents.fallbacks")}</span>
+            <div class="agent-chip-input" @click=${(e: Event) => {
+              const container = e.currentTarget as HTMLElement;
+              const input = container.querySelector("input");
+              if (input) {
+                input.focus();
+              }
+            }}>
               ${fallbackChips.map(
                 (chip, i) => html`
                   <span class="chip">
@@ -169,15 +165,13 @@ export function renderAgentOverview(params: {
                       class="chip-remove"
                       ?disabled=${disabled}
                       @click=${() => removeChip(i)}
-                    >
-                      &times;
-                    </button>
+                    >&times;</button>
                   </span>
                 `,
               )}
               <input
                 ?disabled=${disabled}
-                placeholder=${fallbackChips.length === 0 ? "provider/model" : ""}
+                placeholder=${fallbackChips.length === 0 ? t("overview.agents.providerModel") : ""}
                 @keydown=${handleChipKeydown}
                 @blur=${(e: Event) => {
                   const input = e.target as HTMLInputElement;
@@ -192,13 +186,8 @@ export function renderAgentOverview(params: {
           </div>
         </div>
         <div class="agent-model-actions">
-          <button
-            type="button"
-            class="btn btn--sm"
-            ?disabled=${configLoading}
-            @click=${onConfigReload}
-          >
-            Reload Config
+          <button type="button" class="btn btn--sm" ?disabled=${configLoading} @click=${onConfigReload}>
+            ${t("overview.agents.reloadConfig")}
           </button>
           <button
             type="button"
@@ -206,7 +195,7 @@ export function renderAgentOverview(params: {
             ?disabled=${configSaving || !configDirty}
             @click=${onConfigSave}
           >
-            ${configSaving ? "Saving…" : "Save"}
+            ${configSaving ? t("overview.agents.saving") : t("common.save")}
           </button>
         </div>
       </div>

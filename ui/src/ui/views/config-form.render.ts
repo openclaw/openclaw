@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { icons } from "../icons.ts";
 import type { ConfigUiHints } from "../types.ts";
+import { t } from "../../i18n/lib/translate.ts";
 import { matchesNodeSearch, parseConfigSearchQuery, renderNode } from "./config-form.node.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 
@@ -273,19 +274,57 @@ const sectionIcons = {
   `,
 };
 
-// Section metadata
+// Section metadata - uses translation keys
+export const getSectionMeta = (key: string): { label: string; description: string } => {
+  const meta: Record<string, { labelKey: string; descKey: string }> = {
+    env: { labelKey: "config.subsections.env", descKey: "config.descriptions.env" },
+    update: { labelKey: "config.subsections.update", descKey: "config.descriptions.update" },
+    agents: { labelKey: "config.subsections.agents", descKey: "config.descriptions.agents" },
+    auth: { labelKey: "config.subsections.auth", descKey: "config.descriptions.auth" },
+    channels: { labelKey: "config.subsections.channels", descKey: "config.descriptions.channels" },
+    messages: { labelKey: "config.subsections.messages", descKey: "config.descriptions.messages" },
+    commands: { labelKey: "config.subsections.commands", descKey: "config.descriptions.commands" },
+    hooks: { labelKey: "config.subsections.hooks", descKey: "config.descriptions.hooks" },
+    skills: { labelKey: "config.subsections.skills", descKey: "config.descriptions.skills" },
+    tools: { labelKey: "config.subsections.tools", descKey: "config.descriptions.tools" },
+    gateway: { labelKey: "config.subsections.gateway", descKey: "config.descriptions.gateway" },
+    wizard: { labelKey: "config.subsections.wizard", descKey: "config.descriptions.wizard" },
+    meta: { labelKey: "config.subsections.meta", descKey: "config.descriptions.meta" },
+    logging: { labelKey: "config.subsections.logging", descKey: "config.descriptions.logging" },
+    browser: { labelKey: "config.subsections.browser", descKey: "config.descriptions.browser" },
+    ui: { labelKey: "config.subsections.ui", descKey: "config.descriptions.ui" },
+    models: { labelKey: "config.subsections.models", descKey: "config.descriptions.models" },
+    bindings: { labelKey: "config.subsections.bindings", descKey: "config.descriptions.bindings" },
+    broadcast: { labelKey: "config.subsections.broadcast", descKey: "config.descriptions.broadcast" },
+    audio: { labelKey: "config.subsections.audio", descKey: "config.descriptions.audio" },
+    session: { labelKey: "config.subsections.session", descKey: "config.descriptions.session" },
+    cron: { labelKey: "config.subsections.cron", descKey: "config.descriptions.cron" },
+    web: { labelKey: "config.subsections.web", descKey: "config.descriptions.web" },
+    discovery: { labelKey: "config.subsections.discovery", descKey: "config.descriptions.discovery" },
+    canvasHost: { labelKey: "config.subsections.canvasHost", descKey: "config.descriptions.canvasHost" },
+    talk: { labelKey: "config.subsections.talk", descKey: "config.descriptions.talk" },
+    plugins: { labelKey: "config.subsections.plugins", descKey: "config.descriptions.plugins" },
+    diagnostics: { labelKey: "config.subsections.diagnostics", descKey: "config.descriptions.diagnostics" },
+    cli: { labelKey: "config.subsections.cli", descKey: "config.descriptions.cli" },
+    secrets: { labelKey: "config.subsections.secrets", descKey: "config.descriptions.secrets" },
+    acp: { labelKey: "config.subsections.acp", descKey: "config.descriptions.acp" },
+    mcp: { labelKey: "config.subsections.mcp", descKey: "config.descriptions.mcp" },
+    approvals: { labelKey: "config.subsections.approvals", descKey: "config.descriptions.approvals" },
+  };
+  const m = meta[key];
+  if (m) {
+    return { label: t(m.labelKey), description: t(m.descKey) };
+  }
+  return { label: key, description: "" };
+};
+
+// Legacy export for backwards compatibility
 export const SECTION_META: Record<string, { label: string; description: string }> = {
-  env: {
-    label: "Environment Variables",
-    description: "Environment variables passed to the gateway process",
-  },
+  env: { label: "Environment Variables", description: "Environment variables passed to the gateway process" },
   update: { label: "Updates", description: "Auto-update settings and release channel" },
   agents: { label: "Agents", description: "Agent configurations, models, and identities" },
   auth: { label: "Authentication", description: "API keys and authentication profiles" },
-  channels: {
-    label: "Channels",
-    description: "Messaging channels (Telegram, Discord, Slack, etc.)",
-  },
+  channels: { label: "Channels", description: "Messaging channels (Telegram, Discord, Slack, etc.)" },
   messages: { label: "Messages", description: "Message handling and routing settings" },
   commands: { label: "Commands", description: "Custom slash commands" },
   hooks: { label: "Hooks", description: "Webhooks and event hooks" },
@@ -293,7 +332,6 @@ export const SECTION_META: Record<string, { label: string; description: string }
   tools: { label: "Tools", description: "Tool configurations (browser, search, etc.)" },
   gateway: { label: "Gateway", description: "Gateway server settings (port, auth, binding)" },
   wizard: { label: "Setup Wizard", description: "Setup wizard state and history" },
-  // Additional sections
   meta: { label: "Metadata", description: "Gateway metadata and version information" },
   logging: { label: "Logging", description: "Log levels and output configuration" },
   browser: { label: "Browser", description: "Browser automation settings" },
@@ -309,16 +347,10 @@ export const SECTION_META: Record<string, { label: string; description: string }
   canvasHost: { label: "Canvas Host", description: "Canvas rendering and display" },
   talk: { label: "Talk", description: "Voice and speech settings" },
   plugins: { label: "Plugins", description: "Plugin management and extensions" },
-  diagnostics: {
-    label: "Diagnostics",
-    description: "Instrumentation, OpenTelemetry, and cache-trace settings",
-  },
+  diagnostics: { label: "Diagnostics", description: "Instrumentation, OpenTelemetry, and cache-trace settings" },
   cli: { label: "CLI", description: "CLI banner and startup behavior" },
   secrets: { label: "Secrets", description: "Secret provider configuration" },
-  acp: {
-    label: "ACP",
-    description: "Agent Communication Protocol runtime and streaming settings",
-  },
+  acp: { label: "ACP", description: "Agent Communication Protocol runtime and streaming settings" },
   mcp: { label: "MCP", description: "Model Context Protocol server definitions" },
 };
 
@@ -338,7 +370,7 @@ function matchesSearch(params: {
   }
   const criteria = parseConfigSearchQuery(params.query);
   const q = criteria.text;
-  const meta = SECTION_META[params.key];
+  const meta = getSectionMeta(params.key);
   const sectionMetaMatches =
     q &&
     (params.key.toLowerCase().includes(q) ||
@@ -361,14 +393,14 @@ function matchesSearch(params: {
 export function renderConfigForm(props: ConfigFormProps) {
   if (!props.schema) {
     return html`
-      <div class="muted">Schema unavailable.</div>
+      <div class="muted">${t("channels.schemaUnavailable")}</div>
     `;
   }
   const schema = props.schema;
   const value = props.value ?? {};
   if (schemaType(schema) !== "object" || !schema.properties) {
     return html`
-      <div class="callout danger">Unsupported schema. Use Raw.</div>
+      <div class="callout danger">${t("channels.unsupportedSchemaNode")}</div>
     `;
   }
   const unsupported = new Set(props.unsupportedPaths ?? []);
@@ -429,51 +461,11 @@ export function renderConfigForm(props: ConfigFormProps) {
       <div class="config-empty">
         <div class="config-empty__icon">${icons.search}</div>
         <div class="config-empty__text">
-          ${searchQuery ? `No settings match "${searchQuery}"` : "No settings in this section"}
+          ${searchQuery ? t("config.form.noMatches") : t("config.form.noSettings")}
         </div>
       </div>
     `;
   }
-
-  const renderSectionCard = (params: {
-    id: string;
-    sectionKey: string;
-    label: string;
-    description: string;
-    node: JsonSchema;
-    nodeValue: unknown;
-    path: Array<string | number>;
-  }) => html`
-    <section class="config-section-card" id=${params.id}>
-      <div class="config-section-card__header">
-        <span class="config-section-card__icon">${getSectionIcon(params.sectionKey)}</span>
-        <div class="config-section-card__titles">
-          <h3 class="config-section-card__title">${params.label}</h3>
-          ${
-            params.description
-              ? html`<p class="config-section-card__desc">${params.description}</p>`
-              : nothing
-          }
-        </div>
-      </div>
-      <div class="config-section-card__content">
-        ${renderNode({
-          schema: params.node,
-          value: params.nodeValue,
-          path: params.path,
-          hints: props.uiHints,
-          unsupported,
-          disabled: props.disabled ?? false,
-          showLabel: false,
-          searchCriteria,
-          revealSensitive: props.revealSensitive ?? false,
-          isSensitivePathRevealed: props.isSensitivePathRevealed,
-          onToggleSensitivePath: props.onToggleSensitivePath,
-          onPatch: props.onPatch,
-        })}
-      </div>
-    </section>
-  `;
 
   return html`
     <div class="config-form config-form--modern">
@@ -489,31 +481,73 @@ export function renderConfigForm(props: ConfigFormProps) {
                 sectionValue && typeof sectionValue === "object"
                   ? (sectionValue as Record<string, unknown>)[subsectionKey]
                   : undefined;
-              return renderSectionCard({
-                id: `config-section-${sectionKey}-${subsectionKey}`,
-                sectionKey,
-                label,
-                description,
-                node,
-                nodeValue: scopedValue,
-                path: [sectionKey, subsectionKey],
-              });
+              const id = `config-section-${sectionKey}-${subsectionKey}`;
+              return html`
+              <section class="config-section-card" id=${id}>
+                <div class="config-section-card__header">
+                  <span class="config-section-card__icon">${getSectionIcon(sectionKey)}</span>
+                  <div class="config-section-card__titles">
+                    <h3 class="config-section-card__title">${label}</h3>
+                    ${
+                      description
+                        ? html`<p class="config-section-card__desc">${description}</p>`
+                        : nothing
+                    }
+                  </div>
+                </div>
+                <div class="config-section-card__content">
+                  ${renderNode({
+                    schema: node,
+                    value: scopedValue,
+                    path: [sectionKey, subsectionKey],
+                    hints: props.uiHints,
+                    unsupported,
+                    disabled: props.disabled ?? false,
+                    showLabel: false,
+                    searchCriteria,
+                    revealSensitive: props.revealSensitive ?? false,
+                    isSensitivePathRevealed: props.isSensitivePathRevealed,
+                    onToggleSensitivePath: props.onToggleSensitivePath,
+                    onPatch: props.onPatch,
+                  })}
+                </div>
+              </section>
+            `;
             })()
           : filteredEntries.map(([key, node]) => {
-              const meta = SECTION_META[key] ?? {
-                label: key.charAt(0).toUpperCase() + key.slice(1),
-                description: node.description ?? "",
-              };
+              const meta = getSectionMeta(key);
 
-              return renderSectionCard({
-                id: `config-section-${key}`,
-                sectionKey: key,
-                label: meta.label,
-                description: meta.description,
-                node,
-                nodeValue: value[key],
-                path: [key],
-              });
+              return html`
+              <section class="config-section-card" id="config-section-${key}">
+                <div class="config-section-card__header">
+                  <span class="config-section-card__icon">${getSectionIcon(key)}</span>
+                  <div class="config-section-card__titles">
+                    <h3 class="config-section-card__title">${meta.label}</h3>
+                    ${
+                      meta.description
+                        ? html`<p class="config-section-card__desc">${meta.description}</p>`
+                        : nothing
+                    }
+                  </div>
+                </div>
+                <div class="config-section-card__content">
+                  ${renderNode({
+                    schema: node,
+                    value: value[key],
+                    path: [key],
+                    hints: props.uiHints,
+                    unsupported,
+                    disabled: props.disabled ?? false,
+                    showLabel: false,
+                    searchCriteria,
+                    revealSensitive: props.revealSensitive ?? false,
+                    isSensitivePathRevealed: props.isSensitivePathRevealed,
+                    onToggleSensitivePath: props.onToggleSensitivePath,
+                    onPatch: props.onPatch,
+                  })}
+                </div>
+              </section>
+            `;
             })
       }
     </div>

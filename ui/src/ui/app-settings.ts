@@ -1,4 +1,5 @@
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
+import { t } from "../i18n/lib/translate.ts";
 import { refreshChat } from "./app-chat.ts";
 import {
   startLogsPolling,
@@ -566,7 +567,7 @@ function buildAttentionItems(host: OpenClawApp) {
     items.push({
       severity: "error",
       icon: "x",
-      title: "Gateway Error",
+      title: t("overview.attention.gatewayError"),
       description: host.lastError,
     });
   }
@@ -577,9 +578,8 @@ function buildAttentionItems(host: OpenClawApp) {
     items.push({
       severity: "warning",
       icon: "key",
-      title: "Missing operator.read scope",
-      description:
-        "This connection does not have the operator.read scope. Some features may be unavailable.",
+      title: t("overview.attention.missingScope"),
+      description: t("overview.attention.missingScopeDesc"),
       href: "https://docs.openclaw.ai/web/dashboard",
       external: true,
     });
@@ -589,21 +589,25 @@ function buildAttentionItems(host: OpenClawApp) {
   const missingDeps = skills.filter((s) => !s.disabled && hasMissingSkillDependencies(s.missing));
   if (missingDeps.length > 0) {
     const names = missingDeps.slice(0, 3).map((s) => s.name);
-    const more = missingDeps.length > 3 ? ` +${missingDeps.length - 3} more` : "";
+    const more =
+      missingDeps.length > 3
+        ? ` ${t("overview.attention.more", { n: missingDeps.length - 3 })}`
+        : "";
     items.push({
       severity: "warning",
       icon: "zap",
-      title: "Skills with missing dependencies",
+      title: t("overview.attention.skillsMissingDeps"),
       description: `${names.join(", ")}${more}`,
     });
   }
 
   const blocked = skills.filter((s) => s.blockedByAllowlist);
   if (blocked.length > 0) {
+    const blockedKey = blocked.length === 1 ? "skillBlocked" : "skillsBlocked";
     items.push({
       severity: "warning",
       icon: "shield",
-      title: `${blocked.length} skill${blocked.length > 1 ? "s" : ""} blocked`,
+      title: t(`overview.attention.${blockedKey}`, { n: blocked.length }),
       description: blocked.map((s) => s.name).join(", "),
     });
   }
@@ -611,10 +615,11 @@ function buildAttentionItems(host: OpenClawApp) {
   const cronJobs = host.cronJobs ?? [];
   const failedCron = cronJobs.filter((j) => j.state?.lastStatus === "error");
   if (failedCron.length > 0) {
+    const failedKey = failedCron.length === 1 ? "cronJobFailed" : "cronJobsFailed";
     items.push({
       severity: "error",
       icon: "clock",
-      title: `${failedCron.length} cron job${failedCron.length > 1 ? "s" : ""} failed`,
+      title: t(`overview.attention.${failedKey}`, { n: failedCron.length }),
       description: failedCron.map((j) => j.name).join(", "),
     });
   }
@@ -624,10 +629,11 @@ function buildAttentionItems(host: OpenClawApp) {
     (j) => j.enabled && j.state?.nextRunAtMs != null && now - j.state.nextRunAtMs > 300_000,
   );
   if (overdue.length > 0) {
+    const overdueKey = overdue.length === 1 ? "overdueJob" : "overdueJobs";
     items.push({
       severity: "warning",
       icon: "clock",
-      title: `${overdue.length} overdue job${overdue.length > 1 ? "s" : ""}`,
+      title: t(`overview.attention.${overdueKey}`, { n: overdue.length }),
       description: overdue.map((j) => j.name).join(", "),
     });
   }

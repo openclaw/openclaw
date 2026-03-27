@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/lib/translate.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { IMessageStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
@@ -18,30 +19,33 @@ export function renderIMessageCard(params: {
   const configured = resolveChannelConfigured("imessage", props);
 
   return renderSingleAccountChannelCard({
-    title: "iMessage",
-    subtitle: "macOS bridge status and channel configuration.",
+    title: t("channels.imessageTitle"),
+    subtitle: t("channels.imessageSubtitle"),
     accountCountLabel,
     statusRows: [
-      { label: "Configured", value: formatNullableBoolean(configured) },
-      { label: "Running", value: imessage?.running ? "Yes" : "No" },
+      { label: t("channels.statusConfigured"), value: formatNullableBoolean(configured) },
+      { label: t("channels.statusRunning"), value: imessage?.running ? t("channels.statusYes") : t("channels.statusNo") },
       {
-        label: "Last start",
-        value: imessage?.lastStartAt ? formatRelativeTimestamp(imessage.lastStartAt) : "n/a",
+        label: t("channels.telegramLastStart"),
+        value: imessage?.lastStartAt ? formatRelativeTimestamp(imessage.lastStartAt) : t("channels.statusNa"),
       },
       {
-        label: "Last probe",
-        value: imessage?.lastProbeAt ? formatRelativeTimestamp(imessage.lastProbeAt) : "n/a",
+        label: t("channels.telegramLastProbe"),
+        value: imessage?.lastProbeAt ? formatRelativeTimestamp(imessage.lastProbeAt) : t("channels.statusNa"),
       },
     ],
     lastError: imessage?.lastError,
     secondaryCallout: imessage?.probe
       ? html`<div class="callout" style="margin-top: 12px;">
-          Probe ${imessage.probe.ok ? "ok" : "failed"} · ${imessage.probe.error ?? ""}
+          ${t("channels.btnProbe")} ${imessage.probe.ok ? t("channels.telegramProbeOk") : t("channels.telegramProbeFailed")} ·
+          ${imessage.probe.error ?? ""}
         </div>`
       : nothing,
     configSection: renderChannelConfigSection({ channelId: "imessage", props }),
     footer: html`<div class="row" style="margin-top: 12px;">
-      <button class="btn" @click=${() => props.onRefresh(true)}>Probe</button>
+      <button class="btn" @click=${() => props.onRefresh(true)}>
+        ${t("channels.btnProbe")}
+      </button>
     </div>`,
   });
 }

@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/lib/translate.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { SignalStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
@@ -18,32 +19,34 @@ export function renderSignalCard(params: {
   const configured = resolveChannelConfigured("signal", props);
 
   return renderSingleAccountChannelCard({
-    title: "Signal",
-    subtitle: "signal-cli status and channel configuration.",
+    title: t("channels.signalTitle"),
+    subtitle: t("channels.signalSubtitle"),
     accountCountLabel,
     statusRows: [
-      { label: "Configured", value: formatNullableBoolean(configured) },
-      { label: "Running", value: signal?.running ? "Yes" : "No" },
-      { label: "Base URL", value: signal?.baseUrl ?? "n/a" },
+      { label: t("channels.statusConfigured"), value: formatNullableBoolean(configured) },
+      { label: t("channels.statusRunning"), value: signal?.running ? t("channels.statusYes") : t("channels.statusNo") },
+      { label: t("channels.signalBaseUrl"), value: signal?.baseUrl ?? t("channels.statusNa") },
       {
-        label: "Last start",
-        value: signal?.lastStartAt ? formatRelativeTimestamp(signal.lastStartAt) : "n/a",
+        label: t("channels.telegramLastStart"),
+        value: signal?.lastStartAt ? formatRelativeTimestamp(signal.lastStartAt) : t("channels.statusNa"),
       },
       {
-        label: "Last probe",
-        value: signal?.lastProbeAt ? formatRelativeTimestamp(signal.lastProbeAt) : "n/a",
+        label: t("channels.telegramLastProbe"),
+        value: signal?.lastProbeAt ? formatRelativeTimestamp(signal.lastProbeAt) : t("channels.statusNa"),
       },
     ],
     lastError: signal?.lastError,
     secondaryCallout: signal?.probe
       ? html`<div class="callout" style="margin-top: 12px;">
-          Probe ${signal.probe.ok ? "ok" : "failed"} · ${signal.probe.status ?? ""}
-          ${signal.probe.error ?? ""}
+          ${t("channels.btnProbe")} ${signal.probe.ok ? t("channels.telegramProbeOk") : t("channels.telegramProbeFailed")} ·
+          ${signal.probe.status ?? ""} ${signal.probe.error ?? ""}
         </div>`
       : nothing,
     configSection: renderChannelConfigSection({ channelId: "signal", props }),
     footer: html`<div class="row" style="margin-top: 12px;">
-      <button class="btn" @click=${() => props.onRefresh(true)}>Probe</button>
+      <button class="btn" @click=${() => props.onRefresh(true)}>
+        ${t("channels.btnProbe")}
+      </button>
     </div>`,
   });
 }

@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/lib/translate.ts";
 import type { ChannelAccountSnapshot } from "../types.ts";
 import type { ChannelKey, ChannelsProps } from "./channels.types.ts";
 
@@ -87,9 +88,9 @@ export function resolveChannelConfigured(key: ChannelKey, props: ChannelsProps):
 
 export function formatNullableBoolean(value: boolean | null): string {
   if (value == null) {
-    return "n/a";
+    return t("channels.statusNa");
   }
-  return value ? "Yes" : "No";
+  return value ? t("channels.statusYes") : t("channels.statusNo");
 }
 
 export function renderSingleAccountChannelCard(params: {
@@ -122,11 +123,16 @@ export function renderSingleAccountChannelCard(params: {
 
       ${
         params.lastError
-          ? html`<div class="callout danger" style="margin-top: 12px;">${params.lastError}</div>`
+          ? html`<div class="callout danger" style="margin-top: 12px;">
+            ${params.lastError}
+          </div>`
           : nothing
       }
-      ${params.secondaryCallout ?? nothing} ${params.extraContent ?? nothing}
-      ${params.configSection} ${params.footer ?? nothing}
+
+      ${params.secondaryCallout ?? nothing}
+      ${params.extraContent ?? nothing}
+      ${params.configSection}
+      ${params.footer ?? nothing}
     </div>
   `;
 }
@@ -146,5 +152,5 @@ export function renderChannelAccountCount(
   if (count < 2) {
     return nothing;
   }
-  return html`<div class="account-count">Accounts (${count})</div>`;
+  return html`<div class="account-count">${t("channels.accounts")} (${count})</div>`;
 }

@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/lib/translate.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { DiscordStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
@@ -18,31 +19,33 @@ export function renderDiscordCard(params: {
   const configured = resolveChannelConfigured("discord", props);
 
   return renderSingleAccountChannelCard({
-    title: "Discord",
-    subtitle: "Bot status and channel configuration.",
+    title: t("channels.discordTitle"),
+    subtitle: t("channels.discordSubtitle"),
     accountCountLabel,
     statusRows: [
-      { label: "Configured", value: formatNullableBoolean(configured) },
-      { label: "Running", value: discord?.running ? "Yes" : "No" },
+      { label: t("channels.statusConfigured"), value: formatNullableBoolean(configured) },
+      { label: t("channels.statusRunning"), value: discord?.running ? t("channels.statusYes") : t("channels.statusNo") },
       {
-        label: "Last start",
-        value: discord?.lastStartAt ? formatRelativeTimestamp(discord.lastStartAt) : "n/a",
+        label: t("channels.telegramLastStart"),
+        value: discord?.lastStartAt ? formatRelativeTimestamp(discord.lastStartAt) : t("channels.statusNa"),
       },
       {
-        label: "Last probe",
-        value: discord?.lastProbeAt ? formatRelativeTimestamp(discord.lastProbeAt) : "n/a",
+        label: t("channels.telegramLastProbe"),
+        value: discord?.lastProbeAt ? formatRelativeTimestamp(discord.lastProbeAt) : t("channels.statusNa"),
       },
     ],
     lastError: discord?.lastError,
     secondaryCallout: discord?.probe
       ? html`<div class="callout" style="margin-top: 12px;">
-          Probe ${discord.probe.ok ? "ok" : "failed"} · ${discord.probe.status ?? ""}
-          ${discord.probe.error ?? ""}
+          ${t("channels.btnProbe")} ${discord.probe.ok ? t("channels.telegramProbeOk") : t("channels.telegramProbeFailed")} ·
+          ${discord.probe.status ?? ""} ${discord.probe.error ?? ""}
         </div>`
       : nothing,
     configSection: renderChannelConfigSection({ channelId: "discord", props }),
     footer: html`<div class="row" style="margin-top: 12px;">
-      <button class="btn" @click=${() => props.onRefresh(true)}>Probe</button>
+      <button class="btn" @click=${() => props.onRefresh(true)}>
+        ${t("channels.btnProbe")}
+      </button>
     </div>`,
   });
 }
