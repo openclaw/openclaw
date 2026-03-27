@@ -144,8 +144,12 @@
 2. A WebSocket client can call `projects.list`, `projects.get`, `projects.board.get`, `projects.queue.get` and receive typed responses
 3. When a project file changes on disk, connected WebSocket clients receive `projects.changed` (or `.board.changed` / `.queue.changed`) events
 4. All project methods and events are registered in `server-methods-list.ts` following existing gateway patterns
-   **Plans**: TBD
-   **Estimated complexity**: M
+   **Plans:** 2 plans
+   Plans:
+
+- [ ] 07-01-PLAN.md — ProjectGatewayService class and RPC handler module with unit tests
+- [ ] 07-02-PLAN.md — Wire service and handlers into gateway lifecycle, method registry, and scopes
+      **Estimated complexity**: M
 
 ### Phase 8: CLI Commands
 
@@ -286,8 +290,8 @@ Phase 1 (Types & Schemas)
 | 3. Sync Pipeline                    | 2/2            | Complete    | -          |
 | 4. Concurrency                      | 0/2            | Planned     | -          |
 | 5. Context Injection                | 1/2            | In Progress |            |
-| 6. Queue & Heartbeat                | 3/3 | Complete   | 2026-03-27 |
-| 7. Gateway Service                  | 0/?            | Not started | -          |
+| 6. Queue & Heartbeat                | 3/3            | Complete    | 2026-03-27 |
+| 7. Gateway Service                  | 0/2            | Planned     | -          |
 | 8. CLI Commands                     | 0/?            | Not started | -          |
 | 9. Project Views & Dashboard        | 0/?            | Not started | -          |
 | 10. Kanban Board & Agent Indicators | 0/?            | Not started | -          |
