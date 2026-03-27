@@ -65,7 +65,8 @@ export function shouldSuppressLocalFeishuExecApprovalPrompt(params: {
   accountId?: string | null;
   payload: ReplyPayload;
 }): boolean {
-  void params.cfg;
-  void params.accountId;
-  return getExecApprovalReplyMetadata(params.payload) !== null;
+  return (
+    isFeishuExecApprovalClientEnabled(params) &&
+    getExecApprovalReplyMetadata(params.payload) !== null
+  );
 }

@@ -316,26 +316,31 @@ export async function handleFeishuCardAction(params: {
         log(
           `feishu[${account.accountId}]: exec approval ${execApprovalDecision} for ${approvalId} by ${event.operator.open_id}`,
         );
-        await dispatchSyntheticCommand({
-          cfg,
-          event,
-          command: `/approve ${approvalId} ${execApprovalDecision}`,
-          botOpenId: params.botOpenId,
-          runtime,
-          accountId,
-          chatType: envelope.c?.t ?? (event.context.chat_id ? "group" : "p2p"),
-        });
-        // Send resolved card to give visual feedback that the action was processed
-        await sendCardFeishu({
-          cfg,
-          to: resolveCallbackTarget(event),
-          card: createExecApprovalResolvedCard({
-            approvalId,
-            decision: execApprovalDecision,
-            resolvedBy: event.operator.open_id,
-          }),
-          accountId,
-        }).catch(() => {});
+        try {
+          await dispatchSyntheticCommand({
+            cfg,
+            event,
+            command: `/approve ${approvalId} ${execApprovalDecision}`,
+            botOpenId: params.botOpenId,
+            runtime,
+            accountId,
+            chatType: envelope.c?.t ?? (event.context.chat_id ? "group" : "p2p"),
+          });
+          // Send resolved card only after successful dispatch
+          await sendCardFeishu({
+            cfg,
+            to: resolveCallbackTarget(event),
+            card: createExecApprovalResolvedCard({
+              approvalId,
+              decision: execApprovalDecision,
+              resolvedBy: event.operator.open_id,
+            }),
+            accountId,
+          }).catch(() => {});
+        } catch {
+          // Dispatch failed — don't send resolved card; the error reply
+          // is handled by the command pipeline
+        }
         completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
         return;
       }

@@ -5,6 +5,7 @@ import {
   isFeishuExecApprovalClientEnabled,
   isFeishuExecApprovalApprover,
   resolveFeishuExecApprovalTarget,
+  shouldSuppressLocalFeishuExecApprovalPrompt,
 } from "./exec-approvals.js";
 
 function buildConfig(execApprovals?: Record<string, unknown>) {
@@ -96,5 +97,31 @@ describe("resolveFeishuExecApprovalTarget", () => {
   it("returns configured target", () => {
     const cfg = buildConfig({ enabled: true, approvers: ["ou_123"], target: "both" });
     expect(resolveFeishuExecApprovalTarget({ cfg })).toBe("both");
+  });
+});
+
+describe("shouldSuppressLocalFeishuExecApprovalPrompt", () => {
+  const execApprovalPayload = {
+    channelData: { execApproval: { approvalId: "test1234", approvalSlug: "test1234" } },
+  } as never;
+  const plainPayload = { text: "hello" } as never;
+
+  it("returns false when client is not enabled", () => {
+    const cfg = buildConfig({ enabled: false, approvers: ["ou_123"] });
+    expect(shouldSuppressLocalFeishuExecApprovalPrompt({ cfg, payload: execApprovalPayload })).toBe(
+      false,
+    );
+  });
+
+  it("returns false when no exec approval data in payload", () => {
+    const cfg = buildConfig({ enabled: true, approvers: ["ou_123"] });
+    expect(shouldSuppressLocalFeishuExecApprovalPrompt({ cfg, payload: plainPayload })).toBe(false);
+  });
+
+  it("returns true when client enabled and payload has exec approval data", () => {
+    const cfg = buildConfig({ enabled: true, approvers: ["ou_123"] });
+    expect(shouldSuppressLocalFeishuExecApprovalPrompt({ cfg, payload: execApprovalPayload })).toBe(
+      true,
+    );
   });
 });
