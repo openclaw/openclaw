@@ -25,10 +25,17 @@ export const openaiMediaUnderstandingProvider: MediaUnderstandingProvider = {
   transcribeAudio: transcribeOpenAiAudio,
 };
 
+async function transcribeOpenAiCodexAudio(params: AudioTranscriptionRequest) {
+  return await transcribeOpenAiAudio({
+    ...params,
+    baseUrl: undefined, // force fallback to DEFAULT_OPENAI_AUDIO_BASE_URL
+  });
+}
+
 export const openaiCodexMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "openai-codex",
   capabilities: ["image", "audio"],
   describeImage: describeImageWithModel,
   describeImages: describeImagesWithModel,
-  transcribeAudio: transcribeOpenAiAudio,
+  transcribeAudio: transcribeOpenAiCodexAudio,
 };

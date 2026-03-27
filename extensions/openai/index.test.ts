@@ -176,6 +176,7 @@ describe("openai plugin", () => {
       "media provider",
     );
     expect(codexMediaProvider.capabilities).toEqual(["image", "audio"]);
+    expect(codexMediaProvider.transcribeAudio).toBeDefined();
     expect(imageProviders).toHaveLength(1);
   });
 
