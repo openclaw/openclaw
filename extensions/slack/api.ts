@@ -1,5 +1,6 @@
 export * from "./src/account-inspect.js";
 export * from "./src/accounts.js";
+export * from "./src/action-threading.js";
 export * from "./src/actions.js";
 export * from "./src/blocks-input.js";
 export * from "./src/blocks-render.js";

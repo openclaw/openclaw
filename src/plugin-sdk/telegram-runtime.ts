@@ -68,5 +68,5 @@ export {
   telegramMessageActions,
   unpinMessageTelegram,
 } from "../../extensions/telegram/runtime-api.js";
-export { buildTelegramGroupPeerId } from "../../extensions/telegram/src/bot/helpers.js";
-export { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
+export { buildTelegramGroupPeerId } from "../../extensions/telegram/api.js";
+export { parseTelegramTarget } from "../../extensions/telegram/api.js";

@@ -15,4 +15,4 @@ export {
   isWhatsAppGroupJid,
   isWhatsAppUserTarget,
   normalizeWhatsAppTarget,
-} from "../../extensions/whatsapp/src/normalize-target.js";
+} from "../../extensions/whatsapp/api.js";
