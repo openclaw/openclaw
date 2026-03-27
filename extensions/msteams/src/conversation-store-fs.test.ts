@@ -184,4 +184,27 @@ describe("msteams conversation store (memory)", () => {
     await expect(store.get("conv-a")).resolves.toBeNull();
     await expect(store.remove("missing")).resolves.toBe(false);
   });
+
+  it("preserves existing timezone when upsert omits timezone, matching the fs store", async () => {
+    const store = createMSTeamsConversationStoreMemory();
+
+    await store.upsert("conv-tz", {
+      conversation: { id: "conv-tz" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u1" },
+      timezone: "Europe/London",
+    });
+
+    await store.upsert("conv-tz", {
+      conversation: { id: "conv-tz" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u1" },
+    });
+
+    await expect(store.get("conv-tz")).resolves.toMatchObject({
+      timezone: "Europe/London",
+    });
+  });
 });
