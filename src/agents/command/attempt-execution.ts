@@ -29,6 +29,25 @@ import type { AgentCommandOpts } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
+/**
+ * Check whether a session transcript file exists and contains at least one
+ * assistant message, indicating that the SessionManager has flushed the
+ * initial user+assistant exchange to disk.  This is used to decide whether
+ * a fallback retry can rely on the on-disk history or must re-send the
+ * original task prompt.
+ */
+export async function sessionFileHasContent(sessionFile: string | undefined): Promise<boolean> {
+  if (!sessionFile) {
+    return false;
+  }
+  try {
+    const content = await fs.readFile(sessionFile, "utf-8");
+    return content.includes('"role":"assistant"') || content.includes('"role": "assistant"');
+  } catch {
+    return false;
+  }
+}
+
 export type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;

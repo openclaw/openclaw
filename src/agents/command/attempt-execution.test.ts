@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { resolveFallbackRetryPrompt } from "./attempt-execution.js";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resolveFallbackRetryPrompt, sessionFileHasContent } from "./attempt-execution.js";
 
 describe("resolveFallbackRetryPrompt", () => {
   const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
@@ -58,5 +61,61 @@ describe("resolveFallbackRetryPrompt", () => {
         sessionHasHistory: false,
       }),
     ).toBe(originalBody);
+  });
+});
+
+describe("sessionFileHasContent", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-test-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns false for undefined sessionFile", async () => {
+    expect(await sessionFileHasContent(undefined)).toBe(false);
+  });
+
+  it("returns false when session file does not exist", async () => {
+    expect(await sessionFileHasContent(path.join(tmpDir, "nonexistent.jsonl"))).toBe(false);
+  });
+
+  it("returns false when session file is empty", async () => {
+    const file = path.join(tmpDir, "empty.jsonl");
+    await fs.writeFile(file, "", "utf-8");
+    expect(await sessionFileHasContent(file)).toBe(false);
+  });
+
+  it("returns false when session file has only user message (no assistant flush)", async () => {
+    const file = path.join(tmpDir, "user-only.jsonl");
+    await fs.writeFile(
+      file,
+      '{"type":"session","id":"s1"}\n{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+    expect(await sessionFileHasContent(file)).toBe(false);
+  });
+
+  it("returns true when session file has assistant message (flushed)", async () => {
+    const file = path.join(tmpDir, "with-assistant.jsonl");
+    await fs.writeFile(
+      file,
+      '{"type":"session","id":"s1"}\n{"type":"message","message":{"role":"user","content":"hello"}}\n{"type":"message","message":{"role":"assistant","content":"hi"}}\n',
+      "utf-8",
+    );
+    expect(await sessionFileHasContent(file)).toBe(true);
+  });
+
+  it("returns true when session file has spaced JSON (role : assistant)", async () => {
+    const file = path.join(tmpDir, "spaced.jsonl");
+    await fs.writeFile(
+      file,
+      '{"type":"message","message":{"role": "assistant","content":"hi"}}\n',
+      "utf-8",
+    );
+    expect(await sessionFileHasContent(file)).toBe(true);
   });
 });
