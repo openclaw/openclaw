@@ -424,14 +424,6 @@
       "types": "./dist/plugin-sdk/memory-core-engine-runtime.d.ts",
       "default": "./dist/plugin-sdk/memory-core-engine-runtime.js"
     },
-    "./plugin-sdk/memory-core-host": {
-      "types": "./dist/plugin-sdk/memory-core-host.d.ts",
-      "default": "./dist/plugin-sdk/memory-core-host.js"
-    },
-    "./plugin-sdk/memory-core-host-engine": {
-      "types": "./dist/plugin-sdk/memory-core-host-engine.d.ts",
-      "default": "./dist/plugin-sdk/memory-core-host-engine.js"
-    },
     "./plugin-sdk/memory-core-host-engine-embeddings": {
       "types": "./dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-embeddings.js"
@@ -448,9 +440,21 @@
       "types": "./dist/plugin-sdk/memory-core-host-engine-storage.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-storage.js"
     },
-    "./plugin-sdk/memory-core-host-runtime": {
-      "types": "./dist/plugin-sdk/memory-core-host-runtime.d.ts",
-      "default": "./dist/plugin-sdk/memory-core-host-runtime.js"
+    "./plugin-sdk/memory-core-host-multimodal": {
+      "types": "./dist/plugin-sdk/memory-core-host-multimodal.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-multimodal.js"
+    },
+    "./plugin-sdk/memory-core-host-query": {
+      "types": "./dist/plugin-sdk/memory-core-host-query.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-query.js"
+    },
+    "./plugin-sdk/memory-core-host-secret": {
+      "types": "./dist/plugin-sdk/memory-core-host-secret.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-secret.js"
+    },
+    "./plugin-sdk/memory-core-host-status": {
+      "types": "./dist/plugin-sdk/memory-core-host-status.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-status.js"
     },
     "./plugin-sdk/memory-core-host-runtime-cli": {
       "types": "./dist/plugin-sdk/memory-core-host-runtime-cli.d.ts",
