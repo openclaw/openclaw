@@ -386,7 +386,7 @@ describe("handleFeishuMessage ACP routing", () => {
   it("routes Feishu topic messages through active bound conversations", async () => {
     mockResolveBoundConversation.mockReturnValue({
       bindingId: "default:oc_group_chat:topic:om_topic_root",
-      targetSessionKey: "agent:codex:acp:binding:feishu:default:feedface",
+      targetSessionKey: "agent:main:feishu:group:oc_group_chat:topic:om_topic_root",
       targetKind: "session",
       conversation: {
         channel: "feishu",

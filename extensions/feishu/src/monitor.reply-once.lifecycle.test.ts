@@ -92,7 +92,7 @@ describe("Feishu reply-once lifecycle", () => {
 
     resolveBoundConversationMock.mockReturnValue({
       bindingId: "binding-1",
-      targetSessionKey: "agent:bound-agent:feishu:topic:om_root_topic_1:ou_sender_1",
+      targetSessionKey: "agent:main:feishu:topic:om_root_topic_1:ou_sender_1",
     });
 
     resolveAgentRouteMock.mockReturnValue({
@@ -157,7 +157,7 @@ describe("Feishu reply-once lifecycle", () => {
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         AccountId: "acct-lifecycle",
-        SessionKey: "agent:bound-agent:feishu:topic:om_root_topic_1:ou_sender_1",
+        SessionKey: "agent:main:feishu:topic:om_root_topic_1:ou_sender_1",
         MessageSid: "om_lifecycle_once",
         MessageThreadId: "om_root_topic_1",
       }),
