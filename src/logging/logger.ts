@@ -371,7 +371,7 @@ function isRollingPath(file: string): boolean {
 }
 
 function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function pruneOldRollingLogs(dir: string, logFilePrefix?: string | null): void {
