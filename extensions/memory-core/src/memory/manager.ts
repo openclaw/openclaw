@@ -30,6 +30,7 @@ import {
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
+import { applyWeightsToResults, WeightedRecallStore } from "./weighted-recall.js";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -80,6 +81,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected readonly agentId: string;
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
+  readonly weightStore: WeightedRecallStore;
   protected provider: EmbeddingProvider | null;
   private readonly requestedProvider: EmbeddingProviderRequest;
   private providerInitPromise: Promise<void> | null = null;
@@ -229,6 +231,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.agentId = params.agentId;
     this.workspaceDir = params.workspaceDir;
     this.settings = params.settings;
+    this.weightStore = new WeightedRecallStore(resolveAgentDir(params.cfg, params.agentId));
     this.provider = null;
     this.requestedProvider = params.settings.provider;
     if (params.providerResult) {
@@ -529,7 +532,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       mmr: params.mmr,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
-    }).then((entries) => entries.map((entry) => entry as MemorySearchResult));
+    }).then(async (entries) => {
+      const weighted = await applyWeightsToResults(
+        entries.map((e) => ({ ...(e as MemorySearchResult & { id: string }) })),
+        this.weightStore,
+      );
+      return weighted.map((entry) => entry as MemorySearchResult);
+    });
   }
 
   async sync(params?: {
