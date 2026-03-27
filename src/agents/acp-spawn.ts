@@ -452,11 +452,11 @@ function prepareAcpThreadBinding(params: {
     to: params.to,
     threadId: params.threadId,
   });
-  // When the resolved ID is a bare topic number (no leading "-"), prefer the
-  // explicit group chat ID so the bind adapter receives a usable chat ID.
+  // For Telegram, bare topic numbers (no leading "-") need substituting with
+  // the group chat ID. Other channels use their own ID formats so skip this.
   const groupId = params.groupId?.trim();
   const conversationId =
-    conversationIdRaw && !conversationIdRaw.startsWith("-") && groupId
+    channel === "telegram" && conversationIdRaw && !conversationIdRaw.startsWith("-") && groupId
       ? groupId
       : conversationIdRaw;
   if (!conversationId) {
