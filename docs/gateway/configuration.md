@@ -200,6 +200,7 @@ When validation fails:
 
     - Set `gateway.channelHealthCheckMinutes: 0` to disable health-monitor restarts globally.
     - `channelStaleEventThresholdMinutes` should be greater than or equal to the check interval.
+    - The stale-socket idle-event heuristic currently applies to channels other than Discord, Telegram, and webhook-mode channels.
     - Use `channels.<provider>.healthMonitor.enabled` or `channels.<provider>.accounts.<id>.healthMonitor.enabled` to disable auto-restarts for one channel or account without disabling the global monitor.
     - See [Health Checks](/gateway/health) for operational debugging and the [full reference](/gateway/configuration-reference#gateway) for all fields.
 

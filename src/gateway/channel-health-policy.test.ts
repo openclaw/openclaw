@@ -127,7 +127,7 @@ describe("evaluateChannelHealth", () => {
         lastEventAt: 0,
       },
       {
-        channelId: "discord",
+        channelId: "slack",
         now: 100_000,
         channelConnectGraceMs: 10_000,
         staleEventThresholdMs: 30_000,
@@ -153,6 +153,18 @@ describe("evaluateChannelHealth", () => {
         staleEventThresholdMs: 30_000,
       },
     );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("skips stale-socket detection for discord idle channels", () => {
+    const evaluation = evaluateDiscordHealth({
+      running: true,
+      connected: true,
+      enabled: true,
+      configured: true,
+      lastStartAt: 0,
+      lastEventAt: 0,
+    });
     expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 

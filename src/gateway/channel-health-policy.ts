@@ -48,6 +48,13 @@ function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
   return snapshot.enabled !== false && snapshot.configured !== false;
 }
 
+function shouldSkipStaleSocketDetection(
+  channelId: ChannelId,
+  snapshot: ChannelHealthSnapshot,
+): boolean {
+  return channelId === "discord" || channelId === "telegram" || snapshot.mode === "webhook";
+}
+
 const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
 // Keep these shared between the background health monitor and on-demand readiness
 // probes so both surfaces evaluate channel lifecycle windows consistently.
@@ -106,13 +113,11 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  // Skip stale-socket check for Telegram (long-polling mode) and any channel
-  // explicitly operating in webhook mode. In these cases, there is no persistent
-  // outgoing socket that can go half-dead, so the lack of incoming events
-  // does not necessarily indicate a connection failure.
+  // Skip stale-socket check for Discord and Telegram plus webhook-mode channels.
+  // Discord can remain healthy with low traffic for extended periods, so event
+  // idleness alone is not a reliable socket liveness signal.
   if (
-    policy.channelId !== "telegram" &&
-    snapshot.mode !== "webhook" &&
+    !shouldSkipStaleSocketDetection(policy.channelId, snapshot) &&
     snapshot.connected === true &&
     snapshot.lastEventAt != null
   ) {

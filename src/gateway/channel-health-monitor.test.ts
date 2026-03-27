@@ -557,6 +557,23 @@ describe("channel-health-monitor", () => {
       await expectNoRestart(manager);
     });
 
+    it("skips stale-socket restarts for discord idle channels", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        discord: {
+          default: {
+            running: true,
+            connected: true,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - STALE_THRESHOLD - 60_000,
+            lastEventAt: now - STALE_THRESHOLD - 30_000,
+          },
+        },
+      });
+      await expectNoRestart(manager);
+    });
+
     it("respects custom staleEventThresholdMs", async () => {
       const customThreshold = 10 * 60_000;
       const now = Date.now();
