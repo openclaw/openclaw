@@ -189,11 +189,11 @@ export async function approveNodePairing(
       return null;
     }
     const requiredScope = resolveNodeApprovalRequiredScope(pending);
-    if (requiredScope && options?.callerScopes) {
+    if (requiredScope && options !== undefined) {
       const missingScope = resolveMissingRequestedScope({
         role: OPERATOR_ROLE,
         requestedScopes: [requiredScope],
-        allowedScopes: options.callerScopes,
+        allowedScopes: options.callerScopes ?? [],
       });
       if (missingScope) {
         return { status: "forbidden", missingScope };
