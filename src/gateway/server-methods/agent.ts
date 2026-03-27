@@ -64,9 +64,8 @@ import {
   waitForTerminalGatewayDedupe,
 } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
+import { RESET_COMMAND_RE } from "./session-reset-command.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-
-const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
 
 function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];

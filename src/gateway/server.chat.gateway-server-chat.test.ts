@@ -726,6 +726,48 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.send rejects /reset for write-scoped gateway callers", async () => {
+    await withGatewayServer(async ({ port }) => {
+      await withMainSessionStore(async () => {
+        let scopedWs: WebSocket | undefined;
+
+        try {
+          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          trackConnectChallengeNonce(scopedWs);
+          await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+          await connectOk(scopedWs, {
+            scopes: ["operator.write"],
+          });
+
+          const directReset = await rpcReq(scopedWs, "sessions.reset", {
+            key: "agent:main:main",
+            reason: "reset",
+          });
+          expect(directReset.ok).toBe(false);
+          expect(directReset.error?.message).toBe("missing scope: operator.admin");
+
+          const sendRes = await rpcReq(scopedWs, "chat.send", {
+            sessionKey: "main",
+            message: "/reset hello after rotate",
+            idempotencyKey: "idem-write-scope-reset-rejected",
+          });
+          expect(sendRes.ok).toBe(false);
+          expect(sendRes.error?.message).toBe("missing scope: operator.admin");
+
+          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
+          const stored = JSON.parse(raw) as {
+            "agent:main:main"?: {
+              sessionId?: string;
+            };
+          };
+          expect(stored["agent:main:main"]?.sessionId).toBe("sess-main");
+        } finally {
+          scopedWs?.close();
+        }
+      });
+    });
+  });
+
   test("agent.wait resolves chat.send runs that finish without lifecycle events", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-1";

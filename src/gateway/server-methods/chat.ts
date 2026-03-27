@@ -67,6 +67,7 @@ import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
+import { RESET_COMMAND_RE } from "./session-reset-command.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -1326,6 +1327,15 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const rawSessionKey = p.sessionKey;
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const gatewayClientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    if (RESET_COMMAND_RE.test(parsedMessage) && !gatewayClientScopes.includes(ADMIN_SCOPE)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${ADMIN_SCOPE}`),
+      );
+      return;
+    }
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
