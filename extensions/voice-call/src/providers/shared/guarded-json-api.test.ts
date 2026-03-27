@@ -103,4 +103,31 @@ describe("guardedJsonApiRequest", () => {
 
     expect(release).toHaveBeenCalledTimes(1);
   });
+
+  it("throws descriptive error when response is 200 OK but body is not valid JSON", async () => {
+    const release = vi.fn(async () => {});
+    const htmlBody = "<html><body>Service Unavailable</body></html>";
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(htmlBody, {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      }),
+      release,
+    });
+
+    await expect(
+      guardedJsonApiRequest({
+        url: "https://api.example.com/v1/calls/4",
+        method: "GET",
+        headers: {},
+        allowedHostnames: ["api.example.com"],
+        auditContext: "voice-call:test",
+        errorPrefix: "Acme API error",
+      }),
+    ).rejects.toThrow(
+      "Acme API error: invalid JSON response: <html><body>Service Unavailable</body></html>",
+    );
+
+    expect(release).toHaveBeenCalledTimes(1);
+  });
 });

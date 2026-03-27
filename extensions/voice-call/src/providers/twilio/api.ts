@@ -38,5 +38,12 @@ export async function twilioApiRequest<T = unknown>(params: {
   }
 
   const text = await response.text();
-  return text ? (JSON.parse(text) as T) : (undefined as T);
+  if (!text) {
+    return undefined as T;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`Twilio API returned invalid JSON: ${text.slice(0, 200)}`);
+  }
 }

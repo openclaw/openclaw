@@ -35,7 +35,14 @@ export async function guardedJsonApiRequest<T = unknown>(
     }
 
     const text = await response.text();
-    return text ? (JSON.parse(text) as T) : (undefined as T);
+    if (!text) {
+      return undefined as T;
+    }
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new Error(`${params.errorPrefix}: invalid JSON response: ${text.slice(0, 200)}`);
+    }
   } finally {
     await release();
   }
