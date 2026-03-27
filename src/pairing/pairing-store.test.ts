@@ -164,12 +164,12 @@ describe("pairing store", () => {
   it("reuses pending code and reports created=false", async () => {
     await withTempStateDir(async () => {
       const first = await upsertChannelPairingRequest({
-        channel: "discord",
+        channel: "demo-pairing-a",
         id: "u1",
         accountId: DEFAULT_ACCOUNT_ID,
       });
       const second = await upsertChannelPairingRequest({
-        channel: "discord",
+        channel: "demo-pairing-a",
         id: "u1",
         accountId: DEFAULT_ACCOUNT_ID,
       });
@@ -177,7 +177,7 @@ describe("pairing store", () => {
       expect(second.created).toBe(false);
       expect(second.code).toBe(first.code);
 
-      const list = await listChannelPairingRequests("discord");
+      const list = await listChannelPairingRequests("demo-pairing-a");
       expect(list).toHaveLength(1);
       expect(list[0]?.code).toBe(first.code);
     });
@@ -186,13 +186,13 @@ describe("pairing store", () => {
   it("expires pending requests after TTL", async () => {
     await withTempStateDir(async (stateDir) => {
       const created = await upsertChannelPairingRequest({
-        channel: "signal",
+        channel: "demo-pairing-b",
         id: "+15550001111",
         accountId: DEFAULT_ACCOUNT_ID,
       });
       expect(created.created).toBe(true);
 
-      const filePath = resolvePairingFilePath(stateDir, "signal");
+      const filePath = resolvePairingFilePath(stateDir, "demo-pairing-b");
       const raw = await fs.readFile(filePath, "utf8");
       const parsed = JSON.parse(raw) as {
         requests?: Array<Record<string, unknown>>;
@@ -205,11 +205,11 @@ describe("pairing store", () => {
       }));
       await writeJsonFixture(filePath, { version: 1, requests });
 
-      const list = await listChannelPairingRequests("signal");
+      const list = await listChannelPairingRequests("demo-pairing-b");
       expect(list).toHaveLength(0);
 
       const next = await upsertChannelPairingRequest({
-        channel: "signal",
+        channel: "demo-pairing-b",
         id: "+15550001111",
         accountId: DEFAULT_ACCOUNT_ID,
       });
@@ -253,7 +253,7 @@ describe("pairing store", () => {
       const ids = ["+15550000001", "+15550000002", "+15550000003"];
       for (const id of ids) {
         const created = await upsertChannelPairingRequest({
-          channel: "whatsapp",
+          channel: "demo-pairing-c",
           id,
           accountId: DEFAULT_ACCOUNT_ID,
         });
@@ -261,13 +261,13 @@ describe("pairing store", () => {
       }
 
       const blocked = await upsertChannelPairingRequest({
-        channel: "whatsapp",
+        channel: "demo-pairing-c",
         id: "+15550000004",
         accountId: DEFAULT_ACCOUNT_ID,
       });
       expect(blocked.created).toBe(false);
 
-      const list = await listChannelPairingRequests("whatsapp");
+      const list = await listChannelPairingRequests("demo-pairing-c");
       const listIds = list.map((entry) => entry.id);
       expect(listIds).toHaveLength(3);
       expect(listIds).toContain("+15550000001");
