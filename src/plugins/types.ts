@@ -251,6 +251,20 @@ export type ProviderAuthMethod = {
   hint?: string;
   kind: ProviderAuthKind;
   /**
+   * Optional machine-readable setup metadata for external configuration UIs.
+   *
+   * Keep this contract static and serializable. Execution logic stays in
+   * `run` / `runNonInteractive`.
+   */
+  surface?: {
+    kind: "api_key";
+    optionKey: string;
+    flagName: `--${string}`;
+    envVar: string;
+    allowProfile?: boolean;
+    defaultModel?: string;
+  };
+  /**
    * Optional wizard/onboarding metadata for this specific auth method.
    *
    * Use this when one provider exposes multiple setup entries (for example API
