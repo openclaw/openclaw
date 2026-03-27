@@ -146,7 +146,6 @@ const FAST_GATEWAY_METHODS = new Set([
   "device.pair.list",
   "health",
   "status",
-  "channels.status",
 ]);
 const FAST_METHOD_TIMEOUT_MS = 5_000;
 

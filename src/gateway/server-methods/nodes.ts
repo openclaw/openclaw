@@ -579,6 +579,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         },
         { dropIfSlow: true },
       );
+      nodeListCache = null;
       respond(true, approved, undefined);
     });
   },
@@ -608,6 +609,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         },
         { dropIfSlow: true },
       );
+      nodeListCache = null;
       respond(true, rejected, undefined);
     });
   },
@@ -653,6 +655,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
       }
+      nodeListCache = null;
       respond(true, { nodeId: updated.nodeId, displayName: updated.displayName }, undefined);
     });
   },

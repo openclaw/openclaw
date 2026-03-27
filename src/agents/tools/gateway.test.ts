@@ -197,7 +197,7 @@ describe("gateway tool defaults", () => {
   });
 
   it("uses short timeout for other fast methods (health, status)", async () => {
-    for (const method of ["health", "status", "channels.status", "node.describe"]) {
+    for (const method of ["health", "status", "node.describe"]) {
       callGatewayMock.mockResolvedValueOnce({ ok: true });
       await callGatewayTool(method, {}, {});
       expect(callGatewayMock).toHaveBeenLastCalledWith(
