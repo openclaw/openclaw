@@ -106,6 +106,30 @@ describe("resolvePluginProviders", () => {
     );
   });
 
+  it("does not leak host Vitest env into an explicit non-Vitest env", () => {
+    const previousVitest = process.env.VITEST;
+    process.env.VITEST = "1";
+    try {
+      resolvePluginProviders({
+        env: {} as NodeJS.ProcessEnv,
+        bundledProviderVitestCompat: true,
+      });
+
+      expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: undefined,
+          env: {},
+        }),
+      );
+    } finally {
+      if (previousVitest === undefined) {
+        delete process.env.VITEST;
+      } else {
+        process.env.VITEST = previousVitest;
+      }
+    }
+  });
+
   it("does not reintroduce the retired google auth plugin id into compat allowlists", () => {
     resolvePluginProviders({
       config: {

@@ -1394,6 +1394,42 @@ describe("applyAuthChoice", () => {
     });
   });
 
+  it("uses explicit env for plugin auth resolution instead of host env", async () => {
+    await setupTempState();
+    process.env.OPENAI_API_KEY = "sk-openai-host"; // pragma: allowlist secret
+    const env = { OPENAI_API_KEY: "sk-openai-explicit" } as NodeJS.ProcessEnv; // pragma: allowlist secret
+    const text = vi.fn().mockResolvedValue("should-not-be-used");
+    const confirm = vi.fn(async () => true);
+    const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
+
+    const result = await applyAuthChoice({
+      authChoice: "openai-api-key",
+      config: {},
+      env,
+      prompter,
+      runtime,
+      setDefaultModel: false,
+    });
+
+    expect(resolvePluginProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        env,
+      }),
+    );
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("OPENAI_API_KEY"),
+      }),
+    );
+    expect(text).not.toHaveBeenCalled();
+    expect(result.config.auth?.profiles?.["openai:default"]).toMatchObject({
+      provider: "openai",
+      mode: "api_key",
+    });
+    expect((await readAuthProfile("openai:default"))?.key).toBe("sk-openai-explicit");
+  });
+
   it("keeps existing default model for explicit provider keys when setDefaultModel=false", async () => {
     const scenarios: Array<{
       authChoice: "xai-api-key" | "opencode-zen" | "opencode-go";

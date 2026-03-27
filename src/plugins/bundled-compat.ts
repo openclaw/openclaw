@@ -71,7 +71,7 @@ export function withBundledPluginVitestCompat(params: {
   env?: PluginLoadOptions["env"];
 }): PluginLoadOptions["config"] {
   const env = params.env ?? process.env;
-  const isVitest = Boolean(env.VITEST || process.env.VITEST);
+  const isVitest = Boolean(env.VITEST);
   if (
     !isVitest ||
     hasExplicitPluginConfig(params.config?.plugins) ||
@@ -80,12 +80,20 @@ export function withBundledPluginVitestCompat(params: {
     return params.config;
   }
 
+  const entries = Object.fromEntries(
+    params.pluginIds.map((pluginId) => [pluginId, { enabled: true } satisfies PluginEntryConfig]),
+  );
+
   return {
     ...params.config,
     plugins: {
       ...params.config?.plugins,
       enabled: true,
       allow: [...params.pluginIds],
+      entries: {
+        ...entries,
+        ...params.config?.plugins?.entries,
+      },
       slots: {
         ...params.config?.plugins?.slots,
         memory: "none",

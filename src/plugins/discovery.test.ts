@@ -63,6 +63,17 @@ function writePluginPackageManifest(params: {
   );
 }
 
+function writePluginManifest(params: { pluginDir: string; id: string }) {
+  fs.writeFileSync(
+    path.join(params.pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: params.id,
+      configSchema: { type: "object" },
+    }),
+    "utf-8",
+  );
+}
+
 function expectEscapesPackageDiagnostic(diagnostics: Array<{ message: string }>) {
   expect(diagnostics.some((entry) => entry.message.includes("escapes package directory"))).toBe(
     true,
@@ -205,6 +216,7 @@ describe("discoverOpenClawPlugins", () => {
       packageName: "@openclaw/ollama-provider",
       extensions: ["./src/index.ts"],
     });
+    writePluginManifest({ pluginDir: globalExt, id: "ollama" });
     fs.writeFileSync(
       path.join(globalExt, "src", "index.ts"),
       "export default function () {}",
@@ -232,11 +244,13 @@ describe("discoverOpenClawPlugins", () => {
       packageName: "@openclaw/elevenlabs-speech",
       extensions: ["./src/index.ts"],
     });
+    writePluginManifest({ pluginDir: elevenlabsDir, id: "elevenlabs" });
     writePluginPackageManifest({
       packageDir: microsoftDir,
       packageName: "@openclaw/microsoft-speech",
       extensions: ["./src/index.ts"],
     });
+    writePluginManifest({ pluginDir: microsoftDir, id: "microsoft" });
 
     fs.writeFileSync(
       path.join(elevenlabsDir, "src", "index.ts"),

@@ -67,9 +67,38 @@ describe("resolvePreferredProviderForAuthChoice", () => {
     expect(resolvePluginProviders).not.toHaveBeenCalled();
   });
 
-  it("falls back to static core choices when no provider plugin claims the choice", async () => {
+  it("passes explicit env through legacy auth normalization", async () => {
+    const env = { OPENCLAW_AUTH_CHOICE_TEST: "1" } as NodeJS.ProcessEnv;
+    resolveManifestDeprecatedProviderAuthChoice.mockReturnValue({
+      choiceId: "anthropic-cli",
+      choiceLabel: "Anthropic Claude CLI",
+    });
+    resolveManifestProviderAuthChoice.mockReturnValue({
+      pluginId: "anthropic",
+      providerId: "anthropic",
+      methodId: "cli",
+      choiceId: "anthropic-cli",
+      choiceLabel: "Anthropic Claude CLI",
+    });
+
+    await expect(
+      resolvePreferredProviderForAuthChoice({ choice: "claude-cli", env }),
+    ).resolves.toBe("anthropic");
+    expect(resolveManifestDeprecatedProviderAuthChoice).toHaveBeenCalledWith("claude-cli", { env });
+  });
+
+  it("uses manifest metadata for plugin-owned choices", async () => {
+    resolveManifestProviderAuthChoice.mockReturnValue({
+      pluginId: "chutes",
+      providerId: "chutes",
+      methodId: "oauth",
+      choiceId: "chutes",
+      choiceLabel: "Chutes OAuth",
+    });
+
     await expect(resolvePreferredProviderForAuthChoice({ choice: "chutes" })).resolves.toBe(
       "chutes",
     );
+    expect(resolvePluginProviders).not.toHaveBeenCalled();
   });
 });
