@@ -215,7 +215,7 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(text).toContain("HTTP 429");
     expect(text).toContain("rate_limit_error");
     expect(text).toContain("Rate limited.");
-    expect(text).toContain("req_123");
+    expect(text).not.toContain("req_123");
   });
 
   it("renders a generic unknown error message when raw is empty", () => {
