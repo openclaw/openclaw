@@ -227,6 +227,18 @@ describe("isStrictTransientNetworkError", () => {
     expect(isStrictTransientNetworkError(new Error("network error"))).toBe(false);
   });
 
+  it("returns false for TimeoutError (used in application-level control flow)", () => {
+    const error = new Error("request timed out");
+    error.name = "TimeoutError";
+    expect(isStrictTransientNetworkError(error)).toBe(false);
+  });
+
+  it("returns true for ConnectTimeoutError", () => {
+    const error = new Error("connect timed out");
+    error.name = "ConnectTimeoutError";
+    expect(isStrictTransientNetworkError(error)).toBe(true);
+  });
+
   it("returns false for regular errors", () => {
     expect(isStrictTransientNetworkError(new Error("Something went wrong"))).toBe(false);
     expect(isStrictTransientNetworkError(new TypeError("Cannot read property"))).toBe(false);

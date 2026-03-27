@@ -149,6 +149,15 @@ function isConfigError(err: unknown): boolean {
 // Strict subset of message snippets that are unambiguously I/O-layer TLS/socket
 // errors. Used by the uncaughtException handler where continuing after a false
 // positive is riskier than in the unhandledRejection path.
+// Strict subset of error names that are unambiguously network-layer.
+// Excludes TimeoutError (used for application-level control flow) and
+// AbortError (handled separately by isAbortError).
+const STRICT_NETWORK_ERROR_NAMES = new Set([
+  "ConnectTimeoutError",
+  "HeadersTimeoutError",
+  "BodyTimeoutError",
+]);
+
 const STRICT_NETWORK_MESSAGE_SNIPPETS = [
   "client network socket disconnected before secure tls connection was established",
   "socket hang up",
@@ -186,7 +195,7 @@ export function isStrictTransientNetworkError(err: unknown): boolean {
     }
 
     const name = readErrorName(candidate);
-    if (name && TRANSIENT_NETWORK_ERROR_NAMES.has(name)) {
+    if (name && STRICT_NETWORK_ERROR_NAMES.has(name)) {
       return true;
     }
 
