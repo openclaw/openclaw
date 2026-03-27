@@ -13,6 +13,18 @@ import { resolveDiscordRestFetch } from "./monitor/rest-fetch.js";
 import { createDiscordRetryRunner } from "./retry.js";
 import { normalizeDiscordToken } from "./token.js";
 
+/** Cache proxy-aware fetch by proxy URL to avoid creating a ProxyAgent per send. */
+const proxyFetchCache = new Map<string, typeof fetch>();
+
+export function cachedProxyFetch(proxyUrl: string): typeof fetch {
+  let cached = proxyFetchCache.get(proxyUrl);
+  if (!cached) {
+    cached = resolveDiscordRestFetch(proxyUrl, createNonExitingRuntime());
+    proxyFetchCache.set(proxyUrl, cached);
+  }
+  return cached;
+}
+
 export type DiscordClientOpts = {
   cfg?: ReturnType<typeof loadConfig>;
   token?: string;
@@ -70,9 +82,7 @@ export function createDiscordRestClient(
       fallbackToken: account.token,
     });
   const proxyUrl = account.config.proxy?.trim();
-  const proxyFetch = proxyUrl
-    ? resolveDiscordRestFetch(proxyUrl, createNonExitingRuntime())
-    : undefined;
+  const proxyFetch = proxyUrl ? cachedProxyFetch(proxyUrl) : undefined;
   const rest = resolveRest(token, opts.rest, proxyFetch);
   return { token, rest, account, proxyFetch };
 }

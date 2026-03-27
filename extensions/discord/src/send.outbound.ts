@@ -13,11 +13,10 @@ import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
-import { resolveDiscordRestFetch } from "./monitor/rest-fetch.js";
+import { cachedProxyFetch } from "./client.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import {
   buildDiscordMessagePayload,
@@ -373,7 +372,7 @@ export async function sendWebhookMessageDiscord(
       const account = resolveDiscordAccount({ cfg, accountId: opts.accountId });
       const proxyUrl = account.config.proxy?.trim();
       if (proxyUrl) {
-        resolvedProxyFetch = resolveDiscordRestFetch(proxyUrl, createNonExitingRuntime());
+        resolvedProxyFetch = cachedProxyFetch(proxyUrl);
       }
     } catch {
       // Best-effort proxy resolution; fall back to bare fetch.
