@@ -16,11 +16,13 @@ export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */
   mode?: "efficient";
 };
-export type BrowserSsrFPolicyConfig = {
+export type SsrFPolicyConfig = {
   /** Legacy alias for private-network access. Prefer dangerouslyAllowPrivateNetwork. */
   allowPrivateNetwork?: boolean;
   /** If true, permit browser navigation to private/internal networks. Default: true */
   dangerouslyAllowPrivateNetwork?: boolean;
+  /** If true, permit RFC 2544 benchmarking addresses that are otherwise blocked as special-use IPs. */
+  allowRfc2544BenchmarkRange?: boolean;
   /**
    * Explicitly allowed hostnames (exact-match), including blocked names like localhost.
    * Example: ["localhost", "metadata.internal"]
@@ -32,6 +34,8 @@ export type BrowserSsrFPolicyConfig = {
    */
   hostnameAllowlist?: string[];
 };
+
+export type BrowserSsrFPolicyConfig = SsrFPolicyConfig;
 export type BrowserConfig = {
   enabled?: boolean;
   /** If false, disable browser act:evaluate (arbitrary JS). Default: true */

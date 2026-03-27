@@ -5298,7 +5298,7 @@
         "advanced"
       ],
       "label": "Agent ACP Harness Agent",
-      "help": "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude).",
+      "help": "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude, cursor, gemini, openclaw).",
       "hasChildren": false
     },
     {
@@ -8289,6 +8289,20 @@
       "hasChildren": false
     },
     {
+      "path": "browser.ssrfPolicy.allowRfc2544BenchmarkRange",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Browser Allow RFC 2544 Benchmark Range",
+      "help": "If true, permit RFC 2544 benchmarking IP ranges that are otherwise blocked as special-use addresses.",
+      "hasChildren": false
+    },
+    {
       "path": "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork",
       "kind": "core",
       "type": "boolean",
@@ -8401,7 +8415,6 @@
     {
       "path": "channels",
       "kind": "core",
-      "type": "object",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -8773,8 +8786,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -9320,8 +9338,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -11130,8 +11153,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -11393,8 +11421,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -11763,8 +11796,14 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "media",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -14424,8 +14463,14 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "media",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -14575,8 +14620,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -14805,8 +14855,12 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -15404,8 +15458,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -15530,8 +15589,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -15822,8 +15886,12 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -16414,8 +16482,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -17023,8 +17096,12 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -17082,8 +17159,12 @@
       "type": "object",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -17696,8 +17777,12 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -17755,8 +17840,12 @@
       "type": "object",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -19830,8 +19919,13 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": false
     },
     {
@@ -19880,8 +19974,13 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": false
     },
     {
@@ -20642,8 +20741,13 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": false
     },
     {
@@ -20780,8 +20884,14 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "access",
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": false
     },
     {
@@ -20790,8 +20900,13 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": false
     },
     {
@@ -20989,8 +21104,14 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security",
+        "storage"
+      ],
       "hasChildren": false
     },
     {
@@ -21042,8 +21163,14 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "access",
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": false
     },
     {
@@ -21052,8 +21179,13 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": false
     },
     {
@@ -21261,8 +21393,14 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security",
+        "storage"
+      ],
       "hasChildren": false
     },
     {
@@ -21306,8 +21444,14 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "access",
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": false
     },
     {
@@ -21447,13 +21591,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "access",
-        "channels",
-        "network"
-      ],
-      "label": "Matrix Allow Bot Messages",
-      "help": "Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set \"mentions\" to only accept bot messages that visibly mention this bot.",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -21955,8 +22093,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -22500,8 +22643,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -22975,12 +23123,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "channels",
-        "network"
-      ],
-      "label": "Mattermost Base URL",
-      "help": "Base URL for your Mattermost server (e.g., https://chat.example.com).",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -23049,8 +23192,6 @@
         "network",
         "security"
       ],
-      "label": "Mattermost Bot Token",
-      "help": "Bot token from Mattermost System Console -> Integrations -> Bot Accounts.",
       "hasChildren": true
     },
     {
@@ -23115,12 +23256,7 @@
       ],
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "channels",
-        "network"
-      ],
-      "label": "Mattermost Chat Mode",
-      "help": "Reply to channel messages on mention (\"oncall\"), on trigger chars (\">\" or \"!\") (\"onchar\"), or on every message (\"onmessage\").",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -23200,12 +23336,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "channels",
-        "network"
-      ],
-      "label": "Mattermost Config Writes",
-      "help": "Allow Mattermost to write config in response to channel events/commands (default: true).",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -23426,12 +23557,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "channels",
-        "network"
-      ],
-      "label": "Mattermost Onchar Prefixes",
-      "help": "Trigger prefixes for onchar mode (default: [\">\", \"!\"]).",
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -23466,12 +23592,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "channels",
-        "network"
-      ],
-      "label": "Mattermost Require Mention",
-      "help": "Require @mention in channels before responding (default: true).",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -23548,8 +23669,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -24565,8 +24691,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -24688,8 +24819,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -24728,8 +24864,14 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security",
+        "storage"
+      ],
       "hasChildren": false
     },
     {
@@ -25163,8 +25305,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -25286,8 +25433,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -25326,8 +25478,14 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security",
+        "storage"
+      ],
       "hasChildren": false
     },
     {
@@ -27685,8 +27843,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -27778,8 +27941,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -28628,8 +28796,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -28819,8 +28992,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -30028,8 +30206,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -30619,8 +30802,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -32319,8 +32507,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -34464,8 +34657,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -36772,8 +36970,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -36964,8 +37167,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -37040,8 +37248,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -37242,8 +37455,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -43247,6 +43465,131 @@
       ],
       "label": "Queue Mode",
       "help": "Queue behavior mode: \"steer\", \"followup\", \"collect\", \"steer-backlog\", \"steer+backlog\", \"queue\", or \"interrupt\". Keep conservative modes unless you intentionally need aggressive interruption/backlog semantics.",
+      "hasChildren": false
+    },
+    {
+      "path": "messages.remoteMedia",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Messages Remote Media",
+      "help": "Settings for loading outbound remote media URLs.",
+      "hasChildren": true
+    },
+    {
+      "path": "messages.remoteMedia.ssrfPolicy",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "advanced"
+      ],
+      "label": "Messages Remote Media SSRF Policy",
+      "help": "SSRF policy for outbound remote media loading.",
+      "hasChildren": true
+    },
+    {
+      "path": "messages.remoteMedia.ssrfPolicy.allowedHostnames",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "advanced"
+      ],
+      "label": "Messages Remote Media Allowed Hostnames",
+      "help": "Exact hostnames allowed during outbound remote media loading even when they would otherwise be blocked.",
+      "hasChildren": true
+    },
+    {
+      "path": "messages.remoteMedia.ssrfPolicy.allowedHostnames.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.remoteMedia.ssrfPolicy.allowPrivateNetwork",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "advanced"
+      ],
+      "label": "Messages Remote Media Allow Private Network",
+      "help": "Legacy alias for messages.remoteMedia.ssrfPolicy.dangerouslyAllowPrivateNetwork.",
+      "hasChildren": false
+    },
+    {
+      "path": "messages.remoteMedia.ssrfPolicy.allowRfc2544BenchmarkRange",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "advanced"
+      ],
+      "label": "Messages Remote Media Allow RFC 2544 Benchmark Range",
+      "help": "If true, permit RFC 2544 benchmarking IP ranges during outbound remote media loading.",
+      "hasChildren": false
+    },
+    {
+      "path": "messages.remoteMedia.ssrfPolicy.dangerouslyAllowPrivateNetwork",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "advanced",
+        "security"
+      ],
+      "label": "Messages Remote Media Dangerously Allow Private Network",
+      "help": "If true, permit outbound remote media loading from private or internal network destinations.",
+      "hasChildren": false
+    },
+    {
+      "path": "messages.remoteMedia.ssrfPolicy.hostnameAllowlist",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "advanced"
+      ],
+      "label": "Messages Remote Media Hostname Allowlist",
+      "help": "Hostname allowlist patterns for outbound remote media loading (exact hosts or \"*.example.com\").",
+      "hasChildren": true
+    },
+    {
+      "path": "messages.remoteMedia.ssrfPolicy.hostnameAllowlist.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -52470,6 +52813,24 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.openshell.config.mode",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "mirror",
+        "remote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Mode",
+      "help": "Sandbox mode. Use mirror for the default local-workspace flow or remote for a fully remote workspace.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.openshell.config.policy",
       "kind": "plugin",
       "type": "string",
@@ -55151,8 +55512,11 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security"
+      ],
       "hasChildren": false
     },
     {
@@ -59861,7 +60225,7 @@
         "tools"
       ],
       "label": "Enable apply_patch",
-      "help": "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
+      "help": "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
       "hasChildren": false
     },
     {
@@ -63546,6 +63910,118 @@
       "hasChildren": false
     },
     {
+      "path": "tools.web.fetch.ssrfPolicy",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "tools"
+      ],
+      "label": "Web Fetch SSRF Policy",
+      "help": "SSRF policy for outbound web_fetch requests.",
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.fetch.ssrfPolicy.allowedHostnames",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "tools"
+      ],
+      "label": "Web Fetch Allowed Hostnames",
+      "help": "Exact hostnames allowed even when they would otherwise be blocked.",
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.fetch.ssrfPolicy.allowedHostnames.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.ssrfPolicy.allowPrivateNetwork",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "tools"
+      ],
+      "label": "Web Fetch Allow Private Network",
+      "help": "Legacy alias for tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "tools"
+      ],
+      "label": "Web Fetch Allow RFC 2544 Benchmark Range",
+      "help": "If true, permit RFC 2544 benchmarking IP ranges that are otherwise blocked as special-use addresses.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "advanced",
+        "security",
+        "tools"
+      ],
+      "label": "Web Fetch Dangerously Allow Private Network",
+      "help": "If true, permit web_fetch requests to private or internal network destinations.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.ssrfPolicy.hostnameAllowlist",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "tools"
+      ],
+      "label": "Web Fetch Hostname Allowlist",
+      "help": "Hostname allowlist patterns for web_fetch requests (exact hosts or \"*.example.com\").",
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.fetch.ssrfPolicy.hostnameAllowlist.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "tools.web.fetch.timeoutSeconds",
       "kind": "core",
       "type": "integer",
@@ -63732,6 +64208,139 @@
       ],
       "label": "Web Search Cache TTL (min)",
       "help": "Cache TTL in minutes for web_search results.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.citationRedirect",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "storage",
+        "tools"
+      ],
+      "label": "Web Search Citation Redirect",
+      "help": "Settings for resolving web search citation redirect URLs before returning citations.",
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.citationRedirect.ssrfPolicy",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "storage",
+        "tools"
+      ],
+      "label": "Web Search Citation Redirect SSRF Policy",
+      "help": "SSRF policy for resolving citation redirect URLs.",
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.citationRedirect.ssrfPolicy.allowedHostnames",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "storage",
+        "tools"
+      ],
+      "label": "Web Search Citation Redirect Allowed Hostnames",
+      "help": "Exact hostnames allowed during citation redirect resolution even when they would otherwise be blocked.",
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.citationRedirect.ssrfPolicy.allowedHostnames.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.citationRedirect.ssrfPolicy.allowPrivateNetwork",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "storage",
+        "tools"
+      ],
+      "label": "Web Search Citation Redirect Allow Private Network",
+      "help": "Legacy alias for tools.web.search.citationRedirect.ssrfPolicy.dangerouslyAllowPrivateNetwork.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.citationRedirect.ssrfPolicy.allowRfc2544BenchmarkRange",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "storage",
+        "tools"
+      ],
+      "label": "Web Search Citation Redirect Allow RFC 2544 Benchmark Range",
+      "help": "If true, permit RFC 2544 benchmarking IP ranges during citation redirect resolution.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.citationRedirect.ssrfPolicy.dangerouslyAllowPrivateNetwork",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "advanced",
+        "security",
+        "storage",
+        "tools"
+      ],
+      "label": "Web Search Citation Redirect Dangerously Allow Private Network",
+      "help": "If true, permit citation redirect resolution to private or internal network destinations.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.citationRedirect.ssrfPolicy.hostnameAllowlist",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "storage",
+        "tools"
+      ],
+      "label": "Web Search Citation Redirect Hostname Allowlist",
+      "help": "Hostname allowlist patterns for citation redirect resolution (exact hosts or \"*.example.com\").",
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.citationRedirect.ssrfPolicy.hostnameAllowlist.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {

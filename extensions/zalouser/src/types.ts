@@ -1,3 +1,4 @@
+import type { SsrFPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import type { Style } from "./zca-constants.js";
 
 export type ZcaFriend = {
@@ -61,6 +62,7 @@ export type ZaloSendOptions = {
   caption?: string;
   isGroup?: boolean;
   mediaLocalRoots?: readonly string[];
+  ssrfPolicy?: SsrFPolicy;
   textMode?: "markdown" | "plain";
   textChunkMode?: "length" | "newline";
   textChunkLimit?: number;

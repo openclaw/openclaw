@@ -4,6 +4,7 @@ import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins
 import type { OpenClawConfig } from "../../config/config.js";
 import { createRootScopedReadFile } from "../../infra/fs-safe.js";
 import { basenameFromMediaSource } from "../../infra/local-file-access.js";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { extensionForMime } from "../../media/mime.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
@@ -124,15 +125,18 @@ export function resolveAttachmentMediaPolicy(params: {
 function buildAttachmentMediaLoadOptions(params: {
   policy: AttachmentMediaPolicy;
   maxBytes?: number;
+  ssrfPolicy?: SsrFPolicy;
 }):
   | {
       maxBytes?: number;
       sandboxValidated: true;
       readFile: (filePath: string) => Promise<Buffer>;
+      ssrfPolicy?: SsrFPolicy;
     }
   | {
       maxBytes?: number;
       localRoots?: readonly string[];
+      ssrfPolicy?: SsrFPolicy;
     } {
   if (params.policy.mode === "sandbox") {
     const readSandboxFile = createRootScopedReadFile({
@@ -142,11 +146,13 @@ function buildAttachmentMediaLoadOptions(params: {
       maxBytes: params.maxBytes,
       sandboxValidated: true,
       readFile: readSandboxFile,
+      ssrfPolicy: params.ssrfPolicy,
     };
   }
   return {
     maxBytes: params.maxBytes,
     localRoots: params.policy.localRoots,
+    ssrfPolicy: params.ssrfPolicy,
   };
 }
 
@@ -185,7 +191,11 @@ async function hydrateAttachmentPayload(params: {
     });
     const media = await loadWebMedia(
       mediaSource,
-      buildAttachmentMediaLoadOptions({ policy: params.mediaPolicy, maxBytes }),
+      buildAttachmentMediaLoadOptions({
+        policy: params.mediaPolicy,
+        maxBytes,
+        ssrfPolicy: params.cfg.messages?.remoteMedia?.ssrfPolicy,
+      }),
     );
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {

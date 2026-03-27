@@ -233,12 +233,14 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: {
         allowPrivateNetwork: true,
+        allowRfc2544BenchmarkRange: true,
         allowedHostnames: [" localhost ", ""],
         hostnameAllowlist: [" *.trusted.example ", " "],
       },
     });
     expect(resolved.ssrfPolicy).toEqual({
       dangerouslyAllowPrivateNetwork: true,
+      allowRfc2544BenchmarkRange: true,
       allowedHostnames: ["localhost"],
       hostnameAllowlist: ["*.trusted.example"],
     });
@@ -258,6 +260,18 @@ describe("browser config", () => {
       },
     });
     expect(resolved.ssrfPolicy).toEqual({});
+  });
+
+  it("preserves allowRfc2544BenchmarkRange even in strict browser mode", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: false,
+        allowRfc2544BenchmarkRange: true,
+      },
+    });
+    expect(resolved.ssrfPolicy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+    });
   });
 
   it("resolves existing-session profiles without cdpPort or cdpUrl", () => {

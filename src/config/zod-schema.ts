@@ -9,6 +9,7 @@ import {
   ModelsConfigSchema,
   SecretInputSchema,
   SecretsConfigSchema,
+  SsrFPolicySchema,
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { PluginInstallRecordShape } from "./zod-schema.installs.js";
@@ -366,15 +367,7 @@ export const OpenClawSchema = z
         cdpPortRangeStart: z.number().int().min(1).max(65535).optional(),
         defaultProfile: z.string().optional(),
         snapshotDefaults: BrowserSnapshotDefaultsSchema,
-        ssrfPolicy: z
-          .object({
-            allowPrivateNetwork: z.boolean().optional(),
-            dangerouslyAllowPrivateNetwork: z.boolean().optional(),
-            allowedHostnames: z.array(z.string()).optional(),
-            hostnameAllowlist: z.array(z.string()).optional(),
-          })
-          .strict()
-          .optional(),
+        ssrfPolicy: SsrFPolicySchema,
         profiles: z
           .record(
             z

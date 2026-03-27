@@ -19,7 +19,7 @@ type WebToolGuardedFetchOptions = Omit<
   timeoutSeconds?: number;
   useEnvProxy?: boolean;
 };
-type WebToolEndpointFetchOptions = Omit<WebToolGuardedFetchOptions, "policy" | "useEnvProxy">;
+type WebToolEndpointFetchOptions = Omit<WebToolGuardedFetchOptions, "useEnvProxy">;
 
 function resolveTimeoutMs(params: {
   timeoutMs?: number;
@@ -68,7 +68,10 @@ export async function withTrustedWebToolsEndpoint<T>(
   return await withWebToolsNetworkGuard(
     {
       ...params,
-      policy: WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY,
+      policy: {
+        ...(params.policy ?? {}),
+        ...WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY,
+      },
       useEnvProxy: true,
     },
     run,

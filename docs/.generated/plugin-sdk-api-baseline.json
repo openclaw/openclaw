@@ -1015,7 +1015,7 @@
           "exportName": "BlockStreamingCoalesceSchema",
           "kind": "const",
           "source": {
-            "line": 339,
+            "line": 350,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1033,7 +1033,7 @@
           "exportName": "DmConfigSchema",
           "kind": "const",
           "source": {
-            "line": 293,
+            "line": 304,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1042,7 +1042,7 @@
           "exportName": "DmPolicySchema",
           "kind": "const",
           "source": {
-            "line": 337,
+            "line": 348,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1060,7 +1060,7 @@
           "exportName": "GroupPolicySchema",
           "kind": "const",
           "source": {
-            "line": 335,
+            "line": 346,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1078,7 +1078,7 @@
           "exportName": "MarkdownConfigSchema",
           "kind": "const",
           "source": {
-            "line": 371,
+            "line": 382,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1096,7 +1096,7 @@
           "exportName": "ReplyRuntimeConfigSchemaShape",
           "kind": "const",
           "source": {
-            "line": 347,
+            "line": 358,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1105,7 +1105,7 @@
           "exportName": "requireOpenAllowFrom",
           "kind": "const",
           "source": {
-            "line": 486,
+            "line": 497,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1141,7 +1141,7 @@
           "exportName": "ToolPolicySchema",
           "kind": "const",
           "source": {
-            "line": 253,
+            "line": 254,
             "path": "src/config/zod-schema.agent-runtime.ts"
           }
         },

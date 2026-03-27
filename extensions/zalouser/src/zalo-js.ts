@@ -1043,6 +1043,7 @@ export async function sendZaloTextMessage(
     if (options.mediaUrl?.trim()) {
       const media = await loadOutboundMediaFromUrl(options.mediaUrl.trim(), {
         mediaLocalRoots: options.mediaLocalRoots,
+        ssrfPolicy: options.ssrfPolicy,
       });
       const fileName = resolveMediaFileName({
         mediaUrl: options.mediaUrl,

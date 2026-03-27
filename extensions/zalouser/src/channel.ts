@@ -84,6 +84,7 @@ const zalouserRawSendResultAdapter = createRawChannelSendResultAdapter({
       isGroup: target.isGroup,
       mediaUrl,
       mediaLocalRoots,
+      ssrfPolicy: cfg.messages?.remoteMedia?.ssrfPolicy,
       textMode: "markdown",
       textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
       textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),

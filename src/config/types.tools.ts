@@ -1,5 +1,6 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
+import type { SsrFPolicyConfig } from "./types.browser.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { SecretInput } from "./types.secrets.js";
 
@@ -482,6 +483,10 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
+      citationRedirect?: {
+        /** SSRF policy for resolving search citation redirect URLs. */
+        ssrfPolicy?: SsrFPolicyConfig;
+      };
       /** @deprecated Legacy Brave scoped config. */
       brave?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Firecrawl scoped config. */
@@ -512,6 +517,8 @@ export type ToolsConfig = {
       maxRedirects?: number;
       /** Override User-Agent header for fetch requests. */
       userAgent?: string;
+      /** SSRF policy for outbound web_fetch requests. */
+      ssrfPolicy?: SsrFPolicyConfig;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
       firecrawl?: {

@@ -8,6 +8,7 @@ import {
   InboundDebounceSchema,
   NativeCommandsSettingSchema,
   QueueSchema,
+  SsrFPolicySchema,
   TypingModeSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
@@ -187,6 +188,12 @@ export const MessagesSchema = z
       .strict()
       .optional(),
     suppressToolErrors: z.boolean().optional(),
+    remoteMedia: z
+      .object({
+        ssrfPolicy: SsrFPolicySchema,
+      })
+      .strict()
+      .optional(),
     tts: TtsConfigSchema,
   })
   .strict()

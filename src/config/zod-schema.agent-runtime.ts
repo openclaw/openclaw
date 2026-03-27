@@ -7,6 +7,7 @@ import {
   HumanDelaySchema,
   IdentitySchema,
   SecretInputSchema,
+  SsrFPolicySchema,
   ToolsLinksSchema,
   ToolsMediaSchema,
 } from "./zod-schema.core.js";
@@ -267,6 +268,12 @@ export const ToolsWebSearchSchema = z
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
+    citationRedirect: z
+      .object({
+        ssrfPolicy: SsrFPolicySchema,
+      })
+      .strict()
+      .optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     brave: z
       .object({
@@ -332,6 +339,7 @@ export const ToolsWebFetchSchema = z
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
+    ssrfPolicy: SsrFPolicySchema,
     readability: z.boolean().optional(),
     firecrawl: z
       .object({

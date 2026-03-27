@@ -1,3 +1,4 @@
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { buildOutboundMediaLoadOptions } from "./load-options.js";
 import { saveMediaBuffer } from "./store.js";
 import { loadWebMedia } from "./web-media.js";
@@ -5,13 +6,14 @@ import { loadWebMedia } from "./web-media.js";
 export async function resolveOutboundAttachmentFromUrl(
   mediaUrl: string,
   maxBytes: number,
-  options?: { localRoots?: readonly string[] },
+  options?: { localRoots?: readonly string[]; ssrfPolicy?: SsrFPolicy },
 ): Promise<{ path: string; contentType?: string }> {
   const media = await loadWebMedia(
     mediaUrl,
     buildOutboundMediaLoadOptions({
       maxBytes,
       mediaLocalRoots: options?.localRoots,
+      ssrfPolicy: options?.ssrfPolicy,
     }),
   );
   const saved = await saveMediaBuffer(

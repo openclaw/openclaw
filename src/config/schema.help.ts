@@ -281,6 +281,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Legacy alias for browser.ssrfPolicy.dangerouslyAllowPrivateNetwork. Prefer the dangerously-named key so risk intent is explicit.",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork":
     "Allows access to private-network address ranges from browser tooling. Default is enabled for trusted-network operator setups; disable to enforce strict public-only resolution checks.",
+  "browser.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "If true, permit RFC 2544 benchmarking IP ranges that are otherwise blocked as special-use addresses.",
   "browser.ssrfPolicy.allowedHostnames":
     "Explicit hostname allowlist exceptions for SSRF policy checks on browser/network requests. Keep this list minimal and review entries regularly to avoid stale broad access.",
   "browser.ssrfPolicy.hostnameAllowlist":
@@ -674,6 +676,20 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.search.maxResults": "Number of results to return (1-10).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
   "tools.web.search.cacheTtlMinutes": "Cache TTL in minutes for web_search results.",
+  "tools.web.search.citationRedirect":
+    "Settings for resolving web search citation redirect URLs before returning citations.",
+  "tools.web.search.citationRedirect.ssrfPolicy":
+    "SSRF policy for resolving citation redirect URLs.",
+  "tools.web.search.citationRedirect.ssrfPolicy.allowPrivateNetwork":
+    "Legacy alias for tools.web.search.citationRedirect.ssrfPolicy.dangerouslyAllowPrivateNetwork.",
+  "tools.web.search.citationRedirect.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "If true, permit citation redirect resolution to private or internal network destinations.",
+  "tools.web.search.citationRedirect.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "If true, permit RFC 2544 benchmarking IP ranges during citation redirect resolution.",
+  "tools.web.search.citationRedirect.ssrfPolicy.allowedHostnames":
+    "Exact hostnames allowed during citation redirect resolution even when they would otherwise be blocked.",
+  "tools.web.search.citationRedirect.ssrfPolicy.hostnameAllowlist":
+    'Hostname allowlist patterns for citation redirect resolution (exact hosts or "*.example.com").',
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":
@@ -683,6 +699,17 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.cacheTtlMinutes": "Cache TTL in minutes for web_fetch results.",
   "tools.web.fetch.maxRedirects": "Maximum redirects allowed for web_fetch (default: 3).",
   "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
+  "tools.web.fetch.ssrfPolicy": "SSRF policy for outbound web_fetch requests.",
+  "tools.web.fetch.ssrfPolicy.allowPrivateNetwork":
+    "Legacy alias for tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork.",
+  "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "If true, permit web_fetch requests to private or internal network destinations.",
+  "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "If true, permit RFC 2544 benchmarking IP ranges that are otherwise blocked as special-use addresses.",
+  "tools.web.fetch.ssrfPolicy.allowedHostnames":
+    "Exact hostnames allowed even when they would otherwise be blocked.",
+  "tools.web.fetch.ssrfPolicy.hostnameAllowlist":
+    'Hostname allowlist patterns for web_fetch requests (exact hosts or "*.example.com").',
   "tools.web.fetch.readability":
     "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
   "tools.web.fetch.firecrawl.enabled": "Enable Firecrawl fallback for web_fetch (if configured).",
@@ -1371,6 +1398,18 @@ export const FIELD_HELP: Record<string, string> = {
     'Drop strategy when queue cap is exceeded: "old", "new", or "summarize". Use summarize when preserving intent matters, or old/new when deterministic dropping is preferred.',
   "messages.inbound":
     "Direct inbound debounce settings used before queue/turn processing starts. Configure this for provider-specific rapid message bursts from the same sender.",
+  "messages.remoteMedia": "Settings for loading outbound remote media URLs.",
+  "messages.remoteMedia.ssrfPolicy": "SSRF policy for outbound remote media loading.",
+  "messages.remoteMedia.ssrfPolicy.allowPrivateNetwork":
+    "Legacy alias for messages.remoteMedia.ssrfPolicy.dangerouslyAllowPrivateNetwork.",
+  "messages.remoteMedia.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "If true, permit outbound remote media loading from private or internal network destinations.",
+  "messages.remoteMedia.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "If true, permit RFC 2544 benchmarking IP ranges during outbound remote media loading.",
+  "messages.remoteMedia.ssrfPolicy.allowedHostnames":
+    "Exact hostnames allowed during outbound remote media loading even when they would otherwise be blocked.",
+  "messages.remoteMedia.ssrfPolicy.hostnameAllowlist":
+    'Hostname allowlist patterns for outbound remote media loading (exact hosts or "*.example.com").',
   "messages.inbound.byChannel":
     "Per-channel inbound debounce overrides keyed by provider id in milliseconds. Use this where some providers send message fragments more aggressively than others.",
   "messages.removeAckAfterReply":

@@ -222,6 +222,18 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.maxResults": "Web Search Max Results",
   "tools.web.search.timeoutSeconds": "Web Search Timeout (sec)",
   "tools.web.search.cacheTtlMinutes": "Web Search Cache TTL (min)",
+  "tools.web.search.citationRedirect": "Web Search Citation Redirect",
+  "tools.web.search.citationRedirect.ssrfPolicy": "Web Search Citation Redirect SSRF Policy",
+  "tools.web.search.citationRedirect.ssrfPolicy.allowPrivateNetwork":
+    "Web Search Citation Redirect Allow Private Network",
+  "tools.web.search.citationRedirect.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Web Search Citation Redirect Dangerously Allow Private Network",
+  "tools.web.search.citationRedirect.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "Web Search Citation Redirect Allow RFC 2544 Benchmark Range",
+  "tools.web.search.citationRedirect.ssrfPolicy.allowedHostnames":
+    "Web Search Citation Redirect Allowed Hostnames",
+  "tools.web.search.citationRedirect.ssrfPolicy.hostnameAllowlist":
+    "Web Search Citation Redirect Hostname Allowlist",
   "tools.web.fetch.enabled": "Enable Web Fetch Tool",
   "tools.web.fetch.maxChars": "Web Fetch Max Chars",
   "tools.web.fetch.maxCharsCap": "Web Fetch Hard Max Chars",
@@ -230,6 +242,14 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.cacheTtlMinutes": "Web Fetch Cache TTL (min)",
   "tools.web.fetch.maxRedirects": "Web Fetch Max Redirects",
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
+  "tools.web.fetch.ssrfPolicy": "Web Fetch SSRF Policy",
+  "tools.web.fetch.ssrfPolicy.allowPrivateNetwork": "Web Fetch Allow Private Network",
+  "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Web Fetch Dangerously Allow Private Network",
+  "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "Web Fetch Allow RFC 2544 Benchmark Range",
+  "tools.web.fetch.ssrfPolicy.allowedHostnames": "Web Fetch Allowed Hostnames",
+  "tools.web.fetch.ssrfPolicy.hostnameAllowlist": "Web Fetch Hostname Allowlist",
   "tools.web.fetch.readability": "Web Fetch Readability Extraction",
   "tools.web.fetch.firecrawl.enabled": "Enable Firecrawl Fallback",
   "tools.web.fetch.firecrawl.apiKey": "Firecrawl API Key", // pragma: allowlist secret
@@ -518,6 +538,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.ssrfPolicy": "Browser SSRF Policy",
   "browser.ssrfPolicy.allowPrivateNetwork": "Browser Allow Private Network",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork": "Browser Dangerously Allow Private Network",
+  "browser.ssrfPolicy.allowRfc2544BenchmarkRange": "Browser Allow RFC 2544 Benchmark Range",
   "browser.ssrfPolicy.allowedHostnames": "Browser Allowed Hostnames",
   "browser.ssrfPolicy.hostnameAllowlist": "Browser Hostname Allowlist",
   "browser.remoteCdpTimeoutMs": "Remote CDP Timeout (ms)",
@@ -686,6 +707,17 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.queue.drop": "Queue Drop Strategy",
   "messages.inbound": "Inbound Debounce",
   "messages.suppressToolErrors": "Suppress Tool Error Warnings",
+  "messages.remoteMedia": "Messages Remote Media",
+  "messages.remoteMedia.ssrfPolicy": "Messages Remote Media SSRF Policy",
+  "messages.remoteMedia.ssrfPolicy.allowPrivateNetwork":
+    "Messages Remote Media Allow Private Network",
+  "messages.remoteMedia.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Messages Remote Media Dangerously Allow Private Network",
+  "messages.remoteMedia.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "Messages Remote Media Allow RFC 2544 Benchmark Range",
+  "messages.remoteMedia.ssrfPolicy.allowedHostnames": "Messages Remote Media Allowed Hostnames",
+  "messages.remoteMedia.ssrfPolicy.hostnameAllowlist":
+    "Messages Remote Media Hostname Allowlist",
   "messages.ackReaction": "Ack Reaction Emoji",
   "messages.ackReactionScope": "Ack Reaction Scope",
   "messages.removeAckAfterReply": "Remove Ack Reaction After Reply",
