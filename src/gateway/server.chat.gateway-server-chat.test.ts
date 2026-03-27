@@ -726,6 +726,47 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.send does not rotate sessions for operator.write reset triggers", async () => {
+    await withGatewayServer(async ({ port }) => {
+      await withMainSessionStore(async () => {
+        let scopedWs: WebSocket | undefined;
+
+        try {
+          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          trackConnectChallengeNonce(scopedWs);
+          await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+          await connectOk(scopedWs, {
+            scopes: ["operator.write"],
+          });
+
+          const sendRes = await rpcReq(scopedWs, "chat.send", {
+            sessionKey: "main",
+            message: "/reset",
+            idempotencyKey: "idem-write-scope-reset-no-rotate",
+          });
+          expect(sendRes.ok).toBe(true);
+
+          const waitRes = await rpcReq(scopedWs, "agent.wait", {
+            runId: "idem-write-scope-reset-no-rotate",
+            timeoutMs: 1_000,
+          });
+          expect(waitRes.ok).toBe(true);
+          expect(waitRes.payload?.status).toBe("ok");
+
+          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
+          const stored = JSON.parse(raw) as {
+            "agent:main:main"?: {
+              sessionId?: string;
+            };
+          };
+          expect(stored["agent:main:main"]?.sessionId).toBe("sess-main");
+        } finally {
+          scopedWs?.close();
+        }
+      });
+    });
+  });
+
   test("agent.wait resolves chat.send runs that finish without lifecycle events", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-1";
