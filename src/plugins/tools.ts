@@ -57,7 +57,9 @@ function wrapToolWithExecuteContext(
   execCtx: OpenClawPluginToolExecuteContext,
 ): AnyAgentTool {
   const original = tool.execute;
-  if (!original) return tool;
+  if (!original) {
+    return tool;
+  }
   // We intentionally pass `execCtx` as the third argument instead of an AbortSignal.
   // Plugin tools that declare a third parameter receive identity context; plugins
   // that don't declare it simply ignore the extra argument. The cast is necessary
