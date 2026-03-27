@@ -30,9 +30,9 @@ Agents and humans can seamlessly track, claim, and execute project work through 
 - [ ] Sub-project support (one level deep)
 - [ ] YAML frontmatter on PROJECT.md and task files for structured metadata
 - [ ] Auto-generated `.index/` JSON from markdown via file watcher sync process
-- [ ] PROJECT.md context injection via cwd-based pickup (extend post-compaction loader)
-- [ ] PROJECT.md context injection via channel hook (agent:bootstrap hook)
-- [ ] Capability tags in agent IDENTITY.md for work routing
+- [x] PROJECT.md context injection via cwd-based pickup (extend post-compaction loader)
+- [x] PROJECT.md context injection via channel hook (agent:bootstrap hook)
+- [x] Capability tags in agent IDENTITY.md for work routing
 - [ ] Heartbeat task pickup — agents scan queue.md, match capabilities, claim work
 - [ ] File-level .lock for concurrent queue write prevention
 - [ ] Kanban board state in task frontmatter (configurable columns with defaults)
@@ -90,7 +90,7 @@ Agents and humans can seamlessly track, claim, and execute project work through 
 | Markdown + auto-generated JSON                 | Agents write markdown natively; UI reads JSON for speed; single source of truth | — Pending |
 | Projects at `~/.openclaw/projects/`            | Central location alongside existing config; not per-repo                        | — Pending |
 | PROJECT.md (not AGENTS.md) for project context | Avoids collision with industry-standard AGENTS.md in repos; unambiguous         | — Pending |
-| Capability tags over agent name matching       | More flexible; agents can fulfill multiple roles                                | — Pending |
+| Capability tags over agent name matching       | More flexible; agents can fulfill multiple roles                                | Phase 5  |
 | File-level .lock for queue writes              | Simple concurrency without database; lock held only during brief write          | — Pending |
 | Configurable columns with defaults             | Projects have different needs; Backlog/In Progress/Review/Done as default       | — Pending |
 | Configurable dashboard widgets                 | No one-size-fits-all; good defaults with per-project override                   | — Pending |
@@ -118,4 +118,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-_Last updated: 2026-03-26 after initialization_
+_Last updated: 2026-03-27 after Phase 5 (Context Injection) completion_
