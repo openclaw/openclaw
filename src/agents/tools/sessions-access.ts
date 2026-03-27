@@ -200,6 +200,26 @@ export async function createSessionVisibilityGuard(params: {
   const check = (targetSessionKey: string): SessionAccessResult => {
     const targetAgentId = resolveAgentIdFromSessionKey(targetSessionKey);
     const isCrossAgent = targetAgentId !== requesterAgentId;
+
+    // In tree mode, spawned children are always reachable regardless of agent id.
+    if (params.visibility === "tree") {
+      if (targetSessionKey === params.requesterSessionKey || spawnedKeys?.has(targetSessionKey)) {
+        return { allowed: true };
+      }
+      if (isCrossAgent) {
+        return {
+          allowed: false,
+          status: "forbidden",
+          error: crossVisibilityMessage(params.action),
+        };
+      }
+      return {
+        allowed: false,
+        status: "forbidden",
+        error: treeVisibilityMessage(params.action),
+      };
+    }
+
     if (isCrossAgent) {
       if (params.visibility !== "all") {
         return {
@@ -230,18 +250,6 @@ export async function createSessionVisibilityGuard(params: {
         allowed: false,
         status: "forbidden",
         error: selfVisibilityMessage(params.action),
-      };
-    }
-
-    if (
-      params.visibility === "tree" &&
-      targetSessionKey !== params.requesterSessionKey &&
-      !spawnedKeys?.has(targetSessionKey)
-    ) {
-      return {
-        allowed: false,
-        status: "forbidden",
-        error: treeVisibilityMessage(params.action),
       };
     }
 
