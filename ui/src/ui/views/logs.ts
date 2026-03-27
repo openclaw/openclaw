@@ -1,6 +1,12 @@
 import { html, nothing } from "lit";
 import type { LogEntry, LogLevel } from "../types.ts";
 
+/** Strip ANSI escape codes (SGR, OSC-8) for readable log display. */
+function stripAnsi(text: string): string {
+  // eslint-disable-next-line no-control-regex -- stripping ANSI escape sequences requires matching ESC
+  return text.replace(/\x1b\]8;;.*?(\x1b\\|\x07)/g, "").replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
 
 export type LogsProps = {
@@ -144,7 +150,7 @@ export function renderLogs(props: LogsProps) {
                   <div class="log-time mono">${formatTime(entry.time)}</div>
                   <div class="log-level ${entry.level ?? ""}">${entry.level ?? ""}</div>
                   <div class="log-subsystem mono">${entry.subsystem ?? ""}</div>
-                  <div class="log-message mono">${entry.message ?? entry.raw}</div>
+                  <div class="log-message mono">${stripAnsi(entry.message ?? entry.raw ?? "")}</div>
                 </div>
               `,
               )
