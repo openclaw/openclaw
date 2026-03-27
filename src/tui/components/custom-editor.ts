@@ -1,4 +1,10 @@
-import { Editor, type EditorOptions, type EditorTheme, Key, matchesKey } from "@mariozechner/pi-tui";
+import {
+  Editor,
+  type EditorOptions,
+  type EditorTheme,
+  Key,
+  matchesKey,
+} from "@mariozechner/pi-tui";
 import type { TUI } from "@mariozechner/pi-tui";
 
 type ViMode = "insert" | "normal";
@@ -26,10 +32,7 @@ export class CustomEditor extends Editor {
 
   constructor(tui: TUI, theme: EditorTheme, options?: CustomEditorOptions) {
     super(tui, theme, options);
-    const envViMode =
-      process.env.OPENCLAW_TUI_VI_MODE === "1" ||
-      process.env.OPENCLAW_TUI_VI_MODE === "true";
-    this.viEnabled = options?.viMode ?? envViMode;
+    this.viEnabled = options?.viMode ?? false;
   }
 
   /** Returns the current vi mode if vi is enabled, null otherwise. */
@@ -50,7 +53,9 @@ export class CustomEditor extends Editor {
         // All other input falls through to the existing handler below.
       } else {
         // Normal mode: handle vi bindings first.
-        if (this.handleViNormalInput(data)) return;
+        if (this.handleViNormalInput(data)) {
+          return;
+        }
         // Unrecognised in normal mode: fall through for control sequences.
       }
     }

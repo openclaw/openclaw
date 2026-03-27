@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorTheme, TUI } from "@mariozechner/pi-tui";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CustomEditor } from "./custom-editor.js";
 
 // ── Minimal TUI mock ─────────────────────────────────────────────────────────
@@ -200,38 +200,19 @@ describe("CustomEditor — vi mode via options", () => {
   });
 });
 
-describe("CustomEditor — vi mode via OPENCLAW_TUI_VI_MODE env var", () => {
-  const originalEnv = process.env.OPENCLAW_TUI_VI_MODE;
-
-  afterEach(() => {
-    if (originalEnv === undefined) {
-      delete process.env.OPENCLAW_TUI_VI_MODE;
-    } else {
-      process.env.OPENCLAW_TUI_VI_MODE = originalEnv;
-    }
-  });
-
-  it("OPENCLAW_TUI_VI_MODE=1 enables vi mode", () => {
-    process.env.OPENCLAW_TUI_VI_MODE = "1";
-    const editor = new CustomEditor(createMockTui(), mockTheme);
+describe("CustomEditor — vi mode via config option", () => {
+  it("viMode: true in options enables vi mode", () => {
+    const editor = new CustomEditor(createMockTui(), mockTheme, { viMode: true });
     expect(editor.getViMode()).toBe("insert");
   });
 
-  it("OPENCLAW_TUI_VI_MODE=true enables vi mode", () => {
-    process.env.OPENCLAW_TUI_VI_MODE = "true";
-    const editor = new CustomEditor(createMockTui(), mockTheme);
-    expect(editor.getViMode()).toBe("insert");
-  });
-
-  it("OPENCLAW_TUI_VI_MODE=0 does not enable vi mode", () => {
-    process.env.OPENCLAW_TUI_VI_MODE = "0";
-    const editor = new CustomEditor(createMockTui(), mockTheme);
+  it("viMode: false in options disables vi mode", () => {
+    const editor = new CustomEditor(createMockTui(), mockTheme, { viMode: false });
     expect(editor.getViMode()).toBeNull();
   });
 
-  it("options.viMode=true takes precedence when env var is absent", () => {
-    delete process.env.OPENCLAW_TUI_VI_MODE;
-    const editor = new CustomEditor(createMockTui(), mockTheme, { viMode: true });
-    expect(editor.getViMode()).toBe("insert");
+  it("vi mode is off by default (no option)", () => {
+    const editor = new CustomEditor(createMockTui(), mockTheme);
+    expect(editor.getViMode()).toBeNull();
   });
 });

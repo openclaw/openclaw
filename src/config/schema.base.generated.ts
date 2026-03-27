@@ -11661,7 +11661,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "tui.viMode": {
       label: "TUI Vi Mode",
-      help: "Enable vi/vim keybinding mode for the TUI input editor. When enabled, the editor starts in insert mode; press Escape to enter normal mode for vi-style cursor movement and editing. Can also be enabled via the OPENCLAW_TUI_VI_MODE=1 environment variable.",
+      help: "Enable vi/vim keybinding mode for the TUI input editor. When enabled, the editor starts in insert mode; press Escape to enter normal mode for vi-style cursor movement and editing.",
       tags: ["advanced"],
     },
     "update.channel": {

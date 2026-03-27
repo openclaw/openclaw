@@ -53,7 +53,7 @@ export const FIELD_HELP: Record<string, string> = {
     'Controls tagline style in the CLI startup banner: "random" (default) picks from the rotating tagline pool, "default" always shows the neutral default tagline, and "off" hides tagline text while keeping the banner version line.',
   tui: "Terminal UI controls for TUI input editor behavior and keybinding preferences.",
   "tui.viMode":
-    "Enable vi/vim keybinding mode for the TUI input editor. When enabled, the editor starts in insert mode; press Escape to enter normal mode for vi-style cursor movement and editing. Can also be enabled via the OPENCLAW_TUI_VI_MODE=1 environment variable.",
+    "Enable vi/vim keybinding mode for the TUI input editor. When enabled, the editor starts in insert mode; press Escape to enter normal mode for vi-style cursor movement and editing.",
   update:
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
   "update.channel": 'Update channel for git + npm installs ("stable", "beta", or "dev").',
