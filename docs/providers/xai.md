@@ -27,6 +27,9 @@ openclaw onboard --auth-choice xai-api-key
 }
 ```
 
+OpenClaw now uses the xAI Responses API as the bundled xAI transport. The same
+`XAI_API_KEY` can also power Grok-backed `web_search` and first-class `x_search`.
+
 ## Current bundled model catalog
 
 OpenClaw now includes these xAI model families out of the box:
@@ -52,9 +55,9 @@ openclaw config set tools.web.search.provider grok
 
 - Auth is API-key only today. There is no xAI OAuth/device-code flow in OpenClaw yet.
 - `grok-4.20-multi-agent-experimental-beta-0304` is not supported on the normal xAI provider path because it requires a different upstream API surface than the standard OpenClaw xAI transport.
-- Native xAI server-side tools such as `x_search` and `code_execution` are not yet first-class model-provider features in the bundled plugin.
 
 ## Notes
 
 - OpenClaw applies xAI-specific tool-schema and tool-call compatibility fixes automatically on the shared runner path.
+- `web_search` and `x_search` are exposed as OpenClaw tools. OpenClaw enables the specific xAI built-in it needs inside each tool request instead of attaching both search tools to every chat turn.
 - For the broader provider overview, see [Model providers](/providers/index).
