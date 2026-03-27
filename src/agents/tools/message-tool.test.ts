@@ -546,6 +546,58 @@ describe("message tool schema scoping", () => {
     expect(schema.required ?? []).not.toContain("buttons");
   });
 
+  it("keeps contributed optional buttons out of required even when the optional marker comes from another typebox copy", () => {
+    const foreignOptionalMarker = Symbol("TypeBox.Optional");
+    const telegramPluginWithForeignOptionalButtons = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram test plugin.",
+      actions: ["send"],
+      capabilities: ["interactive", "buttons"],
+      toolSchema: () => ({
+        properties: {
+          buttons: {
+            type: "array",
+            items: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  text: { type: "string" },
+                  callback_data: { type: "string" },
+                },
+              },
+            },
+            [foreignOptionalMarker]: "Optional",
+          } as unknown as ReturnType<typeof createMessageToolButtonsSchema>,
+        },
+      }),
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: telegramPluginWithForeignOptionalButtons,
+        },
+      ]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+    });
+    const schema = tool.parameters as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+
+    expect(schema.properties?.buttons).toBeDefined();
+    expect(schema.required ?? []).not.toContain("buttons");
+  });
+
   it("hides telegram poll extras when telegram polls are disabled in scoped mode", () => {
     const telegramPluginWithConfig = createChannelPlugin({
       id: "telegram",

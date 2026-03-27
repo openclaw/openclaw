@@ -370,6 +370,13 @@ function buildMessageToolSchemaProps(options: {
   };
 }
 
+function isOptionalSchemaMarker(schema: TSchema): boolean {
+  return Object.getOwnPropertySymbols(schema).some((symbol) => {
+    const description = symbol.description ?? String(symbol);
+    return description.includes("Optional");
+  });
+}
+
 function buildMessageToolSchemaFromActions(
   actions: readonly string[],
   options: {
@@ -378,10 +385,21 @@ function buildMessageToolSchemaFromActions(
   },
 ) {
   const props = buildMessageToolSchemaProps(options);
-  return Type.Object({
+  const optionalPropertyNames = Object.entries(props)
+    .filter(([, schema]) => isOptionalSchemaMarker(schema))
+    .map(([name]) => name);
+  const schema = Type.Object({
     action: stringEnum(actions),
     ...props,
   });
+  if (optionalPropertyNames.length === 0 || !Array.isArray(schema.required)) {
+    return schema;
+  }
+  const required = schema.required.filter((name) => !optionalPropertyNames.includes(name));
+  return {
+    ...schema,
+    ...(required.length > 0 ? { required } : {}),
+  };
 }
 
 const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
