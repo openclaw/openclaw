@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/browser-support";
+export { createSubsystemLogger } from "openclaw/plugin-sdk/browser-support";
