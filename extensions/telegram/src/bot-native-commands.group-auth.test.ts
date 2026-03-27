@@ -8,6 +8,8 @@ import {
   findNotAuthorizedCalls,
 } from "./bot-native-commands.test-helpers.js";
 
+const TEST_CHANNEL_ID = -1001234567890;
+
 describe("native command auth in groups", () => {
   function setup(params: {
     cfg?: OpenClawConfig;
@@ -192,5 +194,70 @@ describe("native command auth in groups", () => {
       "You are not authorized to use this command.",
       expect.objectContaining({ message_thread_id: 42 }),
     );
+  });
+
+  it("applies commands.allowFrom.telegram to channel posts even when access groups are off", async () => {
+    const { handlers, sendMessage } = setup({
+      cfg: {
+        commands: {
+          allowFrom: {
+            telegram: [],
+          },
+        },
+      } as OpenClawConfig,
+      useAccessGroups: false,
+    });
+
+    await handlers.status?.({
+      channelPost: {
+        chat: { id: TEST_CHANNEL_ID, type: "channel", title: "Bot Relay" },
+        sender_chat: {
+          id: TEST_CHANNEL_ID,
+          type: "channel",
+          title: "Bot Relay",
+          username: "botrelay",
+        },
+        message_id: 1,
+        date: 1700000000,
+        text: "/status",
+      },
+      match: "",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      TEST_CHANNEL_ID,
+      "You are not authorized to use this command.",
+      expect.any(Object),
+    );
+  });
+
+  it("allows native commands from an explicitly configured channel when useAccessGroups is true", async () => {
+    const { handlers, sendMessage } = setup({
+      useAccessGroups: true,
+      resolveGroupPolicy: () =>
+        ({
+          allowlistEnabled: true,
+          allowed: true,
+          groupConfig: { requireMention: false },
+        }) as ChannelGroupPolicy,
+    });
+
+    await handlers.status?.({
+      channelPost: {
+        chat: { id: TEST_CHANNEL_ID, type: "channel", title: "Bot Relay" },
+        sender_chat: {
+          id: TEST_CHANNEL_ID,
+          type: "channel",
+          title: "Bot Relay",
+          username: "botrelay",
+        },
+        message_id: 1,
+        date: 1700000000,
+        text: "/status",
+      },
+      match: "",
+    });
+
+    expect(findNotAuthorizedCalls(sendMessage)).toHaveLength(0);
   });
 });

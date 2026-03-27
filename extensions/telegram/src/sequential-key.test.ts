@@ -13,6 +13,12 @@ const mockMessage = (message: Pick<Message, "chat"> & Partial<Message>): Message
 
 describe("getTelegramSequentialKey", () => {
   it.each([
+    [
+      {
+        msg: mockMessage({ chat: mockChat({ id: -100777111220, type: "channel" }) }),
+      } as Parameters<typeof getTelegramSequentialKey>[0],
+      "telegram:-100777111220",
+    ],
     [{ message: mockMessage({ chat: mockChat({ id: 123 }) }) }, "telegram:123"],
     [
       {

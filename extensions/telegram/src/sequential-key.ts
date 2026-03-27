@@ -6,6 +6,7 @@ import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 export type TelegramSequentialKeyContext = {
   chat?: { id?: number };
   me?: UserFromGetMe;
+  msg?: Message;
   message?: Message;
   channelPost?: Message;
   editedChannelPost?: Message;
@@ -25,6 +26,7 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     return `telegram:${reaction.chat.id}`;
   }
   const msg =
+    ctx.msg ??
     ctx.message ??
     ctx.channelPost ??
     ctx.editedChannelPost ??

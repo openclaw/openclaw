@@ -23,6 +23,7 @@ export type TelegramUpdateKeyContext = {
     edited_channel_post?: Message;
   };
   update_id?: number;
+  msg?: Message;
   message?: Message;
   channelPost?: Message;
   editedChannelPost?: Message;
@@ -42,6 +43,7 @@ export const buildTelegramUpdateKey = (ctx: TelegramUpdateKeyContext) => {
     return `callback:${callbackId}`;
   }
   const msg =
+    ctx.msg ??
     ctx.message ??
     ctx.channelPost ??
     ctx.editedChannelPost ??

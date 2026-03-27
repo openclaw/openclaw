@@ -136,7 +136,20 @@ export function createNativeCommandsHarness(params?: {
       sendMessage,
     },
     command: (name: string, handler: (ctx: unknown) => Promise<void>) => {
-      handlers[name] = handler;
+      handlers[name] = async (ctx: unknown) => {
+        if (!ctx || typeof ctx !== "object") {
+          return await handler(ctx);
+        }
+        const value = ctx as {
+          msg?: unknown;
+          message?: unknown;
+          channelPost?: unknown;
+        };
+        return await handler({
+          ...value,
+          msg: value.msg ?? value.message ?? value.channelPost,
+        });
+      };
     },
   } as unknown as RegisterTelegramNativeCommandsParams["bot"];
 
