@@ -9,6 +9,24 @@ import {
 
 let executables: Set<string>;
 
+function addExecutables(...paths: string[]): void {
+  for (const candidate of paths) {
+    executables.add(candidate);
+  }
+}
+
+function expectDirsContainAll(dirs: readonly string[], expected: readonly string[]): void {
+  for (const dir of expected) {
+    expect(dirs).toContain(dir);
+  }
+}
+
+function expectDirsExcludeAll(dirs: readonly string[], excluded: readonly string[]): void {
+  for (const dir of excluded) {
+    expect(dirs).not.toContain(dir);
+  }
+}
+
 beforeEach(() => {
   executables = new Set<string>();
   _resetResolveSystemBin((p: string) => executables.has(path.resolve(p)));
@@ -30,21 +48,31 @@ describe("resolveSystemBin", () => {
       expect(resolveSystemBin("ffmpeg")).toBe("/usr/bin/ffmpeg");
     });
 
-    it("does NOT resolve a binary found in /usr/local/bin with strict trust", () => {
-      executables.add("/usr/local/bin/openssl");
-      expect(resolveSystemBin("openssl")).toBeNull();
-      expect(resolveSystemBin("openssl", { trust: "strict" })).toBeNull();
-    });
-
-    it("does NOT resolve a binary found in /opt/homebrew/bin with strict trust", () => {
-      executables.add("/opt/homebrew/bin/ffmpeg");
-      expect(resolveSystemBin("ffmpeg")).toBeNull();
-      expect(resolveSystemBin("ffmpeg", { trust: "strict" })).toBeNull();
-    });
-
-    it("does NOT resolve a binary from a user-writable directory like ~/.local/bin", () => {
-      executables.add("/home/testuser/.local/bin/ffmpeg");
-      expect(resolveSystemBin("ffmpeg")).toBeNull();
+    it.each([
+      {
+        name: "does NOT resolve a binary found in /usr/local/bin with strict trust",
+        executable: "/usr/local/bin/openssl",
+        command: "openssl",
+        checkStrict: true,
+      },
+      {
+        name: "does NOT resolve a binary found in /opt/homebrew/bin with strict trust",
+        executable: "/opt/homebrew/bin/ffmpeg",
+        command: "ffmpeg",
+        checkStrict: true,
+      },
+      {
+        name: "does NOT resolve a binary from a user-writable directory like ~/.local/bin",
+        executable: "/home/testuser/.local/bin/ffmpeg",
+        command: "ffmpeg",
+        checkStrict: false,
+      },
+    ])("$name", ({ executable, command, checkStrict }) => {
+      addExecutables(executable);
+      expect(resolveSystemBin(command)).toBeNull();
+      if (checkStrict) {
+        expect(resolveSystemBin(command, { trust: "strict" })).toBeNull();
+      }
     });
 
     it("prefers /usr/bin over /usr/local/bin (first match wins)", () => {
@@ -79,15 +107,13 @@ describe("resolveSystemBin", () => {
   }
 
   if (process.platform === "darwin") {
-    it("resolves a binary in /opt/homebrew/bin with standard trust on macOS", () => {
-      executables.add("/opt/homebrew/bin/ffmpeg");
-      expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe("/opt/homebrew/bin/ffmpeg");
-    });
-
-    it("resolves a binary in /usr/local/bin with standard trust on macOS", () => {
-      executables.add("/usr/local/bin/ffmpeg");
-      expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe("/usr/local/bin/ffmpeg");
-    });
+    it.each(["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"])(
+      "resolves a binary in %s with standard trust on macOS",
+      (executable) => {
+        addExecutables(executable);
+        expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe(executable);
+      },
+    );
 
     it("prefers /usr/bin over /opt/homebrew/bin with standard trust", () => {
       executables.add("/usr/bin/ffmpeg");
@@ -112,7 +138,7 @@ describe("resolveSystemBin", () => {
 
   if (process.platform === "linux") {
     it("resolves a binary in /usr/local/bin with standard trust on Linux", () => {
-      executables.add("/usr/local/bin/ffmpeg");
+      addExecutables("/usr/local/bin/ffmpeg");
       expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe("/usr/local/bin/ffmpeg");
     });
 
@@ -136,11 +162,8 @@ describe("trusted directory list", () => {
   if (process.platform !== "win32") {
     it("includes base Unix system directories only", () => {
       const dirs = _getTrustedDirs();
-      expect(dirs).toContain("/usr/bin");
-      expect(dirs).toContain("/bin");
-      expect(dirs).toContain("/usr/sbin");
-      expect(dirs).toContain("/sbin");
-      expect(dirs).not.toContain("/usr/local/bin");
+      expectDirsContainAll(dirs, ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]);
+      expectDirsExcludeAll(dirs, ["/usr/local/bin"]);
     });
 
     it("ignores env-controlled NIX_PROFILES entries, including direct store paths", () => {
@@ -150,10 +173,12 @@ describe("trusted directory list", () => {
           "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-ffmpeg-7.1 /tmp/evil /home/user/.nix-profile /nix/var/nix/profiles/default";
         _resetResolveSystemBin((p: string) => executables.has(path.resolve(p)));
         const dirs = _getTrustedDirs();
-        expect(dirs).not.toContain("/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-ffmpeg-7.1/bin");
-        expect(dirs).not.toContain("/tmp/evil/bin");
-        expect(dirs).not.toContain("/home/user/.nix-profile/bin");
-        expect(dirs).not.toContain("/nix/var/nix/profiles/default/bin");
+        expectDirsExcludeAll(dirs, [
+          "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-ffmpeg-7.1/bin",
+          "/tmp/evil/bin",
+          "/home/user/.nix-profile/bin",
+          "/nix/var/nix/profiles/default/bin",
+        ]);
       } finally {
         if (saved === undefined) {
           delete process.env.NIX_PROFILES;
@@ -167,14 +192,12 @@ describe("trusted directory list", () => {
 
   if (process.platform === "darwin") {
     it("does not include /opt/homebrew/bin in strict trust on macOS", () => {
-      expect(_getTrustedDirs("strict")).not.toContain("/opt/homebrew/bin");
-      expect(_getTrustedDirs("strict")).not.toContain("/usr/local/bin");
+      expectDirsExcludeAll(_getTrustedDirs("strict"), ["/opt/homebrew/bin", "/usr/local/bin"]);
     });
 
     it("includes /opt/homebrew/bin and /usr/local/bin in standard trust on macOS", () => {
       const dirs = _getTrustedDirs("standard");
-      expect(dirs).toContain("/opt/homebrew/bin");
-      expect(dirs).toContain("/usr/local/bin");
+      expectDirsContainAll(dirs, ["/opt/homebrew/bin", "/usr/local/bin"]);
     });
 
     it("places Homebrew dirs after system dirs in standard trust", () => {
@@ -199,8 +222,7 @@ describe("trusted directory list", () => {
   if (process.platform === "linux") {
     it("includes Linux system-managed directories", () => {
       const dirs = _getTrustedDirs();
-      expect(dirs).toContain("/run/current-system/sw/bin");
-      expect(dirs).toContain("/snap/bin");
+      expectDirsContainAll(dirs, ["/run/current-system/sw/bin", "/snap/bin"]);
     });
 
     it("includes /usr/local/bin in standard trust on Linux", () => {
@@ -285,13 +307,11 @@ describe("trusted directory list", () => {
       _resetResolveSystemBin((p: string) => executables.has(path.resolve(p)));
       const dirs = _getTrustedDirs();
       const normalizedDirs = dirs.map((dir) => dir.toLowerCase());
-      expect(normalizedDirs).toContain(path.win32.join("C:\\Windows", "System32").toLowerCase());
-      expect(normalizedDirs).toContain(
+      expectDirsContainAll(normalizedDirs, [
+        path.win32.join("C:\\Windows", "System32").toLowerCase(),
         path.win32.join("C:\\Program Files", "OpenSSL-Win64", "bin").toLowerCase(),
-      );
-      expect(normalizedDirs).toContain(
         path.win32.join("C:\\Program Files (x86)", "OpenSSL", "bin").toLowerCase(),
-      );
+      ]);
     });
 
     it("does not include Unix paths on Windows", () => {

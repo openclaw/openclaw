@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { jsonUtf8Bytes } from "./json-utf8-bytes.js";
 
+function createCircularValue() {
+  const circular: { self?: unknown } = {};
+  circular.self = circular;
+  return circular;
+}
+
 describe("jsonUtf8Bytes", () => {
   it.each([
     {
@@ -27,13 +33,12 @@ describe("jsonUtf8Bytes", () => {
     expect(jsonUtf8Bytes(value)).toBe(expected);
   });
 
-  it("falls back to string conversion when JSON serialization throws", () => {
-    const circular: { self?: unknown } = {};
-    circular.self = circular;
-    expect(jsonUtf8Bytes(circular)).toBe(Buffer.byteLength("[object Object]", "utf8"));
-  });
-
   it.each([
+    {
+      name: "circular serialization failures",
+      value: createCircularValue(),
+      expected: "[object Object]",
+    },
     { name: "BigInt serialization failures", value: 12n, expected: "12" },
     { name: "symbol serialization failures", value: Symbol("token"), expected: "Symbol(token)" },
   ])("uses string conversion for $name", ({ value, expected }) => {
