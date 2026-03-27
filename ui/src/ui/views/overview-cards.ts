@@ -134,28 +134,30 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   const sessions = props.sessionsResult?.sessions.slice(0, 5) ?? [];
 
   return html`
-    <section class="ov-cards">
-      ${cards.map((c) => renderStatCard(c, props.onNavigate))}
-    </section>
+    <section class="ov-cards">${cards.map((c) => renderStatCard(c, props.onNavigate))}</section>
 
     ${
       sessions.length > 0
         ? html`
-        <section class="ov-recent">
-          <h3 class="ov-recent__title">${t("overview.cards.recentSessions")}</h3>
-          <ul class="ov-recent__list">
-            ${sessions.map(
-              (s) => html`
-                <li class="ov-recent__row">
-                  <span class="ov-recent__key">${blurDigits(s.displayName || s.label || s.key)}</span>
-                  <span class="ov-recent__model">${s.model ?? ""}</span>
-                  <span class="ov-recent__time">${s.updatedAt ? formatRelativeTimestamp(s.updatedAt) : ""}</span>
-                </li>
-              `,
-            )}
-          </ul>
-        </section>
-      `
+          <section class="ov-recent">
+            <h3 class="ov-recent__title">${t("overview.cards.recentSessions")}</h3>
+            <ul class="ov-recent__list">
+              ${sessions.map(
+                (s) => html`
+                  <li class="ov-recent__row">
+                    <span class="ov-recent__key"
+                      >${blurDigits(s.displayName || s.label || s.key)}</span
+                    >
+                    <span class="ov-recent__model">${s.model ?? ""}</span>
+                    <span class="ov-recent__time"
+                      >${s.updatedAt ? formatRelativeTimestamp(s.updatedAt) : ""}</span
+                    >
+                  </li>
+                `,
+              )}
+            </ul>
+          </section>
+        `
         : nothing
     }
   `;

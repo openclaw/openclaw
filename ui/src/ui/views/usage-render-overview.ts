@@ -270,26 +270,24 @@ function renderDailyChartCompact(
                 ${
                   dailyChartMode === "by-type"
                     ? html`
-                        <div
-                          class="daily-bar daily-bar--stacked"
-                          style="height: ${heightPx.toFixed(0)}px;"
-                        >
-                          ${(() => {
-                            const total = segments.reduce((sum, seg) => sum + seg.value, 0) || 1;
-                            return segments.map(
-                              (seg) => html`
-                                <div
-                                  class="cost-segment ${seg.class}"
-                                  style="height: ${(seg.value / total) * 100}%"
-                                ></div>
-                              `,
-                            );
-                          })()}
-                        </div>
-                      `
-                    : html`
-                        <div class="daily-bar" style="height: ${heightPx.toFixed(0)}px"></div>
-                      `
+                      <div
+                        class="daily-bar daily-bar--stacked"
+                        style="height: ${heightPx.toFixed(0)}px;"
+                      >
+                        ${(() => {
+                          const total = segments.reduce((sum, seg) => sum + seg.value, 0) || 1;
+                          return segments.map(
+                            (seg) => html`
+                              <div
+                                class="cost-segment ${seg.class}"
+                                style="height: ${(seg.value / total) * 100}%"
+                              ></div>
+                            `,
+                          );
+                        })()}
+                      </div>
+                    `
+                    : html` <div class="daily-bar" style="height: ${heightPx.toFixed(0)}px"></div> `
                 }
                 ${showTotals ? html`<div class="daily-bar-total">${totalLabel}</div>` : nothing}
                 <div class="${labelClass}">${shortLabel}</div>
@@ -329,23 +327,64 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
         ${isTokenMode ? t("usage.breakdown.tokensByType") : t("usage.breakdown.costByType")}
       </div>
       <div class="cost-breakdown-bar">
-        <div class="cost-segment output" style="width: ${(isTokenMode ? tokenPcts.output : breakdown.output.pct).toFixed(1)}%"
-          title="${t("usage.breakdown.output")}: ${isTokenMode ? formatTokens(totals.output) : formatCost(breakdown.output.cost)}"></div>
-        <div class="cost-segment input" style="width: ${(isTokenMode ? tokenPcts.input : breakdown.input.pct).toFixed(1)}%"
-          title="${t("usage.breakdown.input")}: ${isTokenMode ? formatTokens(totals.input) : formatCost(breakdown.input.cost)}"></div>
-        <div class="cost-segment cache-write" style="width: ${(isTokenMode ? tokenPcts.cacheWrite : breakdown.cacheWrite.pct).toFixed(1)}%"
-          title="${t("usage.breakdown.cacheWrite")}: ${isTokenMode ? formatTokens(totals.cacheWrite) : formatCost(breakdown.cacheWrite.cost)}"></div>
-        <div class="cost-segment cache-read" style="width: ${(isTokenMode ? tokenPcts.cacheRead : breakdown.cacheRead.pct).toFixed(1)}%"
-          title="${t("usage.breakdown.cacheRead")}: ${isTokenMode ? formatTokens(totals.cacheRead) : formatCost(breakdown.cacheRead.cost)}"></div>
+        <div
+          class="cost-segment output"
+          style="width: ${(isTokenMode ? tokenPcts.output : breakdown.output.pct).toFixed(1)}%"
+          title="${t("usage.breakdown.output")}: ${
+            isTokenMode ? formatTokens(totals.output) : formatCost(breakdown.output.cost)
+          }"
+        ></div>
+        <div
+          class="cost-segment input"
+          style="width: ${(isTokenMode ? tokenPcts.input : breakdown.input.pct).toFixed(1)}%"
+          title="${t("usage.breakdown.input")}: ${
+            isTokenMode ? formatTokens(totals.input) : formatCost(breakdown.input.cost)
+          }"
+        ></div>
+        <div
+          class="cost-segment cache-write"
+          style="width: ${(isTokenMode ? tokenPcts.cacheWrite : breakdown.cacheWrite.pct).toFixed(
+            1,
+          )}%"
+          title="${t("usage.breakdown.cacheWrite")}: ${
+            isTokenMode ? formatTokens(totals.cacheWrite) : formatCost(breakdown.cacheWrite.cost)
+          }"
+        ></div>
+        <div
+          class="cost-segment cache-read"
+          style="width: ${(isTokenMode ? tokenPcts.cacheRead : breakdown.cacheRead.pct).toFixed(
+            1,
+          )}%"
+          title="${t("usage.breakdown.cacheRead")}: ${
+            isTokenMode ? formatTokens(totals.cacheRead) : formatCost(breakdown.cacheRead.cost)
+          }"
+        ></div>
       </div>
       <div class="cost-breakdown-legend">
-        <span class="legend-item"><span class="legend-dot output"></span>${t("usage.breakdown.output")} ${isTokenMode ? formatTokens(totals.output) : formatCost(breakdown.output.cost)}</span>
-        <span class="legend-item"><span class="legend-dot input"></span>${t("usage.breakdown.input")} ${isTokenMode ? formatTokens(totals.input) : formatCost(breakdown.input.cost)}</span>
-        <span class="legend-item"><span class="legend-dot cache-write"></span>${t("usage.breakdown.cacheWrite")} ${isTokenMode ? formatTokens(totals.cacheWrite) : formatCost(breakdown.cacheWrite.cost)}</span>
-        <span class="legend-item"><span class="legend-dot cache-read"></span>${t("usage.breakdown.cacheRead")} ${isTokenMode ? formatTokens(totals.cacheRead) : formatCost(breakdown.cacheRead.cost)}</span>
+        <span class="legend-item"
+          ><span class="legend-dot output"></span>${t("usage.breakdown.output")}
+          ${isTokenMode ? formatTokens(totals.output) : formatCost(breakdown.output.cost)}</span
+        >
+        <span class="legend-item"
+          ><span class="legend-dot input"></span>${t("usage.breakdown.input")}
+          ${isTokenMode ? formatTokens(totals.input) : formatCost(breakdown.input.cost)}</span
+        >
+        <span class="legend-item"
+          ><span class="legend-dot cache-write"></span>${t("usage.breakdown.cacheWrite")}
+          ${
+            isTokenMode ? formatTokens(totals.cacheWrite) : formatCost(breakdown.cacheWrite.cost)
+          }</span
+        >
+        <span class="legend-item"
+          ><span class="legend-dot cache-read"></span>${t("usage.breakdown.cacheRead")}
+          ${
+            isTokenMode ? formatTokens(totals.cacheRead) : formatCost(breakdown.cacheRead.cost)
+          }</span
+        >
       </div>
       <div class="cost-breakdown-total">
-        ${t("usage.breakdown.total")}: ${isTokenMode ? formatTokens(totals.totalTokens) : formatCost(totals.totalCost)}
+        ${t("usage.breakdown.total")}:
+        ${isTokenMode ? formatTokens(totals.totalTokens) : formatCost(totals.totalCost)}
       </div>
     </div>
   `;
@@ -363,20 +402,20 @@ function renderInsightList(
         items.length === 0
           ? html`<div class="muted">${emptyLabel}</div>`
           : html`
-              <div class="usage-list">
-                ${items.map(
-                  (item) => html`
-                    <div class="usage-list-item">
-                      <span>${item.label}</span>
-                      <span class="usage-list-value">
-                        <span>${item.value}</span>
-                        ${item.sub ? html`<span class="usage-list-sub">${item.sub}</span>` : nothing}
-                      </span>
-                    </div>
-                  `,
-                )}
-              </div>
-            `
+            <div class="usage-list">
+              ${items.map(
+                (item) => html`
+                  <div class="usage-list-item">
+                    <span>${item.label}</span>
+                    <span class="usage-list-value">
+                      <span>${item.value}</span>
+                      ${item.sub ? html`<span class="usage-list-sub">${item.sub}</span>` : nothing}
+                    </span>
+                  </div>
+                `,
+              )}
+            </div>
+          `
       }
     </div>
   `;
@@ -400,18 +439,18 @@ function renderPeakErrorList(
         items.length === 0
           ? html`<div class="muted">${emptyLabel}</div>`
           : html`
-              <div class=${listClass}>
-                ${items.map(
-                  (item) => html`
-                    <div class="usage-error-row">
-                      <div class="usage-error-date">${item.label}</div>
-                      <div class="usage-error-rate">${item.value}</div>
-                      ${item.sub ? html`<div class="usage-error-sub">${item.sub}</div>` : nothing}
-                    </div>
-                  `,
-                )}
-              </div>
-            `
+            <div class=${listClass}>
+              ${items.map(
+                (item) => html`
+                  <div class="usage-error-row">
+                    <div class="usage-error-date">${item.label}</div>
+                    <div class="usage-error-rate">${item.value}</div>
+                    ${item.sub ? html`<div class="usage-error-sub">${item.sub}</div>` : nothing}
+                  </div>
+                `,
+              )}
+            </div>
+          `
       }
     </div>
   `;
@@ -777,7 +816,11 @@ function renderSessionsCard(
       >
         <div class="session-bar-label">
           <div class="session-bar-title">${displayLabel}</div>
-          ${meta.length > 0 ? html`<div class="session-bar-meta">${meta.join(" · ")}</div>` : nothing}
+          ${
+            meta.length > 0
+              ? html`<div class="session-bar-meta">${meta.join(" · ")}</div>`
+              : nothing
+          }
         </div>
         <div class="session-bar-actions">
           <button
@@ -790,7 +833,9 @@ function renderSessionsCard(
           >
             ${t("usage.sessions.copy")}
           </button>
-          <div class="session-bar-value">${isTokenMode ? formatTokens(value) : formatCost(value)}</div>
+          <div class="session-bar-value">
+            ${isTokenMode ? formatTokens(value) : formatCost(value)}
+          </div>
         </div>
       </div>
     `;
@@ -820,7 +865,8 @@ function renderSessionsCard(
       <div class="sessions-card-meta">
         <div class="sessions-card-stats">
           <span>
-            ${isTokenMode ? formatTokens(avgValue) : formatCost(avgValue)} ${t("usage.sessions.avg")}
+            ${isTokenMode ? formatTokens(avgValue) : formatCost(avgValue)}
+            ${t("usage.sessions.avg")}
           </span>
           <span>${totalErrors} ${t("usage.overview.errors").toLowerCase()}</span>
         </div>
@@ -841,13 +887,24 @@ function renderSessionsCard(
         <label class="sessions-sort">
           <span>${t("usage.sessions.sort")}</span>
           <select
-            @change=${(e: Event) => onSessionSortChange((e.target as HTMLSelectElement).value as typeof sessionSort)}
+            @change=${(e: Event) =>
+              onSessionSortChange((e.target as HTMLSelectElement).value as typeof sessionSort)}
           >
-            <option value="cost" ?selected=${sessionSort === "cost"}>${t("usage.metrics.cost")}</option>
-            <option value="errors" ?selected=${sessionSort === "errors"}>${t("usage.overview.errors")}</option>
-            <option value="messages" ?selected=${sessionSort === "messages"}>${t("usage.overview.messages")}</option>
-            <option value="recent" ?selected=${sessionSort === "recent"}>${t("usage.sessions.recentShort")}</option>
-            <option value="tokens" ?selected=${sessionSort === "tokens"}>${t("usage.metrics.tokens")}</option>
+            <option value="cost" ?selected=${sessionSort === "cost"}>
+              ${t("usage.metrics.cost")}
+            </option>
+            <option value="errors" ?selected=${sessionSort === "errors"}>
+              ${t("usage.overview.errors")}
+            </option>
+            <option value="messages" ?selected=${sessionSort === "messages"}>
+              ${t("usage.overview.messages")}
+            </option>
+            <option value="recent" ?selected=${sessionSort === "recent"}>
+              ${t("usage.sessions.recentShort")}
+            </option>
+            <option value="tokens" ?selected=${sessionSort === "tokens"}>
+              ${t("usage.metrics.tokens")}
+            </option>
           </select>
         </label>
         <button
@@ -864,57 +921,53 @@ function renderSessionsCard(
         ${
           selectedCount > 0
             ? html`
-                <button class="btn btn--sm" @click=${onClearSessions}>
-                  ${t("usage.sessions.clearSelection")}
-                </button>
-              `
+              <button class="btn btn--sm" @click=${onClearSessions}>
+                ${t("usage.sessions.clearSelection")}
+              </button>
+            `
             : nothing
         }
       </div>
       ${
         sessionsTab === "recent"
           ? recentEntries.length === 0
-            ? html`
-                <div class="usage-empty-block">${t("usage.sessions.noRecent")}</div>
-              `
+            ? html` <div class="usage-empty-block">${t("usage.sessions.noRecent")}</div> `
             : html`
-	                <div class="session-bars session-bars--recent">
-	                  ${recentEntries.map((s) => renderSessionBarRow(s, selectedSet.has(s.key)))}
-	                </div>
-	              `
+              <div class="session-bars session-bars--recent">
+                ${recentEntries.map((s) => renderSessionBarRow(s, selectedSet.has(s.key)))}
+              </div>
+            `
           : sessions.length === 0
-            ? html`
-                <div class="usage-empty-block">${t("usage.sessions.noneInRange")}</div>
-              `
+            ? html` <div class="usage-empty-block">${t("usage.sessions.noneInRange")}</div> `
             : html`
-	                <div class="session-bars">
-	                  ${sortedWithDir
-                      .slice(0, 50)
-                      .map((s) => renderSessionBarRow(s, selectedSet.has(s.key)))}
-	                  ${
-                      sessions.length > 50
-                        ? html`
-                            <div class="usage-more-sessions">
-                              ${t("usage.sessions.more", { count: String(sessions.length - 50) })}
-                            </div>
-                          `
-                        : nothing
-                    }
-	                </div>
-	              `
+              <div class="session-bars">
+                ${sortedWithDir
+                  .slice(0, 50)
+                  .map((s) => renderSessionBarRow(s, selectedSet.has(s.key)))}
+                ${
+                  sessions.length > 50
+                    ? html`
+                      <div class="usage-more-sessions">
+                        ${t("usage.sessions.more", { count: String(sessions.length - 50) })}
+                      </div>
+                    `
+                    : nothing
+                }
+              </div>
+            `
       }
       ${
         selectedCount > 1
           ? html`
-              <div class="sessions-selected-group">
-                <div class="sessions-card-count">
-                  ${t("usage.sessions.selected", { count: String(selectedCount) })}
-                </div>
-                <div class="session-bars session-bars--selected">
-                  ${selectedEntries.map((s) => renderSessionBarRow(s, true))}
-                </div>
+            <div class="sessions-selected-group">
+              <div class="sessions-card-count">
+                ${t("usage.sessions.selected", { count: String(selectedCount) })}
               </div>
-            `
+              <div class="session-bars session-bars--selected">
+                ${selectedEntries.map((s) => renderSessionBarRow(s, true))}
+              </div>
+            </div>
+          `
           : nothing
       }
     </div>

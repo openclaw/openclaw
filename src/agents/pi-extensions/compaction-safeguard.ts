@@ -614,14 +614,18 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    const apiKey = await ctx.modelRegistry.getApiKey(model);
-    if (!apiKey) {
+    const apiKey = (await ctx.modelRegistry.getApiKey(model)) ?? "";
+    const headers =
+      model.headers && typeof model.headers === "object" && !Array.isArray(model.headers)
+        ? model.headers
+        : undefined;
+    if (!apiKey && !headers) {
       log.warn(
-        "Compaction safeguard: no API key available; cancelling compaction to preserve history.",
+        "Compaction safeguard: no request auth available; cancelling compaction to preserve history.",
       );
       setCompactionSafeguardCancelReason(
         ctx.sessionManager,
-        `Compaction safeguard could not resolve an API key for ${model.provider}/${model.id}.`,
+        `Compaction safeguard could not resolve request auth for ${model.provider}/${model.id}.`,
       );
       return { cancel: true };
     }
