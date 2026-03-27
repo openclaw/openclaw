@@ -370,7 +370,7 @@ describe("wrapStreamFnWithModelRegistryAuth", () => {
     expect(calls).toEqual([{ apiKey: "sk-caller" }]);
   });
 
-  it("falls back to the original call when no auth is available", async () => {
+  it("passes caller headers through when no auth is available", async () => {
     const calls: Array<{ apiKey?: string; headers?: Record<string, string> }> = [];
     const baseStreamFn = vi.fn(
       (
@@ -399,6 +399,27 @@ describe("wrapStreamFnWithModelRegistryAuth", () => {
     );
 
     expect(calls).toEqual([{ apiKey: undefined, headers: { "X-Caller": "2" } }]);
+  });
+
+  it("takes the fast path when no auth and no headers are present", async () => {
+    const baseStreamFn = vi.fn((_model: unknown, _context: unknown, _options?: unknown) => {
+      return createFakeStream({ events: [], resultMessage: {} });
+    });
+    const wrapped = wrapStreamFnWithModelRegistryAuth(baseStreamFn as never, undefined);
+
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-test",
+      } as never,
+      { messages: [] } as never,
+      undefined as never,
+    );
+
+    // The fast path passes the original options reference (undefined) straight through.
+    expect(baseStreamFn).toHaveBeenCalledTimes(1);
+    expect(baseStreamFn.mock.calls[0][2]).toBeUndefined();
   });
 });
 

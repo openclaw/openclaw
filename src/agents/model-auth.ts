@@ -65,7 +65,10 @@ function resolveProviderConfig(
   const matched = Object.entries(providers).find(
     ([key]) =>
       normalizeProviderId(key) === normalized ||
-      normalizeProviderIdForAuth(key) === normalizedForAuth,
+      // Only apply auth-normalization when the lookup provider itself is a
+      // plan variant (normalizedForAuth !== normalized) to avoid the reverse
+      // direction (base provider matching a plan-variant config key).
+      (normalizedForAuth !== normalized && normalizeProviderIdForAuth(key) === normalizedForAuth),
   );
   if (matched) {
     return matched[1];

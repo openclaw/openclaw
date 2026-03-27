@@ -293,6 +293,7 @@ function summarizeSessionContext(messages: AgentMessage[]): {
 export function wrapStreamFnWithModelRegistryAuth(
   streamFn: StreamFn,
   resolvedApiKey: string | undefined,
+  resolvedAuthHeaders?: Record<string, string>,
 ): StreamFn {
   return (model, context, options) => {
     const modelHeaders =
@@ -300,7 +301,8 @@ export function wrapStreamFnWithModelRegistryAuth(
         ? model.headers
         : undefined;
 
-    const needsHeaderMerge = modelHeaders != null || options?.headers != null;
+    const needsHeaderMerge =
+      modelHeaders != null || resolvedAuthHeaders != null || options?.headers != null;
 
     // Fast path: nothing to inject
     if (!resolvedApiKey && !needsHeaderMerge) {
@@ -311,7 +313,15 @@ export function wrapStreamFnWithModelRegistryAuth(
       ...options,
       // Only inject apiKey when the caller hasn't already provided one
       ...(resolvedApiKey && options?.apiKey === undefined ? { apiKey: resolvedApiKey } : {}),
-      ...(needsHeaderMerge ? { headers: { ...modelHeaders, ...options?.headers } } : {}),
+      ...(needsHeaderMerge
+        ? {
+            headers: {
+              ...resolvedAuthHeaders,
+              ...modelHeaders,
+              ...options?.headers,
+            },
+          }
+        : {}),
     });
   };
 }
@@ -890,13 +900,17 @@ export async function runEmbeddedAttempt(
         workspaceDir: effectiveWorkspace,
       });
       // Resolve auth once per attempt so every streamFn override carries credentials.
-      const resolvedAttemptApiKey = await params.modelRegistry
+      const resolvedAuth = await params.modelRegistry
         .getApiKeyAndHeaders(params.model)
-        .then((auth) => (auth.ok && auth.apiKey ? auth.apiKey : undefined))
+        .then((auth) => (auth.ok ? { apiKey: auth.apiKey, headers: auth.headers } : undefined))
         .catch(() => undefined);
 
       const setBaseStreamFn = (fn: StreamFn) => {
-        activeSession.agent.streamFn = wrapStreamFnWithModelRegistryAuth(fn, resolvedAttemptApiKey);
+        activeSession.agent.streamFn = wrapStreamFnWithModelRegistryAuth(
+          fn,
+          resolvedAuth?.apiKey,
+          resolvedAuth?.headers,
+        );
       };
 
       if (providerStreamFn) {
@@ -909,11 +923,12 @@ export async function runEmbeddedAttempt(
       ) {
         const wsApiKey = await params.authStorage.getApiKey(params.provider);
         if (wsApiKey) {
-          setBaseStreamFn(
-            createOpenAIWebSocketStreamFn(wsApiKey, params.sessionId, {
-              signal: runAbortController.signal,
-            }),
-          );
+          // WebSocket transport already closes over its own apiKey; skip the
+          // auth wrapper to avoid injecting a potentially different key from
+          // the model registry into options.apiKey.
+          activeSession.agent.streamFn = createOpenAIWebSocketStreamFn(wsApiKey, params.sessionId, {
+            signal: runAbortController.signal,
+          });
         } else {
           log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
           setBaseStreamFn(streamSimple);
