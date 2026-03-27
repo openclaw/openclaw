@@ -506,6 +506,7 @@ export async function initSessionState(params: {
     sessionsDir: path.dirname(storePath),
     fallbackSessionFile,
     activeSessionKey: sessionKey,
+    ensureTranscriptHeader: true,
   });
   sessionEntry = resolvedSessionFile.sessionEntry;
   if (isNewSession) {

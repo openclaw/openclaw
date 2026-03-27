@@ -1522,10 +1522,67 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           reason: "reset",
         }),
       );
+      const newSessionFile = result.sessionEntry.sessionFile;
+      expect(newSessionFile).toBeTruthy();
+      const content = await fs.readFile(newSessionFile ?? "", "utf-8");
+      const header = JSON.parse(content.trim());
+      expect(header.type).toBe("session");
+      expect(header.id).toBe(result.sessionId);
       archiveSpy.mockRestore();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("creates a fresh transcript header immediately for explicit resets", async () => {
+    const storePath = await createStorePath("openclaw-reset-creates-transcript-");
+    const sessionKey = "agent:main:telegram:dm:reset-user";
+    const existingSessionId = "reset-old-session-id";
+    const existingSessionFile = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+    await fs.mkdir(path.dirname(existingSessionFile), { recursive: true });
+    await fs.writeFile(
+      existingSessionFile,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: existingSessionId,
+        timestamp: new Date().toISOString(),
+        cwd: process.cwd(),
+      })}\n`,
+      "utf-8",
+    );
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        sessionFile: existingSessionFile,
+        updatedAt: Date.now(),
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset",
+        RawBody: "/reset",
+        CommandBody: "/reset",
+        From: "reset-user",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    const newSessionFile = result.sessionEntry.sessionFile;
+    expect(newSessionFile).toBeTruthy();
+    const content = await fs.readFile(newSessionFile ?? "", "utf-8");
+    const header = JSON.parse(content.trim());
+    expect(header.type).toBe("session");
+    expect(header.id).toBe(result.sessionId);
   });
 
   it("idle-based new session does NOT preserve overrides (no entry to read)", async () => {
