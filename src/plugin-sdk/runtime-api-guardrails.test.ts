@@ -38,6 +38,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   "extensions/googlechat/runtime-api.ts": ['export * from "openclaw/plugin-sdk/googlechat";'],
   "extensions/matrix/runtime-api.ts": [
     'export * from "./src/auth-precedence.js";',
+    'export { requiresExplicitMatrixDefaultAccount, resolveMatrixDefaultOrOnlyAccountId } from "./src/account-selection.js";',
     'export * from "./helper-api.js";',
     'export { assertHttpUrlTargetsPrivateNetwork, closeDispatcher, createPinnedDispatcher, resolvePinnedHostnameWithPolicy, ssrfPolicyFromAllowPrivateNetwork, type LookupFn, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";',
     'export { setMatrixThreadBindingIdleTimeoutBySessionKey, setMatrixThreadBindingMaxAgeBySessionKey } from "./thread-bindings-runtime.js";',

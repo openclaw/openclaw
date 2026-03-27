@@ -365,7 +365,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           response: {
             update: {
               message: post.message ?? "",
-              props: post.props as Record<string, unknown> | undefined,
+              props: post.props ?? undefined,
             },
             ephemeral_text: `OpenClaw ignored this action for ${decision.roomLabel}.`,
           },
