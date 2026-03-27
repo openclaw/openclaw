@@ -1,15 +1,22 @@
 import { bundledChannelPlugins } from "../channels/plugins/bundled.js";
+import { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type {
   ChannelConfigRuntimeSchema,
   ChannelConfigSchema,
 } from "../channels/plugins/types.plugin.js";
 import { BUNDLED_PLUGIN_METADATA } from "../plugins/bundled-plugin-metadata.js";
+import { MSTeamsConfigSchema } from "./zod-schema.providers-core.js";
+import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 type BundledChannelRuntimeMap = ReadonlyMap<string, ChannelConfigRuntimeSchema>;
 type BundledChannelConfigSchemaMap = ReadonlyMap<string, ChannelConfigSchema>;
 
 const bundledChannelRuntimeMap = new Map<string, ChannelConfigRuntimeSchema>();
 const bundledChannelConfigSchemaMap = new Map<string, ChannelConfigSchema>();
+const staticBundledChannelSchemas = new Map<string, ChannelConfigSchema>([
+  ["msteams", buildChannelConfigSchema(MSTeamsConfigSchema)],
+  ["whatsapp", buildChannelConfigSchema(WhatsAppConfigSchema)],
+]);
 for (const plugin of bundledChannelPlugins) {
   const channelSchema = plugin.configSchema;
   if (!channelSchema) {
@@ -33,6 +40,14 @@ for (const entry of BUNDLED_PLUGIN_METADATA) {
     if (!bundledChannelConfigSchemaMap.has(channelId)) {
       bundledChannelConfigSchemaMap.set(channelId, { schema: channelSchema });
     }
+  }
+}
+for (const [channelId, channelSchema] of staticBundledChannelSchemas) {
+  if (!bundledChannelConfigSchemaMap.has(channelId)) {
+    bundledChannelConfigSchemaMap.set(channelId, channelSchema);
+  }
+  if (channelSchema.runtime && !bundledChannelRuntimeMap.has(channelId)) {
+    bundledChannelRuntimeMap.set(channelId, channelSchema.runtime);
   }
 }
 

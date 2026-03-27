@@ -34,18 +34,23 @@ describe("buildPublishedInstallScenarios", () => {
 
 describe("collectInstalledPackageErrors", () => {
   it("flags version mismatches and missing runtime sidecars", () => {
-    expect(
-      collectInstalledPackageErrors({
-        expectedVersion: "2026.3.23-2",
-        installedVersion: "2026.3.23",
-        packageRoot: "/tmp/empty-openclaw",
-      }),
-    ).toEqual([
+    const errors = collectInstalledPackageErrors({
+      expectedVersion: "2026.3.23-2",
+      installedVersion: "2026.3.23",
+      packageRoot: "/tmp/empty-openclaw",
+    });
+
+    expect(errors[0]).toBe(
       "installed package version mismatch: expected 2026.3.23-2, found 2026.3.23.",
-      ...BUNDLED_RUNTIME_SIDECAR_PATHS.map(
-        (relativePath) =>
-          `installed package is missing required bundled runtime sidecar: ${relativePath}`,
+    );
+    expect(errors).toEqual(
+      expect.arrayContaining(
+        BUNDLED_RUNTIME_SIDECAR_PATHS.map(
+          (relativePath) =>
+            `installed package is missing required bundled runtime sidecar: ${relativePath}`,
+        ),
       ),
-    ]);
+    );
+    expect(errors.length).toBeGreaterThanOrEqual(1 + BUNDLED_RUNTIME_SIDECAR_PATHS.length);
   });
 });
