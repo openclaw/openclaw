@@ -33,9 +33,11 @@ export interface ResponseObject {
 }
 
 export interface UsageInfo {
-  input_tokens: number;
-  output_tokens: number;
-  total_tokens: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
 }
 
 export type OpenAIResponsesAssistantPhase = "commentary" | "final_answer";

@@ -719,7 +719,7 @@ describe("buildAssistantMessageFromResponse", () => {
 
   it("maps prompt_tokens and completion_tokens usage aliases", () => {
     const response = makeResponseObject("resp_5b", "Hello");
-    (response as unknown as { usage?: Record<string, number> }).usage = {
+    response.usage = {
       prompt_tokens: 44,
       completion_tokens: 11,
       total_tokens: 55,
