@@ -185,4 +185,26 @@ describe("local media roots", () => {
       path.join(configDir, "media"),
     ]);
   });
+
+  it("keeps media roots strict when workspaceOnly and roots are both set", () => {
+    const stateDir = path.join("/tmp", "openclaw-mixed-media-roots-state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const strictRoots = getAgentScopedMediaLocalRootsForSources({
+      cfg: {
+        tools: {
+          fs: {
+            workspaceOnly: true,
+            roots: [{ path: "/packs/shared", kind: "dir", access: "ro" }],
+          },
+        },
+      },
+      agentId: "ops",
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
+
+    expect(strictRoots.map(normalizeHostPath)).not.toContain(
+      normalizeHostPath("/Users/peter/Pictures"),
+    );
+  });
 });
