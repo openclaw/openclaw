@@ -33,8 +33,8 @@ Agents and humans can seamlessly track, claim, and execute project work through 
 - [x] PROJECT.md context injection via cwd-based pickup (extend post-compaction loader)
 - [x] PROJECT.md context injection via channel hook (agent:bootstrap hook)
 - [x] Capability tags in agent IDENTITY.md for work routing
-- [ ] Heartbeat task pickup — agents scan queue.md, match capabilities, claim work
-- [ ] File-level .lock for concurrent queue write prevention
+- [x] Heartbeat task pickup — agents scan queue.md, match capabilities, claim work
+- [x] File-level .lock for concurrent queue write prevention
 - [ ] Kanban board state in task frontmatter (configurable columns with defaults)
 - [ ] Task files with checkpoint and log sections for interruption/resume
 - [ ] WebSocket events from file watcher for near-real-time UI updates
@@ -118,4 +118,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-_Last updated: 2026-03-27 after Phase 5 (Context Injection) completion_
+_Last updated: 2026-03-27 after Phase 6 (Queue & Heartbeat) completion_
