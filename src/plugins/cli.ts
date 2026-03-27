@@ -4,15 +4,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadOpenClawPlugins } from "./loader.js";
+import type { OpenClawPluginCliCommandDescriptor } from "./types.js";
 import type { PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
-export function registerPluginCliCommands(
-  program: Command,
-  cfg?: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-) {
+function loadPluginCliRegistry(cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) {
   const config = cfg ?? loadConfig();
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   const logger: PluginLogger = {
@@ -21,12 +18,48 @@ export function registerPluginCliCommands(
     error: (msg: string) => log.error(msg),
     debug: (msg: string) => log.debug(msg),
   };
-  const registry = loadOpenClawPlugins({
+  return {
     config,
     workspaceDir,
-    env,
     logger,
-  });
+    registry: loadOpenClawPlugins({
+      config,
+      workspaceDir,
+      env,
+      logger,
+    }),
+  };
+}
+
+export function getPluginCliCommandDescriptors(
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+): OpenClawPluginCliCommandDescriptor[] {
+  try {
+    const { registry } = loadPluginCliRegistry(cfg, env);
+    const seen = new Set<string>();
+    const descriptors: OpenClawPluginCliCommandDescriptor[] = [];
+    for (const entry of registry.cliRegistrars) {
+      for (const descriptor of entry.descriptors) {
+        if (seen.has(descriptor.name)) {
+          continue;
+        }
+        seen.add(descriptor.name);
+        descriptors.push(descriptor);
+      }
+    }
+    return descriptors;
+  } catch {
+    return [];
+  }
+}
+
+export function registerPluginCliCommands(
+  program: Command,
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+) {
+  const { config, workspaceDir, logger, registry } = loadPluginCliRegistry(cfg, env);
 
   const existingCommands = new Set(program.commands.map((cmd) => cmd.name()));
 

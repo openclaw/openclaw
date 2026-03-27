@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
+import {
+  readEmbeddedGatewayTokenForTest,
+  testServiceAuditCodes,
+} from "./doctor-service-audit.test-helpers.js";
 
 const fsMocks = vi.hoisted(() => ({
   realpath: vi.fn(),
@@ -57,17 +61,9 @@ vi.mock("../daemon/runtime-paths.js", () => ({
 vi.mock("../daemon/service-audit.js", () => ({
   auditGatewayServiceConfig: mocks.auditGatewayServiceConfig,
   needsNodeRuntimeMigration: vi.fn(() => false),
-  readEmbeddedGatewayToken: (
-    command: {
-      environment?: Record<string, string>;
-      environmentValueSources?: Record<string, "inline" | "file">;
-    } | null,
-  ) =>
-    command?.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN === "file"
-      ? undefined
-      : command?.environment?.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined,
+  readEmbeddedGatewayToken: readEmbeddedGatewayTokenForTest,
   SERVICE_AUDIT_CODES: {
-    gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
+    gatewayEntrypointMismatch: testServiceAuditCodes.gatewayEntrypointMismatch,
   },
 }));
 

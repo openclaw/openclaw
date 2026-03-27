@@ -1,6 +1,11 @@
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createSandboxBrowserConfig,
+  createSandboxPruneConfig,
+  createSandboxSshConfig,
+} from "../../../test/helpers/sandbox-fixtures.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SandboxConfig } from "./types.js";
 
@@ -92,28 +97,21 @@ function createBackendSandboxConfig(params?: { binds?: string[]; target?: string
       ...(params?.binds ? { binds: params.binds } : {}),
     },
     ssh: {
-      ...(params?.target ? { target: params.target } : {}),
-      command: "ssh",
-      workspaceRoot: "/remote/openclaw",
-      strictHostKeyChecking: true,
-      updateHostKeys: true,
+      ...createSandboxSshConfig(
+        "/remote/openclaw",
+        params?.target ? { target: params.target } : {},
+      ),
     },
-    browser: {
-      enabled: false,
+    browser: createSandboxBrowserConfig({
       image: "img",
       containerPrefix: "prefix-",
-      network: "bridge",
       cdpPort: 1,
       vncPort: 2,
       noVncPort: 3,
-      headless: true,
-      enableNoVnc: false,
-      allowHostControl: false,
-      autoStart: false,
       autoStartTimeoutMs: 1,
-    },
+    }),
     tools: { allow: [], deny: [] },
-    prune: { idleHours: 24, maxAgeDays: 7 },
+    prune: createSandboxPruneConfig(),
   };
 }
 
