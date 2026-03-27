@@ -24,6 +24,8 @@ Context is _not the same thing_ as “memory”: memory can be stored on disk an
 - `/status` → quick “how full is my window?” view + session settings.
 - `/context list` → what’s injected + rough sizes (per file + totals).
 - `/context detail` → deeper breakdown: per-file, per-tool schema sizes, per-skill entry sizes, and system prompt size.
+- `/context health` → workspace health dashboard: profile mix, verify/failure/retry signals, and 7-day trend comparisons.
+- `/context docs install` → install or update a managed isolated doc-gardening cron job for repo knowledge cleanup.
 - `/usage tokens` → append per-reply usage footer to normal replies.
 - `/compact` → summarize older history into a compact entry to free window space.
 
@@ -32,6 +34,26 @@ See also: [Slash commands](/tools/slash-commands), [Token use & costs](/referenc
 ## Example output
 
 Values vary by model, provider, tool policy, and what’s in your workspace.
+
+### `/context health`
+
+```
+🩺 Workspace health dashboard
+Workspace: <workspaceDir>
+Matched sessions: 12 | active=1 | reports=12
+Overall verify: 7/9 passed (78%)
+Overall failures: 2 | top=verification
+Overall retries: 3 | exhausted=1 | top=thinking_fallback
+Overall cost/runtime: $0.18 total | avg runtime 1m 5s | avg latest context 41.2k tok
+Overall prompt: 39,800 chars avg tracked | hotspot=tool schemas (19,400 chars avg, 49%)
+
+Profiles:
+- coding: 8 sessions | verify=5/6 passed | retries=2 | avgPrompt=40,100 chars | ...
+
+Trends (7d vs previous 7d):
+- Current: sessions=5 | verify=3/4 passed (75%) | failures=1 | top=verification | ...
+- Previous: sessions=4 | verify=2/3 passed (67%) | failures=2 | top=tool | ...
+```
 
 ### `/context list`
 

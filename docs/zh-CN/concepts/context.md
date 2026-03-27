@@ -31,6 +31,8 @@ x-i18n:
 - `/status` → 快速查看"我的窗口有多满？" + 会话设置。
 - `/context list` → 注入了什么 + 大致大小（每个文件 + 总计）。
 - `/context detail` → 更深入的分解：每个文件、每个工具 schema 大小、每个 Skills 条目大小和系统提示词大小。
+- `/context health` → 工作区健康看板：任务画像分布、verify/failure/retry 信号，以及最近 7 天对比趋势。
+- `/context docs install` → 安装或更新一个受管的隔离 doc-gardening cron 作业，用来定期清理 repo knowledge。
 - `/usage tokens` → 在正常回复后附加每次回复的使用量页脚。
 - `/compact` → 将较旧的历史总结为紧凑条目以释放窗口空间。
 
@@ -39,6 +41,26 @@ x-i18n:
 ## 示例输出
 
 数值因模型、提供商、工具策略和工作区内容而异。
+
+### `/context health`
+
+```
+🩺 Workspace health dashboard
+Workspace: <workspaceDir>
+Matched sessions: 12 | active=1 | reports=12
+Overall verify: 7/9 passed (78%)
+Overall failures: 2 | top=verification
+Overall retries: 3 | exhausted=1 | top=thinking_fallback
+Overall cost/runtime: $0.18 total | avg runtime 1m 5s | avg latest context 41.2k tok
+Overall prompt: 39,800 chars avg tracked | hotspot=tool schemas (19,400 chars avg, 49%)
+
+Profiles:
+- coding: 8 sessions | verify=5/6 passed | retries=2 | avgPrompt=40,100 chars | ...
+
+Trends (7d vs previous 7d):
+- Current: sessions=5 | verify=3/4 passed (75%) | failures=1 | top=verification | ...
+- Previous: sessions=4 | verify=2/3 passed (67%) | failures=2 | top=tool | ...
+```
 
 ### `/context list`
 
