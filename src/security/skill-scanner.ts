@@ -45,6 +45,9 @@ const SCANNABLE_EXTENSIONS = new Set([
   ".cts",
   ".jsx",
   ".tsx",
+  ".py",
+  ".sh",
+  ".bash",
 ]);
 
 const DEFAULT_MAX_SCAN_FILES = 500;
@@ -132,6 +135,10 @@ type LineRule = {
   pattern: RegExp;
   /** If set, the rule only fires when the *full source* also matches this pattern. */
   requiresContext?: RegExp;
+  /** If set, the rule is skipped for files with these extensions (e.g. [".py"]). */
+  excludeExtensions?: string[];
+  /** If set, the rule only fires for files with these extensions (e.g. [".py"]). */
+  includeExtensions?: string[];
 };
 
 type SourceRule = {
@@ -157,6 +164,7 @@ const LINE_RULES: LineRule[] = [
     severity: "critical",
     message: "Dynamic code execution detected",
     pattern: /\beval\s*\(|new\s+Function\s*\(/,
+    excludeExtensions: [".py"],
   },
   {
     ruleId: "crypto-mining",
@@ -169,6 +177,59 @@ const LINE_RULES: LineRule[] = [
     severity: "warn",
     message: "WebSocket connection to non-standard port",
     pattern: /new\s+WebSocket\s*\(\s*["']wss?:\/\/[^"']*:(\d+)/,
+  },
+  {
+    ruleId: "dangerous-exec-python",
+    severity: "critical",
+    message: "Potentially dangerous Python command execution detected",
+    pattern:
+      /\b(?:subprocess\.(?:call|run|Popen)\s*\([^)\n]*\bshell\s*=\s*True\b|os\.(?:system|popen|execl|execle|execlp|execlpe|execv|execve|execvp|execvpe)\s*\(\s*["'][^"']+["'])/,
+  },
+  {
+    ruleId: "dynamic-code-execution-python",
+    severity: "critical",
+    message: "Dynamic code execution detected in Python",
+    pattern: /(?<!["'`\w.])(?:exec|eval|compile)\s*\(/,
+    includeExtensions: [".py"],
+  },
+  {
+    ruleId: "dangerous-import-python",
+    severity: "warn",
+    message: "Potentially dangerous Python import detected",
+    pattern: /\bimport\s+(?:ctypes|pickle)\b|__import__\s*\(/,
+  },
+  {
+    ruleId: "network-python",
+    severity: "warn",
+    message: "Python network call detected",
+    pattern:
+      /\burllib\.request\b|\brequests\.(?:post|get|put|patch|request)\s*\(|\bhttpx(?:\.[a-zA-Z_]\w*)?\s*\(|\bsocket\.connect\s*\(/,
+  },
+  {
+    ruleId: "dangerous-eval-shell",
+    severity: "critical",
+    message: "Shell eval usage detected",
+    pattern: /\beval\s+(?:"|'|[^;\s#])/,
+  },
+  {
+    ruleId: "suspicious-curl-shell",
+    severity: "warn",
+    message: "Suspicious curl usage detected",
+    pattern:
+      /\bcurl\b[^\n]*\|\s*(?:sudo\s+)?(?:sh|bash)\b|\bcurl\b[^\n]*(?:-o|--output)\s+(?:\/(?:etc|root|usr\/local\/bin|bin|sbin)\b|~\/\.(?:bashrc|zshrc|profile))/,
+  },
+  {
+    ruleId: "suspicious-download-shell",
+    severity: "warn",
+    message: "Suspicious wget download target detected",
+    pattern:
+      /\bwget\b[^\n]*(?:https?:\/\/(?:\d{1,3}(?:\.\d{1,3}){3}|(?:bit\.ly|tinyurl\.com|pastebin\.com))|(?:bit\.ly|tinyurl\.com|pastebin\.com))/i,
+  },
+  {
+    ruleId: "env-exfiltration-shell",
+    severity: "critical",
+    message: "Environment variable exfiltration pattern detected in shell script",
+    pattern: /\b(?:env|printenv)\b[^\n]*\|\s*(?:curl|wget|nc|netcat)\b/,
   },
 ];
 
@@ -202,6 +263,30 @@ const SOURCE_RULES: SourceRule[] = [
     pattern: /process\.env/,
     requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
   },
+  {
+    ruleId: "env-harvesting-python",
+    severity: "critical",
+    message:
+      "Python environment access combined with network send — possible credential harvesting",
+    pattern: /\bos\.environ\b/,
+    requiresContext:
+      /\burllib\.request\b|\brequests\.(?:post|get|put|request)\b|\bhttpx\.(?:post|get|put|request)\b|\bsocket\.connect\s*\(/,
+  },
+  {
+    ruleId: "potential-exfiltration-python",
+    severity: "warn",
+    message: "Python file read combined with network send — possible data exfiltration",
+    pattern: /\bopen\s*\(/,
+    requiresContext:
+      /\burllib\.request\b|\brequests\.(?:post|get|put|request)\b|\bhttpx\.(?:post|get|put|request)\b|\bsocket\.connect\s*\(/,
+  },
+  {
+    ruleId: "obfuscated-code-python",
+    severity: "warn",
+    message: "Python base64 decode combined with dynamic execution detected",
+    pattern: /\bbase64\.(?:b64decode|urlsafe_b64decode)\s*\(/,
+    requiresContext: /\b(?:exec|eval)\s*\(/,
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -223,6 +308,15 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   // --- Line rules ---
   for (const rule of LINE_RULES) {
     if (matchedLineRules.has(rule.ruleId)) {
+      continue;
+    }
+
+    // Skip rule if file extension is excluded or not included
+    const ext = path.extname(filePath).toLowerCase();
+    if (rule.excludeExtensions && rule.excludeExtensions.includes(ext)) {
+      continue;
+    }
+    if (rule.includeExtensions && !rule.includeExtensions.includes(ext)) {
       continue;
     }
 
