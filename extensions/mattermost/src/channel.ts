@@ -124,24 +124,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
         throw new Error("Mattermost reactions are disabled in config");
       }
 
-      const postIdRaw =
-        typeof (params as any)?.messageId === "string"
-          ? (params as any).messageId
-          : typeof (params as any)?.postId === "string"
-            ? (params as any).postId
-            : "";
-      const postId = postIdRaw.trim();
-      if (!postId) {
-        throw new Error("Mattermost react requires messageId (post id)");
-      }
-
-      const emojiRaw = typeof (params as any)?.emoji === "string" ? (params as any).emoji : "";
-      const emojiName = emojiRaw.trim().replace(/^:+|:+$/g, "");
-      if (!emojiName) {
-        throw new Error("Mattermost react requires emoji");
-      }
-
-      const remove = (params as any)?.remove === true;
+      const { postId, emojiName, remove } = parseMattermostReactActionParams(params);
       if (remove) {
         const result = await removeMattermostReaction({
           cfg,
@@ -238,16 +221,38 @@ const meta = {
   quickstartAllowFrom: true,
 } as const;
 
-function readMattermostReplyToId(params: Record<string, unknown>): string | undefined {
-  const readNormalizedValue = (value: unknown) => {
-    if (typeof value !== "string") {
-      return undefined;
-    }
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  };
+function readTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
 
-  return readNormalizedValue(params.replyToId) ?? readNormalizedValue(params.replyTo);
+function parseMattermostReactActionParams(params: Record<string, unknown>): {
+  postId: string;
+  emojiName: string;
+  remove: boolean;
+} {
+  const postId = readTrimmedString(params.messageId) ?? readTrimmedString(params.postId);
+  if (!postId) {
+    throw new Error("Mattermost react requires messageId (post id)");
+  }
+
+  const emojiName = readTrimmedString(params.emoji)?.replace(/^:+|:+$/g, "");
+  if (!emojiName) {
+    throw new Error("Mattermost react requires emoji");
+  }
+
+  return {
+    postId,
+    emojiName,
+    remove: params.remove === true,
+  };
+}
+
+function readMattermostReplyToId(params: Record<string, unknown>): string | undefined {
+  return readTrimmedString(params.replyToId) ?? readTrimmedString(params.replyTo);
 }
 
 function normalizeAllowEntry(entry: string): string {

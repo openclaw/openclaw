@@ -3,6 +3,7 @@ import { createMockIncomingRequest } from "../../../test/helpers/mock-incoming-r
 import { readNextcloudTalkWebhookBody } from "./monitor.js";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
+import { generateNextcloudTalkSignature } from "./signature.js";
 import type { NextcloudTalkInboundMessage } from "./types.js";
 
 describe("readNextcloudTalkWebhookBody", () => {
@@ -102,5 +103,45 @@ describe("createNextcloudTalkWebhookServer replay handling", () => {
     expect(second.status).toBe(200);
     expect(shouldProcessMessage).toHaveBeenCalledTimes(2);
     expect(onMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createNextcloudTalkWebhookServer payload validation", () => {
+  it("rejects malformed webhook payloads after signature verification", async () => {
+    const payload = {
+      type: "Create",
+      actor: { type: "Person", id: "alice", name: "Alice" },
+      object: {
+        type: "Note",
+        id: "msg-1",
+        name: "hello",
+        content: "hello",
+        mediaType: "text/plain",
+      },
+      target: { type: "Collection", id: "", name: "Room 1" },
+    };
+    const body = JSON.stringify(payload);
+    const { random, signature } = generateNextcloudTalkSignature({
+      body,
+      secret: "nextcloud-secret", // pragma: allowlist secret
+    });
+    const harness = await startWebhookServer({
+      path: "/nextcloud-invalid-payload",
+      onMessage: vi.fn(),
+    });
+
+    const response = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-nextcloud-talk-random": random,
+        "x-nextcloud-talk-signature": signature,
+        "x-nextcloud-talk-backend": "https://nextcloud.example",
+      },
+      body,
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid payload format" });
   });
 });
