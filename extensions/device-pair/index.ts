@@ -611,9 +611,11 @@ export default definePluginEntry({
           if (!pending) {
             return { text: "Pairing request not found." };
           }
-          const approved = await approveDevicePairing(pending.requestId, {
-            callerScopes: gatewayClientScopes ?? [],
-          });
+          const approved = gatewayClientScopes
+            ? await approveDevicePairing(pending.requestId, {
+                callerScopes: gatewayClientScopes,
+              })
+            : await approveDevicePairing(pending.requestId);
           if (!approved) {
             return { text: "Pairing request not found." };
           }
