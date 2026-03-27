@@ -421,8 +421,8 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveMemorySearchConfig: resolveMemorySearchConfigMock,
   }));
 
-  vi.doMock("../../memory/index.js", () => ({
-    getMemorySearchManager: getMemorySearchManagerMock,
+  vi.doMock("../../plugins/memory-runtime.js", () => ({
+    getActiveMemorySearchManager: getMemorySearchManagerMock,
   }));
 
   vi.doMock("../date-time.js", () => ({

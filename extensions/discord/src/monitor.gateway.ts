@@ -1,12 +1,9 @@
 import type { EventEmitter } from "node:events";
+import type { DiscordGatewayHandle } from "./monitor/gateway-handle.js";
 import type {
   DiscordGatewayEvent,
   DiscordGatewaySupervisor,
 } from "./monitor/gateway-supervisor.js";
-
-export type DiscordGatewayHandle = {
-  disconnect?: () => void;
-};
 
 export type WaitForDiscordGatewayStopParams = {
   gateway?: DiscordGatewayHandle;

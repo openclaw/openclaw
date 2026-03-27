@@ -23,6 +23,7 @@ describe("delivery-queue storage", () => {
           bestEffort: true,
           gifPlayback: true,
           silent: true,
+          gatewayClientScopes: ["operator.write"],
           mirror: {
             sessionKey: "agent:main:main",
             text: "hello",
@@ -45,6 +46,7 @@ describe("delivery-queue storage", () => {
         bestEffort: true,
         gifPlayback: true,
         silent: true,
+        gatewayClientScopes: ["operator.write"],
         mirror: {
           sessionKey: "agent:main:main",
           text: "hello",
@@ -155,6 +157,21 @@ describe("delivery-queue storage", () => {
       await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] }, tmpDir());
 
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(2);
+    });
+
+    it("persists gateway caller scopes for replay", async () => {
+      const id = await enqueueDelivery(
+        {
+          channel: "telegram",
+          to: "2",
+          payloads: [{ text: "b" }],
+          gatewayClientScopes: ["operator.write"],
+        },
+        tmpDir(),
+      );
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.gatewayClientScopes).toEqual(["operator.write"]);
     });
 
     it("backfills lastAttemptAt for legacy retry entries during load", async () => {

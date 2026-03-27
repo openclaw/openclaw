@@ -20,10 +20,13 @@ export {
 export {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_MODEL,
+} from "../../extensions/ollama/src/defaults.js";
+export {
+  buildOllamaProvider,
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
-} from "../plugins/provider-ollama-setup.js";
+} from "../../extensions/ollama/src/setup.js";
 export {
   VLLM_DEFAULT_BASE_URL,
   VLLM_DEFAULT_CONTEXT_WINDOW,
@@ -32,7 +35,6 @@ export {
   promptAndConfigureVllm,
 } from "../plugins/provider-vllm-setup.js";
 export {
-  buildOllamaProvider,
   buildSglangProvider,
   buildVllmProvider,
 } from "../agents/models-config.providers.discovery.js";

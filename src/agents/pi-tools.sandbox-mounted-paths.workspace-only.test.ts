@@ -91,8 +91,8 @@ describe("tools.fs.workspaceOnly", () => {
         workspaceDir: sandboxRoot,
         config: {
           tools: {
-            allow: ["read", "exec"],
-            exec: { applyPatch: { enabled: true } },
+            allow: ["read", "write", "exec"],
+            exec: { applyPatch: {} },
           },
         } as OpenClawConfig,
       });
@@ -113,8 +113,8 @@ describe("tools.fs.workspaceOnly", () => {
         workspaceDir: sandboxRoot,
         config: {
           tools: {
-            allow: ["read", "exec"],
-            exec: { applyPatch: { enabled: true, workspaceOnly: false } },
+            allow: ["read", "write", "exec"],
+            exec: { applyPatch: { workspaceOnly: false } },
           },
         } as OpenClawConfig,
       });

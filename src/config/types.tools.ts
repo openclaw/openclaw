@@ -262,9 +262,9 @@ export type ExecToolConfig = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
-  /** apply_patch subtool configuration (experimental). */
+  /** apply_patch subtool configuration. */
   applyPatch?: {
-    /** Enable apply_patch for OpenAI models (default: false). */
+    /** Enable apply_patch for OpenAI models (default: true; set false to disable). */
     enabled?: boolean;
     /**
      * Restrict apply_patch paths to the workspace directory.
@@ -340,8 +340,8 @@ export type MemorySearchConfig = {
     /** Enable session transcript indexing (experimental, default: false). */
     sessionMemory?: boolean;
   };
-  /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
+  /** Memory embedding provider adapter id. */
+  provider?: string;
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
@@ -359,8 +359,8 @@ export type MemorySearchConfig = {
       timeoutMinutes?: number;
     };
   };
-  /** Fallback behavior when embeddings fail. */
-  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
+  /** Fallback memory embedding provider adapter id when embeddings fail. */
+  fallback?: string;
   /** Embedding model id (remote) or alias (local). */
   model?: string;
   /**
@@ -502,6 +502,8 @@ export type ToolsConfig = {
       maxChars?: number;
       /** Hard cap for maxChars (tool or config), defaults to 50000. */
       maxCharsCap?: number;
+      /** Max download size before truncation, defaults to 2000000. */
+      maxResponseBytes?: number;
       /** Timeout in seconds for fetch requests. */
       timeoutSeconds?: number;
       /** Cache TTL in minutes for fetched content. */

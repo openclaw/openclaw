@@ -149,14 +149,27 @@ function emitSessionsChanged(
             sessionId: sessionRow.sessionId,
             kind: sessionRow.kind,
             channel: sessionRow.channel,
+            subject: sessionRow.subject,
+            groupChannel: sessionRow.groupChannel,
+            space: sessionRow.space,
+            chatType: sessionRow.chatType,
+            origin: sessionRow.origin,
+            spawnedBy: sessionRow.spawnedBy,
             label: sessionRow.label,
             displayName: sessionRow.displayName,
             deliveryContext: sessionRow.deliveryContext,
             parentSessionKey: sessionRow.parentSessionKey,
             childSessions: sessionRow.childSessions,
             thinkingLevel: sessionRow.thinkingLevel,
+            fastMode: sessionRow.fastMode,
+            verboseLevel: sessionRow.verboseLevel,
+            reasoningLevel: sessionRow.reasoningLevel,
+            elevatedLevel: sessionRow.elevatedLevel,
+            sendPolicy: sessionRow.sendPolicy,
             systemSent: sessionRow.systemSent,
             abortedLastRun: sessionRow.abortedLastRun,
+            inputTokens: sessionRow.inputTokens,
+            outputTokens: sessionRow.outputTokens,
             lastChannel: sessionRow.lastChannel,
             lastTo: sessionRow.lastTo,
             lastAccountId: sessionRow.lastAccountId,
@@ -164,6 +177,7 @@ function emitSessionsChanged(
             totalTokensFresh: sessionRow.totalTokensFresh,
             contextTokens: sessionRow.contextTokens,
             estimatedCostUsd: sessionRow.estimatedCostUsd,
+            responseUsage: sessionRow.responseUsage,
             modelProvider: sessionRow.modelProvider,
             model: sessionRow.model,
             status: sessionRow.status,
@@ -466,7 +480,7 @@ async function handleSessionSend(params: {
   });
   if (sendAcked) {
     if (shouldAttachPendingMessageSeq({ payload: sendPayload, cached: sendCached })) {
-      reactivateCompletedSubagentSession({
+      await reactivateCompletedSubagentSession({
         sessionKey: canonicalKey,
         runId: startedRunId,
       });
@@ -725,12 +739,31 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const createdEntry =
+      created.entry.sessionFile === ensured.transcriptPath
+        ? created.entry
+        : {
+            ...created.entry,
+            sessionFile: ensured.transcriptPath,
+          };
+    if (createdEntry !== created.entry) {
+      await updateSessionStore(target.storePath, (store) => {
+        const existing = store[target.canonicalKey];
+        if (existing) {
+          store[target.canonicalKey] = {
+            ...existing,
+            sessionFile: ensured.transcriptPath,
+          };
+        }
+      });
+    }
+
     const initialMessage = resolveOptionalInitialSessionMessage(p);
     let runPayload: Record<string, unknown> | undefined;
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     const messageSeq = initialMessage
-      ? readSessionMessages(created.entry.sessionId, target.storePath, created.entry.sessionFile)
+      ? readSessionMessages(createdEntry.sessionId, target.storePath, createdEntry.sessionFile)
           .length + 1
       : undefined;
 
@@ -768,8 +801,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         key: target.canonicalKey,
-        sessionId: created.entry.sessionId,
-        entry: created.entry,
+        sessionId: createdEntry.sessionId,
+        entry: createdEntry,
         runStarted,
         ...(runPayload ? runPayload : {}),
         ...(runStarted && typeof messageSeq === "number" ? { messageSeq } : {}),

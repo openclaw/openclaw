@@ -5,6 +5,7 @@ import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
+  parseApiErrorInfo,
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
 export {
@@ -13,8 +14,8 @@ export {
   isCloudflareOrHtmlErrorPage,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
 import { stableStringify } from "../stable-stringify.js";
-import { formatEffectiveSandboxToolPolicyBlockedMessage } from "../tool-policy-sandbox.js";
 import {
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
@@ -55,9 +56,51 @@ const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 
+/**
+ * Check whether the raw rate-limit error contains provider-specific details
+ * worth surfacing (e.g. reset times, plan names, quota info).  Bare status
+ * codes like "429" or generic phrases like "rate limit exceeded" are not
+ * considered specific enough.
+ */
+const RATE_LIMIT_SPECIFIC_HINT_RE =
+  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\breset\b|\bplan\b|\bquota\b/i;
+
+function extractProviderRateLimitMessage(raw: string): string | undefined {
+  const withoutPrefix = raw.replace(ERROR_PREFIX_RE, "").trim();
+  // Try to pull a human-readable message out of a JSON error payload first.
+  const info = parseApiErrorInfo(raw) ?? parseApiErrorInfo(withoutPrefix);
+  // When the raw string is not a JSON payload, strip any leading HTTP status
+  // code (e.g. "429 ") so the surfaced message stays clean.
+  const candidate =
+    info?.message ?? (extractLeadingHttpStatus(withoutPrefix)?.rest || withoutPrefix);
+
+  if (!candidate || !RATE_LIMIT_SPECIFIC_HINT_RE.test(candidate)) {
+    return undefined;
+  }
+
+  // Skip HTML/Cloudflare error pages even if the body mentions quota/plan text.
+  if (isCloudflareOrHtmlErrorPage(withoutPrefix)) {
+    return undefined;
+  }
+
+  // Avoid surfacing very long or clearly non-human-readable blobs.
+  const trimmed = candidate.trim();
+  if (
+    trimmed.length > 300 ||
+    trimmed.startsWith("{") ||
+    /^(?:<!doctype\s+html\b|<html\b)/i.test(trimmed)
+  ) {
+    return undefined;
+  }
+
+  return `⚠️ ${trimmed}`;
+}
+
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   if (isRateLimitErrorMessage(raw)) {
-    return RATE_LIMIT_ERROR_USER_MESSAGE;
+    // Surface the provider's specific message when it contains actionable
+    // details (reset time, plan name, quota info) instead of the generic copy.
+    return extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE;
   }
   if (isOverloadedErrorMessage(raw)) {
     return OVERLOADED_ERROR_USER_MESSAGE;
@@ -451,7 +494,7 @@ export function classifyFailoverReasonFromHttpStatus(
     }
     return "timeout";
   }
-  if (status === 502 || status === 504) {
+  if (status === 500 || status === 502 || status === 504) {
     return "timeout";
   }
   if (status === 529) {
@@ -563,7 +606,7 @@ export function formatAssistantErrorText(
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
   if (unknownTool?.[1]) {
-    const rewritten = formatEffectiveSandboxToolPolicyBlockedMessage({
+    const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
       sessionKey: opts?.sessionKey,
       toolName: unknownTool[1],

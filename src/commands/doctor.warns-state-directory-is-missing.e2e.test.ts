@@ -1,24 +1,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { createDoctorRuntime, mockDoctorConfigSnapshot } from "./doctor.e2e-harness.js";
+import { loadDoctorCommandForTest, terminalNoteMock } from "./doctor.note-test-helpers.js";
 import "./doctor.fast-path-mocks.js";
-
-const terminalNoteMock = vi.fn();
-
-vi.mock("../terminal/note.js", () => ({
-  note: (...args: unknown[]) => terminalNoteMock(...args),
-}));
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
 
 describe("doctor command", () => {
   beforeEach(async () => {
-    vi.resetModules();
-    vi.doUnmock("./doctor-state-integrity.js");
-    ({ doctorCommand } = await import("./doctor.js"));
-    terminalNoteMock.mockClear();
+    doctorCommand = await loadDoctorCommandForTest({
+      unmockModules: ["./doctor-state-integrity.js"],
+    });
   });
 
   it("warns when the state directory is missing", async () => {

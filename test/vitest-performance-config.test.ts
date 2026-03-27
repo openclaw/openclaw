@@ -25,6 +25,22 @@ describe("loadVitestExperimentalConfig", () => {
     });
   });
 
+  it("passes through the filesystem module cache path when provided", () => {
+    expect(
+      loadVitestExperimentalConfig(
+        {
+          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/openclaw-vitest-cache",
+        },
+        "linux",
+      ),
+    ).toEqual({
+      experimental: {
+        fsModuleCache: true,
+        fsModuleCachePath: "/tmp/openclaw-vitest-cache",
+      },
+    });
+  });
+
   it("disables the filesystem module cache by default on Windows", () => {
     expect(loadVitestExperimentalConfig({}, "win32")).toEqual({});
   });
