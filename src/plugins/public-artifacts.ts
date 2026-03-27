@@ -1,3 +1,5 @@
+import { BUNDLED_PLUGIN_METADATA } from "./bundled-plugin-metadata.js";
+
 function assertUniqueValues<T extends string>(values: readonly T[], label: string): readonly T[] {
   const seen = new Set<string>();
   const duplicates = new Set<string>();
@@ -19,14 +21,11 @@ export function getPublicArtifactBasename(relativePath: string): string {
 }
 
 export const BUNDLED_RUNTIME_SIDECAR_PATHS = assertUniqueValues(
-  [
-    "dist/extensions/whatsapp/light-runtime-api.js",
-    "dist/extensions/whatsapp/runtime-api.js",
-    "dist/extensions/matrix/helper-api.js",
-    "dist/extensions/matrix/runtime-api.js",
-    "dist/extensions/matrix/thread-bindings-runtime.js",
-    "dist/extensions/msteams/runtime-api.js",
-  ] as const,
+  BUNDLED_PLUGIN_METADATA.flatMap((entry) =>
+    (entry.runtimeSidecarArtifacts ?? []).map(
+      (artifact) => `dist/extensions/${entry.dirName}/${artifact}`,
+    ),
+  ).toSorted((left, right) => left.localeCompare(right)),
   "bundled runtime sidecar path",
 );
 
