@@ -361,7 +361,7 @@ export async function resolveReplyDirectives(params: {
     };
   }
 
-  const requireMention = resolveGroupRequireMention({
+  const requireMention = await resolveGroupRequireMention({
     cfg,
     ctx: sessionCtx,
     groupResolution,

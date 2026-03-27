@@ -5,148 +5,87 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("../plugins/web-search-providers.js", () => {
-  const getScoped = (key: string) => (search?: Record<string, unknown>) =>
-    (search?.[key] as { apiKey?: unknown } | undefined)?.apiKey;
-  const getConfigured = (pluginId: string) => (config?: Record<string, unknown>) =>
+const getScopedWebSearchCredential = (key: string) => (search?: Record<string, unknown>) =>
+  (search?.[key] as { apiKey?: unknown } | undefined)?.apiKey;
+const getConfiguredPluginWebSearchCredential =
+  (pluginId: string) => (config?: Record<string, unknown>) =>
     (
       config?.plugins as
         | { entries?: Record<string, { config?: { webSearch?: { apiKey?: unknown } } }> }
         | undefined
     )?.entries?.[pluginId]?.config?.webSearch?.apiKey;
+
+const mockWebSearchProviders = [
+  {
+    id: "aimlapi",
+    autoDetectOrder: 15,
+    envVars: ["AIMLAPI_API_KEY"],
+    credentialPath: "plugins.entries.aimlapi.config.webSearch.apiKey",
+    getCredentialValue: getScopedWebSearchCredential("aimlapi"),
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("aimlapi"),
+  },
+  {
+    id: "brave",
+    autoDetectOrder: 10,
+    envVars: ["BRAVE_API_KEY"],
+    credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
+    getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("brave"),
+  },
+  {
+    id: "firecrawl",
+    autoDetectOrder: 60,
+    envVars: ["FIRECRAWL_API_KEY"],
+    credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
+    getCredentialValue: getScopedWebSearchCredential("firecrawl"),
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("firecrawl"),
+  },
+  {
+    id: "gemini",
+    autoDetectOrder: 20,
+    envVars: ["GEMINI_API_KEY"],
+    credentialPath: "plugins.entries.google.config.webSearch.apiKey",
+    getCredentialValue: getScopedWebSearchCredential("gemini"),
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("google"),
+  },
+  {
+    id: "grok",
+    autoDetectOrder: 30,
+    envVars: ["XAI_API_KEY"],
+    credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
+    getCredentialValue: getScopedWebSearchCredential("grok"),
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("xai"),
+  },
+  {
+    id: "kimi",
+    autoDetectOrder: 40,
+    envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+    credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
+    getCredentialValue: getScopedWebSearchCredential("kimi"),
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("moonshot"),
+  },
+  {
+    id: "perplexity",
+    autoDetectOrder: 50,
+    envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
+    credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
+    getCredentialValue: getScopedWebSearchCredential("perplexity"),
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("perplexity"),
+  },
+  {
+    id: "tavily",
+    autoDetectOrder: 70,
+    envVars: ["TAVILY_API_KEY"],
+    credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
+    getCredentialValue: getScopedWebSearchCredential("tavily"),
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("tavily"),
+  },
+] as const;
+
+vi.mock("../plugins/web-search-providers.js", () => {
   return {
-    resolveBundledPluginWebSearchProviders: () => [
-      {
-        id: "brave",
-        autoDetectOrder: 10,
-        envVars: ["BRAVE_API_KEY"],
-        credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
-        getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
-        getConfiguredCredentialValue: getConfigured("brave"),
-      },
-      {
-        id: "aimlapi",
-        autoDetectOrder: 15,
-        envVars: ["AIMLAPI_API_KEY"],
-        credentialPath: "plugins.entries.aimlapi.config.webSearch.apiKey",
-        getCredentialValue: getScoped("aimlapi"),
-        getConfiguredCredentialValue: getConfigured("aimlapi"),
-      },
-      {
-        id: "firecrawl",
-        autoDetectOrder: 60,
-        envVars: ["FIRECRAWL_API_KEY"],
-        credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
-        getCredentialValue: getScoped("firecrawl"),
-        getConfiguredCredentialValue: getConfigured("firecrawl"),
-      },
-      {
-        id: "gemini",
-        autoDetectOrder: 20,
-        envVars: ["GEMINI_API_KEY"],
-        credentialPath: "plugins.entries.google.config.webSearch.apiKey",
-        getCredentialValue: getScoped("gemini"),
-        getConfiguredCredentialValue: getConfigured("google"),
-      },
-      {
-        id: "grok",
-        autoDetectOrder: 30,
-        envVars: ["XAI_API_KEY"],
-        credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
-        getCredentialValue: getScoped("grok"),
-        getConfiguredCredentialValue: getConfigured("xai"),
-      },
-      {
-        id: "kimi",
-        autoDetectOrder: 40,
-        envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
-        credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
-        getCredentialValue: getScoped("kimi"),
-        getConfiguredCredentialValue: getConfigured("moonshot"),
-      },
-      {
-        id: "perplexity",
-        autoDetectOrder: 50,
-        envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
-        credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
-        getCredentialValue: getScoped("perplexity"),
-        getConfiguredCredentialValue: getConfigured("perplexity"),
-      },
-      {
-        id: "tavily",
-        autoDetectOrder: 70,
-        envVars: ["TAVILY_API_KEY"],
-        credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
-        getCredentialValue: getScoped("tavily"),
-        getConfiguredCredentialValue: getConfigured("tavily"),
-      },
-    ],
-    resolvePluginWebSearchProviders: () => [
-      {
-        id: "brave",
-        autoDetectOrder: 10,
-        envVars: ["BRAVE_API_KEY"],
-        credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
-        getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
-        getConfiguredCredentialValue: getConfigured("brave"),
-      },
-      {
-        id: "aimlapi",
-        autoDetectOrder: 15,
-        envVars: ["AIMLAPI_API_KEY"],
-        credentialPath: "plugins.entries.aimlapi.config.webSearch.apiKey",
-        getCredentialValue: getScoped("aimlapi"),
-        getConfiguredCredentialValue: getConfigured("aimlapi"),
-      },
-      {
-        id: "firecrawl",
-        autoDetectOrder: 60,
-        envVars: ["FIRECRAWL_API_KEY"],
-        credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
-        getCredentialValue: getScoped("firecrawl"),
-        getConfiguredCredentialValue: getConfigured("firecrawl"),
-      },
-      {
-        id: "gemini",
-        autoDetectOrder: 20,
-        envVars: ["GEMINI_API_KEY"],
-        credentialPath: "plugins.entries.google.config.webSearch.apiKey",
-        getCredentialValue: getScoped("gemini"),
-        getConfiguredCredentialValue: getConfigured("google"),
-      },
-      {
-        id: "grok",
-        autoDetectOrder: 30,
-        envVars: ["XAI_API_KEY"],
-        credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
-        getCredentialValue: getScoped("grok"),
-        getConfiguredCredentialValue: getConfigured("xai"),
-      },
-      {
-        id: "kimi",
-        autoDetectOrder: 40,
-        envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
-        credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
-        getCredentialValue: getScoped("kimi"),
-        getConfiguredCredentialValue: getConfigured("moonshot"),
-      },
-      {
-        id: "perplexity",
-        autoDetectOrder: 50,
-        envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
-        credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
-        getCredentialValue: getScoped("perplexity"),
-        getConfiguredCredentialValue: getConfigured("perplexity"),
-      },
-      {
-        id: "tavily",
-        autoDetectOrder: 70,
-        envVars: ["TAVILY_API_KEY"],
-        credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
-        getCredentialValue: getScoped("tavily"),
-        getConfiguredCredentialValue: getConfigured("tavily"),
-      },
-    ],
+    resolveBundledPluginWebSearchProviders: () => mockWebSearchProviders,
+    resolvePluginWebSearchProviders: () => mockWebSearchProviders,
   };
 });
 

@@ -76,6 +76,22 @@ describe("runDaemonStatus", () => {
     expect(printDaemonStatus).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards require-rpc to daemon status gathering", async () => {
+    await runDaemonStatus({
+      rpc: {},
+      probe: true,
+      requireRpc: true,
+      json: false,
+    });
+
+    expect(gatherDaemonStatus).toHaveBeenCalledWith({
+      rpc: {},
+      probe: true,
+      requireRpc: true,
+      deep: false,
+    });
+  });
+
   it("rejects require-rpc when probing is disabled", async () => {
     await expect(
       runDaemonStatus({

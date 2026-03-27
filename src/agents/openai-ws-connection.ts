@@ -58,10 +58,10 @@ export type OutputItem =
       status?: "in_progress" | "completed";
     }
   | {
-      type: "reasoning";
+      type: "reasoning" | `reasoning.${string}`;
       id: string;
       content?: string;
-      summary?: string;
+      summary?: unknown;
     };
 
 export interface ResponseCreatedEvent {
@@ -198,7 +198,13 @@ export type InputItem =
     }
   | { type: "function_call"; id?: string; call_id?: string; name: string; arguments: string }
   | { type: "function_call_output"; call_id: string; output: string }
-  | { type: "reasoning"; content?: string; encrypted_content?: string; summary?: string }
+  | {
+      type: "reasoning";
+      id?: string;
+      content?: string;
+      encrypted_content?: string;
+      summary?: string;
+    }
   | { type: "item_reference"; id: string };
 
 export type ToolChoice =

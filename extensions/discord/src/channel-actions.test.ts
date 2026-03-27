@@ -3,13 +3,15 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
 
-const handleDiscordMessageActionMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const handleDiscordMessageActionMock = vi.hoisted(() =>
+  vi.fn(async () => ({ content: [], details: { ok: true } })),
+);
 
-vi.mock("./actions/handle-action.js", () => ({
-  handleDiscordMessageAction: handleDiscordMessageActionMock,
-}));
-
-import { discordMessageActions } from "./channel-actions.js";
+const handleActionModule = await import("./actions/handle-action.js");
+vi.spyOn(handleActionModule, "handleDiscordMessageAction").mockImplementation(
+  handleDiscordMessageActionMock,
+);
+const { discordMessageActions } = await import("./channel-actions.js");
 
 describe("discordMessageActions", () => {
   it("returns no tool actions when no token-sourced Discord accounts are enabled", () => {
@@ -111,7 +113,7 @@ describe("discordMessageActions", () => {
     await discordMessageActions.handleAction?.({
       channel: "discord",
       action: "send",
-      params: { to: "channel:123", text: "hello" },
+      params: { to: "channel:123", message: "hello" },
       cfg,
       accountId: "ops",
       requesterSenderId: "user-1",
@@ -121,7 +123,7 @@ describe("discordMessageActions", () => {
 
     expect(handleDiscordMessageActionMock).toHaveBeenCalledWith({
       action: "send",
-      params: { to: "channel:123", text: "hello" },
+      params: { to: "channel:123", message: "hello" },
       cfg,
       accountId: "ops",
       requesterSenderId: "user-1",

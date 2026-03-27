@@ -18,8 +18,12 @@ import type {
   ProviderAuthDoctorHintContext,
   ProviderAugmentModelCatalogContext,
   ProviderBuildMissingAuthMessageContext,
+  ProviderBuildUnknownModelHintContext,
   ProviderBuiltInModelSuppressionContext,
   ProviderCacheTtlEligibilityContext,
+  ProviderCreateEmbeddingProviderContext,
+  ProviderResolveSyntheticAuthContext,
+  ProviderCreateStreamFnContext,
   ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
   ProviderModernModelPolicyContext,
@@ -295,6 +299,16 @@ export function prepareProviderExtraParams(params: {
   return resolveProviderRuntimePlugin(params)?.prepareExtraParams?.(params.context) ?? undefined;
 }
 
+export function resolveProviderStreamFn(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderCreateStreamFnContext;
+}) {
+  return resolveProviderRuntimePlugin(params)?.createStreamFn?.(params.context) ?? undefined;
+}
+
 export function wrapProviderStreamFn(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -303,6 +317,16 @@ export function wrapProviderStreamFn(params: {
   context: ProviderWrapStreamFnContext;
 }) {
   return resolveProviderRuntimePlugin(params)?.wrapStreamFn?.(params.context) ?? undefined;
+}
+
+export async function createProviderEmbeddingProvider(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderCreateEmbeddingProviderContext;
+}) {
+  return await resolveProviderRuntimePlugin(params)?.createEmbeddingProvider?.(params.context);
 }
 
 export async function prepareProviderRuntimeAuth(params: {
@@ -425,6 +449,26 @@ export function buildProviderMissingAuthMessageWithPlugin(params: {
   return (
     resolveProviderRuntimePlugin(params)?.buildMissingAuthMessage?.(params.context) ?? undefined
   );
+}
+
+export function buildProviderUnknownModelHintWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderBuildUnknownModelHintContext;
+}) {
+  return resolveProviderRuntimePlugin(params)?.buildUnknownModelHint?.(params.context) ?? undefined;
+}
+
+export function resolveProviderSyntheticAuthWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderResolveSyntheticAuthContext;
+}) {
+  return resolveProviderRuntimePlugin(params)?.resolveSyntheticAuth?.(params.context) ?? undefined;
 }
 
 export function resolveProviderBuiltInModelSuppression(params: {

@@ -1,15 +1,4 @@
-const BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS = {
-  aimlapi: "aimlapi",
-  brave: "brave",
-  duckduckgo: "duckduckgo",
-  exa: "exa",
-  firecrawl: "firecrawl",
-  gemini: "google",
-  grok: "xai",
-  kimi: "moonshot",
-  perplexity: "perplexity",
-  tavily: "tavily",
-} as const satisfies Record<string, string>;
+import { BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS } from "./bundled-capability-metadata.js";
 
 export function resolveBundledWebSearchPluginId(
   providerId: string | undefined,
@@ -21,7 +10,5 @@ export function resolveBundledWebSearchPluginId(
   if (!(normalizedProviderId in BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS)) {
     return undefined;
   }
-  return BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS[
-    normalizedProviderId as keyof typeof BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS
-  ];
+  return BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS[normalizedProviderId];
 }

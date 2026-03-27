@@ -41,6 +41,7 @@ import {
   readConfigIncludeFileWithGuards,
   resolveConfigIncludes,
 } from "./includes.js";
+import { migrateLegacyConfig } from "./legacy-migrate.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { applyMergePatch } from "./merge-patch.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
@@ -1186,6 +1187,11 @@ type ConfigReadResolution = {
   envWarnings: EnvSubstitutionWarning[];
 };
 
+type LegacyMigrationResolution = {
+  effectiveConfigRaw: unknown;
+  sourceLegacyIssues: LegacyConfigIssue[];
+};
+
 function resolveConfigIncludesForRead(
   parsed: unknown,
   configPath: string,
@@ -1223,6 +1229,21 @@ function resolveConfigForRead(
     // Capture env snapshot after substitution for write-time ${VAR} restoration.
     envSnapshotForRestore: { ...env } as Record<string, string | undefined>,
     envWarnings,
+  };
+}
+
+function resolveLegacyConfigForRead(
+  resolvedConfigRaw: unknown,
+  sourceRaw: unknown,
+): LegacyMigrationResolution {
+  const sourceLegacyIssues = findLegacyConfigIssues(resolvedConfigRaw, sourceRaw);
+  if (sourceLegacyIssues.length === 0) {
+    return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues };
+  }
+  const migrated = migrateLegacyConfig(resolvedConfigRaw);
+  return {
+    effectiveConfigRaw: migrated.config ?? resolvedConfigRaw,
+    sourceLegacyIssues,
   };
 }
 
@@ -1276,13 +1297,15 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         deps.env,
       );
       const resolvedConfig = readResolution.resolvedConfigRaw;
+      const legacyResolution = resolveLegacyConfigForRead(resolvedConfig, parsed);
+      const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
       for (const w of readResolution.envWarnings) {
         deps.logger.warn(
           `Config (${configPath}): missing env var "${w.varName}" at ${w.configPath} — feature using this value will be unavailable`,
         );
       }
-      warnOnConfigMiskeys(resolvedConfig, deps.logger);
-      if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
+      warnOnConfigMiskeys(effectiveConfigRaw, deps.logger);
+      if (typeof effectiveConfigRaw !== "object" || effectiveConfigRaw === null) {
         observeLoadConfigSnapshot({
           path: configPath,
           exists: true,
@@ -1294,31 +1317,31 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           hash,
           issues: [],
           warnings: [],
-          legacyIssues: [],
+          legacyIssues: legacyResolution.sourceLegacyIssues,
         });
         return {};
       }
-      const preValidationDuplicates = findDuplicateAgentDirs(resolvedConfig as OpenClawConfig, {
+      const preValidationDuplicates = findDuplicateAgentDirs(effectiveConfigRaw as OpenClawConfig, {
         env: deps.env,
         homedir: deps.homedir,
       });
       if (preValidationDuplicates.length > 0) {
         throw new DuplicateAgentDirError(preValidationDuplicates);
       }
-      const validated = validateConfigObjectWithPlugins(resolvedConfig, { env: deps.env });
+      const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
       if (!validated.ok) {
         observeLoadConfigSnapshot({
           path: configPath,
           exists: true,
           raw,
           parsed,
-          resolved: coerceConfig(resolvedConfig),
+          resolved: coerceConfig(effectiveConfigRaw),
           valid: false,
-          config: coerceConfig(resolvedConfig),
+          config: coerceConfig(effectiveConfigRaw),
           hash,
           issues: validated.issues,
           warnings: validated.warnings,
-          legacyIssues: findLegacyConfigIssues(resolvedConfig, parsed),
+          legacyIssues: legacyResolution.sourceLegacyIssues,
         });
         const details = validated.issues
           .map(
@@ -1363,13 +1386,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         exists: true,
         raw,
         parsed,
-        resolved: coerceConfig(resolvedConfig),
+        resolved: coerceConfig(effectiveConfigRaw),
         valid: true,
         config: cfg,
         hash,
         issues: [],
         warnings: validated.warnings,
-        legacyIssues: findLegacyConfigIssues(resolvedConfig, parsed),
+        legacyIssues: legacyResolution.sourceLegacyIssues,
       });
 
       const duplicates = findDuplicateAgentDirs(cfg, {
@@ -1537,11 +1560,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }));
 
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
-      // Detect legacy keys on resolved config, but only mark source-literal legacy
-      // entries (for auto-migration) when they are present in the parsed source.
-      const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw, parsedRes.parsed);
+      const legacyResolution = resolveLegacyConfigForRead(resolvedConfigRaw, parsedRes.parsed);
+      const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
 
-      const validated = validateConfigObjectWithPlugins(resolvedConfigRaw, { env: deps.env });
+      const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
       if (!validated.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
           snapshot: {
@@ -1549,13 +1571,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             exists: true,
             raw,
             parsed: parsedRes.parsed,
-            resolved: coerceConfig(resolvedConfigRaw),
+            resolved: coerceConfig(effectiveConfigRaw),
             valid: false,
-            config: coerceConfig(resolvedConfigRaw),
+            config: coerceConfig(effectiveConfigRaw),
             hash,
             issues: validated.issues,
             warnings: [...validated.warnings, ...envVarWarnings],
-            legacyIssues,
+            legacyIssues: legacyResolution.sourceLegacyIssues,
           },
         });
       }
@@ -1581,13 +1603,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           parsed: parsedRes.parsed,
           // Use resolvedConfigRaw (after $include and ${ENV} substitution but BEFORE runtime defaults)
           // for config set/unset operations (issue #6070)
-          resolved: coerceConfig(resolvedConfigRaw),
+          resolved: coerceConfig(effectiveConfigRaw),
           valid: true,
           config: snapshotConfig,
           hash,
           issues: [],
           warnings: [...validated.warnings, ...envVarWarnings],
-          legacyIssues,
+          legacyIssues: legacyResolution.sourceLegacyIssues,
         },
         envSnapshotForRestore: readResolution.envSnapshotForRestore,
       });

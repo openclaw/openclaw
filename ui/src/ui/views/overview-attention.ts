@@ -49,7 +49,8 @@ export function renderOverviewAttention(props: OverviewAttentionProps) {
                     href=${item.href}
                     target=${item.external ? EXTERNAL_LINK_TARGET : nothing}
                     rel=${item.external ? buildExternalLinkRel() : nothing}
-                  >${t("common.docs")}</a>`
+                    >${t("common.docs")}</a
+                  >`
                   : nothing
               }
             </div>

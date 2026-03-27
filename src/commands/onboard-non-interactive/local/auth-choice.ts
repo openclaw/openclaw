@@ -5,6 +5,10 @@ import { applyAuthProfileConfig } from "../../../plugins/provider-auth-helpers.j
 import { setCloudflareAiGatewayConfig } from "../../../plugins/provider-auth-storage.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
+import {
+  formatDeprecatedNonInteractiveAuthChoiceError,
+  isDeprecatedAuthChoice,
+} from "../../auth-choice-legacy.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
 import { applyCloudflareAiGatewayConfig } from "../../onboard-auth.config-gateways.js";
@@ -16,7 +20,6 @@ import {
 } from "../../onboard-custom.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
-import { applySimpleNonInteractiveApiKeyChoice } from "./auth-choice.api-key-providers.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 type ResolvedNonInteractiveApiKey = NonNullable<
@@ -133,13 +136,8 @@ export async function applyNonInteractiveAuthChoice(params: {
     return true;
   };
 
-  if (authChoice === "claude-cli" || authChoice === "codex-cli") {
-    runtime.error(
-      [
-        `Auth choice "${authChoice}" is deprecated.`,
-        'Use "--auth-choice token" (Anthropic setup-token) or "--auth-choice openai-codex".',
-      ].join("\n"),
-    );
+  if (isDeprecatedAuthChoice(authChoice)) {
+    runtime.error(formatDeprecatedNonInteractiveAuthChoiceError(authChoice));
     runtime.exit(1);
     return null;
   }
@@ -171,20 +169,6 @@ export async function applyNonInteractiveAuthChoice(params: {
   });
   if (pluginProviderChoice !== undefined) {
     return pluginProviderChoice;
-  }
-
-  const simpleApiKeyChoice = await applySimpleNonInteractiveApiKeyChoice({
-    authChoice,
-    nextConfig,
-    baseConfig,
-    opts,
-    runtime,
-    apiKeyStorageOptions,
-    resolveApiKey,
-    maybeSetResolvedApiKey,
-  });
-  if (simpleApiKeyChoice !== undefined) {
-    return simpleApiKeyChoice;
   }
 
   if (authChoice === "cloudflare-ai-gateway-api-key") {

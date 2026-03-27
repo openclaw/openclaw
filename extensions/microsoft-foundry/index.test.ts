@@ -55,6 +55,172 @@ function registerProvider() {
   return registerProviderMock.mock.calls[0]?.[0];
 }
 
+const defaultFoundryBaseUrl = "https://example.services.ai.azure.com/openai/v1";
+const defaultFoundryProviderId = "microsoft-foundry";
+const defaultFoundryModelId = "gpt-5.4";
+const defaultFoundryProfileId = "microsoft-foundry:entra";
+const defaultFoundryAgentDir = "/tmp/test-agent";
+const defaultAzureCliLoginError = "Please run 'az login' to setup account.";
+
+function buildFoundryModel(
+  overrides: Partial<{
+    provider: string;
+    id: string;
+    name: string;
+    api: "openai-responses" | "openai-completions";
+    baseUrl: string;
+  }> = {},
+) {
+  return {
+    provider: defaultFoundryProviderId,
+    id: defaultFoundryModelId,
+    name: defaultFoundryModelId,
+    api: "openai-responses" as const,
+    baseUrl: defaultFoundryBaseUrl,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+    ...overrides,
+  };
+}
+
+function buildFoundryConfig(params?: {
+  profileIds?: string[];
+  orderedProfileIds?: string[];
+  models?: ReturnType<typeof buildFoundryModel>[];
+}) {
+  const profileIds = params?.profileIds ?? [];
+  const orderedProfileIds = params?.orderedProfileIds;
+  return {
+    auth: {
+      profiles: Object.fromEntries(
+        profileIds.map((profileId) => [
+          profileId,
+          {
+            provider: defaultFoundryProviderId,
+            mode: "api_key" as const,
+          },
+        ]),
+      ),
+      ...(orderedProfileIds
+        ? {
+            order: {
+              [defaultFoundryProviderId]: orderedProfileIds,
+            },
+          }
+        : {}),
+    },
+    models: {
+      providers: {
+        [defaultFoundryProviderId]: {
+          baseUrl: defaultFoundryBaseUrl,
+          api: "openai-responses" as const,
+          models: params?.models ?? [buildFoundryModel()],
+        },
+      },
+    },
+  } satisfies OpenClawConfig;
+}
+
+function buildEntraProfileStore(
+  overrides: Partial<{
+    endpoint: string;
+    modelId: string;
+    modelName: string;
+    tenantId: string;
+  }> = {},
+) {
+  return {
+    profiles: {
+      [defaultFoundryProfileId]: {
+        type: "api_key",
+        provider: defaultFoundryProviderId,
+        metadata: {
+          authMethod: "entra-id",
+          endpoint: "https://example.services.ai.azure.com",
+          modelId: "custom-deployment",
+          modelName: defaultFoundryModelId,
+          tenantId: "tenant-id",
+          ...overrides,
+        },
+      },
+    },
+  };
+}
+
+function buildFoundryRuntimeAuthContext(
+  overrides: Partial<{
+    provider: string;
+    modelId: string;
+    model: ReturnType<typeof buildFoundryModel>;
+    apiKey: string;
+    authMode: "api_key";
+    profileId: string;
+    agentDir: string;
+  }> = {},
+) {
+  const modelId = overrides.modelId ?? "custom-deployment";
+  return {
+    provider: defaultFoundryProviderId,
+    modelId,
+    model: buildFoundryModel({ id: modelId, ...("model" in overrides ? overrides.model : {}) }),
+    apiKey: "__entra_id_dynamic__",
+    authMode: "api_key" as const,
+    profileId: defaultFoundryProfileId,
+    env: process.env,
+    agentDir: defaultFoundryAgentDir,
+    ...overrides,
+  };
+}
+
+function mockAzureCliToken(params: { accessToken: string; expiresInMs: number; delayMs?: number }) {
+  execFileMock.mockImplementationOnce(
+    (
+      _file: unknown,
+      _args: unknown,
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      const respond = () =>
+        callback(
+          null,
+          JSON.stringify({
+            accessToken: params.accessToken,
+            expiresOn: new Date(Date.now() + params.expiresInMs).toISOString(),
+          }),
+          "",
+        );
+      if (params.delayMs) {
+        setTimeout(respond, params.delayMs);
+        return;
+      }
+      respond();
+    },
+  );
+}
+
+function mockAzureCliLoginFailure(delayMs?: number) {
+  execFileMock.mockImplementationOnce(
+    (
+      _file: unknown,
+      _args: unknown,
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      const respond = () => {
+        callback(new Error("az failed"), "", defaultAzureCliLoginError);
+      };
+      if (delayMs) {
+        setTimeout(respond, delayMs);
+        return;
+      }
+      respond();
+    },
+  );
+}
+
 describe("microsoft-foundry plugin", () => {
   beforeEach(() => {
     resetFoundryRuntimeAuthCaches();
@@ -66,39 +232,9 @@ describe("microsoft-foundry plugin", () => {
 
   it("keeps the API key profile bound when multiple auth profiles exist without explicit order", async () => {
     const provider = registerProvider();
-    const config: OpenClawConfig = {
-      auth: {
-        profiles: {
-          "microsoft-foundry:default": {
-            provider: "microsoft-foundry",
-            mode: "api_key" as const,
-          },
-          "microsoft-foundry:entra": {
-            provider: "microsoft-foundry",
-            mode: "api_key" as const,
-          },
-        },
-      },
-      models: {
-        providers: {
-          "microsoft-foundry": {
-            baseUrl: "https://example.services.ai.azure.com/openai/v1",
-            api: "openai-responses",
-            models: [
-              {
-                id: "gpt-5.4",
-                name: "gpt-5.4",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128_000,
-                maxTokens: 16_384,
-              },
-            ],
-          },
-        },
-      },
-    };
+    const config = buildFoundryConfig({
+      profileIds: ["microsoft-foundry:default", "microsoft-foundry:entra"],
+    });
 
     await provider.onModelSelected?.({
       config,
@@ -121,38 +257,10 @@ describe("microsoft-foundry plugin", () => {
         },
       },
     });
-    const config: OpenClawConfig = {
-      auth: {
-        profiles: {
-          "microsoft-foundry:default": {
-            provider: "microsoft-foundry",
-            mode: "api_key" as const,
-          },
-        },
-        order: {
-          "microsoft-foundry": ["microsoft-foundry:default"],
-        },
-      },
-      models: {
-        providers: {
-          "microsoft-foundry": {
-            baseUrl: "https://example.services.ai.azure.com/openai/v1",
-            api: "openai-responses",
-            models: [
-              {
-                id: "gpt-5.4",
-                name: "gpt-5.4",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128_000,
-                maxTokens: 16_384,
-              },
-            ],
-          },
-        },
-      },
-    };
+    const config = buildFoundryConfig({
+      profileIds: ["microsoft-foundry:default"],
+      orderedProfileIds: ["microsoft-foundry:default"],
+    });
 
     await provider.onModelSelected?.({
       config,
@@ -166,131 +274,21 @@ describe("microsoft-foundry plugin", () => {
 
   it("preserves the model-derived base URL for Entra runtime auth refresh", async () => {
     const provider = registerProvider();
-    execFileMock.mockImplementationOnce(
-      (
-        _file: unknown,
-        _args: unknown,
-        _options: unknown,
-        callback: (error: Error | null, stdout: string, stderr: string) => void,
-      ) => {
-        callback(
-          null,
-          JSON.stringify({
-            accessToken: "test-token",
-            expiresOn: new Date(Date.now() + 60_000).toISOString(),
-          }),
-          "",
-        );
-      },
-    );
-    ensureAuthProfileStoreMock.mockReturnValueOnce({
-      profiles: {
-        "microsoft-foundry:entra": {
-          type: "api_key",
-          provider: "microsoft-foundry",
-          metadata: {
-            authMethod: "entra-id",
-            endpoint: "https://example.services.ai.azure.com",
-            modelId: "custom-deployment",
-            modelName: "gpt-5.4",
-            tenantId: "tenant-id",
-          },
-        },
-      },
-    });
+    mockAzureCliToken({ accessToken: "test-token", expiresInMs: 60_000 });
+    ensureAuthProfileStoreMock.mockReturnValueOnce(buildEntraProfileStore());
 
-    const prepared = await provider.prepareRuntimeAuth?.({
-      provider: "microsoft-foundry",
-      modelId: "custom-deployment",
-      model: {
-        provider: "microsoft-foundry",
-        id: "custom-deployment",
-        name: "gpt-5.4",
-        api: "openai-responses",
-        baseUrl: "https://example.services.ai.azure.com/openai/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 16_384,
-      },
-      apiKey: "__entra_id_dynamic__",
-      authMode: "api_key",
-      profileId: "microsoft-foundry:entra",
-      env: process.env,
-      agentDir: "/tmp/test-agent",
-    });
+    const prepared = await provider.prepareRuntimeAuth?.(buildFoundryRuntimeAuthContext());
 
     expect(prepared?.baseUrl).toBe("https://example.services.ai.azure.com/openai/v1");
   });
 
   it("retries Entra token refresh after a failed attempt", async () => {
     const provider = registerProvider();
-    execFileMock
-      .mockImplementationOnce(
-        (
-          _file: unknown,
-          _args: unknown,
-          _options: unknown,
-          callback: (error: Error | null, stdout: string, stderr: string) => void,
-        ) => {
-          callback(new Error("az failed"), "", "Please run 'az login' to setup account.");
-        },
-      )
-      .mockImplementationOnce(
-        (
-          _file: unknown,
-          _args: unknown,
-          _options: unknown,
-          callback: (error: Error | null, stdout: string, stderr: string) => void,
-        ) => {
-          callback(
-            null,
-            JSON.stringify({
-              accessToken: "retry-token",
-              expiresOn: new Date(Date.now() + 10 * 60_000).toISOString(),
-            }),
-            "",
-          );
-        },
-      );
-    ensureAuthProfileStoreMock.mockReturnValue({
-      profiles: {
-        "microsoft-foundry:entra": {
-          type: "api_key",
-          provider: "microsoft-foundry",
-          metadata: {
-            authMethod: "entra-id",
-            endpoint: "https://example.services.ai.azure.com",
-            modelId: "custom-deployment",
-            modelName: "gpt-5.4",
-            tenantId: "tenant-id",
-          },
-        },
-      },
-    });
+    mockAzureCliLoginFailure();
+    mockAzureCliToken({ accessToken: "retry-token", expiresInMs: 10 * 60_000 });
+    ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
 
-    const runtimeContext = {
-      provider: "microsoft-foundry",
-      modelId: "custom-deployment",
-      model: {
-        provider: "microsoft-foundry",
-        id: "custom-deployment",
-        name: "gpt-5.4",
-        api: "openai-responses",
-        baseUrl: "https://example.services.ai.azure.com/openai/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 16_384,
-      },
-      apiKey: "__entra_id_dynamic__",
-      authMode: "api_key",
-      profileId: "microsoft-foundry:entra",
-      env: process.env,
-      agentDir: "/tmp/test-agent",
-    };
+    const runtimeContext = buildFoundryRuntimeAuthContext();
 
     await expect(provider.prepareRuntimeAuth?.(runtimeContext)).rejects.toThrow(
       "Azure CLI is not logged in",
@@ -304,62 +302,10 @@ describe("microsoft-foundry plugin", () => {
 
   it("dedupes concurrent Entra token refreshes for the same profile", async () => {
     const provider = registerProvider();
-    execFileMock.mockImplementationOnce(
-      (
-        _file: unknown,
-        _args: unknown,
-        _options: unknown,
-        callback: (error: Error | null, stdout: string, stderr: string) => void,
-      ) => {
-        setTimeout(() => {
-          callback(
-            null,
-            JSON.stringify({
-              accessToken: "deduped-token",
-              expiresOn: new Date(Date.now() + 60_000).toISOString(),
-            }),
-            "",
-          );
-        }, 10);
-      },
-    );
-    ensureAuthProfileStoreMock.mockReturnValue({
-      profiles: {
-        "microsoft-foundry:entra": {
-          type: "api_key",
-          provider: "microsoft-foundry",
-          metadata: {
-            authMethod: "entra-id",
-            endpoint: "https://example.services.ai.azure.com",
-            modelId: "custom-deployment",
-            modelName: "gpt-5.4",
-            tenantId: "tenant-id",
-          },
-        },
-      },
-    });
+    mockAzureCliToken({ accessToken: "deduped-token", expiresInMs: 60_000, delayMs: 10 });
+    ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
 
-    const runtimeContext = {
-      provider: "microsoft-foundry",
-      modelId: "custom-deployment",
-      model: {
-        provider: "microsoft-foundry",
-        id: "custom-deployment",
-        name: "gpt-5.4",
-        api: "openai-responses",
-        baseUrl: "https://example.services.ai.azure.com/openai/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 16_384,
-      },
-      apiKey: "__entra_id_dynamic__",
-      authMode: "api_key",
-      profileId: "microsoft-foundry:entra",
-      env: process.env,
-      agentDir: "/tmp/test-agent",
-    };
+    const runtimeContext = buildFoundryRuntimeAuthContext();
 
     const [first, second] = await Promise.all([
       provider.prepareRuntimeAuth?.(runtimeContext),
@@ -373,75 +319,11 @@ describe("microsoft-foundry plugin", () => {
 
   it("clears failed refresh state so later concurrent retries succeed", async () => {
     const provider = registerProvider();
-    execFileMock
-      .mockImplementationOnce(
-        (
-          _file: unknown,
-          _args: unknown,
-          _options: unknown,
-          callback: (error: Error | null, stdout: string, stderr: string) => void,
-        ) => {
-          setTimeout(() => {
-            callback(new Error("az failed"), "", "Please run 'az login' to setup account.");
-          }, 10);
-        },
-      )
-      .mockImplementationOnce(
-        (
-          _file: unknown,
-          _args: unknown,
-          _options: unknown,
-          callback: (error: Error | null, stdout: string, stderr: string) => void,
-        ) => {
-          setTimeout(() => {
-            callback(
-              null,
-              JSON.stringify({
-                accessToken: "recovered-token",
-                expiresOn: new Date(Date.now() + 10 * 60_000).toISOString(),
-              }),
-              "",
-            );
-          }, 10);
-        },
-      );
-    ensureAuthProfileStoreMock.mockReturnValue({
-      profiles: {
-        "microsoft-foundry:entra": {
-          type: "api_key",
-          provider: "microsoft-foundry",
-          metadata: {
-            authMethod: "entra-id",
-            endpoint: "https://example.services.ai.azure.com",
-            modelId: "custom-deployment",
-            modelName: "gpt-5.4",
-            tenantId: "tenant-id",
-          },
-        },
-      },
-    });
+    mockAzureCliLoginFailure(10);
+    mockAzureCliToken({ accessToken: "recovered-token", expiresInMs: 10 * 60_000, delayMs: 10 });
+    ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
 
-    const runtimeContext = {
-      provider: "microsoft-foundry",
-      modelId: "custom-deployment",
-      model: {
-        provider: "microsoft-foundry",
-        id: "custom-deployment",
-        name: "gpt-5.4",
-        api: "openai-responses",
-        baseUrl: "https://example.services.ai.azure.com/openai/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 16_384,
-      },
-      apiKey: "__entra_id_dynamic__",
-      authMode: "api_key",
-      profileId: "microsoft-foundry:entra",
-      env: process.env,
-      agentDir: "/tmp/test-agent",
-    };
+    const runtimeContext = buildFoundryRuntimeAuthContext();
 
     const failed = await Promise.allSettled([
       provider.prepareRuntimeAuth?.(runtimeContext),
@@ -461,78 +343,11 @@ describe("microsoft-foundry plugin", () => {
 
   it("refreshes again when a cached token is too close to expiry", async () => {
     const provider = registerProvider();
-    execFileMock
-      .mockImplementationOnce(
-        (
-          _file: unknown,
-          _args: unknown,
-          _options: unknown,
-          callback: (error: Error | null, stdout: string, stderr: string) => void,
-        ) => {
-          callback(
-            null,
-            JSON.stringify({
-              accessToken: "soon-expiring-token",
-              expiresOn: new Date(Date.now() + 60_000).toISOString(),
-            }),
-            "",
-          );
-        },
-      )
-      .mockImplementationOnce(
-        (
-          _file: unknown,
-          _args: unknown,
-          _options: unknown,
-          callback: (error: Error | null, stdout: string, stderr: string) => void,
-        ) => {
-          callback(
-            null,
-            JSON.stringify({
-              accessToken: "fresh-token",
-              expiresOn: new Date(Date.now() + 10 * 60_000).toISOString(),
-            }),
-            "",
-          );
-        },
-      );
-    ensureAuthProfileStoreMock.mockReturnValue({
-      profiles: {
-        "microsoft-foundry:entra": {
-          type: "api_key",
-          provider: "microsoft-foundry",
-          metadata: {
-            authMethod: "entra-id",
-            endpoint: "https://example.services.ai.azure.com",
-            modelId: "custom-deployment",
-            modelName: "gpt-5.4",
-            tenantId: "tenant-id",
-          },
-        },
-      },
-    });
+    mockAzureCliToken({ accessToken: "soon-expiring-token", expiresInMs: 60_000 });
+    mockAzureCliToken({ accessToken: "fresh-token", expiresInMs: 10 * 60_000 });
+    ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
 
-    const runtimeContext = {
-      provider: "microsoft-foundry",
-      modelId: "custom-deployment",
-      model: {
-        provider: "microsoft-foundry",
-        id: "custom-deployment",
-        name: "gpt-5.4",
-        api: "openai-responses",
-        baseUrl: "https://example.services.ai.azure.com/openai/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 16_384,
-      },
-      apiKey: "__entra_id_dynamic__",
-      authMode: "api_key",
-      profileId: "microsoft-foundry:entra",
-      env: process.env,
-      agentDir: "/tmp/test-agent",
-    };
+    const runtimeContext = buildFoundryRuntimeAuthContext();
 
     await expect(provider.prepareRuntimeAuth?.(runtimeContext)).resolves.toMatchObject({
       apiKey: "soon-expiring-token",
@@ -727,46 +542,18 @@ describe("microsoft-foundry plugin", () => {
 
   it("preserves project-scoped endpoint prefixes when extracting the Foundry endpoint", async () => {
     const provider = registerProvider();
-    execFileMock.mockImplementationOnce(
-      (
-        _file: unknown,
-        _args: unknown,
-        _options: unknown,
-        callback: (error: Error | null, stdout: string, stderr: string) => void,
-      ) => {
-        callback(
-          null,
-          JSON.stringify({
-            accessToken: "test-token",
-            expiresOn: new Date(Date.now() + 60_000).toISOString(),
-          }),
-          "",
-        );
-      },
-    );
+    mockAzureCliToken({ accessToken: "test-token", expiresInMs: 60_000 });
     ensureAuthProfileStoreMock.mockReturnValueOnce({ profiles: {} });
 
-    const prepared = await provider.prepareRuntimeAuth?.({
-      provider: "microsoft-foundry",
-      modelId: "deployment-gpt5",
-      model: {
-        provider: "microsoft-foundry",
-        id: "deployment-gpt5",
-        name: "gpt-5.4",
-        api: "openai-responses",
-        baseUrl: "https://example.services.ai.azure.com/api/projects/demo/openai/v1/responses",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 16_384,
-      },
-      apiKey: "__entra_id_dynamic__",
-      authMode: "api_key",
-      profileId: "microsoft-foundry:entra",
-      env: process.env,
-      agentDir: "/tmp/test-agent",
-    });
+    const prepared = await provider.prepareRuntimeAuth?.(
+      buildFoundryRuntimeAuthContext({
+        modelId: "deployment-gpt5",
+        model: buildFoundryModel({
+          id: "deployment-gpt5",
+          baseUrl: "https://example.services.ai.azure.com/api/projects/demo/openai/v1/responses",
+        }),
+      }),
+    );
 
     expect(prepared?.baseUrl).toBe(
       "https://example.services.ai.azure.com/api/projects/demo/openai/v1",
@@ -797,16 +584,7 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it("returns actionable Azure CLI login errors", async () => {
-    execFileMock.mockImplementationOnce(
-      (
-        _file: unknown,
-        _args: unknown,
-        _options: unknown,
-        callback: (error: Error | null, stdout: string, stderr: string) => void,
-      ) => {
-        callback(new Error("az failed"), "", "Please run 'az login' to setup account.");
-      },
-    );
+    mockAzureCliLoginFailure();
 
     await expect(getAccessTokenResultAsync()).rejects.toThrow("Azure CLI is not logged in");
   });

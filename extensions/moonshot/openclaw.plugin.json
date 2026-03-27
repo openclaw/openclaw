@@ -47,6 +47,10 @@
       "help": "Kimi model override."
     }
   },
+  "contracts": {
+    "mediaUnderstandingProviders": ["moonshot"],
+    "webSearchProviders": ["kimi"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

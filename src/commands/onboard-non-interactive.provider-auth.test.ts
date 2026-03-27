@@ -37,6 +37,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     { default: volcenginePlugin },
     { default: byteplusPlugin },
     { default: anthropicPlugin },
+    { default: litellmPlugin },
     { default: mistralPlugin },
     { default: togetherPlugin },
     { default: qianfanPlugin },
@@ -57,6 +58,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     import("../../extensions/volcengine/index.ts"),
     import("../../extensions/byteplus/index.ts"),
     import("../../extensions/anthropic/index.ts"),
+    import("../../extensions/litellm/index.ts"),
     import("../../extensions/mistral/index.ts"),
     import("../../extensions/together/index.ts"),
     import("../../extensions/qianfan/index.ts"),
@@ -86,6 +88,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     registerProvider(provider: MockProvider) {
       providers.push(provider);
     },
+    registerCliBackend() {},
     registerWebSearchProvider() {},
     registerMediaUnderstandingProvider() {},
     registerSpeechProvider() {},
@@ -99,6 +102,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     volcenginePlugin,
     byteplusPlugin,
     anthropicPlugin,
+    litellmPlugin,
     mistralPlugin,
     togetherPlugin,
     qianfanPlugin,

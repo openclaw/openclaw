@@ -614,16 +614,7 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
-    provider: z
-      .union([
-        z.literal("openai"),
-        z.literal("local"),
-        z.literal("gemini"),
-        z.literal("voyage"),
-        z.literal("mistral"),
-        z.literal("ollama"),
-      ])
-      .optional(),
+    provider: z.string().optional(),
     remote: z
       .object({
         baseUrl: z.string().optional(),
@@ -642,17 +633,7 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
-    fallback: z
-      .union([
-        z.literal("openai"),
-        z.literal("gemini"),
-        z.literal("local"),
-        z.literal("voyage"),
-        z.literal("mistral"),
-        z.literal("ollama"),
-        z.literal("none"),
-      ])
-      .optional(),
+    fallback: z.string().optional(),
     model: z.string().optional(),
     outputDimensionality: z.number().int().positive().optional(),
     local: z
