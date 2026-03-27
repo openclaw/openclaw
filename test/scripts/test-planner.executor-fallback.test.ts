@@ -28,9 +28,11 @@ describe("test planner executor", () => {
       kill: vi.fn(),
     });
     const spawnMock = vi.fn(() => {
-      setTimeout(() => {
+      // Use microtask scheduling so listeners registered by executePlan are always attached
+      // before the synthetic exit event fires. This avoids occasional timer-order flakes.
+      queueMicrotask(() => {
         fakeChild.emit("exit", 0, null);
-      }, 0);
+      });
       return fakeChild;
     });
     vi.doMock("node:child_process", () => ({
