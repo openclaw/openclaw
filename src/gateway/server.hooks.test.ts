@@ -828,3 +828,223 @@ describe("gateway server hooks", () => {
     });
   });
 });
+
+/**
+ * Flush async hook dispatch without fixed-delay sleeps.
+ * The fire-and-forget async IIFE in dispatchAgentHook resolves through
+ * microtask + event-loop ticks; this helper yields enough turns to let it
+ * settle deterministically.
+ */
+async function flushHookDispatch(): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+/**
+ * Assert that no system event has been enqueued for the main session after
+ * giving the async dispatch time to settle.  Uses the deterministic flush
+ * helper instead of a fixed `setTimeout(200)`.
+ */
+async function expectNoSystemEvent(): Promise<void> {
+  await flushHookDispatch();
+  expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
+}
+
+describe("hook announcement policy", () => {
+  afterEach(() => {
+    drainSystemEvents(resolveMainKey());
+    vi.restoreAllMocks();
+  });
+
+  test("suppresses main-session fallback when deliver is false and run succeeds", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "background work completed",
+        outputText: "background work completed",
+        delivered: false,
+        deliveryAttempted: false,
+      });
+
+      const res = await postHook(port, "/hooks/agent", {
+        message: "Run silently",
+        name: "Gmail",
+        deliver: false,
+      });
+      expect(res.status).toBe(200);
+      await expectNoSystemEvent();
+    });
+  });
+
+  test("suppresses main-session fallback for mapped hook with deliver false", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      mappings: [
+        {
+          match: { path: "gmail" },
+          action: "agent",
+          messageTemplate: "New email from {{messages[0].from}}",
+          sessionKey: "hook:gmail:normalizer",
+          deliver: false,
+        },
+      ],
+    };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "no action needed",
+        outputText: "No action needed. NO_REPLY",
+        delivered: false,
+        deliveryAttempted: false,
+      });
+
+      const res = await postHook(port, "/hooks/gmail", {
+        source: "gmail",
+        messages: [
+          { id: "msg-1", from: "Ada", subject: "Newsletter", snippet: "Hi", body: "Body" },
+        ],
+      });
+      expect(res.status).toBe(200);
+      await expectNoSystemEvent();
+    });
+  });
+
+  test("still surfaces non-throw run errors when deliver is false", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "error",
+        error: "model timeout",
+        delivered: false,
+        deliveryAttempted: false,
+      });
+
+      const res = await postHook(port, "/hooks/agent", {
+        message: "Run silently",
+        name: "Gmail",
+        deliver: false,
+      });
+      expect(res.status).toBe(200);
+      const events = await waitForSystemEvent();
+      expect(events.some((e) => e.includes("model timeout"))).toBe(true);
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("does not inject main-session fallback when delivery was attempted but not acked", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "user-facing output",
+        outputText: "user-facing output",
+        delivered: false,
+        deliveryAttempted: true,
+      });
+
+      const res = await postHook(port, "/hooks/agent", {
+        message: "Announce path",
+        name: "Email",
+      });
+      expect(res.status).toBe(200);
+      await expectNoSystemEvent();
+    });
+  });
+
+  test("still injects main-session fallback when announceToMain is explicitly true", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "needs operator visibility",
+        outputText: "needs operator visibility",
+        delivered: false,
+        deliveryAttempted: false,
+        announceToMain: true,
+      });
+
+      const res = await postHook(port, "/hooks/agent", {
+        message: "Important result",
+        name: "Monitor",
+      });
+      expect(res.status).toBe(200);
+      const events = await waitForSystemEvent();
+      expect(events.some((e) => e.includes("needs operator visibility"))).toBe(true);
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("suppresses main-session fallback when announceToMain is false even with narration and trailing NO_REPLY", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "skipping writeback NO_REPLY",
+        outputText: "Skipping writeback. NO_REPLY",
+        delivered: false,
+        deliveryAttempted: false,
+        announceToMain: false,
+      });
+
+      const res = await postHook(port, "/hooks/agent", {
+        message: "Classify this email",
+        name: "Gmail",
+      });
+      expect(res.status).toBe(200);
+      await expectNoSystemEvent();
+    });
+  });
+
+  test("surfaces errors even when announceToMain is explicitly false", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "error",
+        error: "rate limited",
+        delivered: false,
+        deliveryAttempted: false,
+        announceToMain: false,
+      });
+
+      const res = await postHook(port, "/hooks/agent", {
+        message: "Run silently",
+        name: "Gmail",
+      });
+      expect(res.status).toBe(200);
+      // status !== "ok" takes priority over announceToMain: false
+      const events = await waitForSystemEvent();
+      expect(events.some((e) => e.includes("rate limited"))).toBe(true);
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("formats the generic fallback prefix as Hook instead of Hook Hook", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "generic result",
+      });
+
+      // Post with no explicit name — normalizeAgentPayload defaults to "Hook"
+      const res = await postHook(port, "/hooks/agent", { message: "Do it" });
+      expect(res.status).toBe(200);
+      const events = await waitForSystemEvent();
+      // Should be "Hook: generic result", NOT "Hook Hook: generic result"
+      expect(events.some((e) => e.startsWith("Hook: "))).toBe(true);
+      expect(events.some((e) => e.includes("Hook Hook"))).toBe(false);
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+});
