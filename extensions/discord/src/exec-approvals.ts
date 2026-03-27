@@ -11,6 +11,19 @@ export function isDiscordExecApprovalClientEnabled(params: {
   return Boolean(config?.enabled && (config.approvers?.length ?? 0) > 0);
 }
 
+export function isDiscordExecApprovalApprover(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  senderId?: string | null;
+}): boolean {
+  const senderId = params.senderId?.trim();
+  if (!senderId) {
+    return false;
+  }
+  const approvers = resolveDiscordAccount(params).config.execApprovals?.approvers ?? [];
+  return approvers.some((approverId) => String(approverId) === senderId);
+}
+
 export function shouldSuppressLocalDiscordExecApprovalPrompt(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
