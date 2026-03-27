@@ -15,6 +15,45 @@ export interface ReActParsedResponse {
   }>;
 }
 
+function transformAssistantMessageForReActFallback(
+  message: AssistantMessage,
+  isReasoningModel: boolean,
+): AssistantMessage {
+  const textParts = (message.content as Array<{ type: string; text?: string }>)
+    .filter((p) => p.type === "text")
+    .map((p) => p.text ?? "")
+    .join("");
+
+  const parsed = parseReActResponse(textParts, isReasoningModel);
+
+  const newContent: Array<{
+    type: string;
+    text?: string;
+    id?: string;
+    name?: string;
+    arguments?: Record<string, unknown>;
+  }> = [];
+  if (parsed.text) {
+    newContent.push({ type: "text", text: parsed.text });
+  }
+  for (const tc of parsed.toolCalls) {
+    newContent.push({
+      type: "toolCall",
+      id: tc.id,
+      name: tc.name,
+      arguments: tc.arguments,
+    });
+  }
+
+  const stopReason: StopReason = parsed.toolCalls.length > 0 ? "toolUse" : message.stopReason;
+
+  return {
+    ...message,
+    content: newContent as AssistantMessage["content"],
+    stopReason,
+  };
+}
+
 export function injectReActPrompt(
   currentSystemPrompt: string | undefined,
   tools: unknown[],
@@ -196,7 +235,11 @@ export function parseReActResponse(
 }
 
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type StopReason,
+} from "@mariozechner/pi-ai";
 import {
   getModelCapability,
   updateModelCapability,
@@ -383,42 +426,32 @@ export function wrapStreamFnWithReActFallback(
     const run = async () => {
       try {
         const native = await nativeStreamFn(model, newContext, options);
+        let sawTerminalEvent = false;
         for await (const chunk of native) {
           if (chunk.type === "done") {
-            // Intercept done: Extract text parts
-            const textParts = (chunk.message.content as any[]) // eslint-disable-line @typescript-eslint/no-explicit-any
-              .filter((p) => p.type === "text")
-              .map((p) => p.text ?? "")
-              .join("");
-
-            const parsed = parseReActResponse(textParts, capabilities.isReasoningModel);
-
-            const newContent: Array<{
-              type: string;
-              text?: string;
-              id?: string;
-              name?: string;
-              arguments?: Record<string, unknown>;
-            }> = [];
-            if (parsed.text) {
-              newContent.push({ type: "text", text: parsed.text });
-            }
-            for (const tc of parsed.toolCalls) {
-              newContent.push({
-                type: "toolCall",
-                id: tc.id,
-                name: tc.name,
-                arguments: tc.arguments,
-              });
-            }
-
-            (chunk as any).message.content = newContent; // eslint-disable-line @typescript-eslint/no-explicit-any
-            chunk.reason = parsed.toolCalls.length > 0 ? "toolUse" : chunk.reason;
-
-            wrappedStream.push(chunk);
+            sawTerminalEvent = true;
+            const transformedMessage = transformAssistantMessageForReActFallback(
+              chunk.message,
+              capabilities.isReasoningModel,
+            );
+            wrappedStream.push({
+              ...chunk,
+              message: transformedMessage,
+              reason: transformedMessage.stopReason === "toolUse" ? "toolUse" : chunk.reason,
+            });
           } else {
             wrappedStream.push(chunk);
           }
+        }
+        if (!sawTerminalEvent && typeof native.result === "function") {
+          const terminalMessage = await native.result();
+          wrappedStream.end(
+            transformAssistantMessageForReActFallback(
+              terminalMessage,
+              capabilities.isReasoningModel,
+            ),
+          );
+          return;
         }
         wrappedStream.end();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

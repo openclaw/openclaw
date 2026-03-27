@@ -232,5 +232,53 @@ describe("ReAct Fallback Stream Core", () => {
 
       expect(runBackgroundCapabilityProbeSpy).not.toHaveBeenCalled();
     });
+
+    it("forwards result-only terminal assistant messages through the fallback wrapper", async () => {
+      const wrapped = wrapStreamFnWithReActFallback(
+        (() =>
+          Promise.resolve({
+            async *[Symbol.asyncIterator]() {},
+            result: async () => ({
+              role: "assistant" as const,
+              content: [{ type: "text" as const, text: "" }],
+              stopReason: "aborted" as const,
+              api: "test",
+              provider: "ollama",
+              model: "tiny-llama:1b",
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              timestamp: Date.now(),
+            }),
+          }) as unknown as Awaited<ReturnType<StreamFn>>) as StreamFn,
+        {
+          modelId: "tiny-llama:1b",
+          providerId: "ollama",
+          providerType: "ollama",
+          toolFallback: "react",
+        },
+      );
+
+      const stream = await wrapped(
+        createModel("ollama"),
+        { tools: [{ name: "read", description: "Read a file" }] } as unknown as StreamContext,
+        {},
+      );
+
+      const chunks = [];
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toHaveLength(0);
+      const result = await stream.result();
+      expect(result.stopReason).toBe("aborted");
+      expect(result.content).toEqual([]);
+    });
   });
 });
