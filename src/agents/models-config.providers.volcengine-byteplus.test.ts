@@ -17,6 +17,8 @@ const VOLC_SHARED_IMAGE_MODELS = [
 function expectSharedCodingVisionCapabilities(
   models: { id: string; input?: string[] }[] | undefined,
 ) {
+  expect(models).toBeDefined();
+
   for (const modelId of VOLC_SHARED_IMAGE_MODELS) {
     expect(models).toEqual(
       expect.arrayContaining([
