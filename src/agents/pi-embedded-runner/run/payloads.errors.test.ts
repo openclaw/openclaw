@@ -283,6 +283,18 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
+  it("suppresses invalid Telegram reaction warnings when messages.suppressToolErrors is enabled", () => {
+    expectNoPayloads({
+      lastToolError: {
+        toolName: "telegram",
+        meta: "react",
+        error: "REACTION_INVALID",
+        mutatingAction: true,
+      },
+      config: { messages: { suppressToolErrors: true } },
+    });
+  });
+
   it.each([
     {
       name: "still shows mutating tool errors when messages.suppressToolErrors is enabled",

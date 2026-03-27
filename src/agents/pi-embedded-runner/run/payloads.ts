@@ -34,6 +34,18 @@ type ToolErrorWarningPolicy = {
   includeDetails: boolean;
 };
 
+function isSuppressibleInvalidReactionWarning(lastToolError: LastToolError): boolean {
+  const normalizedToolName = lastToolError.toolName.trim().toLowerCase();
+  if (normalizedToolName !== "telegram") {
+    return false;
+  }
+  const errorLower = (lastToolError.error ?? "").trim().toLowerCase();
+  return (
+    errorLower === "reaction_invalid" ||
+    errorLower.includes("reaction unavailable:")
+  );
+}
+
 const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "required",
   "missing",
@@ -76,6 +88,9 @@ function resolveToolErrorWarningPolicy(params: {
   }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
+  if (params.suppressToolErrors && isSuppressibleInvalidReactionWarning(params.lastToolError)) {
+    return { showWarning: false, includeDetails };
+  }
   if (isMutatingToolError) {
     return { showWarning: true, includeDetails };
   }
