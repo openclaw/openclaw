@@ -81,6 +81,7 @@ import {
   resolveSkillsPromptForRun,
   type SkillSnapshot,
 } from "../skills.js";
+import { wrapStreamFnWithModelRegistryCredentials } from "../stream-fn-credentials.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { classifyCompactionReason, resolveCompactionFailureReason } from "./compact-reasons.js";
 import {
@@ -727,7 +728,10 @@ export async function compactEmbeddedPiSessionDirect(
         workspaceDir: effectiveWorkspace,
       });
       if (providerStreamFn) {
-        session.agent.streamFn = providerStreamFn;
+        session.agent.streamFn = wrapStreamFnWithModelRegistryCredentials(
+          providerStreamFn,
+          modelRegistry,
+        );
       }
 
       try {

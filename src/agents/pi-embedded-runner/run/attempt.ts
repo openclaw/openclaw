@@ -92,6 +92,7 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
+import { wrapStreamFnWithModelRegistryCredentials } from "../../stream-fn-credentials.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
@@ -851,7 +852,10 @@ export async function runEmbeddedAttempt(
         workspaceDir: effectiveWorkspace,
       });
       if (providerStreamFn) {
-        activeSession.agent.streamFn = providerStreamFn;
+        activeSession.agent.streamFn = wrapStreamFnWithModelRegistryCredentials(
+          providerStreamFn,
+          params.modelRegistry,
+        );
       } else if (
         shouldUseOpenAIWebSocketTransport({
           provider: params.provider,
@@ -865,15 +869,22 @@ export async function runEmbeddedAttempt(
           });
         } else {
           log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
-          activeSession.agent.streamFn = streamSimple;
+          activeSession.agent.streamFn = wrapStreamFnWithModelRegistryCredentials(
+            streamSimple,
+            params.modelRegistry,
+          );
         }
       } else if (params.model.provider === "anthropic-vertex") {
         // Anthropic Vertex AI: inject AnthropicVertex client into pi-ai's
         // streamAnthropic for GCP IAM auth instead of Anthropic API keys.
         activeSession.agent.streamFn = createAnthropicVertexStreamFnForModel(params.model);
       } else {
-        // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
-        activeSession.agent.streamFn = streamSimple;
+        // Keep a stable underlying streamFn reference so vitest can reliably mock
+        // @mariozechner/pi-ai while we preserve per-request credential injection.
+        activeSession.agent.streamFn = wrapStreamFnWithModelRegistryCredentials(
+          streamSimple,
+          params.modelRegistry,
+        );
       }
 
       const { effectiveExtraParams } = applyExtraParamsToAgent(
