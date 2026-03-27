@@ -14,6 +14,7 @@ import { checkInboundAccessControl } from "./access-control.js";
 import {
   isRecentInboundMessage,
   isRecentOutboundMessage,
+  isRecentOutboundMessageId,
   rememberRecentOutboundMessage,
 } from "./dedupe.js";
 import {
@@ -221,15 +222,20 @@ export async function monitorWebInbox(options: {
     // Drop echoes of messages the gateway itself sent (tracked by sendTrackedMessage).
     // Applies to both groups and DMs/self-chat — without this, self-chat mode
     // re-processes the bot's own replies as new inbound user messages.
-    if (
+    const isTrackedOutboundEcho =
       Boolean(msg.key?.fromMe) &&
       id &&
-      isRecentOutboundMessage({
+      (isRecentOutboundMessage({
         accountId: options.accountId,
         remoteJid,
         messageId: id,
-      })
-    ) {
+      }) ||
+        (!group &&
+          isRecentOutboundMessageId({
+            accountId: options.accountId,
+            messageId: id,
+          })));
+    if (isTrackedOutboundEcho) {
       logVerbose(`Skipping recent outbound WhatsApp echo ${id} for ${remoteJid}`);
       return null;
     }
