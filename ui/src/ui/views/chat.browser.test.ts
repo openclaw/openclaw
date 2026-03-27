@@ -124,4 +124,27 @@ describe("chat context notice", () => {
     expect(iconStyle.height).toBe("16px");
     expect(icon.getBoundingClientRect().width).toBeLessThan(24);
   });
+
+  it("allows the split chat main column to shrink inside the flex layout", async () => {
+    const container = document.createElement("div");
+    container.style.width = "1200px";
+    container.style.height = "720px";
+    document.body.append(container);
+
+    render(
+      renderChat(
+        createProps({
+          sidebarOpen: true,
+          sidebarContent: "Sidebar",
+          onCloseSidebar: () => undefined,
+        }),
+      ),
+      container,
+    );
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    const chatMain = container.querySelector<HTMLElement>(".chat-main");
+    expect(chatMain).not.toBeNull();
+    expect(getComputedStyle(chatMain!).minHeight).toBe("0px");
+  });
 });

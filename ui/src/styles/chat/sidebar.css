@@ -9,6 +9,7 @@
 
 .chat-main {
   min-width: 400px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
