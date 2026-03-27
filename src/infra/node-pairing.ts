@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
+import { NODE_SYSTEM_RUN_COMMANDS } from "./node-commands.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
@@ -51,8 +53,26 @@ type NodePairingStateFile = {
 };
 
 const PENDING_TTL_MS = 5 * 60 * 1000;
+const OPERATOR_ROLE = "operator";
+const OPERATOR_WRITE_SCOPE = "operator.write";
+const OPERATOR_ADMIN_SCOPE = "operator.admin";
 
 const withLock = createAsyncLock();
+
+function resolveNodeApprovalRequiredScope(pending: NodePairingPendingRequest): string | null {
+  const commands = Array.isArray(pending.commands) ? pending.commands : [];
+  if (commands.some((command) => NODE_SYSTEM_RUN_COMMANDS.some((allowed) => allowed === command))) {
+    return OPERATOR_ADMIN_SCOPE;
+  }
+  if (commands.length > 0) {
+    return OPERATOR_WRITE_SCOPE;
+  }
+  return null;
+}
+
+type ApprovedNodePairingResult = { requestId: string; node: NodePairingPairedNode };
+type ForbiddenNodePairingResult = { status: "forbidden"; missingScope: string };
+type ApproveNodePairingResult = ApprovedNodePairingResult | ForbiddenNodePairingResult | null;
 
 async function loadState(baseDir?: string): Promise<NodePairingStateFile> {
   const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "nodes");
@@ -146,12 +166,38 @@ export async function requestNodePairing(
 export async function approveNodePairing(
   requestId: string,
   baseDir?: string,
-): Promise<{ requestId: string; node: NodePairingPairedNode } | null> {
+): Promise<ApprovedNodePairingResult | null>;
+export async function approveNodePairing(
+  requestId: string,
+  options: { callerScopes?: readonly string[] },
+  baseDir?: string,
+): Promise<ApproveNodePairingResult>;
+export async function approveNodePairing(
+  requestId: string,
+  optionsOrBaseDir?: { callerScopes?: readonly string[] } | string,
+  maybeBaseDir?: string,
+): Promise<ApproveNodePairingResult> {
+  const options =
+    typeof optionsOrBaseDir === "string" || optionsOrBaseDir === undefined
+      ? undefined
+      : optionsOrBaseDir;
+  const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const pending = state.pendingById[requestId];
     if (!pending) {
       return null;
+    }
+    const requiredScope = resolveNodeApprovalRequiredScope(pending);
+    if (requiredScope && options?.callerScopes) {
+      const missingScope = resolveMissingRequestedScope({
+        role: OPERATOR_ROLE,
+        requestedScopes: [requiredScope],
+        allowedScopes: options.callerScopes,
+      });
+      if (missingScope) {
+        return { status: "forbidden", missingScope };
+      }
     }
 
     const now = Date.now();
