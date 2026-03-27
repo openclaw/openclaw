@@ -1,7 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createConfiguredOllamaCompatNumCtxWrapper } from "../../extensions/ollama/src/stream.js";
+import { createConfiguredOllamaCompatNumCtxWrapper } from "../../extensions/ollama/api.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import {
   createOpenRouterSystemCacheWrapper,

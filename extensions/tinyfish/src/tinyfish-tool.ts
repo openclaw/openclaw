@@ -6,6 +6,10 @@ import {
   resolvePinnedHostname,
   SsrFBlockedError,
 } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  normalizeResolvedSecretInputString,
+  normalizeSecretInput,
+} from "openclaw/plugin-sdk/secret-input";
 
 const DEFAULT_BASE_URL = "https://agent.tinyfish.ai";
 const RUN_STREAM_PATH = "v1/automation/run-sse";
@@ -107,7 +111,14 @@ function resolveTinyFishConfig(
 ): TinyFishConfig {
   const configRecord = asRecord(pluginConfig) ?? {};
   const apiKey =
-    readOptionalString(configRecord.apiKey) ?? readOptionalString(env.TINYFISH_API_KEY);
+    normalizeSecretInput(
+      normalizeResolvedSecretInputString({
+        value: configRecord.apiKey,
+        path: "plugins.entries.tinyfish.config.apiKey",
+      }),
+    ) ||
+    normalizeSecretInput(env.TINYFISH_API_KEY) ||
+    undefined;
   if (!apiKey) {
     throw new Error(
       "TinyFish API key missing. Set plugins.entries.tinyfish.config.apiKey or TINYFISH_API_KEY.",

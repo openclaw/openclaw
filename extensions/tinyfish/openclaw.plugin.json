@@ -10,8 +10,7 @@
     "additionalProperties": false,
     "properties": {
       "apiKey": {
-        "type": "string",
-        "minLength": 1,
+        "type": ["string", "object"],
         "description": "TinyFish API key. You can also set TINYFISH_API_KEY."
       },
       "baseUrl": {

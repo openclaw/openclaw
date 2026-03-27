@@ -54486,7 +54486,10 @@
     {
       "path": "plugins.entries.tinyfish.config.apiKey",
       "kind": "plugin",
-      "type": "string",
+      "type": [
+        "object",
+        "string"
+      ],
       "required": false,
       "deprecated": false,
       "sensitive": true,

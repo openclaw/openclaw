@@ -5,7 +5,7 @@ import {
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "../../../../extensions/ollama/src/stream.js";
+} from "../../../../extensions/ollama/api.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";

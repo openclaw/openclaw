@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PROXY_ENV_KEYS } from "../../../../src/infra/net/proxy-env.js";
 import { SsrFBlockedError, type LookupFn } from "../infra/net/ssrf.js";
 import {
   assertBrowserNavigationAllowed,
@@ -11,6 +12,12 @@ import {
 function createLookupFn(address: string): LookupFn {
   const family = address.includes(":") ? 6 : 4;
   return vi.fn(async () => [{ address, family }]) as unknown as LookupFn;
+}
+
+function clearProxyEnv(): void {
+  for (const key of PROXY_ENV_KEYS) {
+    vi.stubEnv(key, "");
+  }
 }
 
 describe("browser navigation guard", () => {
@@ -133,6 +140,7 @@ describe("browser navigation guard", () => {
   });
 
   it("validates final network URLs after navigation", async () => {
+    clearProxyEnv();
     const lookupFn = createLookupFn("127.0.0.1");
     await expect(
       assertBrowserNavigationResultAllowed({
@@ -151,6 +159,7 @@ describe("browser navigation guard", () => {
   });
 
   it("blocks private intermediate redirect hops", async () => {
+    clearProxyEnv();
     const publicLookup = createLookupFn("93.184.216.34");
     const privateLookup = createLookupFn("127.0.0.1");
     const finalRequest = {
@@ -177,6 +186,7 @@ describe("browser navigation guard", () => {
   });
 
   it("allows redirect chains when every hop is public", async () => {
+    clearProxyEnv();
     const lookupFn = createLookupFn("93.184.216.34");
     const finalRequest = {
       url: () => "https://public.example/final",

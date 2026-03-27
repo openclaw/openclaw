@@ -197,6 +197,29 @@ describe("tinyfish automation tool", () => {
     ).rejects.toThrow(/plugins\.entries\.tinyfish\.config\.apiKey/);
   });
 
+  it("surfaces unresolved SecretRef api keys with the TinyFish config path", async () => {
+    const tool = createTinyFishTool(
+      createApi({
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "TINYFISH_API_KEY",
+        },
+      }),
+      {
+        fetchWithGuard: vi.fn(),
+        env: {},
+      },
+    );
+
+    await expect(
+      tool.execute("tool-1", {
+        url: "https://example.com",
+        goal: "Collect the pricing table",
+      }),
+    ).rejects.toThrow(/plugins\.entries\.tinyfish\.config\.apiKey: unresolved SecretRef/);
+  });
+
   it("rejects target URLs with embedded credentials", async () => {
     const tool = createTinyFishTool(createApi({ apiKey: "config-key" }), {
       fetchWithGuard: vi.fn(),

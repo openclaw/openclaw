@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildAssistantMessage,
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
   convertToOllamaMessages,
-  buildAssistantMessage,
   parseNdjsonStream,
   resolveOllamaBaseUrlForRun,
-} from "../../extensions/ollama/src/stream.js";
+} from "../../extensions/ollama/api.js";
 
 describe("convertToOllamaMessages", () => {
   it("converts user text messages", () => {
