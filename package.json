@@ -412,6 +412,10 @@
       "types": "./dist/plugin-sdk/google.d.ts",
       "default": "./dist/plugin-sdk/google.js"
     },
+    "./plugin-sdk/huggingface": {
+      "types": "./dist/plugin-sdk/huggingface.d.ts",
+      "default": "./dist/plugin-sdk/huggingface.js"
+    },
     "./plugin-sdk/directory-runtime": {
       "types": "./dist/plugin-sdk/directory-runtime.d.ts",
       "default": "./dist/plugin-sdk/directory-runtime.js"

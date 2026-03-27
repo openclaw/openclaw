@@ -93,6 +93,7 @@
   "feishu-setup",
   "group-access",
   "google",
+  "huggingface",
   "directory-runtime",
   "googlechat",
   "image-generation",
