@@ -116,6 +116,8 @@ Docs: https://docs.openclaw.ai
 - Control UI/agents: add a "Not set" placeholder to the default agent model selector dropdown. (#53411) Thanks @BunsDev.
 - Runtime/install: lower the supported Node 22 floor to `22.14+` while continuing to recommend Node 24, so npm installs and self-updates do not strand Node 22.14 users on older releases.
 - CLI/update: preflight the target npm package `engines.node` before `openclaw update` runs a global package install, so outdated Node runtimes fail with a clear upgrade message instead of attempting an unsupported latest release.
+- Agents/BTW: force `/btw` side questions to disable provider reasoning so Anthropic adaptive-thinking sessions stop failing with `No BTW response generated`. Fixes #55376. Thanks @Catteres and @vincentkoc.
+- Auth profiles/OAuth: refresh runtime auth snapshots when saving rotated credentials so OAuth providers do not reuse consumed refresh tokens after the first token rotation. Fixes #55389. Thanks @sam26880 and @vincentkoc.
 
 ### Fixes
 
@@ -214,8 +216,6 @@ Docs: https://docs.openclaw.ai
 - Docs/IRC: fix five `json55` code-fence typos in the IRC channel examples so Mintlify applies JSON5 syntax highlighting correctly. (#50842) Thanks @Hollychou924.
 - Discord/commands: trim overlong slash-command descriptions to Discord's 100-character limit and map rejected deploy indexes from Discord validation payloads back to command names/descriptions, so deploys stop failing on long descriptions and startup logs identify the rejected commands. (#54118) thanks @huntharo
 - Media/store: enforce the intended media file mode after writes and redirect downloads so restrictive umasks do not silently narrow saved media permissions.
-- Agents/BTW: force `/btw` side questions to disable provider reasoning so Anthropic adaptive-thinking sessions stop failing with `No BTW response generated`. Fixes #55376. Thanks @Catteres and @vincentkoc.
-- Auth profiles/OAuth: refresh runtime auth snapshots when saving rotated credentials so OAuth providers do not reuse consumed refresh tokens after the first token rotation. Fixes #55389. Thanks @sam26880 and @vincentkoc.
 
 ## 2026.3.23
 
