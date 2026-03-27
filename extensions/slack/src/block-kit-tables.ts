@@ -1,5 +1,11 @@
 import type { MarkdownTableData } from "openclaw/plugin-sdk/text-runtime";
 
+/**
+ * Slack table blocks support at most 20 columns per table.
+ * @see https://slack.dev/python-slack-sdk/api-docs/slack_sdk/models/blocks/blocks.html
+ */
+const SLACK_MAX_TABLE_COLUMNS = 20;
+
 /** A Slack Block Kit table block (for use in `attachments`). */
 export type SlackTableBlock = {
   type: "table";
@@ -18,7 +24,11 @@ export type SlackTableBlock = {
  * @see https://docs.slack.dev/reference/block-kit/blocks/table-block/
  */
 export function markdownTableToBlockKit(table: MarkdownTableData): SlackTableBlock {
-  const columnCount = Math.max(table.headers.length, ...table.rows.map((row) => row.length), 0);
+  // Clamp to Slack's maximum of 20 columns — extra columns are silently dropped.
+  const columnCount = Math.min(
+    Math.max(table.headers.length, ...table.rows.map((row) => row.length), 0),
+    SLACK_MAX_TABLE_COLUMNS,
+  );
 
   if (columnCount === 0) {
     return { type: "table", column_settings: [], rows: [] };

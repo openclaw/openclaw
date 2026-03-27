@@ -72,6 +72,27 @@ describe("markdownTableToBlockKit", () => {
     expect(result.rows[0]).toHaveLength(3); // header row padded
     expect(result.rows[1]).toHaveLength(3);
   });
+
+  it("clamps columns to Slack's 20-column maximum", () => {
+    const headers = Array.from({ length: 25 }, (_, i) => `Col${i + 1}`);
+    const row = Array.from({ length: 25 }, (_, i) => `Val${i + 1}`);
+    const table: MarkdownTableData = {
+      headers,
+      rows: [row],
+      placeholderOffset: 0,
+    };
+
+    const result = markdownTableToBlockKit(table);
+    // Should be clamped to 20, not 25
+    expect(result.column_settings).toHaveLength(20);
+    expect(result.rows[0]).toHaveLength(20); // header row
+    expect(result.rows[1]).toHaveLength(20); // data row
+    // First and last kept columns should have correct content
+    expect(result.rows[0]?.[0]?.text).toBe("Col1");
+    expect(result.rows[0]?.[19]?.text).toBe("Col20");
+    // Column 21+ should be dropped
+    expect(result.rows[1]?.[19]?.text).toBe("Val20");
+  });
 });
 
 describe("markdownTablesToBlockKitAttachment", () => {
