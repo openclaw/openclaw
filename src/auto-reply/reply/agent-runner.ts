@@ -85,6 +85,7 @@ export async function runReplyAgent(params: {
   agentCfgContextTokens?: number;
   resolvedVerboseLevel: VerboseLevel;
   isNewSession: boolean;
+  resetNoticeSent?: boolean;
   blockStreamingEnabled: boolean;
   blockReplyChunking?: {
     minChars: number;
@@ -669,7 +670,7 @@ export async function runReplyAgent(params: {
     let finalPayloads = guardedReplyPayloads;
     const verboseNotices: ReplyPayload[] = [];
 
-    if (verboseEnabled && activeIsNewSession) {
+    if (verboseEnabled && activeIsNewSession && !params.resetNoticeSent) {
       verboseNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
     }
 
