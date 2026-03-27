@@ -458,7 +458,7 @@ describe("createOpenClawCodingTools", () => {
       senderIsOwner: true,
     });
 
-    expect(xaiTools.some((tool) => tool.name === "web_search")).toBe(false);
+    expect(xaiTools.some((tool) => tool.name === "web_search")).toBe(true);
     for (const tool of xaiTools) {
       const violations = findUnsupportedSchemaKeywords(tool.parameters, `${tool.name}.parameters`);
       expect(

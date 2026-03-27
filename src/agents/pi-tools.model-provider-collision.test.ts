@@ -25,7 +25,7 @@ describe("applyModelProviderToolPolicy", () => {
     expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
   });
 
-  it("removes web_search for OpenRouter xAI model ids", () => {
+  it("keeps web_search for OpenRouter xAI model ids so OpenClaw tool routing stays authoritative", () => {
     const filtered = __testing.applyModelProviderToolPolicy(baseTools, {
       modelCompat: {
         toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
@@ -34,10 +34,10 @@ describe("applyModelProviderToolPolicy", () => {
       },
     });
 
-    expect(toolNames(filtered)).toEqual(["read", "exec"]);
+    expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
   });
 
-  it("removes web_search for direct xai-capable models too", () => {
+  it("keeps web_search for direct xai-capable models too", () => {
     const filtered = __testing.applyModelProviderToolPolicy(baseTools, {
       modelCompat: {
         toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
@@ -45,6 +45,6 @@ describe("applyModelProviderToolPolicy", () => {
       },
     });
 
-    expect(toolNames(filtered)).toEqual(["read", "exec"]);
+    expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
   });
 });

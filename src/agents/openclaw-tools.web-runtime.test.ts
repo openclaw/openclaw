@@ -1,9 +1,33 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 
+const mockedModuleIds = [
+  "../plugins/tools.js",
+  "../gateway/call.js",
+  "./tools/agents-list-tool.js",
+  "./tools/canvas-tool.js",
+  "./tools/cron-tool.js",
+  "./tools/gateway-tool.js",
+  "./tools/image-generate-tool.js",
+  "./tools/image-tool.js",
+  "./tools/message-tool.js",
+  "./tools/nodes-tool.js",
+  "./tools/pdf-tool.js",
+  "./tools/session-status-tool.js",
+  "./tools/sessions-history-tool.js",
+  "./tools/sessions-list-tool.js",
+  "./tools/sessions-send-tool.js",
+  "./tools/sessions-spawn-tool.js",
+  "./tools/sessions-yield-tool.js",
+  "./tools/subagents-tool.js",
+  "./tools/tts-tool.js",
+] as const;
+
 vi.mock("../plugins/tools.js", () => ({
   resolvePluginTools: () => [],
+  copyPluginToolMeta: () => undefined,
+  getPluginToolMeta: () => undefined,
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -123,6 +147,12 @@ describe("openclaw tools runtime web metadata wiring", () => {
     secretsRuntime.clearSecretsRuntimeSnapshot();
   });
 
+  afterAll(() => {
+    for (const id of mockedModuleIds) {
+      vi.doUnmock(id);
+    }
+  });
+
   it("uses runtime-selected provider when higher-precedence provider ref is unresolved", async () => {
     const snapshot = await prepareAndActivate({
       config: asConfig({
@@ -203,5 +233,53 @@ describe("openclaw tools runtime web metadata wiring", () => {
     expect(mockFetch).toHaveBeenCalled();
     expect(mockFetch.mock.calls[0]?.[0]).toBe("https://example.com/runtime-off");
     expect(String(mockFetch.mock.calls[0]?.[0])).not.toContain("api.firecrawl.dev");
+  });
+
+  it("resolves x_search SecretRef from the active runtime snapshot", async () => {
+    const snapshot = await prepareAndActivate({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_RUNTIME_REF" },
+            },
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_RUNTIME_REF: "x-search-runtime-key",
+      },
+    });
+
+    expect(snapshot.webTools.xSearch.active).toBe(true);
+    expect(snapshot.webTools.xSearch.apiKeySource).toBe("secretRef");
+
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            output_text: "runtime x search ok",
+            citations: ["https://x.com/openclaw/status/1"],
+          }),
+      } as Response),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+
+    const xSearch = findTool("x_search", snapshot.config);
+    const result = await xSearch.execute("call-runtime-x-search", {
+      query: "runtime search",
+    });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("api.x.ai/v1/responses");
+    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    const body = JSON.parse(typeof request?.body === "string" ? request.body : "{}") as {
+      tools?: Array<Record<string, unknown>>;
+    };
+    expect(body.tools).toEqual([{ type: "x_search" }]);
+    expect((result.details as { citations?: string[] }).citations).toEqual([
+      "https://x.com/openclaw/status/1",
+    ]);
   });
 });
