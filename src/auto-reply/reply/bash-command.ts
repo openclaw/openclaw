@@ -5,7 +5,6 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { isCommandFlagEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
-import { killProcessTree } from "../../process/kill-tree.js";
 import { clampInt } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -303,6 +302,7 @@ export async function handleBashChatCommand(params: {
         text: `⚠️ Unable to stop bash session ${formatSessionSnippet(sessionId)} because no process ID is available. Use !poll ${sessionId} to check whether it exits on its own.`,
       };
     }
+    const { killProcessTree } = await import("../../process/kill-tree.js");
     killProcessTree(pid);
     return {
       text: `⚙️ bash stopping (session ${formatSessionSnippet(sessionId)}). Use !poll ${sessionId} to confirm exit.`,
