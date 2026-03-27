@@ -18,6 +18,8 @@ export type TelegramMediaRef = {
 export type TelegramMessageContextOptions = {
   forceWasMentioned?: boolean;
   messageIdOverride?: string;
+  /** message_id of the source message for callback_query (inline button click) */
+  callbackMessageId?: number;
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";
 };
