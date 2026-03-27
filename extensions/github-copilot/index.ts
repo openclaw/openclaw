@@ -3,7 +3,13 @@ import { definePluginEntry, type ProviderAuthContext } from "openclaw/plugin-sdk
 import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
 import { githubCopilotLoginCommand } from "openclaw/plugin-sdk/provider-auth-login";
 import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
-import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
+import {
+  COPILOT_EDITOR_HEADERS,
+  DEFAULT_COPILOT_API_BASE_URL,
+  ENTERPRISE_COPILOT_API_BASE_URL,
+  isGitHubPAT,
+  resolveCopilotApiToken,
+} from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
 
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
@@ -122,14 +128,18 @@ export default definePluginEntry({
           }
           let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
           if (githubToken) {
-            try {
-              const token = await resolveCopilotApiToken({
-                githubToken,
-                env: ctx.env,
-              });
-              baseUrl = token.baseUrl;
-            } catch {
-              baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+            if (isGitHubPAT(githubToken)) {
+              baseUrl = ENTERPRISE_COPILOT_API_BASE_URL;
+            } else {
+              try {
+                const token = await resolveCopilotApiToken({
+                  githubToken,
+                  env: ctx.env,
+                });
+                baseUrl = token.baseUrl;
+              } catch {
+                baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+              }
             }
           }
           return {
@@ -147,6 +157,15 @@ export default definePluginEntry({
       supportsXHighThinking: ({ modelId }) =>
         COPILOT_XHIGH_MODEL_IDS.includes(modelId.trim().toLowerCase() as never),
       prepareRuntimeAuth: async (ctx) => {
+        // PATs bypass token exchange and go directly to the enterprise API
+        // with editor-identification headers.
+        if (isGitHubPAT(ctx.apiKey)) {
+          return {
+            apiKey: ctx.apiKey,
+            baseUrl: ENTERPRISE_COPILOT_API_BASE_URL,
+            expiresAt: Number.MAX_SAFE_INTEGER,
+          };
+        }
         const token = await resolveCopilotApiToken({
           githubToken: ctx.apiKey,
           env: ctx.env,
