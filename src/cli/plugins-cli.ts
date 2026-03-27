@@ -626,10 +626,10 @@ export function registerPluginsCli(program: Command) {
       if (cfg.plugins?.slots?.memory === pluginId) {
         preview.push(`memory slot (will reset to "memory-core")`);
       }
-      const channelIds = plugin?.channelIds ?? [];
-      const channelKeysToRemove = channelIds.length > 0 ? channelIds : [pluginId];
+      const channelIds = plugin?.channelIds;
+      const channelKeysToRemove = channelIds !== undefined ? channelIds : [pluginId];
       const channelConfigKeys = channelKeysToRemove.filter((ch) => ch in (cfg.channels ?? {}));
-      if (channelConfigKeys.length > 0) {
+      if (hasInstall && channelConfigKeys.length > 0) {
         preview.push(`channel config (${channelConfigKeys.join(", ")})`);
       }
       const deleteTarget = !keepFiles

@@ -139,7 +139,7 @@ export function removePluginFromConfig(
   const hasInstallRecord = pluginId in (cfg.plugins?.installs ?? {});
   let channels = cfg.channels as Record<string, unknown> | undefined;
   if (hasInstallRecord && channels) {
-    const keysToRemove = channelIds && channelIds.length > 0 ? channelIds : [pluginId];
+    const keysToRemove = channelIds !== undefined ? channelIds : [pluginId];
     for (const key of keysToRemove) {
       if (channels && key in channels && !CHANNELS_SHARED_KEYS.has(key)) {
         const { [key]: _, ...rest } = channels;

@@ -404,6 +404,27 @@ describe("removePluginFromConfig", () => {
     expect(actions.channelConfig).toBe(true);
   });
 
+  it("skips channel cleanup when channelIds is empty array (non-channel plugin)", () => {
+    const config: OpenClawConfig = {
+      channels: {
+        "my-plugin": { enabled: true },
+      },
+      plugins: {
+        entries: {
+          "my-plugin": { enabled: true },
+        },
+        installs: {
+          "my-plugin": { source: "npm", spec: "my-plugin@1.0.0" },
+        },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "my-plugin", []);
+
+    expect((result.channels as Record<string, unknown>)?.["my-plugin"]).toEqual({ enabled: true });
+    expect(actions.channelConfig).toBe(false);
+  });
+
   it("does not modify channels when plugin has no matching channel config", () => {
     const config: OpenClawConfig = {
       channels: {
