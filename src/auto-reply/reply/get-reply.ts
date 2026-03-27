@@ -238,30 +238,6 @@ export async function getReplyFromConfig(
     bodyStripped,
   } = sessionState;
 
-  // Auto model routing based on message complexity
-  // Skip routing if higher-priority overrides are already resolved (heartbeat/session)
-  // to avoid unnecessary router process execution and latency
-  // Note: Recalculate hasSessionModelOverride at each use site to handle reset mutations
-  const hasSessionModelOverride = () =>
-    Boolean(sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim());
-  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride()) {
-    const triggerMessage = finalized.Body || triggerBodyNormalized || "";
-    const autoModelResult = await getAutoModelForMessage(triggerMessage, cfg);
-    if (autoModelResult) {
-      const resolved = resolveModelRefFromString({
-        raw: autoModelResult.model,
-        defaultProvider,
-        aliasIndex,
-      });
-      if (resolved) {
-        provider = resolved.ref.provider;
-        model = resolved.ref.model;
-        // Use defaultRuntime.log instead of direct call
-        defaultRuntime.log(`[auto-model-router] Selected model: ${provider}/${model}`);
-      }
-    }
-  }
-
   if (resetTriggered && bodyStripped?.trim()) {
     const { applyResetModelOverride } = await loadSessionResetModelRuntime();
     await applyResetModelOverride({
@@ -369,6 +345,35 @@ export async function getReplyFromConfig(
   } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
+
+  // Auto model routing based on message complexity
+  // Skip routing if higher-priority overrides are already resolved
+  // (heartbeat/session/model-directive) to avoid unnecessary router
+  // process execution and latency. This check runs after
+  // resolveReplyDirectives to avoid routing messages that return early
+  // (e.g., control commands, inline-directive error replies).
+  const hasSessionModelOverride = () =>
+    Boolean(sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim());
+  if (
+    !hasResolvedHeartbeatModelOverride &&
+    !hasSessionModelOverride() &&
+    !directives.hasModelDirective
+  ) {
+    const triggerMessage = finalized.Body || triggerBodyNormalized || "";
+    const autoModelResult = await getAutoModelForMessage(triggerMessage, cfg);
+    if (autoModelResult) {
+      const resolved = resolveModelRefFromString({
+        raw: autoModelResult.model,
+        defaultProvider,
+        aliasIndex,
+      });
+      if (resolved) {
+        provider = resolved.ref.provider;
+        model = resolved.ref.model;
+        defaultRuntime.log(`[auto-model-router] Selected model: ${provider}/${model}`);
+      }
+    }
+  }
 
   const maybeEmitMissingResetHooks = async () => {
     if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
