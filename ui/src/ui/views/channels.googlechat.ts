@@ -46,15 +46,13 @@ export function renderGoogleChatCard(params: {
     lastError: googleChat?.lastError,
     secondaryCallout: googleChat?.probe
       ? html`<div class="callout" style="margin-top: 12px;">
-          Probe ${googleChat.probe.ok ? "ok" : "failed"} ·
-          ${googleChat.probe.status ?? ""} ${googleChat.probe.error ?? ""}
+          Probe ${googleChat.probe.ok ? "ok" : "failed"} · ${googleChat.probe.status ?? ""}
+          ${googleChat.probe.error ?? ""}
         </div>`
       : nothing,
     configSection: renderChannelConfigSection({ channelId: "googlechat", props }),
     footer: html`<div class="row" style="margin-top: 12px;">
-      <button class="btn" @click=${() => props.onRefresh(true)}>
-        Probe
-      </button>
+      <button class="btn" @click=${() => props.onRefresh(true)}>Probe</button>
     </div>`,
   });
 }
