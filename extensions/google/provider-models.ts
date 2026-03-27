@@ -6,8 +6,13 @@ import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-models";
 
 const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
-const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
-const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
+// gemini-3-pro-preview was shut down on March 9, 2026; list the active
+// gemini-3.1-pro-preview first so it is always tried before the stale entry.
+const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3.1-pro-preview", "gemini-3-pro-preview"] as const;
+// Include both the new 3.1 preview ID (preferred) and the older 3.0 preview as
+// a fallback so forward-compat resolution works regardless of which entry the
+// registry carries after a catalog refresh.
+const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3.1-flash-preview", "gemini-3-flash-preview"] as const;
 
 export function resolveGoogle31ForwardCompatModel(params: {
   providerId: string;
