@@ -158,9 +158,9 @@ def assess_risk(prompt: str, estimated_cost: float = 0.0) -> Optional[ApprovalRe
 # Vision / Multimodal support — Phase 8
 # ---------------------------------------------------------------------------
 _VISION_MODELS: list[str] = [
-    "meta-llama/llama-4-maverick:free",
-    "qwen/qwen3-vl-235b-thinking:free",
-    "nvidia/nemotron-nano-vl",
+    "nvidia/nemotron-nano-12b-v2-vl:free",
+    "google/gemma-3-27b-it:free",
+    "google/gemma-3-12b-it:free",
 ]
 
 

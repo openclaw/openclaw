@@ -82,14 +82,14 @@
       "notes": "Cloud-Only mode. use_local_models=false disables ALL local inference (vLLM/WSL/Ollama). Set use_local_models=true to re-enable local cold reserve."
     },
     "model_router": {
-      "risk_analysis": "deepseek/deepseek-r1:free",
+      "risk_analysis": "google/gemma-3-27b-it:free",
       "tool_execution": "google/gemma-3-12b-it:free",
       "data_parsing": "google/gemma-3-12b-it:free",
       "general": "meta-llama/llama-3.3-70b-instruct:free",
-      "code": "qwen/qwen-2.5-coder-32b-instruct",
-      "research": "deepseek/deepseek-r1:free",
-      "vision": "meta-llama/llama-4-maverick:free",
-      "video_analyst": "nvidia/nemotron-nano-vl"
+      "code": "qwen/qwen3-coder:free",
+      "research": "nousresearch/hermes-3-llama-3.1-405b:free",
+      "vision": "nvidia/nemotron-nano-12b-v2-vl:free",
+      "video_analyst": "nvidia/nemotron-nano-12b-v2-vl:free"
     }
   },
   "hitl": {
@@ -110,8 +110,8 @@
       "description": "Lean dev-brigade for Dmarket trading bot: plan, code, audit.",
       "roles": {
         "Planner": {
-          "model": "deepseek/deepseek-r1:free",
-          "openrouter_model": "deepseek/deepseek-r1:free",
+          "model": "meta-llama/llama-3.3-70b-instruct:free",
+          "openrouter_model": "meta-llama/llama-3.3-70b-instruct:free",
           "fallback_model": "stepfun/step-3.5-flash:free",
           "num_ctx": 32768,
           "temperature": 0.1,
@@ -120,8 +120,8 @@
           "description": "Reads prompt, creates plan for Dmarket trading tasks."
         },
         "Coder": {
-          "model": "qwen/qwen-2.5-coder-32b-instruct:free",
-          "openrouter_model": "qwen/qwen-2.5-coder-32b-instruct:free",
+          "model": "qwen/qwen3-coder:free",
+          "openrouter_model": "qwen/qwen3-coder:free",
           "fallback_model": "meta-llama/llama-3.3-70b-instruct:free",
           "num_ctx": 32768,
           "temperature": 0.2,
@@ -146,9 +146,9 @@
       "description": "Framework self-improvement and swarm operators.",
       "roles": {
         "Planner": {
-          "model": "deepseek/deepseek-r1:free",
+          "model": "meta-llama/llama-3.3-70b-instruct:free",
           "openrouter_model": "stepfun/step-3.5-flash:free",
-          "fallback_model": "deepseek/deepseek-r1:free",
+          "fallback_model": "google/gemma-3-12b-it:free",
           "num_ctx": 32768,
           "temperature": 0.1,
           "timeout_sec": 300,
@@ -196,7 +196,7 @@
           "description": "Integrates framework components, optimizes module interaction and prompt chains."
         },
         "Auditor": {
-          "model": "deepseek/deepseek-r1:free",
+          "model": "google/gemma-3-27b-it:free",
           "openrouter_model": "stepfun/step-3.5-flash:free",
           "fallback_model": "google/gemma-3-12b-it:free",
           "num_ctx": 32768,
@@ -242,8 +242,8 @@
       "description": "Deep research, analysis, and knowledge synthesis brigade.",
       "roles": {
         "Researcher": {
-          "model": "deepseek/deepseek-r1:free",
-          "openrouter_model": "deepseek/deepseek-r1:free",
+          "model": "nousresearch/hermes-3-llama-3.1-405b:free",
+          "openrouter_model": "nousresearch/hermes-3-llama-3.1-405b:free",
           "fallback_model": "stepfun/step-3.5-flash:free",
           "num_ctx": 32768,
           "temperature": 0.3,
