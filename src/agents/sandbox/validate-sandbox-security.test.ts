@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getBlockedBindReason,
   validateBindMounts,
@@ -16,6 +16,10 @@ function expectBindMountsToThrow(binds: string[], expected: RegExp, label: strin
 }
 
 describe("getBlockedBindReason", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("blocks common Docker socket directories", () => {
     expect(getBlockedBindReason("/run:/run")).toEqual(expect.objectContaining({ kind: "targets" }));
     expect(getBlockedBindReason("/var/run:/var/run:ro")).toEqual(
@@ -25,6 +29,32 @@ describe("getBlockedBindReason", () => {
 
   it("does not block /var by default", () => {
     expect(getBlockedBindReason("/var:/var")).toBeNull();
+  });
+
+  it("blocks sensitive home subdirectories", () => {
+    vi.stubEnv("HOME", "/home/tester");
+    expect(getBlockedBindReason("/home/tester/.openclaw:/mnt/state:ro")).toEqual(
+      expect.objectContaining({
+        kind: "targets",
+        blockedPath: "/home/tester/.openclaw",
+      }),
+    );
+    expect(getBlockedBindReason("/home/tester/.ssh:/mnt/ssh:ro")).toEqual(
+      expect.objectContaining({
+        kind: "targets",
+        blockedPath: "/home/tester/.ssh",
+      }),
+    );
+  });
+
+  it("blocks the resolved OpenClaw state directory override", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/srv/openclaw-state");
+    expect(getBlockedBindReason("/srv/openclaw-state/credentials:/mnt/state:ro")).toEqual(
+      expect.objectContaining({
+        kind: "targets",
+        blockedPath: "/srv/openclaw-state",
+      }),
+    );
   });
 });
 

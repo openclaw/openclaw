@@ -5,6 +5,9 @@
  * Enforced at runtime when creating sandbox containers.
  */
 
+import os from "node:os";
+import path from "node:path";
+import { resolveStateDir } from "../../config/paths.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import {
@@ -30,7 +33,13 @@ export const BLOCKED_HOST_PATHS = [
   "/var/run/docker.sock",
   "/private/var/run/docker.sock",
   "/run/docker.sock",
+  "/var/lib/docker",
+  "/private/var/lib/docker",
+  "/var/log",
+  "/private/var/log",
 ];
+
+const BLOCKED_HOME_SUBPATHS = [".aws", ".config", ".kube", ".openclaw", ".ssh"] as const;
 
 const BLOCKED_SECCOMP_PROFILES = new Set(["unconfined"]);
 const BLOCKED_APPARMOR_PROFILES = new Set(["unconfined"]);
@@ -107,13 +116,25 @@ export function getBlockedReasonForSourcePath(sourceNormalized: string): Blocked
   if (sourceNormalized === "/") {
     return { kind: "covers", blockedPath: "/" };
   }
-  for (const blocked of BLOCKED_HOST_PATHS) {
+  for (const blocked of getBlockedHostPaths()) {
     if (sourceNormalized === blocked || sourceNormalized.startsWith(blocked + "/")) {
       return { kind: "targets", blockedPath: blocked };
     }
   }
 
   return null;
+}
+
+function getBlockedHostPaths(): string[] {
+  const blocked = new Set(BLOCKED_HOST_PATHS.map(normalizeHostPath));
+  const homedir = normalizeHostPath(os.homedir());
+  if (homedir !== "/") {
+    for (const suffix of BLOCKED_HOME_SUBPATHS) {
+      blocked.add(normalizeHostPath(path.posix.join(homedir, suffix)));
+    }
+  }
+  blocked.add(normalizeHostPath(resolveStateDir()));
+  return [...blocked];
 }
 
 function normalizeAllowedRoots(roots: string[] | undefined): string[] {
