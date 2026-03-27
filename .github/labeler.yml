@@ -245,6 +245,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/anthropic/**"
+"extensions: baidu":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/baidu/**"
 "extensions: cloudflare-ai-gateway":
   - changed-files:
       - any-glob-to-any-file:
