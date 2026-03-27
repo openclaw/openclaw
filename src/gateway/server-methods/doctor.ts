@@ -1,6 +1,6 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
-import { getMemorySearchManager } from "../../memory/index.js";
+import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { formatError } from "../server-utils.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -17,7 +17,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
   "doctor.memory.status": async ({ respond }) => {
     const cfg = loadConfig();
     const agentId = resolveDefaultAgentId(cfg);
-    const { manager, error } = await getMemorySearchManager({
+    const { manager, error } = await getActiveMemorySearchManager({
       cfg,
       agentId,
       purpose: "status",

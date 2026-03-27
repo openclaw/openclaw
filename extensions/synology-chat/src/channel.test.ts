@@ -378,6 +378,40 @@ describe("createSynologyChatPlugin", () => {
       };
     }
 
+    function makeNamedStartAccountCtx(
+      accountOverrides: Record<string, unknown>,
+      abortController = new AbortController(),
+    ) {
+      return {
+        abortController,
+        ctx: {
+          cfg: {
+            channels: {
+              "synology-chat": {
+                enabled: true,
+                token: "default-token",
+                incomingUrl: "https://nas/default",
+                webhookPath: "/webhook/synology-shared",
+                dmPolicy: "allowlist",
+                allowedUserIds: ["123"],
+                accounts: {
+                  alerts: {
+                    enabled: true,
+                    token: "alerts-token",
+                    incomingUrl: "https://nas/alerts",
+                    ...accountOverrides,
+                  },
+                },
+              },
+            },
+          },
+          accountId: "alerts",
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          abortSignal: abortController.signal,
+        },
+      };
+    }
+
     async function expectPendingStartAccountPromise(
       result: Promise<unknown>,
       abortController: AbortController,
@@ -428,31 +462,10 @@ describe("createSynologyChatPlugin", () => {
     it("startAccount refuses named accounts without explicit webhookPath in multi-account setups", async () => {
       const registerMock = registerPluginHttpRouteMock;
       const plugin = createSynologyChatPlugin();
-      const abortController = new AbortController();
-      const ctx = {
-        cfg: {
-          channels: {
-            "synology-chat": {
-              enabled: true,
-              token: "shared-token",
-              incomingUrl: "https://nas/incoming",
-              webhookPath: "/webhook/synology-shared",
-              accounts: {
-                alerts: {
-                  enabled: true,
-                  token: "alerts-token",
-                  incomingUrl: "https://nas/alerts",
-                  dmPolicy: "allowlist",
-                  allowedUserIds: ["123"],
-                },
-              },
-            },
-          },
-        },
-        accountId: "alerts",
-        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        abortSignal: abortController.signal,
-      };
+      const { ctx, abortController } = makeNamedStartAccountCtx({
+        dmPolicy: "allowlist",
+        allowedUserIds: ["123"],
+      });
 
       const result = plugin.gateway.startAccount(ctx);
       await expectPendingStartAccountPromise(result, abortController);
@@ -465,33 +478,10 @@ describe("createSynologyChatPlugin", () => {
     it("startAccount refuses duplicate exact webhook paths across accounts", async () => {
       const registerMock = registerPluginHttpRouteMock;
       const plugin = createSynologyChatPlugin();
-      const abortController = new AbortController();
-      const ctx = {
-        cfg: {
-          channels: {
-            "synology-chat": {
-              enabled: true,
-              token: "default-token",
-              incomingUrl: "https://nas/default",
-              webhookPath: "/webhook/synology-shared",
-              dmPolicy: "allowlist",
-              allowedUserIds: ["123"],
-              accounts: {
-                alerts: {
-                  enabled: true,
-                  token: "alerts-token",
-                  incomingUrl: "https://nas/alerts",
-                  webhookPath: "/webhook/synology-shared",
-                  dmPolicy: "open",
-                },
-              },
-            },
-          },
-        },
-        accountId: "alerts",
-        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        abortSignal: abortController.signal,
-      };
+      const { ctx, abortController } = makeNamedStartAccountCtx({
+        webhookPath: "/webhook/synology-shared",
+        dmPolicy: "open",
+      });
 
       const result = plugin.gateway.startAccount(ctx);
       await expectPendingStartAccountPromise(result, abortController);

@@ -1,7 +1,9 @@
 import type { ButtonInteraction, ComponentData, StringSelectMenuInteraction } from "@buape/carbon";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../../../src/infra/system-events.ts";
 import {
@@ -61,6 +63,17 @@ describe("agent components", () => {
   beforeEach(() => {
     resetDiscordComponentRuntimeMocks();
     resetSystemEventsForTest();
+    vi.spyOn(securityRuntime, "readStoreAllowFromForDmPolicy").mockImplementation(
+      async (params) => {
+        if (params.shouldRead === false || params.dmPolicy === "allowlist") {
+          return [];
+        }
+        return await readAllowFromStoreMock(params.provider, params.accountId);
+      },
+    );
+    vi.spyOn(conversationRuntime, "upsertChannelPairingRequest").mockImplementation(
+      upsertPairingRequestMock,
+    );
   });
 
   it("sends pairing reply when DM sender is not allowlisted", async () => {

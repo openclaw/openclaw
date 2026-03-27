@@ -34,8 +34,6 @@ const allowedRawFetchCallsites = new Set([
   "extensions/nextcloud-talk/src/room-info.ts:92",
   "extensions/nextcloud-talk/src/send.ts:107",
   "extensions/nextcloud-talk/src/send.ts:198",
-  "extensions/qwen-portal-auth/oauth.ts:46",
-  "extensions/qwen-portal-auth/oauth.ts:80",
   "extensions/talk-voice/index.ts:27",
   "extensions/thread-ownership/index.ts:105",
   "extensions/voice-call/src/providers/plivo.ts:95",
