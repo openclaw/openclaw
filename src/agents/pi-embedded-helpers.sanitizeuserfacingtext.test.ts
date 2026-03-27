@@ -82,6 +82,11 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("does not rewrite unprefixed raw API payloads without explicit errorContext", () => {
+    const raw = '{"type":"error","error":{"type":"server_error","message":"Something exploded"}}';
+    expect(sanitizeUserFacingText(raw)).toBe(raw);
+  });
+
   it("sanitizes Codex error-prefixed API payloads", () => {
     const raw =
       'Codex error: {"type":"error","error":{"type":"server_error","message":"Something exploded"},"sequence_number":2}';
@@ -94,6 +99,19 @@ describe("sanitizeUserFacingText", () => {
     const raw =
       'Codex error: {"type":"error","error":{"type":"server_error","message":"Something exploded"},"sequence_number":2}';
     expect(sanitizeUserFacingText(raw)).toBe("LLM error server_error: Something exploded");
+  });
+
+  it("keeps regular JSON examples intact without explicit errorContext", () => {
+    const raw = '{"error":{"type":"validation_error","message":"showing an example payload"}}';
+    expect(sanitizeUserFacingText(raw)).toBe(raw);
+  });
+
+  it("preserves specialized context overflow guidance for raw API payloads", () => {
+    const raw =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}';
+    expect(sanitizeUserFacingText(raw, { errorContext: true })).toContain(
+      "Context overflow: prompt too large for the model.",
+    );
   });
 
   it("returns a friendly message for rate limit errors in Error: prefixed payloads", () => {

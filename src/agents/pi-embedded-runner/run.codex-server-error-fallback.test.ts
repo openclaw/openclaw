@@ -3,6 +3,7 @@ import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixt
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  MockedFailoverError,
   mockedClassifyFailoverReason,
   mockedFormatAssistantErrorText,
   mockedGlobalHookRunner,
@@ -46,21 +47,24 @@ describe("runEmbeddedPiAgent Codex server_error fallback handoff", () => {
       }),
     );
 
-    await expect(
-      runEmbeddedPiAgent({
-        ...overflowBaseRunParams,
-        runId: "run-codex-server-error-fallback",
-        config: makeModelFallbackCfg({
-          agents: {
-            defaults: {
-              model: {
-                primary: "openai-codex/gpt-5.4",
-                fallbacks: ["anthropic/claude-opus-4-6"],
-              },
+    const promise = runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-codex-server-error-fallback",
+      config: makeModelFallbackCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.4",
+              fallbacks: ["anthropic/claude-opus-4-6"],
             },
           },
-        }),
+        },
       }),
-    ).rejects.toThrow("LLM error server_error: An error occurred while processing your request.");
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(promise).rejects.toThrow(
+      "LLM error server_error: An error occurred while processing your request.",
+    );
   });
 });

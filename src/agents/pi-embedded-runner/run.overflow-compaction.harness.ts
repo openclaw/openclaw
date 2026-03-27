@@ -97,6 +97,13 @@ type MockTruncateOversizedToolResultsResult = {
   reason?: string;
 };
 
+export class MockedFailoverError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FailoverError";
+  }
+}
+
 export const mockedCoerceToFailoverError = vi.fn<MockCoerceToFailoverError>();
 export const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
   (err: unknown): MockFailoverErrorDescription => ({
@@ -441,7 +448,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("../failover-error.js", () => ({
-    FailoverError: class extends Error {},
+    FailoverError: MockedFailoverError,
     coerceToFailoverError: mockedCoerceToFailoverError,
     describeFailoverError: mockedDescribeFailoverError,
     resolveFailoverStatus: mockedResolveFailoverStatus,

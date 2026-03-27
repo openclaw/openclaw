@@ -599,7 +599,16 @@ function isLikelyProviderErrorType(type?: string): boolean {
   return normalized.endsWith("_error");
 }
 
+const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
+const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
+
 function shouldRewriteRawPayloadWithoutErrorContext(raw: string): boolean {
+  if (raw.length > NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH) {
+    return false;
+  }
+  if (!NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE.test(raw)) {
+    return false;
+  }
   const info = parseApiErrorInfo(raw);
   if (!info) {
     return false;
