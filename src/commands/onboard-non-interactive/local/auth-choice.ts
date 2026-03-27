@@ -116,8 +116,13 @@ export async function applyNonInteractiveAuthChoice(params: {
       ...(params.metadata ? { metadata: params.metadata } : {}),
     };
   };
-  if (isDeprecatedAuthChoice(authChoice)) {
-    runtime.error(formatDeprecatedNonInteractiveAuthChoiceError(authChoice));
+  if (isDeprecatedAuthChoice(authChoice, { config: nextConfig, env: process.env })) {
+    runtime.error(
+      formatDeprecatedNonInteractiveAuthChoiceError(authChoice, {
+        config: nextConfig,
+        env: process.env,
+      })!,
+    );
     runtime.exit(1);
     return null;
   }
