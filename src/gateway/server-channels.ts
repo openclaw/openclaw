@@ -5,8 +5,12 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isTransientNetworkError } from "../infra/network-errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+
+const CHANNEL_RESTART_DELAYS = [5_000, 15_000, 30_000, 60_000];
+const MAX_CHANNEL_RESTART_ATTEMPTS = CHANNEL_RESTART_DELAYS.length;
 
 export type ChannelRuntimeSnapshot = {
   channels: Partial<Record<ChannelId, ChannelAccountSnapshot>>;
@@ -19,6 +23,8 @@ type ChannelRuntimeStore = {
   aborts: Map<string, AbortController>;
   tasks: Map<string, Promise<unknown>>;
   runtimes: Map<string, ChannelAccountSnapshot>;
+  restartAttempts: Map<string, number>;
+  restartTimers: Map<string, ReturnType<typeof setTimeout>>;
 };
 
 function createRuntimeStore(): ChannelRuntimeStore {
@@ -26,6 +32,8 @@ function createRuntimeStore(): ChannelRuntimeStore {
     aborts: new Map(),
     tasks: new Map(),
     runtimes: new Map(),
+    restartAttempts: new Map(),
+    restartTimers: new Map(),
   };
 }
 
@@ -138,6 +146,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           return;
         }
 
+        const pendingTimer = store.restartTimers.get(id);
+        if (pendingTimer) {
+          clearTimeout(pendingTimer);
+          store.restartTimers.delete(id);
+        }
+
         const abort = new AbortController();
         store.aborts.set(id, abort);
         setRuntime(channelId, id, {
@@ -163,6 +177,25 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             const message = formatErrorMessage(err);
             setRuntime(channelId, id, { accountId: id, lastError: message });
             log.error?.(`[${id}] channel exited: ${message}`);
+            if (isTransientNetworkError(err) && !abort.signal.aborted) {
+              const attempt = (store.restartAttempts.get(id) ?? 0) + 1;
+              if (attempt <= MAX_CHANNEL_RESTART_ATTEMPTS) {
+                const delayMs = CHANNEL_RESTART_DELAYS[attempt - 1] ?? 60_000;
+                store.restartAttempts.set(id, attempt);
+                log.info?.(
+                  `[${id}] scheduling auto-restart (attempt ${attempt}/${MAX_CHANNEL_RESTART_ATTEMPTS}) in ${Math.round(delayMs / 1000)}s`,
+                );
+                const timer = setTimeout(() => {
+                  store.restartTimers.delete(id);
+                  startChannel(channelId, id);
+                }, delayMs);
+                store.restartTimers.set(id, timer);
+              } else {
+                log.error?.(
+                  `[${id}] auto-restart attempts exhausted (${MAX_CHANNEL_RESTART_ATTEMPTS})`,
+                );
+              }
+            }
           })
           .finally(() => {
             store.aborts.delete(id);
@@ -194,6 +227,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
     await Promise.all(
       Array.from(knownIds.values()).map(async (id) => {
+        const pendingTimer = store.restartTimers.get(id);
+        if (pendingTimer) {
+          clearTimeout(pendingTimer);
+          store.restartTimers.delete(id);
+        }
+        store.restartAttempts.delete(id);
+
         const abort = store.aborts.get(id);
         const task = store.tasks.get(id);
         if (!abort && !task && !plugin?.gateway?.stopAccount) {
