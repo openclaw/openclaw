@@ -46,7 +46,7 @@ import {
   normalizeDiscordOutboundTarget,
 } from "./normalize.js";
 import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
-import { probeDiscord, type DiscordProbe } from "./probe.js";
+import type { DiscordProbe } from "./probe.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import {
   buildTokenChannelStatusSummary,
@@ -74,10 +74,16 @@ type DiscordSendFn = ReturnType<
 let discordProviderRuntimePromise:
   | Promise<typeof import("./monitor/provider.runtime.js")>
   | undefined;
+let discordProbeRuntimePromise: Promise<typeof import("./probe.runtime.js")> | undefined;
 
 async function loadDiscordProviderRuntime() {
   discordProviderRuntimePromise ??= import("./monitor/provider.runtime.js");
   return await discordProviderRuntimePromise;
+}
+
+async function loadDiscordProbeRuntime() {
+  discordProbeRuntimePromise ??= import("./probe.runtime.js");
+  return await discordProbeRuntimePromise;
 }
 
 const meta = getChatChannelMeta("discord");
@@ -364,7 +370,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         buildChannelSummary: ({ snapshot }) =>
           buildTokenChannelStatusSummary(snapshot, { includeMode: false }),
         probeAccount: async ({ account, timeoutMs }) =>
-          probeDiscord(account.token, timeoutMs, {
+          (await loadDiscordProbeRuntime()).probeDiscord(account.token, timeoutMs, {
             includeApplication: true,
           }),
         formatCapabilitiesProbe: ({ probe }) => {
@@ -510,7 +516,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           const token = account.token.trim();
           let discordBotLabel = "";
           try {
-            const probe = await probeDiscord(token, 2500, {
+            const probe = await (
+              await loadDiscordProbeRuntime()
+            ).probeDiscord(token, 2500, {
               includeApplication: true,
             });
             const username = probe.ok ? probe.bot?.username?.trim() : null;
