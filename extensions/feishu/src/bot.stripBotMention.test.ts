@@ -29,9 +29,7 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
 
   it("strips bot mention in p2p (addressing prefix, not semantic content)", () => {
     const ctx = parseFeishuMessageEvent(
-      makeEvent("@_bot_1 hello", [
-        { key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } },
-      ]),
+      makeEvent("@_bot_1 hello", [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }]),
       BOT_OPEN_ID,
     );
     expect(ctx.content).toBe("hello");
@@ -74,9 +72,7 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
 
   it("falls back to @name when open_id is absent", () => {
     const ctx = parseFeishuMessageEvent(
-      makeEvent("@_user_1 hi", [
-        { key: "@_user_1", name: "Alice", id: { user_id: "uid_alice" } },
-      ]),
+      makeEvent("@_user_1 hi", [{ key: "@_user_1", name: "Alice", id: { user_id: "uid_alice" } }]),
       BOT_OPEN_ID,
     );
     expect(ctx.content).toBe("@Alice hi");
@@ -113,9 +109,7 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
 
   it("treats $ in display name as literal (no replacement-pattern interpolation)", () => {
     const ctx = parseFeishuMessageEvent(
-      makeEvent("@_user_1 hi", [
-        { key: "@_user_1", name: "$& the user", id: { open_id: "ou_x" } },
-      ]),
+      makeEvent("@_user_1 hi", [{ key: "@_user_1", name: "$& the user", id: { open_id: "ou_x" } }]),
       BOT_OPEN_ID,
     );
     // $ is preserved literally (no $& pattern substitution); & is not escaped in tag body
@@ -124,9 +118,7 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
 
   it("escapes < and > in mention name to protect tag structure", () => {
     const ctx = parseFeishuMessageEvent(
-      makeEvent("@_user_1 test", [
-        { key: "@_user_1", name: "<script>", id: { open_id: "ou_x" } },
-      ]),
+      makeEvent("@_user_1 test", [{ key: "@_user_1", name: "<script>", id: { open_id: "ou_x" } }]),
       BOT_OPEN_ID,
     );
     expect(ctx.content).toBe('<at user_id="ou_x">&lt;script&gt;</at> test');
