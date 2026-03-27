@@ -185,4 +185,42 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
     }
     expect(event.dedupeKey).toBe("telnyx:req:abc");
   });
+
+  it("maps transcription_data payloads into call.speech events", () => {
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+    const result = provider.parseWebhookEvent(
+      createCtx({
+        rawBody: JSON.stringify({
+          data: {
+            id: "evt-tx",
+            event_type: "call.transcription",
+            payload: {
+              call_control_id: "call-2",
+              transcription_data: {
+                transcript: "pineapple",
+                is_final: true,
+                confidence: 0.286865,
+              },
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(result.events).toHaveLength(1);
+    const event = result.events[0];
+    expect(event).toMatchObject({
+      id: "evt-tx",
+      type: "call.speech",
+      callId: "call-2",
+      providerCallId: "call-2",
+      transcript: "pineapple",
+      isFinal: true,
+      confidence: 0.286865,
+    });
+  });
 });
