@@ -20,6 +20,7 @@ export type MemoryFileEntry = {
   mtimeMs: number;
   size: number;
   hash: string;
+  identityKey: string | null;
   dataHash?: string;
   kind?: "markdown" | "multimodal";
   contentText?: string;
@@ -185,6 +186,16 @@ export function hashText(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
+export function buildFileIdentityKey(stat: {
+  dev?: number | bigint;
+  ino?: number | bigint;
+}): string | null {
+  if (stat.dev === undefined || stat.ino === undefined) {
+    return null;
+  }
+  return `${String(stat.dev)}:${String(stat.ino)}`;
+}
+
 export async function buildFileEntry(
   absPath: string,
   workspaceDir: string,
@@ -200,6 +211,7 @@ export async function buildFileEntry(
     throw err;
   }
   const normalizedPath = path.relative(workspaceDir, absPath).replace(/\\/g, "/");
+  const identityKey = buildFileIdentityKey(stat);
   const multimodalSettings = multimodal ?? DISABLED_MULTIMODAL_SETTINGS;
   const modality = classifyMemoryMultimodalPath(absPath, multimodalSettings);
   if (modality) {
@@ -235,6 +247,7 @@ export async function buildFileEntry(
       mtimeMs: stat.mtimeMs,
       size: stat.size,
       hash: chunkHash,
+      identityKey,
       dataHash,
       kind: "multimodal",
       contentText,
@@ -258,6 +271,7 @@ export async function buildFileEntry(
     mtimeMs: stat.mtimeMs,
     size: stat.size,
     hash,
+    identityKey,
     kind: "markdown",
   };
 }

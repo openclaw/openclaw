@@ -27,6 +27,7 @@ import {
 } from "./embeddings.js";
 import { isFileMissingError } from "./fs-utils.js";
 import {
+  buildFileIdentityKey,
   buildFileEntry,
   ensureDir,
   hashText,
@@ -69,6 +70,54 @@ type MemorySyncProgressState = {
   report: (update: MemorySyncProgressUpdate) => void;
 };
 
+export class MemorySyncError extends Error {
+  readonly kind: "provider" | "local";
+
+  constructor(params: { kind: "provider" | "local"; message: string; cause?: unknown }) {
+    super(params.message, params.cause === undefined ? undefined : { cause: params.cause });
+    this.name = "MemorySyncError";
+    this.kind = params.kind;
+  }
+}
+
+type MemoryFileSyncResult = {
+  syncedPaths: Set<string>;
+  deletedPaths: Set<string>;
+  retryableLocalFailures: Set<string>;
+  localFailureError?: Error;
+  fatalProviderError?: MemorySyncError;
+  allowCommit: boolean;
+};
+
+type SessionFileSyncResult = {
+  syncedFiles: Set<string>;
+  failedFiles: Set<string>;
+  localFailureError?: Error;
+  fatalProviderError?: MemorySyncError;
+  allowCommit: boolean;
+};
+
+type ReindexVerdict = {
+  allowCommit: boolean;
+  error?: Error;
+};
+
+type IndexedFileStateRow = {
+  path: string;
+  hash: string;
+  identityKey: string | null;
+};
+
+type FailedRefreshCandidate = {
+  replacementPath?: string;
+};
+
+type IndexedFileState = {
+  rows: IndexedFileStateRow[];
+  byPath: Map<string, IndexedFileStateRow>;
+  byIdentityKey: Map<string, IndexedFileStateRow[]>;
+};
+
 const META_KEY = "memory_index_meta_v1";
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -98,6 +147,122 @@ export function runDetachedMemorySync(sync: () => Promise<void>, reason: "interv
   void sync().catch((err) => {
     log.warn(`memory sync failed (${reason}): ${String(err)}`);
   });
+}
+
+function isProviderSyncError(err: unknown): err is MemorySyncError {
+  if (err instanceof MemorySyncError) {
+    return err.kind === "provider";
+  }
+  return (
+    err instanceof Error &&
+    (err as { name?: unknown; kind?: unknown }).name === "MemorySyncError" &&
+    (err as { kind?: unknown }).kind === "provider"
+  );
+}
+
+function toError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+function collectErrorSignals(err: unknown): string[] {
+  const values = new Set<string>();
+  const queue: unknown[] = [err];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) {
+      continue;
+    }
+    if (typeof current === "string") {
+      const trimmed = current.trim();
+      if (trimmed) {
+        values.add(trimmed);
+      }
+      continue;
+    }
+    if (current instanceof Error) {
+      if (current.message.trim()) {
+        values.add(current.message);
+      }
+      if (current.name.trim()) {
+        values.add(current.name);
+      }
+      const withCode = current as Error & { code?: unknown; cause?: unknown };
+      if (typeof withCode.code === "string" && withCode.code.trim()) {
+        values.add(withCode.code);
+      }
+      if (withCode.cause) {
+        queue.push(withCode.cause);
+      }
+      continue;
+    }
+    if (typeof current === "object") {
+      const record = current as Record<string, unknown>;
+      for (const key of ["message", "code", "name"]) {
+        const value = record[key];
+        if (typeof value === "string" && value.trim()) {
+          values.add(value);
+        }
+      }
+      if (record.cause) {
+        queue.push(record.cause);
+      }
+    }
+  }
+  return [...values];
+}
+
+function shouldPropagateLocalSyncError(err: unknown): boolean {
+  const signal = collectErrorSignals(err).join("\n");
+  return /SQLITE_|readonly database|read-only|database is locked|database or disk is full|disk full|disk i\/o|ENOSPC/i.test(
+    signal,
+  );
+}
+
+function buildIndexedFileState(rows: IndexedFileStateRow[]): IndexedFileState {
+  const byPath = new Map<string, IndexedFileStateRow>();
+  const byIdentityKey = new Map<string, IndexedFileStateRow[]>();
+  for (const row of rows) {
+    byPath.set(row.path, row);
+    if (!row.identityKey) {
+      continue;
+    }
+    const matches = byIdentityKey.get(row.identityKey);
+    if (matches) {
+      matches.push(row);
+    } else {
+      byIdentityKey.set(row.identityKey, [row]);
+    }
+  }
+  return { rows, byPath, byIdentityKey };
+}
+
+function resolveReplacementPath(params: {
+  currentPath: string;
+  currentIdentityKey: string | null | undefined;
+  existingState?: IndexedFileState | null;
+}): string | undefined {
+  if (!params.currentIdentityKey || !params.existingState) {
+    return undefined;
+  }
+  const matches = params.existingState.byIdentityKey.get(params.currentIdentityKey);
+  if (!matches || matches.length !== 1) {
+    return undefined;
+  }
+  const [match] = matches;
+  if (!match || match.path === params.currentPath) {
+    return undefined;
+  }
+  return match.path;
+}
+
+function selectProtectedStalePaths(failedRefreshes: FailedRefreshCandidate[]): Set<string> {
+  const protectedPaths = new Set<string>();
+  for (const failure of failedRefreshes) {
+    if (failure.replacementPath) {
+      protectedPaths.add(failure.replacementPath);
+    }
+  }
+  return protectedPaths;
 }
 
 export abstract class MemoryManagerSyncOps {
@@ -149,6 +314,7 @@ export abstract class MemoryManagerSyncOps {
     string,
     { lastSize: number; pendingBytes: number; pendingMessages: number }
   >();
+  private indexWriteSavepointCounter = 0;
   private lastMetaSerialized: string | null = null;
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
@@ -172,6 +338,24 @@ export abstract class MemoryManagerSyncOps {
     entry: MemoryFileEntry | SessionFileEntry,
     options: { source: MemorySource; content?: string },
   ): Promise<void>;
+
+  protected withIndexWriteSavepoint<T>(action: () => T): T {
+    const savepointName = `memory_index_write_${this.indexWriteSavepointCounter++}`;
+    this.db.exec(`SAVEPOINT ${savepointName}`);
+    try {
+      const result = action();
+      this.db.exec(`RELEASE SAVEPOINT ${savepointName}`);
+      return result;
+    } catch (err) {
+      try {
+        this.db.exec(`ROLLBACK TO SAVEPOINT ${savepointName}`);
+      } catch {}
+      try {
+        this.db.exec(`RELEASE SAVEPOINT ${savepointName}`);
+      } catch {}
+      throw err;
+    }
+  }
 
   protected async ensureVectorReady(dimensions?: number): Promise<boolean> {
     if (!this.vector.enabled) {
@@ -649,6 +833,134 @@ export abstract class MemoryManagerSyncOps {
     this.sessionsDirty = this.sessionsDirtyFiles.size > 0;
   }
 
+  private markSessionFilesDirty(sessionFiles?: Iterable<string> | null) {
+    if (!sessionFiles) {
+      return;
+    }
+    for (const sessionFile of sessionFiles) {
+      this.sessionsDirtyFiles.add(sessionFile);
+    }
+    this.sessionsDirty = this.sessionsDirtyFiles.size > 0;
+  }
+
+  private applySessionSyncResult(result: SessionFileSyncResult) {
+    this.markSessionFilesDirty(result.failedFiles);
+    this.clearSyncedSessionFiles(result.syncedFiles);
+  }
+
+  private createReindexVerdict(params: {
+    memoryResult?: MemoryFileSyncResult;
+    sessionResult?: SessionFileSyncResult;
+  }): ReindexVerdict {
+    if (params.memoryResult?.fatalProviderError) {
+      return {
+        allowCommit: false,
+        error: params.memoryResult.fatalProviderError,
+      };
+    }
+    if (params.sessionResult?.fatalProviderError) {
+      return {
+        allowCommit: false,
+        error: params.sessionResult.fatalProviderError,
+      };
+    }
+    if (params.memoryResult && !params.memoryResult.allowCommit) {
+      return {
+        allowCommit: false,
+        error: params.memoryResult.localFailureError ?? new Error("memory reindex failed"),
+      };
+    }
+    if (params.sessionResult && !params.sessionResult.allowCommit) {
+      return {
+        allowCommit: false,
+        error: params.sessionResult.localFailureError ?? new Error("session reindex failed"),
+      };
+    }
+    return { allowCommit: true };
+  }
+
+  private snapshotSyncState(): {
+    dirty: boolean;
+    sessionsDirty: boolean;
+    sessionsDirtyFiles: Set<string>;
+    sessionDeltas: Map<string, { lastSize: number; pendingBytes: number; pendingMessages: number }>;
+    lastMetaSerialized: string | null;
+    vectorDims: number | undefined;
+  } {
+    return {
+      dirty: this.dirty,
+      sessionsDirty: this.sessionsDirty,
+      sessionsDirtyFiles: new Set(this.sessionsDirtyFiles),
+      sessionDeltas: new Map(
+        Array.from(this.sessionDeltas, ([sessionFile, state]) => [sessionFile, { ...state }]),
+      ),
+      lastMetaSerialized: this.lastMetaSerialized,
+      vectorDims: this.vector.dims,
+    };
+  }
+
+  private mergeSessionDeltas(
+    snapshot: ReturnType<MemoryManagerSyncOps["snapshotSyncState"]>["sessionDeltas"],
+    live: ReturnType<MemoryManagerSyncOps["snapshotSyncState"]>["sessionDeltas"],
+  ) {
+    const merged = new Map(
+      Array.from(snapshot, ([sessionFile, state]) => [sessionFile, { ...state }]),
+    );
+    for (const [sessionFile, liveState] of live) {
+      const snapshotState = merged.get(sessionFile);
+      if (!snapshotState) {
+        merged.set(sessionFile, { ...liveState });
+        continue;
+      }
+      merged.set(sessionFile, {
+        // Prefer the older baseline so a rolled-back reindex cannot discard bytes/messages
+        // that arrived while the rebuild was running.
+        lastSize: Math.min(snapshotState.lastSize, liveState.lastSize),
+        pendingBytes: Math.max(snapshotState.pendingBytes, liveState.pendingBytes),
+        pendingMessages: Math.max(snapshotState.pendingMessages, liveState.pendingMessages),
+      });
+    }
+    return merged;
+  }
+
+  private restoreSyncState(
+    snapshot: ReturnType<MemoryManagerSyncOps["snapshotSyncState"]>,
+    liveState?: ReturnType<MemoryManagerSyncOps["snapshotSyncState"]>,
+  ) {
+    this.dirty = snapshot.dirty || liveState?.dirty === true;
+    const mergedDirtyFiles = new Set(snapshot.sessionsDirtyFiles);
+    for (const sessionFile of liveState?.sessionsDirtyFiles ?? []) {
+      mergedDirtyFiles.add(sessionFile);
+    }
+    this.sessionsDirtyFiles = mergedDirtyFiles;
+    this.sessionsDirty =
+      snapshot.sessionsDirty || liveState?.sessionsDirty === true || mergedDirtyFiles.size > 0;
+    this.sessionDeltas = liveState
+      ? this.mergeSessionDeltas(snapshot.sessionDeltas, liveState.sessionDeltas)
+      : new Map(
+          Array.from(snapshot.sessionDeltas, ([sessionFile, state]) => [sessionFile, { ...state }]),
+        );
+    this.lastMetaSerialized = snapshot.lastMetaSerialized;
+    this.vector.dims = snapshot.vectorDims;
+  }
+
+  private restoreRetryStateAfterReindexRollback(params: {
+    memoryReindexStarted?: boolean;
+    sessionReindexStarted?: boolean;
+    sessionResult?: SessionFileSyncResult;
+  }) {
+    if (params.memoryReindexStarted) {
+      this.dirty = true;
+    }
+    if (params.sessionReindexStarted) {
+      this.sessionsDirty = true;
+    }
+    if (params.sessionResult) {
+      this.markSessionFilesDirty(params.sessionResult.syncedFiles);
+      this.markSessionFilesDirty(params.sessionResult.failedFiles);
+    }
+  }
+
   protected ensureIntervalSync() {
     const minutes = this.settings.sync.intervalMinutes;
     if (!minutes || minutes <= 0 || this.intervalTimer) {
@@ -693,21 +1005,31 @@ export abstract class MemoryManagerSyncOps {
     if (needsFullReindex) {
       return true;
     }
-    return this.sessionsDirty && this.sessionsDirtyFiles.size > 0;
+    return this.sessionsDirty;
   }
 
   private async syncMemoryFiles(params: {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
-  }) {
+  }): Promise<MemoryFileSyncResult> {
     // FTS-only mode: skip embedding sync (no provider)
     if (!this.provider) {
       log.debug("Skipping memory file sync in FTS-only mode (no embedding provider)");
-      return;
+      return {
+        syncedPaths: new Set<string>(),
+        deletedPaths: new Set<string>(),
+        retryableLocalFailures: new Set<string>(),
+        allowCommit: true,
+      };
     }
-    const selectSourceFileState = this.db.prepare(`SELECT path, hash FROM files WHERE source = ?`);
+    const selectSourceFileState = this.db.prepare(
+      `SELECT path, hash, identity_key FROM files WHERE source = ?`,
+    );
     const deleteFileByPathAndSource = this.db.prepare(
       `DELETE FROM files WHERE path = ? AND source = ?`,
+    );
+    const updateFileIdentityByPathAndSource = this.db.prepare(
+      `UPDATE files SET identity_key = ?, mtime = ?, size = ? WHERE path = ? AND source = ?`,
     );
     const deleteChunksByPathAndSource = this.db.prepare(
       `DELETE FROM chunks WHERE path = ? AND source = ?`,
@@ -728,27 +1050,72 @@ export abstract class MemoryManagerSyncOps {
       this.settings.extraPaths,
       this.settings.multimodal,
     );
-    const fileEntries = (
-      await runWithConcurrency(
-        files.map(
-          (file) => async () =>
-            await buildFileEntry(file, this.workspaceDir, this.settings.multimodal),
-        ),
-        this.getIndexConcurrency(),
-      )
-    ).filter((entry): entry is MemoryFileEntry => entry !== null);
+    const existingState = buildIndexedFileState(
+      (
+        selectSourceFileState.all("memory") as Array<{
+          path: string;
+          hash: string;
+          identity_key: string | null;
+        }>
+      ).map((row) => ({
+        path: row.path,
+        hash: row.hash,
+        identityKey: row.identity_key,
+      })),
+    );
+    const existingRows = existingState.rows;
+    const fileEntries: MemoryFileEntry[] = [];
+    const activePaths = new Set<string>();
+    const syncedPaths = new Set<string>();
+    const deletedPaths = new Set<string>();
+    const retryableLocalFailures = new Set<string>();
+    const failedRefreshes: FailedRefreshCandidate[] = [];
+    let localFailureError: Error | undefined;
+    let fatalProviderError: MemorySyncError | undefined;
+    let allowPrune = true;
+    await runWithConcurrency(
+      files.map((file) => async () => {
+        try {
+          const entry = await buildFileEntry(file, this.workspaceDir, this.settings.multimodal);
+          if (!entry) {
+            return;
+          }
+          activePaths.add(entry.path);
+          fileEntries.push(entry);
+        } catch (err) {
+          const relPath = path.relative(this.workspaceDir, file).replace(/\\/g, "/");
+          try {
+            const stat = await fs.stat(file);
+            activePaths.add(relPath);
+            retryableLocalFailures.add(relPath);
+            localFailureError ??= toError(err);
+            const replacementPath = resolveReplacementPath({
+              currentPath: relPath,
+              currentIdentityKey: buildFileIdentityKey(stat),
+              existingState,
+            });
+            failedRefreshes.push({
+              replacementPath,
+            });
+            log.warn("memory sync: skipping memory file after read failure", {
+              path: relPath,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          } catch (statErr) {
+            if (!isFileMissingError(statErr)) {
+              throw statErr;
+            }
+          }
+        }
+      }),
+      this.getIndexConcurrency(),
+    );
     log.debug("memory sync: indexing memory files", {
       files: fileEntries.length,
       needsFullReindex: params.needsFullReindex,
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
     });
-    const existingRows = selectSourceFileState.all("memory") as Array<{
-      path: string;
-      hash: string;
-    }>;
-    const existingHashes = new Map(existingRows.map((row) => [row.path, row.hash]));
-    const activePaths = new Set(fileEntries.map((entry) => entry.path));
     if (params.progress) {
       params.progress.total += fileEntries.length;
       params.progress.report({
@@ -758,18 +1125,7 @@ export abstract class MemoryManagerSyncOps {
       });
     }
 
-    const tasks = fileEntries.map((entry) => async () => {
-      if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
-        }
-        return;
-      }
-      await this.indexFile(entry, { source: "memory" });
+    const reportProgress = () => {
       if (params.progress) {
         params.progress.completed += 1;
         params.progress.report({
@@ -777,42 +1133,127 @@ export abstract class MemoryManagerSyncOps {
           total: params.progress.total,
         });
       }
+    };
+    const tasks = fileEntries.map((entry) => async () => {
+      try {
+        const existingRow = existingState.byPath.get(entry.path);
+        if (!params.needsFullReindex && existingRow?.hash === entry.hash) {
+          if (existingRow.identityKey !== entry.identityKey) {
+            updateFileIdentityByPathAndSource.run(
+              entry.identityKey,
+              entry.mtimeMs,
+              entry.size,
+              entry.path,
+              "memory",
+            );
+          }
+          syncedPaths.add(entry.path);
+          return;
+        }
+        try {
+          await this.indexFile(entry, { source: "memory" });
+          syncedPaths.add(entry.path);
+        } catch (err) {
+          if (isProviderSyncError(err)) {
+            fatalProviderError ??= err;
+            allowPrune = false;
+            // Rethrow so runWithConcurrency stops scheduling more files.
+            throw err;
+          }
+          if (shouldPropagateLocalSyncError(err)) {
+            throw err;
+          }
+          const reason = err instanceof Error ? err.message : String(err);
+          retryableLocalFailures.add(entry.path);
+          localFailureError ??= toError(err);
+          const replacementPath = resolveReplacementPath({
+            currentPath: entry.path,
+            currentIdentityKey: entry.identityKey,
+            existingState,
+          });
+          failedRefreshes.push({
+            replacementPath,
+          });
+          log.warn("memory sync: skipping memory file after index failure", {
+            path: entry.path,
+            error: reason,
+          });
+        }
+      } finally {
+        reportProgress();
+      }
     });
-    await runWithConcurrency(tasks, this.getIndexConcurrency());
+    try {
+      await runWithConcurrency(tasks, this.getIndexConcurrency());
+    } catch (err) {
+      if (!isProviderSyncError(err)) {
+        throw err;
+      }
+      fatalProviderError ??= err;
+      allowPrune = false;
+    }
 
-    for (const stale of existingRows) {
-      if (activePaths.has(stale.path)) {
-        continue;
-      }
-      deleteFileByPathAndSource.run(stale.path, "memory");
-      if (deleteVectorRowsByPathAndSource) {
-        try {
-          deleteVectorRowsByPathAndSource.run(stale.path, "memory");
-        } catch {}
-      }
-      deleteChunksByPathAndSource.run(stale.path, "memory");
-      if (deleteFtsRowsByPathSourceAndModel) {
-        try {
-          deleteFtsRowsByPathSourceAndModel.run(stale.path, "memory", this.provider.model);
-        } catch {}
+    if (allowPrune) {
+      const staleRows = existingRows.filter((stale) => !activePaths.has(stale.path));
+      const protectedStalePaths = selectProtectedStalePaths(failedRefreshes);
+      for (const stale of staleRows) {
+        if (protectedStalePaths.has(stale.path)) {
+          continue;
+        }
+        deleteFileByPathAndSource.run(stale.path, "memory");
+        if (deleteVectorRowsByPathAndSource) {
+          try {
+            deleteVectorRowsByPathAndSource.run(stale.path, "memory");
+          } catch {}
+        }
+        deleteChunksByPathAndSource.run(stale.path, "memory");
+        if (deleteFtsRowsByPathSourceAndModel) {
+          try {
+            deleteFtsRowsByPathSourceAndModel.run(stale.path, "memory", this.provider.model);
+          } catch {}
+        }
+        deletedPaths.add(stale.path);
       }
     }
+
+    return {
+      syncedPaths,
+      deletedPaths,
+      retryableLocalFailures,
+      localFailureError,
+      fatalProviderError,
+      allowCommit: !fatalProviderError && retryableLocalFailures.size === 0,
+    };
   }
 
   private async syncSessionFiles(params: {
     needsFullReindex: boolean;
     targetSessionFiles?: string[];
     progress?: MemorySyncProgressState;
-  }) {
+  }): Promise<SessionFileSyncResult> {
+    const syncedFiles = new Set<string>();
+    const failedFiles = new Set<string>();
+    const failedRefreshes: FailedRefreshCandidate[] = [];
+    let localFailureError: Error | undefined;
+    let fatalProviderError: MemorySyncError | undefined;
+    let allowPrune = true;
     // FTS-only mode: skip embedding sync (no provider)
     if (!this.provider) {
       log.debug("Skipping session file sync in FTS-only mode (no embedding provider)");
-      return;
+      return { syncedFiles, failedFiles, allowCommit: true };
     }
-    const selectFileHash = this.db.prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`);
-    const selectSourceFileState = this.db.prepare(`SELECT path, hash FROM files WHERE source = ?`);
+    const providerModel = this.provider.model;
+    const selectFileHash = this.db.prepare(
+      `SELECT hash, identity_key FROM files WHERE path = ? AND source = ?`,
+    );
+    const selectSourceFileState = this.db.prepare(
+      `SELECT path, hash, identity_key FROM files WHERE source = ?`,
+    );
     const deleteFileByPathAndSource = this.db.prepare(
       `DELETE FROM files WHERE path = ? AND source = ?`,
+    );
+    const updateFileIdentityByPathAndSource = this.db.prepare(
+      `UPDATE files SET identity_key = ?, mtime = ?, size = ? WHERE path = ? AND source = ?`,
     );
     const deleteChunksByPathAndSource = this.db.prepare(
       `DELETE FROM chunks WHERE path = ? AND source = ?`,
@@ -837,15 +1278,23 @@ export abstract class MemoryManagerSyncOps {
     const activePaths = targetSessionFiles
       ? null
       : new Set(files.map((file) => sessionPathForFile(file)));
-    const existingRows =
+    const existingState =
       activePaths === null
         ? null
-        : (selectSourceFileState.all("sessions") as Array<{
-            path: string;
-            hash: string;
-          }>);
-    const existingHashes =
-      existingRows === null ? null : new Map(existingRows.map((row) => [row.path, row.hash]));
+        : buildIndexedFileState(
+            (
+              selectSourceFileState.all("sessions") as Array<{
+                path: string;
+                hash: string;
+                identity_key: string | null;
+              }>
+            ).map((row) => ({
+              path: row.path,
+              hash: row.hash,
+              identityKey: row.identity_key,
+            })),
+          );
+    const existingRows = existingState?.rows ?? null;
     const indexAll =
       params.needsFullReindex || Boolean(targetSessionFiles) || this.sessionsDirtyFiles.size === 0;
     log.debug("memory sync: indexing session files", {
@@ -865,50 +1314,7 @@ export abstract class MemoryManagerSyncOps {
       });
     }
 
-    const tasks = files.map((absPath) => async () => {
-      if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
-        }
-        return;
-      }
-      const entry = await buildSessionEntry(absPath);
-      if (!entry) {
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
-        }
-        return;
-      }
-      const existingHash =
-        existingHashes?.get(entry.path) ??
-        (
-          selectFileHash.get(entry.path, "sessions") as
-            | {
-                hash: string;
-              }
-            | undefined
-        )?.hash;
-      if (!params.needsFullReindex && existingHash === entry.hash) {
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
-        }
-        this.resetSessionDelta(absPath, entry.size);
-        return;
-      }
-      await this.indexFile(entry, { source: "sessions", content: entry.content });
-      this.resetSessionDelta(absPath, entry.size);
+    const reportProgress = () => {
       if (params.progress) {
         params.progress.completed += 1;
         params.progress.report({
@@ -916,32 +1322,172 @@ export abstract class MemoryManagerSyncOps {
           total: params.progress.total,
         });
       }
+    };
+    const tasks = files.map((absPath) => async () => {
+      try {
+        if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
+          return;
+        }
+        const entry = await buildSessionEntry(absPath);
+        if (!entry) {
+          try {
+            const stat = await fs.stat(absPath);
+            failedFiles.add(absPath);
+            localFailureError ??= new Error(`Failed reading session file ${absPath}`);
+            const sessionPath = sessionPathForFile(absPath);
+            const replacementPath = resolveReplacementPath({
+              currentPath: sessionPath,
+              currentIdentityKey: buildFileIdentityKey(stat),
+              existingState,
+            });
+            failedRefreshes.push({
+              replacementPath,
+            });
+          } catch (err) {
+            if (!isFileMissingError(err)) {
+              throw err;
+            }
+            const sessionPath = sessionPathForFile(absPath);
+            deleteFileByPathAndSource.run(sessionPath, "sessions");
+            if (deleteVectorRowsByPathAndSource) {
+              try {
+                deleteVectorRowsByPathAndSource.run(sessionPath, "sessions");
+              } catch {}
+            }
+            deleteChunksByPathAndSource.run(sessionPath, "sessions");
+            if (deleteFtsRowsByPathSourceAndModel) {
+              try {
+                deleteFtsRowsByPathSourceAndModel.run(sessionPath, "sessions", providerModel);
+              } catch {}
+            }
+            this.sessionDeltas.delete(absPath);
+            syncedFiles.add(absPath);
+          }
+          return;
+        }
+        const existingRow =
+          existingState?.byPath.get(entry.path) ??
+          (() => {
+            const row = selectFileHash.get(entry.path, "sessions") as
+              | {
+                  hash: string;
+                  identity_key: string | null;
+                }
+              | undefined;
+            if (!row) {
+              return undefined;
+            }
+            return {
+              path: entry.path,
+              hash: row.hash,
+              identityKey: row.identity_key,
+            };
+          })();
+        if (!params.needsFullReindex && existingRow?.hash === entry.hash) {
+          if (!existingState || existingRow.identityKey !== entry.identityKey) {
+            updateFileIdentityByPathAndSource.run(
+              entry.identityKey,
+              entry.mtimeMs,
+              entry.size,
+              entry.path,
+              "sessions",
+            );
+          }
+          this.resetSessionDelta(absPath, entry.size);
+          syncedFiles.add(absPath);
+          return;
+        }
+        try {
+          await this.indexFile(entry, { source: "sessions", content: entry.content });
+          this.resetSessionDelta(absPath, entry.size);
+          syncedFiles.add(absPath);
+        } catch (err) {
+          if (isProviderSyncError(err)) {
+            fatalProviderError ??= err;
+            allowPrune = false;
+            // Rethrow so runWithConcurrency stops scheduling more files.
+            throw err;
+          }
+          if (shouldPropagateLocalSyncError(err)) {
+            throw err;
+          }
+          const reason = err instanceof Error ? err.message : String(err);
+          failedFiles.add(absPath);
+          localFailureError ??= toError(err);
+          const replacementPath = resolveReplacementPath({
+            currentPath: entry.path,
+            currentIdentityKey: entry.identityKey,
+            existingState,
+          });
+          failedRefreshes.push({
+            replacementPath,
+          });
+          log.warn("memory sync: skipping session file after index failure", {
+            path: entry.path,
+            error: reason,
+          });
+        }
+      } finally {
+        reportProgress();
+      }
     });
-    await runWithConcurrency(tasks, this.getIndexConcurrency());
+    try {
+      await runWithConcurrency(tasks, this.getIndexConcurrency());
+    } catch (err) {
+      if (!isProviderSyncError(err)) {
+        throw err;
+      }
+      fatalProviderError ??= err;
+      allowPrune = false;
+    }
 
     if (activePaths === null) {
       // Targeted syncs only refresh the requested transcripts and should not
       // prune unrelated session rows without a full directory enumeration.
-      return;
+      return {
+        syncedFiles,
+        failedFiles,
+        localFailureError,
+        fatalProviderError,
+        allowCommit: !fatalProviderError && failedFiles.size === 0,
+      };
     }
 
-    for (const stale of existingRows ?? []) {
-      if (activePaths.has(stale.path)) {
-        continue;
-      }
-      deleteFileByPathAndSource.run(stale.path, "sessions");
-      if (deleteVectorRowsByPathAndSource) {
-        try {
-          deleteVectorRowsByPathAndSource.run(stale.path, "sessions");
-        } catch {}
-      }
-      deleteChunksByPathAndSource.run(stale.path, "sessions");
-      if (deleteFtsRowsByPathSourceAndModel) {
-        try {
-          deleteFtsRowsByPathSourceAndModel.run(stale.path, "sessions", this.provider.model);
-        } catch {}
+    if (allowPrune) {
+      const staleRows = (existingRows ?? []).filter((stale) => !activePaths.has(stale.path));
+      const protectedStalePaths = selectProtectedStalePaths(failedRefreshes);
+      for (const stale of staleRows) {
+        if (protectedStalePaths.has(stale.path)) {
+          continue;
+        }
+        const staleAbsPath = path.join(
+          resolveSessionTranscriptsDirForAgent(this.agentId),
+          path.basename(stale.path),
+        );
+        deleteFileByPathAndSource.run(stale.path, "sessions");
+        if (deleteVectorRowsByPathAndSource) {
+          try {
+            deleteVectorRowsByPathAndSource.run(stale.path, "sessions");
+          } catch {}
+        }
+        deleteChunksByPathAndSource.run(stale.path, "sessions");
+        if (deleteFtsRowsByPathSourceAndModel) {
+          try {
+            deleteFtsRowsByPathSourceAndModel.run(stale.path, "sessions", providerModel);
+          } catch {}
+        }
+        this.sessionDeltas.delete(staleAbsPath);
+        syncedFiles.add(staleAbsPath);
       }
     }
+
+    return {
+      syncedFiles,
+      failedFiles,
+      localFailureError,
+      fatalProviderError,
+      allowCommit: !fatalProviderError && failedFiles.size === 0,
+    };
   }
 
   private createSyncProgress(
@@ -993,16 +1539,24 @@ export abstract class MemoryManagerSyncOps {
       // Post-compaction refreshes should only update the explicit transcript files and
       // leave broader reindex/dirty-work decisions to the regular sync path.
       try {
-        await this.syncSessionFiles({
+        const result = await this.syncSessionFiles({
           needsFullReindex: false,
           targetSessionFiles: Array.from(targetSessionFiles),
           progress: progress ?? undefined,
         });
-        this.clearSyncedSessionFiles(targetSessionFiles);
+        if (result.fatalProviderError) {
+          throw result.fatalProviderError;
+        }
+        this.applySessionSyncResult(result);
+        if (result.failedFiles.size > 0) {
+          throw new MemorySyncError({
+            kind: "local",
+            message: "session refresh failed",
+          });
+        }
       } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
         const activated =
-          this.shouldFallbackOnError(reason) && (await this.activateFallbackProvider(reason));
+          isProviderSyncError(err) && (await this.activateFallbackProvider(err.message));
         if (activated) {
           if (
             process.env.OPENCLAW_TEST_FAST === "1" &&
@@ -1064,27 +1618,34 @@ export abstract class MemoryManagerSyncOps {
       const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
 
       if (shouldSyncMemory) {
-        await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
-        this.dirty = false;
+        const result = await this.syncMemoryFiles({
+          needsFullReindex,
+          progress: progress ?? undefined,
+        });
+        if (result.fatalProviderError) {
+          throw result.fatalProviderError;
+        }
+        this.dirty = result.retryableLocalFailures.size > 0;
       }
 
       if (shouldSyncSessions) {
-        await this.syncSessionFiles({
+        const result = await this.syncSessionFiles({
           needsFullReindex,
           targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
           progress: progress ?? undefined,
         });
-        this.sessionsDirty = false;
-        this.sessionsDirtyFiles.clear();
+        if (result.fatalProviderError) {
+          throw result.fatalProviderError;
+        }
+        this.applySessionSyncResult(result);
       } else if (this.sessionsDirtyFiles.size > 0) {
         this.sessionsDirty = true;
       } else {
         this.sessionsDirty = false;
       }
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
       const activated =
-        this.shouldFallbackOnError(reason) && (await this.activateFallbackProvider(reason));
+        isProviderSyncError(err) && (await this.activateFallbackProvider(err.message));
       if (activated) {
         await this.runSafeReindex({
           reason: params?.reason ?? "fallback",
@@ -1095,10 +1656,6 @@ export abstract class MemoryManagerSyncOps {
       }
       throw err;
     }
-  }
-
-  private shouldFallbackOnError(message: string): boolean {
-    return /embedding|embeddings|batch/i.test(message);
   }
 
   protected resolveBatchConfig(): {
@@ -1198,6 +1755,7 @@ export abstract class MemoryManagerSyncOps {
       vectorDims: this.vector.dims,
       vectorReady: this.vectorReady,
     };
+    const originalSyncState = this.snapshotSyncState();
 
     const restoreOriginalState = () => {
       if (originalDbClosed) {
@@ -1223,6 +1781,10 @@ export abstract class MemoryManagerSyncOps {
     this.ensureSchema();
 
     let nextMeta: MemoryIndexMeta | null = null;
+    let memoryResult: MemoryFileSyncResult | undefined;
+    let sessionResult: SessionFileSyncResult | undefined;
+    let memoryReindexStarted = false;
+    let sessionReindexStarted = false;
 
     try {
       this.seedEmbeddingCache(originalDb);
@@ -1233,14 +1795,35 @@ export abstract class MemoryManagerSyncOps {
       );
 
       if (shouldSyncMemory) {
-        await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
-        this.dirty = false;
+        memoryReindexStarted = true;
+        memoryResult = await this.syncMemoryFiles({
+          needsFullReindex: true,
+          progress: params.progress,
+        });
       }
 
       if (shouldSyncSessions) {
-        await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
-        this.sessionsDirty = false;
-        this.sessionsDirtyFiles.clear();
+        sessionReindexStarted = true;
+        sessionResult = await this.syncSessionFiles({
+          needsFullReindex: true,
+          progress: params.progress,
+        });
+      }
+
+      const verdict = this.createReindexVerdict({
+        memoryResult,
+        sessionResult,
+      });
+      if (!verdict.allowCommit) {
+        throw verdict.error;
+      }
+
+      if (memoryResult) {
+        this.dirty = memoryResult.retryableLocalFailures.size > 0;
+      }
+
+      if (sessionResult) {
+        this.applySessionSyncResult(sessionResult);
       } else if (this.sessionsDirtyFiles.size > 0) {
         this.sessionsDirty = true;
       } else {
@@ -1280,11 +1863,18 @@ export abstract class MemoryManagerSyncOps {
       this.ensureSchema();
       this.vector.dims = nextMeta?.vectorDims;
     } catch (err) {
+      const liveSyncState = this.snapshotSyncState();
       try {
         this.db.close();
       } catch {}
       await this.removeIndexFiles(tempDbPath);
       restoreOriginalState();
+      this.restoreSyncState(originalSyncState, liveSyncState);
+      this.restoreRetryStateAfterReindexRollback({
+        memoryReindexStarted,
+        sessionReindexStarted,
+        sessionResult,
+      });
       throw err;
     }
   }
@@ -1296,44 +1886,87 @@ export abstract class MemoryManagerSyncOps {
   }): Promise<void> {
     // Perf: for test runs, skip atomic temp-db swapping. The index is isolated
     // under the per-test HOME anyway, and this cuts substantial fs+sqlite churn.
-    this.resetIndex();
+    const originalSyncState = this.snapshotSyncState();
+    let memoryResult: MemoryFileSyncResult | undefined;
+    let sessionResult: SessionFileSyncResult | undefined;
+    let memoryReindexStarted = false;
+    let sessionReindexStarted = false;
 
-    const shouldSyncMemory = this.sources.has("memory");
-    const shouldSyncSessions = this.shouldSyncSessions(
-      { reason: params.reason, force: params.force },
-      true,
-    );
+    this.db.exec("BEGIN");
+    try {
+      this.resetIndex();
 
-    if (shouldSyncMemory) {
-      await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
-      this.dirty = false;
+      const shouldSyncMemory = this.sources.has("memory");
+      const shouldSyncSessions = this.shouldSyncSessions(
+        { reason: params.reason, force: params.force },
+        true,
+      );
+
+      if (shouldSyncMemory) {
+        memoryReindexStarted = true;
+        memoryResult = await this.syncMemoryFiles({
+          needsFullReindex: true,
+          progress: params.progress,
+        });
+      }
+
+      if (shouldSyncSessions) {
+        sessionReindexStarted = true;
+        sessionResult = await this.syncSessionFiles({
+          needsFullReindex: true,
+          progress: params.progress,
+        });
+      }
+
+      const verdict = this.createReindexVerdict({
+        memoryResult,
+        sessionResult,
+      });
+      if (!verdict.allowCommit) {
+        throw verdict.error;
+      }
+
+      if (memoryResult) {
+        this.dirty = memoryResult.retryableLocalFailures.size > 0;
+      }
+
+      if (sessionResult) {
+        this.applySessionSyncResult(sessionResult);
+      } else if (this.sessionsDirtyFiles.size > 0) {
+        this.sessionsDirty = true;
+      } else {
+        this.sessionsDirty = false;
+      }
+
+      const nextMeta: MemoryIndexMeta = {
+        model: this.provider?.model ?? "fts-only",
+        provider: this.provider?.id ?? "none",
+        providerKey: this.providerKey!,
+        sources: this.resolveConfiguredSourcesForMeta(),
+        scopeHash: this.resolveConfiguredScopeHash(),
+        chunkTokens: this.settings.chunking.tokens,
+        chunkOverlap: this.settings.chunking.overlap,
+      };
+      if (this.vector.available && this.vector.dims) {
+        nextMeta.vectorDims = this.vector.dims;
+      }
+
+      this.writeMeta(nextMeta);
+      this.pruneEmbeddingCacheIfNeeded?.();
+      this.db.exec("COMMIT");
+    } catch (err) {
+      const liveSyncState = this.snapshotSyncState();
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {}
+      this.restoreSyncState(originalSyncState, liveSyncState);
+      this.restoreRetryStateAfterReindexRollback({
+        memoryReindexStarted,
+        sessionReindexStarted,
+        sessionResult,
+      });
+      throw err;
     }
-
-    if (shouldSyncSessions) {
-      await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
-      this.sessionsDirty = false;
-      this.sessionsDirtyFiles.clear();
-    } else if (this.sessionsDirtyFiles.size > 0) {
-      this.sessionsDirty = true;
-    } else {
-      this.sessionsDirty = false;
-    }
-
-    const nextMeta: MemoryIndexMeta = {
-      model: this.provider?.model ?? "fts-only",
-      provider: this.provider?.id ?? "none",
-      providerKey: this.providerKey!,
-      sources: this.resolveConfiguredSourcesForMeta(),
-      scopeHash: this.resolveConfiguredScopeHash(),
-      chunkTokens: this.settings.chunking.tokens,
-      chunkOverlap: this.settings.chunking.overlap,
-    };
-    if (this.vector.available && this.vector.dims) {
-      nextMeta.vectorDims = this.vector.dims;
-    }
-
-    this.writeMeta(nextMeta);
-    this.pruneEmbeddingCacheIfNeeded?.();
   }
 
   private resetIndex() {

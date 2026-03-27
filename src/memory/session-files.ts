@@ -3,7 +3,7 @@ import path from "node:path";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { hashText } from "./internal.js";
+import { buildFileIdentityKey, hashText } from "./internal.js";
 
 const log = createSubsystemLogger("memory");
 
@@ -13,6 +13,7 @@ export type SessionFileEntry = {
   mtimeMs: number;
   size: number;
   hash: string;
+  identityKey: string | null;
   content: string;
   /** Maps each content line (0-indexed) to its 1-indexed JSONL source line. */
   lineMap: number[];
@@ -121,6 +122,7 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       mtimeMs: stat.mtimeMs,
       size: stat.size,
       hash: hashText(content + "\n" + lineMap.join(",")),
+      identityKey: buildFileIdentityKey(stat),
       content,
       lineMap,
     };

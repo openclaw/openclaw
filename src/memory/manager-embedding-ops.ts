@@ -23,7 +23,7 @@ import {
   type MemoryChunk,
   type MemoryFileEntry,
 } from "./internal.js";
-import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { MemoryManagerSyncOps, MemorySyncError } from "./manager-sync-ops.js";
 import type { SessionFileEntry } from "./session-files.js";
 import type { MemorySource } from "./types.js";
 
@@ -51,6 +51,30 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected abstract batchFailureLastError?: string;
   protected abstract batchFailureLastProvider?: string;
   protected abstract batchFailureLock: Promise<void>;
+
+  private asProviderSyncError(err: unknown): MemorySyncError {
+    if (err instanceof MemorySyncError) {
+      return err;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return new MemorySyncError({
+      kind: "provider",
+      message,
+      cause: err,
+    });
+  }
+
+  private asLocalSyncError(err: unknown): MemorySyncError {
+    if (err instanceof MemorySyncError) {
+      return err;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return new MemorySyncError({
+      kind: "local",
+      message,
+      cause: err,
+    });
+  }
 
   private buildEmbeddingBatches(chunks: MemoryChunk[]): MemoryChunk[][] {
     const batches: MemoryChunk[][] = [];
@@ -106,20 +130,24 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
 
     const out = new Map<string, number[]>();
-    const baseParams = [this.provider.id, this.provider.model, this.providerKey];
-    const batchSize = 400;
-    for (let start = 0; start < unique.length; start += batchSize) {
-      const batch = unique.slice(start, start + batchSize);
-      const placeholders = batch.map(() => "?").join(", ");
-      const rows = this.db
-        .prepare(
-          `SELECT hash, embedding FROM ${EMBEDDING_CACHE_TABLE}\n` +
-            ` WHERE provider = ? AND model = ? AND provider_key = ? AND hash IN (${placeholders})`,
-        )
-        .all(...baseParams, ...batch) as Array<{ hash: string; embedding: string }>;
-      for (const row of rows) {
-        out.set(row.hash, parseEmbedding(row.embedding));
+    try {
+      const baseParams = [this.provider.id, this.provider.model, this.providerKey];
+      const batchSize = 400;
+      for (let start = 0; start < unique.length; start += batchSize) {
+        const batch = unique.slice(start, start + batchSize);
+        const placeholders = batch.map(() => "?").join(", ");
+        const rows = this.db
+          .prepare(
+            `SELECT hash, embedding FROM ${EMBEDDING_CACHE_TABLE}\n` +
+              ` WHERE provider = ? AND model = ? AND provider_key = ? AND hash IN (${placeholders})`,
+          )
+          .all(...baseParams, ...batch) as Array<{ hash: string; embedding: string }>;
+        for (const row of rows) {
+          out.set(row.hash, parseEmbedding(row.embedding));
+        }
       }
+    } catch (err) {
+      throw this.asLocalSyncError(err);
     }
     return out;
   }
@@ -131,26 +159,30 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (entries.length === 0) {
       return;
     }
-    const now = Date.now();
-    const stmt = this.db.prepare(
-      `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)\n` +
-        ` VALUES (?, ?, ?, ?, ?, ?, ?)\n` +
-        ` ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET\n` +
-        `   embedding=excluded.embedding,\n` +
-        `   dims=excluded.dims,\n` +
-        `   updated_at=excluded.updated_at`,
-    );
-    for (const entry of entries) {
-      const embedding = entry.embedding ?? [];
-      stmt.run(
-        this.provider.id,
-        this.provider.model,
-        this.providerKey,
-        entry.hash,
-        JSON.stringify(embedding),
-        embedding.length,
-        now,
+    try {
+      const now = Date.now();
+      const stmt = this.db.prepare(
+        `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)\n` +
+          ` VALUES (?, ?, ?, ?, ?, ?, ?)\n` +
+          ` ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET\n` +
+          `   embedding=excluded.embedding,\n` +
+          `   dims=excluded.dims,\n` +
+          `   updated_at=excluded.updated_at`,
       );
+      for (const entry of entries) {
+        const embedding = entry.embedding ?? [];
+        stmt.run(
+          this.provider.id,
+          this.provider.model,
+          this.providerKey,
+          entry.hash,
+          JSON.stringify(embedding),
+          embedding.length,
+          now,
+        );
+      }
+    } catch (err) {
+      throw this.asLocalSyncError(err);
     }
   }
 
@@ -162,24 +194,28 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!max || max <= 0) {
       return;
     }
-    const row = this.db.prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`).get() as
-      | { c: number }
-      | undefined;
-    const count = row?.c ?? 0;
-    if (count <= max) {
-      return;
+    try {
+      const row = this.db.prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`).get() as
+        | { c: number }
+        | undefined;
+      const count = row?.c ?? 0;
+      if (count <= max) {
+        return;
+      }
+      const excess = count - max;
+      this.db
+        .prepare(
+          `DELETE FROM ${EMBEDDING_CACHE_TABLE}\n` +
+            ` WHERE rowid IN (\n` +
+            `   SELECT rowid FROM ${EMBEDDING_CACHE_TABLE}\n` +
+            `   ORDER BY updated_at ASC\n` +
+            `   LIMIT ?\n` +
+            ` )`,
+        )
+        .run(excess);
+    } catch (err) {
+      throw this.asLocalSyncError(err);
     }
-    const excess = count - max;
-    this.db
-      .prepare(
-        `DELETE FROM ${EMBEDDING_CACHE_TABLE}\n` +
-          ` WHERE rowid IN (\n` +
-          `   SELECT rowid FROM ${EMBEDDING_CACHE_TABLE}\n` +
-          `   ORDER BY updated_at ASC\n` +
-          `   LIMIT ?\n` +
-          ` )`,
-      )
-      .run(excess);
   }
 
   private async embedChunksInBatches(chunks: MemoryChunk[]): Promise<number[][]> {
@@ -204,9 +240,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       const inputs = batch.map((chunk) => chunk.embeddingInput ?? { text: chunk.text });
       const hasStructuredInputs = inputs.some((input) => hasNonTextEmbeddingParts(input));
       if (hasStructuredInputs && !provider.embedBatchInputs) {
-        throw new Error(
-          `Embedding provider "${provider.id}" does not support multimodal memory inputs.`,
-        );
+        throw new MemorySyncError({
+          kind: "provider",
+          message: `Embedding provider "${provider.id}" does not support multimodal memory inputs.`,
+        });
       }
       const batchEmbeddings = hasStructuredInputs
         ? await this.embedBatchInputsWithRetry(inputs)
@@ -219,9 +256,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           toCache.push({ hash: item.chunk.hash, embedding });
         }
       }
+      this.upsertEmbeddingCache(toCache);
+      toCache.length = 0;
       cursor += batch.length;
     }
-    this.upsertEmbeddingCache(toCache);
     return embeddings;
   }
 
@@ -546,7 +584,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (!this.isRetryableEmbeddingError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
-          throw err;
+          throw this.asProviderSyncError(err);
         }
         await this.waitForEmbeddingRetry(delayMs, "retrying");
         delayMs *= 2;
@@ -580,7 +618,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (!this.isRetryableEmbeddingError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
-          throw err;
+          throw this.asProviderSyncError(err);
         }
         await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
         delayMs *= 2;
@@ -712,11 +750,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         try {
           return await params.run();
         } catch (retryErr) {
-          (retryErr as { batchAttempts?: number }).batchAttempts = 2;
-          throw retryErr;
+          const wrapped = this.asProviderSyncError(retryErr);
+          (wrapped as { batchAttempts?: number }).batchAttempts = 2;
+          throw wrapped;
         }
       }
-      throw err;
+      throw this.asProviderSyncError(err);
     }
   }
 
@@ -780,14 +819,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   private upsertFileRecord(entry: MemoryFileEntry | SessionFileEntry, source: MemorySource): void {
     this.db
       .prepare(
-        `INSERT INTO files (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO files (path, source, hash, identity_key, mtime, size) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET
            source=excluded.source,
            hash=excluded.hash,
+           identity_key=excluded.identity_key,
            mtime=excluded.mtime,
            size=excluded.size`,
       )
-      .run(entry.path, source, entry.hash, entry.mtimeMs, entry.size);
+      .run(entry.path, source, entry.hash, entry.identityKey, entry.mtimeMs, entry.size);
   }
 
   private deleteFileRecord(pathname: string, source: MemorySource): void {
@@ -812,6 +852,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       });
       return;
     }
+    const provider = this.provider;
 
     let chunks: MemoryChunk[];
     let structuredInputBytes: number | undefined;
@@ -827,7 +868,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     } else {
       const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
       chunks = enforceEmbeddingMaxInputTokens(
-        this.provider,
+        provider,
         chunkMarkdown(content, this.settings.chunking).filter(
           (chunk) => chunk.text.trim().length > 0,
         ),
@@ -852,74 +893,81 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         log.warn("memory embeddings: skipping multimodal file rejected as too large", {
           path: entry.path,
           bytes: structuredInputBytes,
-          provider: this.provider.id,
-          model: this.provider.model,
+          provider: provider.id,
+          model: provider.model,
           error: message,
         });
-        this.clearIndexedFileData(entry.path, options.source);
-        this.upsertFileRecord(entry, options.source);
+        this.withIndexWriteSavepoint(() => {
+          this.clearIndexedFileData(entry.path, options.source);
+          this.upsertFileRecord(entry, options.source);
+        });
         return;
       }
-      throw err;
+      if (err instanceof MemorySyncError) {
+        throw err;
+      }
+      throw this.asLocalSyncError(err);
     }
     const sample = embeddings.find((embedding) => embedding.length > 0);
     const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
     const now = Date.now();
-    this.clearIndexedFileData(entry.path, options.source);
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      const embedding = embeddings[i] ?? [];
-      const id = hashText(
-        `${options.source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${this.provider.model}`,
-      );
-      this.db
-        .prepare(
-          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET
-             hash=excluded.hash,
-             model=excluded.model,
-             text=excluded.text,
-             embedding=excluded.embedding,
-             updated_at=excluded.updated_at`,
-        )
-        .run(
-          id,
-          entry.path,
-          options.source,
-          chunk.startLine,
-          chunk.endLine,
-          chunk.hash,
-          this.provider.model,
-          chunk.text,
-          JSON.stringify(embedding),
-          now,
+    this.withIndexWriteSavepoint(() => {
+      this.clearIndexedFileData(entry.path, options.source);
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const embedding = embeddings[i] ?? [];
+        const id = hashText(
+          `${options.source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${provider.model}`,
         );
-      if (vectorReady && embedding.length > 0) {
-        try {
-          this.db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`).run(id);
-        } catch {}
-        this.db
-          .prepare(`INSERT INTO ${VECTOR_TABLE} (id, embedding) VALUES (?, ?)`)
-          .run(id, vectorToBlob(embedding));
-      }
-      if (this.fts.enabled && this.fts.available) {
         this.db
           .prepare(
-            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
-              ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               hash=excluded.hash,
+               model=excluded.model,
+               text=excluded.text,
+               embedding=excluded.embedding,
+               updated_at=excluded.updated_at`,
           )
           .run(
-            chunk.text,
             id,
             entry.path,
             options.source,
-            this.provider.model,
             chunk.startLine,
             chunk.endLine,
+            chunk.hash,
+            provider.model,
+            chunk.text,
+            JSON.stringify(embedding),
+            now,
           );
+        if (vectorReady && embedding.length > 0) {
+          try {
+            this.db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`).run(id);
+          } catch {}
+          this.db
+            .prepare(`INSERT INTO ${VECTOR_TABLE} (id, embedding) VALUES (?, ?)`)
+            .run(id, vectorToBlob(embedding));
+        }
+        if (this.fts.enabled && this.fts.available) {
+          this.db
+            .prepare(
+              `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
+                ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              chunk.text,
+              id,
+              entry.path,
+              options.source,
+              provider.model,
+              chunk.startLine,
+              chunk.endLine,
+            );
+        }
       }
-    }
-    this.upsertFileRecord(entry, options.source);
+      this.upsertFileRecord(entry, options.source);
+    });
   }
 }
