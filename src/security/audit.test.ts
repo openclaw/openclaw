@@ -3737,13 +3737,14 @@ description: test skill
         name: "flags open dmPolicy when runtime/filesystem tools are exposed without guards",
         cfg: {
           channels: { feishu: { dmPolicy: "open" } },
-          tools: { elevated: { enabled: false } },
+          tools: { elevated: { enabled: false }, profile: "coding" },
         } satisfies OpenClawConfig,
         assert: (res: SecurityAuditReport) => {
           expect(res.findings).toEqual(
             expect.arrayContaining([
               expect.objectContaining({
                 checkId: "security.exposure.open_groups_with_runtime_or_fs",
+                severity: "critical",
               }),
             ]),
           );
