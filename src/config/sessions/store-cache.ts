@@ -13,7 +13,9 @@ const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
 const SESSION_STORE_CACHE = createExpiringMapCache<string, SessionStoreCacheEntry>({
   ttlMs: getSessionStoreTtl,
 });
-const SESSION_STORE_SERIALIZED_CACHE = new Map<string, string>();
+const SESSION_STORE_SERIALIZED_CACHE = createExpiringMapCache<string, string>({
+  ttlMs: getSessionStoreTtl,
+});
 
 export function getSessionStoreTtl(): number {
   return resolveCacheTtlMs({
