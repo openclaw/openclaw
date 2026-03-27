@@ -16,6 +16,8 @@ export type SkillScanFinding = {
   line: number;
   message: string;
   evidence: string;
+  /** Category for grouping related findings (e.g., prompt-injection, credential-harvesting) */
+  category?: string;
 };
 
 export type SkillScanSummary = {
@@ -24,12 +26,24 @@ export type SkillScanSummary = {
   warn: number;
   info: number;
   findings: SkillScanFinding[];
+  /** Trust verdict based on scan results */
+  trustVerdict: TrustVerdict;
 };
+
+export type TrustVerdict = "SAFE" | "UNSAFE" | "REVIEW_REQUIRED";
 
 export type SkillScanOptions = {
   includeFiles?: string[];
   maxFiles?: number;
   maxFileBytes?: number;
+  /** Fail on warnings in addition to critical findings */
+  failOnWarnings?: boolean;
+};
+
+export type ManifestValidationResult = {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
 };
 
 // ---------------------------------------------------------------------------
@@ -205,6 +219,380 @@ const SOURCE_RULES: SourceRule[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// YARA-style Pattern Rules (inspired by Cisco skill-scanner)
+// Categories: prompt-injection, credential-harvesting, command-injection,
+//             data-exfiltration, autonomy-abuse, unicode-steganography
+// ---------------------------------------------------------------------------
+
+type YaraStyleRule = {
+  ruleId: string;
+  severity: SkillScanSeverity;
+  message: string;
+  category: string;
+  /** Patterns that must ALL match */
+  patterns: RegExp[];
+  /** Optional: at least one of these must match */
+  anyOf?: RegExp[];
+};
+
+const YARA_STYLE_RULES: YaraStyleRule[] = [
+  // --- Prompt Injection ---
+  {
+    ruleId: "prompt-injection-ignore-previous",
+    severity: "critical",
+    message: "Prompt injection detected: 'ignore previous instructions' pattern",
+    category: "prompt-injection",
+    patterns: [/ignore\s+(all\s+)?previous\s+(instructions?|prompts?|rules?)/i],
+  },
+  {
+    ruleId: "prompt-injection-bypass",
+    severity: "critical",
+    message: "Prompt injection detected: bypass/override safety patterns",
+    category: "prompt-injection",
+    patterns: [/bypass\s+(all\s+)?(safety|security|restrictions?|filters?)/i],
+  },
+  {
+    ruleId: "prompt-injection-unrestricted",
+    severity: "critical",
+    message: "Prompt injection detected: unrestricted/developer mode request",
+    category: "prompt-injection",
+    patterns: [/unrestricted\s+mode|developer\s+mode|god\s+mode|debug\s+mode/i],
+  },
+  {
+    ruleId: "prompt-injection-ignore-guidelines",
+    severity: "critical",
+    message: "Prompt injection detected: instruction to ignore guidelines",
+    category: "prompt-injection",
+    patterns: [/ignore\s+(your\s+)?(guidelines|rules|constraints|training)/i],
+  },
+  {
+    ruleId: "prompt-injection-action-concealment",
+    severity: "warn",
+    message: "Prompt injection detected: instruction to hide actions from user",
+    category: "prompt-injection",
+    patterns: [/(don'?t|do\s+not|never)\s+(show|display|tell|reveal|mention)/i],
+  },
+  {
+    ruleId: "prompt-injection-transitive-trust",
+    severity: "warn",
+    message: "Transitive trust attack: delegating execution to untrusted content",
+    category: "prompt-injection",
+    patterns: [/(execute|run|eval|evalu?ate?)\s+(code|commands?|scripts?)\s+(from|in|found\s+in)/i],
+  },
+  {
+    ruleId: "prompt-injection-coercive",
+    severity: "critical",
+    message: "Coercive instruction: forcing tool execution priority",
+    category: "prompt-injection",
+    patterns: [/always\s+(execute|run|call|use)\s+(this\s+)?tool\s+first/i],
+  },
+
+  // --- Credential Harvesting ---
+  {
+    ruleId: "credential-harvesting-aws",
+    severity: "critical",
+    message: "Credential harvesting: AWS credentials file access",
+    category: "credential-harvesting",
+    patterns: [/\.aws\/credentials|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY/i],
+  },
+  {
+    ruleId: "credential-harvesting-ssh",
+    severity: "critical",
+    message: "Credential harvesting: SSH key file access",
+    category: "credential-harvesting",
+    patterns: [/\.ssh\/id_rsa|\.ssh\/id_ed25519|\.ssh\/.*_key/i],
+  },
+  {
+    ruleId: "credential-harvesting-env",
+    severity: "critical",
+    message: "Credential harvesting: .env file access",
+    category: "credential-harvesting",
+    patterns: [/\.env(\.[\w]+)?(\s|$|["'])/],
+  },
+  {
+    ruleId: "credential-harvesting-keychain",
+    severity: "warn",
+    message: "Credential harvesting: keychain/credential manager access",
+    category: "credential-harvesting",
+    patterns: [/keychain|credentials?\s+manager|password\s+store/i],
+  },
+  {
+    ruleId: "credential-harvesting-gcloud",
+    severity: "critical",
+    message: "Credential harvesting: GCP credentials access",
+    category: "credential-harvesting",
+    patterns: [/\.config\/gcloud|GOOGLE_APPLICATION_CREDENTIALS|gcloud\/credentials/i],
+  },
+  {
+    ruleId: "credential-harvesting-azure",
+    severity: "critical",
+    message: "Credential harvesting: Azure credentials access",
+    category: "credential-harvesting",
+    patterns: [/\.azure\/credentials|AZURE_TENANT_ID|AZURE_CLIENT_SECRET/i],
+  },
+
+  // --- Command Injection ---
+  {
+    ruleId: "command-injection-shell-true",
+    severity: "critical",
+    message: "Command injection risk: shell=True with potential user input",
+    category: "command-injection",
+    patterns: [/subprocess.*shell\s*=\s*True|subprocess\.call.*shell\s*=\s*True/i],
+  },
+  {
+    ruleId: "command-injection-os-system",
+    severity: "critical",
+    message: "Command injection risk: os.system call",
+    category: "command-injection",
+    patterns: [/os\.system\s*\(/],
+  },
+  {
+    ruleId: "command-injection-reverse-shell",
+    severity: "critical",
+    message: "Command injection: reverse shell pattern detected",
+    category: "command-injection",
+    patterns: [/\/dev\/tcp\/|nc\s+-[elp]|bash\s+-[ci].*\/dev\/tcp|socat\s+EXEC/i],
+  },
+  {
+    ruleId: "command-injection-rm-rf",
+    severity: "critical",
+    message: "Destructive command: rm -rf pattern detected",
+    category: "command-injection",
+    patterns: [/\brm\s+(-[rf]+\s+|.*-[rf]+\b)/],
+  },
+  {
+    ruleId: "command-injection-dd",
+    severity: "critical",
+    message: "Destructive command: dd overwrite pattern detected",
+    category: "command-injection",
+    patterns: [/dd\s+.*of=\/dev\//],
+  },
+  {
+    ruleId: "command-injection-curl-post",
+    severity: "warn",
+    message: "Suspicious: curl POST with potential credential exfiltration",
+    category: "command-injection",
+    patterns: [/curl\s+.*-X\s+POST|curl\s+.*--data(-raw)?\s+/],
+    anyOf: [/password|secret|token|key|credential/i],
+  },
+
+  // --- Data Exfiltration ---
+  {
+    ruleId: "exfiltration-base64-network",
+    severity: "critical",
+    message: "Data exfiltration: base64 encode before network send",
+    category: "data-exfiltration",
+    patterns: [/(btoa|Buffer\.from.*base64|base64.*encode)/i],
+    anyOf: [/fetch\s*\(|\.post\s*\(|http\.request|axios|request\s*\(/],
+  },
+  {
+    ruleId: "exfiltration-collect-send",
+    severity: "info",
+    message: "Potential exfiltration: collect-then-send pattern",
+    category: "data-exfiltration",
+    patterns: [/readFile|readFileSync|fs\.read/],
+    anyOf: [/fetch|\.post|http\.request|axios/i],
+  },
+  {
+    ruleId: "exfiltration-dns-tunnel",
+    severity: "warn",
+    message: "Possible DNS tunneling/exfiltration via DNS queries",
+    category: "data-exfiltration",
+    patterns: [/dns\.lookup|resolve.*dns|\.dig\s+/i],
+  },
+
+  // --- Autonomy Abuse ---
+  {
+    ruleId: "autonomy-bypass-confirm",
+    severity: "warn",
+    message: "Autonomy abuse: bypassing user confirmation",
+    category: "autonomy-abuse",
+    patterns: [/(skip|bypass|ignore)\s+(user\s+)?(confirmation|approval|consent)/i],
+  },
+  {
+    ruleId: "autonomy-infinite-retry",
+    severity: "warn",
+    message: "Autonomy abuse: infinite retry loop pattern",
+    category: "autonomy-abuse",
+    patterns: [/while\s*\(\s*true\s*\)|for\s*\(\s*;\s*;\s*\)/],
+    anyOf: [/retry|attempt|try\s+again/i],
+  },
+  {
+    ruleId: "autonomy-self-modify",
+    severity: "critical",
+    message: "Autonomy abuse: self-modification capability",
+    category: "autonomy-abuse",
+    patterns: [/writeFile.*__filename|fs\.write.*process\.argv\[1\]/],
+  },
+  {
+    ruleId: "autonomy-blind-error",
+    severity: "warn",
+    message: "Autonomy abuse: blind error suppression",
+    category: "autonomy-abuse",
+    patterns: [/catch\s*\(\s*\w*\s*\)\s*\{\s*(\/\/|\/\*)?\s*\}/],
+  },
+
+  // --- Unicode Steganography ---
+  {
+    ruleId: "steganography-zero-width",
+    severity: "warn",
+    message: "Unicode steganography: zero-width characters detected",
+    category: "unicode-steganography",
+    // eslint-disable-next-line no-misleading-character-class
+    patterns: [/[\u200B\u200C\u200D\uFEFF]/],
+  },
+  {
+    ruleId: "steganography-rtl-override",
+    severity: "warn",
+    message: "Unicode steganography: RTL override character detected",
+    category: "unicode-steganography",
+    patterns: [/[\u202E\u2066\u2067\u2068\u2069]/],
+  },
+  {
+    ruleId: "steganography-invisible",
+    severity: "warn",
+    message: "Unicode steganography: invisible/tag characters detected",
+    category: "unicode-steganography",
+    // eslint-disable-next-line no-misleading-character-class
+    patterns: [/[\u00AD\u034F\u061C\u17B4\u17B5\u180E\u2060\u2064]/],
+  },
+
+  // --- System Manipulation ---
+  {
+    ruleId: "system-crontab",
+    severity: "critical",
+    message: "System manipulation: crontab modification",
+    category: "system-manipulation",
+    patterns: [/crontab\s+-|\/etc\/cron/i],
+  },
+  {
+    ruleId: "system-hosts",
+    severity: "critical",
+    message: "System manipulation: hosts file modification",
+    category: "system-manipulation",
+    patterns: [/\/etc\/hosts|\\windows\\system32\\drivers\\etc\\hosts/i],
+  },
+  {
+    ruleId: "system-firewall",
+    severity: "warn",
+    message: "System manipulation: firewall modification",
+    category: "system-manipulation",
+    patterns: [/iptables|ufw\s+(allow|deny)|firewall-cmd/i],
+  },
+  {
+    ruleId: "system-kernel-module",
+    severity: "critical",
+    message: "System manipulation: kernel module loading",
+    category: "system-manipulation",
+    patterns: [/modprobe|insmod|\/sbin\/modprobe/i],
+  },
+  {
+    ruleId: "systemd-unit",
+    severity: "warn",
+    message: "System manipulation: systemd unit modification",
+    category: "system-manipulation",
+    patterns: [/systemctl\s+(enable|start|create)|\.service\s*\[Install\]/i],
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Hardcoded Secret Detection Patterns
+// ---------------------------------------------------------------------------
+
+type SecretPattern = {
+  ruleId: string;
+  name: string;
+  pattern: RegExp;
+  severity: SkillScanSeverity;
+};
+
+const SECRET_PATTERNS: SecretPattern[] = [
+  {
+    ruleId: "secret-aws-access-key",
+    name: "AWS Access Key ID",
+    pattern: /(?<![A-Z0-9])AKIA[0-9A-Z]{16}(?![A-Z0-9])/,
+    severity: "critical",
+  },
+  {
+    ruleId: "secret-aws-secret",
+    name: "AWS Secret Access Key",
+    // Narrow pattern: must have AWS-related context or typical secret key characteristics
+    // AWS secrets are base64-like but more specific: typically start with specific patterns
+    pattern:
+      /(?:AWS|aws|secret|key|credential|token).*?[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+\])/,
+    severity: "critical",
+  },
+  {
+    ruleId: "secret-github-token",
+    name: "GitHub Personal Access Token",
+    pattern: /ghp_[A-Za-z0-9]{36}/,
+    severity: "critical",
+  },
+  {
+    ruleId: "secret-github-oauth",
+    name: "GitHub OAuth Access Token",
+    pattern: /gho_[A-Za-z0-9]{36}/,
+    severity: "critical",
+  },
+  {
+    ruleId: "secret-stripe-live",
+    name: "Stripe Live Secret Key",
+    pattern: /sk_live_[0-9a-zA-Z]{24}/,
+    severity: "critical",
+  },
+  {
+    ruleId: "secret-stripe-test",
+    name: "Stripe Test Secret Key",
+    pattern: /sk_test_[0-9a-zA-Z]{24}/,
+    severity: "warn",
+  },
+  {
+    ruleId: "secret-jwt",
+    name: "JWT Token",
+    pattern: /eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*/,
+    severity: "critical",
+  },
+  {
+    ruleId: "secret-private-key",
+    name: "Private Key Block",
+    pattern: /-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----/,
+    severity: "critical",
+  },
+  {
+    ruleId: "secret-connection-string",
+    name: "Database Connection String",
+    pattern: /(mongodb|mysql|postgres|postgresql|redis):\/\/[^:]+:[^@]+@/i,
+    severity: "critical",
+  },
+  {
+    ruleId: "secret-generic-api-key",
+    name: "Generic API Key Pattern",
+    pattern:
+      /\b(api[_-]?key|apikey|secret[_-]?key|auth[_-]?token)\s*[=:]\s*['"][A-Za-z0-9_-]{20,}['"]/i,
+    severity: "warn",
+  },
+  {
+    ruleId: "secret-slack-token",
+    name: "Slack Token",
+    pattern: /xox[baprs]-[0-9]{10,}-[0-9]{10,}-[a-zA-Z0-9]+/,
+    severity: "critical",
+  },
+  {
+    ruleId: "secret-openai-key",
+    name: "OpenAI API Key",
+    // Match current and legacy OpenAI key formats
+    pattern: /sk-(?:proj-[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{20,}T3BlbkFJ|[A-Za-z0-9]{48})/,
+    severity: "critical",
+  },
+  {
+    ruleId: "secret-google-api",
+    name: "Google API Key",
+    pattern: /AIza[A-Za-z0-9_-]{35}/,
+    severity: "critical",
+  },
+];
+
+// ---------------------------------------------------------------------------
 // Core scanner
 // ---------------------------------------------------------------------------
 
@@ -213,6 +601,20 @@ function truncateEvidence(evidence: string, maxLen = 120): string {
     return evidence;
   }
   return `${evidence.slice(0, maxLen)}…`;
+}
+
+/** Redact potential secrets in evidence strings */
+function redactSecrets(text: string): string {
+  let result = text;
+  for (const secret of SECRET_PATTERNS) {
+    result = result.replace(secret.pattern, (match) => {
+      if (match.length <= 8) {
+        return "****";
+      }
+      return match.slice(0, 4) + "****" + match.slice(-4);
+    });
+  }
+  return result;
 }
 
 export function scanSource(source: string, filePath: string): SkillScanFinding[] {
@@ -252,7 +654,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
         file: filePath,
         line: i + 1,
         message: rule.message,
-        evidence: truncateEvidence(line.trim()),
+        evidence: truncateEvidence(redactSecrets(line.trim())),
       });
       matchedLineRules.add(rule.ruleId);
       break; // one finding per line-rule per file
@@ -300,9 +702,70 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       file: filePath,
       line: matchLine,
       message: rule.message,
-      evidence: truncateEvidence(matchEvidence),
+      evidence: truncateEvidence(redactSecrets(matchEvidence)),
     });
     matchedSourceRules.add(ruleKey);
+  }
+
+  // --- YARA-style rules ---
+  for (const rule of YARA_STYLE_RULES) {
+    // Check all required patterns match
+    const allPatternsMatch = rule.patterns.every((p) => p.test(source));
+    if (!allPatternsMatch) {
+      continue;
+    }
+
+    // Check anyOf condition if present
+    if (rule.anyOf && !rule.anyOf.some((p) => p.test(source))) {
+      continue;
+    }
+
+    // Find the first matching line for evidence
+    let matchLine = 1;
+    let matchEvidence = "";
+    for (let i = 0; i < lines.length; i++) {
+      if (rule.patterns.some((p) => p.test(lines[i]))) {
+        matchLine = i + 1;
+        matchEvidence = lines[i].trim();
+        break;
+      }
+    }
+
+    findings.push({
+      ruleId: rule.ruleId,
+      severity: rule.severity,
+      file: filePath,
+      line: matchLine,
+      message: rule.message,
+      evidence: truncateEvidence(redactSecrets(matchEvidence)),
+      category: rule.category,
+    });
+  }
+
+  // --- Secret detection ---
+  for (const secret of SECRET_PATTERNS) {
+    // Create a global version of the pattern for matchAll
+    const globalPattern = new RegExp(secret.pattern.source, secret.pattern.flags.includes("g") ? secret.pattern.flags : secret.pattern.flags + "g");
+    const matches = source.matchAll(globalPattern);
+    for (const match of matches) {
+      // Find line number
+      const beforeMatch = source.slice(0, match.index);
+      const lineNum = (beforeMatch.match(/\n/g) || []).length + 1;
+
+      // Redact the secret in evidence
+      const line = lines[lineNum - 1] || "";
+      const redacted = redactSecrets(line.trim());
+
+      findings.push({
+        ruleId: secret.ruleId,
+        severity: secret.severity,
+        file: filePath,
+        line: lineNum,
+        message: `Hardcoded secret detected: ${secret.name}`,
+        evidence: truncateEvidence(redacted),
+        category: "hardcoded-secrets",
+      });
+    }
   }
 
   return findings;
@@ -317,6 +780,7 @@ function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOption
     includeFiles: opts?.includeFiles ?? [],
     maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
     maxFileBytes: Math.max(1, opts?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES),
+    failOnWarnings: opts?.failOnWarnings ?? false,
   };
 }
 
@@ -573,11 +1037,271 @@ export async function scanDirectoryWithSummary(
     }
   }
 
+  // Compute trust verdict
+  const trustVerdict = computeTrustVerdict(critical, warn, scanOptions.failOnWarnings);
+
   return {
     scannedFiles,
     critical,
     warn,
     info,
     findings: allFindings,
+    trustVerdict,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Trust Scoring
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute trust verdict based on scan results
+ * - SAFE: No findings or only info-level findings
+ * - REVIEW_REQUIRED: Warnings present (and failOnWarnings=false)
+ * - UNSAFE: Critical findings present (or warnings with failOnWarnings=true)
+ */
+export function computeTrustVerdict(
+  criticalCount: number,
+  warnCount: number,
+  failOnWarnings: boolean = false,
+): TrustVerdict {
+  if (criticalCount > 0) {
+    return "UNSAFE";
+  }
+  if (warnCount > 0 && failOnWarnings) {
+    return "UNSAFE";
+  }
+  if (warnCount > 0) {
+    return "REVIEW_REQUIRED";
+  }
+  return "SAFE";
+}
+
+/**
+ * Check if a skill should be blocked based on trust verdict
+ */
+export function shouldBlockSkill(verdict: TrustVerdict): boolean {
+  return verdict === "UNSAFE";
+}
+
+// ---------------------------------------------------------------------------
+// Manifest Validation
+// ---------------------------------------------------------------------------
+
+export type SkillManifest = {
+  name?: string;
+  version?: string;
+  description?: string;
+  triggers?: string[];
+  capabilities?: string[];
+  author?: string;
+  homepage?: string;
+  repository?: string;
+  license?: string;
+  keywords?: string[];
+  [key: string]: unknown;
+};
+
+/**
+ * Validate a skill manifest for security concerns
+ * Checks for:
+ * - Required fields presence
+ * - Description quality (not too generic, not keyword-stuffed)
+ * - Unicode steganography in text fields
+ * - Overly broad or suspicious triggers
+ */
+export function validateManifest(manifest: SkillManifest): ManifestValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  // Required fields
+  if (!manifest.name || manifest.name.trim().length === 0) {
+    errors.push("Manifest missing required field: name");
+  }
+
+  if (!manifest.description || manifest.description.trim().length === 0) {
+    errors.push("Manifest missing required field: description");
+  }
+
+  // Description quality checks
+  if (manifest.description) {
+    const desc = manifest.description;
+
+    // Too short
+    if (desc.length < 20) {
+      warnings.push("Description is too short (less than 20 characters)");
+    }
+
+    // Too generic
+    const genericPhrases = [
+      /^a\s+skill$/i,
+      /^an?\s+\w+\s+skill$/i,
+      /^helpful\s+skill$/i,
+      /^utility\s+skill$/i,
+    ];
+    if (genericPhrases.some((p) => p.test(desc.trim()))) {
+      warnings.push("Description is too generic - lacks specificity");
+    }
+
+    // Keyword stuffing (many repeated words)
+    const words = desc.toLowerCase().split(/\s+/);
+    const wordCounts = new Map<string, number>();
+    for (const word of words) {
+      if (word.length < 4) {
+        continue;
+      } // Skip short words
+      wordCounts.set(word, (wordCounts.get(word) || 0) + 1);
+    }
+    const maxRepeats = Math.max(...wordCounts.values(), 0);
+    if (maxRepeats > 3) {
+      warnings.push("Description may be keyword-stuffed (repeated words)");
+    }
+
+    // Unicode steganography check
+    // eslint-disable-next-line no-misleading-character-class
+    const zeroWidthChars = desc.match(/[\u200B\u200C\u200D\uFEFF\u202E]/g);
+    if (zeroWidthChars && zeroWidthChars.length > 0) {
+      errors.push("Description contains hidden Unicode characters (possible steganography)");
+    }
+  }
+
+  // Triggers validation
+  if (manifest.triggers && Array.isArray(manifest.triggers)) {
+    for (const trigger of manifest.triggers) {
+      if (typeof trigger !== "string") {
+        errors.push(`Invalid trigger type: ${typeof trigger}`);
+        continue;
+      }
+
+      // Overly broad triggers
+      if (/^(always|any|every|all|\*|\.|\.\*)$/i.test(trigger.trim())) {
+        warnings.push(`Overly broad trigger: "${trigger}" may activate too frequently`);
+      }
+
+      // Trigger too short
+      if (trigger.trim().length < 3) {
+        warnings.push(`Trigger "${trigger}" is very short and may cause false activations`);
+      }
+    }
+  }
+
+  // Capabilities validation
+  if (manifest.capabilities && Array.isArray(manifest.capabilities)) {
+    const suspiciousCapabilities = new Set([
+      "full_disk_access",
+      "root_access",
+      "admin_access",
+      "unrestricted_network",
+      "unrestricted_filesystem",
+      "bypass_sandbox",
+    ]);
+    for (const cap of manifest.capabilities) {
+      if (typeof cap === "string" && suspiciousCapabilities.has(cap.toLowerCase())) {
+        warnings.push(`Suspicious capability declared: ${cap}`);
+      }
+    }
+  }
+
+  // Unicode steganography in other text fields
+  const textFields = ["name", "author", "homepage", "repository"];
+  for (const field of textFields) {
+    const value = manifest[field];
+    if (typeof value === "string") {
+      // eslint-disable-next-line no-misleading-character-class
+      const hiddenChars = value.match(/[\u200B\u200C\u200D\uFEFF\u202E]/g);
+      if (hiddenChars && hiddenChars.length > 0) {
+        errors.push(`Field "${field}" contains hidden Unicode characters`);
+      }
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+  };
+}
+
+/**
+ * Validate a SKILL.md manifest file
+ */
+export async function validateSkillManifestFile(
+  skillDir: string,
+): Promise<ManifestValidationResult> {
+  const manifestPath = path.join(skillDir, "SKILL.md");
+
+  try {
+    const content = await fs.readFile(manifestPath, "utf-8");
+
+    // Parse frontmatter if present
+    let manifest: SkillManifest = {};
+
+    // Accept both LF and CRLF line endings for cross-platform compatibility
+    const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+    if (frontmatterMatch) {
+      const frontmatter = frontmatterMatch[1];
+      // Simple YAML-like parsing for basic fields
+      for (const line of frontmatter.split(/\r?\n/)) {
+        const colonIdx = line.indexOf(":");
+        if (colonIdx > 0) {
+          const key = line.slice(0, colonIdx).trim();
+          let value: string | string[] = line.slice(colonIdx + 1).trim();
+
+          // Handle arrays (simple format: [item1, item2])
+          if (value.startsWith("[") && value.endsWith("]")) {
+            value = value
+              .slice(1, -1)
+              .split(",")
+              .map((s) => s.trim().replace(/^["']|["']$/g, ""));
+          } else if (value === "") {
+            // Empty value after colon — likely a YAML block list header (e.g., "triggers:")
+            value = [];
+          } else {
+            value = value.replace(/^["']|["']$/g, "");
+          }
+
+          (manifest as Record<string, unknown>)[key] = value;
+        } else if (line.match(/^\s*-\s+/)) {
+          // YAML block list item (e.g., "  - always")
+          const item = line.replace(/^\s*-\s+/, "").trim().replace(/^["']|["']$/g, "");
+          const keys = Object.keys(manifest as Record<string, unknown>);
+          const lastKey = keys[keys.length - 1];
+          if (lastKey) {
+            const current = (manifest as Record<string, unknown>)[lastKey];
+            if (Array.isArray(current)) {
+              (current as string[]).push(item);
+            }
+          }
+        }
+      }
+    }
+
+    // Extract description from content if not in frontmatter
+    // Strip frontmatter first to avoid picking up --- delimiters
+    if (!manifest.description) {
+      let bodyContent = content;
+      // Remove YAML frontmatter if present
+      const frontmatterMatch = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
+      if (frontmatterMatch) {
+        bodyContent = content.slice(frontmatterMatch[0].length);
+      }
+      const lines = bodyContent
+        .split("\n")
+        .filter((l) => l.trim() && !l.startsWith("#") && !l.startsWith("---"));
+      if (lines.length > 0) {
+        manifest.description = lines[0].trim();
+      }
+    }
+
+    return validateManifest(manifest);
+  } catch (err) {
+    if (hasErrnoCode(err, "ENOENT")) {
+      return {
+        valid: false,
+        errors: ["SKILL.md not found"],
+        warnings: [],
+      };
+    }
+    throw err;
+  }
 }
