@@ -1196,9 +1196,12 @@ export async function startGatewayServer(
         }
         return false;
       },
-      disconnectClientsForDevice: (deviceId: string) => {
+      disconnectClientsForDevice: (deviceId: string, opts?: { role?: string }) => {
         for (const gatewayClient of clients) {
           if (gatewayClient.connect.device?.id !== deviceId) {
+            continue;
+          }
+          if (opts?.role && gatewayClient.connect.role !== opts.role) {
             continue;
           }
           try {

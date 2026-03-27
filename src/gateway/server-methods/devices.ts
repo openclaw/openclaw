@@ -285,7 +285,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const normalizedDeviceId = deviceId.trim();
-    context.disconnectClientsForDevice?.(normalizedDeviceId);
+    context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
     context.logGateway.info(`device token revoked device=${normalizedDeviceId} role=${entry.role}`);
     respond(
       true,

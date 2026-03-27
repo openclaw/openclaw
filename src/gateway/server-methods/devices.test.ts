@@ -89,7 +89,9 @@ describe("deviceHandlers", () => {
       deviceId: " device-1 ",
       role: " operator ",
     });
-    expect(opts.context.disconnectClientsForDevice).toHaveBeenCalledWith("device-1");
+    expect(opts.context.disconnectClientsForDevice).toHaveBeenCalledWith("device-1", {
+      role: "operator",
+    });
     expect(opts.respond).toHaveBeenCalledWith(
       true,
       { deviceId: "device-1", role: "operator", revokedAtMs: 456 },
