@@ -11,8 +11,18 @@ export type DeviceBootstrapProfileInput = {
 };
 
 export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
-  roles: ["node"],
-  scopes: [],
+  roles: ["operator", "node"],
+  scopes: [
+    "operator.read",
+    "operator.write",
+    "operator.talk.secrets",
+    "operator.approvals",
+    "operator.pairing",
+    "node.exec",
+    "node.display",
+    "node.camera",
+    "node.voice",
+  ],
 };
 
 function normalizeBootstrapRoles(roles: readonly string[] | undefined): string[] {
