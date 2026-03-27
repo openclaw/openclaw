@@ -77,6 +77,7 @@ export function resolvePluginProviders(params: {
     pluginSdkResolution: params.pluginSdkResolution,
     cache: params.cache ?? false,
     activate: params.activate ?? false,
+    providerOnly: !(params.activate ?? false),
     logger: createPluginLoaderLogger(log),
   });
 
