@@ -614,37 +614,28 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    let requestAuth;
+    let apiKey: string | undefined;
     try {
-      requestAuth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+      apiKey = await ctx.modelRegistry.getApiKey(model);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
-      log.warn(`Compaction safeguard: request auth unavailable; cancelling compaction. ${error}`);
-      setCompactionSafeguardCancelReason(
-        ctx.sessionManager,
-        `Compaction safeguard could not resolve request auth for ${model.provider}/${model.id}: ${error}`,
-      );
-      return { cancel: true };
-    }
-    if (!requestAuth.ok) {
       log.warn(
-        `Compaction safeguard: request auth resolution failed for ${model.provider}/${model.id}: ${requestAuth.error}`,
+        `Compaction safeguard: request credentials unavailable; cancelling compaction. ${error}`,
       );
       setCompactionSafeguardCancelReason(
         ctx.sessionManager,
-        `Compaction safeguard could not resolve request auth for ${model.provider}/${model.id}: ${requestAuth.error}`,
+        `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${error}`,
       );
       return { cancel: true };
     }
-    const apiKey = requestAuth.apiKey ?? "";
-    const headers = requestAuth.headers ?? model.headers;
+    const headers = model.headers;
     if (!apiKey && !headers) {
       log.warn(
-        "Compaction safeguard: no request auth available; cancelling compaction to preserve history.",
+        "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
       );
       setCompactionSafeguardCancelReason(
         ctx.sessionManager,
-        `Compaction safeguard could not resolve request auth for ${model.provider}/${model.id}.`,
+        `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}.`,
       );
       return { cancel: true };
     }
@@ -710,7 +701,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 droppedSummary = await compactionSafeguardDeps.summarizeInStages({
                   messages: pruned.droppedMessagesList,
                   model,
-                  apiKey,
+                  apiKey: apiKey ?? "",
                   headers,
                   signal,
                   reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
@@ -782,7 +773,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               ? await compactionSafeguardDeps.summarizeInStages({
                   messages: messagesToSummarize,
                   model,
-                  apiKey,
+                  apiKey: apiKey ?? "",
                   headers,
                   signal,
                   reserveTokens,
@@ -799,7 +790,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             const prefixSummary = await compactionSafeguardDeps.summarizeInStages({
               messages: turnPrefixMessages,
               model,
-              apiKey,
+              apiKey: apiKey ?? "",
               headers,
               signal,
               reserveTokens,
