@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
@@ -126,7 +126,7 @@ function buildCacheKey(params: {
   const workspaceKey = roots.workspace ?? "";
   const configExtensionsRoot = roots.global;
   const bundledRoot = roots.stock ?? "";
-  const runtimeServiceVersion = resolveRuntimeServiceVersion(params.env);
+  const runtimeServiceVersion = resolveCompatibilityHostVersion(params.env);
   // The manifest registry only depends on where plugins are discovered from (workspace + load paths).
   // It does not depend on allow/deny/entries enable-state, so exclude those for higher cache hit rates.
   return `${workspaceKey}::${configExtensionsRoot}::${bundledRoot}::${runtimeServiceVersion}::${JSON.stringify(loadPaths)}`;
@@ -352,7 +352,7 @@ export function loadPluginManifestRegistry(
   const records: PluginManifestRecord[] = [];
   const seenIds = new Map<string, SeenIdEntry>();
   const realpathCache = new Map<string, string>();
-  const currentHostVersion = resolveRuntimeServiceVersion(env);
+  const currentHostVersion = resolveCompatibilityHostVersion(env);
 
   for (const candidate of candidates) {
     const rejectHardlinks = candidate.origin !== "bundled";
