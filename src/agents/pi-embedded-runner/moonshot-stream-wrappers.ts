@@ -4,7 +4,10 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { usesMoonshotThinkingPayloadCompat } from "../provider-capabilities.js";
 import { normalizeProviderId } from "../provider-id.js";
 
-export { createMoonshotThinkingWrapper, resolveMoonshotThinkingType } from "./moonshot-thinking-stream-wrappers.js";
+export {
+  createMoonshotThinkingWrapper,
+  resolveMoonshotThinkingType,
+} from "./moonshot-thinking-stream-wrappers.js";
 
 export function shouldApplySiliconFlowThinkingOffCompat(params: {
   provider: string;

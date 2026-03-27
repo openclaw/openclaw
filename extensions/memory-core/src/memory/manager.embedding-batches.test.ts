@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { useFastShortTimeouts } from "../../../../test/helpers/fast-short-timeouts.js";
+import type { MemorySyncProgressUpdate } from "../engine-host-api.js";
 import { installEmbeddingManagerFixture } from "./embedding-manager.test-harness.js";
-import type { MemorySyncProgressUpdate } from "./types.js";
 
 const fx = installEmbeddingManagerFixture({
   fixturePrefix: "openclaw-mem-",
