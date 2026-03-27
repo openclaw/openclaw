@@ -161,6 +161,39 @@ describe("hooks mapping", () => {
     expect(mappings[0]?.matchPath).toBe("gmail");
   });
 
+  it("rejects static mapping sessionKey targeting reserved internal namespaces", () => {
+    expect(() =>
+      resolveHookMappings({
+        mappings: [
+          {
+            id: "reserved-session",
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "agent:main:subagent:worker",
+          },
+        ],
+      }),
+    ).toThrow(
+      "hook mapping 'reserved-session' sessionKey may not target internal session namespace subagent:",
+    );
+  });
+
+  it("allows templated mapping sessionKey to defer validation until runtime", () => {
+    const mappings = resolveHookMappings({
+      mappings: [
+        {
+          id: "templated-session",
+          match: { path: "gmail" },
+          action: "agent",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+          sessionKey: "hook:{{messages[0].subject}}",
+        },
+      ],
+    });
+    expect(mappings[0]?.sessionKey).toBe("hook:{{messages[0].subject}}");
+  });
+
   it("renders template from payload", async () => {
     const result = await applyGmailMappings({
       mappings: [

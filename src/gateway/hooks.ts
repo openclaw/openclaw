@@ -11,6 +11,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
+import { resolveReservedHookSessionKeyPrefix } from "./hook-session-key.js";
 import {
   hasHookTemplateExpressions,
   type HookMappingResolved,
@@ -22,7 +23,6 @@ import type { HookMessageChannel } from "./hooks.types.js";
 const DEFAULT_HOOKS_PATH = "/hooks";
 const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
 const MAX_HOOK_IDEMPOTENCY_KEY_LENGTH = 256;
-const HOOK_RESERVED_SESSION_KEY_PREFIXES = ["subagent:", "acp:", "cron:"] as const;
 
 export type HooksConfigResolved = {
   basePath: string;
@@ -154,22 +154,6 @@ export function isSessionKeyAllowedByPrefix(sessionKey: string, prefixes: string
     return false;
   }
   return prefixes.some((prefix) => normalized.startsWith(prefix));
-}
-
-function normalizeHookValidatedSessionKey(raw: string | undefined): string | undefined {
-  const value = resolveSessionKey(raw);
-  if (!value) {
-    return undefined;
-  }
-  return parseAgentSessionKey(value)?.rest ?? value;
-}
-
-function resolveReservedHookSessionKeyPrefix(sessionKey: string | undefined): string | undefined {
-  const normalized = normalizeHookValidatedSessionKey(sessionKey)?.toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  return HOOK_RESERVED_SESSION_KEY_PREFIXES.find((prefix) => normalized.startsWith(prefix));
 }
 
 export function extractHookToken(req: IncomingMessage): string | undefined {
