@@ -225,7 +225,8 @@ beforeEach(() => {
   sendMocks.reactMessageDiscord.mockClear();
   sendMocks.removeReactionDiscord.mockClear();
   editMessageDiscord.mockClear();
-  deliverDiscordReply.mockClear();
+  deliverDiscordReply.mockReset();
+  deliverDiscordReply.mockResolvedValue(undefined);
   createDiscordDraftStream.mockClear();
   dispatchInboundMessage.mockClear();
   recordInboundSession.mockClear();
@@ -703,6 +704,83 @@ describe("processDiscordMessage draft streaming", () => {
     await processDiscordMessage(ctx as any);
 
     expect(getDeliveredReplyTexts()).toEqual(["USD/KRW is 1400", "🔧 exec: rate lookup"]);
+  });
+
+  it("drops deferred tool summaries when dispatch fails before a final reply", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendToolResult({ text: "🔧 exec: rate lookup" });
+      throw new Error("simulated dispatch failure");
+    });
+
+    const ctx = await createBaseContext({
+      ...createDirectMessageContextOverrides(),
+      discordConfig: { streamMode: "off" },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await expect(processDiscordMessage(ctx as any)).rejects.toThrow("simulated dispatch failure");
+
+    expect(getDeliveredReplyTexts()).toEqual([]);
+  });
+
+  it("continues flushing later deferred tool summaries after one send fails", async () => {
+    deliverDiscordReply.mockImplementation(async (params: unknown) => {
+      const text = (params as { replies?: Array<{ text?: string }> })?.replies?.[0]?.text;
+      if (text === "first deferred") {
+        throw new Error("simulated deferred send failure");
+      }
+    });
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendToolResult({ text: "first deferred" });
+      await params?.dispatcher.sendToolResult({ text: "second deferred" });
+      await params?.dispatcher.sendFinalReply({ text: "final first" });
+      return { queuedFinal: true, counts: { final: 1, tool: 2, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      ...createDirectMessageContextOverrides(),
+      discordConfig: { streamMode: "off" },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(getDeliveredReplyTexts()).toEqual(["final first", "first deferred", "second deferred"]);
+  });
+
+  it("bounds deferred tool summaries and appends an overflow notice", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      for (let index = 1; index <= 13; index += 1) {
+        await params?.dispatcher.sendToolResult({ text: `tool ${index}` });
+      }
+      await params?.dispatcher.sendFinalReply({ text: "final first" });
+      return { queuedFinal: true, counts: { final: 1, tool: 13, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      ...createDirectMessageContextOverrides(),
+      discordConfig: { streamMode: "off" },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(getDeliveredReplyTexts()).toEqual([
+      "final first",
+      "tool 1",
+      "tool 2",
+      "tool 3",
+      "tool 4",
+      "tool 5",
+      "tool 6",
+      "tool 7",
+      "tool 8",
+      "tool 9",
+      "tool 10",
+      "tool 11",
+      "tool 12",
+      "Note: 1 additional tool update was suppressed to keep Discord delivery bounded.",
+    ]);
   });
 
   it("streams block previews using draft chunking", async () => {

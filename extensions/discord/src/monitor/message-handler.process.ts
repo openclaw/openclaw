@@ -498,11 +498,15 @@ export async function processDiscordMessage(
       : undefined;
   const shouldSplitPreviewMessages = discordStreamMode === "block";
   const draftChunker = draftChunking ? new EmbeddedBlockChunker(draftChunking) : undefined;
+  const MAX_DEFERRED_TOOL_SUMMARIES = 12;
+  const MAX_DEFERRED_TOOL_SUMMARY_CHARS = 12_000;
   let lastPartialText = "";
   let draftText = "";
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
   const deferredToolSummaries: ReplyPayload[] = [];
+  let deferredToolSummaryChars = 0;
+  let suppressedDeferredToolSummaries = 0;
 
   const resolvePreviewFinalText = (text?: string) => {
     if (typeof text !== "string") {
@@ -609,6 +613,12 @@ export async function processDiscordMessage(
     await draftStream.flush();
   };
 
+  const clearDeferredToolSummaries = () => {
+    deferredToolSummaries.length = 0;
+    deferredToolSummaryChars = 0;
+    suppressedDeferredToolSummaries = 0;
+  };
+
   const shouldDeferToolSummary = (payload: ReplyPayload, kind: "tool" | "block" | "final") => {
     if (kind !== "tool" || payload.isError) {
       return false;
@@ -654,13 +664,51 @@ export async function processDiscordMessage(
     }
   };
 
+  const queueDeferredToolSummary = (payload: ReplyPayload) => {
+    const nextText = payload.text ?? "";
+    if (
+      deferredToolSummaries.length >= MAX_DEFERRED_TOOL_SUMMARIES ||
+      deferredToolSummaryChars + nextText.length > MAX_DEFERRED_TOOL_SUMMARY_CHARS
+    ) {
+      suppressedDeferredToolSummaries += 1;
+      return;
+    }
+    deferredToolSummaries.push(payload);
+    deferredToolSummaryChars += nextText.length;
+  };
+
   const flushDeferredToolSummaries = async () => {
-    if (deferredToolSummaries.length === 0 || isProcessAborted(abortSignal)) {
+    if (
+      (deferredToolSummaries.length === 0 && suppressedDeferredToolSummaries === 0) ||
+      isProcessAborted(abortSignal)
+    ) {
+      clearDeferredToolSummaries();
       return;
     }
     const pendingPayloads = deferredToolSummaries.splice(0);
+    deferredToolSummaryChars = 0;
+    const suppressedCount = suppressedDeferredToolSummaries;
+    suppressedDeferredToolSummaries = 0;
     for (const payload of pendingPayloads) {
-      await deliverImmediatePayload(payload, false);
+      try {
+        await deliverImmediatePayload(payload, false);
+      } catch (err) {
+        logVerbose(`discord: deferred tool summary delivery failed: ${String(err)}`);
+      }
+    }
+    if (suppressedCount > 0) {
+      const nounSuffix = suppressedCount === 1 ? "" : "s";
+      const verb = suppressedCount === 1 ? "was" : "were";
+      try {
+        await deliverImmediatePayload(
+          {
+            text: `Note: ${suppressedCount} additional tool update${nounSuffix} ${verb} suppressed to keep Discord delivery bounded.`,
+          },
+          false,
+        );
+      } catch (err) {
+        logVerbose(`discord: deferred tool summary overflow notice failed: ${String(err)}`);
+      }
     }
   };
 
@@ -689,7 +737,7 @@ export async function processDiscordMessage(
           return;
         }
         if (shouldDeferToolSummary(payload, info.kind)) {
-          deferredToolSummaries.push(payload);
+          queueDeferredToolSummary(payload);
           return;
         }
         if (draftStream && isFinal) {
@@ -880,10 +928,10 @@ export async function processDiscordMessage(
     } finally {
       markRunComplete();
       markDispatchIdle();
-      try {
+      if (dispatchError || dispatchAborted) {
+        clearDeferredToolSummaries();
+      } else {
         await flushDeferredToolSummaries();
-      } catch (err) {
-        logVerbose(`discord: deferred tool summary delivery failed: ${String(err)}`);
       }
     }
     if (statusReactionsEnabled) {
