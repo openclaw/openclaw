@@ -1779,11 +1779,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 tableMode,
                 sendMessage: sendMessageMattermost,
               });
-              try {
-                await deleteMattermostPost(blockStreamingClient!, orphanedStreamId);
-              } catch {
-                // Ignore — the complete message was already delivered.
-              }
+              // Fire-and-forget: delivery already succeeded; don't block withReplyDispatcher.
+              void deleteMattermostPost(blockStreamingClient!, orphanedStreamId).catch(() => {});
               return;
             }
 
@@ -1803,11 +1800,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 tableMode,
                 sendMessage: sendMessageMattermost,
               });
-              try {
-                await deleteMattermostPost(blockStreamingClient!, orphanedStreamId);
-              } catch {
-                // Ignore — media was already delivered.
-              }
+              // Fire-and-forget: media delivery already succeeded; don't block withReplyDispatcher.
+              void deleteMattermostPost(blockStreamingClient!, orphanedStreamId).catch(() => {});
               return;
             }
             // Otherwise fall through to normal delivery.
