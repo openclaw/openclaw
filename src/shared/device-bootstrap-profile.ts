@@ -10,21 +10,6 @@ export type DeviceBootstrapProfileInput = {
   scopes?: readonly string[];
 };
 
-export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
-  roles: ["node", "operator"],
-  scopes: [
-    "node.camera",
-    "node.display",
-    "node.exec",
-    "node.voice",
-    "operator.approvals",
-    "operator.pairing",
-    "operator.read",
-    "operator.talk.secrets",
-    "operator.write",
-  ],
-};
-
 function normalizeBootstrapRoles(roles: readonly string[] | undefined): string[] {
   if (!Array.isArray(roles)) {
     return [];
@@ -47,6 +32,22 @@ export function normalizeDeviceBootstrapProfile(
     scopes: normalizeDeviceAuthScopes(input?.scopes ? [...input.scopes] : []),
   };
 }
+
+export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile =
+  normalizeDeviceBootstrapProfile({
+    roles: ["operator", "node"],
+    scopes: [
+      "operator.read",
+      "operator.write",
+      "operator.talk.secrets",
+      "operator.approvals",
+      "operator.pairing",
+      "node.exec",
+      "node.display",
+      "node.camera",
+      "node.voice",
+    ],
+  });
 
 export function sameDeviceBootstrapProfile(
   left: DeviceBootstrapProfile,
