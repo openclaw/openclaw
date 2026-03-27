@@ -771,6 +771,7 @@ async function agentCommandInternal(
             workspaceDir,
             body,
             isFallbackRetry,
+            isNewSession,
             resolvedThinkLevel,
             timeoutMs,
             runId,

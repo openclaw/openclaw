@@ -301,7 +301,10 @@ export function createDiscordGatewayReconnectController(params: {
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
     const at = Date.now();
-    params.pushStatus({ lastEventAt: at });
+    // Only update lastEventAt for meaningful connection state changes (open/close),
+    // not every debug message (heartbeat ACKs, shard chatter). Blanket updates
+    // inflate lastEventAt with noise, masking stale-socket detection on quiet
+    // servers and causing unnecessary restart loops that leak memory. (#55606)
     if (message.includes("WebSocket connection closed")) {
       if (params.gateway?.isConnected) {
         resetHelloStallCounter();

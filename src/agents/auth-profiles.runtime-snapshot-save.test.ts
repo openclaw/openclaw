@@ -8,6 +8,7 @@ import {
   prepareSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
 import { ensureAuthProfileStore, markAuthProfileUsed } from "./auth-profiles.js";
+import { updateAuthProfileStoreWithLock } from "./auth-profiles/store.js";
 
 describe("auth profile runtime snapshot persistence", () => {
   it("does not write resolved plaintext keys during usage updates", async () => {
@@ -64,6 +65,60 @@ describe("auth profile runtime snapshot persistence", () => {
         provider: "default",
         id: "OPENAI_API_KEY",
       });
+    } finally {
+      clearSecretsRuntimeSnapshot();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("updateAuthProfileStoreWithLock updates runtime cache after save (#55562)", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-cache-update-"));
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const authPath = path.join(agentDir, "auth-profiles.json");
+    try {
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        authPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-disk-key",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: {},
+        env: {},
+        agentDirs: [agentDir],
+      });
+      activateSecretsRuntimeSnapshot(snapshot);
+
+      // Runtime cache should have the disk profile
+      const before = ensureAuthProfileStore(agentDir);
+      expect(before.profiles["openai:default"]?.provider).toBe("openai");
+
+      // Mutate via locked updater (adds usageStats)
+      await updateAuthProfileStoreWithLock({
+        agentDir,
+        updater: (store) => {
+          store.usageStats = { "openai:default": { lastUsed: 123 } };
+          return true;
+        },
+      });
+
+      // Subsequent non-locked read should see the mutation in the cache
+      const after = ensureAuthProfileStore(agentDir);
+      expect(after.usageStats?.["openai:default"]?.lastUsed).toBe(123);
     } finally {
       clearSecretsRuntimeSnapshot();
       await fs.rm(stateDir, { recursive: true, force: true });

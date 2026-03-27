@@ -121,7 +121,11 @@ export function resolveTranscriptPolicy(params: {
     dropThinkingBlocks,
     applyGoogleTurnOrdering: !isOpenAi && (isGoogle || isStrictOpenAiCompatible),
     validateGeminiTurns: !isOpenAi && (isGoogle || isStrictOpenAiCompatible),
-    validateAnthropicTurns: !isOpenAi && (isAnthropic || isStrictOpenAiCompatible),
+    // Strip dangling tool_calls for all openai-completions providers, not just
+    // strictly compatible ones. Session resets can leave orphaned tool_calls in
+    // history that violate OpenAI's adjacency requirement. (#55544)
+    validateAnthropicTurns:
+      !isOpenAi && (isAnthropic || isStrictOpenAiCompatible || params.modelApi === "openai-completions"),
     allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
   };
 }

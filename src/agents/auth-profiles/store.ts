@@ -137,6 +137,13 @@ export async function updateAuthProfileStoreWithLock(params: {
       const shouldSave = params.updater(store);
       if (shouldSave) {
         saveAuthProfileStore(store, params.agentDir);
+        // Update runtime cache so subsequent non-locked reads via
+        // ensureAuthProfileStore() see the freshly persisted state
+        // instead of returning stale per-agent keys. (#55562)
+        const cacheKey = resolveRuntimeStoreKey(params.agentDir);
+        if (runtimeAuthStoreSnapshots.size > 0) {
+          runtimeAuthStoreSnapshots.set(cacheKey, cloneAuthProfileStore(store));
+        }
       }
       return store;
     });

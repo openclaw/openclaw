@@ -181,6 +181,48 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 
+  it("treats a quiet connected server as healthy when lastEventAt equals lastConnectedAt", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 50_000,
+        lastEventAt: 55_000,
+        lastConnectedAt: 55_000,
+      },
+      {
+        channelId: "discord",
+        now: 200_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("detects stale-socket when real events arrived after connection then went silent", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 50_000,
+        lastEventAt: 60_000,
+        lastConnectedAt: 55_000,
+      },
+      {
+        channelId: "discord",
+        now: 200_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+  });
+
   it("does not flag stale sockets without an active connected socket", () => {
     const evaluation = evaluateDiscordHealth(
       {

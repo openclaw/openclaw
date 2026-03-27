@@ -54,8 +54,12 @@ export async function persistSessionEntry(params: PersistSessionEntryParams): Pr
 export function resolveFallbackRetryPrompt(params: {
   body: string;
   isFallbackRetry: boolean;
+  isNewSession: boolean;
 }): string {
-  if (!params.isFallbackRetry) {
+  // On new sessions (including subagent spawns), always preserve the original
+  // body: the transcript is empty so the recovery message has no prior context
+  // to "continue" from, and the fallback model needs the original task. (#55581)
+  if (!params.isFallbackRetry || params.isNewSession) {
     return params.body;
   }
   return "Continue where you left off. The previous model attempt failed or timed out.";
@@ -242,6 +246,7 @@ export function runAgentAttempt(params: {
   workspaceDir: string;
   body: string;
   isFallbackRetry: boolean;
+  isNewSession: boolean;
   resolvedThinkLevel: ThinkLevel;
   timeoutMs: number;
   runId: string;
@@ -261,6 +266,7 @@ export function runAgentAttempt(params: {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
+    isNewSession: params.isNewSession,
   });
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,

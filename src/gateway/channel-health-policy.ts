@@ -11,6 +11,7 @@ export type ChannelHealthSnapshot = {
   lastRunActivityAt?: number | null;
   lastEventAt?: number | null;
   lastStartAt?: number | null;
+  lastConnectedAt?: number | null;
   reconnectAttempts?: number;
   mode?: string;
 };
@@ -116,6 +117,17 @@ export function evaluateChannelHealth(
     snapshot.connected === true &&
     snapshot.lastEventAt != null
   ) {
+    // When the only recorded event is the connection itself (lastEventAt
+    // matches lastConnectedAt), the server is quiet — not half-dead.
+    // Skip stale-socket detection so quiet servers don't trigger
+    // unnecessary restart loops that leak memory. (#55606)
+    const lastConnectedAt =
+      typeof snapshot.lastConnectedAt === "number" && Number.isFinite(snapshot.lastConnectedAt)
+        ? snapshot.lastConnectedAt
+        : null;
+    if (lastConnectedAt != null && snapshot.lastEventAt <= lastConnectedAt) {
+      return { healthy: true, reason: "healthy" };
+    }
     if (lastStartAt != null && snapshot.lastEventAt < lastStartAt) {
       const lifecycleEventGap = Math.max(0, policy.now - lastStartAt);
       if (lifecycleEventGap <= policy.staleEventThresholdMs) {
