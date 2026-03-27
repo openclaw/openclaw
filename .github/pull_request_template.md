@@ -27,6 +27,8 @@ Describe the problem and fix in 2–5 bullets:
 - [ ] UI / DX
 - [ ] CI/CD / infra
 
+If you touch handoff memory or session rollover surfaces, expect the `checks-fast-handoff-freshness` CI check to run on your PR.
+
 ## Linked Issue/PR
 
 - Closes #

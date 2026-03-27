@@ -28,6 +28,8 @@ When you touch tests or want extra confidence:
 
 - Coverage gate: `pnpm test:coverage`
 - E2E suite: `pnpm test:e2e`
+- Handoff rollover freshness regression: `pnpm test:handoff:freshness`
+  - Run this when changing handoff memory, reset hooks, or session rollover seams.
 
 When debugging real providers/models (requires real creds):
 

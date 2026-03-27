@@ -38,6 +38,7 @@ jobs:
       run_node: ${{ steps.scope.outputs.run_node }}
       run_macos: ${{ steps.scope.outputs.run_macos }}
       run_android: ${{ steps.scope.outputs.run_android }}
+      run_handoff_freshness: ${{ steps.scope.outputs.run_handoff_freshness }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -63,12 +64,14 @@ jobs:
             echo "run_node=true" >> "$GITHUB_OUTPUT"
             echo "run_macos=true" >> "$GITHUB_OUTPUT"
             echo "run_android=true" >> "$GITHUB_OUTPUT"
+            echo "run_handoff_freshness=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           run_node=false
           run_macos=false
           run_android=false
+          run_handoff_freshness=false
           has_non_docs=false
           has_non_native_non_docs=false
 
@@ -106,6 +109,12 @@ jobs:
             esac
 
             case "$path" in
+              src/memory/*|src/auto-reply/reply/commands-core.ts|src/auto-reply/reply/commands-core.test.ts|src/auto-reply/reply/session.ts|src/auto-reply/reply/session-hooks-context.test.ts|src/agents/pi-embedded-runner/compact.ts|src/agents/pi-embedded-runner/run/attempt.ts|src/gateway/server-methods/sessions.ts|src/gateway/server.sessions.gateway-server-sessions-a.test.ts|src/sessions/transcript-events.ts|src/sessions/transcript-events.test.ts|package.json|.github/workflows/ci.yml|.github/pull_request_template.md|docs/help/testing.md|.agents/skills/openclaw-pr-maintainer/SKILL.md)
+                run_handoff_freshness=true
+                ;;
+            esac
+
+            case "$path" in
               apps/android/*|apps/ios/*|apps/macos/*|apps/shared/*|Swabble/*|appcast.xml)
                 ;;
               *)
@@ -122,6 +131,7 @@ jobs:
           echo "run_node=${run_node}" >> "$GITHUB_OUTPUT"
           echo "run_macos=${run_macos}" >> "$GITHUB_OUTPUT"
           echo "run_android=${run_android}" >> "$GITHUB_OUTPUT"
+          echo "run_handoff_freshness=${run_handoff_freshness}" >> "$GITHUB_OUTPUT"
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
@@ -238,6 +248,30 @@ jobs:
           path: |
             ${{ env.OPENCLAW_VITEST_REPORT_DIR }}
             ${{ runner.temp }}/vitest-slowest.md
+
+  checks-fast-handoff-freshness:
+    name: checks-fast-handoff-freshness
+    needs: [docs-scope, changed-scope, check]
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_handoff_freshness == 'true')
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Configure Node test resources
+        run: |
+          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
+
+      - name: Run handoff freshness guardrail
+        run: pnpm test:handoff:freshness
 
   # Types, lint, and format check.
   check:
