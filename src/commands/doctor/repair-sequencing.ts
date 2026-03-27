@@ -5,6 +5,7 @@ import {
   maybeRepairTelegramAllowFromUsernames,
 } from "./providers/telegram.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
+import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
 import {
   applyDoctorConfigMutation,
   type DoctorConfigMutationState,
@@ -49,6 +50,7 @@ export async function runDoctorRepairSequence(params: {
   applyMutation(await maybeRepairTelegramAllowFromUsernames(state.candidate));
   applyMutation(maybeRepairDiscordNumericIds(state.candidate));
   applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
+  applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, process.env));
   applyMutation(maybeRepairStalePluginConfig(state.candidate, process.env));
   applyMutation(await maybeRepairAllowlistPolicyAllowFrom(state.candidate));
 

@@ -9,6 +9,10 @@ import {
   collectTelegramEmptyAllowlistExtraWarnings,
   scanTelegramAllowFromUsernameEntries,
 } from "../providers/telegram.js";
+import {
+  collectBundledPluginLoadPathWarnings,
+  scanBundledPluginLoadPathMigrations,
+} from "./bundled-plugin-load-paths.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./empty-allowlist-scan.js";
 import {
   collectExecSafeBinCoverageWarnings,
@@ -73,6 +77,16 @@ export function collectDoctorPreviewWarnings(params: {
         hits: stalePluginHits,
         doctorFixCommand: params.doctorFixCommand,
         autoRepairBlocked: isStalePluginAutoRepairBlocked(params.cfg, process.env),
+      }).join("\n"),
+    );
+  }
+
+  const bundledPluginLoadPathHits = scanBundledPluginLoadPathMigrations(params.cfg, process.env);
+  if (bundledPluginLoadPathHits.length > 0) {
+    warnings.push(
+      collectBundledPluginLoadPathWarnings({
+        hits: bundledPluginLoadPathHits,
+        doctorFixCommand: params.doctorFixCommand,
       }).join("\n"),
     );
   }
