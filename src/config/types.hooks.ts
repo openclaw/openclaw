@@ -110,6 +110,8 @@ export type InternalHooksConfig = {
 export type WebhooksConfig = {
   enabled?: boolean;
   presets?: string[];
+  /** Webhook presets that should receive raw JSON payloads instead of formatted messages. */
+  rawMode?: string[];
 };
 
 export type HooksConfig = {

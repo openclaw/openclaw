@@ -433,5 +433,6 @@ export function resolveWebhooksConfig(cfg: OpenClawConfig): WebhooksConfigResolv
     cfg.hooks?.maxBodyBytes && cfg.hooks.maxBodyBytes > 0
       ? cfg.hooks.maxBodyBytes
       : DEFAULT_HOOKS_MAX_BODY_BYTES;
-  return { token, presets, maxBodyBytes };
+  const rawMode = webhooks.rawMode ?? [];
+  return { token, presets, maxBodyBytes, rawMode };
 }

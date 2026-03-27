@@ -13,6 +13,7 @@ export type WebhooksConfigResolved = {
   token: string;
   presets: string[];
   maxBodyBytes: number;
+  rawMode: string[];
 };
 
 export type WebhooksRequestHandler = (
@@ -24,6 +25,18 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
+}
+
+function extractRawSessionKey(payload: Record<string, unknown>, source: string): string {
+  const id =
+    (payload.entity_id as string | number | undefined) ??
+    (payload.id as string | number | undefined) ??
+    (payload.session_id as string | number | undefined);
+  return `webhook:${source}:${id ?? "unknown"}`;
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 function constantTimeTokenMatch(provided: string, expected: string): boolean {
@@ -114,9 +127,11 @@ export function createWebhooksRequestHandler(opts: {
       return true;
     }
 
-    // Look up transform
+    const rawModeEnabled = webhooksConfig.rawMode.includes(source);
+
+    // Look up transform (required unless rawMode is enabled for this source)
     const transform = getWebhookTransform(source);
-    if (!transform) {
+    if (!transform && !rawModeEnabled) {
       logWebhooks.warn(`no transform found for webhook source "${source}"`);
       res.statusCode = 404;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -137,20 +152,33 @@ export function createWebhooksRequestHandler(opts: {
         ? (body.value as Record<string, unknown>)
         : {};
 
-    // Transform payload
-    const result = transform(payload);
-    if (result === null) {
-      // Transform says skip (e.g., non-meeting_end trigger)
-      sendJson(res, 200, { ok: true, skipped: true });
-      return true;
+    let message: string;
+    let sessionKey: string;
+    let name: string;
+
+    if (rawModeEnabled) {
+      message = JSON.stringify(payload, null, 2);
+      sessionKey = extractRawSessionKey(payload, source);
+      name = capitalize(source);
+    } else {
+      // Transform payload
+      const result = transform!(payload);
+      if (result === null) {
+        // Transform says skip (e.g., non-meeting_end trigger)
+        sendJson(res, 200, { ok: true, skipped: true });
+        return true;
+      }
+      message = result.message;
+      sessionKey = result.sessionKey;
+      name = result.name;
     }
 
     // Dispatch to agent
     const runId = dispatchAgentHook({
-      message: result.message,
-      name: result.name,
+      message,
+      name,
       wakeMode: "now",
-      sessionKey: result.sessionKey,
+      sessionKey,
       deliver: true,
       channel: "last",
     });

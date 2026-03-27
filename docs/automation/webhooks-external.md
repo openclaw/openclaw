@@ -46,6 +46,47 @@ Add a `webhooks` section inside your existing `hooks` config:
 - `webhooks.presets` lists which external app transforms to enable
 - `webhooks.enabled` can be set to `false` to disable without removing config (defaults to `true` when `presets` is set)
 
+### Raw JSON Mode
+
+By default, webhook presets transform payloads into formatted markdown messages. To receive
+the raw JSON payload instead (useful for automation and custom processing), add the preset
+to the `rawMode` array:
+
+```json5
+{
+  hooks: {
+    enabled: true,
+    token: "your-secret-token",
+    webhooks: {
+      presets: ["readai", "ownerrez"],
+      rawMode: ["ownerrez"], // Receive raw JSON for OwnerRez
+    },
+  },
+}
+```
+
+When `rawMode` is enabled for a preset:
+
+- The agent receives the complete JSON payload as a formatted string
+- No data is lost in transformation
+- Session keys are derived from common ID fields (`entity_id`, `id`, `session_id`)
+- Useful when you need access to nested objects or fields not included in the formatted message
+
+**Example raw mode message:**
+
+```json
+{
+  "id": "8bd75001-3c0a-4a38-9d81-668fd6be0085",
+  "user_id": 347443214,
+  "action": "entity_update",
+  "entity_type": "booking",
+  "entity_id": 17152244,
+  "entity": {
+    "guest_name": "Alice Smith"
+  }
+}
+```
+
 ## Endpoint
 
 ### `POST /webhooks/{token}/{source}`

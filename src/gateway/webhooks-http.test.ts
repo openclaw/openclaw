@@ -48,7 +48,7 @@ function createHandler(opts?: {
   const config: WebhooksConfigResolved | null =
     opts?.config !== undefined
       ? opts.config
-      : { token: TOKEN, presets: ["readai"], maxBodyBytes: 256 * 1024 };
+      : { token: TOKEN, presets: ["readai"], maxBodyBytes: 256 * 1024, rawMode: [] };
 
   const dispatchAgentHook = opts?.dispatchAgentHook ?? (() => "run-id-1");
 
@@ -209,7 +209,7 @@ describe("webhooks-http", () => {
 
   test("returns 413 for too-large body", async () => {
     const handler = createHandler({
-      config: { token: TOKEN, presets: ["readai"], maxBodyBytes: 10 },
+      config: { token: TOKEN, presets: ["readai"], maxBodyBytes: 10, rawMode: [] },
     });
     const req = createMockReq({
       url: `/webhooks/${TOKEN}/readai`,
@@ -219,5 +219,114 @@ describe("webhooks-http", () => {
     const handled = await handler(req, res);
     expect(handled).toBe(true);
     expect(res._status).toBe(413);
+  });
+
+  test("raw mode: dispatches raw JSON instead of formatted message", async () => {
+    const dispatchFn = vi.fn().mockReturnValue("run-raw-1");
+    const handler = createHandler({
+      config: {
+        token: TOKEN,
+        presets: ["ownerrez"],
+        maxBodyBytes: 256 * 1024,
+        rawMode: ["ownerrez"],
+      },
+      dispatchAgentHook: dispatchFn,
+    });
+    const payload = {
+      id: "8bd75001",
+      action: "entity_update",
+      entity_type: "booking",
+      entity_id: 17152244,
+      entity: { guest_name: "Alice" },
+    };
+    const req = createMockReq({
+      url: `/webhooks/${TOKEN}/ownerrez`,
+      body: JSON.stringify(payload),
+    });
+    const res = createMockRes();
+    const handled = await handler(req, res);
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    const parsed = JSON.parse(res._body) as { ok: boolean; runId: string };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.runId).toBe("run-raw-1");
+    expect(dispatchFn).toHaveBeenCalledOnce();
+    const call = dispatchFn.mock.calls[0][0];
+    expect(call.name).toBe("Ownerrez");
+    expect(call.sessionKey).toBe("webhook:ownerrez:17152244");
+    const parsedMessage = JSON.parse(call.message as string) as typeof payload;
+    expect(parsedMessage).toEqual(payload);
+  });
+
+  test("raw mode: session key falls back to id field", async () => {
+    const dispatchFn = vi.fn().mockReturnValue("run-raw-2");
+    const handler = createHandler({
+      config: {
+        token: TOKEN,
+        presets: ["shopify"],
+        maxBodyBytes: 256 * 1024,
+        rawMode: ["shopify"],
+      },
+      dispatchAgentHook: dispatchFn,
+    });
+    const req = createMockReq({
+      url: `/webhooks/${TOKEN}/shopify`,
+      body: JSON.stringify({ id: "order-99", kind: "orders/create" }),
+    });
+    const res = createMockRes();
+    await handler(req, res);
+    expect(dispatchFn.mock.calls[0][0].sessionKey).toBe("webhook:shopify:order-99");
+  });
+
+  test("raw mode: session key falls back to unknown when no id field", async () => {
+    const dispatchFn = vi.fn().mockReturnValue("run-raw-3");
+    const handler = createHandler({
+      config: {
+        token: TOKEN,
+        presets: ["ownerrez"],
+        maxBodyBytes: 256 * 1024,
+        rawMode: ["ownerrez"],
+      },
+      dispatchAgentHook: dispatchFn,
+    });
+    const req = createMockReq({
+      url: `/webhooks/${TOKEN}/ownerrez`,
+      body: JSON.stringify({ some_field: "value" }),
+    });
+    const res = createMockRes();
+    await handler(req, res);
+    expect(dispatchFn.mock.calls[0][0].sessionKey).toBe("webhook:ownerrez:unknown");
+  });
+
+  test("mixed mode: non-rawMode presets still use formatted transform", async () => {
+    const dispatchFn = vi.fn().mockReturnValue("run-mixed-1");
+    const handler = createHandler({
+      config: {
+        token: TOKEN,
+        presets: ["readai", "ownerrez"],
+        maxBodyBytes: 256 * 1024,
+        rawMode: ["ownerrez"],
+      },
+      dispatchAgentHook: dispatchFn,
+    });
+    const body = JSON.stringify({
+      trigger: "meeting_end",
+      session_id: "sess-mix",
+      title: "Mixed Mode Test",
+      summary: "Summary here.",
+      action_items: [],
+      key_questions: [],
+      topics: [],
+      owner: { name: "Bob" },
+      participants: [],
+    });
+    const req = createMockReq({ url: `/webhooks/${TOKEN}/readai`, body });
+    const res = createMockRes();
+    await handler(req, res);
+    expect(res._status).toBe(200);
+    const call = dispatchFn.mock.calls[0][0];
+    expect(call.name).toBe("Read.ai");
+    expect(call.sessionKey).toBe("webhook:readai:sess-mix");
+    expect(call.message).toContain("Mixed Mode Test");
   });
 });
