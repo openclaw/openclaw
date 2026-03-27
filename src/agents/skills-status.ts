@@ -186,7 +186,7 @@ function buildSkillStatus(
       (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
     );
   const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
-  const skillSource = entry.skill.sourceInfo.source;
+  const skillSource = entry.skill.source;
   const bundled =
     bundledNames && bundledNames.size > 0
       ? bundledNames.has(entry.skill.name)
