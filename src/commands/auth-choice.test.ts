@@ -16,7 +16,6 @@ import opencodeGoPlugin from "../../extensions/opencode-go/index.js";
 import opencodePlugin from "../../extensions/opencode/index.js";
 import openrouterPlugin from "../../extensions/openrouter/index.js";
 import qianfanPlugin from "../../extensions/qianfan/index.js";
-import qwenPortalAuthPlugin from "../../extensions/qwen-portal-auth/index.js";
 import syntheticPlugin from "../../extensions/synthetic/index.js";
 import togetherPlugin from "../../extensions/together/index.js";
 import venicePlugin from "../../extensions/venice/index.js";
@@ -104,7 +103,6 @@ function createDefaultProviderPlugins() {
     opencodePlugin,
     openrouterPlugin,
     qianfanPlugin,
-    qwenPortalAuthPlugin,
     syntheticPlugin,
     togetherPlugin,
     venicePlugin,
@@ -1395,7 +1393,7 @@ describe("applyAuthChoice", () => {
 
   it("writes portal OAuth credentials for plugin providers", async () => {
     const scenarios: Array<{
-      authChoice: "qwen-portal" | "minimax-global-oauth";
+      authChoice: "minimax-global-oauth";
       label: string;
       authId: string;
       authLabel: string;
@@ -1407,18 +1405,6 @@ describe("applyAuthChoice", () => {
       apiKey: string;
       selectValue?: string;
     }> = [
-      {
-        authChoice: "qwen-portal",
-        label: "Qwen",
-        authId: "device",
-        authLabel: "Qwen OAuth",
-        providerId: "qwen-portal",
-        profileId: "qwen-portal:default",
-        baseUrl: "https://portal.qwen.ai/v1",
-        api: "openai-completions",
-        defaultModel: "qwen-portal/coder-model",
-        apiKey: "qwen-oauth", // pragma: allowlist secret
-      },
       {
         authChoice: "minimax-global-oauth",
         label: "MiniMax",
@@ -1516,7 +1502,6 @@ describe("resolvePreferredProviderForAuthChoice", () => {
   it("maps known and unknown auth choices", async () => {
     const scenarios = [
       { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
-      { authChoice: "qwen-portal" as const, expectedProvider: "qwen-portal" },
       { authChoice: "mistral-api-key" as const, expectedProvider: "mistral" },
       { authChoice: "ollama" as const, expectedProvider: "ollama" },
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },

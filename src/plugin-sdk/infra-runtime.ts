@@ -40,5 +40,6 @@ export * from "../infra/system-message.ts";
 export * from "../infra/tmp-openclaw-dir.js";
 export * from "../infra/transport-ready.js";
 export * from "../infra/wsl.ts";
+export * from "../utils/fetch-timeout.js";
 export { createRuntimeOutboundDelegates } from "../channels/plugins/runtime-forwarders.js";
 export * from "./ssrf-policy.js";

@@ -316,41 +316,43 @@ After approval, you can chat normally.
 
 **1. Group policy** (`channels.feishu.groupPolicy`):
 
-- `"open"` = allow everyone in groups (default)
+- `"open"` = allow everyone in groups
 - `"allowlist"` = only allow `groupAllowFrom`
 - `"disabled"` = disable group messages
 
-**2. Mention requirement** (`channels.feishu.groups.<chat_id>.requireMention`):
+Default: `allowlist`
 
-- `true` = require @mention (default)
-- `false` = respond without mentions
+**2. Mention requirement** (`channels.feishu.requireMention`, overridable via `channels.feishu.groups.<chat_id>.requireMention`):
+
+- explicit `true` = require @mention
+- explicit `false` = respond without mentions
+- when unset and `groupPolicy: "open"` = default to `false`
+- when unset and `groupPolicy` is not `"open"` = default to `true`
 
 ---
 
 ## Group configuration examples
 
-### Allow all groups, require @mention (default)
+### Allow all groups, no @mention required (default for open groups)
 
 ```json5
 {
   channels: {
     feishu: {
       groupPolicy: "open",
-      // Default requireMention: true
     },
   },
 }
 ```
 
-### Allow all groups, no @mention required
+### Allow all groups, but still require @mention
 
 ```json5
 {
   channels: {
     feishu: {
-      groups: {
-        oc_xxx: { requireMention: false },
-      },
+      groupPolicy: "open",
+      requireMention: true,
     },
   },
 }
@@ -680,9 +682,10 @@ Key options:
 | `channels.feishu.accounts.<id>.domain`            | Per-account API domain override         | `feishu`         |
 | `channels.feishu.dmPolicy`                        | DM policy                               | `pairing`        |
 | `channels.feishu.allowFrom`                       | DM allowlist (open_id list)             | -                |
-| `channels.feishu.groupPolicy`                     | Group policy                            | `open`           |
+| `channels.feishu.groupPolicy`                     | Group policy                            | `allowlist`      |
 | `channels.feishu.groupAllowFrom`                  | Group allowlist                         | -                |
-| `channels.feishu.groups.<chat_id>.requireMention` | Require @mention                        | `true`           |
+| `channels.feishu.requireMention`                  | Default require @mention                | conditional      |
+| `channels.feishu.groups.<chat_id>.requireMention` | Per-group require @mention override     | inherited        |
 | `channels.feishu.groups.<chat_id>.enabled`        | Enable group                            | `true`           |
 | `channels.feishu.textChunkLimit`                  | Message chunk size                      | `2000`           |
 | `channels.feishu.mediaMaxMb`                      | Media size limit                        | `30`             |

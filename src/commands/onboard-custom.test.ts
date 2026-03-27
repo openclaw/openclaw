@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OLLAMA_DEFAULT_BASE_URL } from "../../extensions/ollama/src/defaults.js";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
-import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-defaults.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -76,6 +76,22 @@ function expectOpenAiCompatResult(params: {
   expect(params.prompter.text).toHaveBeenCalledTimes(params.textCalls);
   expect(params.prompter.select).toHaveBeenCalledTimes(params.selectCalls);
   expect(params.result.config.models?.providers?.custom?.api).toBe("openai-completions");
+}
+
+function getFirstFetchVerificationCall(fetchMock: ReturnType<typeof vi.fn>) {
+  const firstCall = fetchMock.mock.calls[0];
+  const firstUrl = firstCall?.[0];
+  const firstInit = firstCall?.[1] as
+    | { body?: string; headers?: Record<string, string> }
+    | undefined;
+  if (typeof firstUrl !== "string") {
+    throw new Error("Expected first verification call URL");
+  }
+  return {
+    url: firstUrl,
+    init: firstInit,
+    body: JSON.parse(firstInit?.body ?? "{}"),
+  };
 }
 
 function buildCustomProviderConfig(contextWindow?: number) {
@@ -203,21 +219,13 @@ describe("promptCustomApiConfig", () => {
 
     await runPromptCustomApi(prompter);
 
-    const firstCall = fetchMock.mock.calls[0];
-    const firstUrl = firstCall?.[0];
-    const firstInit = firstCall?.[1] as
-      | { body?: string; headers?: Record<string, string> }
-      | undefined;
-    if (typeof firstUrl !== "string") {
-      throw new Error("Expected first verification call URL");
-    }
-    const parsedBody = JSON.parse(firstInit?.body ?? "{}");
+    const { url, init, body } = getFirstFetchVerificationCall(fetchMock);
 
-    expect(firstUrl).toBe("https://my-resource.openai.azure.com/openai/v1/responses");
-    expect(firstInit?.headers?.["api-key"]).toBe("azure-test-key");
-    expect(firstInit?.headers?.Authorization).toBeUndefined();
-    expect(firstInit?.body).toBeDefined();
-    expect(parsedBody).toEqual({
+    expect(url).toBe("https://my-resource.openai.azure.com/openai/v1/responses");
+    expect(init?.headers?.["api-key"]).toBe("azure-test-key");
+    expect(init?.headers?.Authorization).toBeUndefined();
+    expect(init?.body).toBeDefined();
+    expect(body).toEqual({
       model: "gpt-4.1",
       input: "Hi",
       max_output_tokens: 16,
@@ -240,22 +248,14 @@ describe("promptCustomApiConfig", () => {
 
     await runPromptCustomApi(prompter);
 
-    const firstCall = fetchMock.mock.calls[0];
-    const firstUrl = firstCall?.[0];
-    const firstInit = firstCall?.[1] as
-      | { body?: string; headers?: Record<string, string> }
-      | undefined;
-    if (typeof firstUrl !== "string") {
-      throw new Error("Expected first verification call URL");
-    }
-    const parsedBody = JSON.parse(firstInit?.body ?? "{}");
+    const { url, init, body } = getFirstFetchVerificationCall(fetchMock);
 
-    expect(firstUrl).toBe(
+    expect(url).toBe(
       "https://my-resource.services.ai.azure.com/openai/deployments/deepseek-v3-0324/chat/completions?api-version=2024-10-21",
     );
-    expect(firstInit?.headers?.["api-key"]).toBe("azure-test-key");
-    expect(firstInit?.headers?.Authorization).toBeUndefined();
-    expect(parsedBody).toEqual({
+    expect(init?.headers?.["api-key"]).toBe("azure-test-key");
+    expect(init?.headers?.Authorization).toBeUndefined();
+    expect(body).toEqual({
       model: "deepseek-v3-0324",
       messages: [{ role: "user", content: "Hi" }],
       max_tokens: 1,

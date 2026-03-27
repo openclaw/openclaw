@@ -122,12 +122,13 @@ export function registerControlUiAndPairingSuite(): void {
     ws: WebSocket;
     token?: string;
     password?: string;
+    client?: { id: string; version: string; platform: string; mode: string };
   }) => {
     const res = await connectReq(params.ws, {
       ...(params.token ? { token: params.token } : {}),
       ...(params.password ? { password: params.password } : {}),
       device: null,
-      client: { ...CONTROL_UI_CLIENT },
+      client: { ...(params.client ?? CONTROL_UI_CLIENT) },
     });
     expect(res.ok).toBe(true);
     await expectStatusAndHealthOk(params.ws);
@@ -291,6 +292,24 @@ export function registerControlUiAndPairingSuite(): void {
       wsHeaders: { origin: "http://127.0.0.1" },
     });
     await connectControlUiWithoutDeviceAndExpectOk({ ws, token: "secret" });
+    ws.close();
+    await server.close();
+    restoreGatewayToken(prevToken);
+  });
+
+  test("allows localhost tui without device identity when insecure auth is enabled", async () => {
+    testState.gatewayControlUi = { allowInsecureAuth: true };
+    const { server, ws, prevToken } = await startServerWithClient("secret");
+    await connectControlUiWithoutDeviceAndExpectOk({
+      ws,
+      token: "secret",
+      client: {
+        id: GATEWAY_CLIENT_NAMES.TUI,
+        version: "1.0.0",
+        platform: "darwin",
+        mode: GATEWAY_CLIENT_MODES.UI,
+      },
+    });
     ws.close();
     await server.close();
     restoreGatewayToken(prevToken);

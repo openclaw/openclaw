@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const OPENAI_CODEX_MODEL = {
   provider: "openai-codex",
@@ -176,12 +176,15 @@ function installModelsListCommandForwardCompatMocks() {
   });
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   vi.resetModules();
-  vi.clearAllMocks();
-  resetMocks();
   installModelsListCommandForwardCompatMocks();
   ({ modelsListCommand } = await import("./list.list-command.js"));
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  resetMocks();
 });
 
 describe("modelsListCommand forward-compat", () => {

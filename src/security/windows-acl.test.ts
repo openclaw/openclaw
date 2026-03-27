@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WindowsAclEntry, WindowsAclSummary } from "./windows-acl.js";
 
 const MOCK_USERNAME = "MockUser";
@@ -24,7 +24,7 @@ let parseIcaclsOutput: typeof import("./windows-acl.js").parseIcaclsOutput;
 let resolveWindowsUserPrincipal: typeof import("./windows-acl.js").resolveWindowsUserPrincipal;
 let summarizeWindowsAcl: typeof import("./windows-acl.js").summarizeWindowsAcl;
 
-beforeEach(async () => {
+beforeAll(async () => {
   vi.resetModules();
   ({
     createIcaclsResetCommand,
@@ -35,6 +35,10 @@ beforeEach(async () => {
     resolveWindowsUserPrincipal,
     summarizeWindowsAcl,
   } = await import("./windows-acl.js"));
+});
+
+beforeEach(() => {
+  vi.unstubAllEnvs();
 });
 
 function aclEntry(params: {

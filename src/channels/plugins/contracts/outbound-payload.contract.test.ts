@@ -9,10 +9,10 @@ import {
   sendPayloadWithChunkedTextAndMedia as sendZaloPayloadWithChunkedTextAndMedia,
 } from "../../../../src/plugin-sdk/zalo.js";
 import { sendPayloadWithChunkedTextAndMedia as sendZalouserPayloadWithChunkedTextAndMedia } from "../../../../src/plugin-sdk/zalouser.js";
-import { slackOutbound } from "../../../../test/channel-outbounds.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import { createDirectTextMediaOutbound } from "../outbound/direct-text-media.js";
 import {
+  createSlackOutboundPayloadHarness,
   installChannelOutboundPayloadContractSuite,
   primeChannelOutboundSendMock,
 } from "./suites.js";
@@ -81,29 +81,6 @@ function buildChannelSendResult(channel: string, result: Record<string, unknown>
 
 const mockedSendZalo = vi.mocked(sendMessageZalo);
 const mockedSendZalouser = vi.mocked(sendMessageZalouser);
-
-function createSlackHarness(params: PayloadHarnessParams) {
-  const sendSlack = vi.fn();
-  primeChannelOutboundSendMock(
-    sendSlack,
-    { messageId: "sl-1", channelId: "C12345", ts: "1234.5678" },
-    params.sendResults,
-  );
-  const ctx = {
-    cfg: {},
-    to: "C12345",
-    text: "",
-    payload: params.payload,
-    deps: {
-      sendSlack,
-    },
-  };
-  return {
-    run: async () => await slackOutbound.sendPayload!(ctx),
-    sendMock: sendSlack,
-    to: ctx.to,
-  };
-}
 
 function createDiscordHarness(params: PayloadHarnessParams) {
   const sendDiscord = vi.fn();
@@ -263,7 +240,7 @@ describe("channel outbound payload contract", () => {
     installChannelOutboundPayloadContractSuite({
       channel: "slack",
       chunking: { mode: "passthrough", longTextLength: 5000 },
-      createHarness: createSlackHarness,
+      createHarness: createSlackOutboundPayloadHarness,
     });
   });
 

@@ -1,7 +1,7 @@
 import { RateLimitError } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeDiscordRest } from "./send.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/web-media", async () => {
@@ -23,7 +23,7 @@ let timeoutMemberDiscord: typeof import("./send.js").timeoutMemberDiscord;
 let uploadEmojiDiscord: typeof import("./send.js").uploadEmojiDiscord;
 let uploadStickerDiscord: typeof import("./send.js").uploadStickerDiscord;
 
-beforeEach(async () => {
+beforeAll(async () => {
   vi.resetModules();
   ({
     addRoleDiscord,
@@ -40,6 +40,9 @@ beforeEach(async () => {
     uploadEmojiDiscord,
     uploadStickerDiscord,
   } = await import("./send.js"));
+});
+
+beforeEach(() => {
   vi.clearAllMocks();
 });
 

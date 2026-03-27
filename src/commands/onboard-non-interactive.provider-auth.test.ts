@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MINIMAX_API_BASE_URL,
   MINIMAX_CN_API_BASE_URL,
@@ -86,6 +86,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     registerProvider(provider: MockProvider) {
       providers.push(provider);
     },
+    registerCliBackend() {},
     registerWebSearchProvider() {},
     registerMediaUnderstandingProvider() {},
     registerSpeechProvider() {},
@@ -410,8 +411,11 @@ async function loadProviderAuthOnboardModules(): Promise<void> {
 }
 
 describe("onboard (non-interactive): provider auth", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     await loadProviderAuthOnboardModules();
+  });
+
+  beforeEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
     resetFileLockStateForTest();
     clearPluginDiscoveryCache();

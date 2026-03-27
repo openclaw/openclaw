@@ -1,13 +1,10 @@
 import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
+  withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
 import { resolveBundledWebSearchPluginIds } from "./bundled-web-search.js";
-import {
-  hasExplicitPluginConfig,
-  normalizePluginsConfig,
-  type NormalizedPluginsConfig,
-} from "./config-state.js";
+import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 
@@ -21,35 +18,6 @@ function resolveBundledWebSearchCompatPluginIds(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-}
-
-function withBundledWebSearchVitestCompat(params: {
-  config: PluginLoadOptions["config"];
-  pluginIds: readonly string[];
-  env?: PluginLoadOptions["env"];
-}): PluginLoadOptions["config"] {
-  const env = params.env ?? process.env;
-  const isVitest = Boolean(env.VITEST || process.env.VITEST);
-  if (
-    !isVitest ||
-    hasExplicitPluginConfig(params.config?.plugins) ||
-    params.pluginIds.length === 0
-  ) {
-    return params.config;
-  }
-
-  return {
-    ...params.config,
-    plugins: {
-      ...params.config?.plugins,
-      enabled: true,
-      allow: [...params.pluginIds],
-      slots: {
-        ...params.config?.plugins?.slots,
-        memory: "none",
-      },
-    },
-  };
 }
 
 function compareWebSearchProvidersAlphabetically(
@@ -102,7 +70,7 @@ export function resolveBundledWebSearchResolutionConfig(params: {
     config: allowlistCompat,
     pluginIds: bundledCompatPluginIds,
   });
-  const config = withBundledWebSearchVitestCompat({
+  const config = withBundledPluginVitestCompat({
     config: enablementCompat,
     pluginIds: bundledCompatPluginIds,
     env: params.env,

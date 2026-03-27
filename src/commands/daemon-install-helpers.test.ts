@@ -315,6 +315,80 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.ANTHROPIC_TOKEN).toBe("ant-test-token");
   });
 
+  it("blocks dangerous auth-profile env refs from the service environment", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+    mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
+      version: 1,
+      profiles: {
+        "node:default": {
+          type: "token",
+          provider: "node",
+          tokenRef: { source: "env", provider: "default", id: "NODE_OPTIONS" },
+        },
+        "git:default": {
+          type: "token",
+          provider: "git",
+          tokenRef: { source: "env", provider: "default", id: "GIT_ASKPASS" },
+        },
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      },
+    });
+
+    const warn = vi.fn();
+    const plan = await buildGatewayInstallPlan({
+      env: {
+        NODE_OPTIONS: "--require ./pwn.js",
+        GIT_ASKPASS: "/tmp/askpass.sh",
+        OPENAI_API_KEY: "sk-openai-test", // pragma: allowlist secret
+      },
+      port: 3000,
+      runtime: "node",
+      warn,
+    });
+
+    expect(plan.environment.NODE_OPTIONS).toBeUndefined();
+    expect(plan.environment.GIT_ASKPASS).toBeUndefined();
+    expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("NODE_OPTIONS"), "Auth profile");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("GIT_ASKPASS"), "Auth profile");
+  });
+
+  it("skips non-portable auth-profile env ref keys", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+    mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
+      version: 1,
+      profiles: {
+        "broken:default": {
+          type: "token",
+          provider: "broken",
+          tokenRef: { source: "env", provider: "default", id: "BAD KEY" },
+        },
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {
+        "BAD KEY": "should-not-pass",
+      },
+      port: 3000,
+      runtime: "node",
+    });
+
+    expect(plan.environment["BAD KEY"]).toBeUndefined();
+  });
+
   it("skips unresolved auth-profile env refs", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {

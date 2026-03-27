@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  createPluginLoadResult,
+  createPluginRecord,
+  createTypedHook,
+} from "../plugins/status.test-helpers.js";
 import * as noteModule from "../terminal/note.js";
 
 const resolveAgentWorkspaceDirMock = vi.fn();
@@ -19,70 +24,39 @@ vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
 }));
 
+async function runNoteWorkspaceStatusForTest(
+  loadResult: ReturnType<typeof createPluginLoadResult>,
+) {
+  resolveDefaultAgentIdMock.mockReturnValue("default");
+  resolveAgentWorkspaceDirMock.mockReturnValue("/workspace");
+  buildWorkspaceSkillStatusMock.mockReturnValue({
+    skills: [],
+  });
+  loadOpenClawPluginsMock.mockReturnValue(loadResult);
+
+  const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+  const { noteWorkspaceStatus } = await import("./doctor-workspace-status.js");
+  noteWorkspaceStatus({});
+  return noteSpy;
+}
+
 describe("noteWorkspaceStatus", () => {
   it("warns when plugins use legacy compatibility paths", async () => {
-    resolveDefaultAgentIdMock.mockReturnValue("default");
-    resolveAgentWorkspaceDirMock.mockReturnValue("/workspace");
-    buildWorkspaceSkillStatusMock.mockReturnValue({
-      skills: [],
-    });
-    loadOpenClawPluginsMock.mockReturnValue({
-      plugins: [
-        {
-          id: "legacy-plugin",
-          name: "Legacy Plugin",
-          source: "/tmp/legacy-plugin/index.ts",
-          origin: "workspace",
-          enabled: true,
-          status: "loaded",
-          toolNames: [],
-          hookNames: [],
-          channelIds: [],
-          providerIds: [],
-          speechProviderIds: [],
-          mediaUnderstandingProviderIds: [],
-          imageGenerationProviderIds: [],
-          webSearchProviderIds: [],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
-          hookCount: 1,
-          configSchema: false,
-        },
-      ],
-      diagnostics: [],
-      channels: [],
-      channelSetups: [],
-      providers: [],
-      speechProviders: [],
-      mediaUnderstandingProviders: [],
-      imageGenerationProviders: [],
-      webSearchProviders: [],
-      tools: [],
-      hooks: [],
-      typedHooks: [
-        {
-          pluginId: "legacy-plugin",
-          hookName: "before_agent_start",
-          handler: () => undefined,
-          source: "/tmp/legacy-plugin/index.ts",
-        },
-      ],
-      httpRoutes: [],
-      gatewayHandlers: {},
-      cliRegistrars: [],
-      services: [],
-      commands: [],
-      conversationBindingResolvedHandlers: [],
-    });
-
-    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const noteSpy = await runNoteWorkspaceStatusForTest(
+      createPluginLoadResult({
+        plugins: [
+          createPluginRecord({
+            id: "legacy-plugin",
+            name: "Legacy Plugin",
+            hookCount: 1,
+          }),
+        ],
+        typedHooks: [
+          createTypedHook({ pluginId: "legacy-plugin", hookName: "before_agent_start" }),
+        ],
+      }),
+    );
     try {
-      const { noteWorkspaceStatus } = await import("./doctor-workspace-status.js");
-      noteWorkspaceStatus({});
-
       const compatibilityCalls = noteSpy.mock.calls.filter(
         ([, title]) => title === "Plugin compatibility",
       );
@@ -99,64 +73,21 @@ describe("noteWorkspaceStatus", () => {
   });
 
   it("surfaces bundle plugin capabilities in the plugins note", async () => {
-    resolveDefaultAgentIdMock.mockReturnValue("default");
-    resolveAgentWorkspaceDirMock.mockReturnValue("/workspace");
-    buildWorkspaceSkillStatusMock.mockReturnValue({
-      skills: [],
-    });
-    loadOpenClawPluginsMock.mockReturnValue({
-      plugins: [
-        {
-          id: "claude-bundle",
-          name: "Claude Bundle",
-          source: "/tmp/claude-bundle",
-          origin: "workspace",
-          enabled: true,
-          status: "loaded",
-          format: "bundle",
-          bundleFormat: "claude",
-          bundleCapabilities: ["skills", "commands", "agents"],
-          toolNames: [],
-          hookNames: [],
-          channelIds: [],
-          providerIds: [],
-          speechProviderIds: [],
-          mediaUnderstandingProviderIds: [],
-          imageGenerationProviderIds: [],
-          webSearchProviderIds: [],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
-          hookCount: 0,
-          configSchema: false,
-        },
-      ],
-      diagnostics: [],
-      channels: [],
-      channelSetups: [],
-      providers: [],
-      speechProviders: [],
-      mediaUnderstandingProviders: [],
-      imageGenerationProviders: [],
-      webSearchProviders: [],
-      tools: [],
-      hooks: [],
-      typedHooks: [],
-      httpRoutes: [],
-      gatewayHandlers: {},
-      cliRegistrars: [],
-      services: [],
-      commands: [],
-      conversationBindingResolvedHandlers: [],
-    });
-
-    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const noteSpy = await runNoteWorkspaceStatusForTest(
+      createPluginLoadResult({
+        plugins: [
+          createPluginRecord({
+            id: "claude-bundle",
+            name: "Claude Bundle",
+            source: "/tmp/claude-bundle",
+            format: "bundle",
+            bundleFormat: "claude",
+            bundleCapabilities: ["skills", "commands", "agents"],
+          }),
+        ],
+      }),
+    );
     try {
-      const { noteWorkspaceStatus } = await import("./doctor-workspace-status.js");
-      noteWorkspaceStatus({});
-
       const pluginCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugins");
       expect(pluginCalls).toHaveLength(1);
       const body = String(pluginCalls[0]?.[0]);
@@ -168,61 +99,18 @@ describe("noteWorkspaceStatus", () => {
   });
 
   it("omits plugin compatibility note when no legacy compatibility paths are present", async () => {
-    resolveDefaultAgentIdMock.mockReturnValue("default");
-    resolveAgentWorkspaceDirMock.mockReturnValue("/workspace");
-    buildWorkspaceSkillStatusMock.mockReturnValue({
-      skills: [],
-    });
-    loadOpenClawPluginsMock.mockReturnValue({
-      plugins: [
-        {
-          id: "modern-plugin",
-          name: "Modern Plugin",
-          source: "/tmp/modern-plugin/index.ts",
-          origin: "workspace",
-          enabled: true,
-          status: "loaded",
-          toolNames: [],
-          hookNames: [],
-          channelIds: [],
-          providerIds: ["modern"],
-          speechProviderIds: [],
-          mediaUnderstandingProviderIds: [],
-          imageGenerationProviderIds: [],
-          webSearchProviderIds: [],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
-          hookCount: 0,
-          configSchema: false,
-        },
-      ],
-      diagnostics: [],
-      channels: [],
-      channelSetups: [],
-      providers: [],
-      speechProviders: [],
-      mediaUnderstandingProviders: [],
-      imageGenerationProviders: [],
-      webSearchProviders: [],
-      tools: [],
-      hooks: [],
-      typedHooks: [],
-      httpRoutes: [],
-      gatewayHandlers: {},
-      cliRegistrars: [],
-      services: [],
-      commands: [],
-      conversationBindingResolvedHandlers: [],
-    });
-
-    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const noteSpy = await runNoteWorkspaceStatusForTest(
+      createPluginLoadResult({
+        plugins: [
+          createPluginRecord({
+            id: "modern-plugin",
+            name: "Modern Plugin",
+            providerIds: ["modern"],
+          }),
+        ],
+      }),
+    );
     try {
-      const { noteWorkspaceStatus } = await import("./doctor-workspace-status.js");
-      noteWorkspaceStatus({});
-
       expect(noteSpy.mock.calls.some(([, title]) => title === "Plugin compatibility")).toBe(false);
     } finally {
       noteSpy.mockRestore();

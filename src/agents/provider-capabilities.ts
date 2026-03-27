@@ -67,6 +67,9 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
   moonshot: {
     openAiPayloadNormalizationMode: "moonshot-thinking",
   },
+  kimi: {
+    openAiPayloadNormalizationMode: "moonshot-thinking",
+  },
   opencode: {
     openAiCompatTurnValidation: false,
     geminiThoughtSignatureSanitization: true,

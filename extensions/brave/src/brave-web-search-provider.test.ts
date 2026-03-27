@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { __testing } from "./brave-web-search-provider.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { __testing, createBraveWebSearchProvider } from "./brave-web-search-provider.js";
 
 describe("brave web search provider", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("normalizes brave language parameters and swaps reversed ui/search inputs", () => {
     expect(
       __testing.normalizeBraveLanguageParams({
@@ -48,5 +52,30 @@ describe("brave web search provider", () => {
         siteName: "example.com",
       },
     ]);
+  });
+
+  it("returns validation errors for invalid date ranges", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "BSA...",
+        brave: { apiKey: "BSA..." },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const result = await tool.execute({
+      query: "latest gpu news",
+      date_after: "2026-03-20",
+      date_before: "2026-03-01",
+    });
+
+    expect(result).toMatchObject({
+      error: "invalid_date_range",
+    });
   });
 });

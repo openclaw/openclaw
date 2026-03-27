@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 
@@ -160,7 +160,7 @@ function expectSecurityConnectError(
   }
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   await loadGatewayClientModule();
 });
 

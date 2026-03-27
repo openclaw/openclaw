@@ -7,7 +7,10 @@ import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/confi
 import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { buildDiscordInboundJob } from "./inbound-job.js";
-import { createDiscordInboundWorker } from "./inbound-worker.js";
+import {
+  createDiscordInboundWorker,
+  type DiscordInboundWorkerTestingHooks,
+} from "./inbound-worker.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
@@ -25,6 +28,11 @@ type DiscordMessageHandlerParams = Omit<
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
   workerRunTimeoutMs?: number;
+  __testing?: DiscordMessageHandlerTestingHooks;
+};
+
+type DiscordMessageHandlerTestingHooks = DiscordInboundWorkerTestingHooks & {
+  preflightDiscordMessage?: typeof preflightDiscordMessage;
 };
 
 export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
@@ -64,11 +72,14 @@ export function createDiscordMessageHandler(
     params.discordConfig?.ackReactionScope ??
     params.cfg.messages?.ackReactionScope ??
     "group-mentions";
+  const preflightDiscordMessageImpl =
+    params.__testing?.preflightDiscordMessage ?? preflightDiscordMessage;
   const inboundWorker = createDiscordInboundWorker({
     runtime: params.runtime,
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
     runTimeoutMs: params.workerRunTimeoutMs,
+    __testing: params.__testing,
   });
   const recentInboundMessages = createDedupeCache({
     ttlMs: RECENT_DISCORD_MESSAGE_TTL_MS,
@@ -122,7 +133,7 @@ export function createDiscordMessageHandler(
         return;
       }
       if (entries.length === 1) {
-        const ctx = await preflightDiscordMessage({
+        const ctx = await preflightDiscordMessageImpl({
           ...params,
           ackReactionScope,
           groupPolicy,
@@ -154,7 +165,7 @@ export function createDiscordMessageHandler(
         ...last.data,
         message: syntheticMessage,
       };
-      const ctx = await preflightDiscordMessage({
+      const ctx = await preflightDiscordMessageImpl({
         ...params,
         ackReactionScope,
         groupPolicy,
