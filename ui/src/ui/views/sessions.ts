@@ -664,6 +664,38 @@ function renderRow(
                 ? html`<span class="data-table-badge" style="background:#e3f2fd; color:#1565c0; border:1px solid #90caf9;">🤖 depth:${row.spawnDepth}</span>`
                 : nothing
           }
+          ${
+            row.status === "running"
+              ? html`
+                  <span
+                    class="data-table-badge"
+                    style="background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7"
+                    title="Session running"
+                    >● running</span
+                  >
+                `
+              : row.status === "failed"
+                ? html`
+                    <span
+                      class="data-table-badge"
+                      style="background: #ffebee; color: #c62828; border: 1px solid #ef9a9a"
+                      title="Session failed"
+                      >✗ failed</span
+                    >
+                  `
+                : row.status === "killed" || row.status === "timeout"
+                  ? html`<span class="data-table-badge" style="background:#fff8e1; color:#f57f17; border:1px solid #ffe082;" title="Session ${row.status}">⚠ ${row.status}</span>`
+                  : row.abortedLastRun
+                    ? html`
+                        <span
+                          class="data-table-badge"
+                          style="background: #fff8e1; color: #f57f17; border: 1px solid #ffe082"
+                          title="Last run aborted"
+                          >⚠ aborted</span
+                        >
+                      `
+                    : nothing
+          }
         </div>
       </td>
       <td>

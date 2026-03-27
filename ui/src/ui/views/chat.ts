@@ -292,6 +292,8 @@ function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
 function renderSessionContextBar(
   session: GatewaySessionRow | undefined,
   sessionKey: string,
+  modelProvider?: string | null,
+  model?: string | null,
 ): TemplateResult | typeof nothing {
   if (!session) {
     return nothing;
@@ -303,6 +305,15 @@ function renderSessionContextBar(
   const derivedTitle = trimMaybeString(session.derivedTitle);
   const fallbackTitle = resolveSessionDisplayName(sessionKey, session);
   const title = derivedTitle || subject || displayName || fallbackTitle;
+  const modelBadge = (() => {
+    const p = typeof modelProvider === "string" ? modelProvider.trim() : "";
+    const m = typeof model === "string" ? model.trim() : "";
+    if (!p && !m) {
+      return null;
+    }
+    const label = m || p;
+    return label ? `🤖 ${label}` : null;
+  })();
   const badges = uniqueNonEmpty([
     session.kind !== "unknown" ? session.kind : null,
     channelLabel,
@@ -313,6 +324,7 @@ function renderSessionContextBar(
       : session.spawnDepth != null && session.spawnDepth > 1
         ? `🤖 depth:${session.spawnDepth}`
         : null,
+    modelBadge,
   ]);
   const detail = uniqueNonEmpty([subject, displayName]).filter(
     (part) => part.toLowerCase() !== title.toLowerCase(),
@@ -1257,7 +1269,12 @@ export function renderChat(props: ChatProps) {
 
       ${renderSearchBar(requestUpdate)}
       ${renderPinnedSection(props, pinned, requestUpdate)}
-      ${renderSessionContextBar(activeSession, props.sessionKey)}
+      ${renderSessionContextBar(
+        activeSession,
+        props.sessionKey,
+        props.sessions?.defaults?.modelProvider,
+        props.sessions?.defaults?.model,
+      )}
 
       <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
         <div
