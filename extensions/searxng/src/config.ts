@@ -1,7 +1,4 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveProviderWebSearchPluginConfig } from "openclaw/plugin-sdk/provider-web-search";
-
-const PLUGIN_ID = "searxng";
 
 export const DEFAULT_SEARXNG_BASE_URL = "http://localhost:5000";
 export const DEFAULT_SEARXNG_COUNT = 10;
@@ -18,10 +15,8 @@ type SearXNGPluginConfig = {
 };
 
 function resolveWebSearchConfig(config?: OpenClawConfig): SearXNGPluginConfig["webSearch"] {
-  const raw = resolveProviderWebSearchPluginConfig(config, PLUGIN_ID) as
-    | SearXNGPluginConfig
-    | undefined;
-  const webSearch = raw?.webSearch;
+  const pluginConfig = config?.plugins?.entries?.searxng?.config as SearXNGPluginConfig | undefined;
+  const webSearch = pluginConfig?.webSearch;
   if (webSearch && typeof webSearch === "object" && !Array.isArray(webSearch)) {
     return webSearch;
   }
