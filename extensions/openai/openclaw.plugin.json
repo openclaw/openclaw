@@ -1,5 +1,6 @@
 {
   "id": "openai",
+  "enabledByDefault": true,
   "providers": ["openai", "openai-codex"],
   "cliBackends": ["codex-cli"],
   "providerAuthEnvVars": {

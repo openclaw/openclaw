@@ -291,6 +291,37 @@ describe("noteMemorySearchHealth", () => {
     const providersChecked = providerCalls.map(([arg]) => arg.provider);
     expect(providersChecked).toEqual(["openai", "google", "voyage", "mistral"]);
   });
+
+  it("uses runtime-derived env var hints for explicit providers", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "gemini",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("GEMINI_API_KEY");
+    expect(message).toContain('provider is set to "gemini"');
+  });
+
+  it("uses runtime-derived env var hints in auto mode", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("OPENAI_API_KEY");
+    expect(message).toContain("GEMINI_API_KEY");
+    expect(message).toContain("GOOGLE_API_KEY");
+    expect(message).toContain("VOYAGE_API_KEY");
+    expect(message).toContain("MISTRAL_API_KEY");
+  });
 });
 
 describe("detectLegacyWorkspaceDirs", () => {

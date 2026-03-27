@@ -53,9 +53,7 @@ export const ensureBinary: BinariesRuntimeModule["ensureBinary"] = async (...arg
   (await loadBinariesRuntime()).ensureBinary(...args);
 export const runExec: ExecRuntimeModule["runExec"] = async (...args) =>
   (await loadExecRuntime()).runExec(...args);
-export const runCommandWithTimeout: ExecRuntimeModule["runCommandWithTimeout"] = async (
-  ...args
-) =>
+export const runCommandWithTimeout: ExecRuntimeModule["runCommandWithTimeout"] = async (...args) =>
   (await loadExecRuntime()).runCommandWithTimeout(...args);
 export const monitorWebChannel: WhatsAppRuntimeModule["monitorWebChannel"] = async (...args) =>
   (await loadWhatsAppRuntime()).monitorWebChannel(...args);

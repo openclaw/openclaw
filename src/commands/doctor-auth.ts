@@ -5,13 +5,12 @@ import {
 } from "../agents/auth-health.js";
 import {
   type AuthCredentialReasonCode,
-  CLAUDE_CLI_PROFILE_ID,
-  CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
   repairOAuthProfileIdMismatch,
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
+import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -234,29 +233,36 @@ export function resolveUnusableProfileHint(params: {
   return "Wait for cooldown or switch provider.";
 }
 
-function formatAuthIssueHint(issue: AuthIssue): string | null {
+export async function resolveAuthIssueHint(
+  issue: AuthIssue,
+  cfg: OpenClawConfig,
+  store: ReturnType<typeof ensureAuthProfileStore>,
+): Promise<string | null> {
   if (issue.reasonCode === "invalid_expires") {
     return "Invalid token expires metadata. Set a future Unix ms timestamp or remove expires.";
   }
-  if (issue.provider === "anthropic" && issue.profileId === CLAUDE_CLI_PROFILE_ID) {
-    return `Deprecated profile. ${buildProviderAuthRecoveryHint({
-      provider: "anthropic",
-    })}`;
-  }
-  if (issue.provider === "openai-codex" && issue.profileId === CODEX_CLI_PROFILE_ID) {
-    return `Deprecated profile. ${buildProviderAuthRecoveryHint({
-      provider: "openai-codex",
-    })}`;
+  const providerHint = await formatAuthDoctorHint({
+    cfg,
+    store,
+    provider: issue.provider,
+    profileId: issue.profileId,
+  });
+  if (providerHint.trim()) {
+    return providerHint;
   }
   return buildProviderAuthRecoveryHint({
     provider: issue.provider,
   }).replace(/^Run /, "Re-auth via ");
 }
 
-function formatAuthIssueLine(issue: AuthIssue): string {
+async function formatAuthIssueLine(
+  issue: AuthIssue,
+  cfg: OpenClawConfig,
+  store: ReturnType<typeof ensureAuthProfileStore>,
+): Promise<string> {
   const remaining =
     issue.remainingMs !== undefined ? ` (${formatRemainingShort(issue.remainingMs)})` : "";
-  const hint = formatAuthIssueHint(issue);
+  const hint = await resolveAuthIssueHint(issue, cfg, store);
   const reason = issue.reasonCode ? ` [${issue.reasonCode}]` : "";
   return `- ${issue.profileId}: ${issue.status}${reason}${remaining}${hint ? ` — ${hint}` : ""}`;
 }
@@ -352,19 +358,21 @@ export async function noteAuthProfileHealth(params: {
   }
 
   if (issues.length > 0) {
-    note(
-      issues
-        .map((issue) =>
-          formatAuthIssueLine({
+    const issueLines = await Promise.all(
+      issues.map((issue) =>
+        formatAuthIssueLine(
+          {
             profileId: issue.profileId,
             provider: issue.provider,
             status: issue.status,
             reasonCode: issue.reasonCode,
             remainingMs: issue.remainingMs,
-          }),
-        )
-        .join("\n"),
-      "Model auth",
+          },
+          params.cfg,
+          store,
+        ),
+      ),
     );
+    note(issueLines.join("\n"), "Model auth");
   }
 }

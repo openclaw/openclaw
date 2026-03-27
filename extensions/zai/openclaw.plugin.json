@@ -1,5 +1,6 @@
 {
   "id": "zai",
+  "enabledByDefault": true,
   "providers": ["zai"],
   "providerAuthEnvVars": {
     "zai": ["ZAI_API_KEY", "Z_AI_API_KEY"]

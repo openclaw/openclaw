@@ -1052,6 +1052,15 @@ export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
+  /**
+   * Interactive onboarding surfaces where this search provider should appear
+   * when OpenClaw has no config-aware runtime context yet.
+   *
+   * Unlike provider auth, search setup historically exposed only a curated
+   * quickstart subset. Keep this plugin-owned so core does not hardcode the
+   * default bundled provider list.
+   */
+  onboardingScopes?: Array<"text-inference">;
   requiresCredential?: boolean;
   credentialLabel?: string;
   envVars: string[];
