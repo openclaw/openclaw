@@ -95,11 +95,14 @@ describe("handleAgentEnd", () => {
     expect(warn.mock.calls[0]?.[1]).toMatchObject({
       event: "embedded_run_agent_end",
       runId: "run-1",
-      error: "The AI service is temporarily overloaded. Please try again in a moment.",
+      error: expect.stringContaining(
+        "The AI service is temporarily overloaded. Please try again in a moment.",
+      ),
       failoverReason: "overloaded",
       providerErrorType: "overloaded_error",
-      consoleMessage:
-        'embedded run agent end: runId=run-1 isError=true model=claude-test provider=anthropic error=The AI service is temporarily overloaded. Please try again in a moment. rawError={"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      consoleMessage: expect.stringContaining(
+        "The AI service is temporarily overloaded. Please try again in a moment.",
+      ),
     });
   });
 

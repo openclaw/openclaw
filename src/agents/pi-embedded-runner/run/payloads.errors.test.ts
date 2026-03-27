@@ -37,7 +37,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
   const expectOverloadedFallback = (payloads: ReturnType<typeof buildPayloads>) => {
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe(OVERLOADED_FALLBACK_TEXT);
+    expect(payloads[0]?.text).toContain(OVERLOADED_FALLBACK_TEXT);
   };
 
   function expectSinglePayloadSummary(

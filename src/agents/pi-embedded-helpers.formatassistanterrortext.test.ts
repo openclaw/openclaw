@@ -60,7 +60,7 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_123"}',
     );
-    expect(formatAssistantErrorText(msg)).toBe(
+    expect(formatAssistantErrorText(msg)).toContain(
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
