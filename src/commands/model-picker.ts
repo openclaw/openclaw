@@ -292,13 +292,28 @@ export async function promptDefaultModel(
     options.push({ value: MANUAL_VALUE, label: "Enter model manually" });
   }
   if (includeProviderPluginSetups && agentDir) {
-    const { resolveProviderModelPickerEntries } = await loadResolvedModelPickerRuntime();
+    const runtime = await loadResolvedModelPickerRuntime();
+    const providerModelPickerOptions =
+      "resolveProviderModelPickerContributions" in runtime &&
+      typeof runtime.resolveProviderModelPickerContributions === "function"
+        ? runtime
+            .resolveProviderModelPickerContributions({
+              config: cfg,
+              workspaceDir: params.workspaceDir,
+              env: params.env,
+            })
+            .map((contribution) => contribution.option)
+        : runtime.resolveProviderModelPickerEntries({
+            config: cfg,
+            workspaceDir: params.workspaceDir,
+            env: params.env,
+          });
     options.push(
-      ...resolveProviderModelPickerEntries({
-        config: cfg,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      }),
+      ...providerModelPickerOptions.map((entry) => ({
+        value: entry.value,
+        label: entry.label,
+        ...(entry.hint ? { hint: entry.hint } : {}),
+      })),
     );
   }
 
