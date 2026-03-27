@@ -121,6 +121,10 @@ type ChatSendDeliveryEntry = {
     accountId?: string;
     threadId?: string | number;
   };
+  origin?: {
+    provider?: string;
+    accountId?: string;
+  };
   lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
@@ -162,11 +166,16 @@ function resolveChatSendOriginatingRoute(params: {
   }
 
   const routeChannelCandidate = normalizeMessageChannel(
-    params.entry?.deliveryContext?.channel ?? params.entry?.lastChannel,
+    params.entry?.deliveryContext?.channel ??
+      params.entry?.lastChannel ??
+      params.entry?.origin?.provider,
   );
   const routeToCandidate = params.entry?.deliveryContext?.to ?? params.entry?.lastTo;
   const routeAccountIdCandidate =
-    params.entry?.deliveryContext?.accountId ?? params.entry?.lastAccountId ?? undefined;
+    params.entry?.deliveryContext?.accountId ??
+    params.entry?.lastAccountId ??
+    params.entry?.origin?.accountId ??
+    undefined;
   const routeThreadIdCandidate =
     params.entry?.deliveryContext?.threadId ?? params.entry?.lastThreadId;
   if (params.sessionKey.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {
