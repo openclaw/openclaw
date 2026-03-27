@@ -71,17 +71,6 @@ cost, tokens, errors, and more.
 openclaw plugins install @opik/opik-openclaw
 ```
 
-### Statocyst
-
-OpenClaw plugin for realtime Statocyst skill request/result messaging.
-
-- **npm:** `@moltenbot/openclaw-plugin-statocyst`
-- **repo:** [github.com/Molten-Bot/statocyst](https://github.com/Molten-Bot/statocyst)
-
-```bash
-openclaw plugins install @moltenbot/openclaw-plugin-statocyst
-```
-
 ### QQbot
 
 Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group
@@ -95,6 +84,17 @@ and files.
 openclaw plugins install @sliverp/qqbot
 ```
 
+
+### Statocyst
+
+OpenClaw plugin for realtime Statocyst skill request/result messaging.
+
+- **npm:** `@moltenbot/openclaw-plugin-statocyst`
+- **repo:** [github.com/Molten-Bot/statocyst](https://github.com/Molten-Bot/statocyst)
+
+```bash
+openclaw plugins install @moltenbot/openclaw-plugin-statocyst
+```
 ### wecom
 
 OpenClaw Enterprise WeCom Channel Plugin.
