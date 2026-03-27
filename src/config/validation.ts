@@ -40,11 +40,36 @@ type AllowedValuesCollection = {
   hasValues: boolean;
 };
 
+const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
+const STREAMING_ALLOWED_VALUES = [true, false, "off", "partial", "block", "progress"] as const;
+
 function toIssueRecord(value: unknown): UnknownIssueRecord | null {
   if (!value || typeof value !== "object") {
     return null;
   }
   return value as UnknownIssueRecord;
+}
+
+function collectAllowedValuesFromCustomIssue(record: UnknownIssueRecord): AllowedValuesCollection {
+  const message = typeof record.message === "string" ? record.message : "";
+  const expectedMatch = message.match(CUSTOM_EXPECTED_ONE_OF_RE);
+  if (expectedMatch?.[1]) {
+    const values = [...expectedMatch[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+    return { values, incomplete: false, hasValues: values.length > 0 };
+  }
+
+  const path = Array.isArray(record.path)
+    ? record.path.filter((segment): segment is string => typeof segment === "string")
+    : [];
+  if (path.at(-1) === "streaming") {
+    return {
+      values: [...STREAMING_ALLOWED_VALUES],
+      incomplete: false,
+      hasValues: true,
+    };
+  }
+
+  return { values: [], incomplete: false, hasValues: false };
 }
 
 function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection {
@@ -68,6 +93,10 @@ function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection 
       return { values: [true, false], incomplete: false, hasValues: true };
     }
     return { values: [], incomplete: true, hasValues: false };
+  }
+
+  if (code === "custom") {
+    return collectAllowedValuesFromCustomIssue(record);
   }
 
   if (code !== "invalid_union") {
