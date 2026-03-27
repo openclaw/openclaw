@@ -1,5 +1,8 @@
-import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionStore } from "../../config/sessions.js";
+import {
+  applyKilledSessionEntryState,
+  updateSessionStore,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import { applyAbortCutoffToSessionEntry, type AbortCutoff } from "./abort-cutoff.js";
 import type { CommandHandler } from "./commands-types.js";
 
@@ -25,16 +28,22 @@ export async function persistAbortTargetEntry(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   abortCutoff?: AbortCutoff;
+  legacyKeys?: string[];
 }): Promise<boolean> {
-  const { entry, key, sessionStore, storePath, abortCutoff } = params;
+  const { entry, key, sessionStore, storePath, abortCutoff, legacyKeys } = params;
   if (!entry || !key || !sessionStore) {
     return false;
   }
 
-  entry.abortedLastRun = true;
+  const nowMs = Date.now();
+  applyKilledSessionEntryState(entry, { nowMs, markAbortedLastRun: true });
   applyAbortCutoffToSessionEntry(entry, abortCutoff);
-  entry.updatedAt = Date.now();
   sessionStore[key] = entry;
+  for (const legacyKey of legacyKeys ?? []) {
+    if (legacyKey !== key) {
+      delete sessionStore[legacyKey];
+    }
+  }
 
   if (storePath) {
     await updateSessionStore(storePath, (store) => {
@@ -42,10 +51,14 @@ export async function persistAbortTargetEntry(params: {
       if (!nextEntry) {
         return;
       }
-      nextEntry.abortedLastRun = true;
+      applyKilledSessionEntryState(nextEntry, { nowMs, markAbortedLastRun: true });
       applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
-      nextEntry.updatedAt = Date.now();
       store[key] = nextEntry;
+      for (const legacyKey of legacyKeys ?? []) {
+        if (legacyKey !== key) {
+          delete store[legacyKey];
+        }
+      }
     });
   }
 

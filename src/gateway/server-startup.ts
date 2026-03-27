@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { ACP_SESSION_IDENTITY_RENDERER_VERSION } from "../acp/runtime/session-identifiers.js";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
@@ -16,6 +18,11 @@ import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  applyKilledSessionEntryState,
+  loadSessionStore,
+  updateSessionStore,
+} from "../config/sessions.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import {
   clearInternalHooks,
@@ -33,6 +40,7 @@ import {
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
+const SESSION_STORE_FILE_NAME = "sessions.json";
 
 async function prewarmConfiguredPrimaryModel(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -61,6 +69,57 @@ async function prewarmConfiguredPrimaryModel(params: {
   }
 }
 
+async function reconcilePersistedRunningSessionsOnStartup(params: {
+  stateDir: string;
+  nowMs?: number;
+  log?: { warn?: (msg: string) => void };
+}): Promise<{ storesChecked: number; sessionsReconciled: number }> {
+  const nowMs = params.nowMs ?? Date.now();
+  const sessionDirs = await resolveAgentSessionDirs(params.stateDir);
+  let storesChecked = 0;
+  let sessionsReconciled = 0;
+
+  for (const sessionsDir of sessionDirs) {
+    const storePath = path.join(sessionsDir, SESSION_STORE_FILE_NAME);
+    try {
+      await fs.access(storePath);
+    } catch (err) {
+      const code = (err as { code?: string } | null)?.code;
+      if (code === "ENOENT") {
+        continue;
+      }
+      throw err;
+    }
+
+    storesChecked += 1;
+    const store = loadSessionStore(storePath, { skipCache: true });
+    if (!Object.values(store).some((entry) => entry?.status === "running")) {
+      continue;
+    }
+
+    const reconciledInStore = await updateSessionStore(storePath, (nextStore) => {
+      let reconciledCount = 0;
+      for (const entry of Object.values(nextStore)) {
+        if (!entry || entry.status !== "running") {
+          continue;
+        }
+        applyKilledSessionEntryState(entry, { nowMs, markAbortedLastRun: false });
+        reconciledCount += 1;
+      }
+      return reconciledCount;
+    });
+
+    if (reconciledInStore > 0) {
+      sessionsReconciled += reconciledInStore;
+      params.log?.warn?.(
+        `reconciled ${reconciledInStore} stale running session${reconciledInStore === 1 ? "" : "s"} on startup: ${storePath}`,
+      );
+    }
+  }
+
+  return { storesChecked, sessionsReconciled };
+}
+
 export async function startGatewaySidecars(params: {
   cfg: ReturnType<typeof loadConfig>;
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
@@ -86,8 +145,12 @@ export async function startGatewaySidecars(params: {
         log: { warn: (message) => params.log.warn(message) },
       });
     }
+    await reconcilePersistedRunningSessionsOnStartup({
+      stateDir,
+      log: params.log,
+    });
   } catch (err) {
-    params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
+    params.log.warn(`session startup recovery failed: ${String(err)}`);
   }
 
   // Start Gmail watcher if configured (hooks.gmail.account).
@@ -217,4 +280,5 @@ export async function startGatewaySidecars(params: {
 
 export const __testing = {
   prewarmConfiguredPrimaryModel,
+  reconcilePersistedRunningSessionsOnStartup,
 };

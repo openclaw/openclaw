@@ -1,5 +1,9 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadSessionStore, saveSessionStore } from "../config/sessions/store.js";
 
 const ensureOpenClawModelsJsonMock = vi.fn<
   (config: unknown, agentDir: unknown) => Promise<{ agentDir: string; wrote: boolean }>
@@ -84,5 +88,80 @@ describe("gateway startup primary model warmup", () => {
 
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(resolveModelAsyncMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("gateway startup session recovery", () => {
+  it("reconciles persisted running sessions left behind by an earlier process", async () => {
+    const { __testing } = await import("./server-startup.js");
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-startup-"));
+    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const nowMs = 1_700_000_000_000;
+    const warn = vi.fn();
+
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await saveSessionStore(storePath, {
+        "session:running": {
+          sessionId: "session-running",
+          updatedAt: nowMs - 20_000,
+          status: "running",
+          startedAt: nowMs - 90_000,
+        },
+        "session:already-aborted": {
+          sessionId: "session-aborted",
+          updatedAt: nowMs - 10_000,
+          status: "running",
+          startedAt: nowMs - 30_000,
+          abortedLastRun: true,
+        },
+        "session:done": {
+          sessionId: "session-done",
+          updatedAt: nowMs - 5_000,
+          status: "done",
+          startedAt: nowMs - 40_000,
+          endedAt: nowMs - 5_000,
+          runtimeMs: 35_000,
+        },
+      });
+
+      await expect(
+        __testing.reconcilePersistedRunningSessionsOnStartup({
+          stateDir,
+          nowMs,
+          log: { warn },
+        }),
+      ).resolves.toEqual({
+        storesChecked: 1,
+        sessionsReconciled: 2,
+      });
+
+      const store = loadSessionStore(storePath, { skipCache: true });
+      expect(store["session:running"]).toMatchObject({
+        status: "killed",
+        endedAt: nowMs,
+        runtimeMs: 90_000,
+        updatedAt: nowMs,
+      });
+      expect(store["session:running"]?.abortedLastRun).toBeUndefined();
+      expect(store["session:already-aborted"]).toMatchObject({
+        status: "killed",
+        abortedLastRun: true,
+        endedAt: nowMs,
+        runtimeMs: 30_000,
+        updatedAt: nowMs,
+      });
+      expect(store["session:done"]).toMatchObject({
+        status: "done",
+        endedAt: nowMs - 5_000,
+        runtimeMs: 35_000,
+      });
+      expect(warn).toHaveBeenCalledWith(
+        `reconciled 2 stale running sessions on startup: ${storePath}`,
+      );
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 });

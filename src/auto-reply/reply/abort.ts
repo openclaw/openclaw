@@ -17,17 +17,12 @@ import {
   resolveSessionStoreEntry,
   resolveStorePath,
   type SessionEntry,
-  updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
-import {
-  applyAbortCutoffToSessionEntry,
-  resolveAbortCutoffFromContext,
-  shouldPersistAbortCutoff,
-} from "./abort-cutoff.js";
+import { resolveAbortCutoffFromContext, shouldPersistAbortCutoff } from "./abort-cutoff.js";
 import {
   getAbortMemory,
   getAbortMemorySizeForTest,
@@ -36,6 +31,7 @@ import {
   resetAbortMemoryForTest,
   setAbortMemory,
 } from "./abort-primitives.js";
+import { persistAbortTargetEntry } from "./commands-session-store.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { clearSessionQueues } from "./queue.js";
 
@@ -285,30 +281,17 @@ export async function tryFastAbortFromMessage(params: {
       ? resolveAbortCutoffFromContext(ctx)
       : undefined;
     if (entry && key) {
-      entry.abortedLastRun = true;
-      applyAbortCutoffToSessionEntry(entry, abortCutoff);
-      entry.updatedAt = Date.now();
-      store[key] = entry;
-      for (const legacyKey of legacyKeys ?? []) {
-        if (legacyKey !== key) {
-          delete store[legacyKey];
-        }
-      }
-      await updateSessionStore(storePath, (nextStore) => {
-        const nextEntry = nextStore[key] ?? entry;
-        if (!nextEntry) {
-          return;
-        }
-        nextEntry.abortedLastRun = true;
-        applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
-        nextEntry.updatedAt = Date.now();
-        nextStore[key] = nextEntry;
-        for (const legacyKey of legacyKeys ?? []) {
-          if (legacyKey !== key) {
-            delete nextStore[legacyKey];
-          }
-        }
+      const persisted = await persistAbortTargetEntry({
+        entry,
+        key,
+        sessionStore: store,
+        storePath,
+        abortCutoff,
+        legacyKeys,
       });
+      if (!persisted && abortKey) {
+        setAbortMemory(abortKey, true);
+      }
     } else if (abortKey) {
       setAbortMemory(abortKey, true);
     }
