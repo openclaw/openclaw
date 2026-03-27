@@ -167,9 +167,11 @@ export interface RealtimeVoiceConfig {
   onError?: (error: Error) => void;
 
   /**
-   * Called when the bridge closes (intentionally or after max retries).
+   * Called when the bridge closes.
+   * "completed" = closed intentionally (e.g. caller hung up).
+   * "error"     = reconnect budget exhausted or fatal failure.
    */
-  onClose?: () => void;
+  onClose?: (reason: "completed" | "error") => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -413,7 +415,7 @@ export class OpenAIRealtimeVoiceBridge {
         if (!this.intentionallyClosed) {
           void this.attemptReconnect();
         } else {
-          this.config.onClose?.();
+          this.config.onClose?.("completed");
         }
       });
     });
@@ -497,7 +499,7 @@ export class OpenAIRealtimeVoiceBridge {
       );
       console.error(err.message);
       this.config.onError?.(err);
-      this.config.onClose?.();
+      this.config.onClose?.("error");
       return;
     }
 

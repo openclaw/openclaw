@@ -248,10 +248,10 @@ export class RealtimeCallHandler {
     // already dead before intentionallyClosed is set), so we also call it from the
     // connect() catch handler. The flag ensures exactly one call.ended per call.
     let callEndEmitted = false;
-    const emitCallEnd = () => {
+    const emitCallEnd = (reason: "completed" | "error") => {
       if (callEndEmitted) return;
       callEndEmitted = true;
-      this.endCallInManager(callSid, callId);
+      this.endCallInManager(callSid, callId, reason);
     };
 
     bridge = new OpenAIRealtimeVoiceBridge({
@@ -337,19 +337,21 @@ export class RealtimeCallHandler {
         console.error("[voice-call] Realtime error:", err.message);
       },
 
-      onClose: () => {
-        emitCallEnd();
-        // Bridge gave up reconnecting — actively terminate the live call transport
-        // so the caller is not left connected in silence while billing continues.
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.close(1011, "Bridge disconnected");
+      onClose: (reason) => {
+        emitCallEnd(reason);
+        if (reason === "error") {
+          // Bridge gave up reconnecting — actively terminate the live call transport
+          // so the caller is not left connected in silence while billing continues.
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.close(1011, "Bridge disconnected");
+          }
+          void this.provider
+            .hangupCall({ callId, providerCallId: callSid, reason: "error" })
+            .catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              console.warn(`[voice-call] Failed to hang up call ${callSid} after bridge close:`, msg);
+            });
         }
-        void this.provider
-          .hangupCall({ callId, providerCallId: callSid, reason: "error" })
-          .catch((err: unknown) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.warn(`[voice-call] Failed to hang up call ${callSid} after bridge close:`, msg);
-          });
       },
     });
 
@@ -359,7 +361,7 @@ export class RealtimeCallHandler {
       // attemptReconnect() — without this the bridge retries after the call
       // is already torn down, causing orphan background reconnect loops.
       bridge?.close();
-      emitCallEnd();
+      emitCallEnd("error");
       ws.close(1011, "Failed to connect");
     });
 
@@ -417,14 +419,18 @@ export class RealtimeCallHandler {
     return callRecord.callId;
   }
 
-  private endCallInManager(callSid: string, callId: string): void {
+  private endCallInManager(
+    callSid: string,
+    callId: string,
+    reason: "completed" | "error",
+  ): void {
     this.manager.processEvent({
       id: `realtime-ended-${callSid}-${Date.now()}`,
       type: "call.ended",
       callId,
       providerCallId: callSid,
       timestamp: Date.now(),
-      reason: "completed",
+      reason,
     });
   }
 
