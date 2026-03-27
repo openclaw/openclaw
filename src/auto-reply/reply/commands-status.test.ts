@@ -160,4 +160,22 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).not.toContain("🤖 Subagents: 1 active");
     expect(reply?.text).not.toContain("stale old parent child");
   });
+
+  it("counts controller-owned runs even when the latest child requester differs", async () => {
+    addSubagentRunForTests({
+      runId: "run-status-controller-owned",
+      childSessionKey: "agent:main:subagent:status-controller-owned",
+      requesterSessionKey: "agent:main:requester-only",
+      requesterDisplayKey: "requester-only",
+      controllerSessionKey: "agent:main:main",
+      task: "controller-owned status worker",
+      cleanup: "keep",
+      createdAt: Date.now() - 60_000,
+      startedAt: Date.now() - 60_000,
+    });
+
+    const reply = await buildStatusReplyForTest({});
+
+    expect(reply?.text).toContain("🤖 Subagents: 1 active");
+  });
 });
