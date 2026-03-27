@@ -61,11 +61,11 @@ async def classify_intent(gateway, prompt: str) -> str:
     lower_prompt = prompt.lower()
     has_url = bool(re.search(r'https?://', lower_prompt))
     if any(kw in lower_prompt for kw in dmarket_keywords):
-        keyword_result = "Dmarket"
+        keyword_result = "Dmarket-Dev"
     elif has_url or any(kw in lower_prompt for kw in web_research_keywords):
-        keyword_result = "OpenClaw"
+        keyword_result = "Research-Ops"
     elif any(kw in lower_prompt for kw in openclaw_keywords):
-        keyword_result = "OpenClaw"
+        keyword_result = "OpenClaw-Core"
     else:
         keyword_result = "General"
 
@@ -87,11 +87,12 @@ async def classify_intent(gateway, prompt: str) -> str:
         all_classes = brigades + ["General"]
         classify_prompt = (
             f"Classify this user request into ONE of these categories: {', '.join(all_classes)}.\n"
-            f"Dmarket = trading, buying, selling items, prices, market, skins, inventory.\n"
-            f"OpenClaw = system administration, framework, configuration, models, bots, pipeline, "
-            f"web search, research, URLs, browsing the internet, fetching URLs, "
+            f"Dmarket-Dev = trading, buying, selling items, prices, market, skins, inventory.\n"
+            f"OpenClaw-Core = system administration, framework, configuration, models, bots, pipeline, "
             f"CLI commands execution (npx, pnpm, bunx, npm), clawhub, installing packages, "
             f"running shell commands, checking connections, verifying installations.\n"
+            f"Research-Ops = web search, research, URLs, browsing the internet, fetching URLs, "
+            f"deep research, analysis, reports, benchmarks.\n"
             f"General = general questions, chitchat, greetings, unrelated topics, unclear intent.\n\n"
             f"Request: {prompt}\n\n"
             f"Reply with ONLY the category name, nothing else."

@@ -16,12 +16,19 @@ async def configure_llm_and_pipeline(gateway) -> None:
     inside ``OpenClawGateway.run()``.  Mutates *gateway* in-place (adds
     background tasks, scheduler, etc.).
     """
+    # Live init logger (optional, set by OpenClawGateway.run)
+    _tg_log = getattr(gateway, '_tg_init_log', None)
+
     # 1. Unified LLM Gateway (must run before pipeline.initialize)
     from src.llm_gateway import configure as configure_llm_gateway
     configure_llm_gateway(gateway.config)
+    if _tg_log:
+        await _tg_log.stage("🛠", "LLM Gateway", "Настроен. Модели подключены.")
 
     # 2. Pipeline (MCP + SuperMemory + RAG)
     await gateway.pipeline.initialize()
+    if _tg_log:
+        await _tg_log.stage("🧠", "Pipeline + MCP", "Инициализирован. SuperMemory + RAG готовы.")
 
     # 3. HITL Approval Gate
     if gateway.config.get("hitl", {}).get("enabled", False):
@@ -41,6 +48,9 @@ async def configure_llm_and_pipeline(gateway) -> None:
             lambda c: (c.data or "").startswith("hitl:"),
         )
         logger.info("HITL Approval Gate enabled")
+    if _tg_log:
+        hitl_status = "Включен" if gateway.config.get("hitl", {}).get("enabled", False) else "Отключен"
+        await _tg_log.stage("🛡", "HITL Approval", hitl_status)
 
     # 4. Mission Control Dashboard
     dashboard_cfg = gateway.config.get("dashboard", {})
@@ -60,8 +70,9 @@ async def configure_llm_and_pipeline(gateway) -> None:
             logger.warning("Mission Control failed to start (non-fatal)", error=str(e))
 
     # 5. Background tasks (Memory GC, Polling)
-    memory_task = asyncio.create_task(gateway._scheduled_memory_gc())
-    poll_task = asyncio.create_task(gateway._poll_remote_tasks())
+    from src.boot._background import scheduled_memory_gc, poll_remote_tasks
+    memory_task = asyncio.create_task(scheduled_memory_gc(gateway))
+    poll_task = asyncio.create_task(poll_remote_tasks(gateway))
     gateway._bg_tasks.add(memory_task)
     gateway._bg_tasks.add(poll_task)
     memory_task.add_done_callback(gateway._bg_tasks.discard)
@@ -106,6 +117,8 @@ async def configure_llm_and_pipeline(gateway) -> None:
 
     if force_cloud:
         logger.info("Cloud-Only mode active: OpenRouter primary, vLLM/WSL/Ollama DISABLED")
+        if _tg_log:
+            await _tg_log.stage("☁️", "SmartModelRouter", "Cloud-Only mode. OpenRouter primary.")
     else:
         gateway.vllm_manager.start_health_monitor()
         default_model = (
@@ -129,3 +142,5 @@ async def configure_llm_and_pipeline(gateway) -> None:
         logger.info("Brigade API started", port=brigade_port)
     except Exception as e:
         logger.error("Brigade API failed to start", error=str(e))
+    if _tg_log:
+        await _tg_log.stage("🏰", "Brigade API", f"Порт {brigade_port}")

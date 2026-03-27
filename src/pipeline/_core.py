@@ -88,8 +88,9 @@ class PipelineExecutor:
         )
 
         self.default_chains = {
-            "Dmarket": ["Planner", "Foreman", "Executor_API", "Executor_Parser", "Auditor", "Archivist"],
-            "OpenClaw": ["Planner", "Foreman", "Executor_Tools", "Executor_Architect", "Auditor", "State_Manager", "Archivist"],
+            "Dmarket-Dev": ["Planner", "Coder", "Auditor"],
+            "OpenClaw-Core": ["Planner", "Foreman", "Executor_Tools", "Executor_Architect", "Auditor", "State_Manager", "Archivist"],
+            "Research-Ops": ["Researcher", "Analyst", "Summarizer"],
         }
 
         self._ctx_budget = self.config.get("system", {}).get("vllm_max_model_len", 16384)

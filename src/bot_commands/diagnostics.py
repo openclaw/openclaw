@@ -1,6 +1,7 @@
-"""Diagnostics: test, test_all_models, perf, history, openrouter_test, tailscale."""
+"""Diagnostics: test, test_all_models, perf, history, openrouter_test, tailscale, diag."""
 
 import asyncio
+import time
 
 import aiohttp
 import structlog
@@ -212,3 +213,92 @@ async def cmd_openrouter_test(gateway, message: Message):
         )
     else:
         await status_msg.edit_text(f"❌ OpenRouter ошибка: {result.get('error', 'unknown')}")
+
+
+async def cmd_diag(gateway, message: Message):
+    """Hidden /diag command — full MCP server diagnostics + model router health."""
+    if message.from_user.id != gateway.admin_id:
+        return
+
+    status_msg = await message.reply("🔍 Запускаю полную диагностику MCP-серверов...")
+
+    lines: list[str] = ["<b>🔍 OpenClaw Diagnostics Report</b>\n"]
+
+    # --- MCP Servers ---
+    mcp = getattr(gateway.pipeline, 'mcp_client', None)
+    if mcp:
+        sessions = getattr(mcp, '_server_sessions', [])
+        tools = getattr(mcp, 'available_tools_openai', [])
+        lines.append(f"<b>MCP Servers:</b> {len(sessions)} active")
+        lines.append(f"<b>MCP Tools:</b> {len(tools)} registered")
+
+        # probe each server with list_tools
+        server_names = [
+            "SQLite", "Filesystem", "Parsers", "Memory", "WebSearch", "Shell"
+        ]
+        for i, sess in enumerate(sessions):
+            name = server_names[i] if i < len(server_names) else f"Server-{i}"
+            t0 = time.monotonic()
+            try:
+                resp = await asyncio.wait_for(sess.list_tools(), timeout=5)
+                elapsed = (time.monotonic() - t0) * 1000
+                lines.append(f"  ✅ {name}: {len(resp.tools)} tools ({elapsed:.0f}ms)")
+            except Exception as e:
+                elapsed = (time.monotonic() - t0) * 1000
+                lines.append(f"  ❌ {name}: {e} ({elapsed:.0f}ms)")
+    else:
+        lines.append("⚠️ MCP Client не инициализирован")
+
+    # --- OpenRouter ---
+    or_cfg = gateway.config.get("system", {}).get("openrouter", {})
+    if or_cfg.get("enabled") and or_cfg.get("api_key"):
+        t0 = time.monotonic()
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://openrouter.ai/api/v1/models",
+                    headers={"Authorization": f"Bearer {or_cfg['api_key']}"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    elapsed = (time.monotonic() - t0) * 1000
+                    if resp.status == 200:
+                        data = await resp.json()
+                        count = len(data.get("data", []))
+                        lines.append(f"\n<b>OpenRouter:</b> ✅ {count} models ({elapsed:.0f}ms)")
+                    else:
+                        lines.append(f"\n<b>OpenRouter:</b> ❌ HTTP {resp.status} ({elapsed:.0f}ms)")
+        except Exception as e:
+            elapsed = (time.monotonic() - t0) * 1000
+            lines.append(f"\n<b>OpenRouter:</b> ❌ {e} ({elapsed:.0f}ms)")
+    else:
+        lines.append("\n<b>OpenRouter:</b> ⚠️ disabled")
+
+    # --- Model Router ---
+    router_cfg = gateway.config.get("system", {}).get("model_router", {})
+    lines.append(f"\n<b>Model Router ({len(router_cfg)} roles):</b>")
+    for role, model in router_cfg.items():
+        lines.append(f"  • {role}: <code>{model}</code>")
+
+    # --- Brigades ---
+    brigades = gateway.config.get("brigades", {})
+    total_roles = sum(len(b.get("roles", {})) for b in brigades.values())
+    lines.append(f"\n<b>Brigades:</b> {len(brigades)} ({total_roles} roles)")
+    for bname, bdata in brigades.items():
+        roles = list(bdata.get("roles", {}).keys())
+        lines.append(f"  🏴 {bname}: {', '.join(roles)}")
+
+    # --- Sandbox ---
+    try:
+        from src.tools.dynamic_sandbox import _docker_available
+        docker_ok = _docker_available()
+        lines.append(f"\n<b>Sandbox:</b> {'Docker ✅' if docker_ok else 'Subprocess (fallback)'}")
+    except Exception:
+        lines.append("\n<b>Sandbox:</b> ⚠️ import error")
+
+    report = "\n".join(lines)
+    try:
+        await status_msg.edit_text(report, parse_mode="HTML")
+    except Exception:
+        # fallback plain text
+        plain = report.replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", "")
+        await status_msg.edit_text(plain)

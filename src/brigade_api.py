@@ -35,7 +35,7 @@ logger = structlog.get_logger("BrigadeAPI")
 
 class ExecuteRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=64_000)
-    brigade: str = Field(default="Dmarket")
+    brigade: str = Field(default="Dmarket-Dev")
     max_steps: int = Field(default=5, ge=1, le=10)
     task_type: str | None = Field(default=None)
 

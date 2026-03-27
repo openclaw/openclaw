@@ -90,11 +90,13 @@ async def cmd_status(gateway, message: Message, from_callback: bool = False):
     except Exception as e:
         logger.debug("vLLM status check failed", error=str(e))
 
+    brigade_names = list(gateway.config.get("brigades", {}).keys())
     total_roles = sum(len(brigade["roles"]) for brigade in gateway.config["brigades"].values())
 
     openrouter_cfg = gateway.config.get("system", {}).get("openrouter", {})
     openrouter_on = openrouter_cfg.get("enabled", False) and openrouter_cfg.get("api_key", "")
     inference_label = "OpenRouter API (vLLM fallback)" if openrouter_on else gateway.config['system']['hardware']['inference_engine']
+    brigades_display = " + ".join(brigade_names) if brigade_names else "N/A"
 
     status_msg = (
         f"🛠️ *System Status:*\n\n"
@@ -102,7 +104,7 @@ async def cmd_status(gateway, message: Message, from_callback: bool = False):
         f"🎮 GPU: `{gateway.config['system']['hardware']['target_gpu']}`\n"
         f"💾 VRAM: {gateway.config['system']['hardware']['vram_limit_gb']}GB\n"
         f"📡 vLLM: `{gateway.vllm_url}` — {vllm_status}\n"
-        f"🏴 Бригады: Dmarket + OpenClaw ({total_roles} ролей)\n"
+        f"🏴 Бригады: {brigades_display} ({total_roles} ролей)\n"
         f"🧠 Inference: {inference_label}"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[

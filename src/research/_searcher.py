@@ -104,33 +104,46 @@ def _academic_search_sync(query: str) -> str:
 
 
 async def multi_source_search(query: str) -> str:
-    """Search Habr, Reddit, and GitHub for relevant content."""
-    results: List[str] = []
-    try:
-        from src.parsers.habr import fetch_habr_articles
-        articles = await fetch_habr_articles(query=query, limit=3)
-        for a in articles[:3]:
-            results.append(f"[Habr] {a.title}: {a.summary[:200]}")
-    except Exception as e:
-        logger.debug("Habr parser skipped", error=str(e))
+    """Search Habr, Reddit, and GitHub for relevant content.
 
-    try:
-        from src.parsers.reddit import fetch_reddit_posts
-        posts = await fetch_reddit_posts(
-            subreddit="MachineLearning", query=query, limit=3
-        )
-        for p in posts[:3]:
-            text = p.selftext[:200] if p.selftext else p.title
-            results.append(f"[Reddit r/{p.subreddit}] {p.title} (↑{p.score}): {text}")
-    except Exception as e:
-        logger.debug("Reddit parser skipped", error=str(e))
+    All three sources are fetched concurrently via asyncio.gather
+    for ~3x wall-clock speedup over sequential execution.
+    """
 
-    try:
-        from src.parsers.github import fetch_github_trending
-        repos = await fetch_github_trending(query=f"{query} in:name,description", limit=3)
-        for r in repos[:3]:
-            results.append(f"[GitHub] {r.full_name} ★{r.stars}: {r.description[:200]}")
-    except Exception as e:
-        logger.debug("GitHub parser skipped", error=str(e))
+    async def _habr() -> List[str]:
+        try:
+            from src.parsers.habr import fetch_habr_articles
+            articles = await fetch_habr_articles(query=query, limit=3)
+            return [f"[Habr] {a.title}: {a.summary[:200]}" for a in articles[:3]]
+        except Exception as e:
+            logger.debug("Habr parser skipped", error=str(e))
+            return []
 
+    async def _reddit() -> List[str]:
+        try:
+            from src.parsers.reddit import fetch_reddit_posts
+            posts = await fetch_reddit_posts(
+                subreddit="MachineLearning", query=query, limit=3
+            )
+            return [
+                f"[Reddit r/{p.subreddit}] {p.title} (↑{p.score}): {p.selftext[:200] if p.selftext else p.title}"
+                for p in posts[:3]
+            ]
+        except Exception as e:
+            logger.debug("Reddit parser skipped", error=str(e))
+            return []
+
+    async def _github() -> List[str]:
+        try:
+            from src.parsers.github import fetch_github_trending
+            repos = await fetch_github_trending(query=f"{query} in:name,description", limit=3)
+            return [f"[GitHub] {r.full_name} ★{r.stars}: {r.description[:200]}" for r in repos[:3]]
+        except Exception as e:
+            logger.debug("GitHub parser skipped", error=str(e))
+            return []
+
+    habr_res, reddit_res, github_res = await asyncio.gather(
+        _habr(), _reddit(), _github(),
+    )
+    results = habr_res + reddit_res + github_res
     return "\n".join(results) if results else ""

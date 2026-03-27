@@ -1,4 +1,4 @@
-"""Photo, voice, and document media handlers."""
+"""Photo, voice, video, and document media handlers."""
 
 import base64
 import io
@@ -11,6 +11,7 @@ from prometheus_client import Counter
 logger = structlog.get_logger("BotCommands.Media")
 
 PHOTO_PROMPT_COUNTER = Counter("openclaw_prompts_photo", "Photo prompts received")
+VIDEO_PROMPT_COUNTER = Counter("openclaw_prompts_video", "Video prompts received")
 
 
 async def handle_photo(gateway, message: Message):
@@ -225,6 +226,134 @@ async def handle_document(gateway, message: Message):
     except Exception as e:
         logger.error("Document handler failed", error=str(e))
         await status_msg.edit_text(f"❌ Ошибка обработки документа: {e}")
+
+
+async def handle_video(gateway, message: Message):
+    """Handle video inputs — extract keyframes and route to video_analyst model (Nemotron VL)."""
+    if message.from_user.id != gateway.admin_id:
+        return
+
+    VIDEO_PROMPT_COUNTER.inc()
+    video = message.video or (message.video_note if hasattr(message, 'video_note') else None)
+    if not video:
+        return
+
+    # Size guard: max 20 MB for video analysis
+    file_size = getattr(video, 'file_size', 0) or 0
+    if file_size > 20 * 1024 * 1024:
+        await message.reply("⚠️ Видео слишком большое (макс. 20 МБ для анализа).")
+        return
+
+    status_msg = await message.reply("🎬 Загружаю видео для анализа через NVIDIA Nemotron VL...")
+
+    try:
+        file_info = await gateway.bot.get_file(video.file_id)
+        file_bytes = await gateway.bot.download_file(file_info.file_path)
+        raw = file_bytes.read()
+
+        # Extract keyframes using opencv if available, otherwise send single thumbnail
+        frames_b64 = await _extract_keyframes(raw)
+
+        if not frames_b64:
+            await status_msg.edit_text("⚠️ Не удалось извлечь кадры из видео.")
+            return
+
+        await status_msg.edit_text(
+            f"🎬 Извлечено {len(frames_b64)} кадров. Отправляю на анализ..."
+        )
+
+        prompt = message.caption or (
+            "Проведи детальный покадровый анализ этого видео. "
+            "Опиши: объекты, действия, сцены, настроение, ключевые события."
+        )
+
+        # Route to video_analyst model via llm_gateway
+        from src.llm_gateway import route_llm
+
+        # Use first frame for single-image vision API (multi-frame via system prompt context)
+        frame_descriptions = []
+        for i, frame_b64 in enumerate(frames_b64[:4]):  # Analyze up to 4 keyframes
+            frame_prompt = f"Кадр {i + 1}/{len(frames_b64)}. {prompt}" if i > 0 else prompt
+            model = gateway.config.get("system", {}).get("model_router", {}).get(
+                "video_analyst", "nvidia/nemotron-nano-vl"
+            )
+            result = await route_llm(
+                frame_prompt,
+                task_type="vision",
+                model=model,
+                max_tokens=1024,
+                image_base64=frame_b64,
+                system=(
+                    "Ты — видео-аналитик NVIDIA Nemotron VL. "
+                    "Проводи событийный анализ с глубиной, сопоставимой с Gemini 1.5 Pro. "
+                    "Описывай: объекты, действия, контекст, эмоции, временную динамику."
+                ),
+            )
+            if result:
+                frame_descriptions.append(f"🖼 **Кадр {i + 1}:**\n{result}")
+
+        if frame_descriptions:
+            full_analysis = "\n\n".join(frame_descriptions)
+            # Split if too long
+            if len(full_analysis) > 3800:
+                full_analysis = full_analysis[:3800] + "\n\n[...усечено]"
+            await status_msg.edit_text(
+                f"🎬 *Video Analysis (NVIDIA Nemotron VL):*\n\n{full_analysis}",
+                parse_mode="Markdown",
+            )
+        else:
+            await status_msg.edit_text("⚠️ Видео-аналитик не вернул результат.")
+
+    except Exception as e:
+        logger.error("Video handler failed", error=str(e))
+        await status_msg.edit_text(f"❌ Ошибка обработки видео: {e}")
+
+
+async def _extract_keyframes(video_bytes: bytes, max_frames: int = 4) -> list[str]:
+    """Extract evenly-spaced keyframes from video as base64 JPEG strings.
+    
+    Requires opencv-python; returns empty list if unavailable.
+    """
+    try:
+        import cv2
+        import numpy as np
+        import tempfile
+        import os
+
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            tmp.write(video_bytes)
+            tmp_path = tmp.name
+
+        cap = cv2.VideoCapture(tmp_path)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        if total_frames <= 0:
+            cap.release()
+            os.unlink(tmp_path)
+            return []
+
+        # Pick evenly spaced frame indices
+        step = max(1, total_frames // max_frames)
+        indices = [i * step for i in range(max_frames) if i * step < total_frames]
+
+        frames_b64: list[str] = []
+        for idx in indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
+            if ret:
+                _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                frames_b64.append(base64.b64encode(buf.tobytes()).decode("utf-8"))
+
+        cap.release()
+        os.unlink(tmp_path)
+        return frames_b64
+
+    except ImportError:
+        logger.warning("opencv-python not installed — video keyframe extraction unavailable")
+        return []
+    except Exception as e:
+        logger.error("Keyframe extraction failed", error=str(e))
+        return []
 
 
 def _extract_pdf_text(raw_bytes: bytes) -> str:

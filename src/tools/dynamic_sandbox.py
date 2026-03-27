@@ -52,15 +52,19 @@ _SKILL_DIR_NAME = "local_skills"
 # Safety: patterns that must never appear in generated code
 _CODE_DENY_PATTERNS: list[re.Pattern] = [
     re.compile(r"\bos\.system\b"),
-    re.compile(r"\bsubprocess\.call\b.*shell\s*=\s*True"),
+    re.compile(r"\bsubprocess\b"),               # no subprocess at all (Popen/run/call)
     re.compile(r"\beval\b\s*\("),
     re.compile(r"\bexec\b\s*\("),
     re.compile(r"\b__import__\b"),
+    re.compile(r"\bimportlib\b"),                # no dynamic imports (bypass __import__)
+    re.compile(r"\bos\.popen\b"),                # no os.popen
+    re.compile(r"\bos\.exec\w*\b"),              # no os.execve/execvp/etc.
+    re.compile(r"\bos\.spawn\w*\b"),             # no os.spawn*
     re.compile(r"\bshutil\.rmtree\s*\(\s*['\"/]", re.IGNORECASE),
     re.compile(r"\bopen\s*\([^)]*['\"]\/etc\/", re.IGNORECASE),
-    re.compile(r"\bsocket\b"),                  # no raw network
+    re.compile(r"\bsocket\b"),                   # no raw network
     re.compile(r"\bctypes\b"),                   # no FFI
-    re.compile(r"\bpickle\.loads?\b"),           # deserialization risk
+    re.compile(r"\bpickle\.loads?\b"),            # deserialization risk
     re.compile(r"\bwhile\s+True\b"),              # infinite loop
 ]
 

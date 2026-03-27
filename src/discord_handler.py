@@ -116,7 +116,7 @@ class DiscordHandler:
             async with message.channel.typing():
                 result = await self.pipeline.execute_stream(
                     prompt=prompt,
-                    brigade="OpenClaw",
+                    brigade="OpenClaw-Core",
                     task_type=None,
                 )
                 stream = result.get("stream")
