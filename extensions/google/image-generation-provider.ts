@@ -1,5 +1,5 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/image-generation-core";
 import {
   DEFAULT_GOOGLE_API_BASE_URL,
   normalizeGoogleApiBaseUrl,

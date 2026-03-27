@@ -1,11 +1,12 @@
-import { markdownToText, truncateText } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
+  markdownToText,
   normalizeCacheKey,
   postTrustedWebToolsJson,
   readCache,
   resolveCacheTtlMs,
+  truncateText,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
