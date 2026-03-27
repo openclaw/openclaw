@@ -65,15 +65,17 @@ function wrapToolWithExecuteContext(
   // that don't declare it simply ignore the extra argument. The cast is necessary
   // because the core AgentTool type declares execute's third arg as AbortSignal,
   // but the plugin dispatch convention extends that slot for context injection.
+  //
+  // We use object spread (not Object.create) so that name, description, parameters,
+  // etc. remain own enumerable properties. Downstream code (pi-tools.schema.ts,
+  // pi-tools.before-tool-call.ts, pi-tools.abort.ts) clones tools via { ...tool },
+  // which only copies own properties — inherited prototype fields would be lost.
   // oxlint-disable-next-line typescript/no-explicit-any
   const originalAsAny = original as (...args: any[]) => unknown;
-  return Object.create(tool, {
-    execute: {
-      value: (callId: string, params: unknown) => originalAsAny.call(tool, callId, params, execCtx),
-      writable: true,
-      configurable: true,
-    },
-  });
+  return {
+    ...tool,
+    execute: (callId: string, params: unknown) => originalAsAny.call(tool, callId, params, execCtx),
+  } as AnyAgentTool;
 }
 
 function normalizeAllowlist(list?: string[]) {
@@ -137,7 +139,7 @@ export function resolvePluginTools(params: {
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolName(tool)));
   const allowlist = normalizeAllowlist(params.toolAllowlist);
   const blockedPlugins = new Set<string>();
-  const execCtx = buildExecuteContext(params.context);
+  const execCtx = Object.freeze(buildExecuteContext(params.context));
 
   for (const entry of registry.tools) {
     if (blockedPlugins.has(entry.pluginId)) {

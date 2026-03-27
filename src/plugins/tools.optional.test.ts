@@ -201,9 +201,6 @@ describe("execute context injection", () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
-    vi.mock("./loader.js", () => ({
-      loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
-    }));
     const mod = await import("./tools.js");
     resolvePluginTools = mod.resolvePluginTools;
     const runtimeMod = await import("./runtime.js");
