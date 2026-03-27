@@ -42,15 +42,12 @@ export function markdownTableToBlockKit(table: MarkdownTableData): SlackTableBlo
 }
 
 /**
- * Slack allows **at most one table block per message**.
+ * Convert parsed tables into Block Kit table attachments.
  *
- * Convert the first parsed table into a Block Kit table attachment.
- * Any additional tables are silently dropped here — the caller is
- * responsible for falling back (e.g. rendering them as code fences
- * in the text stream).
- *
- * @returns A single-element array containing one attachment with
- *          one table block, or an empty array when there are no tables.
+ * Each table is placed in its own attachment (one table block per
+ * attachment) to comply with Slack's constraint that each block
+ * surface may contain at most one table block.  Multiple attachments
+ * per message are permitted.
  *
  * @see https://docs.slack.dev/reference/block-kit/blocks/table-block/
  */
@@ -60,15 +57,9 @@ export function markdownTablesToBlockKitAttachment(
   if (!tables.length) {
     return [];
   }
-  // Slack only permits one table per message; take the first.
-  const block = markdownTableToBlockKit(tables[0]!);
-  return [{ blocks: [block] }];
-}
-
-/**
- * Return the count of tables that couldn't be sent as Block Kit
- * (i.e. tables beyond the first, which must be rendered differently).
- */
-export function countOverflowTables(tables: MarkdownTableData[]): number {
-  return Math.max(0, tables.length - 1);
+  // One table per attachment — Slack allows one table block per
+  // block surface, but multiple attachments per message.
+  return tables.map((table) => ({
+    blocks: [markdownTableToBlockKit(table)],
+  }));
 }

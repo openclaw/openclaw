@@ -75,7 +75,7 @@ describe("markdownTableToBlockKit", () => {
 });
 
 describe("markdownTablesToBlockKitAttachment", () => {
-  it("returns one attachment with one table block for a single table", () => {
+  it("wraps a single table in one attachment", () => {
     const tables: MarkdownTableData[] = [
       { headers: ["X"], rows: [["1"]], placeholderOffset: 0 },
     ];
@@ -85,17 +85,18 @@ describe("markdownTablesToBlockKitAttachment", () => {
     expect(result[0]?.blocks).toHaveLength(1);
   });
 
-  it("only includes the first table when multiple are provided (Slack one-table limit)", () => {
+  it("places each table in its own attachment (one table per block surface)", () => {
     const tables: MarkdownTableData[] = [
       { headers: ["X"], rows: [["1"]], placeholderOffset: 0 },
       { headers: ["Y"], rows: [["2"]], placeholderOffset: 10 },
     ];
 
     const result = markdownTablesToBlockKitAttachment(tables);
-    expect(result).toHaveLength(1);
+    expect(result).toHaveLength(2);
     expect(result[0]?.blocks).toHaveLength(1);
-    // Should be the first table
+    expect(result[1]?.blocks).toHaveLength(1);
     expect(result[0]?.blocks[0]?.rows[0]?.[0]?.text).toBe("X");
+    expect(result[1]?.blocks[0]?.rows[0]?.[0]?.text).toBe("Y");
   });
 
   it("returns empty array for no tables", () => {
