@@ -40,7 +40,7 @@ The primary risks are concurrency-related: queue.md concurrent write corruption 
 - **Data flow:** Agent writes markdown -> chokidar detects -> debounce -> parse frontmatter only -> write .index/ JSON -> broadcast WebSocket event -> UI re-renders.
 - **7 existing files need modification** (all LOW or MEDIUM risk, all additive changes):
   - `server.impl.ts` -- start ProjectService
-  - `server-methods-list.ts` -- add projects.* methods/events
+  - `server-methods-list.ts` -- add projects.\* methods/events
   - `post-compaction-context.ts` -- add PROJECT.md detection (MEDIUM risk, needs careful testing)
   - `internal-hooks.ts` -- register bootstrap hook
   - `navigation.ts` -- add Projects tab
@@ -79,6 +79,7 @@ The primary risks are concurrency-related: queue.md concurrent write corruption 
 ### Suggested Phase Structure
 
 **Phase 1: Foundation (build first, everything depends on it)**
+
 - Zod schemas for project/task/queue frontmatter
 - Typed frontmatter parser (`src/projects/frontmatter.ts`)
 - File structure scaffolding (PROJECT.md, queue.md, tasks/ directory)
@@ -93,6 +94,7 @@ The primary risks are concurrency-related: queue.md concurrent write corruption 
 - **Research needed:** No -- standard patterns, well-documented in codebase
 
 **Phase 2: Agent Integration (can parallel with Phase 3)**
+
 - Queue.md read-modify-write with locking
 - Capability matching (agent IDENTITY.md tags vs task capabilities field)
 - Heartbeat task pickup (periodic scan + claim cycle)
@@ -105,6 +107,7 @@ The primary risks are concurrency-related: queue.md concurrent write corruption 
 - **Research needed:** YES -- the file-level lock concurrency model and heartbeat integration need validation under multi-agent load
 
 **Phase 3: Gateway + CLI (can parallel with Phase 2)**
+
 - WebSocket RPC methods (projects.list, projects.get, projects.board.get, projects.queue.get, projects.reindex)
 - WebSocket event types (projects.changed, projects.board.changed, projects.queue.changed)
 - ProjectService lifecycle (start/stop with gateway)
@@ -116,6 +119,7 @@ The primary risks are concurrency-related: queue.md concurrent write corruption 
 - **Research needed:** No -- follows existing gateway method patterns exactly (cron, sessions)
 
 **Phase 4: UI (depends on Phase 3)**
+
 - ProjectsController (state management, WebSocket subscriptions)
 - Project list view
 - Read-only kanban board view
@@ -127,6 +131,7 @@ The primary risks are concurrency-related: queue.md concurrent write corruption 
 - **Research needed:** No -- standard Lit component patterns from existing views
 
 **Phase 5: Polish and Differentiators (after core is solid)**
+
 - Live agent indicators on kanban (pulsing badges, session peek)
 - Configurable dashboard widgets
 - Channel hook context injection (project-scoped agent channels)
@@ -138,6 +143,7 @@ The primary risks are concurrency-related: queue.md concurrent write corruption 
 - **Research needed:** YES -- live agent indicators require WebSocket event design and heartbeat-to-UI plumbing that should be validated
 
 **Phase 6: Deferred to v2+**
+
 - Drag-and-drop kanban
 - Workflow state machine
 - Orchestration agent (PM agent)
@@ -155,24 +161,24 @@ The primary risks are concurrency-related: queue.md concurrent write corruption 
 
 ### Research Flags
 
-| Phase | Needs `/gsd:research-phase`? | Rationale |
-|-------|------------------------------|-----------|
-| Phase 1: Foundation | No | Standard patterns already in codebase |
-| Phase 2: Agent Integration | **Yes** | Lock concurrency under multi-agent load, heartbeat integration complexity, dependency resolution logic |
-| Phase 3: Gateway + CLI | No | Follows existing cron/sessions pattern exactly |
-| Phase 4: UI | No | Standard Lit component patterns |
-| Phase 5: Polish | **Yes** | Live agent indicator WebSocket design, heartbeat-to-UI event plumbing |
+| Phase                      | Needs `/gsd:research-phase`? | Rationale                                                                                              |
+| -------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Phase 1: Foundation        | No                           | Standard patterns already in codebase                                                                  |
+| Phase 2: Agent Integration | **Yes**                      | Lock concurrency under multi-agent load, heartbeat integration complexity, dependency resolution logic |
+| Phase 3: Gateway + CLI     | No                           | Follows existing cron/sessions pattern exactly                                                         |
+| Phase 4: UI                | No                           | Standard Lit component patterns                                                                        |
+| Phase 5: Polish            | **Yes**                      | Live agent indicator WebSocket design, heartbeat-to-UI event plumbing                                  |
 
 ---
 
 ## Confidence Assessment
 
-| Area | Confidence | Notes |
-|------|------------|-------|
-| Stack | **HIGH** | Every recommended library is already in the repo. Zero decisions to make. Sources are direct codebase inspection. |
-| Features | **MEDIUM-HIGH** | Competitive landscape well-researched (9 competitors analyzed). One spec gap identified (dependencies). Differentiators are genuine. |
-| Architecture | **HIGH** | All patterns lifted from existing codebase (config-reload, cron, sessions). Build order driven by clear data dependencies. 7 integration seams identified with risk levels. |
-| Pitfalls | **HIGH** | 10 concrete pitfalls with specific prevention strategies. All are Phase 1 concerns with known mitigations. The two critical pitfalls (queue corruption, watcher races) have proven solutions in the codebase. |
+| Area         | Confidence      | Notes                                                                                                                                                                                                         |
+| ------------ | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stack        | **HIGH**        | Every recommended library is already in the repo. Zero decisions to make. Sources are direct codebase inspection.                                                                                             |
+| Features     | **MEDIUM-HIGH** | Competitive landscape well-researched (9 competitors analyzed). One spec gap identified (dependencies). Differentiators are genuine.                                                                          |
+| Architecture | **HIGH**        | All patterns lifted from existing codebase (config-reload, cron, sessions). Build order driven by clear data dependencies. 7 integration seams identified with risk levels.                                   |
+| Pitfalls     | **HIGH**        | 10 concrete pitfalls with specific prevention strategies. All are Phase 1 concerns with known mitigations. The two critical pitfalls (queue corruption, watcher races) have proven solutions in the codebase. |
 
 **Overall confidence: HIGH.** This is a well-understood problem space being solved with well-understood patterns in a well-understood codebase. The primary risk is execution scope, not technical uncertainty.
 
@@ -189,12 +195,14 @@ The primary risks are concurrency-related: queue.md concurrent write corruption 
 ## Sources
 
 **Stack sources:**
+
 - yaml npm package (v2.8.x, already in repo)
 - chokidar npm package (v5.x, already in repo)
 - zod v4 (v4.3.6, already in repo)
 - Existing codebase: `src/markdown/frontmatter.ts`, `src/gateway/config-reload.ts`, `ui/src/ui/views/overview.ts`
 
 **Features sources:**
+
 - [Taskmaster AI](https://github.com/eyaltoledano/claude-task-master) -- dependency-aware tasks, MCP tools
 - [Linear AI Features 2026](https://www.eesel.ai/blog/linear-ai) -- AI triage, agent-as-teammate
 - [GitHub Projects](https://github.com/features/issues) -- sub-issues, flexible views
@@ -204,6 +212,7 @@ The primary risks are concurrency-related: queue.md concurrent write corruption 
 - [taskmd](https://medium.com/@driangle/taskmd-task-management-for-the-ai-era-92d8b476e24e) -- YAML frontmatter AI tasks
 
 **Architecture sources:**
+
 - Existing `src/gateway/config-reload.ts` -- watcher + debounce pattern
 - Existing `src/gateway/server-methods-list.ts` -- RPC method registration
 - Existing `ui/src/ui/controllers/cron.ts` + `ui/src/ui/views/cron.ts` -- controller/view pattern
@@ -211,6 +220,7 @@ The primary risks are concurrency-related: queue.md concurrent write corruption 
 - Design spec: `docs/superpowers/specs/2026-03-26-project-management-design.md`
 
 **Pitfalls sources:**
+
 - Existing codebase patterns for all mitigations
 - chokidar v5 awaitWriteFinish documentation
 - POSIX filesystem atomicity guarantees (mkdir, O_CREAT|O_EXCL, rename)

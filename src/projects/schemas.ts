@@ -9,9 +9,7 @@ export const ProjectFrontmatterSchema = z.object({
   description: z.string().optional(),
   owner: z.string().optional(),
   tags: z.array(z.string()).default([]),
-  columns: z
-    .array(z.string())
-    .default(["Backlog", "In Progress", "Review", "Done"]),
+  columns: z.array(z.string()).default(["Backlog", "In Progress", "Review", "Done"]),
   dashboard: z
     .object({
       widgets: z
@@ -42,9 +40,7 @@ export const ProjectFrontmatterSchema = z.object({
 export const TaskFrontmatterSchema = z.object({
   id: z.string().regex(TASK_ID_PATTERN),
   title: z.string(),
-  status: z
-    .enum(["backlog", "in-progress", "review", "done", "blocked"])
-    .default("backlog"),
+  status: z.enum(["backlog", "in-progress", "review", "done", "blocked"]).default("backlog"),
   column: z.string().default("Backlog"),
   priority: z.enum(["low", "medium", "high", "critical"]).default("medium"),
   capabilities: z.array(z.string()).default([]),

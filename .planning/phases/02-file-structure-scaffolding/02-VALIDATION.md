@@ -15,13 +15,13 @@ created: 2026-03-27
 
 ## Test Infrastructure
 
-| Property | Value |
-|----------|-------|
-| **Framework** | vitest 3.1.x |
-| **Config file** | `vitest.config.ts` |
-| **Quick run command** | `pnpm test -- src/projects/scaffold` |
-| **Full suite command** | `pnpm test -- src/projects/` |
-| **Estimated runtime** | ~15 seconds (scoped) |
+| Property               | Value                                |
+| ---------------------- | ------------------------------------ |
+| **Framework**          | vitest 3.1.x                         |
+| **Config file**        | `vitest.config.ts`                   |
+| **Quick run command**  | `pnpm test -- src/projects/scaffold` |
+| **Full suite command** | `pnpm test -- src/projects/`         |
+| **Estimated runtime**  | ~15 seconds (scoped)                 |
 
 ---
 
@@ -36,13 +36,13 @@ created: 2026-03-27
 
 ## Per-Task Verification Map
 
-| Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| TBD | 01 | 1 | DATA-01 | unit | `pnpm test -- src/projects/scaffold` | ❌ W0 | ⬜ pending |
-| TBD | 01 | 1 | DATA-02 | unit | `pnpm test -- src/projects/scaffold` | ❌ W0 | ⬜ pending |
-| TBD | 01 | 1 | DATA-06 | unit | `pnpm test -- src/projects/scaffold` | ❌ W0 | ⬜ pending |
+| Task ID | Plan | Wave | Requirement | Test Type | Automated Command                    | File Exists | Status     |
+| ------- | ---- | ---- | ----------- | --------- | ------------------------------------ | ----------- | ---------- |
+| TBD     | 01   | 1    | DATA-01     | unit      | `pnpm test -- src/projects/scaffold` | ❌ W0       | ⬜ pending |
+| TBD     | 01   | 1    | DATA-02     | unit      | `pnpm test -- src/projects/scaffold` | ❌ W0       | ⬜ pending |
+| TBD     | 01   | 1    | DATA-06     | unit      | `pnpm test -- src/projects/scaffold` | ❌ W0       | ⬜ pending |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+_Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
 ---
 
@@ -51,13 +51,13 @@ created: 2026-03-27
 - [ ] `src/projects/scaffold.test.ts` — stubs for DATA-01, DATA-02, DATA-06
 - [ ] No framework install needed — vitest already configured
 
-*Existing infrastructure covers framework requirements.*
+_Existing infrastructure covers framework requirements._
 
 ---
 
 ## Manual-Only Verifications
 
-*All phase behaviors have automated verification.*
+_All phase behaviors have automated verification._
 
 ---
 

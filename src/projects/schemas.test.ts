@@ -9,7 +9,9 @@ describe("ProjectFrontmatterSchema", () => {
   it("parses valid project with only required fields and applies defaults", () => {
     const result = ProjectFrontmatterSchema.safeParse({ name: "test" });
     expect(result.success).toBe(true);
-    if (!result.success) return;
+    if (!result.success) {
+      return;
+    }
     expect(result.data.name).toBe("test");
     expect(result.data.status).toBe("active");
     expect(result.data.tags).toEqual([]);
@@ -36,7 +38,9 @@ describe("ProjectFrontmatterSchema", () => {
       tags: ["ai", "code"],
     });
     expect(result.success).toBe(true);
-    if (!result.success) return;
+    if (!result.success) {
+      return;
+    }
     expect(result.data.owner).toBe("alice");
     expect(result.data.tags).toEqual(["ai", "code"]);
   });
@@ -61,7 +65,9 @@ describe("ProjectFrontmatterSchema", () => {
       updated: "2026-03-26T00:00:00Z",
     });
     expect(result.success).toBe(true);
-    if (!result.success) return;
+    if (!result.success) {
+      return;
+    }
     expect(result.data.description).toBe("A test project");
     expect(result.data.created).toBe("2026-03-26T00:00:00Z");
     expect(result.data.updated).toBe("2026-03-26T00:00:00Z");
@@ -70,7 +76,9 @@ describe("ProjectFrontmatterSchema", () => {
   it("columns default is exactly Backlog, In Progress, Review, Done", () => {
     const result = ProjectFrontmatterSchema.safeParse({ name: "test" });
     expect(result.success).toBe(true);
-    if (!result.success) return;
+    if (!result.success) {
+      return;
+    }
     expect(result.data.columns).toEqual(["Backlog", "In Progress", "Review", "Done"]);
   });
 });
@@ -79,7 +87,9 @@ describe("TaskFrontmatterSchema", () => {
   it("parses valid task with required fields and applies defaults", () => {
     const result = TaskFrontmatterSchema.safeParse({ id: "TASK-001", title: "Do thing" });
     expect(result.success).toBe(true);
-    if (!result.success) return;
+    if (!result.success) {
+      return;
+    }
     expect(result.data.id).toBe("TASK-001");
     expect(result.data.title).toBe("Do thing");
     expect(result.data.status).toBe("backlog");
@@ -96,7 +106,9 @@ describe("TaskFrontmatterSchema", () => {
       depends_on: ["TASK-002", "TASK-003"],
     });
     expect(result.success).toBe(true);
-    if (!result.success) return;
+    if (!result.success) {
+      return;
+    }
     expect(result.data.depends_on).toEqual(["TASK-002", "TASK-003"]);
   });
 
@@ -139,14 +151,18 @@ describe("TaskFrontmatterSchema", () => {
   it("defaults column to Backlog", () => {
     const result = TaskFrontmatterSchema.safeParse({ id: "TASK-001", title: "Test" });
     expect(result.success).toBe(true);
-    if (!result.success) return;
+    if (!result.success) {
+      return;
+    }
     expect(result.data.column).toBe("Backlog");
   });
 
   it("defaults claimed_at and parent to null", () => {
     const result = TaskFrontmatterSchema.safeParse({ id: "TASK-001", title: "Test" });
     expect(result.success).toBe(true);
-    if (!result.success) return;
+    if (!result.success) {
+      return;
+    }
     expect(result.data.claimed_at).toBeNull();
     expect(result.data.parent).toBeNull();
   });
@@ -161,7 +177,9 @@ describe("QueueFrontmatterSchema", () => {
   it("parses object with updated timestamp", () => {
     const result = QueueFrontmatterSchema.safeParse({ updated: "2026-03-26T14:30:00Z" });
     expect(result.success).toBe(true);
-    if (!result.success) return;
+    if (!result.success) {
+      return;
+    }
     expect(result.data.updated).toBe("2026-03-26T14:30:00Z");
   });
 });

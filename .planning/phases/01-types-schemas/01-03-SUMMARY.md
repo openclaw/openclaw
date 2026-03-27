@@ -33,6 +33,7 @@ Queue.md section parser extracting Available/Claimed/Done/Blocked task lists wit
 ### Task 1: Queue.md Section Parser (TDD)
 
 Created `src/projects/queue-parser.ts` with:
+
 - `parseQueue(content, filePath)` -- main entry point returning `ParsedQueue`
 - `parseSectionEntries()` -- extracts `TASK-NNN` IDs and bracket/trailing metadata from list items
 - `splitSections()` -- splits markdown body by `##` headings (case-insensitive)
@@ -45,6 +46,7 @@ Exported types: `QueueEntry`, `ParsedQueue`
 ### Task 2: Public API Barrel (index.ts)
 
 Created `src/projects/index.ts` re-exporting:
+
 - Schemas: `ProjectFrontmatterSchema`, `TaskFrontmatterSchema`, `QueueFrontmatterSchema`
 - Types: `ProjectFrontmatter`, `TaskFrontmatter`, `QueueFrontmatter`, `ParseResult`, `ParseError`
 - Errors: `formatWarning`, `FrontmatterParseWarning`
@@ -58,6 +60,7 @@ Note: frontmatter.ts exports in the barrel will resolve once Plan 01-02 complete
 ### Auto-fixed Issues
 
 **1. [Rule 3 - Blocking] Inline queue frontmatter parsing instead of importing from frontmatter.ts**
+
 - **Found during:** Task 1
 - **Issue:** Plan 01-02 (frontmatter.ts) runs in parallel and the file does not exist yet
 - **Fix:** Implemented `parseQueueFrontmatter()` locally in queue-parser.ts using yaml + QueueFrontmatterSchema
@@ -65,6 +68,7 @@ Note: frontmatter.ts exports in the barrel will resolve once Plan 01-02 complete
 - **Commit:** a029149
 
 **2. [Rule 1 - Bug] Smart comma splitting in bracket metadata**
+
 - **Found during:** Task 1 TDD GREEN phase
 - **Issue:** Naive comma splitting broke values containing commas (e.g. `capabilities: code, testing`)
 - **Fix:** Only start new key-value pair when segment matches `\w+:` pattern; otherwise append to previous value
@@ -73,10 +77,10 @@ Note: frontmatter.ts exports in the barrel will resolve once Plan 01-02 complete
 
 ## Commits
 
-| Task | Commit | Message |
-|------|--------|---------|
-| 1 | a029149 | feat(01-03): create queue.md section parser with TDD tests |
-| 2 | e1b85e1 | feat(01-03): create public API barrel for projects module |
+| Task | Commit  | Message                                                    |
+| ---- | ------- | ---------------------------------------------------------- |
+| 1    | a029149 | feat(01-03): create queue.md section parser with TDD tests |
+| 2    | e1b85e1 | feat(01-03): create public API barrel for projects module  |
 
 ## Known Stubs
 

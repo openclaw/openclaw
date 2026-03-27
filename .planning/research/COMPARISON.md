@@ -6,29 +6,30 @@
 
 ## Quick Comparison
 
-| Criterion | OpenClaw PM (Planned) | ClawTeam (Shipping) |
-|-----------|----------------------|---------------------|
-| **Primary user** | Humans + agents (collaborative) | Agents (agent-first, humans monitor) |
-| **Integration model** | Platform feature in existing gateway | Standalone Python CLI tool |
-| **State format** | Markdown + YAML frontmatter | JSON files |
-| **State location** | `~/.openclaw/projects/` | `~/.clawteam/` |
-| **UI** | Integrated Lit web components | Standalone web server + terminal dashboard |
-| **Agent coordination** | Hook-based context injection + heartbeat | CLI command injection into agent prompts |
-| **Process isolation** | Existing gateway sessions | tmux + git worktrees |
-| **Concurrency** | mkdir-based file locks | tmp+rename atomic writes + fcntl/mkdir locks |
-| **Task dependencies** | `depends_on` frontmatter field | `--blocked-by` CLI flag |
-| **Transport** | WebSocket (existing) | File-based inbox + optional ZeroMQ P2P |
-| **Agent messaging** | v2 scope | Built-in (inbox send/receive/broadcast) |
-| **Team templates** | Not planned | TOML-based team archetypes |
-| **Language** | TypeScript (ESM) | Python 3.10+ |
-| **Maturity** | Design phase | Alpha (v0.2.0), 3.7K stars |
-| **License** | Part of OpenClaw | MIT |
+| Criterion              | OpenClaw PM (Planned)                    | ClawTeam (Shipping)                          |
+| ---------------------- | ---------------------------------------- | -------------------------------------------- |
+| **Primary user**       | Humans + agents (collaborative)          | Agents (agent-first, humans monitor)         |
+| **Integration model**  | Platform feature in existing gateway     | Standalone Python CLI tool                   |
+| **State format**       | Markdown + YAML frontmatter              | JSON files                                   |
+| **State location**     | `~/.openclaw/projects/`                  | `~/.clawteam/`                               |
+| **UI**                 | Integrated Lit web components            | Standalone web server + terminal dashboard   |
+| **Agent coordination** | Hook-based context injection + heartbeat | CLI command injection into agent prompts     |
+| **Process isolation**  | Existing gateway sessions                | tmux + git worktrees                         |
+| **Concurrency**        | mkdir-based file locks                   | tmp+rename atomic writes + fcntl/mkdir locks |
+| **Task dependencies**  | `depends_on` frontmatter field           | `--blocked-by` CLI flag                      |
+| **Transport**          | WebSocket (existing)                     | File-based inbox + optional ZeroMQ P2P       |
+| **Agent messaging**    | v2 scope                                 | Built-in (inbox send/receive/broadcast)      |
+| **Team templates**     | Not planned                              | TOML-based team archetypes                   |
+| **Language**           | TypeScript (ESM)                         | Python 3.10+                                 |
+| **Maturity**           | Design phase                             | Alpha (v0.2.0), 3.7K stars                   |
+| **License**            | Part of OpenClaw                         | MIT                                          |
 
 ## Detailed Analysis
 
 ### OpenClaw PM System (Our Approach)
 
 **Strengths:**
+
 - Markdown as source of truth means agents read/write state natively without learning new commands
 - Two-layer architecture (markdown source + JSON index) serves both agents and UI optimally
 - Integrated into existing gateway lifecycle -- no separate processes to manage
@@ -39,6 +40,7 @@
 - Web UI is a first-class integrated experience, not an afterthought monitoring dashboard
 
 **Weaknesses:**
+
 - No agent-to-agent messaging in v1 (ClawTeam has this from day one)
 - No project/team templates (ClawTeam's TOML templates are convenient)
 - Read-only UI in Phase 1 means humans cannot interact with the board directly
@@ -50,6 +52,7 @@
 ### ClawTeam
 
 **Strengths:**
+
 - Framework-agnostic -- works with Claude Code, Codex, OpenClaw, nanobot, Cursor, any CLI agent
 - Agent-to-agent messaging (inbox) enables rich coordination from day one
 - TOML team templates allow one-command team creation for common patterns
@@ -60,6 +63,7 @@
 - Lifecycle management (idle/active reporting) enables graceful cleanup
 
 **Weaknesses:**
+
 - Agents must learn CLI commands injected into their prompts (context pollution)
 - JSON state files are not naturally readable/writable by agents without the CLI
 - Hard dependency on tmux (platform-specific, not available in all environments)
@@ -75,61 +79,61 @@
 
 ### Task Management
 
-| Aspect | OpenClaw PM | ClawTeam |
-|--------|-----------|----------|
-| Task creation | Write markdown file with YAML frontmatter | `clawteam task create <team> <title>` CLI |
-| Task storage | `tasks/TASK-NNN.md` per project | JSON files in `~/.clawteam/tasks/{team-id}/` |
-| Status values | Configurable columns (default: Backlog/In Progress/Review/Done/Blocked) | Fixed: pending/in_progress/completed/blocked |
-| Dependencies | `depends_on: [TASK-001]` in frontmatter | `--blocked-by TASK-ID` flag on create |
-| Auto-unblocking | Planned: check deps on task completion | Yes: automatic unblock when deps complete |
-| ID format | TASK-NNN (sequential per project) | Numeric IDs per team |
+| Aspect          | OpenClaw PM                                                             | ClawTeam                                     |
+| --------------- | ----------------------------------------------------------------------- | -------------------------------------------- |
+| Task creation   | Write markdown file with YAML frontmatter                               | `clawteam task create <team> <title>` CLI    |
+| Task storage    | `tasks/TASK-NNN.md` per project                                         | JSON files in `~/.clawteam/tasks/{team-id}/` |
+| Status values   | Configurable columns (default: Backlog/In Progress/Review/Done/Blocked) | Fixed: pending/in_progress/completed/blocked |
+| Dependencies    | `depends_on: [TASK-001]` in frontmatter                                 | `--blocked-by TASK-ID` flag on create        |
+| Auto-unblocking | Planned: check deps on task completion                                  | Yes: automatic unblock when deps complete    |
+| ID format       | TASK-NNN (sequential per project)                                       | Numeric IDs per team                         |
 
 **Verdict:** Similar core models. ClawTeam's auto-unblocking is a pattern we should implement. Our configurable columns are more flexible.
 
 ### Concurrency
 
-| Aspect | OpenClaw PM | ClawTeam |
-|--------|-----------|----------|
-| Write protection | mkdir-based atomic lock | fcntl (fork) or tmp+rename (upstream) |
-| Lock scope | Per-project queue.md | Per-team task store |
-| Stale detection | PID + timestamp, 60s timeout | PID + timestamp, similar timeout |
-| Atomic writes | tmp+rename for .index/ JSON | tmp+rename for all state files |
-| Validation | Re-read after write to confirm | Not documented |
+| Aspect           | OpenClaw PM                    | ClawTeam                              |
+| ---------------- | ------------------------------ | ------------------------------------- |
+| Write protection | mkdir-based atomic lock        | fcntl (fork) or tmp+rename (upstream) |
+| Lock scope       | Per-project queue.md           | Per-team task store                   |
+| Stale detection  | PID + timestamp, 60s timeout   | PID + timestamp, similar timeout      |
+| Atomic writes    | tmp+rename for .index/ JSON    | tmp+rename for all state files        |
+| Validation       | Re-read after write to confirm | Not documented                        |
 
 **Verdict:** Very similar approaches. ClawTeam validates our design. Our validate-after-write (CONC-05) is an extra safety net they lack.
 
 ### Agent Coordination
 
-| Aspect | OpenClaw PM | ClawTeam |
-|--------|-----------|----------|
-| How agents learn about tasks | Hook-based PROJECT.md injection + heartbeat | Auto-injected CLI commands in prompt |
-| Task discovery | Automatic via heartbeat scan | Agent calls `clawteam task list` |
-| Task claiming | Automatic via heartbeat + capability match | Agent calls `clawteam task update --status in_progress` |
-| Status reporting | Implicit via task file updates | Explicit `clawteam task update` + `clawteam inbox send` |
-| Idle detection | v2 (PM agent) | `clawteam lifecycle idle` (agent must call) |
-| Capability matching | Agent IDENTITY.md tags vs task capabilities | None (manual/leader-assigned) |
+| Aspect                       | OpenClaw PM                                 | ClawTeam                                                |
+| ---------------------------- | ------------------------------------------- | ------------------------------------------------------- |
+| How agents learn about tasks | Hook-based PROJECT.md injection + heartbeat | Auto-injected CLI commands in prompt                    |
+| Task discovery               | Automatic via heartbeat scan                | Agent calls `clawteam task list`                        |
+| Task claiming                | Automatic via heartbeat + capability match  | Agent calls `clawteam task update --status in_progress` |
+| Status reporting             | Implicit via task file updates              | Explicit `clawteam task update` + `clawteam inbox send` |
+| Idle detection               | v2 (PM agent)                               | `clawteam lifecycle idle` (agent must call)             |
+| Capability matching          | Agent IDENTITY.md tags vs task capabilities | None (manual/leader-assigned)                           |
 
 **Verdict:** Fundamentally different philosophies. ClawTeam makes agents responsible for coordination (via CLI). We make the platform responsible (via hooks + heartbeat). Our approach is cleaner for agents but less flexible for ad-hoc swarms.
 
 ### Communication
 
-| Aspect | OpenClaw PM | ClawTeam |
-|--------|-----------|----------|
-| Agent-to-agent | v2 scope | Inbox (send/receive/broadcast) |
-| Agent-to-UI | WebSocket events via gateway | Web dashboard polls state |
-| Human-to-agent | Existing chat channels | Leader agent prompts (or manual tmux) |
-| Transport options | WebSocket only | File-based + optional ZeroMQ P2P |
+| Aspect            | OpenClaw PM                  | ClawTeam                              |
+| ----------------- | ---------------------------- | ------------------------------------- |
+| Agent-to-agent    | v2 scope                     | Inbox (send/receive/broadcast)        |
+| Agent-to-UI       | WebSocket events via gateway | Web dashboard polls state             |
+| Human-to-agent    | Existing chat channels       | Leader agent prompts (or manual tmux) |
+| Transport options | WebSocket only               | File-based + optional ZeroMQ P2P      |
 
 **Verdict:** ClawTeam has richer agent-to-agent communication. Our UI integration is stronger. Their inbox pattern is worth studying for our v2 COLLAB-02 feature.
 
 ### Monitoring
 
-| Aspect | OpenClaw PM | ClawTeam |
-|--------|-----------|----------|
-| Board view | Lit-based kanban in sidebar | Terminal (rich) + standalone web server |
-| Live indicators | Pulsing badges + session peek | Tiled tmux view |
-| Dashboard | Configurable widgets per project | Fixed monitoring dashboard |
-| Visualization | Kanban + project list | Kanban + Gource commit visualization |
+| Aspect          | OpenClaw PM                      | ClawTeam                                |
+| --------------- | -------------------------------- | --------------------------------------- |
+| Board view      | Lit-based kanban in sidebar      | Terminal (rich) + standalone web server |
+| Live indicators | Pulsing badges + session peek    | Tiled tmux view                         |
+| Dashboard       | Configurable widgets per project | Fixed monitoring dashboard              |
+| Visualization   | Kanban + project list            | Kanban + Gource commit visualization    |
 
 **Verdict:** Our integrated UI is superior for daily use. ClawTeam's tmux tiling is good for watching agents work in real-time.
 

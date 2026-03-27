@@ -37,22 +37,22 @@ The architecture follows the existing codebase pattern: a gateway-hosted service
 
 ### Component Boundaries
 
-| Component | Location | Responsibility | Communicates With |
-|-----------|----------|---------------|-------------------|
-| **ProjectFileWatcher** | `src/projects/watcher.ts` | Watch `~/.openclaw/projects/` for markdown changes, debounce, trigger sync | ProjectIndexer, gateway broadcast |
-| **ProjectIndexer** | `src/projects/indexer.ts` | Parse YAML frontmatter from markdown, write `.index/` JSON files | ProjectFileWatcher (input), filesystem (output) |
-| **ProjectService** | `src/projects/service.ts` | Orchestrate watcher + indexer lifecycle, expose read API for gateway methods | Watcher, Indexer, gateway server |
-| **ProjectLock** | `src/projects/lock.ts` | File-level `.lock` acquire/release with stale timeout (60s) | Filesystem only |
-| **Gateway methods** | `src/gateway/server-methods/projects.ts` | Handle `projects.*` WebSocket RPC (list, get, board, queue) | ProjectService, WebSocket clients |
-| **Gateway events** | Added to `GATEWAY_EVENTS` array | Broadcast `projects.changed`, `projects.board.changed`, `projects.queue.changed` | WebSocket clients (UI) |
-| **CLI commands** | `src/cli/projects-cli.ts` | `openclaw projects create|list|status|reindex` | ProjectService (via direct import or gateway RPC) |
-| **Post-compaction hook** | Extend `src/auto-reply/reply/post-compaction-context.ts` | Detect `PROJECT.md` in cwd, inject into agent context | Existing post-compaction flow |
-| **Bootstrap hook** | Register via `src/hooks/internal-hooks.ts` | Inject `PROJECT.md` content when agent starts in project channel | Existing `agent:bootstrap` hook system |
-| **Heartbeat pickup** | Extend heartbeat runner or add cron-style job | Scan queue.md, match capabilities, claim tasks | ProjectLock, queue.md files |
-| **UI: ProjectsController** | `ui/src/ui/controllers/projects.ts` | Manage project state, subscribe to WebSocket events, expose data to views | Gateway WebSocket, view layer |
-| **UI: ProjectListView** | `ui/src/ui/views/projects-list.ts` | Render project list from controller state | ProjectsController |
-| **UI: ProjectDashboardView** | `ui/src/ui/views/projects-dashboard.ts` | Render configurable widget grid for a project | ProjectsController |
-| **UI: ProjectKanbanView** | `ui/src/ui/views/projects-kanban.ts` | Render read-only kanban board with live agent indicators | ProjectsController |
+| Component                    | Location                                                 | Responsibility                                                                   | Communicates With                               |
+| ---------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------- | ------ | -------- | ------------------------------------------------- |
+| **ProjectFileWatcher**       | `src/projects/watcher.ts`                                | Watch `~/.openclaw/projects/` for markdown changes, debounce, trigger sync       | ProjectIndexer, gateway broadcast               |
+| **ProjectIndexer**           | `src/projects/indexer.ts`                                | Parse YAML frontmatter from markdown, write `.index/` JSON files                 | ProjectFileWatcher (input), filesystem (output) |
+| **ProjectService**           | `src/projects/service.ts`                                | Orchestrate watcher + indexer lifecycle, expose read API for gateway methods     | Watcher, Indexer, gateway server                |
+| **ProjectLock**              | `src/projects/lock.ts`                                   | File-level `.lock` acquire/release with stale timeout (60s)                      | Filesystem only                                 |
+| **Gateway methods**          | `src/gateway/server-methods/projects.ts`                 | Handle `projects.*` WebSocket RPC (list, get, board, queue)                      | ProjectService, WebSocket clients               |
+| **Gateway events**           | Added to `GATEWAY_EVENTS` array                          | Broadcast `projects.changed`, `projects.board.changed`, `projects.queue.changed` | WebSocket clients (UI)                          |
+| **CLI commands**             | `src/cli/projects-cli.ts`                                | `openclaw projects create                                                        | list                                            | status | reindex` | ProjectService (via direct import or gateway RPC) |
+| **Post-compaction hook**     | Extend `src/auto-reply/reply/post-compaction-context.ts` | Detect `PROJECT.md` in cwd, inject into agent context                            | Existing post-compaction flow                   |
+| **Bootstrap hook**           | Register via `src/hooks/internal-hooks.ts`               | Inject `PROJECT.md` content when agent starts in project channel                 | Existing `agent:bootstrap` hook system          |
+| **Heartbeat pickup**         | Extend heartbeat runner or add cron-style job            | Scan queue.md, match capabilities, claim tasks                                   | ProjectLock, queue.md files                     |
+| **UI: ProjectsController**   | `ui/src/ui/controllers/projects.ts`                      | Manage project state, subscribe to WebSocket events, expose data to views        | Gateway WebSocket, view layer                   |
+| **UI: ProjectListView**      | `ui/src/ui/views/projects-list.ts`                       | Render project list from controller state                                        | ProjectsController                              |
+| **UI: ProjectDashboardView** | `ui/src/ui/views/projects-dashboard.ts`                  | Render configurable widget grid for a project                                    | ProjectsController                              |
+| **UI: ProjectKanbanView**    | `ui/src/ui/views/projects-kanban.ts`                     | Render read-only kanban board with live agent indicators                         | ProjectsController                              |
 
 ### Data Flow
 
@@ -118,6 +118,7 @@ Path 2 (channel hook):
 **When:** All file watching in the project system.
 
 **Example:**
+
 ```typescript
 // src/projects/watcher.ts
 import chokidar from "chokidar";
@@ -159,6 +160,7 @@ export function startProjectWatcher(opts: {
 **When:** All UI-to-gateway communication for project data.
 
 **Example:**
+
 ```typescript
 // New methods to add to BASE_METHODS:
 "projects.list",
@@ -182,6 +184,7 @@ export function startProjectWatcher(opts: {
 **When:** All project UI components.
 
 **Example:**
+
 ```typescript
 // ui/src/ui/controllers/projects.ts
 export class ProjectsController {
@@ -210,6 +213,7 @@ export function renderProjectList(props: ProjectListProps) {
 **When:** Building `.index/` JSON from markdown source files.
 
 **Example:**
+
 ```typescript
 // src/projects/indexer.ts
 import { parse as parseYaml } from "yaml";
@@ -230,6 +234,7 @@ export function parseFrontmatter(content: string): { data: Record<string, unknow
 **When:** Queue writes (claiming tasks, releasing tasks).
 
 **Example:**
+
 ```typescript
 // src/projects/lock.ts
 import fs from "node:fs";
@@ -238,7 +243,10 @@ const STALE_LOCK_MS = 60_000;
 
 export async function acquireLock(lockPath: string): Promise<boolean> {
   try {
-    const fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+    const fd = fs.openSync(
+      lockPath,
+      fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
+    );
     fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
     fs.closeSync(fd);
     return true;
@@ -347,6 +355,7 @@ Phase 1f: UI Components (depends on 1c)
 ```
 
 **Dependency rationale:**
+
 - Types and utilities (1a) have zero dependencies and can be built first
 - Watcher and service (1b) need types and indexer
 - Gateway methods (1c) need the service to call into
@@ -360,13 +369,13 @@ Phase 1f: UI Components (depends on 1c)
 
 ## Scalability Considerations
 
-| Concern | At 5 projects / 50 tasks | At 50 projects / 500 tasks | At 500 projects / 5000 tasks |
-|---------|--------------------------|---------------------------|------------------------------|
-| **File watching** | Single chokidar instance, negligible | Single chokidar instance, fine (chokidar handles thousands of paths) | May need to limit watched depth or use polling fallback |
-| **Index rebuild** | Rebuild full project index on any change (<10ms) | Per-project rebuild only (isolate by project directory) | Per-file incremental update (only rebuild the changed task in board.json) |
-| **WebSocket events** | Broadcast every change | Broadcast per-project (UI filters by active project) | Add subscription model (UI subscribes to specific projects) |
-| **Gateway startup reindex** | Full reindex in <100ms | Full reindex in <1s | Lazy reindex (index on first access per project) |
-| **Queue scanning** | Scan all queue.md files | Scan only assigned project queues | Cache parsed queue data in memory, invalidate on file change |
+| Concern                     | At 5 projects / 50 tasks                         | At 50 projects / 500 tasks                                           | At 500 projects / 5000 tasks                                              |
+| --------------------------- | ------------------------------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| **File watching**           | Single chokidar instance, negligible             | Single chokidar instance, fine (chokidar handles thousands of paths) | May need to limit watched depth or use polling fallback                   |
+| **Index rebuild**           | Rebuild full project index on any change (<10ms) | Per-project rebuild only (isolate by project directory)              | Per-file incremental update (only rebuild the changed task in board.json) |
+| **WebSocket events**        | Broadcast every change                           | Broadcast per-project (UI filters by active project)                 | Add subscription model (UI subscribes to specific projects)               |
+| **Gateway startup reindex** | Full reindex in <100ms                           | Full reindex in <1s                                                  | Lazy reindex (index on first access per project)                          |
+| **Queue scanning**          | Scan all queue.md files                          | Scan only assigned project queues                                    | Cache parsed queue data in memory, invalidate on file change              |
 
 **Practical ceiling:** The filesystem-based approach is well-suited for the expected usage pattern (1-20 active projects, 10-100 tasks per project). The 500+ project scenario is unlikely but manageable with the incremental strategies noted above.
 
@@ -374,15 +383,15 @@ Phase 1f: UI Components (depends on 1c)
 
 These are the specific existing files that need modification:
 
-| File | Change | Risk |
-|------|--------|------|
-| `src/gateway/server.impl.ts` | Start ProjectService alongside other services | LOW -- additive, follows existing pattern |
-| `src/gateway/server-methods-list.ts` | Add `projects.*` to `BASE_METHODS` and `GATEWAY_EVENTS` | LOW -- append-only |
-| `src/auto-reply/reply/post-compaction-context.ts` | Add `PROJECT.md` detection alongside `AGENTS.md` | MEDIUM -- core agent context path, needs careful testing |
-| `src/hooks/internal-hooks.ts` | Register project bootstrap hook | LOW -- additive |
-| `ui/src/ui/navigation.ts` | Add `"projects"` tab to `TAB_GROUPS` | LOW -- additive, existing tests verify all tabs |
-| `ui/src/ui/app-render.ts` | Add project view routing | LOW -- follows existing view routing pattern |
-| `src/infra/heartbeat-runner.ts` | Add task pickup to heartbeat cycle | MEDIUM -- heartbeat is complex, needs isolation |
+| File                                              | Change                                                  | Risk                                                     |
+| ------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------- |
+| `src/gateway/server.impl.ts`                      | Start ProjectService alongside other services           | LOW -- additive, follows existing pattern                |
+| `src/gateway/server-methods-list.ts`              | Add `projects.*` to `BASE_METHODS` and `GATEWAY_EVENTS` | LOW -- append-only                                       |
+| `src/auto-reply/reply/post-compaction-context.ts` | Add `PROJECT.md` detection alongside `AGENTS.md`        | MEDIUM -- core agent context path, needs careful testing |
+| `src/hooks/internal-hooks.ts`                     | Register project bootstrap hook                         | LOW -- additive                                          |
+| `ui/src/ui/navigation.ts`                         | Add `"projects"` tab to `TAB_GROUPS`                    | LOW -- additive, existing tests verify all tabs          |
+| `ui/src/ui/app-render.ts`                         | Add project view routing                                | LOW -- follows existing view routing pattern             |
+| `src/infra/heartbeat-runner.ts`                   | Add task pickup to heartbeat cycle                      | MEDIUM -- heartbeat is complex, needs isolation          |
 
 ## Sources
 
@@ -398,4 +407,4 @@ These are the specific existing files that need modification:
 
 ---
 
-*Architecture analysis: 2026-03-26*
+_Architecture analysis: 2026-03-26_

@@ -75,7 +75,9 @@ function parseSectionEntries(sectionContent: string): QueueEntry[] {
 
   for (const line of lines) {
     const match = taskPattern.exec(line);
-    if (!match) continue;
+    if (!match) {
+      continue;
+    }
 
     const taskId = match[1];
     const rest = match[2];

@@ -9,7 +9,9 @@ describe("parseProjectFrontmatter", () => {
   it("parses minimal valid frontmatter with defaults", () => {
     const result = parseProjectFrontmatter("---\nname: Test\n---\n# Body", "test.md");
     expect(result.success).toBe(true);
-    if (!result.success) return;
+    if (!result.success) {
+      return;
+    }
     expect(result.data.name).toBe("Test");
     expect(result.data.status).toBe("active");
     expect(result.data.tags).toEqual([]);
@@ -37,7 +39,9 @@ describe("parseProjectFrontmatter", () => {
     ].join("\n");
     const result = parseProjectFrontmatter(content, "test.md");
     expect(result.success).toBe(true);
-    if (!result.success) return;
+    if (!result.success) {
+      return;
+    }
     expect(result.data.tags).toEqual(["ai", "code"]);
     expect(Array.isArray(result.data.tags)).toBe(true);
     expect(result.data.dashboard.widgets).toEqual(["task-counts"]);
@@ -47,7 +51,9 @@ describe("parseProjectFrontmatter", () => {
   it("returns error when no frontmatter block found", () => {
     const result = parseProjectFrontmatter("no frontmatter here", "bad.md");
     expect(result.success).toBe(false);
-    if (result.success) return;
+    if (result.success) {
+      return;
+    }
     expect(result.error.filePath).toBe("bad.md");
     expect(result.error.message).toBe("No frontmatter block found");
     expect(result.error.issues).toEqual([]);
@@ -56,7 +62,9 @@ describe("parseProjectFrontmatter", () => {
   it("returns error when required field is missing", () => {
     const result = parseProjectFrontmatter("---\nstatus: active\n---\n", "missing-name.md");
     expect(result.success).toBe(false);
-    if (result.success) return;
+    if (result.success) {
+      return;
+    }
     expect(result.error.filePath).toBe("missing-name.md");
     expect(result.error.message).toBe("Schema validation failed");
     expect(result.error.issues.length).toBeGreaterThan(0);
@@ -71,7 +79,9 @@ describe("parseProjectFrontmatter", () => {
       "bad-yaml.md",
     );
     expect(result.success).toBe(false);
-    if (result.success) return;
+    if (result.success) {
+      return;
+    }
     expect(result.error.filePath).toBe("bad-yaml.md");
     expect(result.error.message).toContain("YAML parse error");
     expect(result.error.issues.length).toBeGreaterThan(0);
@@ -84,7 +94,9 @@ describe("parseProjectFrontmatter", () => {
     const content = "---\r\nname: Test\r\n---\r\n# Body";
     const result = parseProjectFrontmatter(content, "crlf.md");
     expect(result.success).toBe(true);
-    if (!result.success) return;
+    if (!result.success) {
+      return;
+    }
     expect(result.data.name).toBe("Test");
   });
 });
@@ -93,7 +105,9 @@ describe("parseTaskFrontmatter", () => {
   it("parses valid task with defaults", () => {
     const result = parseTaskFrontmatter("---\nid: TASK-001\ntitle: Do thing\n---\n", "task.md");
     expect(result.success).toBe(true);
-    if (!result.success) return;
+    if (!result.success) {
+      return;
+    }
     expect(result.data.id).toBe("TASK-001");
     expect(result.data.title).toBe("Do thing");
     expect(result.data.status).toBe("backlog");
@@ -117,7 +131,9 @@ describe("parseTaskFrontmatter", () => {
     ].join("\n");
     const result = parseTaskFrontmatter(content, "task.md");
     expect(result.success).toBe(true);
-    if (!result.success) return;
+    if (!result.success) {
+      return;
+    }
     expect(result.data.depends_on).toEqual(["TASK-002", "TASK-003"]);
     expect(Array.isArray(result.data.depends_on)).toBe(true);
     expect(result.data.capabilities).toEqual(["code", "ui"]);
@@ -127,7 +143,9 @@ describe("parseTaskFrontmatter", () => {
   it("returns error for invalid task ID pattern", () => {
     const result = parseTaskFrontmatter("---\nid: BAD-ID\ntitle: Test\n---\n", "bad-id.md");
     expect(result.success).toBe(false);
-    if (result.success) return;
+    if (result.success) {
+      return;
+    }
     expect(result.error.filePath).toBe("bad-id.md");
     expect(result.error.issues.length).toBeGreaterThan(0);
     expect(result.error.issues[0].path).toBe("id");
@@ -145,7 +163,9 @@ describe("parseTaskFrontmatter", () => {
     ].join("\n");
     const result = parseTaskFrontmatter(content, "bad-dep.md");
     expect(result.success).toBe(false);
-    if (result.success) return;
+    if (result.success) {
+      return;
+    }
     expect(result.error.issues.length).toBeGreaterThan(0);
   });
 });
@@ -157,14 +177,18 @@ describe("parseQueueFrontmatter", () => {
       "queue.md",
     );
     expect(result.success).toBe(true);
-    if (!result.success) return;
+    if (!result.success) {
+      return;
+    }
     expect(result.data.updated).toBe("2026-03-26T14:30:00Z");
   });
 
   it("parses empty frontmatter with undefined updated", () => {
     const result = parseQueueFrontmatter("---\n---\n## Available", "queue.md");
     expect(result.success).toBe(true);
-    if (!result.success) return;
+    if (!result.success) {
+      return;
+    }
     expect(result.data.updated).toBeUndefined();
   });
 });

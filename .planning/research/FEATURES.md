@@ -8,17 +8,17 @@
 
 The feature landscape is informed by analysis of these systems:
 
-| System | Category | Key Differentiator |
-|--------|----------|-------------------|
-| Linear | SaaS PM tool | AI triage, agent-as-teammate, coding agent deeplinks |
-| GitHub Projects | Code-native PM | Sub-issues, agentic workflows in Actions, repo-integrated |
-| Trello | Visual PM | Simple kanban, Power-Ups ecosystem, low learning curve |
-| Taskmaster AI | AI task orchestrator | PRD parsing into dependency-aware tasks, MCP tools, autopilot TDD |
-| GSD | Spec-driven dev workflow | Fresh subagent contexts, atomic plans, context rot prevention |
-| Cursor | AI coding IDE | Plan mode, parallel agents, cloud agents, automations |
-| backlog.md | Markdown PM | Git-native, markdown files as tasks, React kanban UI |
-| MDTM (Roo Commander) | Markdown task mgmt | TOML frontmatter, status-driven files in repo |
-| taskmd | Markdown task mgmt | YAML frontmatter, AI-agent-first design |
+| System               | Category                 | Key Differentiator                                                |
+| -------------------- | ------------------------ | ----------------------------------------------------------------- |
+| Linear               | SaaS PM tool             | AI triage, agent-as-teammate, coding agent deeplinks              |
+| GitHub Projects      | Code-native PM           | Sub-issues, agentic workflows in Actions, repo-integrated         |
+| Trello               | Visual PM                | Simple kanban, Power-Ups ecosystem, low learning curve            |
+| Taskmaster AI        | AI task orchestrator     | PRD parsing into dependency-aware tasks, MCP tools, autopilot TDD |
+| GSD                  | Spec-driven dev workflow | Fresh subagent contexts, atomic plans, context rot prevention     |
+| Cursor               | AI coding IDE            | Plan mode, parallel agents, cloud agents, automations             |
+| backlog.md           | Markdown PM              | Git-native, markdown files as tasks, React kanban UI              |
+| MDTM (Roo Commander) | Markdown task mgmt       | TOML frontmatter, status-driven files in repo                     |
+| taskmd               | Markdown task mgmt       | YAML frontmatter, AI-agent-first design                           |
 
 ---
 
@@ -26,20 +26,20 @@ The feature landscape is informed by analysis of these systems:
 
 Features users expect. Missing any of these and the system feels incomplete or broken for a PM tool built into an AI agent platform.
 
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| **Task CRUD** (create, read, update, delete) | Every PM tool has this. Agents and humans must be able to create and modify tasks. | Low | CLI + agent writes to markdown. Already in design spec. |
-| **Task status tracking** | Users need to know what state work is in. Universal across all competitors. | Low | YAML frontmatter `status` field. Already in design spec. |
-| **Kanban board view** | Visual status at a glance. Linear, Trello, GitHub Projects, backlog.md all have this. | Medium | Read-only Phase 1 is fine, but it must exist. Already in spec. |
-| **Task priority levels** | Without priority, agents and humans cannot triage. Every competitor has this. | Low | Already in spec: low/medium/high/critical. |
-| **Project list/overview** | Users with multiple projects need a summary view. Every PM tool has this. | Low | Already in spec. |
-| **Sub-tasks / checklists** | Breaking work into smaller units is fundamental. GitHub has sub-issues, Taskmaster has subtasks, Trello has checklists. | Low | Already in spec as checkbox sub-tasks within task files. |
-| **Task dependencies** | Taskmaster's core value prop. Linear and GitHub Projects support this. Without dependencies, agents work out of order. | Medium | Not explicitly in Phase 1 spec. Must add at minimum a `depends_on` frontmatter field and "next available task" logic that respects it. |
-| **CLI interface** | Developers expect CLI access. Taskmaster, backlog.md, GSD all are CLI-first. | Low | Already in spec: `openclaw projects create/list/status/reindex`. |
-| **Agent task claiming** | Core to the product's value proposition. If agents cannot autonomously pick up work, this is just another kanban board. | Medium | Already in spec via heartbeat + queue.md + capability matching. |
-| **Interruption/resume** | Context compaction and session ends are inevitable. GSD solves this with fresh contexts; Taskmaster ignores it. OpenClaw's checkpoint approach is the right answer. | Medium | Already in spec via checkpoint sections and logs. |
-| **Activity log/history** | Users need to see what happened. Linear has activity feeds, GitHub has timeline. | Low | Already in spec as `## Log` section in task files. |
-| **File-on-disk persistence** | The markdown-first promise. backlog.md, MDTM, taskmd, GSD all use files. If state lives only in memory or a database, the core value prop is broken. | Low | Already the foundational architecture decision. |
+| Feature                                      | Why Expected                                                                                                                                                        | Complexity | Notes                                                                                                                                  |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Task CRUD** (create, read, update, delete) | Every PM tool has this. Agents and humans must be able to create and modify tasks.                                                                                  | Low        | CLI + agent writes to markdown. Already in design spec.                                                                                |
+| **Task status tracking**                     | Users need to know what state work is in. Universal across all competitors.                                                                                         | Low        | YAML frontmatter `status` field. Already in design spec.                                                                               |
+| **Kanban board view**                        | Visual status at a glance. Linear, Trello, GitHub Projects, backlog.md all have this.                                                                               | Medium     | Read-only Phase 1 is fine, but it must exist. Already in spec.                                                                         |
+| **Task priority levels**                     | Without priority, agents and humans cannot triage. Every competitor has this.                                                                                       | Low        | Already in spec: low/medium/high/critical.                                                                                             |
+| **Project list/overview**                    | Users with multiple projects need a summary view. Every PM tool has this.                                                                                           | Low        | Already in spec.                                                                                                                       |
+| **Sub-tasks / checklists**                   | Breaking work into smaller units is fundamental. GitHub has sub-issues, Taskmaster has subtasks, Trello has checklists.                                             | Low        | Already in spec as checkbox sub-tasks within task files.                                                                               |
+| **Task dependencies**                        | Taskmaster's core value prop. Linear and GitHub Projects support this. Without dependencies, agents work out of order.                                              | Medium     | Not explicitly in Phase 1 spec. Must add at minimum a `depends_on` frontmatter field and "next available task" logic that respects it. |
+| **CLI interface**                            | Developers expect CLI access. Taskmaster, backlog.md, GSD all are CLI-first.                                                                                        | Low        | Already in spec: `openclaw projects create/list/status/reindex`.                                                                       |
+| **Agent task claiming**                      | Core to the product's value proposition. If agents cannot autonomously pick up work, this is just another kanban board.                                             | Medium     | Already in spec via heartbeat + queue.md + capability matching.                                                                        |
+| **Interruption/resume**                      | Context compaction and session ends are inevitable. GSD solves this with fresh contexts; Taskmaster ignores it. OpenClaw's checkpoint approach is the right answer. | Medium     | Already in spec via checkpoint sections and logs.                                                                                      |
+| **Activity log/history**                     | Users need to see what happened. Linear has activity feeds, GitHub has timeline.                                                                                    | Low        | Already in spec as `## Log` section in task files.                                                                                     |
+| **File-on-disk persistence**                 | The markdown-first promise. backlog.md, MDTM, taskmd, GSD all use files. If state lives only in memory or a database, the core value prop is broken.                | Low        | Already the foundational architecture decision.                                                                                        |
 
 ### Table Stakes Gap: Task Dependencies
 
@@ -53,18 +53,18 @@ The current Phase 1 spec does not include task dependencies. This is a significa
 
 Features that set OpenClaw apart from competitors. Not expected by default, but create significant competitive advantage.
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| **Markdown as single source of truth with auto-generated JSON** | No other tool does this exact pattern. backlog.md is close but uses its own CLI to manage state. MDTM stores files but has no JSON index layer. The two-layer approach (agents write markdown, UI reads JSON) is novel and correct. | Medium | Already in spec. This is the architecture differentiator. Protect it. |
-| **Capability-based agent routing** | No competitor does capability matching for task assignment. Taskmaster assigns to "the agent" (singular). Linear assigns to humans. OpenClaw can match task requirements to agent skills automatically. | Medium | Already in spec. This is a major differentiator vs. Taskmaster's single-agent model. |
-| **Multi-agent concurrent work** | Cursor supports parallel agents but in isolated worktrees, not on a shared project board. OpenClaw's file-lock + queue approach enables multiple agents working on different tasks in the same project simultaneously. | High | Already in spec. The concurrency model (file-level .lock) is the hard part. |
-| **Live agent indicators on kanban** | No competitor shows real-time agent activity on a project board. Linear shows assignees but not live working state. This creates a "mission control" feel that is genuinely new. | Medium | Already in spec. Pulsing indicators + session peek. High visual impact. |
-| **Context injection via PROJECT.md** | Unique to OpenClaw's agent architecture. When an agent enters a project directory or receives a message on a project channel, it automatically gets project context. No other tool has this "ambient project awareness." | Medium | Already in spec via two paths (cwd pickup + channel hook). |
-| **Configurable dashboard widgets** | Linear has a fixed dashboard. GitHub Projects has configurable views but not widgets. Per-project widget configuration is a nice touch for power users. | Low | Already in spec. Good differentiator at low cost. |
-| **Configurable kanban columns** | Most tools have this (Linear, GitHub Projects). But markdown-based tools generally do not. Columns in YAML frontmatter is clean. | Low | Already in spec. |
-| **Project-scoped agent channels** | Each project gets a communication channel. Humans can message agents in the context of a specific project. This bridges the gap between "chat with agent" and "manage project" that no competitor bridges well. | Medium | In spec via channel hook. Powerful when combined with context injection. |
-| **Sub-project hierarchy** | One level deep. backlog.md is flat. Taskmaster is flat. GitHub has sub-issues but not sub-projects. Linear has projects within teams but different semantics. | Low | Already in spec. Keep it one level. |
-| **Graceful degradation (delete .index/, regenerate)** | The "if JSON corrupts, just delete it" promise. No database migrations, no state corruption anxiety. This is a developer confidence feature. | Low | Already in spec. Market this. |
+| Feature                                                         | Value Proposition                                                                                                                                                                                                                   | Complexity | Notes                                                                                |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------ |
+| **Markdown as single source of truth with auto-generated JSON** | No other tool does this exact pattern. backlog.md is close but uses its own CLI to manage state. MDTM stores files but has no JSON index layer. The two-layer approach (agents write markdown, UI reads JSON) is novel and correct. | Medium     | Already in spec. This is the architecture differentiator. Protect it.                |
+| **Capability-based agent routing**                              | No competitor does capability matching for task assignment. Taskmaster assigns to "the agent" (singular). Linear assigns to humans. OpenClaw can match task requirements to agent skills automatically.                             | Medium     | Already in spec. This is a major differentiator vs. Taskmaster's single-agent model. |
+| **Multi-agent concurrent work**                                 | Cursor supports parallel agents but in isolated worktrees, not on a shared project board. OpenClaw's file-lock + queue approach enables multiple agents working on different tasks in the same project simultaneously.              | High       | Already in spec. The concurrency model (file-level .lock) is the hard part.          |
+| **Live agent indicators on kanban**                             | No competitor shows real-time agent activity on a project board. Linear shows assignees but not live working state. This creates a "mission control" feel that is genuinely new.                                                    | Medium     | Already in spec. Pulsing indicators + session peek. High visual impact.              |
+| **Context injection via PROJECT.md**                            | Unique to OpenClaw's agent architecture. When an agent enters a project directory or receives a message on a project channel, it automatically gets project context. No other tool has this "ambient project awareness."            | Medium     | Already in spec via two paths (cwd pickup + channel hook).                           |
+| **Configurable dashboard widgets**                              | Linear has a fixed dashboard. GitHub Projects has configurable views but not widgets. Per-project widget configuration is a nice touch for power users.                                                                             | Low        | Already in spec. Good differentiator at low cost.                                    |
+| **Configurable kanban columns**                                 | Most tools have this (Linear, GitHub Projects). But markdown-based tools generally do not. Columns in YAML frontmatter is clean.                                                                                                    | Low        | Already in spec.                                                                     |
+| **Project-scoped agent channels**                               | Each project gets a communication channel. Humans can message agents in the context of a specific project. This bridges the gap between "chat with agent" and "manage project" that no competitor bridges well.                     | Medium     | In spec via channel hook. Powerful when combined with context injection.             |
+| **Sub-project hierarchy**                                       | One level deep. backlog.md is flat. Taskmaster is flat. GitHub has sub-issues but not sub-projects. Linear has projects within teams but different semantics.                                                                       | Low        | Already in spec. Keep it one level.                                                  |
+| **Graceful degradation (delete .index/, regenerate)**           | The "if JSON corrupts, just delete it" promise. No database migrations, no state corruption anxiety. This is a developer confidence feature.                                                                                        | Low        | Already in spec. Market this.                                                        |
 
 ---
 
@@ -72,20 +72,20 @@ Features that set OpenClaw apart from competitors. Not expected by default, but 
 
 Features to explicitly NOT build. Each has a clear reason.
 
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| **Database/SQLite for project state** | Breaks the markdown-as-source-of-truth promise. Agents cannot natively read/write SQLite. Adds migration complexity. backlog.md and taskmd prove files work. | Keep markdown + auto-generated JSON. The .index/ pattern is the right answer. |
-| **Drag-and-drop kanban in Phase 1** | Adds significant UI complexity before the data model is validated. Read-only board proves the architecture first. Phase 2 item. | Agents manage board state via markdown. Humans interact via CLI or project channel messages. |
-| **Real-time collaborative editing of task files** | CRDTs or OT for markdown files is enormous complexity. Multiple agents writing the same file simultaneously is a recipe for corruption. | File-level .lock for queue writes. Each agent works on its own task file. No contention by design. |
-| **Complex workflow state machine (Phase 1)** | Premature abstraction. Need to validate that the basic task/queue model works before adding workflow branching, conditions, and step dependencies. | Keep it to simple status transitions (backlog -> in-progress -> review -> done -> blocked). Phase 2. |
-| **Gantt charts / timeline views** | Over-engineering for an agent-first tool. Agents do not need visual timelines. Humans who need Gantt charts should use Linear or GitHub Projects. | Kanban board + task list + dashboard widgets cover the visual needs. |
-| **Time tracking / estimation** | Scope creep. AI agents do not track time. Human time tracking belongs in dedicated tools (Toggl, Harvest). Adding it muddies the product focus. | If needed later, it is a simple frontmatter field addition, not an architecture decision. |
-| **Sprint/iteration management** | Sprints are a human ceremony concept. AI agents work continuously. Forcing sprint boundaries on agent workflows adds friction with no benefit. | Projects have status (active/paused/complete). Tasks have priority. That is sufficient for agent-driven work. |
-| **External integrations (Jira, Linear sync)** | Phase 1 distraction. Syncing state between OpenClaw markdown and external tools is a maintenance nightmare. Each sync direction has edge cases. | Build a great standalone system first. Integrations can come later as plugins if there is demand. |
-| **User permission/role system** | This is a local tool, not a SaaS platform. The filesystem IS the permission model. Adding RBAC to a local markdown tool is over-engineering. | Trust the filesystem. The `.lock` file prevents concurrent writes. That is sufficient. |
-| **AI-generated task suggestions (Phase 1)** | Requires approval UI, trust calibration, and a mechanism to prevent agents from flooding the queue with low-quality tasks. Phase 2 item after the basic flow is proven. | Humans and orchestration agents (Phase 2) create tasks deliberately. |
-| **Notification system** | Push notifications, email alerts, etc. are SaaS features. OpenClaw agents discover work via heartbeat. Humans check the dashboard or CLI. | Dashboard widgets (blockers, recent activity) serve the "what needs attention" use case. |
-| **Task templates** | Premature. See what patterns emerge from real usage before templating them. Templates added too early calcify bad patterns. | Copy-paste a task file. Markdown makes this trivial. |
+| Anti-Feature                                      | Why Avoid                                                                                                                                                               | What to Do Instead                                                                                            |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **Database/SQLite for project state**             | Breaks the markdown-as-source-of-truth promise. Agents cannot natively read/write SQLite. Adds migration complexity. backlog.md and taskmd prove files work.            | Keep markdown + auto-generated JSON. The .index/ pattern is the right answer.                                 |
+| **Drag-and-drop kanban in Phase 1**               | Adds significant UI complexity before the data model is validated. Read-only board proves the architecture first. Phase 2 item.                                         | Agents manage board state via markdown. Humans interact via CLI or project channel messages.                  |
+| **Real-time collaborative editing of task files** | CRDTs or OT for markdown files is enormous complexity. Multiple agents writing the same file simultaneously is a recipe for corruption.                                 | File-level .lock for queue writes. Each agent works on its own task file. No contention by design.            |
+| **Complex workflow state machine (Phase 1)**      | Premature abstraction. Need to validate that the basic task/queue model works before adding workflow branching, conditions, and step dependencies.                      | Keep it to simple status transitions (backlog -> in-progress -> review -> done -> blocked). Phase 2.          |
+| **Gantt charts / timeline views**                 | Over-engineering for an agent-first tool. Agents do not need visual timelines. Humans who need Gantt charts should use Linear or GitHub Projects.                       | Kanban board + task list + dashboard widgets cover the visual needs.                                          |
+| **Time tracking / estimation**                    | Scope creep. AI agents do not track time. Human time tracking belongs in dedicated tools (Toggl, Harvest). Adding it muddies the product focus.                         | If needed later, it is a simple frontmatter field addition, not an architecture decision.                     |
+| **Sprint/iteration management**                   | Sprints are a human ceremony concept. AI agents work continuously. Forcing sprint boundaries on agent workflows adds friction with no benefit.                          | Projects have status (active/paused/complete). Tasks have priority. That is sufficient for agent-driven work. |
+| **External integrations (Jira, Linear sync)**     | Phase 1 distraction. Syncing state between OpenClaw markdown and external tools is a maintenance nightmare. Each sync direction has edge cases.                         | Build a great standalone system first. Integrations can come later as plugins if there is demand.             |
+| **User permission/role system**                   | This is a local tool, not a SaaS platform. The filesystem IS the permission model. Adding RBAC to a local markdown tool is over-engineering.                            | Trust the filesystem. The `.lock` file prevents concurrent writes. That is sufficient.                        |
+| **AI-generated task suggestions (Phase 1)**       | Requires approval UI, trust calibration, and a mechanism to prevent agents from flooding the queue with low-quality tasks. Phase 2 item after the basic flow is proven. | Humans and orchestration agents (Phase 2) create tasks deliberately.                                          |
+| **Notification system**                           | Push notifications, email alerts, etc. are SaaS features. OpenClaw agents discover work via heartbeat. Humans check the dashboard or CLI.                               | Dashboard widgets (blockers, recent activity) serve the "what needs attention" use case.                      |
+| **Task templates**                                | Premature. See what patterns emerge from real usage before templating them. Templates added too early calcify bad patterns.                                             | Copy-paste a task file. Markdown makes this trivial.                                                          |
 
 ---
 
@@ -138,6 +138,7 @@ File Structure (folders, PROJECT.md, queue.md, tasks/)
 **Critical path:** File Structure -> Task CRUD -> Sync Process -> WebSocket Events -> UI Views. Everything else can be developed in parallel once the file structure and sync process exist.
 
 **Parallel workstreams after file structure:**
+
 1. Agent integration (claiming, capability matching, heartbeat) -- independent of UI
 2. UI (project list, dashboard, kanban) -- depends on sync process only
 3. Context injection (cwd + channel hook) -- independent of both UI and claiming

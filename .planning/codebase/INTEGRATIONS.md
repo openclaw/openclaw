@@ -5,6 +5,7 @@
 ## APIs & External Services
 
 **Language Models (LLM Providers):**
+
 - Anthropic Claude - Direct and via Google Vertex AI
   - SDK: `@anthropic-ai/vertex-sdk` (Vertex) or vendor-specific
   - Auth: `ANTHROPIC_API_KEY`, `ANTHROPIC_API_KEYS` (comma-separated for rotation)
@@ -37,6 +38,7 @@
   - DeepSeek, Mistral, Groq, HuggingFace, Together, Qwen, Moonshot, Kimi Coding, OpenRouter, xAI, Deepgram (speech), Perplexity, ZAI, Ollama, Vllm, ModelStudio, BytePlus, VolcEngine
 
 **Web Search & Content:**
+
 - Brave Web Search API
   - Auth: `BRAVE_API_KEY`
   - Extension: `extensions/brave/`
@@ -59,6 +61,7 @@
   - Extension: `extensions/firecrawl/`
 
 **Voice & TTS:**
+
 - ElevenLabs Text-to-Speech
   - Auth: `ELEVENLABS_API_KEY` or `XI_API_KEY` (alias)
   - Extension: `extensions/elevenlabs/`
@@ -69,6 +72,7 @@
   - Extension: `extensions/deepgram/`
 
 **Image Generation & Processing:**
+
 - FAL AI (image generation)
   - Extension: `extensions/fal/`
 
@@ -78,6 +82,7 @@
 ## Messaging Channels
 
 **Core Channels (built-in):**
+
 - **Telegram** - `src/telegram/`, `extensions/telegram/`
   - Auth: `TELEGRAM_BOT_TOKEN`
 
@@ -94,6 +99,7 @@
   - SignalCliRest protocol integration
 
 **Channel Extensions (82 plugins, key ones):**
+
 - **iMessage** - `extensions/imessage/` (macOS Bluetooth integration)
 - **LINE** - `extensions/line/` (SDK: `@line/bot-sdk` v10.6.0)
 - **Matrix** - `extensions/matrix/` (open protocol)
@@ -116,6 +122,7 @@
 ## Data Storage
 
 **Primary Database:**
+
 - SQLite (Node.js native `node:sqlite` module)
   - Location: `~/.openclaw/` (configurable via `OPENCLAW_STATE_DIR`)
   - Vector support: `sqlite-vec` 0.1.7 for embeddings
@@ -124,31 +131,37 @@
   - Search: `src/memory/manager-search.ts`
 
 **Session Storage:**
+
 - Pi session logs: `~/.openclaw/agents/<agentId>/sessions/*.jsonl`
 - Gateway sessions: `~/.openclaw/sessions/`
 
 **File Storage:**
+
 - Local filesystem only (no cloud storage integration)
 - Temporary paths via `openclaw/plugin-sdk/temp-path`
 - JSON store: `openclaw/plugin-sdk/json-store` (file-based)
 
 **Cache:**
+
 - In-process (no external cache service)
 - Chokidar-based file watching: `chokidar` ^5.0.0
 
 ## Authentication & Identity
 
 **Gateway Auth:**
+
 - Token-based: `OPENCLAW_GATEWAY_TOKEN` (environment variable)
 - Password-based: `OPENCLAW_GATEWAY_PASSWORD` (alternative, not simultaneously)
 - WebSocket authentication: `src/gateway/server/http-auth.ts`
 
 **External OAuth/API Keys:**
+
 - All provider API keys stored in `.env` or `~/.openclaw/.env`
 - Credential storage: `~/.openclaw/credentials/` (web provider creds)
 - Secret management: Direct env vars or config file entries (no vault integration)
 
 **Device Pairing:**
+
 - QR code generation: `qrcode-terminal` ^0.12.0 (`src/pairing/`)
 - mDNS/Bonjour support: `@homebridge/ciao` ^1.3.5
 - Extension: `extensions/device-pair/`
@@ -156,16 +169,19 @@
 ## Monitoring & Observability
 
 **Logging:**
+
 - `tslog` ^4.10.2 - Structured logging with levels
 - Channel-specific: `src/channels/logging.ts`
 - Log exports/templates: `src/terminal/` (ANSI formatting)
 
 **Error Tracking:**
+
 - None detected (no Sentry, Bugsnag, etc.)
 - Error handling via try-catch and validation (Zod)
 - Test error fixtures: `src/agents/live-model-errors.ts`
 
 **Diagnostics:**
+
 - OpenTelemetry support: `extensions/diagnostics-otel/`
 - Config schema validation: `src/agents/models-config.ts`
 - System prompt reporting: `src/agents/system-prompt-report.ts`
@@ -173,19 +189,23 @@
 ## CI/CD & Deployment
 
 **Source Control:**
+
 - GitHub: `https://github.com/openclaw/openclaw`
 
 **Hosting:**
+
 - CLI: npm package (`openclaw`)
 - macOS app: Distributed via Sparkle updates (`appcast.xml`)
 - Installers: Sibling repo `../openclaw.ai` (`public/install.sh`, `install-cli.sh`, `install.ps1`)
 - Gateway runs locally or on VM (exe.dev infrastructure mentioned in docs)
 
 **CI Pipeline:**
+
 - GitHub Actions (referenced in test configs)
 - Pre-commit hooks: Oxlint, Oxfmt, TypeScript checks (`prek install`)
 
 **Build Artifacts:**
+
 - `dist/` - Built JavaScript (ESM modules)
 - Binary: `openclaw.mjs` (CLI entry point)
 - Docs: Generated in `docs/.generated/`
@@ -194,6 +214,7 @@
 ## Environment Configuration
 
 **Required env vars (conditional on enabled features):**
+
 - `OPENCLAW_GATEWAY_TOKEN` - Gateway auth (recommended for non-loopback)
 - `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` - At least one LLM
 - `TELEGRAM_BOT_TOKEN` - For Telegram channel
@@ -201,6 +222,7 @@
 - `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` - For Slack channel
 
 **Optional overrides:**
+
 - `OPENCLAW_STATE_DIR` - Config/session directory (default: `~/.openclaw`)
 - `OPENCLAW_CONFIG_PATH` - Config file path (default: `~/.openclaw/openclaw.json`)
 - `OPENCLAW_HOME` - Home directory (default: `~`)
@@ -208,6 +230,7 @@
 - `OPENCLAW_LOAD_SHELL_ENV_TIMEOUT_MS` - Shell env load timeout (default: 15000)
 
 **Secrets Location:**
+
 - Environment files: `.env` (local dev) or `~/.openclaw/.env` (daemon mode)
 - Config file: `~/.openclaw/openclaw.json` (yaml or json5)
 - Never committed (covered by `.gitignore` and `detect-secrets`)
@@ -215,11 +238,13 @@
 ## Webhooks & Callbacks
 
 **Incoming:**
+
 - Channel-specific webhook endpoints (Telegram, Discord, Slack, LINE, etc.)
 - `src/channels/web/` - Web channel transport
 - `src/routing/` - Message routing and handling
 
 **Outgoing:**
+
 - Auto-reply hooks: `src/auto-reply/`
 - Custom webhook support: `openclaw/plugin-sdk/webhook-path`
 - Channel send result tracking: `openclaw/plugin-sdk/channel-send-result`
@@ -227,16 +252,18 @@
 ## Tool Integration
 
 **Agent Tools Runtime:**
+
 - Model context protocol (MCP) SDK support: `@modelcontextprotocol/sdk` 1.27.1
 - Tool execution: `src/agents/pi-tools.*.test.ts` (tool filtering, gating, etc.)
 - Tool images: `src/agents/tool-images.test.ts` (image rendering in tool context)
 - WhatsApp-specific gating: `src/agents/pi-tools.whatsapp-login-gating.test.ts`
 
 **Browser & Automation:**
+
 - Playwright headless browser: `playwright-core` 1.58.2
 - Navigation guard: `src/browser/pw-session.create-page.navigation-guard.ts`
 - Screenshot support: `src/browser/screenshot.test.ts`
 
 ---
 
-*Integration audit: 2026-03-26*
+_Integration audit: 2026-03-26_

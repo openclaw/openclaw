@@ -67,9 +67,7 @@ updated: 2026-03-26T14:30:00Z
 `;
     const result = parseQueue(content, "queue.md");
 
-    expect(result.available).toEqual([
-      { taskId: "TASK-001", metadata: { priority: "low" } },
-    ]);
+    expect(result.available).toEqual([{ taskId: "TASK-001", metadata: { priority: "low" } }]);
     expect(result.claimed).toEqual([]);
     expect(result.done).toEqual([]);
     expect(result.blocked).toEqual([]);
@@ -84,9 +82,7 @@ updated: 2026-03-26T14:30:00Z
     const result = parseQueue(content, "queue.md");
 
     expect(result.available).toEqual([]);
-    expect(result.claimed).toEqual([
-      { taskId: "TASK-001", metadata: { claimed_by: "agent-01" } },
-    ]);
+    expect(result.claimed).toEqual([{ taskId: "TASK-001", metadata: { claimed_by: "agent-01" } }]);
   });
 
   it("is case-insensitive for section headings", () => {
@@ -112,9 +108,7 @@ updated: 2026-03-26T14:30:00Z
 `;
     const result = parseQueue(content, "queue.md");
 
-    expect(result.available).toEqual([
-      { taskId: "TASK-001", metadata: { foo: "bar" } },
-    ]);
+    expect(result.available).toEqual([{ taskId: "TASK-001", metadata: { foo: "bar" } }]);
   });
 
   it("handles no frontmatter", () => {

@@ -15,6 +15,4 @@ export type ParseError = {
   issues: Array<{ path: string; message: string; line?: number }>;
 };
 
-export type ParseResult<T> =
-  | { success: true; data: T }
-  | { success: false; error: ParseError };
+export type ParseResult<T> = { success: true; data: T } | { success: false; error: ParseError };

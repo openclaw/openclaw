@@ -11,6 +11,7 @@
 **Warning signs:** Truncated frontmatter in `.index/` files, intermittent UI rendering errors, "invalid YAML" parse errors in logs.
 
 **Prevention:**
+
 - Use chokidar's `awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 }` — already proven in `src/gateway/config-reload.ts`
 - Debounce watcher callbacks (existing config-reload pattern uses this)
 - Wrap frontmatter parsing in try/catch — skip corrupt files, log warning, retry on next change
@@ -25,6 +26,7 @@
 **Warning signs:** Tasks claimed by agent A but queue.md shows agent B, duplicate work, agents working on same task.
 
 **Prevention:**
+
 - File-level `.lock` via `mkdir` (atomic on POSIX) — design spec already specifies this
 - Lock held only during queue read-modify-write cycle (<100ms)
 - Stale lock detection: if `.lock` older than 60 seconds, force-clear (Phase 1) or PM agent clears (Phase 2)
@@ -39,6 +41,7 @@
 **Warning signs:** `capabilities` parsed as `"[code, ui]"` string instead of `["code", "ui"]` array, widget config not loading.
 
 **Prevention:**
+
 - Create a parallel typed parser (`src/projects/frontmatter.ts`) that calls `yaml.parse()` directly
 - Validate parsed output with Zod schemas per file type (ProjectSchema, TaskSchema, QueueSchema)
 - Do NOT modify existing `parseFrontmatterBlock()` — other callers depend on current behavior
@@ -52,6 +55,7 @@
 **Warning signs:** Dashboard counts don't match actual task files, "ghost" tasks that were completed but still show as in-progress.
 
 **Prevention:**
+
 - Full regeneration on gateway startup (catches any drift accumulated while gateway was down)
 - `openclaw projects reindex` CLI command for manual recovery
 - Periodic consistency check (optional cron: compare `.index/board.json` task count vs `tasks/*.md` file count)
@@ -66,6 +70,7 @@
 **Warning signs:** Sidebar takes >500ms to render, kanban board lags when switching projects, WebSocket event storms.
 
 **Prevention:**
+
 - Start with broadcast-all WebSocket events; add project-scoped subscriptions if performance requires it
 - Lazy-load project details — sidebar shows name/status from a lightweight global index, full dashboard loads on click
 - Paginate task lists in kanban columns (show first 20, load more on scroll)
@@ -80,6 +85,7 @@
 **Warning signs:** Agents lose workspace context after compaction, AGENTS.md sections stop loading, agent behavior changes in non-project contexts.
 
 **Prevention:**
+
 - PROJECT.md detection is additive — append to existing flow, don't modify AGENTS.md logic
 - Isolated test: verify AGENTS.md still loads correctly when PROJECT.md is absent
 - Isolated test: verify PROJECT.md loads when present, AGENTS.md still loads from workspace root
@@ -94,6 +100,7 @@
 **Warning signs:** Heartbeat cycles taking longer, file system I/O spikes, agents slow to respond to messages.
 
 **Prevention:**
+
 - Agent scoping: agents only scan projects they're assigned to (design spec already includes this)
 - Cache queue state in memory, invalidate on watcher event (watcher already exists for UI sync)
 - Stagger heartbeats: don't have all agents wake up at exactly the same time
@@ -108,6 +115,7 @@
 **Warning signs:** Wrong task details shown in dashboard, agents working on parent task when sub-project task was intended.
 
 **Prevention:**
+
 - Design spec says IDs are sequential per project with independent sequences — this is correct
 - In UI and logs, always qualify with project path: `my-project/TASK-001` vs `my-project/auth-system/TASK-001`
 - Queue.md references should include the project context (they're per-project files, so this is implicit)
@@ -121,6 +129,7 @@
 **Warning signs:** "Project queue is locked" error on every claim attempt, no agent can pick up new work.
 
 **Prevention:**
+
 - Phase 1: stale lock older than 60 seconds is force-cleared
 - Phase 2: PM agent clears stale locks on heartbeat
 - Write PID and timestamp into lock file content for diagnostics
@@ -135,6 +144,7 @@
 **Warning signs:** Tasks visible in filesystem but missing from kanban, parse error warnings in logs.
 
 **Prevention:**
+
 - Zod validation with `.safeParse()` — returns error details instead of throwing
 - Log parse failures with file path and line number for easy debugging
 - UI shows "N files failed to parse" warning on dashboard if any tasks couldn't be indexed
@@ -144,15 +154,15 @@
 
 ## Summary
 
-| Priority | Pitfall | Risk | Phase |
-|----------|---------|------|-------|
-| Critical | Queue concurrent write corruption | HIGH | 1 |
-| Critical | File watcher race conditions | HIGH | 1 |
-| High | Frontmatter parser type mismatch | MEDIUM | 1 |
-| High | Agent context injection regression | MEDIUM | 1 |
-| Medium | .index/ JSON drift | MEDIUM | 1 |
-| Medium | Lock file left behind | MEDIUM | 1 |
-| Medium | YAML frontmatter edge cases | MEDIUM | 1 |
-| Low | UI performance with many projects | LOW (Phase 1) | 1 |
-| Low | Heartbeat pickup overload | LOW (Phase 1) | 1 |
-| Low | Task ID collision in sub-projects | LOW | 1 |
+| Priority | Pitfall                            | Risk          | Phase |
+| -------- | ---------------------------------- | ------------- | ----- |
+| Critical | Queue concurrent write corruption  | HIGH          | 1     |
+| Critical | File watcher race conditions       | HIGH          | 1     |
+| High     | Frontmatter parser type mismatch   | MEDIUM        | 1     |
+| High     | Agent context injection regression | MEDIUM        | 1     |
+| Medium   | .index/ JSON drift                 | MEDIUM        | 1     |
+| Medium   | Lock file left behind              | MEDIUM        | 1     |
+| Medium   | YAML frontmatter edge cases        | MEDIUM        | 1     |
+| Low      | UI performance with many projects  | LOW (Phase 1) | 1     |
+| Low      | Heartbeat pickup overload          | LOW (Phase 1) | 1     |
+| Low      | Task ID collision in sub-projects  | LOW           | 1     |

@@ -60,6 +60,7 @@ Agents and humans can seamlessly track, claim, and execute project work through 
 ## Context
 
 **Existing codebase:** OpenClaw is a mature TypeScript (ESM) platform with:
+
 - **UI:** Lit 3.x web components, Vite 8.x build, sidebar with tab groups (Chat, Control, Agent, Settings)
 - **Navigation:** `ui/src/ui/navigation.ts` defines sidebar tabs and routing
 - **Gateway:** WebSocket server at `127.0.0.1:18789`, typed event system
@@ -84,23 +85,24 @@ Agents and humans can seamlessly track, claim, and execute project work through 
 
 ## Key Decisions
 
-| Decision | Rationale | Outcome |
-|----------|-----------|---------|
-| Markdown + auto-generated JSON | Agents write markdown natively; UI reads JSON for speed; single source of truth | — Pending |
-| Projects at `~/.openclaw/projects/` | Central location alongside existing config; not per-repo | — Pending |
-| PROJECT.md (not AGENTS.md) for project context | Avoids collision with industry-standard AGENTS.md in repos; unambiguous | — Pending |
-| Capability tags over agent name matching | More flexible; agents can fulfill multiple roles | — Pending |
-| File-level .lock for queue writes | Simple concurrency without database; lock held only during brief write | — Pending |
-| Configurable columns with defaults | Projects have different needs; Backlog/In Progress/Review/Done as default | — Pending |
-| Configurable dashboard widgets | No one-size-fits-all; good defaults with per-project override | — Pending |
-| Read-only kanban in Phase 1 | Prove data model before adding interaction complexity | — Pending |
-| PM agent investigates stale tasks (Phase 2) | Prevents false positives from timer-based detection; tries revival first | — Pending |
+| Decision                                       | Rationale                                                                       | Outcome   |
+| ---------------------------------------------- | ------------------------------------------------------------------------------- | --------- |
+| Markdown + auto-generated JSON                 | Agents write markdown natively; UI reads JSON for speed; single source of truth | — Pending |
+| Projects at `~/.openclaw/projects/`            | Central location alongside existing config; not per-repo                        | — Pending |
+| PROJECT.md (not AGENTS.md) for project context | Avoids collision with industry-standard AGENTS.md in repos; unambiguous         | — Pending |
+| Capability tags over agent name matching       | More flexible; agents can fulfill multiple roles                                | — Pending |
+| File-level .lock for queue writes              | Simple concurrency without database; lock held only during brief write          | — Pending |
+| Configurable columns with defaults             | Projects have different needs; Backlog/In Progress/Review/Done as default       | — Pending |
+| Configurable dashboard widgets                 | No one-size-fits-all; good defaults with per-project override                   | — Pending |
+| Read-only kanban in Phase 1                    | Prove data model before adding interaction complexity                           | — Pending |
+| PM agent investigates stale tasks (Phase 2)    | Prevents false positives from timer-based detection; tries revival first        | — Pending |
 
 ## Evolution
 
 This document evolves at phase transitions and milestone boundaries.
 
 **After each phase transition** (via `/gsd:transition`):
+
 1. Requirements invalidated? → Move to Out of Scope with reason
 2. Requirements validated? → Move to Validated with phase reference
 3. New requirements emerged? → Add to Active
@@ -108,10 +110,12 @@ This document evolves at phase transitions and milestone boundaries.
 5. "What This Is" still accurate? → Update if drifted
 
 **After each milestone** (via `/gsd:complete-milestone`):
+
 1. Full review of all sections
 2. Core Value check — still the right priority?
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-26 after initialization*
+
+_Last updated: 2026-03-26 after initialization_

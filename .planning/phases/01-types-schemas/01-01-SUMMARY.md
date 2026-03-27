@@ -5,7 +5,15 @@ subsystem: projects/data-model
 tags: [zod, schemas, types, validation, foundation]
 dependency_graph:
   requires: []
-  provides: [ProjectFrontmatterSchema, TaskFrontmatterSchema, QueueFrontmatterSchema, ParseResult, ParseError, FrontmatterParseWarning]
+  provides:
+    [
+      ProjectFrontmatterSchema,
+      TaskFrontmatterSchema,
+      QueueFrontmatterSchema,
+      ParseResult,
+      ParseError,
+      FrontmatterParseWarning,
+    ]
   affects: [frontmatter-parser, queue-parser, sync-pipeline, gateway, cli]
 tech_stack:
   added: []
@@ -54,6 +62,7 @@ Three source files and one test file establishing the data model foundation for 
 ### Auto-fixed Issues
 
 **1. [Rule 1 - Bug] Zod 4 dashboard default behavior**
+
 - **Found during:** Task 1 GREEN phase
 - **Issue:** Zod 4's `.default({})` returns the literal `{}` when the parent field is undefined, without running inner schema defaults for `widgets`
 - **Fix:** Provided full default object with widgets array to `.default()` instead of empty `{}`
@@ -62,8 +71,8 @@ Three source files and one test file establishing the data model foundation for 
 
 ## Commits
 
-| Hash | Message |
-|------|---------|
+| Hash    | Message                                                                                |
+| ------- | -------------------------------------------------------------------------------------- |
 | 931c37d | feat(01-01): add Zod schemas, TypeScript types, and error types for project management |
 
 ## Known Stubs

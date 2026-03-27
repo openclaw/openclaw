@@ -15,13 +15,13 @@ created: 2026-03-26
 
 ## Test Infrastructure
 
-| Property | Value |
-|----------|-------|
-| **Framework** | vitest 3.1.x |
-| **Config file** | `vitest.config.ts` |
-| **Quick run command** | `pnpm test -- src/projects/` |
-| **Full suite command** | `pnpm test` |
-| **Estimated runtime** | ~15 seconds (scoped) |
+| Property               | Value                        |
+| ---------------------- | ---------------------------- |
+| **Framework**          | vitest 3.1.x                 |
+| **Config file**        | `vitest.config.ts`           |
+| **Quick run command**  | `pnpm test -- src/projects/` |
+| **Full suite command** | `pnpm test`                  |
+| **Estimated runtime**  | ~15 seconds (scoped)         |
 
 ---
 
@@ -36,19 +36,19 @@ created: 2026-03-26
 
 ## Per-Task Verification Map
 
-| Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| TBD | 01 | 1 | PARSE-01 | unit | `pnpm test -- src/projects/frontmatter` | ❌ W0 | ⬜ pending |
-| TBD | 01 | 1 | PARSE-02 | unit | `pnpm test -- src/projects/schemas` | ❌ W0 | ⬜ pending |
-| TBD | 01 | 1 | PARSE-03 | unit | `pnpm test -- src/projects/frontmatter` | ❌ W0 | ⬜ pending |
-| TBD | 01 | 1 | DATA-03 | unit | `pnpm test -- src/projects/schemas` | ❌ W0 | ⬜ pending |
-| TBD | 01 | 1 | DATA-04 | unit | `pnpm test -- src/projects/schemas` | ❌ W0 | ⬜ pending |
-| TBD | 01 | 1 | DATA-05 | unit | `pnpm test -- src/projects/schemas` | ❌ W0 | ⬜ pending |
-| TBD | 01 | 1 | DATA-07 | unit | `pnpm test -- src/projects/schemas` | ❌ W0 | ⬜ pending |
-| TBD | 01 | 1 | DATA-08 | unit | `pnpm test -- src/projects/schemas` | ❌ W0 | ⬜ pending |
-| TBD | 01 | 1 | PARSE-04 | integration | `pnpm test -- src/markdown/frontmatter` | ✅ | ⬜ pending |
+| Task ID | Plan | Wave | Requirement | Test Type   | Automated Command                       | File Exists | Status     |
+| ------- | ---- | ---- | ----------- | ----------- | --------------------------------------- | ----------- | ---------- |
+| TBD     | 01   | 1    | PARSE-01    | unit        | `pnpm test -- src/projects/frontmatter` | ❌ W0       | ⬜ pending |
+| TBD     | 01   | 1    | PARSE-02    | unit        | `pnpm test -- src/projects/schemas`     | ❌ W0       | ⬜ pending |
+| TBD     | 01   | 1    | PARSE-03    | unit        | `pnpm test -- src/projects/frontmatter` | ❌ W0       | ⬜ pending |
+| TBD     | 01   | 1    | DATA-03     | unit        | `pnpm test -- src/projects/schemas`     | ❌ W0       | ⬜ pending |
+| TBD     | 01   | 1    | DATA-04     | unit        | `pnpm test -- src/projects/schemas`     | ❌ W0       | ⬜ pending |
+| TBD     | 01   | 1    | DATA-05     | unit        | `pnpm test -- src/projects/schemas`     | ❌ W0       | ⬜ pending |
+| TBD     | 01   | 1    | DATA-07     | unit        | `pnpm test -- src/projects/schemas`     | ❌ W0       | ⬜ pending |
+| TBD     | 01   | 1    | DATA-08     | unit        | `pnpm test -- src/projects/schemas`     | ❌ W0       | ⬜ pending |
+| TBD     | 01   | 1    | PARSE-04    | integration | `pnpm test -- src/markdown/frontmatter` | ✅          | ⬜ pending |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+_Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
 ---
 
@@ -58,13 +58,13 @@ created: 2026-03-26
 - [ ] `src/projects/schemas.test.ts` — stubs for PARSE-02, DATA-03, DATA-04, DATA-05, DATA-07, DATA-08
 - [ ] No framework install needed — vitest already configured
 
-*Existing infrastructure covers framework requirements.*
+_Existing infrastructure covers framework requirements._
 
 ---
 
 ## Manual-Only Verifications
 
-*All phase behaviors have automated verification.*
+_All phase behaviors have automated verification._
 
 ---
 

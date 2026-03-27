@@ -15,7 +15,11 @@ affects: [sync-pipeline, gateway, cli, queue-parser]
 
 tech-stack:
   added: []
-  patterns: [extractYamlBlock + YAML.parse + Zod safeParse pipeline, discriminated union ParseResult return type]
+  patterns:
+    [
+      extractYamlBlock + YAML.parse + Zod safeParse pipeline,
+      discriminated union ParseResult return type,
+    ]
 
 key-files:
   created:
@@ -51,6 +55,7 @@ completed: 2026-03-26
 - **Files created:** 2
 
 ## Accomplishments
+
 - Typed frontmatter parser that returns real arrays and nested objects (not flattened strings)
 - Structured error reporting with file path, issues array, and YAML line numbers
 - 12 unit tests covering happy path, defaults, malformed input, YAML errors, and CRLF normalization
@@ -65,10 +70,12 @@ Each task was committed atomically:
 3. **Task 1 (format): Apply oxfmt** - `d92a5fc` (chore)
 
 ## Files Created/Modified
+
 - `src/projects/frontmatter.ts` - Typed frontmatter parser with extractYamlBlock, parseAndValidate, and three public parse functions
 - `src/projects/frontmatter.test.ts` - 12 unit tests covering all parse functions, error paths, array preservation, and CRLF normalization
 
 ## Decisions Made
+
 - Duplicated the 10-line extractYamlBlock logic rather than importing from existing parser, maintaining complete independence per PARSE-04
 - Used YAML `schema: "core"` to avoid YAML 1.1 boolean coercion (e.g. bare `no`/`yes` staying as strings)
 - Empty frontmatter (`---\n---`) coalesces YAML null to `{}` so Zod defaults apply correctly
@@ -78,6 +85,7 @@ Each task was committed atomically:
 None - plan executed exactly as written.
 
 ## Issues Encountered
+
 - Zod error message for missing required string field is "Invalid input: expected string, received undefined" rather than containing "required" -- adjusted test assertion to match both patterns.
 
 ## User Setup Required
@@ -85,9 +93,11 @@ None - plan executed exactly as written.
 None - no external service configuration required.
 
 ## Next Phase Readiness
+
 - Typed frontmatter parser ready for consumption by sync pipeline (Phase 02) and CLI commands (Phase 08)
 - All three parse functions exported and tested with structured error reporting
 
 ---
-*Phase: 01-types-schemas*
-*Completed: 2026-03-26*
+
+_Phase: 01-types-schemas_
+_Completed: 2026-03-26_

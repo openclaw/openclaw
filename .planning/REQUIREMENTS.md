@@ -115,80 +115,82 @@ Deferred to future release. Tracked but not in current roadmap.
 
 Explicitly excluded. Documented to prevent scope creep.
 
-| Feature | Reason |
-|---------|--------|
-| Database/SQLite for project state | Markdown is source of truth for agent accessibility; database breaks the core promise |
-| Sprint management | Human ceremony concept that doesn't map to agent workflows |
-| External integrations (Jira, Linear sync) | Sync complexity distracts from core value; revisit only if proven demand |
-| Real-time collaborative editing | Projects are single-writer (one agent or human at a time per file) |
-| Time tracking / estimates | Not relevant to agent-driven development |
-| Drag-and-drop kanban (Phase 1) | Prove data model with read-only board before adding interaction complexity |
-| Sub-sub-projects | One level of nesting is sufficient; keeps structure flat and navigable |
-| Custom task statuses beyond columns | Configurable columns already handle this; free-form statuses add complexity without value |
+| Feature                                   | Reason                                                                                    |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Database/SQLite for project state         | Markdown is source of truth for agent accessibility; database breaks the core promise     |
+| Sprint management                         | Human ceremony concept that doesn't map to agent workflows                                |
+| External integrations (Jira, Linear sync) | Sync complexity distracts from core value; revisit only if proven demand                  |
+| Real-time collaborative editing           | Projects are single-writer (one agent or human at a time per file)                        |
+| Time tracking / estimates                 | Not relevant to agent-driven development                                                  |
+| Drag-and-drop kanban (Phase 1)            | Prove data model with read-only board before adding interaction complexity                |
+| Sub-sub-projects                          | One level of nesting is sufficient; keeps structure flat and navigable                    |
+| Custom task statuses beyond columns       | Configurable columns already handle this; free-form statuses add complexity without value |
 
 ## Traceability
 
 Which phases cover which requirements. Updated during roadmap creation.
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| DATA-01 | Phase 2 | Pending |
-| DATA-02 | Phase 2 | Pending |
-| DATA-03 | Phase 1 | Complete |
-| DATA-04 | Phase 1 | Complete |
-| DATA-05 | Phase 1 | Complete |
-| DATA-06 | Phase 2 | Pending |
-| DATA-07 | Phase 1 | Complete |
-| DATA-08 | Phase 1 | Complete |
-| PARSE-01 | Phase 1 | Complete |
-| PARSE-02 | Phase 1 | Complete |
-| PARSE-03 | Phase 1 | Complete |
-| PARSE-04 | Phase 1 | Complete |
-| SYNC-01 | Phase 3 | Pending |
-| SYNC-02 | Phase 3 | Pending |
-| SYNC-03 | Phase 3 | Pending |
-| SYNC-04 | Phase 3 | Pending |
-| SYNC-05 | Phase 3 | Pending |
-| SYNC-06 | Phase 3 | Pending |
-| SYNC-07 | Phase 3 | Pending |
-| CONC-01 | Phase 4 | Pending |
-| CONC-02 | Phase 4 | Pending |
-| CONC-03 | Phase 4 | Pending |
-| CONC-04 | Phase 4 | Pending |
-| CONC-05 | Phase 4 | Pending |
-| AGNT-01 | Phase 5 | Pending |
-| AGNT-02 | Phase 5 | Pending |
-| AGNT-03 | Phase 5 | Pending |
-| AGNT-04 | Phase 5 | Pending |
-| AGNT-05 | Phase 6 | Pending |
-| AGNT-06 | Phase 6 | Pending |
-| AGNT-07 | Phase 6 | Pending |
-| AGNT-08 | Phase 6 | Pending |
-| AGNT-09 | Phase 6 | Pending |
-| GATE-01 | Phase 7 | Pending |
-| GATE-02 | Phase 7 | Pending |
-| GATE-03 | Phase 7 | Pending |
-| GATE-04 | Phase 7 | Pending |
-| CLI-01 | Phase 8 | Pending |
-| CLI-02 | Phase 8 | Pending |
-| CLI-03 | Phase 8 | Pending |
-| CLI-04 | Phase 8 | Pending |
-| CLI-05 | Phase 8 | Pending |
-| UI-01 | Phase 9 | Pending |
-| UI-02 | Phase 9 | Pending |
-| UI-03 | Phase 9 | Pending |
-| UI-04 | Phase 9 | Pending |
-| UI-05 | Phase 10 | Pending |
-| UI-06 | Phase 10 | Pending |
-| UI-07 | Phase 10 | Pending |
-| UI-08 | Phase 9 | Pending |
-| UI-09 | Phase 9 | Pending |
+| Requirement | Phase    | Status   |
+| ----------- | -------- | -------- |
+| DATA-01     | Phase 2  | Pending  |
+| DATA-02     | Phase 2  | Pending  |
+| DATA-03     | Phase 1  | Complete |
+| DATA-04     | Phase 1  | Complete |
+| DATA-05     | Phase 1  | Complete |
+| DATA-06     | Phase 2  | Pending  |
+| DATA-07     | Phase 1  | Complete |
+| DATA-08     | Phase 1  | Complete |
+| PARSE-01    | Phase 1  | Complete |
+| PARSE-02    | Phase 1  | Complete |
+| PARSE-03    | Phase 1  | Complete |
+| PARSE-04    | Phase 1  | Complete |
+| SYNC-01     | Phase 3  | Pending  |
+| SYNC-02     | Phase 3  | Pending  |
+| SYNC-03     | Phase 3  | Pending  |
+| SYNC-04     | Phase 3  | Pending  |
+| SYNC-05     | Phase 3  | Pending  |
+| SYNC-06     | Phase 3  | Pending  |
+| SYNC-07     | Phase 3  | Pending  |
+| CONC-01     | Phase 4  | Pending  |
+| CONC-02     | Phase 4  | Pending  |
+| CONC-03     | Phase 4  | Pending  |
+| CONC-04     | Phase 4  | Pending  |
+| CONC-05     | Phase 4  | Pending  |
+| AGNT-01     | Phase 5  | Pending  |
+| AGNT-02     | Phase 5  | Pending  |
+| AGNT-03     | Phase 5  | Pending  |
+| AGNT-04     | Phase 5  | Pending  |
+| AGNT-05     | Phase 6  | Pending  |
+| AGNT-06     | Phase 6  | Pending  |
+| AGNT-07     | Phase 6  | Pending  |
+| AGNT-08     | Phase 6  | Pending  |
+| AGNT-09     | Phase 6  | Pending  |
+| GATE-01     | Phase 7  | Pending  |
+| GATE-02     | Phase 7  | Pending  |
+| GATE-03     | Phase 7  | Pending  |
+| GATE-04     | Phase 7  | Pending  |
+| CLI-01      | Phase 8  | Pending  |
+| CLI-02      | Phase 8  | Pending  |
+| CLI-03      | Phase 8  | Pending  |
+| CLI-04      | Phase 8  | Pending  |
+| CLI-05      | Phase 8  | Pending  |
+| UI-01       | Phase 9  | Pending  |
+| UI-02       | Phase 9  | Pending  |
+| UI-03       | Phase 9  | Pending  |
+| UI-04       | Phase 9  | Pending  |
+| UI-05       | Phase 10 | Pending  |
+| UI-06       | Phase 10 | Pending  |
+| UI-07       | Phase 10 | Pending  |
+| UI-08       | Phase 9  | Pending  |
+| UI-09       | Phase 9  | Pending  |
 
 **Coverage:**
+
 - v1 requirements: 51 total (corrected from stated 49)
 - Mapped to phases: 51
 - Unmapped: 0
 
 ---
-*Requirements defined: 2026-03-26*
-*Last updated: 2026-03-26 after roadmap creation*
+
+_Requirements defined: 2026-03-26_
+_Last updated: 2026-03-26 after roadmap creation_
