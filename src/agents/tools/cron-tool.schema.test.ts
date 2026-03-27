@@ -24,6 +24,7 @@ describe("CronToolSchema", () => {
         "delivery",
         "description",
         "enabled",
+        "failureAlert",
         "name",
         "payload",
         "schedule",
@@ -78,6 +79,12 @@ describe("CronToolSchema", () => {
         "thinking",
         "timeoutSeconds",
       ].toSorted(),
+    );
+  });
+
+  it("job.failureAlert exposes after, channel, to, cooldownMs, mode, accountId", () => {
+    expect(keysAt(CronToolSchema as Record<string, unknown>, "job.failureAlert")).toEqual(
+      ["accountId", "after", "channel", "cooldownMs", "mode", "to"].toSorted(),
     );
   });
 });

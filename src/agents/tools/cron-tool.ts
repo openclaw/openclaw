@@ -12,12 +12,8 @@ import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
-// NOTE: We spell out top-level properties for job/patch so that LLMs know
-// what fields to populate. Without them, models like GPT-5.4 send `job: {}`
-// because the JSON Schema has `"properties": {}`.
-// Nested unions are avoided — we use flat string enums instead of
-// Type.Union([Type.Literal(...)]) which some providers reject.
-// Runtime validation still happens in normalizeCronJobCreate/Patch.
+// We spell out job/patch properties so that LLMs know what fields to send.
+// Nested unions are avoided; runtime validation happens in normalizeCronJob*.
 
 const CRON_ACTIONS = ["status", "list", "add", "update", "remove", "run", "runs", "wake"] as const;
 
@@ -32,7 +28,6 @@ const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
 const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
 
-// Reusable sub-schemas for the job/patch objects.
 const CronScheduleSchema = Type.Optional(
   Type.Object(
     {
@@ -91,6 +86,20 @@ const CronDeliverySchema = Type.Optional(
   ),
 );
 
+const CronFailureAlertSchema = Type.Optional(
+  Type.Object(
+    {
+      after: Type.Optional(Type.Number({ description: "Failures before alerting" })),
+      channel: Type.Optional(Type.String({ description: "Alert channel" })),
+      to: Type.Optional(Type.String({ description: "Alert target" })),
+      cooldownMs: Type.Optional(Type.Number({ description: "Cooldown between alerts in ms" })),
+      mode: optionalStringEnum(["announce", "webhook"] as const),
+      accountId: Type.Optional(Type.String()),
+    },
+    { additionalProperties: true },
+  ),
+);
+
 const CronJobObjectSchema = Type.Optional(
   Type.Object(
     {
@@ -109,6 +118,7 @@ const CronJobObjectSchema = Type.Optional(
       enabled: Type.Optional(Type.Boolean()),
       deleteAfterRun: Type.Optional(Type.Boolean({ description: "Delete after first execution" })),
       sessionKey: Type.Optional(Type.String({ description: "Explicit session key" })),
+      failureAlert: CronFailureAlertSchema,
     },
     { additionalProperties: true },
   ),
@@ -186,21 +196,7 @@ const CronPatchObjectSchema = Type.Optional(
       deleteAfterRun: Type.Optional(Type.Boolean()),
       agentId: Type.Optional(Type.String({ description: "Agent id" })),
       sessionKey: Type.Optional(Type.String({ description: "Explicit session key" })),
-      failureAlert: Type.Optional(
-        Type.Object(
-          {
-            after: Type.Optional(Type.Number({ description: "Failures before alerting" })),
-            channel: Type.Optional(Type.String({ description: "Alert channel" })),
-            to: Type.Optional(Type.String({ description: "Alert target" })),
-            cooldownMs: Type.Optional(
-              Type.Number({ description: "Cooldown between alerts in ms" }),
-            ),
-            mode: optionalStringEnum(["announce", "webhook"] as const),
-            accountId: Type.Optional(Type.String()),
-          },
-          { additionalProperties: true },
-        ),
-      ),
+      failureAlert: CronFailureAlertSchema,
     },
     { additionalProperties: true },
   ),
