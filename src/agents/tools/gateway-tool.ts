@@ -35,11 +35,11 @@ function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
 
 function getSnapshotConfig(snapshot: unknown): Record<string, unknown> {
   if (!snapshot || typeof snapshot !== "object") {
-    throw new Error("Missing config snapshot.");
+    throw new Error("config.get response is not an object.");
   }
   const config = (snapshot as { config?: unknown }).config;
   if (!config || typeof config !== "object" || Array.isArray(config)) {
-    throw new Error("Missing config snapshot.");
+    throw new Error("config.get response is missing a config object.");
   }
   return config as Record<string, unknown>;
 }
@@ -226,6 +226,8 @@ export function createGatewayTool(opts?: {
       }> => {
         const raw = readStringParam(params, "raw", { required: true });
         const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
+        // Always fetch config.get so we can compare protected exec settings
+        // against the current snapshot before forwarding any write RPC.
         const snapshotConfig = getSnapshotConfig(snapshot);
         let baseHash = readStringParam(params, "baseHash");
         if (!baseHash) {

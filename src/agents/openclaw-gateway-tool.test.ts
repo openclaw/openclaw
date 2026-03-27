@@ -223,6 +223,26 @@ describe("gateway tool", () => {
     );
   });
 
+  it("rejects config.apply when protected exec settings are omitted", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-missing-protected", {
+        action: "config.apply",
+        raw: '{ agents: { defaults: { workspace: "~/openclaw" } } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.apply cannot change protected config paths: tools.exec.ask, tools.exec.security",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.apply",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
   it("passes update.run through gateway call", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
