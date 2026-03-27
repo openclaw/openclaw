@@ -119,6 +119,35 @@ describe("configureGatewayForSetup", () => {
     }
   });
 
+  it("enables insecure local control ui auth for fresh quickstart loopback setups", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+
+    const result = await runGatewayConfig({
+      flow: "quickstart",
+      textQueue: [],
+    });
+
+    expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).toBe(true);
+  });
+
+  it("preserves explicit control ui auth policy in quickstart", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+
+    const result = await runGatewayConfig({
+      flow: "quickstart",
+      textQueue: [],
+      nextConfig: {
+        gateway: {
+          controlUi: {
+            allowInsecureAuth: false,
+          },
+        },
+      },
+    });
+
+    expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).toBe(false);
+  });
+
   it("does not set password to literal 'undefined' when prompt returns undefined", async () => {
     mocks.randomToken.mockReturnValue("unused");
     const result = await runGatewayConfig({
