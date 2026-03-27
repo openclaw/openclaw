@@ -45,17 +45,14 @@ export function renderWhatsAppCard(params: {
     extraContent: html`
       ${
         props.whatsappMessage
-          ? html`<div class="callout" style="margin-top: 12px;">
-              ${props.whatsappMessage}
-            </div>`
+          ? html`<div class="callout" style="margin-top: 12px;">${props.whatsappMessage}</div>`
           : nothing
       }
-
       ${
         props.whatsappQrDataUrl
           ? html`<div class="qr-wrap">
-              <img src=${props.whatsappQrDataUrl} alt="WhatsApp QR" />
-            </div>`
+            <img src=${props.whatsappQrDataUrl} alt="WhatsApp QR" />
+          </div>`
           : nothing
       }
     `,
@@ -75,11 +72,7 @@ export function renderWhatsAppCard(params: {
       >
         Relink
       </button>
-      <button
-        class="btn"
-        ?disabled=${props.whatsappBusy}
-        @click=${() => props.onWhatsAppWait()}
-      >
+      <button class="btn" ?disabled=${props.whatsappBusy} @click=${() => props.onWhatsAppWait()}>
         Wait for scan
       </button>
       <button
@@ -89,9 +82,7 @@ export function renderWhatsAppCard(params: {
       >
         Logout
       </button>
-      <button class="btn" @click=${() => props.onRefresh(true)}>
-        Refresh
-      </button>
+      <button class="btn" @click=${() => props.onRefresh(true)}>Refresh</button>
     </div>`,
   });
 }

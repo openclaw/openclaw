@@ -578,7 +578,9 @@ function renderAppearanceSection(props: ConfigProps) {
           ${THEME_OPTIONS.map(
             (opt) => html`
               <button
-                class="settings-theme-card ${opt.id === props.theme ? "settings-theme-card--active" : ""}"
+                class="settings-theme-card ${
+                  opt.id === props.theme ? "settings-theme-card--active" : ""
+                }"
                 title=${opt.description}
                 @click=${(e: Event) => {
                   if (opt.id !== props.theme) {
@@ -593,7 +595,9 @@ function renderAppearanceSection(props: ConfigProps) {
                 <span class="settings-theme-card__label">${opt.label}</span>
                 ${
                   opt.id === props.theme
-                    ? html`<span class="settings-theme-card__check" aria-hidden="true">${icons.check}</span>`
+                    ? html`<span class="settings-theme-card__check" aria-hidden="true"
+                      >${icons.check}</span
+                    >`
                     : nothing
                 }
               </button>
@@ -636,7 +640,9 @@ function renderAppearanceSection(props: ConfigProps) {
           <div class="settings-info-row">
             <span class="settings-info-row__label">Status</span>
             <span class="settings-info-row__value">
-              <span class="settings-status-dot ${props.connected ? "settings-status-dot--ok" : ""}"></span>
+              <span
+                class="settings-status-dot ${props.connected ? "settings-status-dot--ok" : ""}"
+              ></span>
               ${props.connected ? "Connected" : "Offline"}
             </span>
           </div>
@@ -787,36 +793,36 @@ export function renderConfig(props: ConfigProps) {
             ${
               showModeToggle
                 ? html`
-                    <div class="config-mode-toggle">
-                      <button
-                        class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
-                        ?disabled=${props.schemaLoading || !props.schema}
-                        title=${formUnsafe ? "Form view can't safely edit some fields" : ""}
-                        @click=${() => props.onFormModeChange("form")}
-                      >
-                        Form
-                      </button>
-                      <button
-                        class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
-                        @click=${() => props.onFormModeChange("raw")}
-                      >
-                        Raw
-                      </button>
-                    </div>
-                  `
+                  <div class="config-mode-toggle">
+                    <button
+                      class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
+                      ?disabled=${props.schemaLoading || !props.schema}
+                      title=${formUnsafe ? "Form view can't safely edit some fields" : ""}
+                      @click=${() => props.onFormModeChange("form")}
+                    >
+                      Form
+                    </button>
+                    <button
+                      class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
+                      @click=${() => props.onFormModeChange("raw")}
+                    >
+                      Raw
+                    </button>
+                  </div>
+                `
                 : nothing
             }
             ${
               hasChanges
                 ? html`
-	                  <span class="config-changes-badge"
-	                    >${
-                        formMode === "raw"
-                          ? "Unsaved changes"
-                          : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`
-                      }</span
-	                  >
-	                `
+                  <span class="config-changes-badge"
+                    >${
+                      formMode === "raw"
+                        ? "Unsaved changes"
+                        : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`
+                    }</span
+                  >
+                `
                 : html`
                     <span class="config-status muted">No changes</span>
                   `
@@ -826,42 +832,26 @@ export function renderConfig(props: ConfigProps) {
             ${
               props.onOpenFile
                 ? html`
-                    <button
-                      class="btn btn--sm"
-                      title=${props.configPath ? `Open ${props.configPath}` : "Open config file"}
-                      @click=${props.onOpenFile}
-                    >
-                      ${icons.fileText} Open
-                    </button>
-                  `
+                  <button
+                    class="btn btn--sm"
+                    title=${props.configPath ? `Open ${props.configPath}` : "Open config file"}
+                    @click=${props.onOpenFile}
+                  >
+                    ${icons.fileText} Open
+                  </button>
+                `
                 : nothing
             }
-            <button
-              class="btn btn--sm"
-              ?disabled=${props.loading}
-              @click=${props.onReload}
-            >
+            <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onReload}>
               ${props.loading ? "Loading…" : "Reload"}
             </button>
-            <button
-              class="btn btn--sm primary"
-              ?disabled=${!canSave}
-              @click=${props.onSave}
-            >
+            <button class="btn btn--sm primary" ?disabled=${!canSave} @click=${props.onSave}>
               ${props.saving ? "Saving…" : "Save"}
             </button>
-            <button
-              class="btn btn--sm"
-              ?disabled=${!canApply}
-              @click=${props.onApply}
-            >
+            <button class="btn btn--sm" ?disabled=${!canApply} @click=${props.onApply}>
               ${props.applying ? "Applying…" : "Apply"}
             </button>
-            <button
-              class="btn btn--sm"
-              ?disabled=${!canUpdate}
-              @click=${props.onUpdate}
-            >
+            <button class="btn btn--sm" ?disabled=${!canUpdate} @click=${props.onUpdate}>
               ${props.updating ? "Updating…" : "Update"}
             </button>
           </div>
@@ -871,43 +861,43 @@ export function renderConfig(props: ConfigProps) {
           ${
             formMode === "form"
               ? html`
-                  <div class="config-search config-search--top">
-                    <div class="config-search__input-row">
-                      <svg
-                        class="config-search__icon"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                      >
-                        <circle cx="11" cy="11" r="8"></circle>
-                        <path d="M21 21l-4.35-4.35"></path>
-                      </svg>
-                      <input
-                        type="text"
-                        class="config-search__input"
-                        placeholder="Search settings..."
-                        aria-label="Search settings"
-                        .value=${props.searchQuery}
-                        @input=${(e: Event) =>
-                          props.onSearchChange((e.target as HTMLInputElement).value)}
-                      />
-                      ${
-                        props.searchQuery
-                          ? html`
-                              <button
-                                class="config-search__clear"
-                                aria-label="Clear search"
-                                @click=${() => props.onSearchChange("")}
-                              >
-                                ×
-                              </button>
-                            `
-                          : nothing
-                      }
-                    </div>
+                <div class="config-search config-search--top">
+                  <div class="config-search__input-row">
+                    <svg
+                      class="config-search__icon"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                    >
+                      <circle cx="11" cy="11" r="8"></circle>
+                      <path d="M21 21l-4.35-4.35"></path>
+                    </svg>
+                    <input
+                      type="text"
+                      class="config-search__input"
+                      placeholder="Search settings..."
+                      aria-label="Search settings"
+                      .value=${props.searchQuery}
+                      @input=${(e: Event) =>
+                        props.onSearchChange((e.target as HTMLInputElement).value)}
+                    />
+                    ${
+                      props.searchQuery
+                        ? html`
+                          <button
+                            class="config-search__clear"
+                            aria-label="Clear search"
+                            @click=${() => props.onSearchChange("")}
+                          >
+                            ×
+                          </button>
+                        `
+                        : nothing
+                    }
                   </div>
-                `
+                </div>
+              `
               : nothing
           }
 
@@ -926,26 +916,41 @@ export function renderConfig(props: ConfigProps) {
               `,
             )}
           </div>
-
         </div>
 
         ${
           validity === "invalid" && !cvs.validityDismissed
             ? html`
               <div class="config-validity-warning">
-                <svg class="config-validity-warning__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
-                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                <svg
+                  class="config-validity-warning__icon"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  width="16"
+                  height="16"
+                >
+                  <path
+                    d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+                  ></path>
                   <line x1="12" y1="9" x2="12" y2="13"></line>
                   <line x1="12" y1="17" x2="12.01" y2="17"></line>
                 </svg>
-                <span class="config-validity-warning__text">Your configuration is invalid. Some settings may not work as expected.</span>
+                <span class="config-validity-warning__text"
+                  >Your configuration is invalid. Some settings may not work as expected.</span
+                >
                 <button
                   class="btn btn--sm"
                   @click=${() => {
                     cvs.validityDismissed = true;
                     requestUpdate();
                   }}
-                >Don't remind again</button>
+                >
+                  Don't remind again
+                </button>
               </div>
             `
             : nothing
@@ -957,10 +962,7 @@ export function renderConfig(props: ConfigProps) {
             ? html`
               <details class="config-diff">
                 <summary class="config-diff__summary">
-                  <span
-                    >View ${diff.length} pending
-                    change${diff.length !== 1 ? "s" : ""}</span
-                  >
+                  <span>View ${diff.length} pending change${diff.length !== 1 ? "s" : ""}</span>
                   <svg
                     class="config-diff__chevron"
                     viewBox="0 0 24 24"
@@ -993,17 +995,15 @@ export function renderConfig(props: ConfigProps) {
             `
             : nothing
         }
-	        ${
-            activeSectionMeta && formMode === "form"
-              ? html`
-	              <div class="config-section-hero">
-	                <div class="config-section-hero__icon">
-	                  ${getSectionIcon(props.activeSection ?? "")}
+        ${
+          activeSectionMeta && formMode === "form"
+            ? html`
+              <div class="config-section-hero">
+                <div class="config-section-hero__icon">
+                  ${getSectionIcon(props.activeSection ?? "")}
                 </div>
                 <div class="config-section-hero__text">
-                  <div class="config-section-hero__title">
-                    ${activeSectionMeta.label}
-                  </div>
+                  <div class="config-section-hero__title">${activeSectionMeta.label}</div>
                   ${
                     activeSectionMeta.description
                       ? html`<div class="config-section-hero__desc">
@@ -1016,14 +1016,25 @@ export function renderConfig(props: ConfigProps) {
                   props.activeSection === "env"
                     ? html`
                       <button
-                        class="config-env-peek-btn ${envSensitiveVisible ? "config-env-peek-btn--active" : ""}"
+                        class="config-env-peek-btn ${
+                          envSensitiveVisible ? "config-env-peek-btn--active" : ""
+                        }"
                         title=${envSensitiveVisible ? "Hide env values" : "Reveal env values"}
                         @click=${() => {
                           cvs.envRevealed = !cvs.envRevealed;
                           requestUpdate();
                         }}
                       >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          width="16"
+                          height="16"
+                        >
                           <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
                           <circle cx="12" cy="12" r="3"></circle>
                         </svg>
@@ -1034,8 +1045,8 @@ export function renderConfig(props: ConfigProps) {
                 }
               </div>
             `
-              : nothing
-          }
+            : nothing
+        }
         <!-- Form content -->
         <div class="config-content">
           ${
@@ -1045,35 +1056,35 @@ export function renderConfig(props: ConfigProps) {
                 : nothing
               : formMode === "form"
                 ? html`
-                ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
-                ${
-                  props.schemaLoading
-                    ? html`
-                        <div class="config-loading">
-                          <div class="config-loading__spinner"></div>
-                          <span>Loading schema…</span>
-                        </div>
-                      `
-                    : renderConfigForm({
-                        schema: analysis.schema,
-                        uiHints: props.uiHints,
-                        value: props.formValue,
-                        disabled: props.loading || !props.formValue,
-                        unsupportedPaths: analysis.unsupportedPaths,
-                        onPatch: props.onFormPatch,
-                        searchQuery: props.searchQuery,
-                        activeSection: props.activeSection,
-                        activeSubsection: effectiveSubsection,
-                        revealSensitive:
-                          props.activeSection === "env" ? envSensitiveVisible : false,
-                        isSensitivePathRevealed,
-                        onToggleSensitivePath: (path) => {
-                          toggleSensitivePathReveal(path);
-                          requestUpdate();
-                        },
-                      })
-                }
-              `
+                  ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
+                  ${
+                    props.schemaLoading
+                      ? html`
+                          <div class="config-loading">
+                            <div class="config-loading__spinner"></div>
+                            <span>Loading schema…</span>
+                          </div>
+                        `
+                      : renderConfigForm({
+                          schema: analysis.schema,
+                          uiHints: props.uiHints,
+                          value: props.formValue,
+                          disabled: props.loading || !props.formValue,
+                          unsupportedPaths: analysis.unsupportedPaths,
+                          onPatch: props.onFormPatch,
+                          searchQuery: props.searchQuery,
+                          activeSection: props.activeSection,
+                          activeSubsection: effectiveSubsection,
+                          revealSensitive:
+                            props.activeSection === "env" ? envSensitiveVisible : false,
+                          isSensitivePathRevealed,
+                          onToggleSensitivePath: (path) => {
+                            toggleSensitivePathReveal(path);
+                            requestUpdate();
+                          },
+                        })
+                  }
+                `
                 : (() => {
                     const sensitiveCount = countSensitiveConfigValues(
                       props.formValue,
@@ -1098,7 +1109,10 @@ export function renderConfig(props: ConfigProps) {
                         ${
                           sensitiveCount > 0
                             ? html`
-                              <span class="pill pill--sm">${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"} ${blurred ? "redacted" : "visible"}</span>
+                              <span class="pill pill--sm"
+                                >${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"}
+                                ${blurred ? "redacted" : "visible"}</span
+                              >
                               <button
                                 class="btn btn--icon config-raw-toggle ${blurred ? "" : "active"}"
                                 title=${
@@ -1120,20 +1134,20 @@ export function renderConfig(props: ConfigProps) {
                       ${
                         blurred
                           ? html`
-                              <div class="callout info" style="margin-top: 12px">
-                                ${sensitiveCount} sensitive value${sensitiveCount === 1 ? "" : "s"} hidden. Use the
-                                reveal button above to edit the raw config.
-                              </div>
-                            `
+                            <div class="callout info" style="margin-top: 12px">
+                              ${sensitiveCount} sensitive value${sensitiveCount === 1 ? "" : "s"}
+                              hidden. Use the reveal button above to edit the raw config.
+                            </div>
+                          `
                           : html`
-                              <textarea
-                                placeholder="Raw config (JSON/JSON5)"
-                                .value=${props.raw}
-                                @input=${(e: Event) => {
-                                  props.onRawChange((e.target as HTMLTextAreaElement).value);
-                                }}
-                              ></textarea>
-                            `
+                            <textarea
+                              placeholder="Raw config (JSON/JSON5)"
+                              .value=${props.raw}
+                              @input=${(e: Event) => {
+                                props.onRawChange((e.target as HTMLTextAreaElement).value);
+                              }}
+                            ></textarea>
+                          `
                       }
                     </div>
                   `;
@@ -1144,9 +1158,7 @@ export function renderConfig(props: ConfigProps) {
         ${
           props.issues.length > 0
             ? html`<div class="callout danger" style="margin-top: 12px;">
-              <pre class="code-block">
-${JSON.stringify(props.issues, null, 2)}</pre
-              >
+              <pre class="code-block">${JSON.stringify(props.issues, null, 2)}</pre>
             </div>`
             : nothing
         }
