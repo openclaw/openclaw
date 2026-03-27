@@ -186,11 +186,11 @@ export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
     defaultAccountOnlyEnvError:
       "NEXTCLOUD_TALK_BOT_SECRET can only be used for the default account.",
     validate: ({ accountId, input }) => {
-      const typedInput = input as NextcloudSetupInput;
-      if (!typedInput.useEnv && !typedInput.secret && !typedInput.secretFile) {
+      const setupInput = input as NextcloudSetupInput;
+      if (!setupInput.useEnv && !setupInput.secret && !setupInput.secretFile) {
         return "Nextcloud Talk requires bot secret or --secret-file (or --use-env).";
       }
-      if (!typedInput.baseUrl) {
+      if (!setupInput.baseUrl) {
         return "Nextcloud Talk requires --base-url.";
       }
       return null;
