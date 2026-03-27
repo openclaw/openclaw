@@ -439,22 +439,34 @@ describe("/approve command", () => {
         cfg: createDiscordApproveCfg(null),
         senderId: "123",
         expectedText: "Discord exec approvals are not enabled",
+        setup: () =>
+          callGatewayMock.mockRejectedValue(
+            gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"),
+          ),
+        expectedGatewayCalls: 1,
       },
       {
         name: "discord non approver",
         cfg: createDiscordApproveCfg({ enabled: true, approvers: ["999"], target: "channel" }),
         senderId: "123",
         expectedText: "not authorized to approve",
+        setup: () =>
+          callGatewayMock.mockRejectedValue(
+            gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"),
+          ),
+        expectedGatewayCalls: 1,
       },
       {
         name: "discord approver",
         cfg: createDiscordApproveCfg({ enabled: true, approvers: ["123"], target: "channel" }),
         senderId: "123",
         expectedText: "Approval allow-once submitted",
+        setup: () => callGatewayMock.mockResolvedValue({ ok: true }),
+        expectedGatewayCalls: 1,
       },
     ] as const) {
       callGatewayMock.mockReset();
-      callGatewayMock.mockResolvedValue({ ok: true });
+      testCase.setup();
       const params = buildParams("/approve abc12345 allow-once", testCase.cfg, {
         Provider: "discord",
         Surface: "discord",
@@ -464,8 +476,51 @@ describe("/approve command", () => {
       const result = await handleCommands(params);
       expect(result.shouldContinue, testCase.name).toBe(false);
       expect(result.reply?.text, testCase.name).toContain(testCase.expectedText);
-      expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(
-        testCase.name === "discord approver" ? 1 : 0,
+      expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(testCase.expectedGatewayCalls);
+      if (testCase.expectedGatewayCalls > 0) {
+        expect(callGatewayMock, testCase.name).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method:
+              testCase.name === "discord approver"
+                ? "exec.approval.resolve"
+                : "plugin.approval.resolve",
+            params: { id: "abc12345", decision: "allow-once" },
+          }),
+        );
+      }
+    }
+  });
+
+  it("preserves legacy unprefixed plugin approval fallback on Discord", async () => {
+    for (const testCase of [
+      {
+        name: "discord legacy plugin approval with exec approvals disabled",
+        cfg: createDiscordApproveCfg(null),
+        senderId: "123",
+      },
+      {
+        name: "discord legacy plugin approval for non approver",
+        cfg: createDiscordApproveCfg({ enabled: true, approvers: ["999"], target: "channel" }),
+        senderId: "123",
+      },
+    ] as const) {
+      callGatewayMock.mockReset();
+      callGatewayMock.mockResolvedValue({ ok: true });
+      const params = buildParams("/approve legacy-plugin-123 allow-once", testCase.cfg, {
+        Provider: "discord",
+        Surface: "discord",
+        SenderId: testCase.senderId,
+      });
+
+      const result = await handleCommands(params);
+      expect(result.shouldContinue, testCase.name).toBe(false);
+      expect(result.reply?.text, testCase.name).toContain("Approval allow-once submitted");
+      expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(1);
+      expect(callGatewayMock, testCase.name).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "plugin.approval.resolve",
+          params: { id: "legacy-plugin-123", decision: "allow-once" },
+        }),
       );
     }
   });

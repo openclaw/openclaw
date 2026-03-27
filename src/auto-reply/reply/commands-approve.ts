@@ -130,6 +130,8 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     return { shouldContinue: false, reply: { text: parsed.error } };
   }
   const isPluginId = parsed.id.startsWith("plugin:");
+  let discordExecApprovalDeniedReply: { shouldContinue: false; reply: { text: string } } | null =
+    null;
 
   if (params.command.channel === "telegram") {
     const telegramApproverContext = {
@@ -173,13 +175,13 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       senderId: params.command.senderId,
     };
     if (!isDiscordExecApprovalClientEnabled(discordApproverContext)) {
-      return {
+      discordExecApprovalDeniedReply = {
         shouldContinue: false,
         reply: { text: "❌ Discord exec approvals are not enabled for this bot account." },
       };
     }
-    if (!isDiscordExecApprovalApprover(discordApproverContext)) {
-      return {
+    if (!discordExecApprovalDeniedReply && !isDiscordExecApprovalApprover(discordApproverContext)) {
+      discordExecApprovalDeniedReply = {
         shouldContinue: false,
         reply: { text: "❌ You are not authorized to approve exec requests on Discord." },
       };
@@ -236,6 +238,25 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       };
     }
   } else {
+    if (discordExecApprovalDeniedReply) {
+      // Preserve the legacy unprefixed plugin fallback on Discord even when
+      // exec approvals are unavailable to this sender.
+      try {
+        await callApprovalMethod("plugin.approval.resolve");
+      } catch (pluginErr) {
+        if (isApprovalNotFoundError(pluginErr)) {
+          return discordExecApprovalDeniedReply;
+        }
+        return {
+          shouldContinue: false,
+          reply: { text: `❌ Failed to submit approval: ${String(pluginErr)}` },
+        };
+      }
+      return {
+        shouldContinue: false,
+        reply: { text: `✅ Approval ${parsed.decision} submitted for ${parsed.id}.` },
+      };
+    }
     try {
       await callApprovalMethod("exec.approval.resolve");
     } catch (err) {
