@@ -1,5 +1,6 @@
 {
   "id": "anthropic",
+  "enabledByDefault": true,
   "providers": ["anthropic"],
   "cliBackends": ["claude-cli"],
   "providerAuthEnvVars": {
