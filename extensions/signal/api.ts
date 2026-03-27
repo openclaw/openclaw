@@ -8,4 +8,4 @@ export * from "./src/probe.js";
 export * from "./src/reaction-level.js";
 export * from "./src/send-reactions.js";
 export * from "./src/send.js";
-export { normalizeSignalAccountInput } from "./src/setup-surface.js";
+export { normalizeSignalAccountInput } from "./src/setup-core.js";

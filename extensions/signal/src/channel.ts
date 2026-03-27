@@ -13,6 +13,7 @@ import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-h
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
 import { markdownToSignalTextChunks } from "./format.js";
 import { signalMessageActions } from "./message-actions.js";
+import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
 import type { SignalProbe } from "./probe.js";
 import {
@@ -20,9 +21,7 @@ import {
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
-  looksLikeSignalTargetId,
   normalizeE164,
-  normalizeSignalMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   type ChannelPlugin,
