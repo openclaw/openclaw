@@ -6,6 +6,7 @@ import {
   DEFAULT_MEMORY_FLUSH_PROMPT,
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
 } from "./src/flush-plan.js";
+import { registerBuiltInMemoryEmbeddingProviders } from "./src/memory/provider-adapters.js";
 import { buildPromptSection } from "./src/prompt-section.js";
 import { memoryRuntime } from "./src/runtime-provider.js";
 import { createMemoryGetTool, createMemorySearchTool } from "./src/tools.js";
@@ -23,6 +24,7 @@ export default definePluginEntry({
   description: "File-backed memory search tools and CLI",
   kind: "memory",
   register(api) {
+    registerBuiltInMemoryEmbeddingProviders(api);
     api.registerMemoryPromptSection(buildPromptSection);
     api.registerMemoryFlushPlan(buildMemoryFlushPlan);
     api.registerMemoryRuntime(memoryRuntime);

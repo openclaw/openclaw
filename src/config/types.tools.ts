@@ -340,8 +340,8 @@ export type MemorySearchConfig = {
     /** Enable session transcript indexing (experimental, default: false). */
     sessionMemory?: boolean;
   };
-  /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
+  /** Memory embedding provider adapter id. */
+  provider?: string;
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
@@ -359,8 +359,8 @@ export type MemorySearchConfig = {
       timeoutMinutes?: number;
     };
   };
-  /** Fallback behavior when embeddings fail. */
-  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
+  /** Fallback memory embedding provider adapter id when embeddings fail. */
+  fallback?: string;
   /** Embedding model id (remote) or alias (local). */
   model?: string;
   /**

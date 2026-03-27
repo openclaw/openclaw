@@ -1,10 +1,11 @@
-import type { MemoryFlushPlan, OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
 import {
   DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
   parseNonNegativeByteSize,
   resolveCronStyleNow,
   SILENT_REPLY_TOKEN,
-} from "openclaw/plugin-sdk/memory-core";
+  type MemoryFlushPlan,
+  type OpenClawConfig,
+} from "./api.js";
 
 export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
 export const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;

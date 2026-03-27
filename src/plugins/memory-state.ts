@@ -4,7 +4,7 @@ import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
   MemorySyncProgressUpdate,
-} from "../memory/types.js";
+} from "../plugins/memory-host/types.js";
 
 export type MemoryPromptSectionBuilder = (params: {
   availableTools: Set<string>;
@@ -56,6 +56,7 @@ export type MemoryPluginRuntime = {
     cfg: OpenClawConfig;
     agentId: string;
   }): MemoryRuntimeBackendConfig;
+  closeAllMemorySearchManagers?(): Promise<void>;
 };
 
 type MemoryPluginState = {

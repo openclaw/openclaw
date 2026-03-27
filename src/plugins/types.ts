@@ -1435,6 +1435,10 @@ export type OpenClawPluginApi = {
   registerMemoryFlushPlan: (resolver: import("./memory-state.js").MemoryFlushPlanResolver) => void;
   /** Register the active memory runtime adapter for this memory plugin (exclusive slot). */
   registerMemoryRuntime: (runtime: import("./memory-state.js").MemoryPluginRuntime) => void;
+  /** Register a memory embedding provider adapter. Multiple adapters may coexist. */
+  registerMemoryEmbeddingProvider: (
+    adapter: import("./memory-embedding-providers.js").MemoryEmbeddingProviderAdapter,
+  ) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
