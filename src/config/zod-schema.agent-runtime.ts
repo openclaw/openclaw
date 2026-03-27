@@ -756,6 +756,7 @@ export const AgentEntrySchema = z
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
+    skillPromptMode: z.enum(["reference", "inline"]).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,
@@ -868,6 +869,18 @@ export const ToolsSchema = z
           .optional(),
       })
       .strict()
+      .optional(),
+    validators: z
+      .array(
+        z
+          .object({
+            tool: z.string(),
+            field: z.string(),
+            assert: z.string(),
+            message: z.string().optional(),
+          })
+          .strict(),
+      )
       .optional(),
   })
   .strict()

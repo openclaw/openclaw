@@ -613,4 +613,18 @@ export type ToolsConfig = {
       deny?: string[];
     };
   };
+  /** Pre-execution parameter validators. Blocks tool calls when assertions fail. */
+  validators?: ToolValidator[];
+};
+
+/** Pre-execution parameter validator for a specific tool. */
+export type ToolValidator = {
+  /** Tool name (exact match). */
+  tool: string;
+  /** Dot-path into params (e.g., "quantity", "items.length"). */
+  field: string;
+  /** Predicate expression: $ is the field value. Supports: $ > N, $ < N, $ >= N, $ <= N, $ === V, $ !== V, $.length < N, and && / || combinators. */
+  assert: string;
+  /** Custom rejection message. */
+  message?: string;
 };

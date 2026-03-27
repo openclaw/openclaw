@@ -73,6 +73,12 @@ export type AgentConfig = {
   fastModeDefault?: boolean;
   /** Optional allowlist of skills for this agent (omit = all skills; empty = none). */
   skills?: string[];
+  /**
+   * How skills are presented to the agent:
+   * - "reference": agent sees skill names/descriptions only (default).
+   * - "inline": full SKILL.md content is embedded in the system prompt.
+   */
+  skillPromptMode?: "reference" | "inline";
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;

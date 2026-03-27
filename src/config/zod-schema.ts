@@ -912,6 +912,41 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    autonomy: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxChainDepth: z.number().int().min(0).max(10).optional(),
+        policy: z
+          .object({
+            green: z
+              .object({
+                description: z.string().optional(),
+                categories: z.array(z.string()),
+                maxSeverity: z.enum(["critical", "high", "medium", "low"]).optional(),
+              })
+              .strict()
+              .optional(),
+            yellow: z
+              .object({
+                description: z.string().optional(),
+                categories: z.array(z.string()),
+                maxSeverity: z.enum(["critical", "high", "medium", "low"]).optional(),
+              })
+              .strict()
+              .optional(),
+            red: z
+              .object({
+                description: z.string().optional(),
+                categories: z.array(z.string()),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     plugins: z
       .object({
         enabled: z.boolean().optional(),
