@@ -107,15 +107,45 @@ export function createMemoryTool(params: {
   };
 }
 
+
+/**
+ * Return actionable remediation hint for common embedding errors.
+ * Helps users/agents fix broken memory search without reading source code.
+ */
+function resolveEmbeddingErrorHint(error: string | undefined): string | undefined {
+  if (!error) {
+    return undefined;
+  }
+  const lower = error.toLowerCase();
+  
+  // Leaked key detection
+  if (lower.includes("leaked")) {
+    return "The embedding API key was flagged as leaked by the provider. Generate a new key, update it via `openclaw configure`, and restart the gateway.";
+  }
+  
+  // Quota/rate limit exhaustion
+  if (lower.includes("quota") || lower.includes("rate limit") || lower.includes("429")) {
+    return "Embedding provider quota exhausted. Wait and retry, or switch provider via `openclaw configure`.";
+  }
+  
+  // Invalid/unauthorized key
+  if (lower.includes("401") || lower.includes("unauthorized") || lower.includes("invalid key") || lower.includes("invalid_key")) {
+    return "API key is invalid or expired. Update it via `openclaw configure`.";
+  }
+  
+  return undefined;
+}
+
 export function buildMemorySearchUnavailableResult(error: string | undefined) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
   const isQuotaError = /insufficient_quota|quota|429/.test(reason.toLowerCase());
   const warning = isQuotaError
     ? "Memory search is unavailable because the embedding provider quota is exhausted."
     : "Memory search is unavailable due to an embedding/provider error.";
-  const action = isQuotaError
+  const hint = resolveEmbeddingErrorHint(reason);
+  const action = hint ?? (isQuotaError
     ? "Top up or switch embedding provider, then retry memory_search."
-    : "Check embedding provider configuration and retry memory_search.";
+    : "Check embedding provider configuration and retry memory_search.");
   return {
     results: [],
     disabled: true,
