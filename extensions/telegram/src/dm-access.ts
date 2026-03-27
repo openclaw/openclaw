@@ -60,6 +60,11 @@ export async function enforceTelegramDmAccess(params: {
   if (dmPolicy === "disabled") {
     return false;
   }
+  // Allow self-originated messages (bot's own pinned_message notifications, etc.)
+  // but only AFTER the disabled-policy check so disabled remains authoritative.
+  if (msg.from?.is_bot && msg.from.id === bot.botInfo.id) {
+    return true;
+  }
   if (dmPolicy === "open") {
     return true;
   }
