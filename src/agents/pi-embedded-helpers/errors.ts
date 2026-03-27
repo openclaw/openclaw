@@ -492,6 +492,15 @@ export function classifyFailoverReasonFromHttpStatus(
     if (message && isCliSessionExpiredErrorMessage(message)) {
       return "session_expired";
     }
+    if (message && isBillingErrorMessage(message)) {
+      return "billing";
+    }
+    if (message && isAuthPermanentErrorMessage(message)) {
+      return "auth_permanent";
+    }
+    if (message && isAuthErrorMessage(message)) {
+      return "auth";
+    }
     return "timeout";
   }
   if (status === 503) {

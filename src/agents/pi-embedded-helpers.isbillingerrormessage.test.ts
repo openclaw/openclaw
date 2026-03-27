@@ -571,6 +571,12 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
       "session_expired",
     );
   });
+
+  it("preserves explicit billing and auth signals on HTTP 410", () => {
+    expect(classifyFailoverReasonFromHttpStatus(410, "invalid_api_key")).toBe("auth_permanent");
+    expect(classifyFailoverReasonFromHttpStatus(410, "authentication failed")).toBe("auth");
+    expect(classifyFailoverReasonFromHttpStatus(410, "insufficient credits")).toBe("billing");
+  });
 });
 
 describe("classifyFailoverReason", () => {
@@ -586,6 +592,12 @@ describe("classifyFailoverReason", () => {
   it("keeps session-specific 410 text mapped to session_expired", () => {
     expect(classifyFailoverReason("HTTP 410: session not found")).toBe("session_expired");
     expect(classifyFailoverReason("410 conversation expired")).toBe("session_expired");
+  });
+
+  it("keeps explicit billing and auth signals on 410 text", () => {
+    expect(classifyFailoverReason("HTTP 410: invalid_api_key")).toBe("auth_permanent");
+    expect(classifyFailoverReason("HTTP 410: authentication failed")).toBe("auth");
+    expect(classifyFailoverReason("HTTP 410: insufficient credits")).toBe("billing");
   });
 });
 

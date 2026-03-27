@@ -102,6 +102,27 @@ describe("failover-error", () => {
     ).toBe("session_expired");
   });
 
+  it("preserves explicit auth and billing signals on HTTP 410", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 410,
+        message: "invalid_api_key",
+      }),
+    ).toBe("auth_permanent");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 410,
+        message: "authentication failed",
+      }),
+    ).toBe("auth");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 410,
+        message: "insufficient credits",
+      }),
+    ).toBe("billing");
+  });
+
   it("classifies documented provider error shapes at the error boundary", () => {
     expect(
       resolveFailoverReasonFromError({
