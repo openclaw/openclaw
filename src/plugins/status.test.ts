@@ -13,6 +13,7 @@ const loadConfigMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
 const resolveBundledProviderCompatPluginIdsMock = vi.fn();
 const withBundledPluginAllowlistCompatMock = vi.fn();
+const withBundledPluginEnablementCompatMock = vi.fn();
 let buildPluginStatusReport: typeof import("./status.js").buildPluginStatusReport;
 let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectReport;
 let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginInspectReports;
@@ -37,6 +38,8 @@ vi.mock("./providers.js", () => ({
 vi.mock("./bundled-compat.js", () => ({
   withBundledPluginAllowlistCompat: (...args: unknown[]) =>
     withBundledPluginAllowlistCompatMock(...args),
+  withBundledPluginEnablementCompat: (...args: unknown[]) =>
+    withBundledPluginEnablementCompatMock(...args),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -64,9 +67,13 @@ describe("buildPluginStatusReport", () => {
     loadOpenClawPluginsMock.mockReset();
     resolveBundledProviderCompatPluginIdsMock.mockReset();
     withBundledPluginAllowlistCompatMock.mockReset();
+    withBundledPluginEnablementCompatMock.mockReset();
     loadConfigMock.mockReturnValue({});
     resolveBundledProviderCompatPluginIdsMock.mockReturnValue([]);
     withBundledPluginAllowlistCompatMock.mockImplementation(
+      (params: { config: unknown }) => params.config,
+    );
+    withBundledPluginEnablementCompatMock.mockImplementation(
       (params: { config: unknown }) => params.config,
     );
     setPluginLoadResult({ plugins: [] });
@@ -99,12 +106,22 @@ describe("buildPluginStatusReport", () => {
     );
   });
 
-  it("applies bundled provider allowlist compat before loading plugins", () => {
+  it("applies the full bundled provider compat chain before loading plugins", () => {
     const config = { plugins: { allow: ["telegram"] } };
     loadConfigMock.mockReturnValue(config);
     resolveBundledProviderCompatPluginIdsMock.mockReturnValue(["anthropic", "openai"]);
     const compatConfig = { plugins: { allow: ["telegram", "anthropic", "openai"] } };
+    const enabledConfig = {
+      plugins: {
+        allow: ["telegram", "anthropic", "openai"],
+        entries: {
+          anthropic: { enabled: true },
+          openai: { enabled: true },
+        },
+      },
+    };
     withBundledPluginAllowlistCompatMock.mockReturnValue(compatConfig);
+    withBundledPluginEnablementCompatMock.mockReturnValue(enabledConfig);
 
     buildPluginStatusReport({ config });
 
@@ -112,8 +129,12 @@ describe("buildPluginStatusReport", () => {
       config,
       pluginIds: ["anthropic", "openai"],
     });
+    expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledWith({
+      config: compatConfig,
+      pluginIds: ["anthropic", "openai"],
+    });
     expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ config: compatConfig }),
+      expect.objectContaining({ config: enabledConfig }),
     );
   });
 
