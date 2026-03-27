@@ -368,6 +368,7 @@ async function maybeQueueSubagentAnnounce(params: {
   sourceTool?: string;
   internalEvents?: AgentInternalEvent[];
   signal?: AbortSignal;
+  requesterMessageId?: string;
 }): Promise<"steered" | "queued" | "none" | "dropped"> {
   if (params.signal?.aborted) {
     return "none";
