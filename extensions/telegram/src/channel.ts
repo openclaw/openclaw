@@ -92,7 +92,14 @@ type TelegramStatusRuntimeHelpers = {
 };
 
 function getTelegramStatusRuntimeHelpers(): TelegramStatusRuntimeHelpers {
-  return (getTelegramRuntime().channel?.telegram ?? {}) as TelegramStatusRuntimeHelpers;
+  try {
+    return (getTelegramRuntime().channel?.telegram ?? {}) as TelegramStatusRuntimeHelpers;
+  } catch (error) {
+    if (error instanceof Error && error.message === "Telegram runtime not initialized") {
+      return {};
+    }
+    throw error;
+  }
 }
 
 function resolveTelegramProbe() {
