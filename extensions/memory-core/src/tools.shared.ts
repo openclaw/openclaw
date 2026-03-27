@@ -109,31 +109,57 @@ export function createMemoryTool(params: {
 
 
 /**
+ * Detect the kind of embedding error from an error message.
+ * Shared utility to prevent drift between tool and CLI error handling.
+ */
+function resolveEmbeddingErrorKind(
+  error: string | undefined,
+): "leaked" | "quota" | "invalid_key" | null {
+  if (!error) {
+    return null;
+  }
+  const lower = error.toLowerCase();
+
+  // Leaked key detection
+  if (lower.includes("leaked")) {
+    return "leaked";
+  }
+
+  // Quota/rate limit exhaustion
+  if (lower.includes("quota") || lower.includes("rate limit") || lower.includes("429")) {
+    return "quota";
+  }
+
+  // Invalid/unauthorized key
+  if (
+    lower.includes("401") ||
+    lower.includes("unauthorized") ||
+    lower.includes("invalid key") ||
+    lower.includes("invalid_key")
+  ) {
+    return "invalid_key";
+  }
+
+  return null;
+}
+
+/**
  * Return actionable remediation hint for common embedding errors.
  * Helps users/agents fix broken memory search without reading source code.
  */
 function resolveEmbeddingErrorHint(error: string | undefined): string | undefined {
-  if (!error) {
-    return undefined;
+  const kind = resolveEmbeddingErrorKind(error);
+
+  switch (kind) {
+    case "leaked":
+      return "The embedding API key was flagged as leaked by the provider. Generate a new key, update it via `openclaw configure`, and restart the gateway.";
+    case "quota":
+      return "Embedding provider quota exhausted. Wait and retry, or switch provider via `openclaw configure`.";
+    case "invalid_key":
+      return "API key is invalid or expired. Update it via `openclaw configure`.";
+    default:
+      return undefined;
   }
-  const lower = error.toLowerCase();
-  
-  // Leaked key detection
-  if (lower.includes("leaked")) {
-    return "The embedding API key was flagged as leaked by the provider. Generate a new key, update it via `openclaw configure`, and restart the gateway.";
-  }
-  
-  // Quota/rate limit exhaustion
-  if (lower.includes("quota") || lower.includes("rate limit") || lower.includes("429")) {
-    return "Embedding provider quota exhausted. Wait and retry, or switch provider via `openclaw configure`.";
-  }
-  
-  // Invalid/unauthorized key
-  if (lower.includes("401") || lower.includes("unauthorized") || lower.includes("invalid key") || lower.includes("invalid_key")) {
-    return "API key is invalid or expired. Update it via `openclaw configure`.";
-  }
-  
-  return undefined;
 }
 
 export function buildMemorySearchUnavailableResult(error: string | undefined) {

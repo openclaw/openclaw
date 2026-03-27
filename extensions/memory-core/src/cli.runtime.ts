@@ -32,42 +32,68 @@ import { getMemorySearchManager } from "./memory/index.js";
 
 
 /**
+ * Detect the kind of embedding error (shared logic with tools.shared.ts).
+ * Inlined here to avoid circular deps in the runtime split.
+ */
+function resolveEmbeddingErrorKind(
+  error: string,
+): "leaked" | "quota" | "invalid_key" | null {
+  const lower = error.toLowerCase();
+
+  if (lower.includes("leaked")) {
+    return "leaked";
+  }
+  if (lower.includes("quota") || lower.includes("rate limit") || lower.includes("429")) {
+    return "quota";
+  }
+  if (
+    lower.includes("401") ||
+    lower.includes("unauthorized") ||
+    lower.includes("invalid key") ||
+    lower.includes("invalid_key")
+  ) {
+    return "invalid_key";
+  }
+
+  return null;
+}
+
+/**
  * Return actionable remediation hint for common embedding errors.
  * Helps users fix broken memory search without reading source code.
  */
 function resolveEmbeddingErrorRemediation(error: string, provider?: string): string | null {
-  const lower = error.toLowerCase();
-  
-  // Leaked key detection
-  if (lower.includes("leaked")) {
-    const keyEnvHint =
-      provider === "gemini" || provider === "google"
-        ? "GEMINI_API_KEY"
-        : provider === "openai"
-          ? "OPENAI_API_KEY"
-          : provider === "voyage"
-            ? "VOYAGE_API_KEY"
-            : null;
-    const lines = [
-      "Your API key was flagged as leaked by the provider.",
-      "1. Generate a new API key from your provider's console.",
-      `2. Update it: openclaw configure (or set ${keyEnvHint ?? "the API key env var"} and restart the gateway).`,
-      "3. Restart the gateway: openclaw gateway restart",
-    ];
-    return lines.join(" ");
+  const kind = resolveEmbeddingErrorKind(error);
+
+  if (!kind) {
+    return null;
   }
-  
-  // Quota/rate limit exhaustion
-  if (lower.includes("quota") || lower.includes("rate limit") || lower.includes("429")) {
-    return "Embedding provider quota exhausted. Wait and retry, or switch provider via: openclaw configure";
+
+  switch (kind) {
+    case "leaked": {
+      const keyEnvHint =
+        provider === "gemini" || provider === "google"
+          ? "GEMINI_API_KEY"
+          : provider === "openai"
+            ? "OPENAI_API_KEY"
+            : provider === "voyage"
+              ? "VOYAGE_API_KEY"
+              : null;
+      const steps = [
+        "Your API key was flagged as leaked by the provider.",
+        "1. Generate a new API key from your provider's console.",
+        `2. Update it: openclaw configure (or set ${keyEnvHint ?? "the API key env var"} and restart the gateway).`,
+        "3. Restart the gateway: openclaw gateway restart",
+      ];
+      return steps.join(" ");
+    }
+    case "quota":
+      return "Embedding provider quota exhausted. Wait and retry, or switch provider via: openclaw configure";
+    case "invalid_key":
+      return "API key is invalid or expired. Update it via: openclaw configure";
+    default:
+      return null;
   }
-  
-  // Invalid/unauthorized key
-  if (lower.includes("401") || lower.includes("unauthorized") || lower.includes("invalid key") || lower.includes("invalid_key")) {
-    return "API key is invalid or expired. Update it via: openclaw configure";
-  }
-  
-  return null;
 }
 
 type MemoryManager = NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
@@ -521,10 +547,10 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       lines.push(`${label("Embeddings")} ${colorize(rich, stateColor, state)}`);
       if (embeddingProbe.error) {
         lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
-      const remediation = resolveEmbeddingErrorRemediation(embeddingProbe.error, status.provider);
-      if (remediation) {
-        lines.push(`${label("Fix")} ${muted(remediation)}`);
-      }
+        const remediation = resolveEmbeddingErrorRemediation(embeddingProbe.error, status.provider);
+        if (remediation) {
+          lines.push(`${label("Fix")} ${muted(remediation)}`);
+        }
       }
     }
     if (status.sourceCounts?.length) {
