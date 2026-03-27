@@ -596,6 +596,7 @@ export async function runSubagentAnnounceFlow(params: {
       requesterIsSubagent,
       expectsCompletionMessage: expectsCompletionMessage,
       bestEffortDeliver: params.bestEffortDeliver,
+      requesterMessageId: announceType === "cron job" ? undefined : params.requesterMessageId,
       directIdempotencyKey,
       signal: params.signal,
     });
