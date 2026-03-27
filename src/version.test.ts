@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   VERSION,
   readVersionFromBuildInfoForModuleUrl,
+  resolveCompatibilityHostVersion,
   readVersionFromPackageJsonForModuleUrl,
   resolveBinaryVersion,
   resolveRuntimeServiceVersion,
@@ -141,6 +142,22 @@ describe("version resolution", () => {
         npm_package_version: "1.1.1",
       }),
     ).toBe("9.9.9");
+  });
+
+  it("prefers runtime VERSION over stale OPENCLAW_VERSION for compatibility checks", () => {
+    const previous = process.env.OPENCLAW_VERSION;
+    const previousService = process.env.OPENCLAW_SERVICE_VERSION;
+    const previousPackage = process.env.npm_package_version;
+    try {
+      process.env.OPENCLAW_VERSION = "2026.3.25";
+      process.env.OPENCLAW_SERVICE_VERSION = "2026.3.25-service";
+      process.env.npm_package_version = "2026.3.25-package";
+      expect(resolveCompatibilityHostVersion()).toBe(VERSION);
+    } finally {
+      process.env.OPENCLAW_VERSION = previous;
+      process.env.OPENCLAW_SERVICE_VERSION = previousService;
+      process.env.npm_package_version = previousPackage;
+    }
   });
 
   it("normalizes runtime version candidate for fallback handling", () => {
