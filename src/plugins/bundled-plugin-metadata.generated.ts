@@ -11350,6 +11350,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "OpenRouter API key",
         },
       ],
+      contracts: {
+        mediaUnderstandingProviders: ["openrouter"],
+      },
     },
   },
   {
