@@ -69,6 +69,33 @@ jobs:
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           pnpm release:openclaw:npm:check
 
+      - name: Validate Universal Binary packaging defaults
+        run: |
+          set -euo pipefail
+          # Verify dist script defaults to universal (BUILD_ARCHS=all)
+          if ! grep -q 'BUILD_ARCHS:-all' scripts/package-mac-dist.sh; then
+            echo "::error::package-mac-dist.sh does not default BUILD_ARCHS to 'all' (Universal Binary)"
+            exit 1
+          fi
+          # Verify app script expands 'all' to 'arm64 x86_64'
+          if ! grep -q '"arm64 x86_64"' scripts/package-mac-app.sh; then
+            echo "::error::package-mac-app.sh does not expand 'all' to 'arm64 x86_64'"
+            exit 1
+          fi
+          # Verify Info.plist declares both architectures in LSArchitecturePriority
+          PLIST="apps/macos/Sources/OpenClaw/Resources/Info.plist"
+          if ! grep -q 'LSArchitecturePriority' "$PLIST"; then
+            echo "::error::Info.plist missing LSArchitecturePriority key"
+            exit 1
+          fi
+          for arch in arm64 x86_64; do
+            if ! grep -q "<string>${arch}</string>" "$PLIST"; then
+              echo "::error::Info.plist LSArchitecturePriority missing ${arch}"
+              exit 1
+            fi
+          done
+          echo "✅ Universal Binary packaging defaults validated (arm64 + x86_64)"
+
       - name: Summarize next step
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -77,6 +104,9 @@ jobs:
             echo "## Public macOS validation only"
             echo
             echo "This workflow no longer builds, signs, notarizes, or uploads macOS assets."
+            echo
+            echo "**Architecture:** Release builds produce Universal Binaries (arm64 + x86_64) by default."
+            echo "Set \`PER_ARCH_DIST=1\` in the private workflow to also produce per-architecture zips."
             echo
             echo "Next step:"
             echo "- Run \`openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml\` with tag \`${RELEASE_TAG}\`."

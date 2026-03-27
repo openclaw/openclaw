@@ -118,3 +118,11 @@ Beta and dev builds may **not** include a macOS app release. That is OK:
 
 - The git tag and npm dist-tag can still be published.
 - Call out "no macOS build for this beta" in release notes or changelog.
+
+## macOS app architecture
+
+Stable macOS releases ship as **Universal Binaries** containing both arm64 (Apple Silicon) and x86_64 (Intel) code. The app runs natively on all supported Macs without Rosetta.
+
+For users who want smaller downloads, per-architecture zips (`OpenClaw-<version>-arm64.zip`, `OpenClaw-<version>-x86_64.zip`) can be produced by setting `PER_ARCH_DIST=1` during release packaging.
+
+For building from source with a specific architecture, see [Cross-architecture builds](/platforms/mac/building).
