@@ -147,7 +147,6 @@ function isSameOAuthIdentity(a: OAuthCredential, b: OAuthCredential): boolean {
 async function performOAuthRefresh(
   cred: OAuthCredential,
 ): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
-  const { refreshProviderOAuthCredentialWithPlugin } = await loadProviderRuntime();
   const pluginRefreshed = await refreshProviderOAuthCredentialWithPlugin({
     provider: cred.provider,
     context: cred,
@@ -187,8 +186,10 @@ async function writeCredentialToAgentStore(
           existing.type !== "oauth" ||
           !Number.isFinite(existing.expires) ||
           existing.expires < newCred.expires ||
-          existing.access !== newCred.access ||
-          existing.refresh !== newCred.refresh
+          // Token rotation without expiry change: persist when expiry matches
+          // but don't overwrite a strictly newer credential from a concurrent re-auth.
+          (existing.expires === newCred.expires &&
+            (existing.access !== newCred.access || existing.refresh !== newCred.refresh))
         ) {
           store.profiles[profileId] = { ...newCred };
           return true;
