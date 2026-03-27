@@ -489,13 +489,25 @@ export async function importMigrateArchive(
 
   // Guard against dangerous remap-workspace targets that could cause
   // catastrophic data loss during overwrite (rm + copy).
+  // Canonicalize via realpath to dereference symlinks — a symlink to "/"
+  // or home would otherwise pass the path.resolve check.
   if (resolvedRemapWorkspace) {
-    const resolved = path.resolve(resolvedRemapWorkspace);
-    const root = path.parse(resolved).root;
+    let canonicalRemap: string;
+    try {
+      canonicalRemap = await fs.realpath(resolvedRemapWorkspace);
+    } catch {
+      // Path doesn't exist yet — use resolved path (will be created on import).
+      canonicalRemap = path.resolve(resolvedRemapWorkspace);
+    }
+    const root = path.parse(canonicalRemap).root;
     const home = os.homedir();
-    if (resolved === root || resolved === home || resolved === path.dirname(home)) {
+    if (
+      canonicalRemap === root ||
+      canonicalRemap === home ||
+      canonicalRemap === path.dirname(home)
+    ) {
       throw new Error(
-        `Refusing --remap-workspace target "${resolvedRemapWorkspace}": path is too broad and could cause data loss.`,
+        `Refusing --remap-workspace target "${resolvedRemapWorkspace}": path resolves to "${canonicalRemap}" which is too broad and could cause data loss.`,
       );
     }
   }
