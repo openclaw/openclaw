@@ -384,7 +384,7 @@ async function dispatchDiscordComponentEvent(params: {
     GroupSubject: groupSubject,
     GroupChannel: groupChannel,
     GroupSystemPrompt: interactionCtx.isDirectMessage ? undefined : groupSystemPrompt,
-    GroupSpace: guildInfo?.id ?? guildInfo?.slug ?? interactionCtx.rawGuildId ?? undefined,
+    GroupSpace: guildInfo?.slug ?? guildInfo?.id ?? interactionCtx.rawGuildId ?? undefined,
     OwnerAllowFrom: ownerAllowFrom,
     Provider: "discord" as const,
     Surface: "discord" as const,

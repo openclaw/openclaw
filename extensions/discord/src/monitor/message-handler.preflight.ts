@@ -560,7 +560,9 @@ export async function preflightDiscordMessage(
   const configChannelName = threadParentName ?? channelName;
   const configChannelSlug = configChannelName ? normalizeDiscordSlug(configChannelName) : "";
   const displayChannelName = threadName ?? channelName;
-  const displayChannelSlug = displayChannelName ? normalizeDiscordSlug(displayChannelName) : "";
+  const displayChannelSlug = displayChannelName
+    ? (normalizeDiscordSlug(displayChannelName) || displayChannelName.trim().toLowerCase().replace(/\s+/g, "-"))
+    : "";
   const guildSlug =
     guildInfo?.slug ||
     (params.data.guild?.name ? normalizeDiscordSlug(params.data.guild.name) : "");
