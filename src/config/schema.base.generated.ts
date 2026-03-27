@@ -2998,6 +2998,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       dangerouslyAllowContainerNamespaceJoin: {
                         type: "boolean",
                       },
+                      workspaceMountPropagation: {
+                        type: "string",
+                        enum: ["private", "rslave", "rshared"],
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -4135,6 +4139,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                         dangerouslyAllowContainerNamespaceJoin: {
                           type: "boolean",
+                        },
+                        workspaceMountPropagation: {
+                          type: "string",
+                          enum: ["private", "rslave", "rshared"],
                         },
                       },
                       additionalProperties: false,
