@@ -30,8 +30,8 @@ Requirements for Phase 1 release. Each maps to roadmap phases.
 - [ ] **SYNC-01**: File watcher (chokidar) monitors `~/.openclaw/projects/` for changes to markdown files
 - [ ] **SYNC-02**: Watcher uses `awaitWriteFinish` with stabilityThreshold to prevent reading partial writes
 - [ ] **SYNC-03**: Watcher callbacks are debounced (300ms) to batch rapid changes
-- [ ] **SYNC-04**: On file change, frontmatter is parsed and `.index/` JSON files are regenerated
-- [ ] **SYNC-05**: `.index/` JSON is written atomically (write to temp file, then rename)
+- [x] **SYNC-04**: On file change, frontmatter is parsed and `.index/` JSON files are regenerated
+- [x] **SYNC-05**: `.index/` JSON is written atomically (write to temp file, then rename)
 - [ ] **SYNC-06**: Full `.index/` regeneration runs on gateway startup to catch any drift
 - [ ] **SYNC-07**: `.index/` directory is always deletable and fully regeneratable from markdown
 
@@ -147,8 +147,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SYNC-01     | Phase 3  | Pending  |
 | SYNC-02     | Phase 3  | Pending  |
 | SYNC-03     | Phase 3  | Pending  |
-| SYNC-04     | Phase 3  | Pending  |
-| SYNC-05     | Phase 3  | Pending  |
+| SYNC-04     | Phase 3  | Complete |
+| SYNC-05     | Phase 3  | Complete |
 | SYNC-06     | Phase 3  | Pending  |
 | SYNC-07     | Phase 3  | Pending  |
 | CONC-01     | Phase 4  | Pending  |
