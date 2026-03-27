@@ -27,6 +27,7 @@ export {
   createOllamaEmbeddingProvider,
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
 } from "./host/embeddings-ollama.js";
+export type { OllamaEmbeddingClient } from "./host/embeddings-ollama.js";
 export {
   createOpenAiEmbeddingProvider,
   DEFAULT_OPENAI_EMBEDDING_MODEL,
