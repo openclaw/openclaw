@@ -51,16 +51,47 @@ export function formatBillingErrorMessage(provider?: string, model?: string): st
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
-const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
-const OVERLOADED_ERROR_USER_MESSAGE =
-  "The AI service is temporarily overloaded. Please try again in a moment.";
+type TransientErrorOpts = {
+  provider?: string;
+  model?: string;
+  profileId?: string;
+  trigger?: string;
+  sessionKey?: string;
+};
 
-function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
+function buildTransientErrorContext(opts?: TransientErrorOpts): string {
+  if (!opts) {
+    return "";
+  }
+  const parts: string[] = [];
+  if (opts.provider || opts.model) {
+    const providerModel = [opts.provider, opts.model].filter(Boolean).join("/");
+    if (providerModel) {
+      parts.push(providerModel);
+    }
+  }
+  if (opts.profileId) {
+    parts.push(`profile=${opts.profileId}`);
+  }
+  if (opts.trigger) {
+    parts.push(`trigger=${opts.trigger}`);
+  }
+  if (opts.sessionKey) {
+    parts.push(`session=${opts.sessionKey}`);
+  }
+  return parts.length > 0 ? ` [${parts.join(", ")}]` : "";
+}
+
+function formatRateLimitOrOverloadedErrorCopy(
+  raw: string,
+  opts?: TransientErrorOpts,
+): string | undefined {
+  const ctx = buildTransientErrorContext(opts);
   if (isRateLimitErrorMessage(raw)) {
-    return RATE_LIMIT_ERROR_USER_MESSAGE;
+    return `⚠️ API rate limit reached. Please try again later.${ctx}`;
   }
   if (isOverloadedErrorMessage(raw)) {
-    return OVERLOADED_ERROR_USER_MESSAGE;
+    return `⚠️ The AI service is temporarily overloaded. Please try again in a moment.${ctx}`;
   }
   return undefined;
 }
@@ -548,7 +579,14 @@ export function isRawApiErrorPayload(raw?: string): boolean {
 
 export function formatAssistantErrorText(
   msg: AssistantMessage,
-  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
+  opts?: {
+    cfg?: OpenClawConfig;
+    sessionKey?: string;
+    provider?: string;
+    model?: string;
+    profileId?: string;
+    trigger?: string;
+  },
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
@@ -612,7 +650,13 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
-  const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
+  const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw, {
+    provider: opts?.provider,
+    model: opts?.model ?? msg.model,
+    profileId: opts?.profileId,
+    trigger: opts?.trigger,
+    sessionKey: opts?.sessionKey,
+  });
   if (transientCopy) {
     return transientCopy;
   }

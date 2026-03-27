@@ -982,6 +982,8 @@ export async function runEmbeddedPiAgent(
                 sessionKey: params.sessionKey ?? params.sessionId,
                 provider: activeErrorContext.provider,
                 model: activeErrorContext.model,
+                profileId: lastProfileId,
+                trigger: params.trigger,
               })
             : undefined;
           const assistantErrorText =
@@ -1504,6 +1506,8 @@ export async function runEmbeddedPiAgent(
                       sessionKey: params.sessionKey ?? params.sessionId,
                       provider: activeErrorContext.provider,
                       model: activeErrorContext.model,
+                      profileId: lastProfileId,
+                      trigger: params.trigger,
                     })
                   : undefined) ||
                 lastAssistant?.errorMessage?.trim() ||
@@ -1559,6 +1563,8 @@ export async function runEmbeddedPiAgent(
             sessionKey: params.sessionKey ?? params.sessionId,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,
+            profileId: lastProfileId,
+            trigger: params.trigger,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
