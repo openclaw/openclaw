@@ -62,6 +62,40 @@ describe("resolveFallbackRetryPrompt", () => {
       }),
     ).toBe(originalBody);
   });
+
+  it("allows prompt replay when fallback stays within the same provider", () => {
+    expect(
+      resolveFallbackRetryPrompt({
+        body: originalBody,
+        isFallbackRetry: true,
+        sessionHasHistory: false,
+        primaryProvider: "deepseek",
+        fallbackProvider: "deepseek",
+      }),
+    ).toBe(originalBody);
+  });
+
+  it("throws when replaying prompt to a different provider without history", () => {
+    expect(() =>
+      resolveFallbackRetryPrompt({
+        body: originalBody,
+        isFallbackRetry: true,
+        sessionHasHistory: false,
+        primaryProvider: "zai",
+        fallbackProvider: "deepseek",
+      }),
+    ).toThrow("Cannot replay original prompt to a different provider");
+  });
+
+  it("allows prompt replay when provider info is not supplied (defensive default)", () => {
+    expect(
+      resolveFallbackRetryPrompt({
+        body: originalBody,
+        isFallbackRetry: true,
+        sessionHasHistory: false,
+      }),
+    ).toBe(originalBody);
+  });
 });
 
 describe("sessionFileHasContent", () => {
@@ -117,5 +151,17 @@ describe("sessionFileHasContent", () => {
       "utf-8",
     );
     expect(await sessionFileHasContent(file)).toBe(true);
+  });
+
+  it("returns false when session file is a symbolic link", async () => {
+    const realFile = path.join(tmpDir, "real.jsonl");
+    await fs.writeFile(
+      realFile,
+      '{"type":"message","message":{"role":"assistant","content":"hi"}}\n',
+      "utf-8",
+    );
+    const link = path.join(tmpDir, "link.jsonl");
+    await fs.symlink(realFile, link);
+    expect(await sessionFileHasContent(link)).toBe(false);
   });
 });

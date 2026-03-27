@@ -29,6 +29,9 @@ import type { AgentCommandOpts } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
+/** Upper bound on bytes read from a session transcript for the history check. */
+const SESSION_FILE_READ_LIMIT = 256 * 1024;
+
 /**
  * Check whether a session transcript file exists and contains at least one
  * assistant message, indicating that the SessionManager has flushed the
@@ -41,8 +44,24 @@ export async function sessionFileHasContent(sessionFile: string | undefined): Pr
     return false;
   }
   try {
-    const content = await fs.readFile(sessionFile, "utf-8");
-    return content.includes('"role":"assistant"') || content.includes('"role": "assistant"');
+    // Guard against symlink-following (CWE-400 / arbitrary-file-read vector).
+    const stat = await fs.lstat(sessionFile);
+    if (stat.isSymbolicLink()) {
+      return false;
+    }
+
+    // Bounded read: only inspect the first SESSION_FILE_READ_LIMIT bytes to
+    // prevent memory/time DoS on oversized transcripts (CWE-400).
+    const bytesToRead = Math.min(stat.size, SESSION_FILE_READ_LIMIT);
+    const fh = await fs.open(sessionFile, "r");
+    try {
+      const buf = Buffer.alloc(bytesToRead);
+      const { bytesRead } = await fh.read(buf, 0, bytesToRead, 0);
+      const prefix = buf.subarray(0, bytesRead).toString("utf-8");
+      return prefix.includes('"role":"assistant"') || prefix.includes('"role": "assistant"');
+    } finally {
+      await fh.close();
+    }
   } catch {
     return false;
   }
@@ -74,6 +93,8 @@ export function resolveFallbackRetryPrompt(params: {
   body: string;
   isFallbackRetry: boolean;
   sessionHasHistory?: boolean;
+  primaryProvider?: string;
+  fallbackProvider?: string;
 }): string {
   if (!params.isFallbackRetry) {
     return params.body;
@@ -84,6 +105,19 @@ export function resolveFallbackRetryPrompt(params: {
   // recovery prompt and lose the original task entirely.  Preserve the
   // original body in that case so the fallback model can execute the task.
   if (!params.sessionHasHistory) {
+    // CWE-201: avoid leaking the original (potentially sensitive) prompt to a
+    // different provider.  Only replay when the fallback stays within the same
+    // provider, or when provider information is unavailable (defensive default).
+    if (
+      params.primaryProvider &&
+      params.fallbackProvider &&
+      params.primaryProvider !== params.fallbackProvider
+    ) {
+      throw new FailoverError(
+        "Cannot replay original prompt to a different provider without persisted session history",
+        { reason: "auth" },
+      );
+    }
     return params.body;
   }
   return "Continue where you left off. The previous model attempt failed or timed out.";
@@ -286,11 +320,14 @@ export function runAgentAttempt(params: {
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
   sessionHasHistory?: boolean;
+  primaryProvider?: string;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
     sessionHasHistory: params.sessionHasHistory,
+    primaryProvider: params.primaryProvider,
+    fallbackProvider: params.providerOverride,
   });
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
