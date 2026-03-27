@@ -605,6 +605,7 @@ export async function runPreparedReply(
     agentCfgContextTokens: agentCfg?.contextTokens,
     resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
     isNewSession,
+    resetTriggered,
     blockStreamingEnabled,
     blockReplyChunking,
     resolvedBlockStreamingBreak,
