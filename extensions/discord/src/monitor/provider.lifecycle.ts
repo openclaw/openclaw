@@ -136,7 +136,7 @@ export async function runDiscordGatewayLifecycle(params: {
       // when we intentionally set maxAttempts to 0 for a clean abort/restart.
       // The gateway throws this as if it were a connection failure, but in this
       // context it's an intentional shutdown triggered by the health monitor.
-      const message = String(err);
+      const message = err instanceof Error ? err.message : String(err);
       if (!message.includes("Max reconnect attempts")) {
         throw err;
       }
