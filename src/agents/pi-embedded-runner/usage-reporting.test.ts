@@ -1,11 +1,51 @@
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   loadRunOverflowCompactionHarness,
   mockedEnsureRuntimePluginsLoaded,
   mockedRunEmbeddedAttempt,
 } from "./run.overflow-compaction.harness.js";
+import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
+
+function makeAttemptResult(
+  overrides: Partial<EmbeddedRunAttemptResult> = {},
+): EmbeddedRunAttemptResult {
+  return {
+    aborted: false,
+    timedOut: false,
+    timedOutDuringCompaction: false,
+    promptError: null,
+    sessionIdUsed: "test-session",
+    messagesSnapshot: [],
+    assistantTexts: [],
+    toolMetas: [],
+    lastAssistant: undefined,
+    didSendViaMessagingTool: false,
+    messagingToolSentTexts: [],
+    messagingToolSentMediaUrls: [],
+    messagingToolSentTargets: [],
+    cloudCodeAssistFormatError: false,
+    ...overrides,
+  };
+}
+
+function makeAssistantMessage(
+  overrides: Partial<AssistantMessage> = {},
+): NonNullable<EmbeddedRunAttemptResult["lastAssistant"]> {
+  return {
+    role: "assistant",
+    api: "openai-responses",
+    provider: "openai",
+    model: "gpt-5.2",
+    usage: { input: 0, output: 0 } as AssistantMessage["usage"],
+    stopReason: "end_turn" as AssistantMessage["stopReason"],
+    timestamp: Date.now(),
+    content: [],
+    ...overrides,
+  };
+}
 
 describe("runEmbeddedPiAgent usage reporting", () => {
   beforeAll(async () => {
@@ -18,14 +58,11 @@ describe("runEmbeddedPiAgent usage reporting", () => {
   });
 
   it("bootstraps runtime plugins with the resolved workspace before running", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
-      aborted: false,
-      promptError: null,
-      timedOut: false,
-      sessionIdUsed: "test-session",
-      assistantTexts: ["Response 1"],
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Response 1"],
+      }),
+    );
 
     await runEmbeddedPiAgent({
       sessionId: "test-session",
@@ -44,14 +81,11 @@ describe("runEmbeddedPiAgent usage reporting", () => {
   });
 
   it("forwards gateway subagent binding opt-in to runtime plugin bootstrap", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
-      aborted: false,
-      promptError: null,
-      timedOut: false,
-      sessionIdUsed: "test-session",
-      assistantTexts: ["Response 1"],
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Response 1"],
+      }),
+    );
 
     await runEmbeddedPiAgent({
       sessionId: "test-session",
@@ -77,14 +111,11 @@ describe("runEmbeddedPiAgent usage reporting", () => {
   });
 
   it("forwards sender identity fields into embedded attempts", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
-      aborted: false,
-      promptError: null,
-      timedOut: false,
-      sessionIdUsed: "test-session",
-      assistantTexts: ["Response 1"],
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Response 1"],
+      }),
+    );
 
     await runEmbeddedPiAgent({
       sessionId: "test-session",
@@ -111,14 +142,11 @@ describe("runEmbeddedPiAgent usage reporting", () => {
   });
 
   it("forwards memory flush write paths into memory-triggered attempts", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
-      aborted: false,
-      promptError: null,
-      timedOut: false,
-      sessionIdUsed: "test-session",
-      assistantTexts: [],
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+      }),
+    );
 
     await runEmbeddedPiAgent({
       sessionId: "test-session",
@@ -156,19 +184,15 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     // We expect result.meta.agentMeta.usage.total to be 200 (last turn total).
     // The bug causes it to be 350 (accumulated total).
 
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
-      aborted: false,
-      promptError: null,
-      timedOut: false,
-      sessionIdUsed: "test-session",
-      assistantTexts: ["Response 1", "Response 2"],
-      lastAssistant: {
-        usage: { input: 150, output: 50, total: 200 },
-        stopReason: "end_turn",
-      },
-      attemptUsage: { input: 250, output: 100, total: 350 },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Response 1", "Response 2"],
+        lastAssistant: makeAssistantMessage({
+          usage: { input: 150, output: 50, total: 200 } as unknown as AssistantMessage["usage"],
+        }),
+        attemptUsage: { input: 250, output: 100, total: 350 },
+      }),
+    );
 
     const result = await runEmbeddedPiAgent({
       sessionId: "test-session",
