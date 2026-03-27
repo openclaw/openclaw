@@ -209,7 +209,6 @@ export class TelegramPollingSession {
     let lastGetUpdatesError: string | null = null;
     let lastGetUpdatesOffset: number | null = null;
     let inFlightGetUpdates = 0;
-    let stopSequenceLogged = false;
     let stallDiagLoggedAt = 0;
 
     bot.api.config.use(async (prev, method, payload, signal) => {
