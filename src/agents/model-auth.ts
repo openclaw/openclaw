@@ -1,7 +1,7 @@
 import path from "node:path";
 import { type Api, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { getRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
@@ -26,6 +26,7 @@ import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
+  NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
 import {
   requireApiKey,
@@ -189,10 +190,69 @@ function isCustomLocalProviderConfig(providerConfig: ModelProviderConfig): boole
   );
 }
 
+function isManagedSecretRefApiKeyMarker(apiKey: string | undefined): boolean {
+  return apiKey?.trim() === NON_ENV_SECRETREF_MARKER;
+}
+
+type SyntheticProviderAuthResolution = {
+  auth?: ResolvedProviderAuth;
+  blockedOnManagedSecretRef?: boolean;
+};
+
+function resolveProviderSyntheticRuntimeAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): SyntheticProviderAuthResolution {
+  const resolveFromConfig = (
+    config: OpenClawConfig | undefined,
+  ): ResolvedProviderAuth | undefined => {
+    const providerConfig = resolveProviderConfig(config, params.provider);
+    return resolveProviderSyntheticAuthWithPlugin({
+      provider: params.provider,
+      config,
+      context: {
+        config,
+        provider: params.provider,
+        providerConfig,
+      },
+    });
+  };
+
+  const directAuth = resolveFromConfig(params.cfg);
+  if (!directAuth) {
+    return {};
+  }
+  if (!isManagedSecretRefApiKeyMarker(directAuth.apiKey)) {
+    return { auth: directAuth };
+  }
+
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  if (!runtimeConfig || runtimeConfig === params.cfg) {
+    return { blockedOnManagedSecretRef: true };
+  }
+
+  const runtimeAuth = resolveFromConfig(runtimeConfig);
+  const runtimeApiKey = runtimeAuth?.apiKey;
+  if (!runtimeAuth || !runtimeApiKey || isNonSecretApiKeyMarker(runtimeApiKey)) {
+    return { blockedOnManagedSecretRef: true };
+  }
+  return {
+    auth: runtimeAuth,
+  };
+}
+
 function resolveSyntheticLocalProviderAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
 }): ResolvedProviderAuth | null {
+  const syntheticProviderAuth = resolveProviderSyntheticRuntimeAuth(params);
+  if (syntheticProviderAuth.auth) {
+    return syntheticProviderAuth.auth;
+  }
+  if (syntheticProviderAuth.blockedOnManagedSecretRef) {
+    return null;
+  }
+
   const providerConfig = resolveProviderConfig(params.cfg, params.provider);
   if (!providerConfig) {
     return null;
@@ -204,19 +264,6 @@ function resolveSyntheticLocalProviderAuth(params: {
     (Array.isArray(providerConfig.models) && providerConfig.models.length > 0);
   if (!hasApiConfig) {
     return null;
-  }
-
-  const pluginSyntheticAuth = resolveProviderSyntheticAuthWithPlugin({
-    provider: params.provider,
-    config: params.cfg,
-    context: {
-      config: params.cfg,
-      provider: params.provider,
-      providerConfig,
-    },
-  });
-  if (pluginSyntheticAuth) {
-    return pluginSyntheticAuth;
   }
 
   const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
