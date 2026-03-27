@@ -30,11 +30,9 @@ const MATCHED_KEY = `agent:main:discord:channel:${THREAD_ID}`;
 const UNMATCHED_KEY = `agent:main:discord:channel:${OTHER_ID}`;
 
 describe("closeDiscordThreadSessions", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ closeDiscordThreadSessions } = await import("./thread-session-close.js"));
-  });
-
-  beforeEach(() => {
     hoisted.updateSessionStore.mockClear();
     hoisted.resolveStorePath.mockClear();
     hoisted.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions.json");

@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
-import { deliverDiscordReply } from "./reply-delivery.js";
 import {
   __testing as threadBindingTesting,
   createThreadBindingManager,
@@ -59,6 +58,8 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
   };
 });
 
+let deliverDiscordReply: typeof import("./reply-delivery.js").deliverDiscordReply;
+
 describe("deliverDiscordReply", () => {
   const runtime = {} as RuntimeEnv;
   const cfg = {
@@ -111,7 +112,9 @@ describe("deliverDiscordReply", () => {
     return threadBindings;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ deliverDiscordReply } = await import("./reply-delivery.js"));
     sendMessageDiscordMock.mockClear().mockResolvedValue({
       messageId: "msg-1",
       channelId: "channel-1",
