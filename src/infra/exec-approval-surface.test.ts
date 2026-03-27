@@ -26,22 +26,22 @@ async function loadExecApprovalSurfaceModule() {
     getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
     listChannelPlugins: (...args: unknown[]) => listChannelPluginsMock(...args),
   }));
-  vi.doMock("../../extensions/discord/src/channel.js", () => ({
+  vi.doMock("../../extensions/discord/index.js", () => ({
     discordPlugin: {},
   }));
-  vi.doMock("../../extensions/telegram/src/channel.js", () => ({
+  vi.doMock("../../extensions/telegram/index.js", () => ({
     telegramPlugin: {},
   }));
-  vi.doMock("../../extensions/slack/src/channel.js", () => ({
+  vi.doMock("../../extensions/slack/index.js", () => ({
     slackPlugin: {},
   }));
-  vi.doMock("../../extensions/whatsapp/src/channel.js", () => ({
+  vi.doMock("../../extensions/whatsapp/index.js", () => ({
     whatsappPlugin: {},
   }));
-  vi.doMock("../../extensions/signal/src/channel.js", () => ({
+  vi.doMock("../../extensions/signal/index.js", () => ({
     signalPlugin: {},
   }));
-  vi.doMock("../../extensions/imessage/src/channel.js", () => ({
+  vi.doMock("../../extensions/imessage/index.js", () => ({
     imessagePlugin: {},
   }));
   vi.doMock("../utils/message-channel.js", () => ({
