@@ -627,6 +627,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     }
 
     const apiKey = requestAuth.apiKey ?? "";
+    const headers = requestAuth.headers;
 
     try {
       const modelContextWindow = resolveContextWindowTokens(model);
@@ -690,6 +691,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   messages: pruned.droppedMessagesList,
                   model,
                   apiKey,
+                  headers,
                   signal,
                   reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
                   maxChunkTokens: droppedMaxChunkTokens,
@@ -761,6 +763,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   messages: messagesToSummarize,
                   model,
                   apiKey,
+                  headers,
                   signal,
                   reserveTokens,
                   maxChunkTokens,
@@ -777,6 +780,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               messages: turnPrefixMessages,
               model,
               apiKey,
+              headers,
               signal,
               reserveTokens,
               maxChunkTokens,
