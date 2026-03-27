@@ -1,4 +1,6 @@
 import type { ChannelSetupAdapter, OpenClawConfig } from "openclaw/plugin-sdk/setup";
+import { createZodSetupInputValidator } from "openclaw/plugin-sdk/setup";
+import { z } from "zod";
 import { hasLineCredentials, parseLineAllowFromId } from "./account-helpers.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -9,6 +11,16 @@ import {
 } from "./setup-runtime-api.js";
 
 const channel = "line" as const;
+
+const LineSetupInputSchema = z
+  .object({
+    useEnv: z.boolean().optional(),
+    channelAccessToken: z.string().optional(),
+    channelSecret: z.string().optional(),
+    tokenFile: z.string().optional(),
+    secretFile: z.string().optional(),
+  })
+  .passthrough();
 
 export function patchLineAccountConfig(params: {
   cfg: OpenClawConfig;
@@ -80,25 +92,21 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
       accountId,
       patch: name?.trim() ? { name: name.trim() } : {},
     }),
-  validateInput: ({ accountId, input }) => {
-    const typedInput = input as {
-      useEnv?: boolean;
-      channelAccessToken?: string;
-      channelSecret?: string;
-      tokenFile?: string;
-      secretFile?: string;
-    };
-    if (typedInput.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-      return "LINE_CHANNEL_ACCESS_TOKEN can only be used for the default account.";
-    }
-    if (!typedInput.useEnv && !typedInput.channelAccessToken && !typedInput.tokenFile) {
-      return "LINE requires channelAccessToken or --token-file (or --use-env).";
-    }
-    if (!typedInput.useEnv && !typedInput.channelSecret && !typedInput.secretFile) {
-      return "LINE requires channelSecret or --secret-file (or --use-env).";
-    }
-    return null;
-  },
+  validateInput: createZodSetupInputValidator({
+    schema: LineSetupInputSchema,
+    validate: ({ accountId, input }) => {
+      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
+        return "LINE_CHANNEL_ACCESS_TOKEN can only be used for the default account.";
+      }
+      if (!input.useEnv && !input.channelAccessToken && !input.tokenFile) {
+        return "LINE requires channelAccessToken or --token-file (or --use-env).";
+      }
+      if (!input.useEnv && !input.channelSecret && !input.secretFile) {
+        return "LINE requires channelSecret or --secret-file (or --use-env).";
+      }
+      return null;
+    },
+  }),
   applyAccountConfig: ({ cfg, accountId, input }) => {
     const typedInput = input as {
       useEnv?: boolean;
