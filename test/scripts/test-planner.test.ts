@@ -421,6 +421,19 @@ describe("resolveVitestFsModuleCachePath", () => {
     ).toBe("/repo/node_modules/.experimental-vitest-cache/unit-fast-1");
   });
 
+  it("honors the requested Windows platform when building the cache path", () => {
+    expect(
+      resolveVitestFsModuleCachePath({
+        cwd: "/repo",
+        env: {
+          OPENCLAW_VITEST_FS_MODULE_CACHE: "1",
+        },
+        platform: "win32",
+        unitId: "unit-fast-1",
+      }),
+    ).toBe("\\repo\\node_modules\\.experimental-vitest-cache\\unit-fast-1");
+  });
+
   it("respects an explicit cache path override", () => {
     expect(
       resolveVitestFsModuleCachePath({
