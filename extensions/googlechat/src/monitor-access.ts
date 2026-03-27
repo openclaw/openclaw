@@ -271,10 +271,13 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   const dmPolicy = account.config.dm?.policy ?? "pairing";
   const configAllowFrom = (account.config.dm?.allowFrom ?? []).map((v) => String(v));
   const normalizedGroupUsers = groupUsers.map((v) => String(v));
-  const senderGroupPolicy = resolveSenderScopedGroupPolicy({
-    groupPolicy,
-    groupAllowFrom: normalizedGroupUsers,
-  });
+  const senderGroupPolicy =
+    groupConfigResolved.allowlistConfigured && normalizedGroupUsers.length === 0
+      ? groupPolicy
+      : resolveSenderScopedGroupPolicy({
+          groupPolicy,
+          groupAllowFrom: normalizedGroupUsers,
+        });
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const storeAllowFrom =
     !isGroup && dmPolicy !== "allowlist" && (dmPolicy !== "open" || shouldComputeAuth)
