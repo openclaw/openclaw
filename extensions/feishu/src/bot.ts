@@ -324,6 +324,17 @@ export async function handleFeishuMessage(params: {
     `feishu[${account.accountId}]: received message from ${ctx.senderOpenId} in ${ctx.chatId} (${ctx.chatType})`,
   );
 
+  // Immediately acknowledge receipt by adding a Typing reaction to the user's message
+  try {
+    await createFeishuClient(account).im.messageReaction.create({
+      path: { message_id: messageId },
+      data: { reaction_type: { emoji_type: "Typing" } },
+    });
+    log(`feishu[${account.accountId}]: ack reaction (Typing) added to ${messageId}`);
+  } catch (ackErr) {
+    log(`feishu[${account.accountId}]: ack reaction failed: ${String(ackErr)}`);
+  }
+
   // Log mention targets if detected
   if (ctx.mentionTargets && ctx.mentionTargets.length > 0) {
     const names = ctx.mentionTargets.map((t) => t.name).join(", ");
