@@ -2,28 +2,28 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, vi } from "vitest";
-import {
-  __testing as discordThreadBindingTesting,
-  createThreadBindingManager as createDiscordThreadBindingManager,
-} from "../../../../extensions/discord/runtime-api.js";
-import { createFeishuThreadBindingManager } from "../../../../extensions/feishu/api.js";
-import {
-  resolveDefaultLineAccountId,
-  resolveLineAccount,
-  listLineAccountIds,
-} from "../../../../extensions/line/runtime-api.js";
-import {
-  createMatrixThreadBindingManager,
-  resetMatrixThreadBindingsForTests,
-} from "../../../../extensions/matrix/api.js";
-import { setMatrixRuntime } from "../../../../extensions/matrix/index.js";
-import { createTelegramThreadBindingManager } from "../../../../extensions/telegram/runtime-api.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   getSessionBindingService,
   type SessionBindingCapabilities,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
+import {
+  discordThreadBindingTesting,
+  createDiscordThreadBindingManager,
+} from "../../../plugin-sdk/discord.js";
+import { createFeishuThreadBindingManager } from "../../../plugin-sdk/feishu.js";
+import {
+  listLineAccountIds,
+  resolveDefaultLineAccountId,
+  resolveLineAccount,
+} from "../../../plugin-sdk/line.js";
+import {
+  createMatrixThreadBindingManager,
+  resetMatrixThreadBindingsForTests,
+  setMatrixRuntime,
+} from "../../../plugin-sdk/matrix.js";
+import { createTelegramThreadBindingManager } from "../../../plugin-sdk/telegram-runtime.js";
 import {
   bundledChannelPlugins,
   bundledChannelRuntimeSetters,
