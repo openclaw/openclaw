@@ -299,7 +299,7 @@ export function createOpenAIWebSocketStreamFn(
     const run = async () => {
       const transport = resolveWsTransport(options);
       if (transport === "sse") {
-        return fallbackToHttp(model, context, options, eventStream, opts.signal);
+        return fallbackToHttp(model, context, options, eventStream, opts.signal, apiKey);
       }
 
       // ── 1. Get or create session state ──────────────────────────────────
@@ -339,7 +339,7 @@ export function createOpenAIWebSocketStreamFn(
             `[ws-stream] WebSocket connect failed for session=${sessionId}; falling back to HTTP. error=${String(connErr)}`,
           );
           // Fall back to HTTP immediately
-          return fallbackToHttp(model, context, options, eventStream, opts.signal);
+          return fallbackToHttp(model, context, options, eventStream, opts.signal, apiKey);
         }
       }
 
@@ -356,7 +356,7 @@ export function createOpenAIWebSocketStreamFn(
           /* ignore */
         }
         wsRegistry.delete(sessionId);
-        return fallbackToHttp(model, context, options, eventStream, opts.signal);
+        return fallbackToHttp(model, context, options, eventStream, opts.signal, apiKey);
       }
 
       const signal = opts.signal ?? (options as WsOptions | undefined)?.signal;
@@ -401,7 +401,7 @@ export function createOpenAIWebSocketStreamFn(
             log.warn(
               `[ws-stream] reconnect after warm-up failed for session=${sessionId}; falling back to HTTP. error=${String(reconnectErr)}`,
             );
-            return fallbackToHttp(model, context, options, eventStream, opts.signal);
+            return fallbackToHttp(model, context, options, eventStream, opts.signal, apiKey);
           }
         }
       }
@@ -506,7 +506,7 @@ export function createOpenAIWebSocketStreamFn(
           /* ignore */
         }
         wsRegistry.delete(sessionId);
-        return fallbackToHttp(model, context, options, eventStream, opts.signal);
+        return fallbackToHttp(model, context, options, eventStream, opts.signal, apiKey);
       }
 
       eventStream.push({
@@ -618,8 +618,13 @@ async function fallbackToHttp(
   options: Parameters<StreamFn>[2],
   eventStream: AssistantMessageEventStreamLike,
   signal?: AbortSignal,
+  apiKey?: string,
 ): Promise<void> {
-  const mergedOptions = signal ? { ...options, signal } : options;
+  const mergedOptions = {
+    ...options,
+    ...(signal ? { signal } : {}),
+    apiKey: (options as { apiKey?: string } | undefined)?.apiKey ?? apiKey,
+  };
   const httpStream = openAIWsStreamDeps.streamSimple(model, context, mergedOptions);
   for await (const event of httpStream) {
     eventStream.push(event);

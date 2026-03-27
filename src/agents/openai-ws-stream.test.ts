@@ -172,9 +172,9 @@ const { MockManager } = vi.hoisted(() => {
 });
 
 // Track if streamSimple (HTTP fallback) was called
-const streamSimpleCalls: Array<{ model: unknown; context: unknown }> = [];
-const mockStreamSimple = vi.fn((model: unknown, context: unknown) => {
-  streamSimpleCalls.push({ model, context });
+const streamSimpleCalls: Array<{ model: unknown; context: unknown; options: unknown }> = [];
+const mockStreamSimple = vi.fn((model: unknown, context: unknown, options: unknown) => {
+  streamSimpleCalls.push({ model, context, options });
   const stream = createAssistantMessageEventStream();
   queueMicrotask(() => {
     const msg = makeFakeAssistantMessage("http fallback response");
@@ -1273,12 +1273,34 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
       // streamSimple was called as part of HTTP fallback
       expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
+      expect(
+        streamSimpleCalls.at(-1)?.options as { apiKey?: string } | undefined,
+      ).toMatchObject({
+        apiKey: "sk-test",
+      });
 
       // manager.close() must be called to cancel background reconnect attempts
       expect(MockManager.lastInstance!.closeCallCount).toBeGreaterThanOrEqual(1);
     } finally {
       MockManager.globalConnectShouldFail = false;
     }
+  });
+
+  it("forwards the API key when transport is forced to sse", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-sse");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { transport: "sse" } as Parameters<typeof streamFn>[2],
+    );
+
+    for await (const _ of await resolveStream(stream)) {
+      /* consume */
+    }
+
+    expect(streamSimpleCalls.at(-1)?.options as { apiKey?: string } | undefined).toMatchObject({
+      apiKey: "sk-test",
+    });
   });
 
   it("tracks previous_response_id across turns (incremental send)", async () => {
@@ -1523,6 +1545,11 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(hasWsSession(sessionId)).toBe(false);
     // HTTP fallback invoked
     expect(streamSimpleCalls.length).toBeGreaterThan(callsBefore);
+    expect(
+      streamSimpleCalls.at(-1)?.options as { apiKey?: string } | undefined,
+    ).toMatchObject({
+      apiKey: "sk-test",
+    });
   });
 
   it("forwards temperature and maxTokens to response.create", async () => {
