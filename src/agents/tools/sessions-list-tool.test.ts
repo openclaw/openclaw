@@ -73,4 +73,75 @@ describe("sessions-list-tool", () => {
       threadId: "thread-1",
     });
   });
+
+  it("keeps live session setting metadata in sessions_list results", async () => {
+    const gatewayCallMock = vi.fn(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            {
+              key: "main",
+              kind: "direct",
+              sessionId: "sess-main",
+              thinkingLevel: "high",
+              fastMode: true,
+              verboseLevel: "on",
+              reasoningLevel: "deep",
+              elevatedLevel: "on",
+              responseUsage: "full",
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    vi.doMock("../../gateway/call.js", () => ({
+      callGateway: gatewayCallMock,
+    }));
+    vi.doMock("./sessions-helpers.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./sessions-helpers.js")>("./sessions-helpers.js");
+      return {
+        ...actual,
+        createAgentToAgentPolicy: () => ({}),
+        createSessionVisibilityGuard: async () => ({
+          check: () => ({ allowed: true }),
+        }),
+        resolveEffectiveSessionToolsVisibility: () => "all",
+        resolveSandboxedSessionToolContext: () => ({
+          mainKey: "main",
+          alias: "main",
+          requesterInternalKey: undefined,
+          restrictToSpawned: false,
+        }),
+      };
+    });
+
+    const { createSessionsListTool } = await import("./sessions-list-tool.js");
+    const tool = createSessionsListTool({ config: {} as never });
+
+    const result = await tool.execute("call-2", {});
+    const details = result.details as {
+      sessions?: Array<{
+        thinkingLevel?: string;
+        fastMode?: boolean;
+        verboseLevel?: string;
+        reasoningLevel?: string;
+        elevatedLevel?: string;
+        responseUsage?: string;
+      }>;
+    };
+
+    expect(details.sessions?.[0]).toMatchObject({
+      thinkingLevel: "high",
+      fastMode: true,
+      verboseLevel: "on",
+      reasoningLevel: "deep",
+      elevatedLevel: "on",
+      responseUsage: "full",
+    });
+  });
 });
