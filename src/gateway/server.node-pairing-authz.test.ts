@@ -54,10 +54,10 @@ async function connectNodeClientWithPairing(params: {
 }
 
 describe("gateway node pairing authorization", () => {
-  test("rejects approving node commands above the caller session scopes", async () => {
+  test("requires operator.write before node pairing approvals", async () => {
     const started = await startServerWithClient("secret");
     const approver = await issueOperatorToken({
-      name: "node-pair-approve-attacker",
+      name: "node-pair-approve-pairing-only",
       approvedScopes: ["operator.admin"],
       tokenScopes: ["operator.pairing"],
       clientId: GATEWAY_CLIENT_NAMES.TEST,
@@ -78,6 +78,47 @@ describe("gateway node pairing authorization", () => {
         deviceToken: approver.token,
         deviceIdentityPath: approver.identityPath,
         scopes: ["operator.pairing"],
+      });
+
+      const approve = await rpcReq(pairingWs, "node.pair.approve", {
+        requestId: request.request.requestId,
+      });
+      expect(approve.ok).toBe(false);
+      expect(approve.error?.message).toBe("missing scope: operator.write");
+
+      await expect(getPairedNode("node-approve-target")).resolves.toBeNull();
+    } finally {
+      pairingWs?.close();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("rejects approving exec-capable node commands above the caller session scopes", async () => {
+    const started = await startServerWithClient("secret");
+    const approver = await issueOperatorToken({
+      name: "node-pair-approve-attacker",
+      approvedScopes: ["operator.admin"],
+      tokenScopes: ["operator.write"],
+      clientId: GATEWAY_CLIENT_NAMES.TEST,
+      clientMode: GATEWAY_CLIENT_MODES.TEST,
+    });
+
+    let pairingWs: WebSocket | undefined;
+    try {
+      const request = await requestNodePairing({
+        nodeId: "node-approve-target",
+        platform: "darwin",
+        commands: ["system.run"],
+      });
+
+      pairingWs = await openTrackedWs(started.port);
+      await connectOk(pairingWs, {
+        skipDefaultAuth: true,
+        deviceToken: approver.token,
+        deviceIdentityPath: approver.identityPath,
+        scopes: ["operator.write"],
       });
 
       const approve = await rpcReq(pairingWs, "node.pair.approve", {
@@ -158,6 +199,65 @@ describe("gateway node pairing authorization", () => {
       });
       expect(invoke.ok).toBe(false);
       expect(invoke.error?.message ?? "").toContain("node command not allowed");
+    } finally {
+      controlWs?.close();
+      await firstClient?.stopAndWait();
+      await nodeClient?.stopAndWait();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("treats paired nodes without stored commands as having no approved commands", async () => {
+    const started = await startServerWithClient("secret");
+    const pairedNode = loadDeviceIdentity("node-command-empty");
+
+    let controlWs: WebSocket | undefined;
+    let firstClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    let nodeClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    try {
+      controlWs = await openTrackedWs(started.port);
+      await connectOk(controlWs, { token: "secret" });
+
+      firstClient = await connectNodeClientWithPairing({
+        port: started.port,
+        deviceIdentity: pairedNode.identity,
+        commands: ["canvas.snapshot"],
+      });
+      await firstClient.stopAndWait();
+
+      const request = await requestNodePairing({
+        nodeId: pairedNode.identity.deviceId,
+        platform: "darwin",
+      });
+      await approveNodePairing(request.request.requestId);
+
+      nodeClient = await connectNodeClientWithPairing({
+        port: started.port,
+        deviceIdentity: pairedNode.identity,
+        commands: ["canvas.snapshot", "system.run"],
+      });
+
+      const deadline = Date.now() + 2_000;
+      let lastNodes: Array<{ nodeId: string; connected?: boolean; commands?: string[] }> = [];
+      while (Date.now() < deadline) {
+        const list = await rpcReq<{
+          nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
+        }>(controlWs, "node.list", {});
+        lastNodes = list.payload?.nodes ?? [];
+        const node = lastNodes.find(
+          (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
+        );
+        if ((node?.commands?.length ?? 0) === 0) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      const connectedNode = lastNodes.find(
+        (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
+      );
+      expect(connectedNode?.commands ?? [], JSON.stringify(lastNodes)).toEqual([]);
     } finally {
       controlWs?.close();
       await firstClient?.stopAndWait();
