@@ -187,21 +187,19 @@ const CronPatchObjectSchema = Type.Optional(
       agentId: Type.Optional(Type.String({ description: "Agent id" })),
       sessionKey: Type.Optional(Type.String({ description: "Explicit session key" })),
       failureAlert: Type.Optional(
-        Type.Union([
-          Type.Literal(false),
-          Type.Object(
-            {
-              enabled: Type.Optional(Type.Boolean()),
-              after: Type.Optional(Type.Number({ description: "Failures before alerting" })),
-              cooldownMs: Type.Optional(
-                Type.Number({ description: "Cooldown between alerts in ms" }),
-              ),
-              mode: optionalStringEnum(["announce", "webhook"] as const),
-              accountId: Type.Optional(Type.String()),
-            },
-            { additionalProperties: true },
-          ),
-        ]),
+        Type.Object(
+          {
+            after: Type.Optional(Type.Number({ description: "Failures before alerting" })),
+            channel: Type.Optional(Type.String({ description: "Alert channel" })),
+            to: Type.Optional(Type.String({ description: "Alert target" })),
+            cooldownMs: Type.Optional(
+              Type.Number({ description: "Cooldown between alerts in ms" }),
+            ),
+            mode: optionalStringEnum(["announce", "webhook"] as const),
+            accountId: Type.Optional(Type.String()),
+          },
+          { additionalProperties: true },
+        ),
       ),
     },
     { additionalProperties: true },
