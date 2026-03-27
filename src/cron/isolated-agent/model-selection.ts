@@ -126,12 +126,16 @@ export async function resolveCronModelSelection(
   if (!modelOverride && !hooksGmailModelApplied) {
     const sessionModelOverride = params.sessionEntry.modelOverride?.trim();
     if (sessionModelOverride) {
-      const sessionProviderOverride =
-        params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
+      // If the model already includes a provider prefix (e.g. "anthropic/claude-sonnet-4-6"),
+      // use it directly without prepending the session provider. Otherwise prepend the
+      // session provider (or default) so it resolves correctly.
+      const rawModelRef = sessionModelOverride.includes("/")
+        ? sessionModelOverride
+        : `${params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider}/${sessionModelOverride}`;
       const resolvedSessionOverride = resolveAllowedModelRef({
         cfg: params.cfgWithAgentDefaults,
         catalog: await loadCatalogOnce(),
-        raw: `${sessionProviderOverride}/${sessionModelOverride}`,
+        raw: rawModelRef,
         defaultProvider: resolvedDefault.provider,
         defaultModel: resolvedDefault.model,
       });
