@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
+import { streamSimple, type ImageContent } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -274,6 +274,193 @@ function summarizeSessionContext(messages: AgentMessage[]): {
     totalTextChars,
     totalImageBlocks,
     maxMessageTextChars,
+  };
+}
+
+const USER_ATTACHED_IMAGE_PLACEHOLDER = "[user attached an image]";
+
+function stringifyUserMessageContentForPrompt(message: AgentMessage): string {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  const chunks: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; text?: unknown };
+    if (typeof typedBlock.text === "string") {
+      const trimmed = typedBlock.text.trim();
+      if (trimmed.length > 0) {
+        chunks.push(trimmed);
+      }
+      continue;
+    }
+    if (typedBlock.type === "image") {
+      chunks.push(USER_ATTACHED_IMAGE_PLACEHOLDER);
+    }
+  }
+
+  return chunks.join("\n").trim();
+}
+
+function extractUserMessageImages(message: AgentMessage): ImageContent[] {
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.filter((block): block is ImageContent => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const typedBlock = block as { type?: unknown; data?: unknown; mimeType?: unknown };
+    return (
+      typedBlock.type === "image" &&
+      typeof typedBlock.data === "string" &&
+      typeof typedBlock.mimeType === "string"
+    );
+  });
+}
+
+function dedupeImageContents(images: ImageContent[]): ImageContent[] {
+  const seen = new Set<string>();
+  const deduped: ImageContent[] = [];
+  for (const image of images) {
+    const key = `${image.mimeType}\u0000${image.data}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(image);
+  }
+  return deduped;
+}
+
+function normalizeRetryPromptEchoText(text: string | undefined): string {
+  if (!text) {
+    return "";
+  }
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && line !== USER_ATTACHED_IMAGE_PLACEHOLDER)
+    .join("\n")
+    .trim();
+}
+
+export function mergeRecoveredPromptImages(
+  currentImages: ImageContent[] | undefined,
+  recoveredImages: ImageContent[],
+): ImageContent[] | undefined {
+  if (recoveredImages.length === 0) {
+    return currentImages;
+  }
+  return dedupeImageContents([...recoveredImages, ...(currentImages ?? [])]);
+}
+
+type SessionLeafEntryLike = {
+  type?: unknown;
+  parentId?: string | null;
+  message?: AgentMessage;
+};
+
+type OrphanRecoverySessionManager = {
+  getLeafEntry: () => SessionLeafEntryLike | undefined;
+  branch: (parentId: string) => void;
+  resetLeaf: () => void;
+  buildSessionContext: () => { messages: AgentMessage[] };
+};
+
+export function recoverOrphanedUserMessagesForPrompt(params: {
+  sessionManager: OrphanRecoverySessionManager;
+  prompt: string;
+  rawPrompt?: string;
+  replaceMessages: (messages: AgentMessage[]) => void;
+}): {
+  prompt: string;
+  recoveredCount: number;
+  mergedCount: number;
+  recoveredImages: ImageContent[];
+} {
+  const orphanedUserCarryForward: string[] = [];
+  const recoveredImageGroups: ImageContent[][] = [];
+  let orphanedUserCount = 0;
+  let leafEntry = params.sessionManager.getLeafEntry();
+  while (leafEntry?.type === "message" && leafEntry.message?.role === "user") {
+    orphanedUserCount++;
+    const carryForwardText = stringifyUserMessageContentForPrompt(leafEntry.message);
+    const leafImages = extractUserMessageImages(leafEntry.message);
+    if (leafImages.length > 0) {
+      recoveredImageGroups.push(leafImages);
+    }
+    if (carryForwardText.length > 0) {
+      orphanedUserCarryForward.push(carryForwardText);
+    }
+    if (leafEntry.parentId) {
+      params.sessionManager.branch(leafEntry.parentId);
+    } else {
+      params.sessionManager.resetLeaf();
+    }
+    leafEntry = params.sessionManager.getLeafEntry();
+  }
+  if (orphanedUserCount === 0) {
+    return { prompt: params.prompt, recoveredCount: 0, mergedCount: 0, recoveredImages: [] };
+  }
+  const chronologicalRecoveredImages = dedupeImageContents(
+    recoveredImageGroups.toReversed().flat(),
+  );
+
+  const sessionContext = params.sessionManager.buildSessionContext();
+  params.replaceMessages(sessionContext.messages);
+  if (orphanedUserCarryForward.length === 0) {
+    return {
+      prompt: params.prompt,
+      recoveredCount: orphanedUserCount,
+      mergedCount: 0,
+      recoveredImages: chronologicalRecoveredImages,
+    };
+  }
+
+  const normalizedPromptCandidates = new Set<string>();
+  const normalizedPrompt = normalizeRetryPromptEchoText(params.prompt);
+  if (normalizedPrompt) {
+    normalizedPromptCandidates.add(normalizedPrompt);
+  }
+  const normalizedRawPrompt = normalizeRetryPromptEchoText(params.rawPrompt);
+  if (normalizedRawPrompt) {
+    normalizedPromptCandidates.add(normalizedRawPrompt);
+  }
+  const carryForwardEntries = orphanedUserCarryForward
+    .toReversed()
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  if (normalizedPromptCandidates.size > 0) {
+    const newestRecoveredEntry = normalizeRetryPromptEchoText(orphanedUserCarryForward[0]);
+    // Only strip a prompt echo when the newest orphaned turn is the same message
+    // the user is currently retrying. Older matching turns are real history.
+    if (newestRecoveredEntry && normalizedPromptCandidates.has(newestRecoveredEntry)) {
+      carryForwardEntries.pop();
+    }
+  }
+  if (carryForwardEntries.length === 0) {
+    return {
+      prompt: params.prompt,
+      recoveredCount: orphanedUserCount,
+      mergedCount: 0,
+      recoveredImages: chronologicalRecoveredImages,
+    };
+  }
+  const carryForwardPrompt = carryForwardEntries.join("\n\n");
+  return {
+    prompt: `${carryForwardPrompt}\n\n${params.prompt}`,
+    recoveredCount: orphanedUserCount,
+    mergedCount: carryForwardEntries.length,
+    recoveredImages: chronologicalRecoveredImages,
   };
 }
 
@@ -1317,7 +1504,7 @@ export async function runEmbeddedAttempt(
 
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
-      const prePromptMessageCount = activeSession.messages.length;
+      let prePromptMessageCount = activeSession.messages.length;
       try {
         const promptStartedAt = Date.now();
 
@@ -1383,19 +1570,21 @@ export async function runEmbeddedAttempt(
           messages: activeSession.messages,
         });
 
-        // Repair orphaned trailing user messages so new prompts don't violate role ordering.
-        const leafEntry = sessionManager.getLeafEntry();
-        if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
-          if (leafEntry.parentId) {
-            sessionManager.branch(leafEntry.parentId);
-          } else {
-            sessionManager.resetLeaf();
-          }
-          const sessionContext = sessionManager.buildSessionContext();
-          activeSession.agent.replaceMessages(sessionContext.messages);
+        // Preserve orphaned trailing user content by carrying it into the next prompt.
+        const orphanRecovery = recoverOrphanedUserMessagesForPrompt({
+          sessionManager,
+          prompt: effectivePrompt,
+          rawPrompt: params.prompt,
+          replaceMessages: (messages) => activeSession.agent.replaceMessages(messages),
+        });
+        effectivePrompt = orphanRecovery.prompt;
+        const recoveredPromptImages = orphanRecovery.recoveredImages;
+        prePromptMessageCount = activeSession.messages.length;
+        if (orphanRecovery.recoveredCount > 0) {
           log.warn(
-            `Removed orphaned user message to prevent consecutive user turns. ` +
-              `runId=${params.runId} sessionId=${params.sessionId}`,
+            `Recovered orphaned user message(s) by carrying context forward. ` +
+              `runId=${params.runId} sessionId=${params.sessionId} ` +
+              `recovered=${orphanRecovery.recoveredCount} merged=${orphanRecovery.mergedCount}`,
           );
         }
         const transcriptLeafId =
@@ -1415,7 +1604,7 @@ export async function runEmbeddedAttempt(
             prompt: effectivePrompt,
             workspaceDir: effectiveWorkspace,
             model: params.model,
-            existingImages: params.images,
+            existingImages: mergeRecoveredPromptImages(params.images, recoveredPromptImages),
             maxBytes: MAX_IMAGE_BYTES,
             maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
             workspaceOnly: effectiveFsWorkspaceOnly,

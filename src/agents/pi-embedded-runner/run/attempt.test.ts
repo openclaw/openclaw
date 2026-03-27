@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -15,9 +16,11 @@ import {
   buildAfterTurnRuntimeContext,
   buildSessionsYieldContextMessage,
   composeSystemPromptWithHookContext,
+  mergeRecoveredPromptImages,
   persistSessionsYieldContextMessage,
   prependSystemPromptAddition,
   queueSessionsYieldInterruptMessage,
+  recoverOrphanedUserMessagesForPrompt,
   resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
@@ -384,6 +387,494 @@ describe("shouldInjectHeartbeatPrompt", () => {
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).not.toContain("HEARTBEAT_OK");
     expect(prompt).not.toContain("Read HEARTBEAT.md");
+  });
+});
+
+describe("recoverOrphanedUserMessagesForPrompt", () => {
+  type LeafEntry = {
+    id: string;
+    type: "message" | "custom";
+    parentId?: string | null;
+    message?: AgentMessage;
+  };
+
+  function agentMessage(value: Record<string, unknown>): AgentMessage {
+    return value as unknown as AgentMessage;
+  }
+
+  function createSessionManager(entries: LeafEntry[], leafId: string | null) {
+    const byId = new Map(entries.map((entry) => [entry.id, entry]));
+    let currentLeafId = leafId;
+
+    return {
+      getLeafEntry: () => (currentLeafId ? byId.get(currentLeafId) : undefined),
+      branch: (parentId: string) => {
+        currentLeafId = parentId;
+      },
+      resetLeaf: () => {
+        currentLeafId = null;
+      },
+      buildSessionContext: () => {
+        const messages: AgentMessage[] = [];
+        const seen = new Set<string>();
+        let cursor = currentLeafId;
+        while (cursor && !seen.has(cursor)) {
+          seen.add(cursor);
+          const entry = byId.get(cursor);
+          if (!entry) {
+            break;
+          }
+          if (entry.type === "message" && entry.message) {
+            messages.push(entry.message);
+          }
+          cursor = entry.parentId ?? null;
+        }
+        messages.reverse();
+        return { messages };
+      },
+    };
+  }
+
+  it("merges trailing orphaned users into the current prompt in order", () => {
+    const sessionManager = createSessionManager(
+      [
+        {
+          id: "assistant",
+          type: "message",
+          message: agentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "seed assistant" }],
+          }),
+        },
+        {
+          id: "u1",
+          type: "message",
+          parentId: "assistant",
+          message: agentMessage({
+            role: "user",
+            content: [{ type: "text", text: "first orphaned message" }],
+          }),
+        },
+        {
+          id: "u2",
+          type: "message",
+          parentId: "u1",
+          message: agentMessage({
+            role: "user",
+            content: [{ type: "text", text: "second orphaned message" }],
+          }),
+        },
+      ],
+      "u2",
+    );
+
+    const replaceMessages = vi.fn();
+    const result = recoverOrphanedUserMessagesForPrompt({
+      sessionManager,
+      prompt: "hello",
+      replaceMessages,
+    });
+
+    expect(result.recoveredCount).toBe(2);
+    expect(result.mergedCount).toBe(2);
+    expect(result.prompt).toContain("first orphaned message");
+    expect(result.prompt).toContain("second orphaned message");
+    expect(result.prompt.indexOf("first orphaned message")).toBeLessThan(
+      result.prompt.indexOf("second orphaned message"),
+    );
+    expect(result.prompt.indexOf("second orphaned message")).toBeLessThan(
+      result.prompt.indexOf("hello"),
+    );
+    expect(replaceMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds a placeholder for orphaned image-only user content", () => {
+    const sessionManager = createSessionManager(
+      [
+        {
+          id: "assistant",
+          type: "message",
+          message: agentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "seed assistant" }],
+          }),
+        },
+        {
+          id: "u1",
+          type: "message",
+          parentId: "assistant",
+          message: agentMessage({
+            role: "user",
+            content: [{ type: "image", data: "abc", mimeType: "image/png" }],
+          }),
+        },
+      ],
+      "u1",
+    );
+
+    const replaceMessages = vi.fn();
+    const result = recoverOrphanedUserMessagesForPrompt({
+      sessionManager,
+      prompt: "hello",
+      replaceMessages,
+    });
+
+    expect(result.recoveredCount).toBe(1);
+    expect(result.mergedCount).toBe(1);
+    expect(result.prompt).toContain("[user attached an image]");
+    expect(result.recoveredImages).toEqual([{ type: "image", data: "abc", mimeType: "image/png" }]);
+    expect(replaceMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns recovered images in chronological order without duplicates", () => {
+    const sessionManager = createSessionManager(
+      [
+        {
+          id: "assistant",
+          type: "message",
+          message: agentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "seed assistant" }],
+          }),
+        },
+        {
+          id: "u1",
+          type: "message",
+          parentId: "assistant",
+          message: agentMessage({
+            role: "user",
+            content: [{ type: "image", data: "older", mimeType: "image/png" }],
+          }),
+        },
+        {
+          id: "u2",
+          type: "message",
+          parentId: "u1",
+          message: agentMessage({
+            role: "user",
+            content: [
+              { type: "image", data: "newer", mimeType: "image/png" },
+              { type: "image", data: "older", mimeType: "image/png" },
+            ],
+          }),
+        },
+      ],
+      "u2",
+    );
+
+    const replaceMessages = vi.fn();
+    const result = recoverOrphanedUserMessagesForPrompt({
+      sessionManager,
+      prompt: "retry",
+      replaceMessages,
+    });
+
+    expect(result.recoveredImages).toEqual([
+      { type: "image", data: "older", mimeType: "image/png" },
+      { type: "image", data: "newer", mimeType: "image/png" },
+    ]);
+  });
+
+  it("preserves image order within each recovered user turn", () => {
+    const sessionManager = createSessionManager(
+      [
+        {
+          id: "assistant",
+          type: "message",
+          message: agentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "seed assistant" }],
+          }),
+        },
+        {
+          id: "u1",
+          type: "message",
+          parentId: "assistant",
+          message: agentMessage({
+            role: "user",
+            content: [
+              { type: "image", data: "img-1", mimeType: "image/png" },
+              { type: "image", data: "img-2", mimeType: "image/png" },
+            ],
+          }),
+        },
+      ],
+      "u1",
+    );
+
+    const result = recoverOrphanedUserMessagesForPrompt({
+      sessionManager,
+      prompt: "retry",
+      replaceMessages: vi.fn(),
+    });
+
+    expect(result.recoveredImages).toEqual([
+      { type: "image", data: "img-1", mimeType: "image/png" },
+      { type: "image", data: "img-2", mimeType: "image/png" },
+    ]);
+  });
+
+  it("treats image placeholder retries as the same newest orphaned prompt", () => {
+    const sessionManager = createSessionManager(
+      [
+        {
+          id: "assistant",
+          type: "message",
+          message: agentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "seed assistant" }],
+          }),
+        },
+        {
+          id: "u1",
+          type: "message",
+          parentId: "assistant",
+          message: agentMessage({
+            role: "user",
+            content: [
+              { type: "text", text: "describe this" },
+              { type: "image", data: "img-1", mimeType: "image/png" },
+            ],
+          }),
+        },
+      ],
+      "u1",
+    );
+
+    const result = recoverOrphanedUserMessagesForPrompt({
+      sessionManager,
+      prompt: "describe this",
+      replaceMessages: vi.fn(),
+    });
+
+    expect(result).toEqual({
+      prompt: "describe this",
+      recoveredCount: 1,
+      mergedCount: 0,
+      recoveredImages: [{ type: "image", data: "img-1", mimeType: "image/png" }],
+    });
+  });
+
+  it("prepends recovered prompt images ahead of current retry images", () => {
+    const result = mergeRecoveredPromptImages(
+      [{ type: "image", data: "current", mimeType: "image/png" }],
+      [
+        { type: "image", data: "older", mimeType: "image/png" },
+        { type: "image", data: "current", mimeType: "image/png" },
+      ],
+    );
+
+    expect(result).toEqual([
+      { type: "image", data: "older", mimeType: "image/png" },
+      { type: "image", data: "current", mimeType: "image/png" },
+    ]);
+  });
+
+  it("returns prompt unchanged when no orphaned user leaf exists", () => {
+    const sessionManager = createSessionManager(
+      [
+        {
+          id: "assistant",
+          type: "message",
+          message: agentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "seed assistant" }],
+          }),
+        },
+      ],
+      "assistant",
+    );
+
+    const replaceMessages = vi.fn();
+    const result = recoverOrphanedUserMessagesForPrompt({
+      sessionManager,
+      prompt: "hello",
+      replaceMessages,
+    });
+
+    expect(result).toEqual({
+      prompt: "hello",
+      recoveredCount: 0,
+      mergedCount: 0,
+      recoveredImages: [],
+    });
+    expect(replaceMessages).not.toHaveBeenCalled();
+  });
+
+  it("does not duplicate prompt when orphaned carry-forward matches current prompt", () => {
+    const sessionManager = createSessionManager(
+      [
+        {
+          id: "assistant",
+          type: "message",
+          message: agentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "seed assistant" }],
+          }),
+        },
+        {
+          id: "u1",
+          type: "message",
+          parentId: "assistant",
+          message: agentMessage({
+            role: "user",
+            content: [{ type: "text", text: "retry me" }],
+          }),
+        },
+      ],
+      "u1",
+    );
+
+    const replaceMessages = vi.fn();
+    const result = recoverOrphanedUserMessagesForPrompt({
+      sessionManager,
+      prompt: "retry me",
+      replaceMessages,
+    });
+
+    expect(result).toEqual({
+      prompt: "retry me",
+      recoveredCount: 1,
+      mergedCount: 0,
+      recoveredImages: [],
+    });
+    expect(replaceMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves repeated orphaned turns when multiple entries match current prompt", () => {
+    const sessionManager = createSessionManager(
+      [
+        {
+          id: "assistant",
+          type: "message",
+          message: agentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "seed assistant" }],
+          }),
+        },
+        {
+          id: "u1",
+          type: "message",
+          parentId: "assistant",
+          message: agentMessage({
+            role: "user",
+            content: [{ type: "text", text: "retry me" }],
+          }),
+        },
+        {
+          id: "u2",
+          type: "message",
+          parentId: "u1",
+          message: agentMessage({
+            role: "user",
+            content: [{ type: "text", text: "retry me" }],
+          }),
+        },
+      ],
+      "u2",
+    );
+
+    const replaceMessages = vi.fn();
+    const result = recoverOrphanedUserMessagesForPrompt({
+      sessionManager,
+      prompt: "retry me",
+      replaceMessages,
+    });
+
+    expect(result.recoveredCount).toBe(2);
+    expect(result.mergedCount).toBe(1);
+    expect(result.prompt).toBe("retry me\n\nretry me");
+    expect(replaceMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it("dedupes prompt echo against raw prompt when hooks prepend context", () => {
+    const sessionManager = createSessionManager(
+      [
+        {
+          id: "assistant",
+          type: "message",
+          message: agentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "seed assistant" }],
+          }),
+        },
+        {
+          id: "u1",
+          type: "message",
+          parentId: "assistant",
+          message: agentMessage({
+            role: "user",
+            content: [{ type: "text", text: "retry me" }],
+          }),
+        },
+      ],
+      "u1",
+    );
+
+    const replaceMessages = vi.fn();
+    const result = recoverOrphanedUserMessagesForPrompt({
+      sessionManager,
+      prompt: "[context from before_prompt_build]\n\nretry me",
+      rawPrompt: "retry me",
+      replaceMessages,
+    });
+
+    expect(result).toEqual({
+      prompt: "[context from before_prompt_build]\n\nretry me",
+      recoveredCount: 1,
+      mergedCount: 0,
+      recoveredImages: [],
+    });
+    expect(replaceMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps older matching orphaned turns when only the newest turn differs", () => {
+    const sessionManager = createSessionManager(
+      [
+        {
+          id: "assistant",
+          type: "message",
+          message: agentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "seed assistant" }],
+          }),
+        },
+        {
+          id: "u1",
+          type: "message",
+          parentId: "assistant",
+          message: agentMessage({
+            role: "user",
+            content: [{ type: "text", text: "retry me" }],
+          }),
+        },
+        {
+          id: "u2",
+          type: "message",
+          parentId: "u1",
+          message: agentMessage({
+            role: "user",
+            content: [{ type: "text", text: "latest orphan" }],
+          }),
+        },
+      ],
+      "u2",
+    );
+
+    const replaceMessages = vi.fn();
+    const result = recoverOrphanedUserMessagesForPrompt({
+      sessionManager,
+      prompt: "retry me",
+      replaceMessages,
+    });
+
+    expect(result).toEqual({
+      prompt: "retry me\n\nlatest orphan\n\nretry me",
+      recoveredCount: 2,
+      mergedCount: 2,
+      recoveredImages: [],
+    });
+    expect(replaceMessages).toHaveBeenCalledTimes(1);
   });
 });
 
