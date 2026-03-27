@@ -62,12 +62,10 @@ export async function loadSessions(
       params.limit = limit;
     }
     const res = await state.client.request<SessionsListResult | undefined>("sessions.list", params);
-    if (res) {
-      state.sessionsResult = res;
-    }
+    state.sessionsResult = res ?? null;
   } catch (err) {
+    state.sessionsResult = null;
     if (isMissingOperatorReadScopeError(err)) {
-      state.sessionsResult = null;
       state.sessionsError = formatMissingOperatorReadScopeMessage("sessions");
     } else {
       state.sessionsError = String(err);
