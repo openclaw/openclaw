@@ -2,17 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, vi } from "vitest";
-import {
-  __testing as discordThreadBindingTesting,
-  createThreadBindingManager as createDiscordThreadBindingManager,
-} from "../../../../extensions/discord/runtime-api.js";
-import { createFeishuThreadBindingManager } from "../../../../extensions/feishu/api.js";
-import {
-  createMatrixThreadBindingManager,
-  resetMatrixThreadBindingsForTests,
-} from "../../../../extensions/matrix/api.js";
-import { setMatrixRuntime } from "../../../../extensions/matrix/index.js";
-import { createTelegramThreadBindingManager } from "../../../../extensions/telegram/runtime-api.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   getSessionBindingService,
@@ -20,14 +9,25 @@ import {
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import {
+  discordThreadBindingTesting,
+  createDiscordThreadBindingManager,
+} from "../../../plugin-sdk/discord.js";
+import { createFeishuThreadBindingManager } from "../../../plugin-sdk/feishu.js";
+import {
+  listLineAccountIds,
   resolveDefaultLineAccountId,
   resolveLineAccount,
-  listLineAccountIds,
-} from "../../../line/accounts.js";
+} from "../../../plugin-sdk/line.js";
+import {
+  createMatrixThreadBindingManager,
+  resetMatrixThreadBindingsForTests,
+  setMatrixRuntime,
+} from "../../../plugin-sdk/matrix.js";
+import { createTelegramThreadBindingManager } from "../../../plugin-sdk/telegram-runtime.js";
 import {
   bundledChannelPlugins,
-  bundledChannelRuntimeSetters,
   requireBundledChannelPlugin,
+  setBundledChannelRuntime,
 } from "../bundled.js";
 import type { ChannelPlugin } from "../types.js";
 import {
@@ -177,7 +177,7 @@ const sendMessageMatrixMock = vi.hoisted(() =>
   })),
 );
 
-bundledChannelRuntimeSetters.setTelegramRuntime({
+setBundledChannelRuntime("telegram", {
   channel: {
     telegram: {
       messageActions: {
@@ -187,7 +187,7 @@ bundledChannelRuntimeSetters.setTelegramRuntime({
   },
 } as never);
 
-bundledChannelRuntimeSetters.setDiscordRuntime({
+setBundledChannelRuntime("discord", {
   channel: {
     discord: {
       messageActions: {
@@ -197,7 +197,7 @@ bundledChannelRuntimeSetters.setDiscordRuntime({
   },
 } as never);
 
-bundledChannelRuntimeSetters.setLineRuntime({
+setBundledChannelRuntime("line", {
   channel: {
     line: {
       listLineAccountIds,
@@ -281,6 +281,7 @@ export const actionContractRegistry: ActionsContractEntry[] = [
           "edit",
           "delete",
           "download-file",
+          "upload-file",
           "pin",
           "unpin",
           "list-pins",
@@ -310,6 +311,7 @@ export const actionContractRegistry: ActionsContractEntry[] = [
           "edit",
           "delete",
           "download-file",
+          "upload-file",
           "pin",
           "unpin",
           "list-pins",

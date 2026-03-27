@@ -1,3 +1,4 @@
+import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
@@ -56,6 +57,33 @@ const createManager = (calls: CallRecord[]) => {
   return { manager, endCall, processEvent };
 };
 
+function hasPort(value: unknown): value is { port: number | string } {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const maybeAddress = value as { port?: unknown };
+  return typeof maybeAddress.port === "number" || typeof maybeAddress.port === "string";
+}
+
+function requireBoundRequestUrl(server: VoiceCallWebhookServer, baseUrl: string) {
+  const address = (
+    server as unknown as { server?: { address?: () => unknown } }
+  ).server?.address?.();
+  if (!hasPort(address) || !address.port) {
+    throw new Error("voice webhook server did not expose a bound port");
+  }
+  const requestUrl = new URL(baseUrl);
+  requestUrl.port = String(address.port);
+  return requestUrl;
+}
+
+function expectWebhookUrl(url: string, expectedPath: string) {
+  const parsed = new URL(url);
+  expect(parsed.pathname).toBe(expectedPath);
+  expect(parsed.port).not.toBe("");
+  expect(parsed.port).not.toBe("0");
+}
+
 async function runStaleCallReaperCase(params: {
   callAgeMs: number;
   staleCallReaperSeconds: number;
@@ -79,17 +107,72 @@ async function runStaleCallReaperCase(params: {
 }
 
 async function postWebhookForm(server: VoiceCallWebhookServer, baseUrl: string, body: string) {
-  const address = (
-    server as unknown as { server?: { address?: () => unknown } }
-  ).server?.address?.();
-  const requestUrl = new URL(baseUrl);
-  if (address && typeof address === "object" && "port" in address && address.port) {
-    requestUrl.port = String(address.port);
-  }
+  const requestUrl = requireBoundRequestUrl(server, baseUrl);
   return await fetch(requestUrl.toString(), {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body,
+  });
+}
+
+async function postWebhookFormWithHeaders(
+  server: VoiceCallWebhookServer,
+  baseUrl: string,
+  body: string,
+  headers: Record<string, string>,
+) {
+  const requestUrl = requireBoundRequestUrl(server, baseUrl);
+  return await fetch(requestUrl.toString(), {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      ...headers,
+    },
+    body,
+  });
+}
+
+async function postWebhookFormWithHeadersResult(
+  server: VoiceCallWebhookServer,
+  baseUrl: string,
+  body: string,
+  headers: Record<string, string>,
+): Promise<
+  | { kind: "response"; statusCode: number; body: string }
+  | { kind: "error"; code: string | undefined }
+> {
+  const requestUrl = requireBoundRequestUrl(server, baseUrl);
+  return await new Promise((resolve) => {
+    const req = request(
+      {
+        hostname: requestUrl.hostname,
+        port: requestUrl.port,
+        path: requestUrl.pathname + requestUrl.search,
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          ...headers,
+        },
+      },
+      (res) => {
+        res.setEncoding("utf8");
+        let responseBody = "";
+        res.on("data", (chunk) => {
+          responseBody += chunk;
+        });
+        res.on("end", () => {
+          resolve({
+            kind: "response",
+            statusCode: res.statusCode ?? 0,
+            body: responseBody,
+          });
+        });
+      },
+    );
+    req.on("error", (error: NodeJS.ErrnoException) => {
+      resolve({ kind: "error", code: error.code });
+    });
+    req.end(body);
   });
 }
 
@@ -154,13 +237,7 @@ describe("VoiceCallWebhookServer path matching", () => {
 
     try {
       const baseUrl = await server.start();
-      const address = (
-        server as unknown as { server?: { address?: () => unknown } }
-      ).server?.address?.();
-      const requestUrl = new URL(baseUrl);
-      if (address && typeof address === "object" && "port" in address && address.port) {
-        requestUrl.port = String(address.port);
-      }
+      const requestUrl = requireBoundRequestUrl(server, baseUrl);
       requestUrl.pathname = "/voice/webhook-evil";
 
       const response = await fetch(requestUrl.toString(), {
@@ -245,11 +322,19 @@ describe("VoiceCallWebhookServer replay handling", () => {
 
       expect(response.status).toBe(200);
       expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
-      expect(parseWebhookEvent.mock.calls[0]?.[1]).toEqual({
+      const parseOptions = parseWebhookEvent.mock.calls[0]?.[1];
+      if (!parseOptions) {
+        throw new Error("webhook server did not pass verified parse options");
+      }
+      expect(parseOptions).toEqual({
         verifiedRequestKey: "verified:req:123",
       });
       expect(processEvent).toHaveBeenCalledTimes(1);
-      expect(processEvent.mock.calls[0]?.[0]?.dedupeKey).toBe("verified:req:123");
+      const firstEvent = processEvent.mock.calls[0]?.[0];
+      if (!firstEvent) {
+        throw new Error("webhook server did not forward the parsed event");
+      }
+      expect(firstEvent.dedupeKey).toBe("verified:req:123");
     } finally {
       await server.stop();
     }
@@ -273,6 +358,128 @@ describe("VoiceCallWebhookServer replay handling", () => {
       expect(response.status).toBe(401);
       expect(parseWebhookEvent).not.toHaveBeenCalled();
     } finally {
+      await server.stop();
+    }
+  });
+});
+
+describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
+  it("rejects missing signature headers before reading the request body", async () => {
+    const verifyWebhook = vi.fn(() => ({ ok: true, verifiedRequestKey: "twilio:req:test" }));
+    const twilioProvider: VoiceCallProvider = {
+      ...provider,
+      name: "twilio",
+      verifyWebhook,
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({ provider: "twilio" });
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+    const readBodySpy = vi.spyOn(
+      server as unknown as {
+        readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
+      },
+      "readBody",
+    );
+
+    try {
+      const baseUrl = await server.start();
+      const response = await postWebhookForm(server, baseUrl, "CallSid=CA123&SpeechResult=hello");
+
+      expect(response.status).toBe(401);
+      expect(await response.text()).toBe("Unauthorized");
+      expect(readBodySpy).not.toHaveBeenCalled();
+      expect(verifyWebhook).not.toHaveBeenCalled();
+    } finally {
+      readBodySpy.mockRestore();
+      await server.stop();
+    }
+  });
+
+  it("uses the shared pre-auth body cap before verification", async () => {
+    const verifyWebhook = vi.fn(() => ({ ok: true, verifiedRequestKey: "twilio:req:test" }));
+    const twilioProvider: VoiceCallProvider = {
+      ...provider,
+      name: "twilio",
+      verifyWebhook,
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({ provider: "twilio" });
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+
+    try {
+      const baseUrl = await server.start();
+      const responseOrError = await postWebhookFormWithHeadersResult(
+        server,
+        baseUrl,
+        "CallSid=CA123&SpeechResult=".padEnd(70 * 1024, "a"),
+        { "x-twilio-signature": "sig" },
+      );
+
+      if (responseOrError.kind === "response") {
+        expect(responseOrError.statusCode).toBe(413);
+        expect(responseOrError.body).toBe("Payload Too Large");
+      } else {
+        expect(responseOrError.code).toBeOneOf(["ECONNRESET", "EPIPE"]);
+      }
+      expect(verifyWebhook).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("limits concurrent pre-auth requests per source IP", async () => {
+    const twilioProvider: VoiceCallProvider = {
+      ...provider,
+      name: "twilio",
+      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:test" }),
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({ provider: "twilio" });
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+
+    let enteredReads = 0;
+    let releaseReads!: () => void;
+    let unblockReadBodies!: () => void;
+    const enteredEightReads = new Promise<void>((resolve) => {
+      releaseReads = resolve;
+    });
+    const unblockReads = new Promise<void>((resolve) => {
+      unblockReadBodies = resolve;
+    });
+    const readBodySpy = vi.spyOn(
+      server as unknown as {
+        readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
+      },
+      "readBody",
+    );
+    readBodySpy.mockImplementation(async () => {
+      enteredReads += 1;
+      if (enteredReads === 8) {
+        releaseReads();
+      }
+      await unblockReads;
+      return "CallSid=CA123&SpeechResult=hello";
+    });
+
+    try {
+      const baseUrl = await server.start();
+      const headers = { "x-twilio-signature": "sig" };
+      const inFlightRequests = Array.from({ length: 8 }, () =>
+        postWebhookFormWithHeaders(server, baseUrl, "CallSid=CA123", headers),
+      );
+      await enteredEightReads;
+
+      const rejected = await postWebhookFormWithHeaders(server, baseUrl, "CallSid=CA999", headers);
+      expect(rejected.status).toBe(429);
+      expect(await rejected.text()).toBe("Too Many Requests");
+
+      unblockReadBodies();
+
+      const settled = await Promise.all(inFlightRequests);
+      expect(settled.every((response) => response.status === 200)).toBe(true);
+    } finally {
+      unblockReadBodies();
+      readBodySpy.mockRestore();
       await server.stop();
     }
   });
@@ -316,11 +523,10 @@ describe("VoiceCallWebhookServer start idempotency", () => {
       const secondUrl = await server.start();
 
       // Dynamic port allocations should resolve to a real listening port.
-      expect(firstUrl).toContain("/voice/webhook");
-      expect(firstUrl).not.toContain(":0/");
+      expectWebhookUrl(firstUrl, "/voice/webhook");
       // Idempotent re-start should return the same already-bound URL.
       expect(secondUrl).toBe(firstUrl);
-      expect(secondUrl).toContain("/voice/webhook");
+      expectWebhookUrl(secondUrl, "/voice/webhook");
     } finally {
       await server.stop();
     }
@@ -332,12 +538,12 @@ describe("VoiceCallWebhookServer start idempotency", () => {
     const server = new VoiceCallWebhookServer(config, manager, provider);
 
     const firstUrl = await server.start();
-    expect(firstUrl).toContain("/voice/webhook");
+    expectWebhookUrl(firstUrl, "/voice/webhook");
     await server.stop();
 
     // After stopping, a new start should succeed
     const secondUrl = await server.start();
-    expect(secondUrl).toContain("/voice/webhook");
+    expectWebhookUrl(secondUrl, "/voice/webhook");
     await server.stop();
   });
 
@@ -426,7 +632,9 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
         onConnect?: (providerCallId: string, streamSid: string) => void;
       };
     };
-    expect(mediaHandler).toBeTruthy();
+    if (!mediaHandler) {
+      throw new Error("expected webhook server to expose a media stream handler");
+    }
 
     mediaHandler.config.onConnect?.("CA-stream-1", "MZ-new");
     mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-old");

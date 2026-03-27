@@ -1,35 +1,39 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import openAIPlugin from "../../../extensions/openai/index.js";
-import qwenPortalPlugin from "../../../extensions/qwen-portal-auth/index.js";
-import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "../../../test/helpers/extensions/provider-registration.js";
 import { createProviderUsageFetch, makeResponse } from "../../test-utils/provider-usage-fetch.js";
-import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
-import type { ProviderRuntimeModel } from "../types.js";
-import { requireProviderContractProvider as requireBundledProviderContractProvider } from "./registry.js";
+import type { ProviderPlugin, ProviderRuntimeModel } from "../types.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
-const getOAuthApiKeyMock = vi.hoisted(() => vi.fn());
-const refreshQwenPortalCredentialsMock = vi.hoisted(() => vi.fn());
+const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
+const getOAuthProvidersMock = vi.hoisted(() =>
+  vi.fn(() => [
+    { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
+    { id: "google", envApiKey: "GOOGLE_API_KEY", oauthTokenEnv: "GOOGLE_OAUTH_TOKEN" }, // pragma: allowlist secret
+    { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
+  ]),
+);
 
 vi.mock("@mariozechner/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<object>("@mariozechner/pi-ai/oauth");
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
+  );
   return {
     ...actual,
-    getOAuthApiKey: getOAuthApiKeyMock,
+    refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
+    getOAuthProviders: getOAuthProvidersMock,
   };
 });
 
-vi.mock("../../../extensions/qwen-portal-auth/refresh.js", async () => {
-  const actual = await vi.importActual<object>("../../../extensions/qwen-portal-auth/refresh.js");
-  return {
-    ...actual,
-    refreshQwenPortalCredentials: refreshQwenPortalCredentialsMock,
-  };
-});
+vi.mock("../../../extensions/openai/openai-codex-provider.runtime.js", () => ({
+  refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
+}));
 
 function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRuntimeModel, "id">) {
   return {
@@ -46,64 +50,134 @@ function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRun
   } satisfies ProviderRuntimeModel;
 }
 
-function registerProviders(...plugins: Array<{ register(api: OpenClawPluginApi): void }>) {
-  const captured = createCapturedPluginRegistration();
-  for (const plugin of plugins) {
-    plugin.register(captured.api);
-  }
-  return captured.providers;
-}
+type ProviderRuntimeContractFixture = {
+  providerIds: string[];
+  pluginId: string;
+  name: string;
+  load: () => Promise<{ default: Parameters<typeof registerProviderPlugin>[0]["plugin"] }>;
+};
 
-function requireProvider(providers: ProviderPlugin[], providerId: string) {
-  const provider = providers.find((entry) => entry.id === providerId);
+const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixture[] = [
+  {
+    providerIds: ["anthropic"],
+    pluginId: "anthropic",
+    name: "Anthropic",
+    load: async () => await import("../../../extensions/anthropic/index.ts"),
+  },
+  {
+    providerIds: ["github-copilot"],
+    pluginId: "github-copilot",
+    name: "GitHub Copilot",
+    load: async () => await import("../../../extensions/github-copilot/index.ts"),
+  },
+  {
+    providerIds: ["google", "google-gemini-cli"],
+    pluginId: "google",
+    name: "Google",
+    load: async () => await import("../../../extensions/google/index.ts"),
+  },
+  {
+    providerIds: ["openai", "openai-codex"],
+    pluginId: "openai",
+    name: "OpenAI",
+    load: async () => await import("../../../extensions/openai/index.ts"),
+  },
+  {
+    providerIds: ["openrouter"],
+    pluginId: "openrouter",
+    name: "OpenRouter",
+    load: async () => await import("../../../extensions/openrouter/index.ts"),
+  },
+  {
+    providerIds: ["venice"],
+    pluginId: "venice",
+    name: "Venice",
+    load: async () => await import("../../../extensions/venice/index.ts"),
+  },
+  {
+    providerIds: ["xai"],
+    pluginId: "xai",
+    name: "xAI",
+    load: async () => await import("../../../extensions/xai/index.ts"),
+  },
+  {
+    providerIds: ["zai"],
+    pluginId: "zai",
+    name: "Z.AI",
+    load: async () => await import("../../../extensions/zai/index.ts"),
+  },
+] as const;
+
+const providerRuntimeContractProviders = new Map<string, ProviderPlugin>();
+
+function requireProviderContractProvider(providerId: string): ProviderPlugin {
+  const provider = providerRuntimeContractProviders.get(providerId);
   if (!provider) {
-    throw new Error(`provider ${providerId} missing`);
+    throw new Error(`provider runtime contract fixture missing for ${providerId}`);
   }
   return provider;
 }
 
-function requireProviderContractProvider(providerId: string): ProviderPlugin {
-  if (providerId === "openai-codex") {
-    return requireProvider(registerProviders(openAIPlugin), providerId);
-  }
-  if (providerId === "qwen-portal") {
-    return requireProvider(registerProviders(qwenPortalPlugin), providerId);
-  }
-  return requireBundledProviderContractProvider(providerId);
-}
-
-describe("provider runtime contract", () => {
+describe("provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
+  beforeAll(async () => {
+    providerRuntimeContractProviders.clear();
+    const registeredFixtures = await Promise.all(
+      PROVIDER_RUNTIME_CONTRACT_FIXTURES.map(async (fixture) => {
+        const plugin = await fixture.load();
+        return {
+          fixture,
+          providers: registerProviderPlugin({
+            plugin: plugin.default,
+            id: fixture.pluginId,
+            name: fixture.name,
+          }).providers,
+        };
+      }),
+    );
+    for (const { fixture, providers } of registeredFixtures) {
+      for (const providerId of fixture.providerIds) {
+        providerRuntimeContractProviders.set(
+          providerId,
+          requireRegisteredProvider(providers, providerId, "provider"),
+        );
+      }
+    }
+  }, CONTRACT_SETUP_TIMEOUT_MS);
   beforeEach(() => {
-    getOAuthApiKeyMock.mockReset();
-    refreshQwenPortalCredentialsMock.mockReset();
+    refreshOpenAICodexTokenMock.mockReset();
+    getOAuthProvidersMock.mockClear();
   }, CONTRACT_SETUP_TIMEOUT_MS);
 
   describe("anthropic", () => {
-    it("owns anthropic 4.6 forward-compat resolution", () => {
-      const provider = requireProviderContractProvider("anthropic");
-      const model = provider.resolveDynamicModel?.({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4.6-20260219",
-        modelRegistry: {
-          find: (_provider: string, id: string) =>
-            id === "claude-sonnet-4.5-20260219"
-              ? createModel({
-                  id: id,
-                  api: "anthropic-messages",
-                  provider: "anthropic",
-                  baseUrl: "https://api.anthropic.com",
-                })
-              : null,
-        } as never,
-      });
+    it(
+      "owns anthropic 4.6 forward-compat resolution",
+      () => {
+        const provider = requireProviderContractProvider("anthropic");
+        const model = provider.resolveDynamicModel?.({
+          provider: "anthropic",
+          modelId: "claude-sonnet-4.6-20260219",
+          modelRegistry: {
+            find: (_provider: string, id: string) =>
+              id === "claude-sonnet-4.5-20260219"
+                ? createModel({
+                    id: id,
+                    api: "anthropic-messages",
+                    provider: "anthropic",
+                    baseUrl: "https://api.anthropic.com",
+                  })
+                : null,
+          } as never,
+        });
 
-      expect(model).toMatchObject({
-        id: "claude-sonnet-4.6-20260219",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        baseUrl: "https://api.anthropic.com",
-      });
-    });
+        expect(model).toMatchObject({
+          id: "claude-sonnet-4.6-20260219",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com",
+        });
+      },
+      CONTRACT_SETUP_TIMEOUT_MS,
+    );
 
     it("owns usage auth resolution", async () => {
       const provider = requireProviderContractProvider("anthropic");
@@ -192,7 +266,7 @@ describe("provider runtime contract", () => {
       const provider = requireProviderContractProvider("github-copilot");
       const model = provider.resolveDynamicModel?.({
         provider: "github-copilot",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         modelRegistry: {
           find: (_provider: string, id: string) =>
             id === "gpt-5.2-codex"
@@ -207,7 +281,7 @@ describe("provider runtime contract", () => {
       });
 
       expect(model).toMatchObject({
-        id: "gpt-5.3-codex",
+        id: "gpt-5.4",
         provider: "github-copilot",
         api: "openai-codex-responses",
       });
@@ -540,21 +614,26 @@ describe("provider runtime contract", () => {
   });
 
   describe("openai-codex", () => {
-    it("owns refresh fallback for accountId extraction failures", async () => {
-      const provider = requireProviderContractProvider("openai-codex");
-      const credential = {
-        type: "oauth" as const,
-        provider: "openai-codex",
-        access: "cached-access-token",
-        refresh: "refresh-token",
-        expires: Date.now() - 60_000,
-      };
+    it(
+      "owns refresh fallback for accountId extraction failures",
+      { timeout: CONTRACT_SETUP_TIMEOUT_MS },
+      async () => {
+        const provider = requireProviderContractProvider("openai-codex");
+        const credential = {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "cached-access-token",
+          refresh: "refresh-token",
+          expires: Date.now() - 60_000,
+        };
 
-      getOAuthApiKeyMock.mockReset();
-      getOAuthApiKeyMock.mockRejectedValueOnce(new Error("Failed to extract accountId from token"));
+        refreshOpenAICodexTokenMock.mockRejectedValueOnce(
+          new Error("Failed to extract accountId from token"),
+        );
 
-      await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
-    });
+        await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
+      },
+    );
 
     it("owns forward-compat codex models", () => {
       const provider = requireProviderContractProvider("openai-codex");
@@ -631,29 +710,6 @@ describe("provider runtime contract", () => {
         windows: [{ label: "3h", usedPercent: 12, resetAt: 1_705_000_000 }],
         plan: "Plus",
       });
-    });
-  });
-
-  describe("qwen-portal", () => {
-    it("owns OAuth refresh", async () => {
-      const provider = requireProviderContractProvider("qwen-portal");
-      const credential = {
-        type: "oauth" as const,
-        provider: "qwen-portal",
-        access: "stale-access-token",
-        refresh: "refresh-token",
-        expires: Date.now() - 60_000,
-      };
-      const refreshed = {
-        ...credential,
-        access: "fresh-access-token",
-        expires: Date.now() + 60_000,
-      };
-
-      refreshQwenPortalCredentialsMock.mockReset();
-      refreshQwenPortalCredentialsMock.mockResolvedValueOnce(refreshed);
-
-      await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(refreshed);
     });
   });
 

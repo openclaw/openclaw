@@ -18,6 +18,52 @@ export type TelegramThreadSpec = {
   scope: "dm" | "forum" | "none";
 };
 
+function extractTelegramForumFlag(value: unknown): boolean | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const forum = (value as { is_forum?: unknown }).is_forum;
+  return typeof forum === "boolean" ? forum : undefined;
+}
+
+export async function resolveTelegramForumFlag(params: {
+  chatId: string | number;
+  chatType?: Chat["type"];
+  isGroup: boolean;
+  isForum?: boolean;
+  getChat?: (chatId: string | number) => Promise<unknown>;
+}): Promise<boolean> {
+  if (typeof params.isForum === "boolean") {
+    return params.isForum;
+  }
+  if (!params.isGroup || params.chatType !== "supergroup" || !params.getChat) {
+    return false;
+  }
+  try {
+    return extractTelegramForumFlag(await params.getChat(params.chatId)) === true;
+  } catch {
+    return false;
+  }
+}
+
+// Preserve recovered forum metadata so downstream handlers do not need to re-query getChat.
+export function withResolvedTelegramForumFlag<T extends { chat: object }>(
+  message: T,
+  isForum: boolean,
+): T {
+  const current = extractTelegramForumFlag(message.chat);
+  if (current === isForum) {
+    return message;
+  }
+  return {
+    ...message,
+    chat: {
+      ...message.chat,
+      is_forum: isForum,
+    },
+  };
+}
+
 export async function resolveTelegramGroupAllowFromContext(params: {
   chatId: string | number;
   accountId?: string;
@@ -406,7 +452,13 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
 
   const replyLike = reply ?? externalReply;
   if (!body && replyLike) {
-    const replyBody = (replyLike.text ?? replyLike.caption ?? "").trim();
+    const replyBody = (
+      typeof replyLike.text === "string"
+        ? replyLike.text
+        : typeof replyLike.caption === "string"
+          ? replyLike.caption
+          : ""
+    ).trim();
     body = replyBody;
     if (!body) {
       body = resolveTelegramMediaPlaceholder(replyLike) ?? "";

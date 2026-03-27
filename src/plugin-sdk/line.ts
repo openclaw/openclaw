@@ -31,16 +31,26 @@ export {
   normalizeAccountId,
   resolveDefaultLineAccountId,
   resolveLineAccount,
-} from "../line/accounts.js";
-export { LineConfigSchema } from "../line/config-schema.js";
-export type { LineChannelData, LineConfig, ResolvedLineAccount } from "../line/types.js";
+} from "../../extensions/line/runtime-api.js";
+export { LineConfigSchema } from "../../extensions/line/runtime-api.js";
+export type {
+  LineChannelData,
+  LineConfig,
+  ResolvedLineAccount,
+} from "../../extensions/line/runtime-api.js";
+export type { LineProbeResult } from "../../extensions/line/runtime-api.js";
 export {
   createActionCard,
+  createAgendaCard,
+  createAppleTvRemoteCard,
+  createDeviceControlCard,
+  createEventCard,
   createImageCard,
   createInfoCard,
   createListCard,
+  createMediaPlayerCard,
   createReceiptCard,
   type CardAction,
   type ListItem,
-} from "../line/flex-templates.js";
-export { processLineMessage } from "../line/markdown-to-line.js";
+} from "../../extensions/line/runtime-api.js";
+export { processLineMessage } from "../../extensions/line/runtime-api.js";

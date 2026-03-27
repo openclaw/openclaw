@@ -109,7 +109,6 @@ x-i18n:
 - `byteplus`、`cloudflare-ai-gateway`、`huggingface`、`kimi-coding`、
   `modelstudio`、`nvidia`、`qianfan`、`synthetic`、`together`、`venice`、
   `vercel-ai-gateway` 和 `volcengine`：仅插件接管的目录
-- `qwen-portal`：插件接管的目录、OAuth 登录和 OAuth 刷新
 - `minimax` 和 `xiaomi`：插件接管的目录，以及使用量身份验证/快照逻辑
 
 内置的 `openai` 插件现在接管两个提供商 ID：`openai` 和
@@ -347,22 +346,6 @@ Kimi Coding 使用 Moonshot AI 的 Anthropic 兼容端点：
   },
 }
 ```
-
-### Qwen OAuth（免费层）
-
-Qwen 通过设备代码流程提供对 Qwen Coder + Vision 的 OAuth 访问。
-内置提供商插件默认启用，因此只需登录：
-
-```bash
-openclaw models auth login --provider qwen-portal --set-default
-```
-
-模型引用：
-
-- `qwen-portal/coder-model`
-- `qwen-portal/vision-model`
-
-设置详情和说明请参见 [/providers/qwen](/providers/qwen)。
 
 ### Volcano Engine（Doubao）
 

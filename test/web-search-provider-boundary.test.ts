@@ -3,30 +3,10 @@ import {
   collectWebSearchProviderBoundaryInventory,
   main,
 } from "../scripts/check-web-search-provider-boundaries.mjs";
+import { createCapturedIo } from "./helpers/captured-io.js";
 
 const inventoryPromise = collectWebSearchProviderBoundaryInventory();
 const jsonOutputPromise = getJsonOutput();
-
-function createCapturedIo() {
-  let stdout = "";
-  let stderr = "";
-  return {
-    io: {
-      stdout: {
-        write(chunk) {
-          stdout += String(chunk);
-        },
-      },
-      stderr: {
-        write(chunk) {
-          stderr += String(chunk);
-        },
-      },
-    },
-    readStdout: () => stdout,
-    readStderr: () => stderr,
-  };
-}
 
 async function getJsonOutput() {
   const captured = createCapturedIo();

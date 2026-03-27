@@ -1,6 +1,8 @@
 {
   "id": "openai",
+  "enabledByDefault": true,
   "providers": ["openai", "openai-codex"],
+  "cliBackends": ["codex-cli"],
   "providerAuthEnvVars": {
     "openai": ["OPENAI_API_KEY"]
   },
@@ -29,6 +31,11 @@
       "cliDescription": "OpenAI API key"
     }
   ],
+  "contracts": {
+    "speechProviders": ["openai"],
+    "mediaUnderstandingProviders": ["openai", "openai-codex"],
+    "imageGenerationProviders": ["openai"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

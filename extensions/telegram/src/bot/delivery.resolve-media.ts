@@ -15,6 +15,9 @@ import { resolveTelegramMediaPlaceholder } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
+const GrammyErrorCtor: typeof GrammyError | undefined =
+  typeof GrammyError === "function" ? GrammyError : undefined;
+
 function buildTelegramMediaSsrfPolicy(apiRoot?: string) {
   const hostnames = ["api.telegram.org"];
   if (apiRoot) {
@@ -41,7 +44,7 @@ function buildTelegramMediaSsrfPolicy(apiRoot?: string) {
  * Unlike network errors, this is a permanent error and should not be retried.
  */
 function isFileTooBigError(err: unknown): boolean {
-  if (err instanceof GrammyError) {
+  if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
     return FILE_TOO_BIG_RE.test(err.description);
   }
   return FILE_TOO_BIG_RE.test(formatErrorMessage(err));

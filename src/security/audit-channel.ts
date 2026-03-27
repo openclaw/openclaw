@@ -152,6 +152,16 @@ function hasExplicitProviderAccountConfig(
   return Object.hasOwn(accounts, accountId);
 }
 
+function formatChannelAccountNote(params: {
+  orderedAccountIds: string[];
+  hasExplicitAccountPath: boolean;
+  accountId: string;
+}): string {
+  return params.orderedAccountIds.length > 1 || params.hasExplicitAccountPath
+    ? ` (account: ${params.accountId})`
+    : "";
+}
+
 export async function collectChannelSecurityFindings(params: {
   cfg: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
@@ -385,8 +395,11 @@ export async function collectChannelSecurityFindings(params: {
       const accountConfig = (account as { config?: Record<string, unknown> } | null | undefined)
         ?.config;
       if (isDangerousNameMatchingEnabled(accountConfig)) {
-        const accountNote =
-          orderedAccountIds.length > 1 || hasExplicitAccountPath ? ` (account: ${accountId})` : "";
+        const accountNote = formatChannelAccountNote({
+          orderedAccountIds,
+          hasExplicitAccountPath,
+          accountId,
+        });
         findings.push({
           checkId: `channels.${plugin.id}.allowFrom.dangerous_name_matching_enabled`,
           severity: "info",
@@ -395,6 +408,27 @@ export async function collectChannelSecurityFindings(params: {
             "dangerouslyAllowNameMatching=true re-enables mutable name/email/tag matching for sender authorization. This is a break-glass compatibility mode, not a hardened default.",
           remediation:
             "Prefer stable sender IDs in allowlists, then disable dangerouslyAllowNameMatching.",
+        });
+      }
+
+      if (
+        plugin.id === "synology-chat" &&
+        (account as { dangerouslyAllowNameMatching?: unknown } | null)
+          ?.dangerouslyAllowNameMatching === true
+      ) {
+        const accountNote = formatChannelAccountNote({
+          orderedAccountIds,
+          hasExplicitAccountPath,
+          accountId,
+        });
+        findings.push({
+          checkId: "channels.synology-chat.reply.dangerous_name_matching_enabled",
+          severity: "info",
+          title: `Synology Chat dangerous name matching is enabled${accountNote}`,
+          detail:
+            "dangerouslyAllowNameMatching=true re-enables mutable username/nickname matching for reply delivery. This is a break-glass compatibility mode, not a hardened default.",
+          remediation:
+            "Prefer stable numeric Synology Chat user IDs for reply delivery, then disable dangerouslyAllowNameMatching.",
         });
       }
 

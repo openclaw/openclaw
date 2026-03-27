@@ -1,13 +1,15 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/testing";
+import type { OutputRuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { vi } from "vitest";
 
-export function createRuntimeEnv<TRuntime = RuntimeEnv>(options?: {
+export function createRuntimeEnv<TRuntime = OutputRuntimeEnv>(options?: {
   throwOnExit?: boolean;
-}): RuntimeEnv {
+}): OutputRuntimeEnv {
   const throwOnExit = options?.throwOnExit ?? true;
   return {
     log: vi.fn(),
     error: vi.fn(),
+    writeStdout: vi.fn(),
+    writeJson: vi.fn(),
     exit: throwOnExit
       ? vi.fn((code: number): never => {
           throw new Error(`exit ${code}`);
@@ -20,7 +22,7 @@ export function createTypedRuntimeEnv<TRuntime>(options?: { throwOnExit?: boolea
   return createRuntimeEnv(options) as TRuntime;
 }
 
-export function createNonExitingRuntimeEnv(): RuntimeEnv {
+export function createNonExitingRuntimeEnv(): OutputRuntimeEnv {
   return createRuntimeEnv({ throwOnExit: false });
 }
 

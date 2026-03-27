@@ -591,6 +591,7 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("routes bound Matrix threads to the target session key", async () => {
+    const touch = vi.fn();
     registerSessionBindingAdapter({
       channel: "matrix",
       accountId: "ops",
@@ -614,7 +615,7 @@ describe("matrix monitor handler pairing account scope", () => {
               },
             }
           : null,
-      touch: vi.fn(),
+      touch,
     });
     const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       client: {
@@ -649,6 +650,64 @@ describe("matrix monitor handler pairing account scope", () => {
         sessionKey: "agent:bound:session-1",
       }),
     );
+    expect(touch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refresh bound Matrix thread bindings for room messages dropped before routing", async () => {
+    const touch = vi.fn();
+    registerSessionBindingAdapter({
+      channel: "matrix",
+      accountId: "ops",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === "$root"
+          ? {
+              bindingId: "ops:!room:example:$root",
+              targetSessionKey: "agent:bound:session-1",
+              targetKind: "session",
+              conversation: {
+                channel: "matrix",
+                accountId: "ops",
+                conversationId: "$root",
+                parentConversationId: "!room:example",
+              },
+              status: "active",
+              boundAt: Date.now(),
+              metadata: {
+                boundBy: "user-1",
+              },
+            }
+          : null,
+      touch,
+    });
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$root",
+            sender: "@alice:example.org",
+            body: "Root topic",
+          }),
+      },
+      isDirectMessage: false,
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example",
+      createMatrixTextMessageEvent({
+        eventId: "$reply-no-mention",
+        body: "follow up without mention",
+        relatesTo: {
+          rel_type: "m.thread",
+          event_id: "$root",
+          "m.in_reply_to": { event_id: "$root" },
+        },
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(touch).not.toHaveBeenCalled();
   });
 
   it("does not enqueue system events for delivered text replies", async () => {

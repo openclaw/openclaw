@@ -10,6 +10,7 @@ export type { InspectedDiscordAccount } from "../../extensions/discord/api.js";
 export type { ResolvedDiscordAccount } from "../../extensions/discord/api.js";
 export type { DiscordSendComponents, DiscordSendEmbeds } from "../../extensions/discord/api.js";
 export type { DiscordComponentMessageSpec } from "../../extensions/discord/api.js";
+export type { DiscordSendResult } from "../../extensions/discord/api.js";
 export type {
   ThreadBindingManager,
   ThreadBindingRecord,
@@ -67,6 +68,7 @@ export {
 export {
   buildDiscordComponentMessage,
   createDiscordActionGate,
+  handleDiscordMessageAction,
   listDiscordAccountIds,
   resolveDiscordAccount,
   resolveDefaultDiscordAccountId,
@@ -95,6 +97,10 @@ export {
   setThreadBindingIdleTimeoutBySessionKey,
   setThreadBindingMaxAgeBySessionKey,
   unbindThreadBindingsBySessionKey,
+} from "../../extensions/discord/runtime-api.js";
+export {
+  __testing as discordThreadBindingTesting,
+  createThreadBindingManager as createDiscordThreadBindingManager,
 } from "../../extensions/discord/runtime-api.js";
 export { getGateway } from "../../extensions/discord/runtime-api.js";
 export { getPresence } from "../../extensions/discord/runtime-api.js";
@@ -155,3 +161,4 @@ export {
   uploadStickerDiscord,
 } from "../../extensions/discord/runtime-api.js";
 export { discordMessageActions } from "../../extensions/discord/runtime-api.js";
+export { resolveDiscordOutboundSessionRoute } from "../../extensions/discord/runtime-api.js";

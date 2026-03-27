@@ -62,7 +62,7 @@ They run immediately, are stripped before the model sees the message, and the re
 - `commands.bashForegroundMs` (default `2000`) controls how long bash waits before switching to background mode (`0` backgrounds immediately).
 - `commands.config` (default `false`) enables `/config` (reads/writes `openclaw.json`).
 - `commands.mcp` (default `false`) enables `/mcp` (reads/writes OpenClaw-managed MCP config under `mcp.servers`).
-- `commands.plugins` (default `false`) enables `/plugins` (plugin discovery/status plus enable/disable toggles).
+- `commands.plugins` (default `false`) enables `/plugins` (plugin discovery/status plus install + enable/disable controls).
 - `commands.debug` (default `false`) enables `/debug` (runtime-only overrides).
 - `commands.allowFrom` (optional) sets a per-provider allowlist for command authorization. When configured, it is the
   only authorization source for commands and directives (channel allowlists/pairing and `commands.useAccessGroups`
@@ -75,6 +75,7 @@ Text + native (when enabled):
 
 - `/help`
 - `/commands`
+- `/tools [compact|verbose]` (show what the current agent can use right now; `verbose` adds descriptions)
 - `/skill <name> [input]` (run a skill by name)
 - `/status` (show current status; includes provider usage/quota for the current model provider when available)
 - `/allowlist` (list/add/remove allowlist entries)
@@ -95,7 +96,10 @@ Text + native (when enabled):
 - `/tell <id|#> <message>` (alias for `/steer`)
 - `/config show|get|set|unset` (persist config to disk, owner-only; requires `commands.config: true`)
 - `/mcp show|get|set|unset` (manage OpenClaw MCP server config, owner-only; requires `commands.mcp: true`)
-- `/plugins list|show|get|enable|disable` (inspect discovered plugins and toggle enablement, owner-only for writes; requires `commands.plugins: true`)
+- `/plugins list|show|get|install|enable|disable` (inspect discovered plugins, install new ones, and toggle enablement; owner-only for writes; requires `commands.plugins: true`)
+  - `/plugin` is an alias for `/plugins`.
+  - `/plugin install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, or `clawhub:<pkg>`.
+  - Enable/disable writes still reply with a restart hint. On a watched foreground gateway, OpenClaw may perform that restart automatically right after the write.
 - `/debug show|set|unset|reset` (runtime overrides, owner-only; requires `commands.debug: true`)
 - `/usage off|tokens|full|cost` (per-response usage footer or local cost summary)
 - `/tts off|always|inbound|tagged|status|provider|limit|summary|audio` (control TTS; see [/tts](/tools/tts))
@@ -153,6 +157,22 @@ Notes:
   - Skills may optionally declare `command-dispatch: tool` to route the command directly to a tool (deterministic, no model).
   - Example: `/prose` (OpenProse plugin) — see [OpenProse](/prose).
 - **Native command arguments:** Discord uses autocomplete for dynamic options (and button menus when you omit required args). Telegram and Slack show a button menu when a command supports choices and you omit the arg.
+
+## `/tools`
+
+`/tools` answers a runtime question, not a config question: **what this agent can use right now in
+this conversation**.
+
+- Default `/tools` is compact and optimized for quick scanning.
+- `/tools verbose` adds short descriptions.
+- Native-command surfaces that support arguments expose the same mode switch as `compact|verbose`.
+- Results are session-scoped, so changing agent, channel, thread, sender authorization, or model can
+  change the output.
+- `/tools` includes tools that are actually reachable at runtime, including core tools, connected
+  plugin tools, and channel-owned tools.
+
+For profile and override editing, use the Control UI Tools panel or config/catalog surfaces instead
+of treating `/tools` as a static catalog.
 
 ## Usage surfaces (what shows where)
 

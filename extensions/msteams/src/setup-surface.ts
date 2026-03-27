@@ -2,6 +2,7 @@ import {
   createTopLevelChannelAllowFromSetter,
   createTopLevelChannelDmPolicy,
   createTopLevelChannelGroupPolicySetter,
+  createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   mergeAllowFromEntries,
@@ -274,26 +275,19 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
   channel,
   resolveAccountIdForConfigure: () => DEFAULT_ACCOUNT_ID,
   resolveShouldPromptAccountIds: () => false,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "MS Teams",
     configuredLabel: "configured",
     unconfiguredLabel: "needs app credentials",
     configuredHint: "configured",
     unconfiguredHint: "needs app creds",
     configuredScore: 2,
     unconfiguredScore: 0,
-    resolveConfigured: ({ cfg }) => {
-      return (
-        Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)) ||
-        hasConfiguredMSTeamsCredentials(cfg.channels?.msteams)
-      );
-    },
-    resolveStatusLines: ({ cfg }) => {
-      const configured =
-        Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)) ||
-        hasConfiguredMSTeamsCredentials(cfg.channels?.msteams);
-      return [`MS Teams: ${configured ? "configured" : "needs app credentials"}`];
-    },
-  },
+    includeStatusLine: true,
+    resolveConfigured: ({ cfg }) =>
+      Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)) ||
+      hasConfiguredMSTeamsCredentials(cfg.channels?.msteams),
+  }),
   credentials: [],
   finalize: async ({ cfg, prompter }) => {
     const resolved = resolveMSTeamsCredentials(cfg.channels?.msteams);

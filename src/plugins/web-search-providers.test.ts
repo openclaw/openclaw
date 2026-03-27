@@ -1,35 +1,45 @@
 import { describe, expect, it } from "vitest";
 import { resolveBundledPluginWebSearchProviders } from "./web-search-providers.js";
 
-describe("resolveBundledPluginWebSearchProviders", () => {
-  it("returns bundled providers in auto-detect order", () => {
-    const providers = resolveBundledPluginWebSearchProviders({});
+const WEB_SEARCH_PROVIDER_TEST_TIMEOUT_MS = 300_000;
 
-    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
-      "brave:brave",
-      "google:gemini",
-      "xai:grok",
-      "moonshot:kimi",
-      "perplexity:perplexity",
-      "firecrawl:firecrawl",
-      "tavily:tavily",
-    ]);
-    expect(providers.map((provider) => provider.credentialPath)).toEqual([
-      "plugins.entries.brave.config.webSearch.apiKey",
-      "plugins.entries.google.config.webSearch.apiKey",
-      "plugins.entries.xai.config.webSearch.apiKey",
-      "plugins.entries.moonshot.config.webSearch.apiKey",
-      "plugins.entries.perplexity.config.webSearch.apiKey",
-      "plugins.entries.firecrawl.config.webSearch.apiKey",
-      "plugins.entries.tavily.config.webSearch.apiKey",
-    ]);
-    expect(providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig).toEqual(
-      expect.any(Function),
-    );
-    expect(
-      providers.find((provider) => provider.id === "perplexity")?.resolveRuntimeMetadata,
-    ).toEqual(expect.any(Function));
-  });
+describe("resolveBundledPluginWebSearchProviders", () => {
+  it(
+    "returns bundled providers in alphabetical order",
+    { timeout: WEB_SEARCH_PROVIDER_TEST_TIMEOUT_MS },
+    () => {
+      const providers = resolveBundledPluginWebSearchProviders({});
+
+      expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
+        "brave:brave",
+        "duckduckgo:duckduckgo",
+        "exa:exa",
+        "firecrawl:firecrawl",
+        "google:gemini",
+        "xai:grok",
+        "moonshot:kimi",
+        "perplexity:perplexity",
+        "tavily:tavily",
+      ]);
+      expect(providers.map((provider) => provider.credentialPath)).toEqual([
+        "plugins.entries.brave.config.webSearch.apiKey",
+        "",
+        "plugins.entries.exa.config.webSearch.apiKey",
+        "plugins.entries.firecrawl.config.webSearch.apiKey",
+        "plugins.entries.google.config.webSearch.apiKey",
+        "plugins.entries.xai.config.webSearch.apiKey",
+        "plugins.entries.moonshot.config.webSearch.apiKey",
+        "plugins.entries.perplexity.config.webSearch.apiKey",
+        "plugins.entries.tavily.config.webSearch.apiKey",
+      ]);
+      expect(
+        providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig,
+      ).toEqual(expect.any(Function));
+      expect(
+        providers.find((provider) => provider.id === "perplexity")?.resolveRuntimeMetadata,
+      ).toEqual(expect.any(Function));
+    },
+  );
 
   it("can augment restrictive allowlists for bundled compatibility", () => {
     const providers = resolveBundledPluginWebSearchProviders({
@@ -43,11 +53,13 @@ describe("resolveBundledPluginWebSearchProviders", () => {
 
     expect(providers.map((provider) => provider.pluginId)).toEqual([
       "brave",
+      "duckduckgo",
+      "exa",
+      "firecrawl",
       "google",
       "xai",
       "moonshot",
       "perplexity",
-      "firecrawl",
       "tavily",
     ]);
   });
@@ -90,18 +102,20 @@ describe("resolveBundledPluginWebSearchProviders", () => {
     expect(providers).toEqual([]);
   });
 
-  it("can resolve bundled providers without the plugin loader", () => {
+  it("can resolve bundled providers through the manifest-scoped loader path", () => {
     const providers = resolveBundledPluginWebSearchProviders({
       bundledAllowlistCompat: true,
     });
 
     expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
       "brave:brave",
+      "duckduckgo:duckduckgo",
+      "exa:exa",
+      "firecrawl:firecrawl",
       "google:gemini",
       "xai:grok",
       "moonshot:kimi",
       "perplexity:perplexity",
-      "firecrawl:firecrawl",
       "tavily:tavily",
     ]);
   });

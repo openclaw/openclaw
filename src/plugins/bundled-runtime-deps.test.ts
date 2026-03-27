@@ -46,6 +46,10 @@ describe("bundled plugin runtime dependencies", () => {
     expectPluginOwnsRuntimeDep("extensions/whatsapp/package.json", "@whiskeysockets/baileys");
   });
 
+  it("keeps WhatsApp image helper deps plugin-local so bundled builds resolve Baileys peers", () => {
+    expectPluginOwnsRuntimeDep("extensions/whatsapp/package.json", "jimp");
+  });
+
   it("keeps bundled proxy-agent deps plugin-local instead of mirroring them into the root package", () => {
     expectPluginOwnsRuntimeDep("extensions/discord/package.json", "https-proxy-agent");
   });

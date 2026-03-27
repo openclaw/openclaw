@@ -1,24 +1,34 @@
 import { describe, expect, it, vi } from "vitest";
+import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  isOllamaCompatProvider,
+  resolveOllamaBaseUrlForRun,
+  resolveOllamaCompatNumCtxEnabled,
+  shouldInjectOllamaCompatNumCtx,
+  wrapOllamaCompatNumCtx,
+} from "../../../plugin-sdk/ollama.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
-import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
+import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 import {
   buildAfterTurnRuntimeContext,
+  buildSessionsYieldContextMessage,
   composeSystemPromptWithHookContext,
-  isOllamaCompatProvider,
+  persistSessionsYieldContextMessage,
   prependSystemPromptAddition,
+  queueSessionsYieldInterruptMessage,
   resolveAttemptFsWorkspaceOnly,
-  resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
-  shouldInjectOllamaCompatNumCtx,
+  stripSessionsYieldArtifacts,
+  shouldInjectHeartbeatPrompt,
   decodeHtmlEntitiesInObject,
-  wrapOllamaCompatNumCtx,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
+import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 
 type FakeWrappedStream = {
   result: () => Promise<unknown>;
@@ -142,6 +152,98 @@ describe("resolvePromptBuildHookResult", () => {
   });
 });
 
+describe("sessions_yield helpers", () => {
+  it("builds a hidden follow-up context note", () => {
+    expect(buildSessionsYieldContextMessage("Waiting for subagent")).toContain(
+      "Waiting for subagent",
+    );
+    expect(buildSessionsYieldContextMessage("Waiting for subagent")).toContain(
+      "ended intentionally via sessions_yield",
+    );
+  });
+
+  it("queues a hidden interrupt steering message", () => {
+    const steer = vi.fn();
+    queueSessionsYieldInterruptMessage({ agent: { steer } });
+    expect(steer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: "custom",
+        customType: "openclaw.sessions_yield_interrupt",
+        display: false,
+        details: { source: "sessions_yield" },
+      }),
+    );
+  });
+
+  it("persists a hidden yield context message without triggering a turn", async () => {
+    const sendCustomMessage = vi.fn(async () => {});
+    await persistSessionsYieldContextMessage(
+      {
+        sendCustomMessage,
+      },
+      "Waiting for subagent",
+    );
+    expect(sendCustomMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: "openclaw.sessions_yield",
+        display: false,
+        details: { source: "sessions_yield", message: "Waiting for subagent" },
+        content: expect.stringContaining("Waiting for subagent"),
+      }),
+      { triggerTurn: false },
+    );
+  });
+
+  it("strips trailing yield interrupt artifacts from memory and transcript state", () => {
+    const replaceMessages = vi.fn();
+    const rewriteFile = vi.fn();
+    const activeSession = {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "hi" }] },
+        { role: "custom", customType: "openclaw.sessions_yield_interrupt" },
+        { role: "assistant", stopReason: "aborted" },
+      ],
+      agent: { replaceMessages },
+      sessionManager: {
+        fileEntries: [
+          { type: "session", id: "session-root" },
+          {
+            type: "custom_message",
+            id: "interrupt",
+            parentId: "session-root",
+            customType: "openclaw.sessions_yield_interrupt",
+          },
+          {
+            type: "message",
+            id: "aborted",
+            parentId: "interrupt",
+            message: { role: "assistant", stopReason: "aborted" },
+          },
+        ],
+        byId: new Map([
+          ["interrupt", { id: "interrupt" }],
+          ["aborted", { id: "aborted" }],
+        ]),
+        leafId: "aborted",
+        _rewriteFile: rewriteFile,
+      },
+    };
+
+    stripSessionsYieldArtifacts(activeSession as never);
+
+    expect(replaceMessages).toHaveBeenCalledWith([
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+    ]);
+    expect(activeSession.sessionManager.fileEntries).toEqual([
+      { type: "session", id: "session-root" },
+    ]);
+    expect(activeSession.sessionManager.byId.has("interrupt")).toBe(false);
+    expect(activeSession.sessionManager.byId.has("aborted")).toBe(false);
+    expect(activeSession.sessionManager.leafId).toBe("session-root");
+    expect(rewriteFile).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("composeSystemPromptWithHookContext", () => {
   it("returns undefined when no hook system context is provided", () => {
     expect(composeSystemPromptWithHookContext({ baseSystemPrompt: "base" })).toBeUndefined();
@@ -217,6 +319,71 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession(undefined)).toBe("full");
     expect(resolvePromptModeForSession("agent:main")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
+  });
+});
+
+describe("shouldInjectHeartbeatPrompt", () => {
+  it("uses trigger policy defaults for non-cron triggers", () => {
+    expect(shouldInjectHeartbeatPromptForTrigger("user")).toBe(true);
+    expect(shouldInjectHeartbeatPromptForTrigger("heartbeat")).toBe(true);
+    expect(shouldInjectHeartbeatPromptForTrigger("memory")).toBe(true);
+    expect(shouldInjectHeartbeatPromptForTrigger(undefined)).toBe(true);
+  });
+
+  it("uses trigger policy overrides for cron", () => {
+    expect(shouldInjectHeartbeatPromptForTrigger("cron")).toBe(false);
+  });
+
+  it("injects the heartbeat prompt for default-agent non-cron runs", () => {
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "user" })).toBe(true);
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "heartbeat" })).toBe(true);
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "memory" })).toBe(true);
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: undefined })).toBe(true);
+  });
+
+  it("suppresses the heartbeat prompt for cron-triggered runs", () => {
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "cron" })).toBe(false);
+  });
+
+  it("suppresses the heartbeat prompt for non-default agents", () => {
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: false, trigger: "user" })).toBe(false);
+  });
+
+  it("omits heartbeat prompt content for cron-triggered full-mode runs on non-cron session keys", () => {
+    const sessionKey = "agent:main:kos:thread:abc";
+    expect(resolvePromptModeForSession(sessionKey)).toBe("full");
+
+    const heartbeatPrompt = shouldInjectHeartbeatPrompt({
+      isDefaultAgent: true,
+      trigger: "cron",
+    })
+      ? resolveHeartbeatPrompt(undefined)
+      : undefined;
+
+    const prompt = buildEmbeddedSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      defaultThinkLevel: "off",
+      reasoningLevel: "off",
+      reasoningTagHint: false,
+      heartbeatPrompt,
+      promptMode: resolvePromptModeForSession(sessionKey),
+      runtimeInfo: {
+        host: "host",
+        os: "Darwin",
+        arch: "arm64",
+        node: "v22.0.0",
+        model: "openai/gpt-5.4",
+      },
+      tools: [],
+      modelAliasLines: [],
+      userTimezone: "UTC",
+      userTime: "00:00",
+      userTimeFormat: "24",
+    });
+
+    expect(prompt).not.toContain("## Heartbeats");
+    expect(prompt).not.toContain("HEARTBEAT_OK");
+    expect(prompt).not.toContain("Read HEARTBEAT.md");
   });
 });
 
@@ -1713,7 +1880,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         skillsSnapshot: undefined,
         senderIsOwner: true,
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",
@@ -1725,7 +1892,7 @@ describe("buildAfterTurnRuntimeContext", () => {
 
     expect(legacy).toMatchObject({
       provider: "openai-codex",
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
     });
   });
 
@@ -1749,7 +1916,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         skillsSnapshot: undefined,
         senderIsOwner: true,
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",
@@ -1763,7 +1930,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     // compactEmbeddedPiSessionDirect does it centrally for both auto + manual paths.
     expect(legacy).toMatchObject({
       provider: "openai-codex",
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
     });
   });
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
@@ -1778,7 +1945,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         skillsSnapshot: undefined,
         senderIsOwner: true,
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",
@@ -1791,7 +1958,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     expect(legacy).toMatchObject({
       authProfileId: "openai:p1",
       provider: "openai-codex",
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
     });
@@ -1813,7 +1980,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         senderIsOwner: true,
         senderId: "user-123",
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",

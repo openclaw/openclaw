@@ -7,6 +7,11 @@ import { coerceSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  buildProviderMissingAuthMessageWithPlugin,
+  resolveProviderSyntheticAuthWithPlugin,
+} from "../plugins/provider-runtime.js";
+import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
 } from "../utils/normalize-secret-input.js";
@@ -23,7 +28,6 @@ import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
-  OLLAMA_LOCAL_AUTH_MARKER,
 } from "./model-auth-markers.js";
 import { normalizeProviderId } from "./model-selection.js";
 
@@ -35,15 +39,6 @@ const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
 const AWS_SECRET_KEY_ENV = "AWS_SECRET_ACCESS_KEY";
 const AWS_PROFILE_ENV = "AWS_PROFILE";
-let providerRuntimePromise:
-  | Promise<typeof import("../plugins/provider-runtime.runtime.js")>
-  | undefined;
-
-function loadProviderRuntime() {
-  providerRuntimePromise ??= import("../plugins/provider-runtime.runtime.js");
-  return providerRuntimePromise;
-}
-
 function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -180,13 +175,17 @@ function resolveSyntheticLocalProviderAuth(params: {
     return null;
   }
 
-  const normalizedProvider = normalizeProviderId(params.provider);
-  if (normalizedProvider === "ollama") {
-    return {
-      apiKey: OLLAMA_LOCAL_AUTH_MARKER,
-      source: "models.providers.ollama (synthetic local key)",
-      mode: "api-key",
-    };
+  const pluginSyntheticAuth = resolveProviderSyntheticAuthWithPlugin({
+    provider: params.provider,
+    config: params.cfg,
+    context: {
+      config: params.cfg,
+      provider: params.provider,
+      providerConfig,
+    },
+  });
+  if (pluginSyntheticAuth) {
+    return pluginSyntheticAuth;
   }
 
   const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
@@ -366,20 +365,30 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
-  const { buildProviderMissingAuthMessageWithPlugin } = await loadProviderRuntime();
-  const pluginMissingAuthMessage = buildProviderMissingAuthMessageWithPlugin({
-    provider,
-    config: cfg,
-    context: {
-      config: cfg,
-      agentDir: params.agentDir,
-      env: process.env,
+  const providerConfig = resolveProviderConfig(cfg, provider);
+  const hasInlineConfiguredModels =
+    Array.isArray(providerConfig?.models) && providerConfig.models.length > 0;
+  const owningPluginIds = !hasInlineConfiguredModels
+    ? resolveOwningPluginIdsForProvider({
+        provider,
+        config: cfg,
+      })
+    : undefined;
+  if (owningPluginIds?.length) {
+    const pluginMissingAuthMessage = buildProviderMissingAuthMessageWithPlugin({
       provider,
-      listProfileIds: (providerId) => listProfilesForProvider(store, providerId),
-    },
-  });
-  if (pluginMissingAuthMessage) {
-    throw new Error(pluginMissingAuthMessage);
+      config: cfg,
+      context: {
+        config: cfg,
+        agentDir: params.agentDir,
+        env: process.env,
+        provider,
+        listProfileIds: (providerId) => listProfilesForProvider(store, providerId),
+      },
+    });
+    if (pluginMissingAuthMessage) {
+      throw new Error(pluginMissingAuthMessage);
+    }
   }
 
   const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);

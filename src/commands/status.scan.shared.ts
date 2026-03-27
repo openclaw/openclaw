@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { probeGateway } from "../gateway/probe.js";
-import type { MemoryProviderStatus } from "../memory/types.js";
+import type { MemoryProviderStatus } from "../plugin-sdk/memory-core-host-engine-storage.js";
 import {
   pickGatewaySelfPresence,
   resolveGatewayProbeAuthResolution,
@@ -66,7 +66,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     typeof params.cfg.gateway?.remote?.url === "string" ? params.cfg.gateway.remote.url : "";
   const remoteUrlMissing = isRemoteMode && !remoteUrlRaw.trim();
   const gatewayMode = isRemoteMode ? "remote" : "local";
-  const gatewayProbeAuthResolution = resolveGatewayProbeAuthResolution(params.cfg);
+  const gatewayProbeAuthResolution = await resolveGatewayProbeAuthResolution(params.cfg);
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
   const gatewayProbe = remoteUrlMissing
     ? null
@@ -123,7 +123,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   requireDefaultStore?: (agentId: string) => string | null;
 }): Promise<MemoryStatusSnapshot | null> {
   const { cfg, agentStatus, memoryPlugin } = params;
-  if (!memoryPlugin.enabled || memoryPlugin.slot !== "memory-core") {
+  if (!memoryPlugin.enabled || !memoryPlugin.slot) {
     return null;
   }
   const agentId = agentStatus.defaultId ?? "main";

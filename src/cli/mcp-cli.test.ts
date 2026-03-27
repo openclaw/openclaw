@@ -4,19 +4,14 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
-const mockLog = vi.fn();
-const mockError = vi.fn();
-const mockExit = vi.fn((code: number) => {
-  throw new Error(`__exit__:${code}`);
-});
+const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const mockLog = defaultRuntime.log;
+const mockError = defaultRuntime.error;
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime: {
-    log: (...args: unknown[]) => mockLog(...args),
-    error: (...args: unknown[]) => mockError(...args),
-    exit: (code: number) => mockExit(code),
-  },
+  defaultRuntime,
 }));
 
 const tempDirs: string[] = [];
@@ -29,7 +24,6 @@ async function createWorkspace(): Promise<string> {
 
 let registerMcpCli: typeof import("./mcp-cli.js").registerMcpCli;
 let sharedProgram: Command;
-let previousCwd = process.cwd();
 
 async function runMcpCommand(args: string[]) {
   await sharedProgram.parseAsync(args, { from: "user" });
@@ -45,11 +39,11 @@ describe("mcp cli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    previousCwd = process.cwd();
+    resetRuntimeCapture();
   });
 
   afterEach(async () => {
-    process.chdir(previousCwd);
+    vi.restoreAllMocks();
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
@@ -58,7 +52,7 @@ describe("mcp cli", () => {
   it("sets and shows a configured MCP server", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
-      process.chdir(workspaceDir);
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
       await runMcpCommand(["mcp", "set", "context7", '{"command":"uvx","args":["context7-mcp"]}']);
       expect(mockLog).toHaveBeenCalledWith(expect.stringContaining('Saved MCP server "context7"'));
@@ -72,7 +66,7 @@ describe("mcp cli", () => {
   it("fails when removing an unknown MCP server", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
-      process.chdir(workspaceDir);
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
       await expect(runMcpCommand(["mcp", "unset", "missing"])).rejects.toThrow("__exit__:1");
       expect(mockError).toHaveBeenCalledWith(

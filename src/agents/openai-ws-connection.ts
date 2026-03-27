@@ -58,10 +58,10 @@ export type OutputItem =
       status?: "in_progress" | "completed";
     }
   | {
-      type: "reasoning";
+      type: "reasoning" | `reasoning.${string}`;
       id: string;
       content?: string;
-      summary?: string;
+      summary?: unknown;
     };
 
 export interface ResponseCreatedEvent {
@@ -198,7 +198,13 @@ export type InputItem =
     }
   | { type: "function_call"; id?: string; call_id?: string; name: string; arguments: string }
   | { type: "function_call_output"; call_id: string; output: string }
-  | { type: "reasoning"; content?: string; encrypted_content?: string; summary?: string }
+  | {
+      type: "reasoning";
+      id?: string;
+      content?: string;
+      encrypted_content?: string;
+      summary?: string;
+    }
   | { type: "item_reference"; id: string };
 
 export type ToolChoice =
@@ -380,8 +386,15 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
     this._cancelRetryTimer();
     if (this.ws) {
       this.ws.removeAllListeners();
-      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
-        this.ws.close(1000, "Client closed");
+      try {
+        if (this.ws.readyState === WebSocket.OPEN) {
+          this.ws.close(1000, "Client closed");
+        } else if (this.ws.readyState === WebSocket.CONNECTING) {
+          // ws can still throw here while the handshake is in-flight.
+          this.ws.terminate();
+        }
+      } catch {
+        // Best-effort close during setup/teardown.
       }
       this.ws = null;
     }

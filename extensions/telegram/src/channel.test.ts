@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { PluginApprovalRequest } from "../../../src/infra/plugin-approvals.js";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
@@ -142,6 +143,26 @@ function installSendMessageRuntime(
     sendMessageTelegram,
   });
   return sendMessageTelegram;
+}
+
+function createPluginApprovalRequest(
+  overrides: Partial<PluginApprovalRequest["request"]> = {},
+): PluginApprovalRequest {
+  return {
+    id: "plugin:12345678-1234-1234-1234-1234567890ab",
+    request: {
+      title: "Sensitive plugin action",
+      description: "The plugin requested a sensitive operation.",
+      severity: "warning",
+      toolName: "plugin.tool",
+      pluginId: "plugin-test",
+      agentId: "agent-main",
+      sessionKey: "agent:agent-main:telegram:12345",
+      ...overrides,
+    },
+    createdAtMs: 1_000,
+    expiresAtMs: 61_000,
+  };
 }
 
 afterEach(() => {
@@ -468,12 +489,131 @@ describe("telegramPlugin duplicate token guard", () => {
     expect(result).toMatchObject({ channel: "telegram", messageId: "tg-4" });
   });
 
+  it("builds plugin approval pending payload with callback ids that preserve allow-always", () => {
+    const request = createPluginApprovalRequest();
+    const payload = telegramPlugin.execApprovals?.buildPluginPendingPayload?.({
+      cfg: createCfg(),
+      request,
+      target: { channel: "telegram", to: "12345" },
+      nowMs: 2_000,
+    });
+
+    expect(payload?.text).toContain("Plugin approval required");
+    const channelData = payload?.channelData as
+      | {
+          execApproval?: { approvalId?: string; approvalSlug?: string };
+          telegram?: { buttons?: Array<Array<{ text: string; callback_data: string }>> };
+        }
+      | undefined;
+    expect(channelData?.execApproval?.approvalId).toBe(request.id);
+    expect(channelData?.execApproval?.approvalSlug).toBe(request.id);
+    const buttons = channelData?.telegram?.buttons;
+    expect(buttons).toBeDefined();
+    expect(buttons?.[0]?.some((button) => button.text === "Allow Always")).toBe(true);
+    for (const row of buttons ?? []) {
+      for (const button of row) {
+        expect(Buffer.byteLength(button.callback_data, "utf8")).toBeLessThanOrEqual(64);
+      }
+    }
+  });
+
   it("ignores accounts with missing tokens during duplicate-token checks", async () => {
     const cfg = createCfg();
     cfg.channels!.telegram!.accounts!.ops = {} as never;
 
     const alertsAccount = resolveAccount(cfg, "alerts");
     expect(await telegramPlugin.config.isConfigured!(alertsAccount, cfg)).toBe(true);
+  });
+
+  // Regression: https://github.com/openclaw/openclaw/issues/53876
+  // Single-bot setup with channel-level token should report configured.
+  it("reports configured for single-bot setup with channel-level token", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "single-bot-token",
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = resolveAccount(cfg, "default");
+    expect(await telegramPlugin.config.isConfigured!(account, cfg)).toBe(true);
+  });
+
+  // Regression: https://github.com/openclaw/openclaw/issues/53876
+  // Binding-created non-default accountId in single-bot setup should report configured.
+  it("reports configured for binding-created accountId in single-bot setup", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "single-bot-token",
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = resolveAccount(cfg, "bot-main");
+    expect(account.token).toBe("single-bot-token");
+    expect(await telegramPlugin.config.isConfigured!(account, cfg)).toBe(true);
+  });
+
+  // Regression: multi-bot guard — unknown binding-created accountId in multi-bot
+  // setup must NOT be reported as configured, matching resolveTelegramToken behaviour.
+  it("reports not configured for unknown binding-created accountId in multi-bot setup", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "channel-level-token",
+          enabled: true,
+          accounts: {
+            knownBot: { botToken: "known-bot-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = resolveAccount(cfg, "unknownBot");
+    expect(await telegramPlugin.config.isConfigured!(account, cfg)).toBe(false);
+    expect(telegramPlugin.config.unconfiguredReason?.(account, cfg)).toContain("unknown accountId");
+  });
+
+  // Regression: multi-bot guard must use full normalization (same as resolveTelegramToken)
+  // so that account keys like "Carey Notifications" resolve to "carey-notifications".
+  it("multi-bot guard normalizes account keys with spaces and mixed case", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "channel-level-token",
+          enabled: true,
+          accounts: {
+            "Carey Notifications": { botToken: "carey-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    // "carey-notifications" is the normalized form of "Carey Notifications"
+    const account = resolveAccount(cfg, "carey-notifications");
+    expect(await telegramPlugin.config.isConfigured!(account, cfg)).toBe(true);
+  });
+
+  // Regression: configured_unavailable token (e.g. unreadable tokenFile) should
+  // NOT be reported as configured — runtime would fail to authenticate.
+  it("reports not configured when token is configured_unavailable", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          tokenFile: "/nonexistent/path/to/token",
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = resolveAccount(cfg, "default");
+    // tokenFile is configured but file doesn't exist → configured_unavailable
+    expect(await telegramPlugin.config.isConfigured!(account, cfg)).toBe(false);
+    expect(telegramPlugin.config.unconfiguredReason?.(account, cfg)).toContain("unavailable");
   });
 
   it("does not crash startup when a resolved account token is undefined", async () => {

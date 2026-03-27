@@ -316,7 +316,11 @@ export function renderSessions(props: SessionsProps) {
       <div class="row" style="justify-content: space-between; margin-bottom: 12px;">
         <div>
           <div class="card-title">Sessions</div>
-          <div class="card-sub">${props.result ? `Store: ${props.result.path}` : "Active session keys and per-session overrides."}</div>
+          <div class="card-sub">
+            ${props.result
+              ? `Store: ${props.result.path}`
+              : "Active session keys and per-session overrides."}
+          </div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
           ${props.loading ? "Loading…" : "Refresh"}
@@ -383,11 +387,9 @@ export function renderSessions(props: SessionsProps) {
         </label>
       </div>
 
-      ${
-        props.error
-          ? html`<div class="callout danger" style="margin-bottom: 12px;">${props.error}</div>`
-          : nothing
-      }
+      ${props.error
+        ? html`<div class="callout danger" style="margin-bottom: 12px;">${props.error}</div>`
+        : nothing}
 
       <div class="data-table-wrapper">
         <div class="data-table-toolbar">
@@ -401,40 +403,34 @@ export function renderSessions(props: SessionsProps) {
           </div>
         </div>
 
-        ${
-          props.selectedKeys.size > 0
-            ? html`
-                <div class="data-table-bulk-bar">
-                  <span>${props.selectedKeys.size} selected</span>
-                  <button
-                    class="btn btn--sm"
-                    @click=${props.onDeselectAll}
-                  >
-                    Unselect
-                  </button>
-                  <button
-                    class="btn btn--sm danger"
-                    ?disabled=${props.loading}
-                    @click=${props.onDeleteSelected}
-                  >
-                    ${icons.trash} Delete
-                  </button>
-                </div>
-              `
-            : nothing
-        }
+        ${props.selectedKeys.size > 0
+          ? html`
+              <div class="data-table-bulk-bar">
+                <span>${props.selectedKeys.size} selected</span>
+                <button class="btn btn--sm" @click=${props.onDeselectAll}>Unselect</button>
+                <button
+                  class="btn btn--sm danger"
+                  ?disabled=${props.loading}
+                  @click=${props.onDeleteSelected}
+                >
+                  ${icons.trash} Delete
+                </button>
+              </div>
+            `
+          : nothing}
 
         <div class="data-table-container">
           <table class="data-table">
             <thead>
               <tr>
                 <th class="data-table-checkbox-col">
-                  ${
-                    paginated.length > 0
-                      ? html`<input
+                  ${paginated.length > 0
+                    ? html`<input
                         type="checkbox"
-                        .checked=${paginated.length > 0 && paginated.every((r) => props.selectedKeys.has(r.key))}
-                        .indeterminate=${paginated.some((r) => props.selectedKeys.has(r.key)) && !paginated.every((r) => props.selectedKeys.has(r.key))}
+                        .checked=${paginated.length > 0 &&
+                        paginated.every((r) => props.selectedKeys.has(r.key))}
+                        .indeterminate=${paginated.some((r) => props.selectedKeys.has(r.key)) &&
+                        !paginated.every((r) => props.selectedKeys.has(r.key))}
                         @change=${() => {
                           const allSelected = paginated.every((r) => props.selectedKeys.has(r.key));
                           if (allSelected) {
@@ -445,13 +441,11 @@ export function renderSessions(props: SessionsProps) {
                         }}
                         aria-label="Select all on page"
                       />`
-                      : nothing
-                  }
+                    : nothing}
                 </th>
                 ${sortHeader("key", "Key", "data-table-key-col")}
                 <th>Label</th>
-                ${sortHeader("kind", "Kind")}
-                ${sortHeader("updated", "Updated")}
+                ${sortHeader("kind", "Kind")} ${sortHeader("updated", "Updated")}
                 ${sortHeader("tokens", "Tokens")}
                 <th>Thinking</th>
                 <th>Fast</th>
@@ -460,65 +454,61 @@ export function renderSessions(props: SessionsProps) {
               </tr>
             </thead>
             <tbody>
-              ${
-                paginated.length === 0
-                  ? html`
-                      <tr>
-                        <td colspan="10" style="text-align: center; padding: 48px 16px; color: var(--muted)">
-                          No sessions found.
-                        </td>
-                      </tr>
-                    `
-                  : paginated.map((row) =>
-                      renderRow(
-                        row,
-                        props.basePath,
-                        props.onPatch,
-                        props.selectedKeys.has(row.key),
-                        props.onToggleSelect,
-                        props.loading,
-                        props.onNavigateToChat,
-                      ),
-                    )
-              }
+              ${paginated.length === 0
+                ? html`
+                    <tr>
+                      <td
+                        colspan="10"
+                        style="text-align: center; padding: 48px 16px; color: var(--muted)"
+                      >
+                        No sessions found.
+                      </td>
+                    </tr>
+                  `
+                : paginated.map((row) =>
+                    renderRow(
+                      row,
+                      props.basePath,
+                      props.onPatch,
+                      props.selectedKeys.has(row.key),
+                      props.onToggleSelect,
+                      props.loading,
+                      props.onNavigateToChat,
+                    ),
+                  )}
             </tbody>
           </table>
         </div>
 
-        ${
-          totalRows > 0
-            ? html`
-                <div class="data-table-pagination">
-                  <div class="data-table-pagination__info">
-                    ${page * props.pageSize + 1}-${Math.min((page + 1) * props.pageSize, totalRows)}
-                    of ${totalRows} row${totalRows === 1 ? "" : "s"}
-                  </div>
-                  <div class="data-table-pagination__controls">
-                    <select
-                      style="height: 32px; padding: 0 8px; font-size: 13px; border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--card);"
-                      .value=${String(props.pageSize)}
-                      @change=${(e: Event) =>
-                        props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
-                    >
-                      ${PAGE_SIZES.map((s) => html`<option value=${s}>${s} per page</option>`)}
-                    </select>
-                    <button
-                      ?disabled=${page <= 0}
-                      @click=${() => props.onPageChange(page - 1)}
-                    >
-                      Previous
-                    </button>
-                    <button
-                      ?disabled=${page >= totalPages - 1}
-                      @click=${() => props.onPageChange(page + 1)}
-                    >
-                      Next
-                    </button>
-                  </div>
+        ${totalRows > 0
+          ? html`
+              <div class="data-table-pagination">
+                <div class="data-table-pagination__info">
+                  ${page * props.pageSize + 1}-${Math.min((page + 1) * props.pageSize, totalRows)}
+                  of ${totalRows} row${totalRows === 1 ? "" : "s"}
                 </div>
-              `
-            : nothing
-        }
+                <div class="data-table-pagination__controls">
+                  <select
+                    style="height: 32px; padding: 0 8px; font-size: 13px; border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--card);"
+                    .value=${String(props.pageSize)}
+                    @change=${(e: Event) =>
+                      props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
+                  >
+                    ${PAGE_SIZES.map((s) => html`<option value=${s}>${s} per page</option>`)}
+                  </select>
+                  <button ?disabled=${page <= 0} @click=${() => props.onPageChange(page - 1)}>
+                    Previous
+                  </button>
+                  <button
+                    ?disabled=${page >= totalPages - 1}
+                    @click=${() => props.onPageChange(page + 1)}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            `
+          : nothing}
       </div>
     </section>
   `;
@@ -602,56 +592,57 @@ function renderRow(
       </td>
       <td class="data-table-key-col">
         <div class="mono session-key-cell">
-          ${
-            canLink
-              ? html`<a
-                  href=${chatUrl}
-                  class="session-link"
-                  @click=${(e: MouseEvent) => {
-                    if (
-                      e.defaultPrevented ||
-                      e.button !== 0 ||
-                      e.metaKey ||
-                      e.ctrlKey ||
-                      e.shiftKey ||
-                      e.altKey
-                    ) {
-                      return;
-                    }
-                    if (onNavigateToChat) {
-                      e.preventDefault();
-                      onNavigateToChat(row.key);
-                    }
-                  }}
-                >${row.key}</a>`
-              : row.key
-          }
-          ${
-            secondaryTitle
-              ? html`<span class="muted session-key-display-name">${secondaryTitle}</span>`
-              : nothing
-          }
-          ${
-            contextMeta
-              ? html`<span class="muted session-key-display-name">${contextMeta}</span>`
-              : nothing
-          }
-          ${
-            row.lastMessagePreview
-              ? html`<span class="muted session-key-display-name" style="font-style:italic;">${row.lastMessagePreview}</span>`
-              : nothing
-          }
+          ${canLink
+            ? html`<a
+                href=${chatUrl}
+                class="session-link"
+                @click=${(e: MouseEvent) => {
+                  if (
+                    e.defaultPrevented ||
+                    e.button !== 0 ||
+                    e.metaKey ||
+                    e.ctrlKey ||
+                    e.shiftKey ||
+                    e.altKey
+                  ) {
+                    return;
+                  }
+                  if (onNavigateToChat) {
+                    e.preventDefault();
+                    onNavigateToChat(row.key);
+                  }
+                }}
+                >${row.key}</a
+              >`
+            : row.key}
+          ${secondaryTitle
+            ? html`<span class="muted session-key-display-name">${secondaryTitle}</span>`
+            : nothing}
+          ${contextMeta
+            ? html`<span class="muted session-key-display-name">${contextMeta}</span>`
+            : nothing}
+          ${row.lastMessagePreview
+            ? html`<span class="muted session-key-display-name" style="font-style:italic;"
+                >${row.lastMessagePreview}</span
+              >`
+            : nothing}
           ${(() => {
             const delivery = resolveDeliveryContext(row);
             return delivery
-              ? html`<span class="muted session-key-display-name" style="font-size:11px; opacity:0.75;">→ ${delivery}</span>`
+              ? html`<span
+                  class="muted session-key-display-name"
+                  style="font-size:11px; opacity:0.75;"
+                  >→ ${delivery}</span
+                >`
               : nothing;
           })()}
-          ${
-            row.parentSessionKey
-              ? html`<span class="muted session-key-display-name" style="font-size:11px; opacity:0.65;">⊕ from ${row.parentSessionKey}</span>`
-              : nothing
-          }
+          ${row.parentSessionKey
+            ? html`<span
+                class="muted session-key-display-name"
+                style="font-size:11px; opacity:0.65;"
+                >⊕ from ${row.parentSessionKey}</span
+              >`
+            : nothing}
         </div>
       </td>
       <td>
@@ -669,76 +660,81 @@ function renderRow(
       <td>
         <div style="display:flex; gap:4px; align-items:center;">
           <span class="data-table-badge ${badgeClass}">${row.kind}</span>
-          ${
-            row.sendPolicy === "deny"
+          ${row.sendPolicy === "deny"
+            ? html`
+                <span
+                  class="data-table-badge"
+                  style="background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7"
+                  >🛡️ Guardian</span
+                >
+              `
+            : nothing}
+          ${row.spawnDepth === 1
+            ? html`
+                <span
+                  class="data-table-badge"
+                  style="background: #e3f2fd; color: #1565c0; border: 1px solid #90caf9"
+                  >🤖 subagent</span
+                >
+              `
+            : row.spawnDepth != null && row.spawnDepth > 1
+              ? html`<span
+                  class="data-table-badge"
+                  style="background:#e3f2fd; color:#1565c0; border:1px solid #90caf9;"
+                  >🤖 depth:${row.spawnDepth}</span
+                >`
+              : nothing}
+          ${row.status === "running"
+            ? html`
+                <span
+                  class="data-table-badge"
+                  style="background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7"
+                  title="Session running"
+                  >● running</span
+                >
+              `
+            : row.status === "failed"
               ? html`
                   <span
                     class="data-table-badge"
-                    style="background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7"
-                    >🛡️ Guardian</span
+                    style="background: #ffebee; color: #c62828; border: 1px solid #ef9a9a"
+                    title="Session failed"
+                    >✗ failed</span
                   >
                 `
-              : nothing
-          }
-          ${
-            row.spawnDepth === 1
-              ? html`
-                  <span
+              : row.status === "killed" || row.status === "timeout"
+                ? html`<span
                     class="data-table-badge"
-                    style="background: #e3f2fd; color: #1565c0; border: 1px solid #90caf9"
-                    >🤖 subagent</span
-                  >
-                `
-              : row.spawnDepth != null && row.spawnDepth > 1
-                ? html`<span class="data-table-badge" style="background:#e3f2fd; color:#1565c0; border:1px solid #90caf9;">🤖 depth:${row.spawnDepth}</span>`
-                : nothing
-          }
-          ${
-            row.status === "running"
-              ? html`
-                  <span
-                    class="data-table-badge"
-                    style="background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7"
-                    title="Session running"
-                    >● running</span
-                  >
-                `
-              : row.status === "failed"
-                ? html`
-                    <span
-                      class="data-table-badge"
-                      style="background: #ffebee; color: #c62828; border: 1px solid #ef9a9a"
-                      title="Session failed"
-                      >✗ failed</span
-                    >
-                  `
-                : row.status === "killed" || row.status === "timeout"
-                  ? html`<span class="data-table-badge" style="background:#fff8e1; color:#f57f17; border:1px solid #ffe082;" title="Session ${row.status}">⚠ ${row.status}</span>`
-                  : row.abortedLastRun
-                    ? html`
-                        <span
-                          class="data-table-badge"
-                          style="background: #fff8e1; color: #f57f17; border: 1px solid #ffe082"
-                          title="Last run aborted"
-                          >⚠ aborted</span
-                        >
-                      `
-                    : nothing
-          }
-          ${
-            childCount > 0
-              ? html`<span class="data-table-badge" style="background:#f3e5f5; color:#6a1b9a; border:1px solid #ce93d8;" title="${childCount} child sessions">👶 ${childCount}</span>`
-              : nothing
-          }
+                    style="background:#fff8e1; color:#f57f17; border:1px solid #ffe082;"
+                    title="Session ${row.status}"
+                    >⚠ ${row.status}</span
+                  >`
+                : row.abortedLastRun
+                  ? html`
+                      <span
+                        class="data-table-badge"
+                        style="background: #fff8e1; color: #f57f17; border: 1px solid #ffe082"
+                        title="Last run aborted"
+                        >⚠ aborted</span
+                      >
+                    `
+                  : nothing}
+          ${childCount > 0
+            ? html`<span
+                class="data-table-badge"
+                style="background:#f3e5f5; color:#6a1b9a; border:1px solid #ce93d8;"
+                title="${childCount} child sessions"
+                >👶 ${childCount}</span
+              >`
+            : nothing}
         </div>
       </td>
       <td title=${updatedTitle}>
         <div style="display:flex; align-items:center; gap:6px;">
-          ${
-            isRecent
-              ? html`
-                  <span
-                    style="
+          ${isRecent
+            ? html`
+                <span
+                  style="
                       display: inline-block;
                       width: 8px;
                       height: 8px;
@@ -746,20 +742,15 @@ function renderRow(
                       background: #4caf50;
                       box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.3);
                     "
-                  ></span>
-                `
-              : nothing
-          }
-          ${
-            isRunning && startedAgo
-              ? html`<span style="color:#2e7d32; font-weight:500;">● ${startedAgo} active</span>`
-              : html`<span class="${isRecent ? "muted" : ""}">${updated}</span>`
-          }
-          ${
-            row.runtimeMs != null
-              ? html`<span class="muted" style="font-size:11px;">${row.runtimeMs}ms</span>`
-              : nothing
-          }
+                ></span>
+              `
+            : nothing}
+          ${isRunning && startedAgo
+            ? html`<span style="color:#2e7d32; font-weight:500;">● ${startedAgo} active</span>`
+            : html`<span class="${isRecent ? "muted" : ""}">${updated}</span>`}
+          ${row.runtimeMs != null
+            ? html`<span class="muted" style="font-size:11px;">${row.runtimeMs}ms</span>`
+            : nothing}
         </div>
       </td>
       <td>

@@ -1,10 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
-import {
-  resolvePluginWebSearchProviders,
-  resolveRuntimeWebSearchProviders,
-} from "./web-search-providers.runtime.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+type RegistryModule = typeof import("./registry.js");
+type RuntimeModule = typeof import("./runtime.js");
+type WebSearchProvidersRuntimeModule = typeof import("./web-search-providers.runtime.js");
+type ManifestRegistryModule = typeof import("./manifest-registry.js");
 
 const BUNDLED_WEB_SEARCH_PROVIDERS = [
   { pluginId: "brave", id: "brave", order: 10 },
@@ -13,85 +12,161 @@ const BUNDLED_WEB_SEARCH_PROVIDERS = [
   { pluginId: "moonshot", id: "kimi", order: 40 },
   { pluginId: "perplexity", id: "perplexity", order: 50 },
   { pluginId: "firecrawl", id: "firecrawl", order: 60 },
+  { pluginId: "exa", id: "exa", order: 65 },
   { pluginId: "tavily", id: "tavily", order: 70 },
+  { pluginId: "duckduckgo", id: "duckduckgo", order: 100 },
 ] as const;
 
-const { loadOpenClawPluginsMock } = vi.hoisted(() => ({
-  loadOpenClawPluginsMock: vi.fn((params?: { config?: { plugins?: Record<string, unknown> } }) => {
-    const plugins = params?.config?.plugins as
-      | {
-          enabled?: boolean;
-          allow?: string[];
-          entries?: Record<string, { enabled?: boolean }>;
-        }
-      | undefined;
-    if (plugins?.enabled === false) {
-      return { webSearchProviders: [] };
-    }
-    const allow = Array.isArray(plugins?.allow) && plugins.allow.length > 0 ? plugins.allow : null;
-    const entries = plugins?.entries ?? {};
-    const webSearchProviders = BUNDLED_WEB_SEARCH_PROVIDERS.filter((provider) => {
-      if (allow && !allow.includes(provider.pluginId)) {
-        return false;
-      }
-      if (entries[provider.pluginId]?.enabled === false) {
-        return false;
-      }
-      return true;
-    }).map((provider) => ({
-      pluginId: provider.pluginId,
-      pluginName: provider.pluginId,
-      source: "test" as const,
-      provider: {
-        id: provider.id,
-        label: provider.id,
-        hint: `${provider.id} provider`,
-        envVars: [`${provider.id.toUpperCase()}_API_KEY`],
-        placeholder: `${provider.id}-...`,
-        signupUrl: `https://example.com/${provider.id}`,
-        autoDetectOrder: provider.order,
-        credentialPath: `plugins.entries.${provider.pluginId}.config.webSearch.apiKey`,
-        getCredentialValue: () => "configured",
-        setCredentialValue: () => {},
-        createTool: () => ({
-          description: provider.id,
-          parameters: {},
-          execute: async () => ({}),
-        }),
-      },
-    }));
-    return { webSearchProviders };
-  }),
-}));
+let createEmptyPluginRegistry: RegistryModule["createEmptyPluginRegistry"];
+let loadPluginManifestRegistryMock: ReturnType<typeof vi.fn>;
+let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
+let resolvePluginWebSearchProviders: WebSearchProvidersRuntimeModule["resolvePluginWebSearchProviders"];
+let resolveRuntimeWebSearchProviders: WebSearchProvidersRuntimeModule["resolveRuntimeWebSearchProviders"];
+let resetWebSearchProviderSnapshotCacheForTests: WebSearchProvidersRuntimeModule["__testing"]["resetWebSearchProviderSnapshotCacheForTests"];
+let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
+let loaderModule: typeof import("./loader.js");
+let manifestRegistryModule: ManifestRegistryModule;
 
-vi.mock("./loader.js", () => ({
-  loadOpenClawPlugins: loadOpenClawPluginsMock,
-}));
+function buildMockedWebSearchProviders(params?: {
+  config?: { plugins?: Record<string, unknown> };
+}) {
+  const plugins = params?.config?.plugins as
+    | {
+        enabled?: boolean;
+        allow?: string[];
+        entries?: Record<string, { enabled?: boolean }>;
+      }
+    | undefined;
+  if (plugins?.enabled === false) {
+    return [];
+  }
+  const allow = Array.isArray(plugins?.allow) && plugins.allow.length > 0 ? plugins.allow : null;
+  const entries = plugins?.entries ?? {};
+  const webSearchProviders = BUNDLED_WEB_SEARCH_PROVIDERS.filter((provider) => {
+    if (allow && !allow.includes(provider.pluginId)) {
+      return false;
+    }
+    if (entries[provider.pluginId]?.enabled === false) {
+      return false;
+    }
+    return true;
+  }).map((provider) => ({
+    pluginId: provider.pluginId,
+    pluginName: provider.pluginId,
+    source: "test" as const,
+    provider: {
+      id: provider.id,
+      label: provider.id,
+      hint: `${provider.id} provider`,
+      envVars: [`${provider.id.toUpperCase()}_API_KEY`],
+      placeholder: `${provider.id}-...`,
+      signupUrl: `https://example.com/${provider.id}`,
+      autoDetectOrder: provider.order,
+      credentialPath: `plugins.entries.${provider.pluginId}.config.webSearch.apiKey`,
+      getCredentialValue: () => "configured",
+      setCredentialValue: () => {},
+      createTool: () => ({
+        description: provider.id,
+        parameters: {},
+        execute: async () => ({}),
+      }),
+    },
+  }));
+  return webSearchProviders;
+}
 
 describe("resolvePluginWebSearchProviders", () => {
+  beforeAll(async () => {
+    ({ createEmptyPluginRegistry } = await import("./registry.js"));
+    manifestRegistryModule = await import("./manifest-registry.js");
+    loaderModule = await import("./loader.js");
+    ({ setActivePluginRegistry } = await import("./runtime.js"));
+    ({
+      resolvePluginWebSearchProviders,
+      resolveRuntimeWebSearchProviders,
+      __testing: { resetWebSearchProviderSnapshotCacheForTests },
+    } = await import("./web-search-providers.runtime.js"));
+  });
+
   beforeEach(() => {
-    loadOpenClawPluginsMock.mockClear();
+    resetWebSearchProviderSnapshotCacheForTests();
+    loadPluginManifestRegistryMock = vi
+      .spyOn(manifestRegistryModule, "loadPluginManifestRegistry")
+      .mockReturnValue({
+        plugins: [
+          {
+            id: "brave",
+            origin: "bundled",
+            rootDir: "/tmp/brave",
+            source: "/tmp/brave/index.js",
+            manifestPath: "/tmp/brave/openclaw.plugin.json",
+            channels: [],
+            providers: [],
+            skills: [],
+            hooks: [],
+            configUiHints: { "webSearch.apiKey": { label: "key" } },
+          },
+          {
+            id: "noise",
+            origin: "bundled",
+            rootDir: "/tmp/noise",
+            source: "/tmp/noise/index.js",
+            manifestPath: "/tmp/noise/openclaw.plugin.json",
+            channels: [],
+            providers: [],
+            skills: [],
+            hooks: [],
+            configUiHints: { unrelated: { label: "nope" } },
+          },
+        ],
+        diagnostics: [],
+      } as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
+        ...args: unknown[]
+      ) => infer R
+        ? R
+        : never);
+    loadOpenClawPluginsMock = vi
+      .spyOn(loaderModule, "loadOpenClawPlugins")
+      .mockImplementation((params) => {
+        const registry = createEmptyPluginRegistry();
+        registry.webSearchProviders = buildMockedWebSearchProviders(params);
+        return registry;
+      });
     setActivePluginRegistry(createEmptyPluginRegistry());
     vi.useRealTimers();
   });
 
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
+    vi.restoreAllMocks();
   });
 
-  it("loads bundled providers through the plugin loader in auto-detect order", () => {
+  it("loads bundled providers through the plugin loader in alphabetical order", () => {
     const providers = resolvePluginWebSearchProviders({});
 
     expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
       "brave:brave",
+      "duckduckgo:duckduckgo",
+      "exa:exa",
+      "firecrawl:firecrawl",
       "google:gemini",
       "xai:grok",
       "moonshot:kimi",
       "perplexity:perplexity",
-      "firecrawl:firecrawl",
       "tavily:tavily",
     ]);
     expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("scopes plugin loading to manifest-declared web-search candidates", () => {
+    resolvePluginWebSearchProviders({});
+
+    expect(loadPluginManifestRegistryMock).toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["brave"],
+      }),
+    );
   });
 
   it("memoizes snapshot provider resolution for the same config and env", () => {

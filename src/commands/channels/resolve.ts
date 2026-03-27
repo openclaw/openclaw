@@ -5,7 +5,7 @@ import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targ
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 
 export type ChannelsResolveOptions = {
@@ -166,7 +166,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   }
 
   if (opts.json) {
-    runtime.log(JSON.stringify(results, null, 2));
+    writeRuntimeJson(runtime, results);
     return;
   }
 

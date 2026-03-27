@@ -3,8 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  collectChannelSchemaMetadata,
+  collectPluginSchemaMetadata,
+} from "./channel-config-metadata.js";
 import { FIELD_HELP } from "./schema.help.js";
 import type { ConfigSchemaResponse } from "./schema.js";
+import { buildConfigSchema } from "./schema.js";
 import { schemaHasChildren } from "./schema.shared.js";
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -23,14 +29,6 @@ type JsonSchemaObject = JsonSchemaNode & {
   anyOf?: JsonSchemaObject[];
   allOf?: JsonSchemaObject[];
   oneOf?: JsonSchemaObject[];
-};
-
-type ChannelSurfaceMetadata = {
-  id: string;
-  label: string;
-  description?: string;
-  configSchema?: Record<string, unknown>;
-  configUiHints?: ConfigSchemaResponse["uiHints"];
 };
 
 export type ConfigDocBaselineKind = "core" | "channel" | "plugin";
@@ -330,28 +328,7 @@ function resolveEntryKind(configPath: string): ConfigDocBaselineKind {
   return "core";
 }
 
-function resolveFirstExistingPath(candidates: string[]): string | null {
-  for (const candidate of candidates) {
-    try {
-      fsSync.accessSync(candidate);
-      return candidate;
-    } catch {
-      // Keep scanning for other source file variants.
-    }
-  }
-  return null;
-}
-
 async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> {
-  const [
-    { listChannelPluginCatalogEntries },
-    { loadPluginManifestRegistry },
-    { buildConfigSchema },
-  ] = await Promise.all([
-    import("../channels/plugins/catalog.js"),
-    import("../plugins/manifest-registry.js"),
-    import("./schema.js"),
-  ]);
   const repoRoot = resolveRepoRoot();
   const env = {
     ...process.env,
@@ -365,132 +342,21 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
     env,
     config: {},
   });
-  const channelCatalogById = new Map(
-    listChannelPluginCatalogEntries({
-      workspaceDir: repoRoot,
-      env,
-    }).map((entry) => [entry.id, entry.meta] as const),
-  );
   logConfigDocBaselineDebug(`loaded ${manifestRegistry.plugins.length} bundled plugin manifests`);
-  const bundledChannelPlugins = manifestRegistry.plugins.filter(
-    (plugin) => plugin.origin === "bundled" && plugin.channels.length > 0,
-  );
-  const channelPlugins =
-    process.env.OPENCLAW_CONFIG_DOC_BASELINE_DEBUG === "1"
-      ? await bundledChannelPlugins.reduce<Promise<ChannelSurfaceMetadata[]>>(
-          async (promise, plugin) => {
-            const loaded = await promise;
-            const catalogMeta = channelCatalogById.get(plugin.id);
-            const label = catalogMeta?.label ?? plugin.name ?? plugin.id;
-            const description = catalogMeta?.blurb ?? plugin.description;
-            loaded.push(
-              (await loadChannelSurfaceMetadata(
-                plugin.rootDir,
-                plugin.id,
-                label,
-                description,
-                repoRoot,
-              )) ?? {
-                id: plugin.id,
-                label,
-                description,
-                configSchema: plugin.configSchema,
-                configUiHints: plugin.configUiHints,
-              },
-            );
-            return loaded;
-          },
-          Promise.resolve([]),
-        )
-      : await Promise.all(
-          bundledChannelPlugins.map(async (plugin) => {
-            const catalogMeta = channelCatalogById.get(plugin.id);
-            const label = catalogMeta?.label ?? plugin.name ?? plugin.id;
-            const description = catalogMeta?.blurb ?? plugin.description;
-            return (
-              (await loadChannelSurfaceMetadata(
-                plugin.rootDir,
-                plugin.id,
-                label,
-                description,
-                repoRoot,
-              )) ?? {
-                id: plugin.id,
-                label,
-                description,
-                configSchema: plugin.configSchema,
-                configUiHints: plugin.configUiHints,
-              }
-            );
-          }),
-        );
+  const bundledRegistry = {
+    ...manifestRegistry,
+    plugins: manifestRegistry.plugins.filter((plugin) => plugin.origin === "bundled"),
+  };
+  const channelPlugins = collectChannelSchemaMetadata(bundledRegistry);
   logConfigDocBaselineDebug(
-    `loaded ${channelPlugins.length} bundled channel entries from channel surfaces`,
+    `loaded ${channelPlugins.length} bundled channel entries from metadata`,
   );
 
   return buildConfigSchema({
     cache: false,
-    plugins: manifestRegistry.plugins
-      .filter((plugin) => plugin.origin === "bundled")
-      .map((plugin) => ({
-        id: plugin.id,
-        name: plugin.name,
-        description: plugin.description,
-        configUiHints: plugin.configUiHints,
-        configSchema: plugin.configSchema,
-      })),
-    channels: channelPlugins.map((entry) => ({
-      id: entry.id,
-      label: entry.label,
-      description: entry.description,
-      configSchema: entry.configSchema,
-      configUiHints: entry.configUiHints,
-    })),
+    plugins: collectPluginSchemaMetadata(bundledRegistry),
+    channels: channelPlugins,
   });
-}
-
-async function loadChannelSurfaceMetadata(
-  rootDir: string,
-  id: string,
-  label: string,
-  description: string | undefined,
-  repoRoot: string,
-): Promise<ChannelSurfaceMetadata | null> {
-  logConfigDocBaselineDebug(`resolve channel config surface ${rootDir}`);
-  const modulePath = resolveFirstExistingPath([
-    path.join(rootDir, "src", "config-schema.ts"),
-    path.join(rootDir, "src", "config-schema.js"),
-    path.join(rootDir, "src", "config-schema.mts"),
-    path.join(rootDir, "src", "config-schema.mjs"),
-  ]);
-  if (!modulePath) {
-    logConfigDocBaselineDebug(`missing channel config schema module ${rootDir}`);
-    return null;
-  }
-
-  logConfigDocBaselineDebug(`import channel config schema ${modulePath}`);
-  try {
-    const { loadChannelConfigSurfaceModule } =
-      await import("../../scripts/load-channel-config-surface.ts");
-    const configSurface = await loadChannelConfigSurfaceModule(modulePath, { repoRoot });
-    if (!configSurface) {
-      logConfigDocBaselineDebug(`channel config schema export missing ${modulePath}`);
-      return null;
-    }
-    logConfigDocBaselineDebug(`completed channel config schema import ${modulePath}`);
-    return {
-      id,
-      label,
-      description,
-      configSchema: configSurface.schema,
-      configUiHints: configSurface.uiHints as ConfigSchemaResponse["uiHints"] | undefined,
-    };
-  } catch (error) {
-    logConfigDocBaselineDebug(
-      `channel config schema import failed for ${modulePath}: ${String(error)}`,
-    );
-    return null;
-  }
 }
 
 export function collectConfigDocBaselineEntries(

@@ -7,6 +7,7 @@ vi.mock("./manifest-registry.js", () => ({
 }));
 
 import {
+  resolveManifestDeprecatedProviderAuthChoice,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
   resolveManifestProviderOnboardAuthFlags,
@@ -90,5 +91,31 @@ describe("provider auth choice manifest helpers", () => {
         description: "Moonshot API key",
       },
     ]);
+  });
+
+  it("resolves deprecated auth-choice aliases through manifest metadata", () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "minimax",
+          providerAuthChoices: [
+            {
+              provider: "minimax",
+              method: "api-global",
+              choiceId: "minimax-global-api",
+              deprecatedChoiceIds: ["minimax", "minimax-api"],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(resolveManifestDeprecatedProviderAuthChoice("minimax")?.choiceId).toBe(
+      "minimax-global-api",
+    );
+    expect(resolveManifestDeprecatedProviderAuthChoice("minimax-api")?.choiceId).toBe(
+      "minimax-global-api",
+    );
+    expect(resolveManifestDeprecatedProviderAuthChoice("openai")).toBeUndefined();
   });
 });

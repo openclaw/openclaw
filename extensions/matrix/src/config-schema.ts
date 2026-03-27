@@ -1,11 +1,13 @@
+import { ToolPolicySchema } from "openclaw/plugin-sdk/agent-config-primitives";
 import {
   AllowFromListSchema,
   buildNestedDmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
-} from "openclaw/plugin-sdk/channel-config-schema";
-import { z } from "zod";
-import { buildSecretInputSchema, MarkdownConfigSchema, ToolPolicySchema } from "./runtime-api.js";
+  MarkdownConfigSchema,
+} from "openclaw/plugin-sdk/channel-config-primitives";
+import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
+import { z } from "openclaw/plugin-sdk/zod";
 
 const matrixActionSchema = z
   .object({

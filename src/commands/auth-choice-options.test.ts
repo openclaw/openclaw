@@ -40,6 +40,15 @@ describe("buildAuthChoiceOptions", () => {
   it("includes core and provider-specific auth choices", () => {
     resolveManifestProviderAuthChoices.mockReturnValue([
       {
+        pluginId: "chutes",
+        providerId: "chutes",
+        methodId: "oauth",
+        choiceId: "chutes",
+        choiceLabel: "Chutes (OAuth)",
+        groupId: "chutes",
+        groupLabel: "Chutes",
+      },
+      {
         pluginId: "github-copilot",
         providerId: "github-copilot",
         methodId: "device",
@@ -65,6 +74,15 @@ describe("buildAuthChoiceOptions", () => {
         choiceLabel: "OpenAI API key",
         groupId: "openai",
         groupLabel: "OpenAI",
+      },
+      {
+        pluginId: "litellm",
+        providerId: "litellm",
+        methodId: "api-key",
+        choiceId: "litellm-api-key",
+        choiceLabel: "LiteLLM API key",
+        groupId: "litellm",
+        groupLabel: "LiteLLM",
       },
       {
         pluginId: "moonshot",
@@ -110,15 +128,6 @@ describe("buildAuthChoiceOptions", () => {
         choiceLabel: "Together AI API key",
         groupId: "together",
         groupLabel: "Together AI",
-      },
-      {
-        pluginId: "qwen-portal-auth",
-        providerId: "qwen-portal",
-        methodId: "device",
-        choiceId: "qwen-portal",
-        choiceLabel: "Qwen OAuth",
-        groupId: "qwen",
-        groupLabel: "Qwen",
       },
       {
         pluginId: "xai",
@@ -200,7 +209,6 @@ describe("buildAuthChoiceOptions", () => {
       "moonshot-api-key",
       "together-api-key",
       "chutes",
-      "qwen-portal",
       "xai-api-key",
       "mistral-api-key",
       "volcengine-api-key",
@@ -216,6 +224,20 @@ describe("buildAuthChoiceOptions", () => {
 
   it("builds cli help choices from the same catalog", () => {
     resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "chutes",
+        providerId: "chutes",
+        methodId: "oauth",
+        choiceId: "chutes",
+        choiceLabel: "Chutes (OAuth)",
+      },
+      {
+        pluginId: "litellm",
+        providerId: "litellm",
+        methodId: "api-key",
+        choiceId: "litellm-api-key",
+        choiceLabel: "LiteLLM API key",
+      },
       {
         pluginId: "openai",
         providerId: "openai",
@@ -287,11 +309,24 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(cliChoices).not.toContain("ollama");
     expect(cliChoices).not.toContain("openai-api-key");
+    expect(cliChoices).not.toContain("chutes");
+    expect(cliChoices).not.toContain("litellm-api-key");
+    expect(cliChoices).toContain("custom-api-key");
     expect(cliChoices).toContain("skip");
   });
 
   it("shows Chutes in grouped provider selection", () => {
-    resolveManifestProviderAuthChoices.mockReturnValue([]);
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "chutes",
+        providerId: "chutes",
+        methodId: "oauth",
+        choiceId: "chutes",
+        choiceLabel: "Chutes (OAuth)",
+        groupId: "chutes",
+        groupLabel: "Chutes",
+      },
+    ]);
     const { groups } = buildAuthChoiceGroups({
       store: EMPTY_STORE,
       includeSkip: false,
@@ -300,6 +335,28 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(chutesGroup).toBeDefined();
     expect(chutesGroup?.options.some((opt) => opt.value === "chutes")).toBe(true);
+  });
+
+  it("shows LiteLLM in grouped provider selection", () => {
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "litellm",
+        providerId: "litellm",
+        methodId: "api-key",
+        choiceId: "litellm-api-key",
+        choiceLabel: "LiteLLM API key",
+        groupId: "litellm",
+        groupLabel: "LiteLLM",
+      },
+    ]);
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+    });
+    const litellmGroup = groups.find((group) => group.value === "litellm");
+
+    expect(litellmGroup).toBeDefined();
+    expect(litellmGroup?.options.some((opt) => opt.value === "litellm-api-key")).toBe(true);
   });
 
   it("groups OpenCode Zen and Go under one OpenCode entry", () => {

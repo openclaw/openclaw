@@ -25,6 +25,22 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 
+export const BORDER_RADIUS_STOPS = [0, 25, 50, 75, 100] as const;
+export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
+
+function snapBorderRadius(value: number): BorderRadiusStop {
+  let best: BorderRadiusStop = BORDER_RADIUS_STOPS[0];
+  let bestDist = Math.abs(value - best);
+  for (const stop of BORDER_RADIUS_STOPS) {
+    const dist = Math.abs(value - stop);
+    if (dist < bestDist) {
+      best = stop;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
 export type UiSettings = {
   gatewayUrl: string;
   token: string;
@@ -253,7 +269,7 @@ export function loadSettings(): UiSettings {
         typeof parsed.borderRadius === "number" &&
         parsed.borderRadius >= 0 &&
         parsed.borderRadius <= 100
-          ? parsed.borderRadius
+          ? snapBorderRadius(parsed.borderRadius)
           : defaults.borderRadius,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };

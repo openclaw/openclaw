@@ -1,11 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
-import type { MsgContext } from "../../auto-reply/templating.js";
 import {
-  archiveSessionTranscripts,
-  cleanupArchivedSessionTranscripts,
-} from "../../gateway/session-archive.fs.js";
+  acquireSessionWriteLock,
+  resolveSessionLockMaxHoldFromTimeout,
+} from "../../agents/session-write-lock.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -15,13 +14,14 @@ import {
   normalizeSessionDeliveryFields,
   type DeliveryContext,
 } from "../../utils/delivery-context.js";
-import { getFileStatSnapshot, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
+import { getFileStatSnapshot } from "../cache-utils.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import {
   clearSessionStoreCaches,
   dropSessionStoreObjectCache,
   getSerializedSessionStore,
+  isSessionStoreCacheEnabled,
   readSessionStoreCache,
   setSerializedSessionStore,
   writeSessionStoreCache,
@@ -44,26 +44,17 @@ import {
 } from "./types.js";
 
 const log = createSubsystemLogger("sessions/store");
+let sessionArchiveRuntimePromise: Promise<
+  typeof import("../../gateway/session-archive.runtime.js")
+> | null = null;
 
-// ============================================================================
-// Session Store Cache with TTL Support
-// ============================================================================
-
-const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
+function loadSessionArchiveRuntime() {
+  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
+  return sessionArchiveRuntimePromise;
+}
 
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
   return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function getSessionStoreTtl(): number {
-  return resolveCacheTtlMs({
-    envValue: process.env.OPENCLAW_SESSION_CACHE_TTL_MS,
-    defaultTtlMs: DEFAULT_SESSION_STORE_TTL_MS,
-  });
-}
-
-function isSessionStoreCacheEnabled(): boolean {
-  return isCacheEnabled(getSessionStoreTtl());
 }
 
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
@@ -175,6 +166,26 @@ export function clearSessionStoreCacheForTest(): void {
   LOCK_QUEUES.clear();
 }
 
+export async function drainSessionStoreLockQueuesForTest(): Promise<void> {
+  while (LOCK_QUEUES.size > 0) {
+    const queues = [...LOCK_QUEUES.values()];
+    for (const queue of queues) {
+      for (const task of queue.pending) {
+        task.reject(new Error("session store queue cleared for test"));
+      }
+      queue.pending.length = 0;
+    }
+    const activeDrains = queues.flatMap((queue) =>
+      queue.drainPromise ? [queue.drainPromise] : [],
+    );
+    if (activeDrains.length === 0) {
+      LOCK_QUEUES.clear();
+      return;
+    }
+    await Promise.allSettled(activeDrains);
+  }
+}
+
 /** Expose lock queue size for tests. */
 export function getSessionStoreLockQueueSizeForTest(): number {
   return LOCK_QUEUES.size;
@@ -201,7 +212,6 @@ export function loadSessionStore(
     const currentFileStat = getFileStatSnapshot(storePath);
     const cached = readSessionStoreCache({
       storePath,
-      ttlMs: getSessionStoreTtl(),
       mtimeMs: currentFileStat?.mtimeMs,
       sizeBytes: currentFileStat?.sizeBytes,
     });
@@ -469,7 +479,7 @@ async function saveSessionStoreUnlocked(
           .map((entry) => entry?.sessionId)
           .filter((id): id is string => Boolean(id)),
       );
-      const archivedForDeletedSessions = archiveRemovedSessionTranscripts({
+      const archivedForDeletedSessions = await archiveRemovedSessionTranscripts({
         removedSessionFiles,
         referencedSessionIds,
         storePath,
@@ -480,6 +490,7 @@ async function saveSessionStoreUnlocked(
         archivedDirs.add(archivedDir);
       }
       if (archivedDirs.size > 0 || maintenance.resetArchiveRetentionMs != null) {
+        const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
         const targetDirs =
           archivedDirs.size > 0 ? [...archivedDirs] : [path.dirname(path.resolve(storePath))];
         await cleanupArchivedSessionTranscripts({
@@ -608,6 +619,9 @@ type SessionStoreLockOptions = {
   staleMs?: number;
 };
 
+const SESSION_STORE_LOCK_MIN_HOLD_MS = 5_000;
+const SESSION_STORE_LOCK_TIMEOUT_GRACE_MS = 5_000;
+
 type SessionStoreLockTask = {
   fn: () => Promise<unknown>;
   resolve: (value: unknown) => void;
@@ -619,6 +633,7 @@ type SessionStoreLockTask = {
 type SessionStoreLockQueue = {
   running: boolean;
   pending: SessionStoreLockTask[];
+  drainPromise: Promise<void> | null;
 };
 
 const LOCK_QUEUES = new Map<string, SessionStoreLockQueue>();
@@ -639,13 +654,14 @@ function rememberRemovedSessionFile(
   }
 }
 
-export function archiveRemovedSessionTranscripts(params: {
+export async function archiveRemovedSessionTranscripts(params: {
   removedSessionFiles: Iterable<[string, string | undefined]>;
   referencedSessionIds: ReadonlySet<string>;
   storePath: string;
   reason: "deleted" | "reset";
   restrictToStoreDir?: boolean;
-}): Set<string> {
+}): Promise<Set<string>> {
+  const { archiveSessionTranscripts } = await loadSessionArchiveRuntime();
   const archivedDirs = new Set<string>();
   for (const [sessionId, sessionFile] of params.removedSessionFiles) {
     if (params.referencedSessionIds.has(sessionId)) {
@@ -698,68 +714,88 @@ function lockTimeoutError(storePath: string): Error {
   return new Error(`timeout waiting for session store lock: ${storePath}`);
 }
 
+function resolveSessionStoreLockMaxHoldMs(timeoutMs: number | undefined): number | undefined {
+  if (timeoutMs == null || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return undefined;
+  }
+  return resolveSessionLockMaxHoldFromTimeout({
+    timeoutMs,
+    graceMs: SESSION_STORE_LOCK_TIMEOUT_GRACE_MS,
+    minMs: SESSION_STORE_LOCK_MIN_HOLD_MS,
+  });
+}
+
 function getOrCreateLockQueue(storePath: string): SessionStoreLockQueue {
   const existing = LOCK_QUEUES.get(storePath);
   if (existing) {
     return existing;
   }
-  const created: SessionStoreLockQueue = { running: false, pending: [] };
+  const created: SessionStoreLockQueue = { running: false, pending: [], drainPromise: null };
   LOCK_QUEUES.set(storePath, created);
   return created;
 }
 
 async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
   const queue = LOCK_QUEUES.get(storePath);
-  if (!queue || queue.running) {
+  if (!queue) {
+    return;
+  }
+  if (queue.drainPromise) {
+    await queue.drainPromise;
     return;
   }
   queue.running = true;
-  try {
-    while (queue.pending.length > 0) {
-      const task = queue.pending.shift();
-      if (!task) {
-        continue;
-      }
+  queue.drainPromise = (async () => {
+    try {
+      while (queue.pending.length > 0) {
+        const task = queue.pending.shift();
+        if (!task) {
+          continue;
+        }
 
-      const remainingTimeoutMs = task.timeoutMs ?? Number.POSITIVE_INFINITY;
-      if (task.timeoutMs != null && remainingTimeoutMs <= 0) {
-        task.reject(lockTimeoutError(storePath));
-        continue;
-      }
+        const remainingTimeoutMs = task.timeoutMs ?? Number.POSITIVE_INFINITY;
+        if (task.timeoutMs != null && remainingTimeoutMs <= 0) {
+          task.reject(lockTimeoutError(storePath));
+          continue;
+        }
 
-      let lock: { release: () => Promise<void> } | undefined;
-      let result: unknown;
-      let failed: unknown;
-      let hasFailure = false;
-      try {
-        lock = await acquireSessionWriteLock({
-          sessionFile: storePath,
-          timeoutMs: remainingTimeoutMs,
-          staleMs: task.staleMs,
+        let lock: { release: () => Promise<void> } | undefined;
+        let result: unknown;
+        let failed: unknown;
+        let hasFailure = false;
+        try {
+          lock = await acquireSessionWriteLock({
+            sessionFile: storePath,
+            timeoutMs: remainingTimeoutMs,
+            staleMs: task.staleMs,
+            maxHoldMs: resolveSessionStoreLockMaxHoldMs(task.timeoutMs),
+          });
+          result = await task.fn();
+        } catch (err) {
+          hasFailure = true;
+          failed = err;
+        } finally {
+          await lock?.release().catch(() => undefined);
+        }
+        if (hasFailure) {
+          task.reject(failed);
+          continue;
+        }
+        task.resolve(result);
+      }
+    } finally {
+      queue.running = false;
+      queue.drainPromise = null;
+      if (queue.pending.length === 0) {
+        LOCK_QUEUES.delete(storePath);
+      } else {
+        queueMicrotask(() => {
+          void drainSessionStoreLockQueue(storePath);
         });
-        result = await task.fn();
-      } catch (err) {
-        hasFailure = true;
-        failed = err;
-      } finally {
-        await lock?.release().catch(() => undefined);
       }
-      if (hasFailure) {
-        task.reject(failed);
-        continue;
-      }
-      task.resolve(result);
     }
-  } finally {
-    queue.running = false;
-    if (queue.pending.length === 0) {
-      LOCK_QUEUES.delete(storePath);
-    } else {
-      queueMicrotask(() => {
-        void drainSessionStoreLockQueue(storePath);
-      });
-    }
-  }
+  })();
+  await queue.drainPromise;
 }
 
 async function withSessionStoreLock<T>(

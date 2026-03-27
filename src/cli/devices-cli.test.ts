@@ -1,6 +1,9 @@
 import { Command } from "commander";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
+const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
+runtime.exit.mockImplementation(() => {});
 const callGateway = vi.fn();
 const buildGatewayConnectionDetails = vi.fn(() => ({
   url: "ws://127.0.0.1:18789",
@@ -11,12 +14,6 @@ const listDevicePairing = vi.fn();
 const approveDevicePairing = vi.fn();
 const summarizeDeviceTokens = vi.fn();
 const withProgress = vi.fn(async (_opts: unknown, fn: () => Promise<unknown>) => await fn());
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
-
 vi.mock("../gateway/call.js", () => ({
   callGateway,
   buildGatewayConnectionDetails,
@@ -32,8 +29,14 @@ vi.mock("../infra/device-pairing.js", () => ({
   summarizeDeviceTokens,
 }));
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: runtime,
+  writeRuntimeJson: (
+    targetRuntime: { log: (...args: unknown[]) => void },
+    value: unknown,
+    space = 2,
+  ) => targetRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined)),
 }));
 
 let registerDevicesCli: typeof import("./devices-cli.js").registerDevicesCli;
@@ -50,6 +53,11 @@ async function runDevicesCommand(argv: string[]) {
   const program = new Command();
   registerDevicesCli(program);
   await program.parseAsync(["devices", ...argv], { from: "user" });
+}
+
+function readRuntimeCallText(call: unknown[] | undefined): string {
+  const value = call?.[0];
+  return typeof value === "string" ? value : "";
 }
 
 describe("devices cli approve", () => {
@@ -305,13 +313,14 @@ describe("devices cli list", () => {
 
     await runDevicesCommand(["list"]);
 
-    const output = runtime.log.mock.calls.map((entry) => String(entry[0] ?? "")).join("\n");
+    const output = runtime.log.mock.calls.map((entry) => readRuntimeCallText(entry)).join("\n");
     expect(output).toContain("Scopes");
     expect(output).toContain("operator.admin, operator.read");
   });
 });
 
 afterEach(() => {
+  resetRuntimeCapture();
   callGateway.mockClear();
   buildGatewayConnectionDetails.mockClear();
   buildGatewayConnectionDetails.mockReturnValue({

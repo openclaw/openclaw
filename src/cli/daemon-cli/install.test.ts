@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../../test-utils/env.js";
+import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import type { DaemonActionResponse } from "./response.js";
 
 const resolveNodeStartupTlsEnvironmentMock = vi.hoisted(() => vi.fn());
@@ -43,6 +44,7 @@ const service = vi.hoisted(() => ({
   loadedText: "loaded",
   notLoadedText: "not loaded",
   isLoaded: vi.fn(async () => false),
+  stage: vi.fn(async () => {}),
   install: vi.fn(async () => {}),
   uninstall: vi.fn(async () => {}),
   restart: vi.fn(async () => {}),
@@ -125,13 +127,9 @@ vi.mock("./response.js", () => ({
   installDaemonServiceAndEmit: installDaemonServiceAndEmitMock,
 }));
 
-const runtimeLogs: string[] = [];
+const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime: {
-    log: (message: string) => runtimeLogs.push(message),
-    error: vi.fn(),
-    exit: vi.fn(),
-  },
+  defaultRuntime,
 }));
 
 function expectFirstInstallPlanCallOmitsToken() {
@@ -170,7 +168,8 @@ describe("runDaemonInstall", () => {
     isGatewayDaemonRuntimeMock.mockReset();
     installDaemonServiceAndEmitMock.mockReset();
     service.isLoaded.mockReset();
-    runtimeLogs.length = 0;
+    service.stage.mockReset();
+    resetRuntimeCapture();
     actionState.warnings.length = 0;
     actionState.emitted.length = 0;
     actionState.failed.length = 0;
@@ -197,13 +196,13 @@ describe("runDaemonInstall", () => {
     isGatewayDaemonRuntimeMock.mockReturnValue(true);
     installDaemonServiceAndEmitMock.mockResolvedValue(undefined);
     service.isLoaded.mockResolvedValue(false);
+    service.stage.mockResolvedValue(undefined);
     service.readCommand.mockResolvedValue(null);
     resolveNodeStartupTlsEnvironmentMock.mockReturnValue({
       NODE_EXTRA_CA_CERTS: undefined,
       NODE_USE_SYSTEM_CA: undefined,
     });
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
   });
 
   afterEach(() => {
@@ -358,5 +357,35 @@ describe("runDaemonInstall", () => {
         execPath: "/home/test/.nvm/versions/node/v22.18.0/bin/node",
       }),
     );
+  });
+
+  it("reuses env-backed service secrets during forced reinstall when the current shell is missing them", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENAI_API_KEY: "service-openai-key",
+      },
+    } as never);
+    const previous = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      await runDaemonInstall({ json: true, force: true });
+
+      expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env: expect.objectContaining({
+            OPENAI_API_KEY: "service-openai-key",
+          }),
+        }),
+      );
+      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previous;
+      }
+    }
   });
 });

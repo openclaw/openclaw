@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/provider-models";
 import { createOpenAIAttributionHeadersWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
+import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
 import {
   cloneFirstTemplateModel,
@@ -52,9 +53,6 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
   "gpt-5.2-codex",
   OPENAI_CODEX_GPT_53_MODEL_ID,
   OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
-  "gpt-5.1-codex",
-  "gpt-5.1-codex-mini",
-  "gpt-5.1-codex-max",
 ] as const;
 
 function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
@@ -141,19 +139,15 @@ function resolveCodexForwardCompatModel(
 
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   try {
-    const { getOAuthApiKey } = await import("./openai-codex-provider.runtime.js");
-    const refreshed = await getOAuthApiKey("openai-codex", {
-      "openai-codex": cred,
-    });
-    if (!refreshed) {
-      throw new Error("OpenAI Codex OAuth refresh returned no credentials.");
-    }
+    const { refreshOpenAICodexToken } = await import("./openai-codex-provider.runtime.js");
+    const refreshed = await refreshOpenAICodexToken(cred.refresh);
     return {
       ...cred,
-      ...refreshed.newCredentials,
+      ...refreshed,
       type: "oauth" as const,
       provider: PROVIDER_ID,
       email: cred.email,
+      displayName: cred.displayName,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -185,14 +179,27 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
     return { profiles: [] };
   }
 
+  const identity = resolveCodexAuthIdentity({
+    accessToken: creds.access,
+    email: typeof creds.email === "string" ? creds.email : undefined,
+  });
+
   return buildOauthProviderAuthResult({
     providerId: PROVIDER_ID,
     defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
     access: creds.access,
     refresh: creds.refresh,
     expires: creds.expires,
-    email: typeof creds.email === "string" ? creds.email : undefined,
+    email: identity.email,
+    profileName: identity.profileName,
   });
+}
+
+function buildOpenAICodexAuthDoctorHint(ctx: { profileId?: string }) {
+  if (ctx.profileId !== CODEX_CLI_PROFILE_ID) {
+    return undefined;
+  }
+  return "Deprecated profile. Run `openclaw models auth login --provider openai-codex` or `openclaw configure`.";
 }
 
 export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
@@ -233,6 +240,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
       },
     },
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
+    buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
     capabilities: {
       providerFamily: "openai",
     },

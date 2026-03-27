@@ -55,6 +55,8 @@ export {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
 } from "../../extensions/signal/api.js";
+export { isSignalSenderAllowed } from "../../extensions/signal/api.js";
+export type { SignalSender } from "../../extensions/signal/api.js";
 export { monitorSignalProvider } from "../../extensions/signal/api.js";
 export { probeSignal } from "../../extensions/signal/api.js";
 export { resolveSignalReactionLevel } from "../../extensions/signal/api.js";

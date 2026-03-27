@@ -230,6 +230,15 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
   return loadPromise;
 }
 
+export function resetContextWindowCacheForTest(): void {
+  loadPromise = null;
+  configuredConfig = undefined;
+  configLoadFailures = 0;
+  nextConfigLoadAttemptAtMs = 0;
+  modelsConfigRuntimePromise = undefined;
+  MODEL_CONTEXT_TOKEN_CACHE.clear();
+}
+
 export function lookupContextTokens(
   modelId?: string,
   options?: { allowAsyncLoad?: boolean },
@@ -237,8 +246,12 @@ export function lookupContextTokens(
   if (!modelId) {
     return undefined;
   }
-  // Best-effort: kick off loading on demand, but don't block lookups.
-  if (options?.allowAsyncLoad !== false) {
+  if (options?.allowAsyncLoad === false) {
+    // Read-only callers still need synchronous config-backed overrides, but they
+    // should not start background model discovery or models.json writes.
+    primeConfiguredContextWindows();
+  } else {
+    // Best-effort: kick off loading on demand, but don't block lookups.
     void ensureContextWindowCacheLoaded();
   }
   return lookupCachedContextTokens(modelId);
@@ -311,9 +324,8 @@ function resolveConfiguredProviderContextWindow(
   }
 
   // Mirror the lookup order in pi-embedded-runner/model.ts: exact key first,
-  // then normalized fallback. This prevents alias collisions (e.g. when both
-  // "qwen" and "qwen-portal" exist as config keys) from picking the wrong
-  // contextWindow based on Object.entries iteration order.
+  // then normalized fallback. This prevents alias collisions from picking the
+  // wrong contextWindow based on Object.entries iteration order.
   function findContextWindow(matchProviderId: (id: string) => boolean): number | undefined {
     for (const [providerId, providerConfig] of Object.entries(providers!)) {
       if (!matchProviderId(providerId)) {
@@ -342,7 +354,7 @@ function resolveConfiguredProviderContextWindow(
     return exactResult;
   }
 
-  // 2. Normalized fallback: covers alias keys such as "qwen" → "qwen-portal".
+  // 2. Normalized fallback: covers alias keys such as "z.ai" → "zai".
   const normalizedProvider = normalizeProviderId(provider);
   return findContextWindow((id) => normalizeProviderId(id) === normalizedProvider);
 }

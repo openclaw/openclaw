@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { normalizeRepoPath, visitModuleSpecifiers } from "./lib/guard-inventory-utils.mjs";
 import {
   collectTypeScriptFilesFromRoots,
   resolveSourceRoots,
@@ -29,10 +30,6 @@ function readEntrypoints() {
   return new Set(entrypoints.filter((entry) => entry !== "index"));
 }
 
-function normalizePath(filePath) {
-  return path.relative(repoRoot, filePath).split(path.sep).join("/");
-}
-
 function parsePluginSdkSubpath(specifier) {
   if (!specifier.startsWith("openclaw/plugin-sdk/")) {
     return null;
@@ -55,7 +52,8 @@ async function collectViolations() {
   const entrypoints = readEntrypoints();
   const exports = readPackageExports();
   const files = (await collectTypeScriptFilesFromRoots(scanRoots, { includeTests: true })).toSorted(
-    (left, right) => normalizePath(left).localeCompare(normalizePath(right)),
+    (left, right) =>
+      normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
   );
   const violations = [];
 
@@ -87,7 +85,7 @@ async function collectViolations() {
       }
 
       violations.push({
-        file: normalizePath(filePath),
+        file: normalizeRepoPath(repoRoot, filePath),
         line: toLine(sourceFile, specifierNode),
         kind,
         specifier,
@@ -96,27 +94,9 @@ async function collectViolations() {
       });
     }
 
-    function visit(node) {
-      if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-        push("import", node.moduleSpecifier, node.moduleSpecifier.text);
-      } else if (
-        ts.isExportDeclaration(node) &&
-        node.moduleSpecifier &&
-        ts.isStringLiteral(node.moduleSpecifier)
-      ) {
-        push("export", node.moduleSpecifier, node.moduleSpecifier.text);
-      } else if (
-        ts.isCallExpression(node) &&
-        node.expression.kind === ts.SyntaxKind.ImportKeyword &&
-        node.arguments.length === 1 &&
-        ts.isStringLiteral(node.arguments[0])
-      ) {
-        push("dynamic-import", node.arguments[0], node.arguments[0].text);
-      }
-      ts.forEachChild(node, visit);
-    }
-
-    visit(sourceFile);
+    visitModuleSpecifiers(ts, sourceFile, ({ kind, specifier, specifierNode }) => {
+      push(kind, specifierNode, specifier);
+    });
   }
 
   return violations.toSorted(compareEntries);

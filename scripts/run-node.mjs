@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { resolveGitHead, writeBuildStamp as writeDistBuildStamp } from "./build-stamp.mjs";
 import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
 
 const buildScript = "scripts/tsdown-build.mjs";
@@ -119,27 +120,6 @@ const findLatestMtime = (dirPath, shouldSkip, deps) => {
     }
   }
   return latest;
-};
-
-const runGit = (gitArgs, deps) => {
-  try {
-    const result = deps.spawnSync("git", gitArgs, {
-      cwd: deps.cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    if (result.status !== 0) {
-      return null;
-    }
-    return (result.stdout ?? "").trim();
-  } catch {
-    return null;
-  }
-};
-
-const resolveGitHead = (deps) => {
-  const head = runGit(["rev-parse", "HEAD"], deps);
-  return head || null;
 };
 
 const readGitStatus = (deps) => {
@@ -291,12 +271,11 @@ const syncRuntimeArtifacts = (deps) => {
 
 const writeBuildStamp = (deps) => {
   try {
-    deps.fs.mkdirSync(deps.distRoot, { recursive: true });
-    const stamp = {
-      builtAt: Date.now(),
-      head: resolveGitHead(deps),
-    };
-    deps.fs.writeFileSync(deps.buildStampPath, `${JSON.stringify(stamp)}\n`);
+    writeDistBuildStamp({
+      cwd: deps.cwd,
+      fs: deps.fs,
+      spawnSync: deps.spawnSync,
+    });
   } catch (error) {
     // Best-effort stamp; still allow the runner to start.
     logRunner(`Failed to write build stamp: ${error?.message ?? "unknown error"}`, deps);

@@ -4,8 +4,17 @@ const path = require("node:path");
 const fs = require("node:fs");
 
 let monolithicSdk = null;
+let diagnosticEventsModule = null;
 const jitiLoaders = new Map();
 const pluginSdkSubpathsCache = new Map();
+const isDistRootAlias = __filename.includes(
+  `${path.sep}dist${path.sep}plugin-sdk${path.sep}root-alias.cjs`,
+);
+const shouldPreferSourceInTests =
+  !isDistRootAlias &&
+  (Boolean(process.env.VITEST) ||
+    process.env.NODE_ENV === "test" ||
+    process.env.OPENCLAW_PLUGIN_SDK_SOURCE_IN_TESTS === "1");
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -63,15 +72,29 @@ function resolveControlCommandGate(params) {
 }
 
 function onDiagnosticEvent(listener) {
-  const monolithic = loadMonolithicSdk();
-  if (!monolithic || typeof monolithic.onDiagnosticEvent !== "function") {
+  const diagnosticEvents = loadDiagnosticEventsModule();
+  if (!diagnosticEvents || typeof diagnosticEvents.onDiagnosticEvent !== "function") {
     throw new Error("openclaw/plugin-sdk root alias could not resolve onDiagnosticEvent");
   }
-  return monolithic.onDiagnosticEvent(listener);
+  return diagnosticEvents.onDiagnosticEvent(listener);
 }
 
 function getPackageRoot() {
   return path.resolve(__dirname, "..", "..");
+}
+
+function findDistChunkByPrefix(prefix) {
+  const distRoot = path.join(getPackageRoot(), "dist");
+  try {
+    const entries = fs.readdirSync(distRoot, { withFileTypes: true });
+    const match = entries.find(
+      (entry) =>
+        entry.isFile() && entry.name.startsWith(`${prefix}-`) && entry.name.endsWith(".js"),
+    );
+    return match ? path.join(distRoot, match.name) : null;
+  } catch {
+    return null;
+  }
 }
 
 function listPluginSdkExportedSubpaths() {
@@ -137,7 +160,7 @@ function loadMonolithicSdk() {
   }
 
   const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "compat.js");
-  if (fs.existsSync(distCandidate)) {
+  if (!shouldPreferSourceInTests && fs.existsSync(distCandidate)) {
     try {
       monolithicSdk = getJiti(true)(distCandidate);
       return monolithicSdk;
@@ -146,8 +169,57 @@ function loadMonolithicSdk() {
     }
   }
 
-  monolithicSdk = getJiti(false)(path.join(__dirname, "compat.ts"));
+  monolithicSdk = getJiti(false)(path.join(getPackageRoot(), "src", "plugin-sdk", "compat.ts"));
   return monolithicSdk;
+}
+
+function loadDiagnosticEventsModule() {
+  if (diagnosticEventsModule) {
+    return diagnosticEventsModule;
+  }
+
+  const directDistCandidate = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "dist",
+    "infra",
+    "diagnostic-events.js",
+  );
+  if (!shouldPreferSourceInTests) {
+    const distCandidate =
+      (fs.existsSync(directDistCandidate) && directDistCandidate) ||
+      findDistChunkByPrefix("diagnostic-events");
+    if (distCandidate) {
+      try {
+        diagnosticEventsModule = normalizeDiagnosticEventsModule(getJiti(true)(distCandidate));
+        return diagnosticEventsModule;
+      } catch {
+        // Fall through to source path if dist is unavailable or stale.
+      }
+    }
+  }
+
+  diagnosticEventsModule = normalizeDiagnosticEventsModule(
+    getJiti(false)(path.join(getPackageRoot(), "src", "infra", "diagnostic-events.ts")),
+  );
+  return diagnosticEventsModule;
+}
+
+function normalizeDiagnosticEventsModule(mod) {
+  if (!mod || typeof mod !== "object") {
+    return mod;
+  }
+  if (typeof mod.onDiagnosticEvent === "function") {
+    return mod;
+  }
+  if (typeof mod.r === "function") {
+    return {
+      ...mod,
+      onDiagnosticEvent: mod.r,
+    };
+  }
+  return mod;
 }
 
 function tryLoadMonolithicSdk() {

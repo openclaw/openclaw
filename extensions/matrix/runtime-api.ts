@@ -2,6 +2,10 @@
 // helpers without traversing the full plugin-sdk/runtime graph or bootstrapping
 // matrix-js-sdk during plain runtime-api import.
 export * from "./src/auth-precedence.js";
+export {
+  requiresExplicitMatrixDefaultAccount,
+  resolveMatrixDefaultOrOnlyAccountId,
+} from "./src/account-selection.js";
 export * from "./helper-api.js";
 export {
   assertHttpUrlTargetsPrivateNetwork,
@@ -16,6 +20,7 @@ export {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
 } from "./thread-bindings-runtime.js";
+export { setMatrixRuntime } from "./src/runtime.js";
 export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 export type {
   ChannelDirectoryEntry,
