@@ -1,8 +1,6 @@
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
-import { applyAuthProfileConfig } from "../../../plugins/provider-auth-helpers.js";
-import { setCloudflareAiGatewayConfig } from "../../../plugins/provider-auth-storage.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import {
@@ -11,7 +9,6 @@ import {
 } from "../../auth-choice-legacy.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
-import { applyCloudflareAiGatewayConfig } from "../../onboard-auth.config-gateways.js";
 import {
   applyCustomApiConfig,
   CustomApiError,
@@ -20,6 +17,7 @@ import {
 } from "../../onboard-custom.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
+import { applySimpleNonInteractiveApiKeyChoice } from "./auth-choice.api-key-providers.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 type ResolvedNonInteractiveApiKey = NonNullable<
@@ -156,54 +154,19 @@ export async function applyNonInteractiveAuthChoice(params: {
     return pluginProviderChoice;
   }
 
-  if (authChoice === "cloudflare-ai-gateway-api-key") {
-    const accountId = opts.cloudflareAiGatewayAccountId?.trim() ?? "";
-    const gatewayId = opts.cloudflareAiGatewayGatewayId?.trim() ?? "";
-    if (!accountId || !gatewayId) {
-      runtime.error(
-        [
-          'Auth choice "cloudflare-ai-gateway-api-key" requires Account ID and Gateway ID.',
-          "Use --cloudflare-ai-gateway-account-id and --cloudflare-ai-gateway-gateway-id.",
-        ].join("\n"),
-      );
-      runtime.exit(1);
-      return null;
-    }
-    const resolved = await resolveApiKey({
-      provider: "cloudflare-ai-gateway",
-      cfg: baseConfig,
-      flagValue: opts.cloudflareAiGatewayApiKey,
-      flagName: "--cloudflare-ai-gateway-api-key",
-      envVar: "CLOUDFLARE_AI_GATEWAY_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      const stored = toStoredSecretInput(resolved);
-      if (!stored) {
-        return null;
-      }
-      await setCloudflareAiGatewayConfig(
-        accountId,
-        gatewayId,
-        stored,
-        undefined,
-        apiKeyStorageOptions,
-      );
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "cloudflare-ai-gateway:default",
-      provider: "cloudflare-ai-gateway",
-      mode: "api_key",
-    });
-    return applyCloudflareAiGatewayConfig(nextConfig, {
-      accountId,
-      gatewayId,
-    });
+  const simpleApiKeyChoice = await applySimpleNonInteractiveApiKeyChoice({
+    authChoice,
+    nextConfig,
+    baseConfig,
+    opts,
+    runtime,
+    apiKeyStorageOptions,
+    resolveApiKey,
+    maybeSetResolvedApiKey,
+  });
+  if (simpleApiKeyChoice !== undefined) {
+    return simpleApiKeyChoice;
   }
-
   // Legacy aliases: these choice values were removed; fail with an actionable message so
   // existing CI automation gets a clear error instead of silently exiting 0 with no auth.
   const REMOVED_MINIMAX_CHOICES: Record<string, string> = {

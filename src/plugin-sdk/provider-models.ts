@@ -91,7 +91,7 @@ export {
   type OllamaModelWithContext,
   type OllamaTagModel,
   type OllamaTagsResponse,
-} from "../../extensions/ollama/src/provider-models.js";
+} from "../../extensions/ollama/api.js";
 export {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -134,7 +134,7 @@ export {
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
   OLLAMA_DEFAULT_COST,
   OLLAMA_DEFAULT_MAX_TOKENS,
-} from "../../extensions/ollama/src/defaults.js";
+} from "../../extensions/ollama/api.js";
 export { VLLM_DEFAULT_BASE_URL } from "../agents/vllm-defaults.js";
 export { SGLANG_DEFAULT_BASE_URL } from "../agents/sglang-defaults.js";
 export {

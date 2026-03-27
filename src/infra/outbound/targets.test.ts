@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { parseTelegramTarget } from "../../../extensions/telegram/src/targets.js";
+import { parseTelegramTarget } from "../../../extensions/telegram/api.js";
 import { telegramOutbound, whatsappOutbound } from "../../../test/channel-outbounds.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";

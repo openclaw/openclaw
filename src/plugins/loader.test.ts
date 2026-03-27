@@ -1046,6 +1046,7 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     const scoped = loadOpenClawPlugins({
       cache: false,
       activate: false,
+      pluginSdkResolution: "dist",
       config: {
         plugins: {
           enabled: true,
