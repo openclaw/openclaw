@@ -157,7 +157,12 @@ function resolveBindingConversationFromCommand(params: {
 } | null {
   const accountId = params.accountId?.trim() || "default";
   if (params.channel === "telegram") {
-    const rawTarget = params.to ?? params.from;
+    // Native Telegram slash commands use a synthetic `To: slash:<senderId>` value.
+    // Prefer `from` so binding resolution parses the real chat/topic peer.
+    const rawTarget =
+      params.to && params.to.startsWith("slash:")
+        ? (params.from ?? params.to)
+        : (params.to ?? params.from);
     if (!rawTarget) {
       return null;
     }
