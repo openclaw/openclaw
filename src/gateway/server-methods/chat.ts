@@ -186,6 +186,54 @@ function canonicalizeFallbacks(params: {
     .filter((fb): fb is string => fb !== null);
 }
 
+/**
+ * Filter and canonicalize image model fallbacks in one step.
+ * This combines allowlist filtering with provider-aware canonicalization.
+ */
+function prepareImageModelFallbacks(params: {
+  fallbacks: string[];
+  imageModelPrimary: string;
+  cfg: OpenClawConfig;
+  agentId?: string;
+  aliasIndex: ReturnType<typeof buildModelAliasIndex>;
+  defaultProvider: string;
+  defaultModel?: string;
+  imageModelProvider?: string;
+}): string[] {
+  const {
+    fallbacks,
+    imageModelPrimary,
+    cfg,
+    agentId,
+    aliasIndex,
+    defaultProvider,
+    defaultModel,
+    imageModelProvider,
+  } = params;
+
+  if (fallbacks.length === 0) {
+    return [];
+  }
+
+  const filtered = filterFallbacksByAllowlist({
+    fallbacks,
+    cfg,
+    agentId,
+    aliasIndex,
+    defaultProvider,
+    defaultModel,
+    imageModelProvider,
+  });
+
+  return canonicalizeFallbacks({
+    fallbacks: filtered,
+    imageModelRaw: imageModelPrimary,
+    aliasIndex,
+    agentDefaultProvider: defaultProvider,
+    imageModelProvider,
+  });
+}
+
 type TranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
@@ -1647,7 +1695,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             aliasIndex,
           });
           imageModelProvider = imageModelResolved?.ref.provider;
-        } else if (!primaryHasProvider) {
+        } else {
           // Primary has no explicit provider (providerless).
           // First, try to resolve the primary itself (handles aliases like "vision").
           // This ensures that if primary is an alias pointing to a specific provider,
@@ -1812,64 +1860,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             // User's stored model is an image model but NOT in allowlist
             // The stored model will be cleared anyway, switch to configured imageModel
             imageModelOverride = resolvedImageModelPrimary;
-            if (effectiveImageModelFallbacks.length > 0) {
-              const filtered = filterFallbacksByAllowlist({
-                fallbacks: effectiveImageModelFallbacks,
-                cfg,
-                agentId,
-                aliasIndex: imageFallbackAliasIndex,
-                defaultProvider,
-                defaultModel: agentDefault.model,
-                imageModelProvider,
-              });
-              imageModelFallbacks = canonicalizeFallbacks({
-                fallbacks: filtered,
-                imageModelRaw: imageModelPrimary,
-                aliasIndex: imageFallbackAliasIndex,
-                agentDefaultProvider: defaultProvider,
-                imageModelProvider,
-              });
-            } else {
-              imageModelFallbacks = [];
-            }
-            context.logGateway.info(
-              `[image-model-switch] Stored model ${userModelKey} is image-capable but not in agent allowlist, switching to: ${imageModelOverride}${imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
-            );
-          } else {
-            // User's stored model is not an image model
-            // Switch to imageModel
-            imageModelOverride = resolvedImageModelPrimary;
-            if (effectiveImageModelFallbacks.length > 0) {
-              const filtered = filterFallbacksByAllowlist({
-                fallbacks: effectiveImageModelFallbacks,
-                cfg,
-                agentId,
-                aliasIndex: imageFallbackAliasIndex,
-                defaultProvider,
-                defaultModel: agentDefault.model,
-                imageModelProvider,
-              });
-              imageModelFallbacks = canonicalizeFallbacks({
-                fallbacks: filtered,
-                imageModelRaw: imageModelPrimary,
-                aliasIndex: imageFallbackAliasIndex,
-                agentDefaultProvider: defaultProvider,
-                imageModelProvider,
-              });
-            } else {
-              imageModelFallbacks = [];
-            }
-            context.logGateway.info(
-              `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}${imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
-            );
-          }
-        } else {
-          // No stored override, switch to imageModel
-          imageModelOverride = resolvedImageModelPrimary;
-          // Filter fallbacks against agent allowlist
-          if (effectiveImageModelFallbacks.length > 0) {
-            const filtered = filterFallbacksByAllowlist({
+            imageModelFallbacks = prepareImageModelFallbacks({
               fallbacks: effectiveImageModelFallbacks,
+              imageModelPrimary,
               cfg,
               agentId,
               aliasIndex: imageFallbackAliasIndex,
@@ -1877,19 +1870,42 @@ export const chatHandlers: GatewayRequestHandlers = {
               defaultModel: agentDefault.model,
               imageModelProvider,
             });
-            // Canonicalize fallbacks with image model's provider context
-            imageModelFallbacks = canonicalizeFallbacks({
-              fallbacks: filtered,
-              imageModelRaw: imageModelPrimary,
+            context.logGateway.info(
+              `[image-model-switch] Stored model ${userModelKey} is image-capable but not in agent allowlist, switching to: ${imageModelOverride}${imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
+            );
+          } else {
+            // User's stored model is not an image model
+            // Switch to imageModel
+            imageModelOverride = resolvedImageModelPrimary;
+            imageModelFallbacks = prepareImageModelFallbacks({
+              fallbacks: effectiveImageModelFallbacks,
+              imageModelPrimary,
+              cfg,
+              agentId,
               aliasIndex: imageFallbackAliasIndex,
-              agentDefaultProvider: defaultProvider,
+              defaultProvider,
+              defaultModel: agentDefault.model,
               imageModelProvider,
             });
-          } else {
-            imageModelFallbacks = [];
+            context.logGateway.info(
+              `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}${imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
+            );
           }
+        } else {
+          // No stored override, switch to imageModel
+          imageModelOverride = resolvedImageModelPrimary;
+          imageModelFallbacks = prepareImageModelFallbacks({
+            fallbacks: effectiveImageModelFallbacks,
+            imageModelPrimary,
+            cfg,
+            agentId,
+            aliasIndex: imageFallbackAliasIndex,
+            defaultProvider,
+            defaultModel: agentDefault.model,
+            imageModelProvider,
+          });
           context.logGateway.info(
-            `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}${imageModelFallbacks && imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
+            `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}${imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
           );
         }
       } else {
