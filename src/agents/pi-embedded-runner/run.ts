@@ -437,6 +437,7 @@ export async function runEmbeddedPiAgent(
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
 
           const attempt = await runEmbeddedAttempt({
+            isRetry: runLoopIterations > 1,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             trigger: params.trigger,

@@ -15,6 +15,8 @@ type EmbeddedRunAttemptBase = Omit<
 >;
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** True when this attempt is retrying the same user turn. */
+  isRetry?: boolean;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
   contextEngine?: ContextEngine;
   /** Resolved model context window in tokens for assemble/compact budgeting. */

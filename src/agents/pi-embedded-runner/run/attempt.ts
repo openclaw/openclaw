@@ -210,6 +210,59 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
+type RetryResumeLeafEntry = {
+  type?: string;
+  parentId?: string | null;
+  message?: AgentMessage;
+};
+
+export function prepareRetryResumeAttempt(params: {
+  isRetry?: boolean;
+  activeSession: Awaited<ReturnType<typeof createAgentSession>>["session"];
+  sessionManager: ReturnType<typeof guardSessionManager>;
+  runId: string;
+  sessionId: string;
+}): boolean {
+  if (params.isRetry !== true) {
+    return false;
+  }
+
+  let sessionContext = params.sessionManager.buildSessionContext();
+  let lastMessage = sessionContext.messages.at(-1);
+
+  if (!lastMessage) {
+    return false;
+  }
+
+  if (lastMessage.role === "assistant") {
+    const stopReason = (lastMessage as { stopReason?: unknown }).stopReason;
+    if (stopReason !== "error" && stopReason !== "aborted") {
+      return false;
+    }
+
+    let leafEntry = params.sessionManager.getLeafEntry() as RetryResumeLeafEntry | undefined;
+    while (
+      leafEntry?.parentId &&
+      (leafEntry.type !== "message" || leafEntry.message?.role === "assistant")
+    ) {
+      params.sessionManager.branch(leafEntry.parentId);
+      leafEntry = params.sessionManager.getLeafEntry() as RetryResumeLeafEntry | undefined;
+    }
+
+    sessionContext = params.sessionManager.buildSessionContext();
+    lastMessage = sessionContext.messages.at(-1);
+    if (!lastMessage || lastMessage.role === "assistant") {
+      log.warn(
+        `retry resume could not restore non-assistant leaf: runId=${params.runId} sessionId=${params.sessionId}`,
+      );
+      return false;
+    }
+  }
+
+  params.activeSession.agent.replaceMessages(sessionContext.messages);
+  return true;
+}
+
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -1505,12 +1558,26 @@ export async function runEmbeddedAttempt(
             inFlightPrompt: effectivePrompt,
           });
 
-          // Only pass images option if there are actually images to pass
-          // This avoids potential issues with models that don't expect the images parameter
-          if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
+          const shouldResumeRetry = prepareRetryResumeAttempt({
+            isRetry: params.isRetry,
+            activeSession,
+            sessionManager,
+            runId: params.runId,
+            sessionId: params.sessionId,
+          });
+
+          if (shouldResumeRetry) {
+            await abortable(activeSession.agent.continue());
           } else {
-            await abortable(activeSession.prompt(effectivePrompt));
+            // Only pass images option if there are actually images to pass.
+            // Retries resume the already-persisted user turn via continue().
+            if (imageResult.images.length > 0) {
+              await abortable(
+                activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+              );
+            } else {
+              await abortable(activeSession.prompt(effectivePrompt));
+            }
           }
         } catch (err) {
           // Yield-triggered abort is intentional — treat as clean stop, not error.

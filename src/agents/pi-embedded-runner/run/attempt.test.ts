@@ -21,6 +21,7 @@ import {
   shouldInjectHeartbeatPrompt,
   shouldInjectOllamaCompatNumCtx,
   decodeHtmlEntitiesInObject,
+  prepareRetryResumeAttempt,
   wrapOllamaCompatNumCtx,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
@@ -300,6 +301,88 @@ describe("composeSystemPromptWithHookContext", () => {
     expect(turns[2]?.prompt.startsWith("hello once more")).toBe(true);
     expect(turns[0]?.prompt).toContain("[Bootstrap truncation warning]");
     expect(turns[2]?.prompt).toContain("[Bootstrap truncation warning]");
+  });
+});
+
+describe("prepareRetryResumeAttempt", () => {
+  it("branches away from a terminal assistant failure before retry continue()", () => {
+    const userMessage = {
+      role: "user",
+      content: [{ type: "text", text: "hello" }],
+      timestamp: 1,
+    } as AgentMessage;
+    const failedAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "" }],
+      stopReason: "error",
+      errorMessage: "401 unauthorized",
+      timestamp: 2,
+    } as AgentMessage;
+    const replaceMessages = vi.fn();
+    const branch = vi.fn();
+    const getLeafEntry = vi
+      .fn()
+      .mockReturnValueOnce({
+        type: "message",
+        id: "assistant-2",
+        parentId: "user-1",
+        message: failedAssistant,
+      })
+      .mockReturnValueOnce({
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        message: userMessage,
+      });
+    const buildSessionContext = vi
+      .fn()
+      .mockReturnValueOnce({ messages: [userMessage, failedAssistant] })
+      .mockReturnValueOnce({ messages: [userMessage] });
+
+    const shouldResume = prepareRetryResumeAttempt({
+      isRetry: true,
+      activeSession: {
+        agent: { replaceMessages },
+      } as unknown as Parameters<typeof prepareRetryResumeAttempt>[0]["activeSession"],
+      sessionManager: {
+        branch,
+        buildSessionContext,
+        getLeafEntry,
+      } as unknown as Parameters<typeof prepareRetryResumeAttempt>[0]["sessionManager"],
+      runId: "run-retry-resume",
+      sessionId: "embedded-session",
+    });
+
+    expect(shouldResume).toBe(true);
+    expect(branch).toHaveBeenCalledWith("user-1");
+    expect(replaceMessages).toHaveBeenCalledWith([userMessage]);
+  });
+
+  it("does not resume from successful assistant turns", () => {
+    const replaceMessages = vi.fn();
+    const successAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+      stopReason: "end_turn",
+      timestamp: 2,
+    } as AgentMessage;
+
+    const shouldResume = prepareRetryResumeAttempt({
+      isRetry: true,
+      activeSession: {
+        agent: { replaceMessages },
+      } as unknown as Parameters<typeof prepareRetryResumeAttempt>[0]["activeSession"],
+      sessionManager: {
+        buildSessionContext: () => ({ messages: [successAssistant] }),
+        getLeafEntry: () => undefined,
+        branch: vi.fn(),
+      } as unknown as Parameters<typeof prepareRetryResumeAttempt>[0]["sessionManager"],
+      runId: "run-retry-skip",
+      sessionId: "embedded-session",
+    });
+
+    expect(shouldResume).toBe(false);
+    expect(replaceMessages).not.toHaveBeenCalled();
   });
 });
 

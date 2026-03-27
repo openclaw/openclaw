@@ -58,22 +58,26 @@ const installRunEmbeddedMocks = () => {
   vi.doMock("./pi-embedded-runner/run/attempt.js", () => ({
     runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
   }));
-  vi.doMock("../plugins/provider-runtime.js", () => ({
-    prepareProviderRuntimeAuth: async (params: {
-      provider: string;
-      context: { apiKey: string };
-    }) => {
-      if (params.provider !== "github-copilot") {
-        return undefined;
-      }
-      const token = await resolveCopilotApiTokenMock(params.context.apiKey);
-      return {
-        apiKey: token.token,
-        baseUrl: token.baseUrl,
-        expiresAt: token.expiresAt,
-      };
-    },
-  }));
+  vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+    return {
+      ...actual,
+      prepareProviderRuntimeAuth: async (params: {
+        provider: string;
+        context: { apiKey: string };
+      }) => {
+        if (params.provider !== "github-copilot") {
+          return undefined;
+        }
+        const token = await resolveCopilotApiTokenMock(params.context.apiKey);
+        return {
+          apiKey: token.token,
+          baseUrl: token.baseUrl,
+          expiresAt: token.expiresAt,
+        };
+      },
+    };
+  });
   vi.doMock("../infra/backoff.js", () => ({
     computeBackoff: (
       policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
@@ -436,6 +440,8 @@ async function runAutoPinnedRotationCase(params: {
     });
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+    expect(runEmbeddedAttemptMock.mock.calls[0]?.[0]).toMatchObject({ isRetry: false });
+    expect(runEmbeddedAttemptMock.mock.calls[1]?.[0]).toMatchObject({ isRetry: true });
     const usageStats = await readUsageStats(agentDir);
     return { usageStats };
   });
@@ -458,6 +464,8 @@ async function runAutoPinnedPromptErrorRotationCase(params: {
     });
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+    expect(runEmbeddedAttemptMock.mock.calls[0]?.[0]).toMatchObject({ isRetry: false });
+    expect(runEmbeddedAttemptMock.mock.calls[1]?.[0]).toMatchObject({ isRetry: true });
     const usageStats = await readUsageStats(agentDir);
     return { usageStats };
   });
