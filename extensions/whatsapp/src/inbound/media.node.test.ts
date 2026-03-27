@@ -13,21 +13,6 @@ const { normalizeMessageContent, downloadMediaMessage } = vi.hoisted(() => ({
   downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("fake-media-data")),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => {
-  const logger = {
-    debug: () => {},
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    child: () => logger,
-  };
-  return {
-    createSubsystemLogger: () => logger,
-    danger: (value: unknown) => String(value),
-    logVerbose: vi.fn(),
-  };
-});
-
 vi.mock("@whiskeysockets/baileys", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@whiskeysockets/baileys")>();
   return {

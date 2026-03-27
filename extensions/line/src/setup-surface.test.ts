@@ -22,21 +22,6 @@ const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
   return { getBotInfoMock, MessagingApiClientMock };
 });
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => {
-  const logger = {
-    debug: () => {},
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    child: () => logger,
-  };
-  return {
-    createSubsystemLogger: () => logger,
-    danger: (value: unknown) => String(value),
-    logVerbose: vi.fn(),
-  };
-});
-
 vi.mock("@line/bot-sdk", () => ({
   messagingApi: { MessagingApiClient: MessagingApiClientMock },
 }));
