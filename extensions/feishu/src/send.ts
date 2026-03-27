@@ -230,6 +230,7 @@ function parseInteractiveCardContent(parsed: unknown): string {
       const jsonCard = JSON.parse(jsonCardStr) as {
         config?: { summary?: { content?: string } };
         body?: { elements?: unknown[] };
+        elements?: unknown[];
       };
       const parts: string[] = [];
 
@@ -238,9 +239,13 @@ function parseInteractiveCardContent(parsed: unknown): string {
         parts.push(jsonCard.config.summary.content);
       }
 
-      // Also extract text from body elements
+      // Also extract text from body elements (schema 2.0: body.elements)
       if (Array.isArray(jsonCard.body?.elements)) {
         parts.push(...extractJsonCardTexts(jsonCard.body!.elements));
+      }
+      // Schema 1.0: top-level elements
+      if (Array.isArray(jsonCard.elements)) {
+        parts.push(...extractJsonCardTexts(jsonCard.elements));
       }
 
       const result = parts.join("\n").trim();
