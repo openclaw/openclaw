@@ -143,6 +143,18 @@ function collectRuntimeApiOverlapExports(params: {
       statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)
         ? statement.moduleSpecifier.text
         : undefined;
+    if (
+      moduleSpecifier === "../../extensions/line/runtime-api.js" &&
+      statement.exportClause &&
+      ts.isNamedExports(statement.exportClause)
+    ) {
+      for (const element of statement.exportClause.elements) {
+        if (!element.isTypeOnly) {
+          overlapExports.add(element.name.text);
+        }
+      }
+      continue;
+    }
     const normalized = moduleSpecifier ? normalizeModuleSpecifier(moduleSpecifier) : null;
     if (!normalized || !runtimeApiLocalModules.has(normalized)) {
       continue;
