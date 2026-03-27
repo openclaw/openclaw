@@ -233,7 +233,8 @@ async function finalizeAcpTurnOutput(params: {
     ttsMode !== "all" &&
     hasAccumulatedBlockText &&
     !finalMediaDelivered &&
-    !params.delivery.hasDeliveredFinalReply();
+    !params.delivery.hasDeliveredFinalReply() &&
+    params.delivery.getRoutedCounts().block === 0;
   if (shouldDeliverTextFallback) {
     const delivered = await params.delivery.deliver(
       "final",
