@@ -78,7 +78,7 @@ export async function mimoTTS(params: {
         model,
         messages: [{ role: "assistant", content: assistantContent }],
         audio: {
-          format: "wav",
+          format: "mp3",
           voice,
         },
       }),
@@ -139,8 +139,8 @@ export function buildMimoSpeechProvider(): SpeechProviderPlugin {
 
       return {
         audioBuffer,
-        outputFormat: "wav",
-        fileExtension: ".wav",
+        outputFormat: "mp3",
+        fileExtension: ".mp3",
         voiceCompatible: false,
       };
     },
