@@ -141,21 +141,61 @@ function collectExtensionHintKeys(
   plugins: PluginUiMetadata[],
   channels: ChannelUiMetadata[],
 ): Set<string> {
-  const pluginPrefixes = plugins
-    .map((plugin) => plugin.id.trim())
-    .filter(Boolean)
-    .map((id) => `plugins.entries.${id}`);
-  const channelPrefixes = channels
-    .map((channel) => channel.id.trim())
-    .filter(Boolean)
-    .map((id) => `channels.${id}`);
-  const prefixes = [...pluginPrefixes, ...channelPrefixes];
+  const keys = new Set<string>();
+  const collectPrefixedHintKeys = (prefix: string) => {
+    for (const key of Object.keys(hints)) {
+      if (key === prefix || key.startsWith(`${prefix}.`)) {
+        keys.add(key);
+      }
+    }
+  };
 
-  return new Set(
-    Object.keys(hints).filter((key) =>
-      prefixes.some((prefix) => key === prefix || key.startsWith(`${prefix}.`)),
-    ),
-  );
+  const collectSchemaKeys = (schema: unknown, basePath: string) => {
+    const node = asJsonSchemaObject(schema);
+    if (!node) {
+      return;
+    }
+    keys.add(basePath);
+    for (const [propertyKey, propertySchema] of Object.entries(node.properties ?? {})) {
+      collectSchemaKeys(propertySchema, `${basePath}.${propertyKey}`);
+    }
+    if (node.additionalProperties && typeof node.additionalProperties === "object") {
+      collectSchemaKeys(node.additionalProperties, `${basePath}.*`);
+    }
+    if (Array.isArray(node.items)) {
+      for (const item of node.items) {
+        if (item && typeof item === "object") {
+          collectSchemaKeys(item, `${basePath}[]`);
+        }
+      }
+      return;
+    }
+    if (node.items && typeof node.items === "object") {
+      collectSchemaKeys(node.items, `${basePath}[]`);
+    }
+  };
+
+  for (const plugin of plugins) {
+    const id = plugin.id.trim();
+    if (!id) {
+      continue;
+    }
+    const prefix = `plugins.entries.${id}`;
+    collectPrefixedHintKeys(prefix);
+    collectSchemaKeys(plugin.configSchema, `${prefix}.config`);
+  }
+
+  for (const channel of channels) {
+    const id = channel.id.trim();
+    if (!id) {
+      continue;
+    }
+    const prefix = `channels.${id}`;
+    collectPrefixedHintKeys(prefix);
+    collectSchemaKeys(channel.configSchema, prefix);
+  }
+
+  return keys;
 }
 
 function applyPluginHints(hints: ConfigUiHints, plugins: PluginUiMetadata[]): ConfigUiHints {

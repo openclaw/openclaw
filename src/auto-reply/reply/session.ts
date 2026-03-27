@@ -29,7 +29,6 @@ import {
   type SessionScope,
 } from "../../config/sessions/types.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
-import { archiveSessionTranscripts } from "../../gateway/session-archive.fs.js";
 import { resolveConversationIdFromTargets } from "../../infra/outbound/conversation-id.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -51,6 +50,14 @@ import { forkSessionFromParent, resolveParentForkMaxTokens } from "./session-for
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 
 const log = createSubsystemLogger("session-init");
+let sessionArchiveRuntimePromise: Promise<
+  typeof import("../../gateway/session-archive.runtime.js")
+> | null = null;
+
+function loadSessionArchiveRuntime() {
+  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
+  return sessionArchiveRuntimePromise;
+}
 
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
@@ -573,6 +580,7 @@ export async function initSessionState(params: {
 
   // Archive old transcript so it doesn't accumulate on disk (#14869).
   if (previousSessionEntry?.sessionId) {
+    const { archiveSessionTranscripts } = await loadSessionArchiveRuntime();
     archiveSessionTranscripts({
       sessionId: previousSessionEntry.sessionId,
       storePath,

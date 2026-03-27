@@ -92,9 +92,14 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     const resolved = resolveCliBackendConfig("claude-cli");
 
     expect(resolved).not.toBeNull();
+    expect(resolved?.config.output).toBe("jsonl");
+    expect(resolved?.config.args).toContain("stream-json");
+    expect(resolved?.config.args).toContain("--verbose");
     expect(resolved?.config.args).toContain("--permission-mode");
     expect(resolved?.config.args).toContain("bypassPermissions");
     expect(resolved?.config.args).not.toContain("--dangerously-skip-permissions");
+    expect(resolved?.config.resumeArgs).toContain("stream-json");
+    expect(resolved?.config.resumeArgs).toContain("--verbose");
     expect(resolved?.config.resumeArgs).toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).not.toContain("--dangerously-skip-permissions");

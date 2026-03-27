@@ -10,8 +10,11 @@ export const AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI: ReadonlyArray<AuthChoice> = [
 export function normalizeLegacyOnboardAuthChoice(
   authChoice: AuthChoice | undefined,
 ): AuthChoice | undefined {
-  if (authChoice === "oauth" || authChoice === "claude-cli") {
+  if (authChoice === "oauth") {
     return "setup-token";
+  }
+  if (authChoice === "claude-cli") {
+    return "anthropic-cli";
   }
   if (authChoice === "codex-cli") {
     return "openai-codex";
@@ -31,8 +34,8 @@ export function resolveDeprecatedAuthChoiceReplacement(authChoice: "claude-cli" 
 } {
   if (authChoice === "claude-cli") {
     return {
-      normalized: "setup-token",
-      message: 'Auth choice "claude-cli" is deprecated; using setup-token flow instead.',
+      normalized: "anthropic-cli",
+      message: 'Auth choice "claude-cli" is deprecated; using Anthropic Claude CLI setup instead.',
     };
   }
   return {
@@ -45,8 +48,6 @@ export function formatDeprecatedNonInteractiveAuthChoiceError(
   authChoice: "claude-cli" | "codex-cli",
 ): string {
   const replacement =
-    authChoice === "claude-cli"
-      ? '"--auth-choice token" (Anthropic setup-token)'
-      : '"--auth-choice openai-codex"';
+    authChoice === "claude-cli" ? '"--auth-choice anthropic-cli"' : '"--auth-choice openai-codex"';
   return [`Auth choice "${authChoice}" is deprecated.`, `Use ${replacement}.`].join("\n");
 }

@@ -3,7 +3,7 @@ import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import { resolveAgentModelPrimaryValue } from "./model-input.js";
 import {
-  DEFAULT_TALK_PROVIDER,
+  LEGACY_TALK_PROVIDER_ID,
   normalizeTalkConfig,
   resolveActiveTalkProviderConfig,
   resolveTalkApiKey,
@@ -204,7 +204,7 @@ export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
 
   const talk = normalized.talk;
   const active = resolveActiveTalkProviderConfig(talk);
-  if (active?.provider && active.provider !== DEFAULT_TALK_PROVIDER) {
+  if (!active || active.provider !== LEGACY_TALK_PROVIDER_ID) {
     return normalized;
   }
 
@@ -214,7 +214,7 @@ export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
     return normalized;
   }
 
-  const providerId = active?.provider ?? DEFAULT_TALK_PROVIDER;
+  const providerId = active.provider;
   const providers = { ...talk?.providers };
   const providerConfig = { ...providers[providerId], apiKey: resolved };
   providers[providerId] = providerConfig;
@@ -222,7 +222,6 @@ export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
   const nextTalk = {
     ...talk,
     apiKey: resolved,
-    provider: talk?.provider ?? providerId,
     providers,
   };
 

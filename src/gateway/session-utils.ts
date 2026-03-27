@@ -15,7 +15,7 @@ import {
   getSubagentSessionStartedAt,
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
-} from "../agents/subagent-registry.js";
+} from "../agents/subagent-registry-read.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -1210,6 +1210,7 @@ export function buildGatewaySessionRow(params: {
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,
+    fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
     reasoningLevel: entry?.reasoningLevel,
     elevatedLevel: entry?.elevatedLevel,

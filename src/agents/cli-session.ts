@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { CLAUDE_CLI_BACKEND_ID } from "../../extensions/anthropic/cli-shared.js";
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
 import { normalizeProviderId } from "./model-selection.js";
 
@@ -37,7 +38,7 @@ export function getCliSessionBinding(
   if (fromMap?.trim()) {
     return { sessionId: fromMap.trim() };
   }
-  if (normalized === "claude-cli") {
+  if (normalized === CLAUDE_CLI_BACKEND_ID) {
     const legacy = entry.claudeCliSessionId?.trim();
     if (legacy) {
       return { sessionId: legacy };
@@ -83,7 +84,7 @@ export function setCliSessionBinding(
     },
   };
   entry.cliSessionIds = { ...entry.cliSessionIds, [normalized]: trimmed };
-  if (normalized === "claude-cli") {
+  if (normalized === CLAUDE_CLI_BACKEND_ID) {
     entry.claudeCliSessionId = trimmed;
   }
 }
@@ -100,7 +101,7 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
     delete next[normalized];
     entry.cliSessionIds = Object.keys(next).length > 0 ? next : undefined;
   }
-  if (normalized === "claude-cli") {
+  if (normalized === CLAUDE_CLI_BACKEND_ID) {
     delete entry.claudeCliSessionId;
   }
 }

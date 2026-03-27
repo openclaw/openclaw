@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createSyntheticSourceInfo } from "@mariozechner/pi-coding-agent";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import type { SkillEntry } from "../agents/skills.js";
@@ -36,10 +37,13 @@ describe("skills-cli (e2e)", () => {
         skill: {
           name: "peekaboo",
           description: "Capture UI screenshots",
-          source: "openclaw-bundled",
           filePath: path.join(baseDir, "SKILL.md"),
           baseDir,
-        } as SkillEntry["skill"],
+          sourceInfo: createSyntheticSourceInfo(path.join(baseDir, "SKILL.md"), {
+            source: "openclaw-bundled",
+          }),
+          disableModelInvocation: false,
+        },
         frontmatter: {},
         metadata: { emoji: "📸" },
       },
