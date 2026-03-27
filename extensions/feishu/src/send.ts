@@ -179,9 +179,76 @@ async function sendReplyOrFallbackDirect(
   return toFeishuSendResult(response, params.directParams.receiveId);
 }
 
+/**
+ * Recursively extract plain_text content from CardKit json_card body elements.
+ */
+function extractJsonCardTexts(elements: unknown[]): string[] {
+  const texts: string[] = [];
+  for (const el of elements) {
+    if (!el || typeof el !== "object") continue;
+    const node = el as {
+      tag?: string;
+      property?: { content?: string };
+      elements?: unknown[];
+      columns?: unknown[];
+      rows?: unknown[];
+    };
+    if (node.tag === "plain_text" && typeof node.property?.content === "string") {
+      texts.push(node.property.content);
+    }
+    if (node.tag === "markdown" && typeof (node as { content?: string }).content === "string") {
+      texts.push((node as { content?: string }).content!);
+    }
+    // Recurse into nested structures (column_set columns, form elements, etc.)
+    if (Array.isArray(node.elements)) {
+      texts.push(...extractJsonCardTexts(node.elements));
+    }
+    if (Array.isArray(node.columns)) {
+      for (const col of node.columns) {
+        if (
+          col &&
+          typeof col === "object" &&
+          Array.isArray((col as { elements?: unknown[] }).elements)
+        ) {
+          texts.push(...extractJsonCardTexts((col as { elements: unknown[] }).elements));
+        }
+      }
+    }
+  }
+  return texts;
+}
+
 function parseInteractiveCardContent(parsed: unknown): string {
   if (!parsed || typeof parsed !== "object") {
     return "[Interactive Card]";
+  }
+
+  // CardKit streaming cards: the raw_card_content param returns a `json_card` field
+  // containing the full card structure as a JSON string.
+  const jsonCardStr = (parsed as { json_card?: unknown }).json_card;
+  if (typeof jsonCardStr === "string") {
+    try {
+      const jsonCard = JSON.parse(jsonCardStr) as {
+        config?: { summary?: { content?: string } };
+        body?: { elements?: unknown[] };
+      };
+      const parts: string[] = [];
+
+      // summary.content is the streaming card's summary (often the full reply text prefix)
+      if (typeof jsonCard.config?.summary?.content === "string") {
+        parts.push(jsonCard.config.summary.content);
+      }
+
+      // Also extract text from body elements
+      if (Array.isArray(jsonCard.body?.elements)) {
+        parts.push(...extractJsonCardTexts(jsonCard.body!.elements));
+      }
+
+      const result = parts.join("\n").trim();
+      if (result) return result;
+    } catch {
+      // Fall through to legacy element parsing
+    }
   }
 
   // Support both schema 1.0 (top-level `elements`) and 2.0 (`body.elements`).
@@ -301,6 +368,9 @@ export async function getMessageFeishu(params: {
   try {
     const response = (await client.im.message.get({
       path: { message_id: messageId },
+      // Undocumented in the SDK types but supported by the API: when set, interactive
+      // messages return the full json_card structure instead of fallback screenshot content.
+      params: { card_msg_content_type: "raw_card_content" } as Record<string, string>,
     })) as FeishuGetMessageResponse;
 
     if (response.code !== 0) {
@@ -355,15 +425,19 @@ export async function listFeishuThreadMessages(params: {
 
   const client = createFeishuClient(account);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- card_msg_content_type is not in the SDK types yet
+  const listParams: any = {
+    container_id_type: "thread",
+    container_id: threadId,
+    // Fetch newest messages first so long threads keep the most recent turns.
+    // Results are reversed below to restore chronological order.
+    sort_type: "ByCreateTimeDesc",
+    page_size: Math.min(limit + 1, 50),
+    // See comment in getMessageFeishu – retrieve full card content.
+    card_msg_content_type: "raw_card_content",
+  };
   const response = (await client.im.message.list({
-    params: {
-      container_id_type: "thread",
-      container_id: threadId,
-      // Fetch newest messages first so long threads keep the most recent turns.
-      // Results are reversed below to restore chronological order.
-      sort_type: "ByCreateTimeDesc",
-      page_size: Math.min(limit + 1, 50),
-    },
+    params: listParams,
   })) as {
     code?: number;
     msg?: string;

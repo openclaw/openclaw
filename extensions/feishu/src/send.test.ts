@@ -129,6 +129,110 @@ describe("getMessageFeishu", () => {
     });
     expect(mockConvertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
     expect(result).toEqual({ messageId: "om_send", chatId: "oc_send" });
+
+  it("passes card_msg_content_type param to message.get", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_param",
+            chat_id: "oc_param",
+            msg_type: "text",
+            body: { content: JSON.stringify({ text: "hi" }) },
+          },
+        ],
+      },
+    });
+
+    await getMessageFeishu({ cfg: {} as ClawdbotConfig, messageId: "om_param" });
+
+    expect(mockClientGet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { card_msg_content_type: "raw_card_content" },
+      }),
+    );
+  });
+
+  it("extracts content from CardKit json_card format (streaming card)", async () => {
+    const jsonCard = {
+      config: { summary: { content: "Summary text from streaming card" } },
+      body: {
+        elements: [
+          {
+            tag: "column_set",
+            columns: [
+              {
+                elements: [{ tag: "plain_text", property: { content: "Column text" } }],
+              },
+            ],
+          },
+          { tag: "markdown", content: "Body markdown" },
+        ],
+      },
+    };
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_jsoncard",
+            chat_id: "oc_jsoncard",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({ json_card: JSON.stringify(jsonCard) }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_jsoncard",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_jsoncard",
+        contentType: "interactive",
+        content: "Summary text from streaming card\nColumn text\nBody markdown",
+      }),
+    );
+  });
+
+  it("falls back to legacy elements when json_card parsing fails", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_fallback",
+            chat_id: "oc_fallback",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                json_card: "not valid json{{{",
+                elements: [{ tag: "markdown", content: "fallback content" }],
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_fallback",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_fallback",
+        contentType: "interactive",
+        content: "fallback content",
+      }),
+    );
   });
 
   it("extracts text content from interactive card elements", async () => {
