@@ -3,7 +3,7 @@ import {
   createDelegatedSetupWizardProxy,
   createDelegatedTextInputShouldPrompt,
   createPatchedAccountSetupAdapter,
-  createZodSetupInputValidator,
+  createSetupInputPresenceValidator,
   createTopLevelChannelDmPolicy,
   normalizeE164,
   parseSetupEntriesAllowingWildcard,
@@ -19,7 +19,6 @@ import type {
   ChannelSetupWizardTextInput,
 } from "openclaw/plugin-sdk/setup";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { z } from "zod";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
@@ -32,16 +31,6 @@ const MAX_E164_DIGITS = 15;
 const DIGITS_ONLY = /^\d+$/;
 const INVALID_SIGNAL_ACCOUNT_ERROR =
   "Invalid E.164 phone number (must start with + and country code, e.g. +15555550123)";
-
-const SignalSetupInputSchema = z
-  .object({
-    signalNumber: z.string().optional(),
-    cliPath: z.string().optional(),
-    httpUrl: z.string().optional(),
-    httpHost: z.string().optional(),
-    httpPort: z.string().optional(),
-  })
-  .passthrough();
 
 export function normalizeSignalAccountInput(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
@@ -196,8 +185,7 @@ export const signalCompletionNote = {
 
 export const signalSetupAdapter: ChannelSetupAdapter = createPatchedAccountSetupAdapter({
   channelKey: channel,
-  validateInput: createZodSetupInputValidator({
-    schema: SignalSetupInputSchema,
+  validateInput: createSetupInputPresenceValidator({
     validate: ({ input }) => {
       if (
         !input.signalNumber &&
