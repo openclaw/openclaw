@@ -9,6 +9,7 @@ import { requireProviderContractProvider as requireBundledProviderContractProvid
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
 const getOAuthApiKeyMock = vi.hoisted(() => vi.fn());
+const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 const getOAuthProvidersMock = vi.hoisted(() =>
   vi.fn(() => [
     { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
@@ -25,11 +26,12 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
     ...actual,
     getOAuthApiKey: getOAuthApiKeyMock,
     getOAuthProviders: getOAuthProvidersMock,
+    refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
   };
 });
 
-vi.mock("../../../extensions/openai/src/openai-codex-provider.runtime.js", () => ({
-  getOAuthApiKey: getOAuthApiKeyMock,
+vi.mock("../../../extensions/openai/openai-codex-provider.runtime.js", () => ({
+  refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
 }));
 
 function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRuntimeModel, "id">) {
@@ -55,34 +57,39 @@ describe("provider runtime contract", () => {
   beforeEach(() => {
     getOAuthApiKeyMock.mockReset();
     getOAuthProvidersMock.mockClear();
+    refreshOpenAICodexTokenMock.mockReset();
   }, CONTRACT_SETUP_TIMEOUT_MS);
 
   describe("anthropic", () => {
-    it("owns anthropic 4.6 forward-compat resolution", () => {
-      const provider = requireProviderContractProvider("anthropic");
-      const model = provider.resolveDynamicModel?.({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4.6-20260219",
-        modelRegistry: {
-          find: (_provider: string, id: string) =>
-            id === "claude-sonnet-4.5-20260219"
-              ? createModel({
-                  id: id,
-                  api: "anthropic-messages",
-                  provider: "anthropic",
-                  baseUrl: "https://api.anthropic.com",
-                })
-              : null,
-        } as never,
-      });
+    it(
+      "owns anthropic 4.6 forward-compat resolution",
+      () => {
+        const provider = requireProviderContractProvider("anthropic");
+        const model = provider.resolveDynamicModel?.({
+          provider: "anthropic",
+          modelId: "claude-sonnet-4.6-20260219",
+          modelRegistry: {
+            find: (_provider: string, id: string) =>
+              id === "claude-sonnet-4.5-20260219"
+                ? createModel({
+                    id: id,
+                    api: "anthropic-messages",
+                    provider: "anthropic",
+                    baseUrl: "https://api.anthropic.com",
+                  })
+                : null,
+          } as never,
+        });
 
-      expect(model).toMatchObject({
-        id: "claude-sonnet-4.6-20260219",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        baseUrl: "https://api.anthropic.com",
-      });
-    });
+        expect(model).toMatchObject({
+          id: "claude-sonnet-4.6-20260219",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com",
+        });
+      },
+      CONTRACT_SETUP_TIMEOUT_MS,
+    );
 
     it("owns usage auth resolution", async () => {
       const provider = requireProviderContractProvider("anthropic");
@@ -519,21 +526,40 @@ describe("provider runtime contract", () => {
   });
 
   describe("openai-codex", () => {
-    it("owns refresh fallback for accountId extraction failures", async () => {
-      const provider = requireProviderContractProvider("openai-codex");
-      const credential = {
-        type: "oauth" as const,
-        provider: "openai-codex",
-        access: "cached-access-token",
-        refresh: "refresh-token",
-        expires: Date.now() - 60_000,
-      };
+    it(
+      "owns refresh fallback for accountId extraction failures",
+      async () => {
+        const provider = requireProviderContractProvider("openai-codex");
+        const credential = {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "cached-access-token",
+          refresh: "refresh-token",
+          expires: Date.now() - 60_000,
+        };
 
-      getOAuthApiKeyMock.mockReset();
-      getOAuthApiKeyMock.mockRejectedValueOnce(new Error("Failed to extract accountId from token"));
+        const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString(
+          "base64url",
+        );
+        const payload = Buffer.from(JSON.stringify({})).toString("base64url");
+        const accessTokenWithoutAccountId = `${header}.${payload}.sig`;
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn(async () =>
+          makeResponse(200, {
+            access_token: accessTokenWithoutAccountId,
+            refresh_token: "refreshed-refresh-token",
+            expires_in: 3600,
+          }),
+        ) as typeof fetch;
 
-      await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
-    });
+        try {
+          await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
+        } finally {
+          globalThis.fetch = originalFetch;
+        }
+      },
+      CONTRACT_SETUP_TIMEOUT_MS,
+    );
 
     it("owns forward-compat codex models", () => {
       const provider = requireProviderContractProvider("openai-codex");
