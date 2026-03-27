@@ -28,7 +28,7 @@ describe("openrouter plugin", () => {
     expect(providers).toHaveLength(1);
     expect(providers.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(speechProviders).toHaveLength(0);
-    expect(mediaProviders).toHaveLength(0);
+    expect(mediaProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(imageProviders).toHaveLength(0);
   });
 });

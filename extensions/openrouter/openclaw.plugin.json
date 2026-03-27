@@ -19,6 +19,9 @@
       "cliDescription": "OpenRouter API key"
     }
   ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["openrouter"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
