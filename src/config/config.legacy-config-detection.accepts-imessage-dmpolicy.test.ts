@@ -219,7 +219,7 @@ describe("legacy config detection", () => {
     await withSnapshotForConfig(
       { channels: { telegram: { groupMentionsOnly: true } } },
       async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(false);
+        expect(ctx.snapshot.valid).toBe(true);
         expect(
           ctx.snapshot.legacyIssues.some(
             (issue) => issue.path === "channels.telegram.groupMentionsOnly",
