@@ -1,8 +1,9 @@
 ---
-summary: "Use Anthropic Claude via API keys or setup-token in OpenClaw"
+summary: "Use Anthropic Claude via API keys, setup-token, or Claude CLI in OpenClaw"
 read_when:
   - You want to use Anthropic models in OpenClaw
   - You want setup-token instead of API keys
+  - You want to reuse Claude CLI subscription auth on the gateway host
 title: "Anthropic"
 ---
 
@@ -26,7 +27,7 @@ openclaw onboard
 openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 ```
 
-### Config snippet
+### Claude CLI config snippet
 
 ```json5
 {
@@ -43,6 +44,34 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 - Related Anthropic docs:
   - [Adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking)
   - [Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+
+## Fast mode (Anthropic API)
+
+OpenClaw's shared `/fast` toggle also supports direct Anthropic API-key traffic.
+
+- `/fast on` maps to `service_tier: "auto"`
+- `/fast off` maps to `service_tier: "standard_only"`
+- Config default:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "anthropic/claude-sonnet-4-6": {
+          params: { fastMode: true },
+        },
+      },
+    },
+  },
+}
+```
+
+Important limits:
+
+- This is **API-key only**. Anthropic setup-token / OAuth auth does not honor OpenClaw fast-mode tier injection.
+- OpenClaw only injects Anthropic service tiers for direct `api.anthropic.com` requests. If you route `anthropic/*` through a proxy or gateway, `/fast` leaves `service_tier` untouched.
+- Anthropic reports the effective tier on the response under `usage.service_tier`. On accounts without Priority Tier capacity, `service_tier: "auto"` may still resolve to `standard`.
 
 ## Prompt caching (Anthropic API)
 
@@ -158,7 +187,122 @@ Note: Anthropic currently rejects `context-1m-*` beta requests when using
 OAuth/subscription tokens (`sk-ant-oat-*`). OpenClaw automatically skips the
 context1m beta header for OAuth auth and keeps the required OAuth betas.
 
-## Option B: Claude setup-token
+## Option B: Claude CLI as the message provider
+
+**Best for:** a single-user gateway host that already has Claude CLI installed
+and signed in with a Claude subscription.
+
+This path uses the local `claude` binary for model inference instead of calling
+the Anthropic API directly. OpenClaw treats it as a **CLI backend provider**
+with model refs like:
+
+- `claude-cli/claude-sonnet-4-6`
+- `claude-cli/claude-opus-4-6`
+
+How it works:
+
+1. OpenClaw launches `claude -p --output-format json ...` on the **gateway
+   host**.
+2. The first turn sends `--session-id <uuid>`.
+3. Follow-up turns reuse the stored Claude session via `--resume <sessionId>`.
+4. Your chat messages still go through the normal OpenClaw message pipeline, but
+   the actual model reply is produced by Claude CLI.
+
+### Requirements
+
+- Claude CLI installed on the gateway host and available on PATH, or configured
+  with an absolute command path.
+- Claude CLI already authenticated on that same host:
+
+```bash
+claude auth status
+```
+
+- OpenClaw auto-loads the bundled Anthropic plugin at gateway startup when your
+  config explicitly references `claude-cli/...` or `claude-cli` backend config.
+
+### Config snippet
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: {
+        primary: "claude-cli/claude-sonnet-4-6",
+      },
+      models: {
+        "claude-cli/claude-sonnet-4-6": {},
+      },
+      sandbox: { mode: "off" },
+    },
+  },
+}
+```
+
+If the `claude` binary is not on the gateway host PATH:
+
+```json5
+{
+  agents: {
+    defaults: {
+      cliBackends: {
+        "claude-cli": {
+          command: "/opt/homebrew/bin/claude",
+        },
+      },
+    },
+  },
+}
+```
+
+### What you get
+
+- Claude subscription auth reused from the local CLI
+- Normal OpenClaw message/session routing
+- Claude CLI session continuity across turns
+
+### Migrate from Anthropic auth to Claude CLI
+
+If you currently use `anthropic/...` with a setup-token or API key and want to
+switch the same gateway host to Claude CLI:
+
+```bash
+openclaw models auth login --provider anthropic --method cli --set-default
+```
+
+Or in onboarding:
+
+```bash
+openclaw onboard --auth-choice anthropic-cli
+```
+
+What this does:
+
+- verifies Claude CLI is already signed in on the gateway host
+- switches the default model to `claude-cli/...`
+- rewrites Anthropic default-model fallbacks like `anthropic/claude-opus-4-6`
+  to `claude-cli/claude-opus-4-6`
+- adds matching `claude-cli/...` entries to `agents.defaults.models`
+
+What it does **not** do:
+
+- delete your existing Anthropic auth profiles
+- remove every old `anthropic/...` config reference outside the main default
+  model/allowlist path
+
+That makes rollback simple: change the default model back to `anthropic/...` if
+you need to.
+
+### Important limits
+
+- This is **not** the Anthropic API provider. It is the local CLI runtime.
+- Tools are disabled on the OpenClaw side for CLI backend runs.
+- Text in, text out. No OpenClaw streaming handoff.
+- Best fit for a personal gateway host, not shared multi-user billing setups.
+
+More details: [/gateway/cli-backends](/gateway/cli-backends)
+
+## Option C: Claude setup-token
 
 **Best for:** using your Claude subscription.
 
@@ -185,7 +329,7 @@ openclaw models auth paste-token --provider anthropic
 ### CLI setup (setup-token)
 
 ```bash
-# Paste a setup-token during onboarding
+# Paste a setup-token during setup
 openclaw onboard --auth-choice setup-token
 ```
 
@@ -200,7 +344,7 @@ openclaw onboard --auth-choice setup-token
 ## Notes
 
 - Generate the setup-token with `claude setup-token` and paste it, or run `openclaw models auth setup-token` on the gateway host.
-- If you see “OAuth token refresh failed …” on a Claude subscription, re-auth with a setup-token. See [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription).
+- If you see “OAuth token refresh failed …” on a Claude subscription, re-auth with a setup-token. See [/gateway/troubleshooting](/gateway/troubleshooting).
 - Auth details + reuse rules are in [/concepts/oauth](/concepts/oauth).
 
 ## Troubleshooting

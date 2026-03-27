@@ -7,6 +7,7 @@
  * 3. before_agent_start remains a legacy compatibility fallback
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { joinPresentTextSegments } from "../shared/text/join-segments.js";
 import { createHookRunner } from "./hooks.js";
 import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
@@ -94,7 +95,7 @@ describe("model override pipeline wiring", () => {
         pluginId: "legacy-hook",
         hookName: "before_agent_start",
         handler: (() => ({
-          modelOverride: "gpt-4o",
+          modelOverride: "gpt-5.4",
           providerOverride: "openai",
         })) as PluginHookRegistration["handler"],
       });
@@ -154,9 +155,10 @@ describe("model override pipeline wiring", () => {
         { prompt: "test", messages: [{ role: "user", content: "x" }] as unknown[] },
         stubCtx,
       );
-      const prependContext = [promptBuild?.prependContext, legacy?.prependContext]
-        .filter((value): value is string => Boolean(value))
-        .join("\n\n");
+      const prependContext = joinPresentTextSegments([
+        promptBuild?.prependContext,
+        legacy?.prependContext,
+      ]);
 
       expect(prependContext).toBe("new context\n\nlegacy context");
     });

@@ -1,6 +1,7 @@
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
-import { renderConfig } from "./config.ts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ThemeMode, ThemeName } from "../theme.ts";
+import { renderConfig, type ConfigProps } from "./config.ts";
 
 describe("config view", () => {
   const baseProps = () => ({
@@ -20,6 +21,7 @@ describe("config view", () => {
     schemaLoading: false,
     uiHints: {},
     formMode: "form" as const,
+    showModeToggle: true,
     formValue: {},
     originalValue: {},
     searchQuery: "",
@@ -35,6 +37,15 @@ describe("config view", () => {
     onApply: vi.fn(),
     onUpdate: vi.fn(),
     onSubsectionChange: vi.fn(),
+    version: "2026.3.11",
+    theme: "claw" as ThemeName,
+    themeMode: "system" as ThemeMode,
+    setTheme: vi.fn(),
+    setThemeMode: vi.fn(),
+    borderRadius: 50,
+    setBorderRadius: vi.fn(),
+    gatewayUrl: "",
+    assistantName: "OpenClaw",
   });
 
   function findActionButtons(container: HTMLElement): {
@@ -47,6 +58,49 @@ describe("config view", () => {
       applyButton: buttons.find((btn) => btn.textContent?.trim() === "Apply"),
     };
   }
+
+  function renderConfigView(overrides: Partial<ConfigProps> = {}): {
+    container: HTMLElement;
+    props: ConfigProps;
+  } {
+    const container = document.createElement("div");
+    const props = {
+      ...baseProps(),
+      ...overrides,
+    };
+    const rerender = () =>
+      render(
+        renderConfig({
+          ...props,
+          onRequestUpdate: rerender,
+        }),
+        container,
+      );
+    rerender();
+    return { container, props };
+  }
+
+  function normalizedText(container: HTMLElement): string {
+    return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
+  }
+
+  function resetRawRevealState() {
+    const { container } = renderConfigView({
+      formMode: "raw",
+      raw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
+      originalRaw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
+      formValue: {
+        openai: {
+          apiKey: "supersecret",
+        },
+      },
+    });
+    container.querySelector<HTMLButtonElement>(".config-raw-toggle.active")?.click();
+  }
+
+  beforeEach(() => {
+    resetRawRevealState();
+  });
 
   it("allows save when form is unsafe", () => {
     const container = document.createElement("div");
@@ -200,34 +254,102 @@ describe("config view", () => {
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
   });
 
-  it("shows all tag options in compact tag picker", () => {
+  it("renders the top search icon inside the search input row", () => {
     const container = document.createElement("div");
     render(renderConfig(baseProps()), container);
 
-    const options = Array.from(container.querySelectorAll(".config-search__tag-option")).map(
-      (option) => option.textContent?.trim(),
-    );
-    expect(options).toContain("tag:security");
-    expect(options).toContain("tag:advanced");
-    expect(options).toHaveLength(15);
+    const icon = container.querySelector<SVGElement>(".config-search__icon");
+    expect(icon).not.toBeNull();
+    expect(icon?.closest(".config-search__input-row")).not.toBeNull();
   });
 
-  it("updates search query when toggling a tag option", () => {
+  it("renders top tabs for root and available sections", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfig({
+        ...baseProps(),
+        schema: {
+          type: "object",
+          properties: {
+            gateway: { type: "object", properties: {} },
+            agents: { type: "object", properties: {} },
+          },
+        },
+      }),
+      container,
+    );
+
+    const tabs = Array.from(container.querySelectorAll(".config-top-tabs__tab")).map((tab) =>
+      tab.textContent?.trim(),
+    );
+    expect(tabs).toContain("Settings");
+    expect(tabs).toContain("Agents");
+    expect(tabs).toContain("Gateway");
+  });
+
+  it("clears the active search query", () => {
     const container = document.createElement("div");
     const onSearchChange = vi.fn();
     render(
       renderConfig({
         ...baseProps(),
+        searchQuery: "gateway",
         onSearchChange,
       }),
       container,
     );
 
-    const option = container.querySelector<HTMLButtonElement>(
-      '.config-search__tag-option[data-tag="security"]',
-    );
-    expect(option).toBeTruthy();
-    option?.click();
-    expect(onSearchChange).toHaveBeenCalledWith("tag:security");
+    const clearButton = container.querySelector<HTMLButtonElement>(".config-search__clear");
+    expect(clearButton).toBeTruthy();
+    clearButton?.click();
+    expect(onSearchChange).toHaveBeenCalledWith("");
+  });
+
+  it("keeps sensitive raw config hidden until reveal", () => {
+    const { container } = renderConfigView({
+      formMode: "raw",
+      raw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
+      originalRaw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
+      formValue: {
+        openai: {
+          apiKey: "supersecret",
+        },
+      },
+    });
+
+    const text = normalizedText(container);
+    expect(text).toContain("1 secret redacted");
+    expect(text).toContain("Use the reveal button above to edit the raw config.");
+    expect(text).not.toContain("supersecret");
+    expect(container.querySelector("textarea")).toBeNull();
+  });
+
+  it("reveals sensitive raw config before editing", () => {
+    const onRawChange = vi.fn();
+    const { container } = renderConfigView({
+      formMode: "raw",
+      raw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
+      originalRaw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
+      formValue: {
+        openai: {
+          apiKey: "supersecret",
+        },
+      },
+      onRawChange,
+    });
+
+    const revealButton = container.querySelector<HTMLButtonElement>(".config-raw-toggle");
+    expect(revealButton).toBeTruthy();
+    revealButton?.click();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    expect(textarea?.value).toContain("supersecret");
+    if (!textarea) {
+      return;
+    }
+    textarea.value = textarea.value.replace("supersecret", "updatedsecret");
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onRawChange).toHaveBeenCalledWith(textarea.value);
   });
 });

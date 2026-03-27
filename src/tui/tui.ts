@@ -8,8 +8,8 @@ import {
   Text,
   TUI,
 } from "@mariozechner/pi-tui";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { loadConfig } from "../config/config.js";
+import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
@@ -27,6 +27,11 @@ import { formatTokens } from "./tui-formatters.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
+import {
+  createEditorSubmitHandler,
+  createSubmitBurstCoalescer,
+  shouldEnableWindowsGitBashPasteFallback,
+} from "./tui-submit.js";
 import type {
   AgentSummary,
   SessionInfo,
@@ -38,150 +43,11 @@ import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.
 
 export { resolveFinalAssistantText } from "./tui-formatters.js";
 export type { TuiOptions } from "./tui-types.js";
-
-export function createEditorSubmitHandler(params: {
-  editor: {
-    setText: (value: string) => void;
-    addToHistory: (value: string) => void;
-  };
-  handleCommand: (value: string) => Promise<void> | void;
-  sendMessage: (value: string) => Promise<void> | void;
-  handleBangLine: (value: string) => Promise<void> | void;
-}) {
-  return (text: string) => {
-    const raw = text;
-    const value = raw.trim();
-    params.editor.setText("");
-
-    // Keep previous behavior: ignore empty/whitespace-only submissions.
-    if (!value) {
-      return;
-    }
-
-    // Bash mode: only if the very first character is '!' and it's not just '!'.
-    // IMPORTANT: use the raw (untrimmed) text so leading spaces do NOT trigger.
-    // Per requirement: a lone '!' should be treated as a normal message.
-    if (raw.startsWith("!") && raw !== "!") {
-      params.editor.addToHistory(raw);
-      void params.handleBangLine(raw);
-      return;
-    }
-
-    // Enable built-in editor prompt history navigation (up/down).
-    params.editor.addToHistory(value);
-
-    if (value.startsWith("/")) {
-      void params.handleCommand(value);
-      return;
-    }
-
-    void params.sendMessage(value);
-  };
-}
-
-export function shouldEnableWindowsGitBashPasteFallback(params?: {
-  platform?: string;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
-  const platform = params?.platform ?? process.platform;
-  const env = params?.env ?? process.env;
-  const termProgram = (env.TERM_PROGRAM ?? "").toLowerCase();
-
-  // Some macOS terminals emit multiline paste as rapid single-line submits.
-  // Enable burst coalescing so pasted blocks stay as one user message.
-  if (platform === "darwin") {
-    if (termProgram.includes("iterm") || termProgram.includes("apple_terminal")) {
-      return true;
-    }
-    return false;
-  }
-
-  if (platform !== "win32") {
-    return false;
-  }
-
-  const msystem = (env.MSYSTEM ?? "").toUpperCase();
-  const shell = env.SHELL ?? "";
-  if (msystem.startsWith("MINGW") || msystem.startsWith("MSYS")) {
-    return true;
-  }
-  if (shell.toLowerCase().includes("bash")) {
-    return true;
-  }
-  return termProgram.includes("mintty");
-}
-
-export function createSubmitBurstCoalescer(params: {
-  submit: (value: string) => void;
-  enabled: boolean;
-  burstWindowMs?: number;
-  now?: () => number;
-  setTimer?: typeof setTimeout;
-  clearTimer?: typeof clearTimeout;
-}) {
-  const windowMs = Math.max(1, params.burstWindowMs ?? 50);
-  const now = params.now ?? (() => Date.now());
-  const setTimer = params.setTimer ?? setTimeout;
-  const clearTimer = params.clearTimer ?? clearTimeout;
-  let pending: string | null = null;
-  let pendingAt = 0;
-  let flushTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const clearFlushTimer = () => {
-    if (!flushTimer) {
-      return;
-    }
-    clearTimer(flushTimer);
-    flushTimer = null;
-  };
-
-  const flushPending = () => {
-    if (pending === null) {
-      return;
-    }
-    const value = pending;
-    pending = null;
-    pendingAt = 0;
-    clearFlushTimer();
-    params.submit(value);
-  };
-
-  const scheduleFlush = () => {
-    clearFlushTimer();
-    flushTimer = setTimer(() => {
-      flushPending();
-    }, windowMs);
-  };
-
-  return (value: string) => {
-    if (!params.enabled) {
-      params.submit(value);
-      return;
-    }
-    if (value.includes("\n")) {
-      flushPending();
-      params.submit(value);
-      return;
-    }
-    const ts = now();
-    if (pending === null) {
-      pending = value;
-      pendingAt = ts;
-      scheduleFlush();
-      return;
-    }
-    if (ts - pendingAt <= windowMs) {
-      pending = `${pending}\n${value}`;
-      pendingAt = ts;
-      scheduleFlush();
-      return;
-    }
-    flushPending();
-    pending = value;
-    pendingAt = ts;
-    scheduleFlush();
-  };
-}
+export {
+  createEditorSubmitHandler,
+  createSubmitBurstCoalescer,
+  shouldEnableWindowsGitBashPasteFallback,
+} from "./tui-submit.js";
 
 export function resolveTuiSessionKey(params: {
   raw?: string;
@@ -206,6 +72,28 @@ export function resolveTuiSessionKey(params: {
     return trimmed.toLowerCase();
   }
   return `agent:${params.currentAgentId}:${trimmed.toLowerCase()}`;
+}
+
+export function resolveInitialTuiAgentId(params: {
+  cfg: OpenClawConfig;
+  fallbackAgentId: string;
+  initialSessionInput?: string;
+  cwd?: string;
+}) {
+  const parsed = parseAgentSessionKey((params.initialSessionInput ?? "").trim());
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+
+  const inferredFromWorkspace = resolveAgentIdByWorkspacePath(
+    params.cfg,
+    params.cwd ?? process.cwd(),
+  );
+  if (inferredFromWorkspace) {
+    return inferredFromWorkspace;
+  }
+
+  return normalizeAgentId(params.fallbackAgentId);
 }
 
 export function resolveGatewayDisconnectState(reason?: string): {
@@ -303,7 +191,12 @@ export async function runTui(opts: TuiOptions) {
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
   let agentDefaultId = resolveDefaultAgentId(config);
-  let currentAgentId = agentDefaultId;
+  let currentAgentId = resolveInitialTuiAgentId({
+    cfg: config,
+    fallbackAgentId: agentDefaultId,
+    initialSessionInput,
+    cwd: process.cwd(),
+  });
   let agents: AgentSummary[] = [];
   const agentNames = new Map<string, string>();
   let currentSessionKey = "";
@@ -317,6 +210,7 @@ export async function runTui(opts: TuiOptions) {
   let showThinking = false;
   let pairingHintShown = false;
   const localRunIds = new Set<string>();
+  const localBtwRunIds = new Set<string>();
 
   const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
@@ -471,7 +365,30 @@ export async function runTui(opts: TuiOptions) {
     localRunIds.clear();
   };
 
-  const client = new GatewayChatClient({
+  const noteLocalBtwRunId = (runId: string) => {
+    if (!runId) {
+      return;
+    }
+    localBtwRunIds.add(runId);
+    if (localBtwRunIds.size > 200) {
+      const [first] = localBtwRunIds;
+      if (first) {
+        localBtwRunIds.delete(first);
+      }
+    }
+  };
+
+  const forgetLocalBtwRunId = (runId: string) => {
+    localBtwRunIds.delete(runId);
+  };
+
+  const isLocalBtwRunId = (runId: string) => localBtwRunIds.has(runId);
+
+  const clearLocalBtwRunIds = () => {
+    localBtwRunIds.clear();
+  };
+
+  const client = await GatewayChatClient.connect({
     url: opts.url,
     token: opts.token,
     password: opts.password,
@@ -725,6 +642,7 @@ export async function runTui(opts: TuiOptions) {
       : "unknown";
     const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
     const think = sessionInfo.thinkingLevel ?? "off";
+    const fast = sessionInfo.fastMode === true;
     const verbose = sessionInfo.verboseLevel ?? "off";
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
@@ -734,6 +652,7 @@ export async function runTui(opts: TuiOptions) {
       `session ${sessionLabel}`,
       modelLabel,
       think !== "off" ? `think ${think}` : null,
+      fast ? "fast" : null,
       verbose !== "off" ? `verbose ${verbose}` : null,
       reasoningLabel,
       tokens,
@@ -742,6 +661,14 @@ export async function runTui(opts: TuiOptions) {
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
+  const btw = {
+    showResult: (params: { question: string; text: string; isError?: boolean }) => {
+      chatLog.showBtw(params);
+    },
+    clear: () => {
+      chatLog.dismissBtw();
+    },
+  };
 
   const initialSessionAgentId = (() => {
     if (!initialSessionInput) {
@@ -754,6 +681,7 @@ export async function runTui(opts: TuiOptions) {
   const sessionActions = createSessionActions({
     client,
     chatLog,
+    btw,
     tui,
     opts,
     state,
@@ -776,8 +704,9 @@ export async function runTui(opts: TuiOptions) {
     abortActive,
   } = sessionActions;
 
-  const { handleChatEvent, handleAgentEvent } = createEventHandlers({
+  const { handleChatEvent, handleAgentEvent, handleBtwEvent } = createEventHandlers({
     chatLog,
+    btw,
     tui,
     state,
     setActivityStatus,
@@ -786,6 +715,9 @@ export async function runTui(opts: TuiOptions) {
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
+    isLocalBtwRunId,
+    forgetLocalBtwRunId,
+    clearLocalBtwRunIds,
   });
 
   const requestExit = () => {
@@ -817,7 +749,9 @@ export async function runTui(opts: TuiOptions) {
       setActivityStatus,
       formatSessionKey,
       noteLocalRunId,
+      noteLocalBtwRunId,
       forgetLocalRunId,
+      forgetLocalBtwRunId,
       requestExit,
     });
 
@@ -840,6 +774,11 @@ export async function runTui(opts: TuiOptions) {
   });
 
   editor.onEscape = () => {
+    if (chatLog.hasVisibleBtw()) {
+      chatLog.dismissBtw();
+      tui.requestRender();
+      return;
+    }
     void abortActive();
   };
   const handleCtrlC = () => {
@@ -889,9 +828,27 @@ export async function runTui(opts: TuiOptions) {
     void loadHistory();
   };
 
+  tui.addInputListener((data) => {
+    if (!chatLog.hasVisibleBtw()) {
+      return undefined;
+    }
+    if (editor.getText().length > 0) {
+      return undefined;
+    }
+    if (matchesKey(data, "enter")) {
+      chatLog.dismissBtw();
+      tui.requestRender();
+      return { consume: true };
+    }
+    return undefined;
+  });
+
   client.onEvent = (evt) => {
     if (evt.event === "chat") {
       handleChatEvent(evt.payload);
+    }
+    if (evt.event === "chat.side_result") {
+      handleBtwEvent(evt.payload);
     }
     if (evt.event === "agent") {
       handleAgentEvent(evt.payload);

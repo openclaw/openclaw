@@ -2,7 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
+import {
+  readEmbeddedGatewayTokenForTest,
+  testServiceAuditCodes,
+} from "./doctor-service-audit.test-helpers.js";
+import type { LegacyStateDetection } from "./doctor-state-migrations.js";
 
 let originalIsTTY: boolean | undefined;
 let originalStateDir: string | undefined;
@@ -91,6 +97,19 @@ export const findExtraGatewayServices = vi.fn().mockResolvedValue([]) as unknown
 export const renderGatewayServiceCleanupHints = vi
   .fn()
   .mockReturnValue(["cleanup"]) as unknown as MockFn;
+export const auditGatewayServiceConfig = vi
+  .fn()
+  .mockResolvedValue({ ok: true, issues: [] }) as unknown as MockFn;
+export const buildGatewayInstallPlan = vi.mocked(
+  vi.fn().mockResolvedValue({
+    programArguments: ["node", "cli", "gateway", "--port", "18789"],
+    workingDirectory: "/tmp",
+    environment: {},
+  }),
+) as unknown as MockFn;
+export const resolveGatewayAuthTokenForService = vi
+  .fn()
+  .mockResolvedValue({ token: undefined }) as unknown as MockFn;
 export const resolveGatewayProgramArguments = vi.fn().mockResolvedValue({
   programArguments: ["node", "cli", "gateway", "--port", "18789"],
 }) as unknown as MockFn;
@@ -99,6 +118,7 @@ export const serviceIsLoaded = vi.fn().mockResolvedValue(false) as unknown as Mo
 export const serviceStop = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
 export const serviceRestart = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
 export const serviceUninstall = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
+export const serviceReadCommand = vi.fn().mockResolvedValue(null) as unknown as MockFn;
 export const callGateway = vi
   .fn()
   .mockRejectedValue(new Error("gateway closed")) as unknown as MockFn;
@@ -109,11 +129,12 @@ export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
   changes: [],
   warnings: [],
 }) as unknown as MockFn;
+export const runStartupMatrixMigration = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
 
 function createLegacyStateMigrationDetectionResult(params?: {
   hasLegacySessions?: boolean;
   preview?: string[];
-}) {
+}): LegacyStateDetection {
   return {
     targetAgentId: "main",
     targetMainKey: "main",
@@ -139,9 +160,8 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
     },
     pairingAllowFrom: {
-      legacyTelegramPath: "/tmp/oauth/telegram-allowFrom.json",
-      targetTelegramPath: "/tmp/oauth/telegram-default-allowFrom.json",
       hasLegacyTelegram: false,
+      copyPlans: [],
     },
     preview: params?.preview ?? [],
   };
@@ -180,7 +200,7 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 
 vi.mock("../plugins/loader.js", () => ({
-  loadOpenClawPlugins: () => ({ plugins: [], diagnostics: [] }),
+  loadOpenClawPlugins: () => createEmptyPluginRegistry(),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -205,8 +225,24 @@ vi.mock("../daemon/inspect.js", () => ({
   renderGatewayServiceCleanupHints,
 }));
 
+vi.mock("../daemon/service-audit.js", () => ({
+  auditGatewayServiceConfig,
+  needsNodeRuntimeMigration: vi.fn(() => false),
+  readEmbeddedGatewayToken: readEmbeddedGatewayTokenForTest,
+  SERVICE_AUDIT_CODES: testServiceAuditCodes,
+}));
+
 vi.mock("../daemon/program-args.js", () => ({
   resolveGatewayProgramArguments,
+}));
+
+vi.mock("./daemon-install-helpers.js", () => ({
+  buildGatewayInstallPlan,
+  gatewayInstallErrorHint: vi.fn(() => "hint"),
+}));
+
+vi.mock("./doctor-gateway-auth-token.js", () => ({
+  resolveGatewayAuthTokenForService,
 }));
 
 vi.mock("../gateway/call.js", async (importOriginal) => {
@@ -248,7 +284,7 @@ vi.mock("../daemon/service.js", () => ({
     stop: serviceStop,
     restart: serviceRestart,
     isLoaded: serviceIsLoaded,
-    readCommand: vi.fn(),
+    readCommand: serviceReadCommand,
     readRuntime: vi.fn().mockResolvedValue({ status: "running" }),
   }),
 }));
@@ -258,7 +294,7 @@ vi.mock("../pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest: vi.fn().mockResolvedValue({ code: "000000", created: false }),
 }));
 
-vi.mock("../telegram/token.js", () => ({
+vi.mock("../../extensions/telegram/api.js", () => ({
   resolveTelegramToken: vi.fn(() => ({ token: "", source: "none" })),
 }));
 
@@ -297,6 +333,10 @@ vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyStateDir,
   detectLegacyStateMigrations,
   runLegacyStateMigrations,
+}));
+
+vi.mock("../gateway/server-startup-matrix-migration.js", () => ({
+  runStartupMatrixMigration,
 }));
 
 export function mockDoctorConfigSnapshot(
@@ -384,6 +424,13 @@ beforeEach(() => {
   uninstallLegacyGatewayServices.mockReset().mockResolvedValue([]);
   findExtraGatewayServices.mockReset().mockResolvedValue([]);
   renderGatewayServiceCleanupHints.mockReset().mockReturnValue(["cleanup"]);
+  auditGatewayServiceConfig.mockReset().mockResolvedValue({ ok: true, issues: [] });
+  buildGatewayInstallPlan.mockReset().mockResolvedValue({
+    programArguments: ["node", "cli", "gateway", "--port", "18789"],
+    workingDirectory: "/tmp",
+    environment: {},
+  });
+  resolveGatewayAuthTokenForService.mockReset().mockResolvedValue({ token: undefined });
   resolveGatewayProgramArguments.mockReset().mockResolvedValue({
     programArguments: ["node", "cli", "gateway", "--port", "18789"],
   });
@@ -392,7 +439,9 @@ beforeEach(() => {
   serviceStop.mockReset().mockResolvedValue(undefined);
   serviceRestart.mockReset().mockResolvedValue(undefined);
   serviceUninstall.mockReset().mockResolvedValue(undefined);
+  serviceReadCommand.mockReset().mockResolvedValue(null);
   callGateway.mockReset().mockRejectedValue(new Error("gateway closed"));
+  runStartupMatrixMigration.mockReset().mockResolvedValue(undefined);
 
   originalIsTTY = process.stdin.isTTY;
   setStdinTty(true);

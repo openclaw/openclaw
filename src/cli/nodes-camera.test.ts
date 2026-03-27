@@ -1,26 +1,54 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readFileUtf8AndCleanup,
   stubFetchResponse,
 } from "../test-utils/camera-url-test-helpers.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import {
-  cameraTempPath,
-  parseCameraClipPayload,
-  parseCameraSnapPayload,
-  writeCameraClipPayloadToFile,
-  writeBase64ToFile,
-  writeUrlToFile,
-} from "./nodes-camera.js";
-import { parseScreenRecordPayload, screenRecordTempPath } from "./nodes-screen.js";
+
+const fetchGuardMocks = vi.hoisted(() => ({
+  fetchWithSsrFGuard: vi.fn(async (params: { url: string }) => {
+    return {
+      response: await globalThis.fetch(params.url),
+      finalUrl: params.url,
+      release: async () => {},
+    };
+  }),
+}));
+
+vi.mock("../infra/net/fetch-guard.js", () => ({
+  fetchWithSsrFGuard: fetchGuardMocks.fetchWithSsrFGuard,
+}));
+
+let cameraTempPath: typeof import("./nodes-camera.js").cameraTempPath;
+let parseCameraClipPayload: typeof import("./nodes-camera.js").parseCameraClipPayload;
+let parseCameraSnapPayload: typeof import("./nodes-camera.js").parseCameraSnapPayload;
+let writeCameraClipPayloadToFile: typeof import("./nodes-camera.js").writeCameraClipPayloadToFile;
+let writeBase64ToFile: typeof import("./nodes-camera.js").writeBase64ToFile;
+let writeUrlToFile: typeof import("./nodes-camera.js").writeUrlToFile;
+let parseScreenRecordPayload: typeof import("./nodes-screen.js").parseScreenRecordPayload;
+let screenRecordTempPath: typeof import("./nodes-screen.js").screenRecordTempPath;
 
 async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   return await withTempDir("openclaw-test-", run);
 }
 
 describe("nodes camera helpers", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    ({
+      cameraTempPath,
+      parseCameraClipPayload,
+      parseCameraSnapPayload,
+      writeCameraClipPayloadToFile,
+      writeBase64ToFile,
+      writeUrlToFile,
+    } = await import("./nodes-camera.js"));
+    ({ parseScreenRecordPayload, screenRecordTempPath } = await import("./nodes-screen.js"));
+  });
+
   it("parses camera.snap payload", () => {
     expect(
       parseCameraSnapPayload({

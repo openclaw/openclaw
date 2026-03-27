@@ -1,5 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { dashboardCommand } from "./dashboard.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
@@ -8,6 +7,7 @@ const detectBrowserOpenSupportMock = vi.hoisted(() => vi.fn());
 const openUrlMock = vi.hoisted(() => vi.fn());
 const formatControlUiSshHintMock = vi.hoisted(() => vi.fn());
 const copyToClipboardMock = vi.hoisted(() => vi.fn());
+const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
@@ -25,6 +25,12 @@ vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: copyToClipboardMock,
 }));
 
+vi.mock("../secrets/resolve.js", () => ({
+  resolveSecretRefValues: resolveSecretRefValuesMock,
+}));
+
+let dashboardCommand: typeof import("./dashboard.js").dashboardCommand;
+
 const runtime = {
   log: vi.fn(),
   error: vi.fn(),
@@ -37,7 +43,7 @@ function resetRuntime() {
   runtime.exit.mockClear();
 }
 
-function mockSnapshot(token = "abc") {
+function mockSnapshot(token: unknown = "abc") {
   readConfigFileSnapshotMock.mockResolvedValue({
     path: "/tmp/openclaw.json",
     exists: true,
@@ -53,9 +59,14 @@ function mockSnapshot(token = "abc") {
     httpUrl: "http://127.0.0.1:18789/",
     wsUrl: "ws://127.0.0.1:18789",
   });
+  resolveSecretRefValuesMock.mockReset();
 }
 
 describe("dashboardCommand", () => {
+  beforeAll(async () => {
+    ({ dashboardCommand } = await import("./dashboard.js"));
+  });
+
   beforeEach(() => {
     resetRuntime();
     readConfigFileSnapshotMock.mockClear();
@@ -65,6 +76,8 @@ describe("dashboardCommand", () => {
     openUrlMock.mockClear();
     formatControlUiSshHintMock.mockClear();
     copyToClipboardMock.mockClear();
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.CUSTOM_GATEWAY_TOKEN;
   });
 
   it("opens and copies the dashboard link by default", async () => {
@@ -113,6 +126,75 @@ describe("dashboardCommand", () => {
     expect(openUrlMock).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
       "Browser launch disabled (--no-open). Use the URL above.",
+    );
+  });
+
+  it("prints non-tokenized URL with guidance when token SecretRef is unresolved", async () => {
+    mockSnapshot({
+      source: "env",
+      provider: "default",
+      id: "MISSING_GATEWAY_TOKEN",
+    });
+    copyToClipboardMock.mockResolvedValue(true);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(true);
+    resolveSecretRefValuesMock.mockRejectedValue(new Error("missing env var"));
+
+    await dashboardCommand(runtime);
+
+    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Token auto-auth unavailable"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).",
+      ),
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("missing env var"));
+  });
+
+  it("keeps URL non-tokenized when token SecretRef is unresolved but env fallback exists", async () => {
+    mockSnapshot({
+      source: "env",
+      provider: "default",
+      id: "MISSING_GATEWAY_TOKEN",
+    });
+    process.env.OPENCLAW_GATEWAY_TOKEN = "fallback-token";
+    copyToClipboardMock.mockResolvedValue(true);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(true);
+    resolveSecretRefValuesMock.mockRejectedValue(new Error("missing env var"));
+
+    await dashboardCommand(runtime);
+
+    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
+    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Token auto-auth is disabled for SecretRef-managed"),
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("Token auto-auth unavailable"),
+    );
+  });
+
+  it("keeps URL non-tokenized when env-template gateway.auth.token is unresolved", async () => {
+    mockSnapshot("${CUSTOM_GATEWAY_TOKEN}");
+    copyToClipboardMock.mockResolvedValue(true);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(true);
+
+    await dashboardCommand(runtime);
+
+    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
+    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Token auto-auth unavailable: gateway.auth.token SecretRef is unresolved (env:default:CUSTOM_GATEWAY_TOKEN).",
+      ),
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("Token auto-auth is disabled for SecretRef-managed"),
     );
   });
 });

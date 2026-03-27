@@ -1,12 +1,16 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
 import {
-  createLoggerBackedRuntime,
+  resolveLoggerBackedRuntime,
+  safeParseJsonWithSchema,
+} from "openclaw/plugin-sdk/extension-shared";
+import { z } from "zod";
+import {
   type RuntimeEnv,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk/nextcloud-talk";
+} from "../runtime-api.js";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
@@ -25,7 +29,29 @@ const DEFAULT_WEBHOOK_HOST = "0.0.0.0";
 const DEFAULT_WEBHOOK_PATH = "/nextcloud-talk-webhook";
 const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+const PREAUTH_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
+const PREAUTH_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 const HEALTH_PATH = "/healthz";
+const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> = z.object({
+  type: z.enum(["Create", "Update", "Delete"]),
+  actor: z.object({
+    type: z.literal("Person"),
+    id: z.string().min(1),
+    name: z.string(),
+  }),
+  object: z.object({
+    type: z.literal("Note"),
+    id: z.string().min(1),
+    name: z.string(),
+    content: z.string(),
+    mediaType: z.string(),
+  }),
+  target: z.object({
+    type: z.literal("Collection"),
+    id: z.string().min(1),
+    name: z.string(),
+  }),
+});
 const WEBHOOK_ERRORS = {
   missingSignatureHeaders: "Missing signature headers",
   invalidBackend: "Invalid backend",
@@ -51,23 +77,7 @@ function normalizeOrigin(value: string): string | null {
 }
 
 function parseWebhookPayload(body: string): NextcloudTalkWebhookPayload | null {
-  try {
-    const data = JSON.parse(body);
-    if (
-      !data.type ||
-      !data.actor?.type ||
-      !data.actor?.id ||
-      !data.object?.type ||
-      !data.object?.id ||
-      !data.target?.type ||
-      !data.target?.id
-    ) {
-      return null;
-    }
-    return data as NextcloudTalkWebhookPayload;
-  } catch {
-    return null;
-  }
+  return safeParseJsonWithSchema(NextcloudTalkWebhookPayloadSchema, body);
 }
 
 function writeJsonResponse(
@@ -171,8 +181,10 @@ export function readNextcloudTalkWebhookBody(
   maxBodyBytes: number,
 ): Promise<string> {
   return readRequestBodyWithLimit(req, {
-    maxBytes: maxBodyBytes,
-    timeoutMs: DEFAULT_WEBHOOK_BODY_TIMEOUT_MS,
+    // This read happens before signature verification, so keep the unauthenticated
+    // body budget bounded even if the operator-configured post-parse limit is larger.
+    maxBytes: Math.min(maxBodyBytes, PREAUTH_WEBHOOK_MAX_BODY_BYTES),
+    timeoutMs: PREAUTH_WEBHOOK_BODY_TIMEOUT_MS,
   });
 }
 
@@ -318,12 +330,10 @@ export async function monitorNextcloudTalkProvider(
     cfg,
     accountId: opts.accountId,
   });
-  const runtime: RuntimeEnv =
-    opts.runtime ??
-    createLoggerBackedRuntime({
-      logger: core.logging.getChildLogger(),
-      exitError: () => new Error("Runtime exit not available"),
-    });
+  const runtime: RuntimeEnv = resolveLoggerBackedRuntime(
+    opts.runtime,
+    core.logging.getChildLogger(),
+  );
 
   if (!account.secret) {
     throw new Error(`Nextcloud Talk bot secret not configured for account "${account.accountId}"`);

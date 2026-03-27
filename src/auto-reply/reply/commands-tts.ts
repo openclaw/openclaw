@@ -1,12 +1,17 @@
 import { logVerbose } from "../../globals.js";
 import {
+  canonicalizeSpeechProviderId,
+  getSpeechProvider,
+  listSpeechProviders,
+} from "../../tts/provider-registry.js";
+import {
+  getResolvedSpeechProviderConfig,
   getLastTtsAttempt,
   getTtsMaxLength,
   getTtsProvider,
   isSummarizationEnabled,
   isTtsEnabled,
   isTtsProviderConfigured,
-  resolveTtsApiKey,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   setLastTtsAttempt,
@@ -54,15 +59,13 @@ function ttsUsage(): ReplyPayload {
       `• /tts summary [on|off] — View/change auto-summary\n` +
       `• /tts audio <text> — Generate audio from text\n\n` +
       `**Providers:**\n` +
-      `• edge — Free, fast (default)\n` +
-      `• openai — High quality (requires API key)\n` +
-      `• elevenlabs — Premium voices (requires API key)\n\n` +
+      `Use /tts provider to list the registered speech providers and their status.\n\n` +
       `**Text Limit (default: 1500, max: 4096):**\n` +
       `When text exceeds the limit:\n` +
       `• Summary ON: AI summarizes, then generates audio\n` +
       `• Summary OFF: Truncates text, then generates audio\n\n` +
       `**Examples:**\n` +
-      `/tts provider edge\n` +
+      `/tts provider <id>\n` +
       `/tts limit 2000\n` +
       `/tts audio Hello, this is a test!`,
   };
@@ -159,32 +162,47 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "provider") {
     const currentProvider = getTtsProvider(config, prefsPath);
     if (!args.trim()) {
-      const hasOpenAI = Boolean(resolveTtsApiKey(config, "openai"));
-      const hasElevenLabs = Boolean(resolveTtsApiKey(config, "elevenlabs"));
-      const hasEdge = isTtsProviderConfigured(config, "edge");
+      const providers = listSpeechProviders(params.cfg);
       return {
         shouldContinue: false,
         reply: {
           text:
             `🎙️ TTS provider\n` +
             `Primary: ${currentProvider}\n` +
-            `OpenAI key: ${hasOpenAI ? "✅" : "❌"}\n` +
-            `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}\n` +
-            `Edge enabled: ${hasEdge ? "✅" : "❌"}\n` +
-            `Usage: /tts provider openai | elevenlabs | edge`,
+            providers
+              .map(
+                (provider) =>
+                  `${provider.label}: ${
+                    provider.isConfigured({
+                      cfg: params.cfg,
+                      providerConfig: getResolvedSpeechProviderConfig(
+                        config,
+                        provider.id,
+                        params.cfg,
+                      ),
+                      timeoutMs: config.timeoutMs,
+                    })
+                      ? "✅"
+                      : "❌"
+                  }`,
+              )
+              .join("\n") +
+            `\nUsage: /tts provider <id>`,
         },
       };
     }
 
     const requested = args.trim().toLowerCase();
-    if (requested !== "openai" && requested !== "elevenlabs" && requested !== "edge") {
+    const resolvedProvider = getSpeechProvider(requested, params.cfg);
+    if (!resolvedProvider) {
       return { shouldContinue: false, reply: ttsUsage() };
     }
 
-    setTtsProvider(prefsPath, requested);
+    const nextProvider = canonicalizeSpeechProviderId(requested, params.cfg) ?? resolvedProvider.id;
+    setTtsProvider(prefsPath, nextProvider);
     return {
       shouldContinue: false,
-      reply: { text: `✅ TTS provider set to ${requested}.` },
+      reply: { text: `✅ TTS provider set to ${nextProvider}.` },
     };
   }
 
@@ -249,7 +267,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "status") {
     const enabled = isTtsEnabled(config, prefsPath);
     const provider = getTtsProvider(config, prefsPath);
-    const hasKey = isTtsProviderConfigured(config, provider);
+    const hasKey = isTtsProviderConfigured(config, provider, params.cfg);
     const maxLength = getTtsMaxLength(prefsPath);
     const summarize = isSummarizationEnabled(prefsPath);
     const last = getLastTtsAttempt();

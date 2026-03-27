@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
+import { getTerminalTableWidth } from "../../terminal/table.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
@@ -16,7 +17,7 @@ export function registerNodesPairingCommands(nodes: Command) {
           const result = await callGatewayCli("node.pair.list", opts, {});
           const { pending } = parsePairingList(result);
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(pending, null, 2));
+            defaultRuntime.writeJson(pending);
             return;
           }
           if (pending.length === 0) {
@@ -25,7 +26,7 @@ export function registerNodesPairingCommands(nodes: Command) {
             return;
           }
           const { heading, warn, muted } = getNodesTheme();
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const rendered = renderPendingPairingRequestsTable({
             pending,
@@ -49,7 +50,7 @@ export function registerNodesPairingCommands(nodes: Command) {
           const result = await callGatewayCli("node.pair.approve", opts, {
             requestId,
           });
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
         });
       }),
   );
@@ -64,7 +65,7 @@ export function registerNodesPairingCommands(nodes: Command) {
           const result = await callGatewayCli("node.pair.reject", opts, {
             requestId,
           });
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
         });
       }),
   );
@@ -89,7 +90,7 @@ export function registerNodesPairingCommands(nodes: Command) {
             displayName: name,
           });
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
+            defaultRuntime.writeJson(result);
             return;
           }
           const { ok } = getNodesTheme();

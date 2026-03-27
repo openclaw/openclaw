@@ -29,6 +29,7 @@ describe("message-normalizer", () => {
         content: [{ type: "text", text: "Hello world" }],
         timestamp: 1000,
         id: "msg-1",
+        senderLabel: null,
       });
     });
 
@@ -109,6 +110,25 @@ describe("message-normalizer", () => {
       });
 
       expect(result.content[0].args).toEqual({ foo: "bar" });
+    });
+
+    it("handles input field for anthropic tool_use blocks", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [{ type: "tool_use", name: "Bash", input: { command: "pwd" } }],
+      });
+
+      expect(result.content[0].args).toEqual({ command: "pwd" });
+    });
+
+    it("preserves top-level sender labels", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: "Hello from Telegram",
+        senderLabel: "Iris",
+      });
+
+      expect(result.senderLabel).toBe("Iris");
     });
   });
 

@@ -1,3 +1,4 @@
+import type { SsrFPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import { blueBubblesFetchWithTimeout } from "./types.js";
 
 export function concatUint8Arrays(parts: Uint8Array[]): Uint8Array {
@@ -16,6 +17,7 @@ export async function postMultipartFormData(params: {
   boundary: string;
   parts: Uint8Array[];
   timeoutMs: number;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<Response> {
   const body = Buffer.from(concatUint8Arrays(params.parts));
   return await blueBubblesFetchWithTimeout(
@@ -28,5 +30,14 @@ export async function postMultipartFormData(params: {
       body,
     },
     params.timeoutMs,
+    params.ssrfPolicy,
   );
+}
+
+export async function assertMultipartActionOk(response: Response, action: string): Promise<void> {
+  if (response.ok) {
+    return;
+  }
+  const errorText = await response.text().catch(() => "");
+  throw new Error(`BlueBubbles ${action} failed (${response.status}): ${errorText || "unknown"}`);
 }

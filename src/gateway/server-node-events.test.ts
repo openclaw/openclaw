@@ -9,6 +9,9 @@ const buildSessionLookup = (
     lastChannel?: string;
     lastTo?: string;
     updatedAt?: number;
+    label?: string;
+    spawnedBy?: string;
+    parentSessionKey?: string;
   } = {},
 ): ReturnType<typeof loadSessionEntryType> => ({
   cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
@@ -19,12 +22,23 @@ const buildSessionLookup = (
     updatedAt: entry.updatedAt ?? Date.now(),
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
+    label: entry.label,
+    spawnedBy: entry.spawnedBy,
+    parentSessionKey: entry.parentSessionKey,
   },
   canonicalKey: sessionKey,
   legacyKey: undefined,
 });
 
 const ingressAgentCommandMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const registerApnsRegistrationMock = vi.hoisted(() => vi.fn());
+const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    deviceId: "gateway-device-1",
+    publicKeyPem: "public",
+    privateKeyPem: "private",
+  })),
+);
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
@@ -43,8 +57,21 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../config/sessions.js", () => ({
   updateSessionStore: vi.fn(),
 }));
+vi.mock("../infra/push-apns.js", () => ({
+  registerApnsRegistration: registerApnsRegistrationMock,
+}));
+vi.mock("../infra/device-identity.js", () => ({
+  loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
+}));
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
+  migrateAndPruneGatewaySessionStoreKey: vi.fn(
+    ({ key, store }: { key: string; store: Record<string, unknown> }) => ({
+      target: { canonicalKey: key, storeKeys: [key] },
+      primaryKey: key,
+      entry: store[key],
+    }),
+  ),
   pruneLegacyStoreKeys: vi.fn(),
   resolveGatewaySessionStoreTarget: vi.fn(({ key }: { key: string }) => ({
     canonicalKey: key,
@@ -58,6 +85,7 @@ import type { HealthSummary } from "../commands/health.js";
 import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { registerApnsRegistration } from "../infra/push-apns.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
@@ -69,6 +97,7 @@ const loadConfigMock = vi.mocked(loadConfig);
 const agentCommandMock = vi.mocked(agentCommand);
 const updateSessionStoreMock = vi.mocked(updateSessionStore);
 const loadSessionEntryMock = vi.mocked(loadSessionEntry);
+const registerApnsRegistrationVi = vi.mocked(registerApnsRegistration);
 
 function buildCtx(): NodeEventContext {
   return {
@@ -97,6 +126,8 @@ describe("node exec events", () => {
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
+    registerApnsRegistrationVi.mockClear();
+    loadOrCreateDeviceIdentityMock.mockClear();
   });
 
   it("enqueues exec.started events", async () => {
@@ -255,6 +286,75 @@ describe("node exec events", () => {
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
+
+  it("stores direct APNs registrations from node events", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-direct", {
+      event: "push.apns.register",
+      payloadJSON: JSON.stringify({
+        token: "abcd1234abcd1234abcd1234abcd1234",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+      }),
+    });
+
+    expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
+      nodeId: "node-direct",
+      transport: "direct",
+      token: "abcd1234abcd1234abcd1234abcd1234",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+    });
+  });
+
+  it("stores relay APNs registrations from node events", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-relay", {
+      event: "push.apns.register",
+      payloadJSON: JSON.stringify({
+        transport: "relay",
+        relayHandle: "relay-handle-123",
+        sendGrant: "send-grant-123",
+        gatewayDeviceId: "gateway-device-1",
+        installationId: "install-123",
+        topic: "ai.openclaw.ios",
+        environment: "production",
+        distribution: "official",
+        tokenDebugSuffix: "abcd1234",
+      }),
+    });
+
+    expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
+      nodeId: "node-relay",
+      transport: "relay",
+      relayHandle: "relay-handle-123",
+      sendGrant: "send-grant-123",
+      installationId: "install-123",
+      topic: "ai.openclaw.ios",
+      environment: "production",
+      distribution: "official",
+      tokenDebugSuffix: "abcd1234",
+    });
+  });
+
+  it("rejects relay registrations bound to a different gateway identity", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-relay", {
+      event: "push.apns.register",
+      payloadJSON: JSON.stringify({
+        transport: "relay",
+        relayHandle: "relay-handle-123",
+        sendGrant: "send-grant-123",
+        gatewayDeviceId: "gateway-device-other",
+        installationId: "install-123",
+        topic: "ai.openclaw.ios",
+        environment: "production",
+        distribution: "official",
+      }),
+    });
+
+    expect(registerApnsRegistrationVi).not.toHaveBeenCalled();
+  });
 });
 
 describe("voice transcript events", () => {
@@ -316,7 +416,9 @@ describe("voice transcript events", () => {
   });
 
   it("forwards transcript with voice provenance", async () => {
+    const addChatRun = vi.fn();
     const ctx = buildCtx();
+    ctx.addChatRun = addChatRun;
 
     await handleNodeEvent(ctx, "node-v2", {
       event: "voice.transcript",
@@ -338,6 +440,12 @@ describe("voice transcript events", () => {
         sourceTool: "gateway.voice.transcript",
       },
     });
+    expect(typeof opts.runId).toBe("string");
+    expect(opts.runId).not.toBe(opts.sessionId);
+    expect(addChatRun).toHaveBeenCalledWith(
+      opts.runId,
+      expect.objectContaining({ clientRunId: expect.stringMatching(/^voice-/) }),
+    );
   });
 
   it("does not block agent dispatch when session-store touch fails", async () => {
@@ -357,6 +465,58 @@ describe("voice transcript events", () => {
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("voice session-store update failed"));
+  });
+
+  it("preserves existing session metadata when touching the store for voice transcripts", async () => {
+    const ctx = buildCtx();
+    loadSessionEntryMock.mockImplementation((sessionKey: string) =>
+      buildSessionLookup(sessionKey, {
+        sessionId: "sess-preserve",
+        updatedAt: 10,
+        label: "existing label",
+        spawnedBy: "agent:main:parent",
+        parentSessionKey: "agent:main:parent",
+        lastChannel: "discord",
+        lastTo: "thread-1",
+      }),
+    );
+
+    let updatedStore: Record<string, unknown> | undefined;
+    updateSessionStoreMock.mockImplementationOnce(async (_storePath, update) => {
+      const store = {
+        "voice-preserve-session": {
+          sessionId: "sess-preserve",
+          updatedAt: 10,
+          label: "existing label",
+          spawnedBy: "agent:main:parent",
+          parentSessionKey: "agent:main:parent",
+          lastChannel: "discord",
+          lastTo: "thread-1",
+        },
+      };
+      update(store);
+      updatedStore = structuredClone(store);
+    });
+
+    await handleNodeEvent(ctx, "node-v4", {
+      event: "voice.transcript",
+      payloadJSON: JSON.stringify({
+        text: "preserve metadata",
+        sessionKey: "voice-preserve-session",
+      }),
+    });
+    await Promise.resolve();
+
+    expect(updatedStore).toMatchObject({
+      "voice-preserve-session": {
+        sessionId: "sess-preserve",
+        label: "existing label",
+        spawnedBy: "agent:main:parent",
+        parentSessionKey: "agent:main:parent",
+        lastChannel: "discord",
+        lastTo: "thread-1",
+      },
+    });
   });
 });
 
@@ -492,6 +652,23 @@ describe("notifications changed events", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
     expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(1);
   });
+
+  it("suppresses exec notifyOnExit events when payload opts out", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n7", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:main:main",
+        runId: "approval-1",
+        exitCode: 0,
+        output: "ok",
+        suppressNotifyOnExit: true,
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("agent request events", () => {
@@ -563,5 +740,6 @@ describe("agent request events", () => {
       channel: "telegram",
       to: "123",
     });
+    expect(opts.runId).toBe(opts.sessionId);
   });
 });

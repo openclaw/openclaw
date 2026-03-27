@@ -1,5 +1,6 @@
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isReasoningModelHeuristic } from "../plugin-sdk/provider-reasoning.js";
 
 const log = createSubsystemLogger("huggingface-models");
 
@@ -125,7 +126,7 @@ export function buildHuggingfaceModelDefinition(
  */
 function inferredMetaFromModelId(id: string): { name: string; reasoning: boolean } {
   const base = id.split("/").pop() ?? id;
-  const reasoning = /r1|reasoning|thinking|reason/i.test(id) || /-\d+[tb]?-thinking/i.test(base);
+  const reasoning = isReasoningModelHeuristic(id);
   const name = base.replace(/-/g, " ").replace(/\b(\w)/g, (c) => c.toUpperCase());
   return { name, reasoning };
 }

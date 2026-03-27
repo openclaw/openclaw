@@ -1,9 +1,16 @@
-import { createServer, type RequestListener } from "node:http";
-import type { AddressInfo } from "node:net";
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/zalo";
+import type { RequestListener } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
+import {
+  createImageLifecycleCore,
+  createImageUpdate,
+  createTextUpdate,
+  expectImageLifecycleDelivery,
+  postWebhookReplay,
+} from "../../../test/helpers/extensions/zalo-lifecycle.js";
+import { withServer } from "../../../test/helpers/http-test-server.js";
+import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import {
   clearZaloWebhookSecurityStateForTest,
   getZaloWebhookRateLimitStateSizeForTest,
@@ -12,22 +19,6 @@ import {
   registerZaloWebhookTarget,
 } from "./monitor.js";
 import type { ResolvedZaloAccount } from "./types.js";
-
-async function withServer(handler: RequestListener, fn: (baseUrl: string) => Promise<void>) {
-  const server = createServer(handler);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const address = server.address() as AddressInfo | null;
-  if (!address) {
-    throw new Error("missing server address");
-  }
-  try {
-    await fn(`http://127.0.0.1:${address.port}`);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-}
 
 const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
   accountId: "default",
@@ -92,6 +83,33 @@ function createPairingAuthCore(params?: { storeAllowFrom?: string[]; pairingCrea
     },
   } as unknown as PluginRuntime;
   return { core, readAllowFromStore, upsertPairingRequest };
+}
+
+async function postUntilRateLimited(params: {
+  baseUrl: string;
+  path: string;
+  secret: string;
+  withNonceQuery?: boolean;
+  attempts?: number;
+}): Promise<boolean> {
+  const attempts = params.attempts ?? 130;
+  for (let i = 0; i < attempts; i += 1) {
+    const url = params.withNonceQuery
+      ? `${params.baseUrl}${params.path}?nonce=${i}`
+      : `${params.baseUrl}${params.path}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "x-bot-api-secret-token": params.secret,
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+    if (response.status === 429) {
+      return true;
+    }
+  }
+  return false;
 }
 
 describe("handleZaloWebhookRequest", () => {
@@ -194,39 +212,25 @@ describe("handleZaloWebhookRequest", () => {
   it("deduplicates webhook replay by event_name + message_id", async () => {
     const sink = vi.fn();
     const unregister = registerTarget({ path: "/hook-replay", statusSink: sink });
-
-    const payload = {
-      event_name: "message.text.received",
-      message: {
-        from: { id: "123" },
-        chat: { id: "123", chat_type: "PRIVATE" },
-        message_id: "msg-replay-1",
-        date: Math.floor(Date.now() / 1000),
-        text: "hello",
-      },
-    };
+    const payload = createTextUpdate({
+      messageId: "msg-replay-1",
+      userId: "123",
+      userName: "",
+      chatId: "123",
+      text: "hello",
+    });
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
-        const first = await fetch(`${baseUrl}/hook-replay`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "secret",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
-        const second = await fetch(`${baseUrl}/hook-replay`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "secret",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(payload),
+        const { first, replay } = await postWebhookReplay({
+          baseUrl,
+          path: "/hook-replay",
+          secret: "secret",
+          payload,
         });
 
         expect(first.status).toBe(200);
-        expect(second.status).toBe(200);
+        expect(replay.status).toBe(200);
         expect(sink).toHaveBeenCalledTimes(1);
       });
     } finally {
@@ -234,26 +238,62 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
+  it("downloads inbound image media from webhook photo_url and preserves display_name", async () => {
+    const {
+      core,
+      finalizeInboundContextMock,
+      recordInboundSessionMock,
+      fetchRemoteMediaMock,
+      saveMediaBufferMock,
+    } = createImageLifecycleCore();
+    const unregister = registerTarget({
+      path: "/hook-image",
+      core,
+      account: {
+        ...DEFAULT_ACCOUNT,
+        config: {
+          dmPolicy: "open",
+        },
+      },
+    });
+    const payload = createImageUpdate();
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/hook-image`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(200);
+      });
+    } finally {
+      unregister();
+    }
+
+    await vi.waitFor(() => expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1));
+    expectImageLifecycleDelivery({
+      fetchRemoteMediaMock,
+      saveMediaBufferMock,
+      finalizeInboundContextMock,
+      recordInboundSessionMock,
+    });
+  });
+
   it("returns 429 when per-path request rate exceeds threshold", async () => {
     const unregister = registerTarget({ path: "/hook-rate" });
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
-        let saw429 = false;
-        for (let i = 0; i < 130; i += 1) {
-          const response = await fetch(`${baseUrl}/hook-rate`, {
-            method: "POST",
-            headers: {
-              "x-bot-api-secret-token": "secret",
-              "content-type": "application/json",
-            },
-            body: "{}",
-          });
-          if (response.status === 429) {
-            saw429 = true;
-            break;
-          }
-        }
+        const saw429 = await postUntilRateLimited({
+          baseUrl,
+          path: "/hook-rate",
+          secret: "secret", // pragma: allowlist secret
+        });
 
         expect(saw429).toBe(true);
       });
@@ -266,19 +306,25 @@ describe("handleZaloWebhookRequest", () => {
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
+        let saw429 = false;
         for (let i = 0; i < 200; i += 1) {
           const response = await fetch(`${baseUrl}/hook-query-status?nonce=${i}`, {
             method: "POST",
             headers: {
-              "x-bot-api-secret-token": "invalid-token",
+              "x-bot-api-secret-token": "invalid-token", // pragma: allowlist secret
               "content-type": "application/json",
             },
             body: "{}",
           });
-          expect(response.status).toBe(401);
+          expect([401, 429]).toContain(response.status);
+          if (response.status === 429) {
+            saw429 = true;
+            break;
+          }
         }
 
-        expect(getZaloWebhookStatusCounterSizeForTest()).toBe(1);
+        expect(saw429).toBe(true);
+        expect(getZaloWebhookStatusCounterSizeForTest()).toBe(2);
       });
     } finally {
       unregister();
@@ -290,24 +336,100 @@ describe("handleZaloWebhookRequest", () => {
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
-        let saw429 = false;
+        const saw429 = await postUntilRateLimited({
+          baseUrl,
+          path: "/hook-query-rate",
+          secret: "secret", // pragma: allowlist secret
+          withNonceQuery: true,
+        });
+
+        expect(saw429).toBe(true);
+        expect(getZaloWebhookRateLimitStateSizeForTest()).toBe(1);
+      });
+    } finally {
+      unregister();
+    }
+  });
+
+  it("rate limits unauthorized secret guesses before authentication succeeds", async () => {
+    const unregister = registerTarget({ path: "/hook-preauth-rate" });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const saw429 = await postUntilRateLimited({
+          baseUrl,
+          path: "/hook-preauth-rate",
+          secret: "invalid-token", // pragma: allowlist secret
+          withNonceQuery: true,
+        });
+
+        expect(saw429).toBe(true);
+        expect(getZaloWebhookRateLimitStateSizeForTest()).toBe(1);
+      });
+    } finally {
+      unregister();
+    }
+  });
+
+  it("does not let unauthorized floods rate-limit authenticated traffic from a different trusted forwarded client IP", async () => {
+    const unregister = registerTarget({
+      path: "/hook-preauth-split",
+      config: {
+        gateway: {
+          trustedProxies: ["127.0.0.1"],
+        },
+      } as OpenClawConfig,
+    });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
         for (let i = 0; i < 130; i += 1) {
-          const response = await fetch(`${baseUrl}/hook-query-rate?nonce=${i}`, {
+          const response = await fetch(`${baseUrl}/hook-preauth-split?nonce=${i}`, {
             method: "POST",
             headers: {
-              "x-bot-api-secret-token": "secret",
+              "x-bot-api-secret-token": "invalid-token", // pragma: allowlist secret
               "content-type": "application/json",
+              "x-forwarded-for": "203.0.113.10",
             },
             body: "{}",
           });
           if (response.status === 429) {
-            saw429 = true;
             break;
           }
         }
 
-        expect(saw429).toBe(true);
-        expect(getZaloWebhookRateLimitStateSizeForTest()).toBe(1);
+        const validResponse = await fetch(`${baseUrl}/hook-preauth-split`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+            "x-forwarded-for": "198.51.100.20",
+          },
+          body: JSON.stringify({ event_name: "message.unsupported.received" }),
+        });
+
+        expect(validResponse.status).toBe(200);
+      });
+    } finally {
+      unregister();
+    }
+  });
+
+  it("still returns 401 before 415 when both secret and content-type are invalid", async () => {
+    const unregister = registerTarget({ path: "/hook-auth-before-type" });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/hook-auth-before-type`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "invalid-token", // pragma: allowlist secret
+            "content-type": "text/plain",
+          },
+          body: "not-json",
+        });
+
+        expect(response.status).toBe(401);
       });
     } finally {
       unregister();

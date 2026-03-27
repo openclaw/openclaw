@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
   convertToOllamaMessages,
   buildAssistantMessage,
   parseNdjsonStream,
-} from "./ollama-stream.js";
+  resolveOllamaBaseUrlForRun,
+} from "../plugin-sdk/ollama.js";
 
 describe("convertToOllamaMessages", () => {
   it("converts user text messages", () => {
@@ -104,7 +106,23 @@ describe("buildAssistantMessage", () => {
     expect(result.usage.totalTokens).toBe(15);
   });
 
-  it("falls back to reasoning when content is empty", () => {
+  it("drops thinking-only output when content is empty", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: "",
+        thinking: "Thinking output",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([]);
+  });
+
+  it("drops reasoning-only output when content and thinking are empty", () => {
     const response = {
       model: "qwen3:32b",
       created_at: "2026-01-01T00:00:00Z",
@@ -117,7 +135,7 @@ describe("buildAssistantMessage", () => {
     };
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([{ type: "text", text: "Reasoning output" }]);
+    expect(result.content).toEqual([]);
   });
 
   it("builds response with tool calls", () => {
@@ -183,6 +201,20 @@ function mockNdjsonReader(lines: string[]): ReadableStreamDefaultReader<Uint8Arr
     cancel: async () => {},
     closed: Promise.resolve(undefined),
   } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+}
+
+async function expectDoneEventContent(lines: string[], expectedContent: unknown) {
+  await withMockNdjsonFetch(lines, async () => {
+    const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+    const events = await collectStreamEvents(stream);
+
+    const doneEvent = events.at(-1);
+    if (!doneEvent || doneEvent.type !== "done") {
+      throw new Error("Expected done event");
+    }
+
+    expect(doneEvent.message.content).toEqual(expectedContent);
+  });
 }
 
 describe("parseNdjsonStream", () => {
@@ -302,9 +334,15 @@ async function withMockNdjsonFetch(
 
 async function createOllamaTestStream(params: {
   baseUrl: string;
-  options?: { maxTokens?: number; signal?: AbortSignal };
+  defaultHeaders?: Record<string, string>;
+  options?: {
+    apiKey?: string;
+    maxTokens?: number;
+    signal?: AbortSignal;
+    headers?: Record<string, string>;
+  };
 }) {
-  const streamFn = createOllamaStreamFn(params.baseUrl);
+  const streamFn = createOllamaStreamFn(params.baseUrl, params.defaultHeaders);
   return streamFn(
     {
       id: "qwen3:32b",
@@ -361,23 +399,238 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
-  it("accumulates reasoning chunks when content is empty", async () => {
+  it("merges default headers and allows request headers to override them", async () => {
     await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          defaultHeaders: {
+            "X-OLLAMA-KEY": "provider-secret",
+            "X-Trace": "default",
+          },
+          options: {
+            headers: {
+              "X-Trace": "request",
+              "X-Request-Only": "1",
+            },
+          },
+        });
+
+        const events = await collectStreamEvents(stream);
+        expect(events.at(-1)?.type).toBe("done");
+
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        expect(requestInit.headers).toMatchObject({
+          "Content-Type": "application/json",
+          "X-OLLAMA-KEY": "provider-secret",
+          "X-Trace": "request",
+          "X-Request-Only": "1",
+        });
+      },
+    );
+  });
+
+  it("preserves an explicit Authorization header when apiKey is a local marker", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          defaultHeaders: {
+            Authorization: "Bearer proxy-token",
+          },
+          options: {
+            apiKey: "ollama-local", // pragma: allowlist secret
+            headers: {
+              Authorization: "Bearer proxy-token",
+            },
+          },
+        });
+
+        await collectStreamEvents(stream);
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        expect(requestInit.headers).toMatchObject({
+          Authorization: "Bearer proxy-token",
+        });
+      },
+    );
+  });
+
+  it("allows a real apiKey to override an explicit Authorization header", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434", {
+          Authorization: "Bearer proxy-token",
+        });
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "qwen3:32b",
+              api: "ollama",
+              provider: "custom-ollama",
+              contextWindow: 131072,
+            } as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+            } as never,
+            {
+              apiKey: "real-token", // pragma: allowlist secret
+            } as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        expect(requestInit.headers).toMatchObject({
+          Authorization: "Bearer real-token",
+        });
+      },
+    );
+  });
+
+  it("surfaces non-2xx HTTP response as status-prefixed error", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => {
+      return new Response("Service Unavailable", {
+        status: 503,
+        statusText: "Service Unavailable",
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+      const events = await collectStreamEvents(stream);
+
+      const errorEvent = events.find((e) => e.type === "error") as
+        | { type: "error"; error: { errorMessage?: string } }
+        | undefined;
+      expect(errorEvent).toBeDefined();
+      // The error message must start with the HTTP status code so that
+      // extractLeadingHttpStatus can parse it for failover/retry logic.
+      expect(errorEvent!.error.errorMessage).toMatch(/^503\b/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("drops thinking chunks when no final content is emitted", async () => {
+    await expectDoneEventContent(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":"reasoned"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":" output"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
+      ],
+      [],
+    );
+  });
+
+  it("prefers streamed content over earlier thinking chunks", async () => {
+    await expectDoneEventContent(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":"internal"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"final"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":" answer"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
+      ],
+      [{ type: "text", text: "final answer" }],
+    );
+  });
+
+  it("drops reasoning chunks when no final content is emitted", async () => {
+    await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"reasoned"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":" output"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-        const events = await collectStreamEvents(stream);
+      [],
+    );
+  });
 
-        const doneEvent = events.at(-1);
-        if (!doneEvent || doneEvent.type !== "done") {
-          throw new Error("Expected done event");
-        }
+  it("prefers streamed content over earlier reasoning chunks", async () => {
+    await expectDoneEventContent(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"internal"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"final"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":" answer"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
+      ],
+      [{ type: "text", text: "final answer" }],
+    );
+  });
+});
 
-        expect(doneEvent.message.content).toEqual([{ type: "text", text: "reasoned output" }]);
+describe("resolveOllamaBaseUrlForRun", () => {
+  it("prefers provider baseUrl over model baseUrl", () => {
+    expect(
+      resolveOllamaBaseUrlForRun({
+        modelBaseUrl: "http://model-host:11434",
+        providerBaseUrl: "http://provider-host:11434",
+      }),
+    ).toBe("http://provider-host:11434");
+  });
+
+  it("falls back to model baseUrl when provider baseUrl is missing", () => {
+    expect(
+      resolveOllamaBaseUrlForRun({
+        modelBaseUrl: "http://model-host:11434",
+      }),
+    ).toBe("http://model-host:11434");
+  });
+
+  it("falls back to native default when neither baseUrl is configured", () => {
+    expect(resolveOllamaBaseUrlForRun({})).toBe("http://127.0.0.1:11434");
+  });
+});
+
+describe("createConfiguredOllamaStreamFn", () => {
+  it("uses provider-level baseUrl when model baseUrl is absent", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createConfiguredOllamaStreamFn({
+          model: {
+            headers: { Authorization: "Bearer proxy-token" },
+          },
+          providerBaseUrl: "http://provider-host:11434/v1",
+        });
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "qwen3:32b",
+              api: "ollama",
+              provider: "custom-ollama",
+              contextWindow: 131072,
+            } as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+            } as never,
+            {
+              apiKey: "ollama-local", // pragma: allowlist secret
+            } as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+        const [url, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        expect(url).toBe("http://provider-host:11434/api/chat");
+        expect(requestInit.headers).toMatchObject({
+          Authorization: "Bearer proxy-token",
+        });
       },
     );
   });
