@@ -623,6 +623,9 @@ describe("monitorDiscordProvider", () => {
   it("continues startup when Discord daily slash-command create quota is exhausted", async () => {
     const { RateLimitError } = await import("@buape/carbon");
     const runtime = baseRuntime();
+    const request = new Request("https://discord.com/api/v10/applications/commands", {
+      method: "PUT",
+    });
     const rateLimitError = new RateLimitError(
       new Response(null, {
         status: 429,
@@ -636,6 +639,7 @@ describe("monitorDiscordProvider", () => {
         retry_after: 193.632,
         global: false,
       },
+      request,
     );
     rateLimitError.discordCode = 30034;
     clientHandleDeployRequestMock.mockRejectedValueOnce(rateLimitError);
