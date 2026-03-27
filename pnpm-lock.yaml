@@ -480,6 +480,8 @@ importers:
         specifier: ^1.2.10
         version: 1.2.10
 
+  extensions/microsoft-foundry: {}
+
   extensions/minimax: {}
 
   extensions/mistral: {}
