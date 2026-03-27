@@ -605,6 +605,109 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
+  it("suppresses pre-tool flush when buffered text ends with a colon", () => {
+    let now = 12_500;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, toolEventRecipients, handler } =
+      createHarness({
+        resolveSessionKeyForRun: () => "session-colon",
+      });
+
+    chatRunState.registry.add("run-colon", {
+      sessionKey: "session-colon",
+      clientRunId: "client-colon",
+    });
+    registerAgentRunContext("run-colon", {
+      sessionKey: "session-colon",
+      verboseLevel: "off",
+    });
+    toolEventRecipients.add("run-colon", "conn-1");
+
+    // Buffer text ending with colon (incomplete narration before tool call).
+    handler({
+      runId: "run-colon",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Let me check:" },
+    });
+
+    // Tool start should NOT flush the colon-ending text.
+    now = 12_550;
+    handler({
+      runId: "run-colon",
+      seq: 2,
+      stream: "tool",
+      ts: Date.now(),
+      data: { phase: "start", name: "read", toolCallId: "tool-colon-1" },
+    });
+
+    // Only the initial delta should have been broadcast, not a pre-tool flush.
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as { state?: string } | undefined;
+    expect(payload?.state).toBe("delta");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy.mockRestore();
+    resetAgentRunContextForTest();
+  });
+
+  it("still flushes pre-tool text that ends with a period", () => {
+    let now = 13_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, toolEventRecipients, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-period",
+    });
+
+    chatRunState.registry.add("run-period", {
+      sessionKey: "session-period",
+      clientRunId: "client-period",
+    });
+    registerAgentRunContext("run-period", {
+      sessionKey: "session-period",
+      verboseLevel: "off",
+    });
+    toolEventRecipients.add("run-period", "conn-1");
+
+    handler({
+      runId: "run-period",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Let me check." },
+    });
+
+    // Throttled update within 150ms.
+    now = 13_050;
+    handler({
+      runId: "run-period",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Let me check this for you." },
+    });
+
+    handler({
+      runId: "run-period",
+      seq: 3,
+      stream: "tool",
+      ts: Date.now(),
+      data: { phase: "start", name: "read", toolCallId: "tool-period-1" },
+    });
+
+    // Should flush: initial delta + pre-tool flush = 2 chat broadcasts.
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(2);
+    const flushedPayload = chatCalls[1]?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(flushedPayload.state).toBe("delta");
+    expect(flushedPayload.message?.content?.[0]?.text).toBe("Let me check this for you.");
+    nowSpy.mockRestore();
+    resetAgentRunContextForTest();
+  });
+
   it("routes tool events only to registered recipients when verbose is enabled", () => {
     const { broadcast, broadcastToConnIds, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
