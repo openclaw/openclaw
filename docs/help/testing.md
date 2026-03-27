@@ -23,6 +23,7 @@ This doc is a “how we test” guide:
 Most days:
 
 - Full gate (expected before push): `pnpm build && pnpm check && pnpm test`
+- Faster local full-suite run on a roomy machine: `pnpm test:max`
 
 When you touch tests or want extra confidence:
 
@@ -54,11 +55,19 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Should be fast and stable
 - Scheduler note:
   - `pnpm test` now keeps a small checked-in behavioral manifest for true pool/isolation overrides and a separate timing snapshot for the slowest unit files.
-  - Shared unit coverage now defaults to `threads`, while the manifest keeps the measured fork-only exceptions and heavy singleton lanes explicit.
-  - The shared extension lane still defaults to `threads`; the wrapper keeps explicit fork-only exceptions in `test/fixtures/test-parallel.behavior.json` when a file cannot safely share a non-isolated worker.
-  - The channel suite (`vitest.channels.config.ts`) now also defaults to `threads`; the March 22, 2026 direct full-suite control run passed clean without channel-specific fork exceptions.
+  - Extension-only local runs now also use a checked-in extensions timing snapshot plus a slightly coarser shared batch target on high-memory hosts, so the shared extensions lane avoids spawning an extra batch when two measured shared runs are enough.
+  - High-memory local extension shared batches also run with a slightly higher worker cap than before, which shortened the two remaining shared extension batches without changing the isolated extension lanes.
+  - High-memory local channel runs now reuse the checked-in channel timing snapshot to split the shared channels lane into a few measured batches instead of one long shared worker.
+  - High-memory local channel shared batches also run with a slightly lower worker cap than shared unit batches, which helped targeted channel reruns avoid CPU oversubscription once isolated channel lanes are already in flight.
+  - Targeted local channel reruns now start splitting shared channel work a bit earlier, which keeps medium-sized targeted reruns from leaving one oversized shared channel batch on the critical path.
+  - Targeted local unit reruns also split medium-sized shared unit selections into measured batches, which helps large focused reruns overlap instead of waiting behind one long shared unit lane.
+  - High-memory local multi-surface runs also use slightly coarser shared `unit-fast` batches so the mixed planner spends less time spinning up extra shared unit workers before the later surfaces can overlap.
+  - Shared unit, extension, channel, and gateway runs all stay on Vitest `forks`.
+  - The wrapper keeps measured fork-isolated exceptions and heavy singleton lanes explicit in `test/fixtures/test-parallel.behavior.json`.
   - The wrapper peels the heaviest measured files into dedicated lanes instead of relying on a growing hand-maintained exclusion list.
-  - Refresh the timing snapshot with `pnpm test:perf:update-timings` after major suite shape changes.
+  - For surface-only local runs, unit, extension, and channel shared lanes can overlap their isolated hotspots instead of waiting behind one serial prefix.
+  - For multi-surface local runs, the wrapper keeps the shared surface phases ordered, but batches inside the same shared phase now fan out together, deferred isolated work can overlap the next shared phase, and spare `unit-fast` headroom now starts that deferred work earlier instead of leaving those slots idle.
+  - Refresh the timing snapshots with `pnpm test:perf:update-timings` and `pnpm test:perf:update-timings:extensions` after major suite shape changes.
 - Embedded runner note:
   - When you change message-tool discovery inputs or compaction runtime context,
     keep both levels of coverage.
@@ -72,15 +81,16 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     sufficient substitute for those integration paths.
 - Pool note:
   - Base Vitest config still defaults to `forks`.
-  - Unit wrapper lanes default to `threads`, with explicit manifest fork-only exceptions.
-  - Extension scoped config defaults to `threads`.
-  - Channel scoped config defaults to `threads`.
+  - Unit, channel, extension, and gateway wrapper lanes all default to `forks`.
   - Unit, channel, and extension configs default to `isolate: false` for faster file startup.
   - `pnpm test` also passes `--isolate=false` at the wrapper level.
   - Opt back into Vitest file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
   - `OPENCLAW_TEST_NO_ISOLATE=0` or `OPENCLAW_TEST_NO_ISOLATE=false` also force isolated runs.
 - Fast-local iteration note:
   - `pnpm test:changed` runs the wrapper with `--changed origin/main`.
+  - `pnpm test:changed:max` keeps the same changed-file filter but uses the wrapper's aggressive local planner profile.
+  - `pnpm test:max` exposes that same planner profile for a full local run.
+  - On supported local Node versions, including Node 25, the normal profile can use top-level lane parallelism. `pnpm test:max` still pushes the planner harder when you want a more aggressive local run.
   - The base Vitest config marks the wrapper manifests/config files as `forceRerunTriggers` so changed-mode reruns stay correct when scheduler inputs change.
   - Vitest's filesystem module cache is now enabled by default for Node-side test reruns.
   - Opt out with `OPENCLAW_VITEST_FS_MODULE_CACHE=0` or `OPENCLAW_VITEST_FS_MODULE_CACHE=false` if you suspect stale transform cache behavior.
@@ -295,6 +305,19 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
   pnpm test:live src/gateway/gateway-cli-backend.live.test.ts
 ```
 
+Docker recipe:
+
+```bash
+pnpm test:docker:live-cli-backend
+```
+
+Notes:
+
+- The Docker runner lives at `scripts/test-live-cli-backend-docker.sh`.
+- It runs the live CLI-backend smoke inside the repo Docker image as the non-root `node` user, because Claude CLI rejects `bypassPermissions` when invoked as root.
+- For `claude-cli`, it installs the Linux `@anthropic-ai/claude-code` package into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
+- It copies `~/.claude` into the container when available, but on machines where Claude auth is backed by `ANTHROPIC_API_KEY`, it also preserves `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY_OLD` for the child Claude CLI via `OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV`.
+
 ### Recommended live recipes
 
 Narrow, explicit allowlists are fastest and least flaky:
@@ -432,6 +455,7 @@ These Docker runners split into two buckets:
 The live-model Docker runners also bind-mount only the needed CLI auth homes (or all supported ones when the run is not narrowed), then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
 
 - Direct models: `pnpm test:docker:live-models` (script: `scripts/test-live-models-docker.sh`)
+- CLI backend smoke: `pnpm test:docker:live-cli-backend` (script: `scripts/test-live-cli-backend-docker.sh`)
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
 - Open WebUI live smoke: `pnpm test:docker:openwebui` (script: `scripts/e2e/openwebui-docker.sh`)
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
@@ -468,8 +492,9 @@ Useful env vars:
 - `OPENCLAW_CONFIG_DIR=...` (default: `~/.openclaw`) mounted to `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR=...` (default: `~/.openclaw/workspace`) mounted to `/home/node/.openclaw/workspace`
 - `OPENCLAW_PROFILE_FILE=...` (default: `~/.profile`) mounted to `/home/node/.profile` and sourced before running tests
+- `OPENCLAW_DOCKER_CLI_TOOLS_DIR=...` (default: `~/.cache/openclaw/docker-cli-tools`) mounted to `/home/node/.npm-global` for cached CLI installs inside Docker
 - External CLI auth dirs under `$HOME` are mounted read-only under `/host-auth/...`, then copied into `/home/node/...` before tests start
-  - Default: mount all supported dirs (`.codex`, `.claude`, `.qwen`, `.minimax`)
+  - Default: mount all supported dirs (`.codex`, `.claude`, `.minimax`)
   - Narrowed provider runs mount only the needed dirs inferred from `OPENCLAW_LIVE_PROVIDERS` / `OPENCLAW_LIVE_GATEWAY_PROVIDERS`
   - Override manually with `OPENCLAW_DOCKER_AUTH_DIRS=all`, `OPENCLAW_DOCKER_AUTH_DIRS=none`, or a comma list like `OPENCLAW_DOCKER_AUTH_DIRS=.claude,.codex`
 - `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...` to narrow the run

@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/browser-plugin",
+  "version": "2026.3.26",
+  "private": true,
+  "description": "OpenClaw browser tool plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

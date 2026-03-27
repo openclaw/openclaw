@@ -1321,6 +1321,40 @@ describe("slack actions adapter", () => {
         },
         absentKeys: ["blocks"],
       },
+      {
+        action: "upload-file" as const,
+        params: {
+          to: "user:U1",
+          filePath: "/tmp/report.png",
+          initialComment: "fresh build",
+          filename: "build.png",
+          title: "Build Screenshot",
+          threadId: "171234.567",
+        },
+        expected: {
+          action: "uploadFile",
+          to: "user:U1",
+          filePath: "/tmp/report.png",
+          initialComment: "fresh build",
+          filename: "build.png",
+          title: "Build Screenshot",
+          threadTs: "171234.567",
+        },
+      },
+      {
+        action: "upload-file" as const,
+        params: {
+          to: "channel:C1",
+          path: "/tmp/path-alias.txt",
+          message: "path alias",
+        },
+        expected: {
+          action: "uploadFile",
+          to: "channel:C1",
+          filePath: "/tmp/path-alias.txt",
+          initialComment: "path alias",
+        },
+      },
     ] as const;
 
     for (const testCase of cases) {

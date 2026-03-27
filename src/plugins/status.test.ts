@@ -126,6 +126,7 @@ describe("buildPluginStatusReport", () => {
           name: "Google",
           description: "Google provider plugin",
           origin: "bundled",
+          cliBackendIds: ["google-gemini-cli"],
           providerIds: ["google"],
           mediaUnderstandingProviderIds: ["google"],
           imageGenerationProviderIds: ["google"],
@@ -142,6 +143,7 @@ describe("buildPluginStatusReport", () => {
     expect(inspect?.shape).toBe("hybrid-capability");
     expect(inspect?.capabilityMode).toBe("hybrid");
     expect(inspect?.capabilities.map((entry) => entry.kind)).toEqual([
+      "cli-backend",
       "text-inference",
       "media-understanding",
       "image-generation",
@@ -193,6 +195,24 @@ describe("buildPluginStatusReport", () => {
       "text-inference",
       "web-search",
     ]);
+  });
+
+  it("treats a CLI-backend-only plugin as a plain capability", () => {
+    setPluginLoadResult({
+      plugins: [
+        createPluginRecord({
+          id: "anthropic",
+          name: "Anthropic",
+          cliBackendIds: ["claude-cli"],
+        }),
+      ],
+    });
+
+    const inspect = buildPluginInspectReport({ id: "anthropic" });
+
+    expect(inspect?.shape).toBe("plain-capability");
+    expect(inspect?.capabilityMode).toBe("plain");
+    expect(inspect?.capabilities).toEqual([{ kind: "cli-backend", ids: ["claude-cli"] }]);
   });
 
   it("builds compatibility warnings for legacy compatibility paths", () => {

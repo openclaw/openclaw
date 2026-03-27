@@ -2,12 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import openAIPlugin from "../../../extensions/openai/index.js";
-import qwenPortalPlugin from "../../../extensions/qwen-portal-auth/index.js";
 import { createProviderUsageFetch, makeResponse } from "../../test-utils/provider-usage-fetch.js";
 import type { ProviderPlugin, ProviderRuntimeModel } from "../types.js";
 import { requireProviderContractProvider as requireBundledProviderContractProvider } from "./registry.js";
-import { registerProviders, requireProvider } from "./testkit.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
@@ -17,14 +14,8 @@ const getOAuthProvidersMock = vi.hoisted(() =>
     { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
     { id: "google", envApiKey: "GOOGLE_API_KEY", oauthTokenEnv: "GOOGLE_OAUTH_TOKEN" }, // pragma: allowlist secret
     { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
-    {
-      id: "qwen-portal",
-      envApiKey: "QWEN_PORTAL_API_KEY",
-      oauthTokenEnv: "QWEN_PORTAL_OAUTH_TOKEN",
-    }, // pragma: allowlist secret
   ]),
 );
-const refreshQwenPortalCredentialsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@mariozechner/pi-ai/oauth", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
@@ -34,14 +25,6 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
     ...actual,
     getOAuthApiKey: getOAuthApiKeyMock,
     getOAuthProviders: getOAuthProvidersMock,
-  };
-});
-
-vi.mock("../../../extensions/qwen-portal-auth/refresh.js", async () => {
-  const actual = await vi.importActual<object>("../../../extensions/qwen-portal-auth/refresh.js");
-  return {
-    ...actual,
-    refreshQwenPortalCredentials: refreshQwenPortalCredentialsMock,
   };
 });
 
@@ -61,12 +44,6 @@ function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRun
 }
 
 function requireProviderContractProvider(providerId: string): ProviderPlugin {
-  if (providerId === "openai-codex") {
-    return requireProvider(registerProviders(openAIPlugin), providerId);
-  }
-  if (providerId === "qwen-portal") {
-    return requireProvider(registerProviders(qwenPortalPlugin), providerId);
-  }
   return requireBundledProviderContractProvider(providerId);
 }
 
@@ -74,7 +51,6 @@ describe("provider runtime contract", () => {
   beforeEach(() => {
     getOAuthApiKeyMock.mockReset();
     getOAuthProvidersMock.mockClear();
-    refreshQwenPortalCredentialsMock.mockReset();
   }, CONTRACT_SETUP_TIMEOUT_MS);
 
   describe("anthropic", () => {
@@ -630,29 +606,6 @@ describe("provider runtime contract", () => {
         windows: [{ label: "3h", usedPercent: 12, resetAt: 1_705_000_000 }],
         plan: "Plus",
       });
-    });
-  });
-
-  describe("qwen-portal", () => {
-    it("owns OAuth refresh", async () => {
-      const provider = requireProviderContractProvider("qwen-portal");
-      const credential = {
-        type: "oauth" as const,
-        provider: "qwen-portal",
-        access: "stale-access-token",
-        refresh: "refresh-token",
-        expires: Date.now() - 60_000,
-      };
-      const refreshed = {
-        ...credential,
-        access: "fresh-access-token",
-        expires: Date.now() + 60_000,
-      };
-
-      refreshQwenPortalCredentialsMock.mockReset();
-      refreshQwenPortalCredentialsMock.mockResolvedValueOnce(refreshed);
-
-      await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(refreshed);
     });
   });
 

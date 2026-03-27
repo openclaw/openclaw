@@ -32,6 +32,7 @@ import { parseSlackTarget, resolveSlackChannelId } from "./targets.js";
 
 const messagingActions = new Set([
   "sendMessage",
+  "uploadFile",
   "editMessage",
   "deleteMessage",
   "readMessages",
@@ -246,6 +247,48 @@ export async function handleSlackAction(
         // Keep "first" mode consistent even when the agent explicitly provided
         // threadTs: once we send a message to the current channel, consider the
         // first reply "used" so later tool calls don't auto-thread again.
+        if (context?.hasRepliedRef && context.currentChannelId) {
+          const parsedTarget = parseSlackTarget(to, { defaultKind: "channel" });
+          if (parsedTarget?.kind === "channel" && parsedTarget.id === context.currentChannelId) {
+            context.hasRepliedRef.value = true;
+          }
+        }
+
+        return jsonResult({ ok: true, result });
+      }
+      case "uploadFile": {
+        const to = readStringParam(params, "to", { required: true });
+        const filePath = readStringParam(params, "filePath", {
+          required: true,
+          trim: false,
+        });
+        const initialComment = readStringParam(params, "initialComment", {
+          allowEmpty: true,
+        });
+        const filename = readStringParam(params, "filename");
+        const title = readStringParam(params, "title");
+        const threadTs = resolveThreadTsFromContext(
+          readStringParam(params, "threadTs"),
+          to,
+          context,
+        );
+        const result = await slackActionRuntime.sendSlackMessage(to, initialComment ?? "", {
+          ...writeOpts,
+          mediaUrl: filePath,
+          mediaLocalRoots: context?.mediaLocalRoots,
+          threadTs: threadTs ?? undefined,
+          ...(filename ? { uploadFileName: filename } : {}),
+          ...(title ? { uploadTitle: title } : {}),
+        });
+
+        if (threadTs && result.channelId && account.accountId) {
+          slackActionRuntime.recordSlackThreadParticipation(
+            account.accountId,
+            result.channelId,
+            threadTs,
+          );
+        }
+
         if (context?.hasRepliedRef && context.currentChannelId) {
           const parsedTarget = parseSlackTarget(to, { defaultKind: "channel" });
           if (parsedTarget?.kind === "channel" && parsedTarget.id === context.currentChannelId) {
