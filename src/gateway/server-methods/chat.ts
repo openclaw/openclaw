@@ -1706,7 +1706,12 @@ export const chatHandlers: GatewayRequestHandlers = {
             defaultProvider,
             aliasIndex,
           });
-          if (primaryResolved?.ref.provider) {
+          // Only use resolved provider if primary is an alias.
+          // If primary is providerless and NOT an alias (e.g., "gpt-4o"),
+          // resolveModelRefFromString would return defaultProvider which is wrong
+          // in mixed-provider configs (e.g., default Anthropic + image fallback openai/gpt-4.1).
+          // In that case, leave imageModelProvider empty so fallbacks derive the correct provider.
+          if (primaryResolved?.alias && primaryResolved.ref.provider) {
             imageModelProvider = primaryResolved.ref.provider;
           }
 

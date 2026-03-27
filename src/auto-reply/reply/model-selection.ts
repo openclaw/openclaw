@@ -134,13 +134,16 @@ function collectImageModelKeys(
     // First pass: try to resolve providerless primary alias to get its provider.
     // This handles the case where imageModel: { primary: "vision" } with "vision"
     // being an alias to "openai/gpt-4o" — we should derive "openai" as the provider.
+    // If primary is providerless and NOT an alias (e.g., "gpt-4o"), resolveModelRefFromString
+    // would return defaultProvider which is wrong in mixed-provider configs.
+    // In that case, leave imageModelDefaultProvider empty so fallbacks derive the correct provider.
     if (!primaryHasProvider && imageModelPrimary && defaultProvider) {
       const resolved = resolveModelRefFromString({
         raw: primaryTrimmed,
         defaultProvider,
         aliasIndex,
       });
-      if (resolved) {
+      if (resolved?.alias) {
         imageModelDefaultProvider = resolved.ref.provider;
       }
     }
