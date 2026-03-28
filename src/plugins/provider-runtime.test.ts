@@ -25,6 +25,7 @@ let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js"
 let buildProviderMissingAuthMessageWithPlugin: typeof import("./provider-runtime.js").buildProviderMissingAuthMessageWithPlugin;
 let buildProviderUnknownModelHintWithPlugin: typeof import("./provider-runtime.js").buildProviderUnknownModelHintWithPlugin;
 let formatProviderAuthProfileApiKeyWithPlugin: typeof import("./provider-runtime.js").formatProviderAuthProfileApiKeyWithPlugin;
+let normalizeProviderModelIdWithPlugin: typeof import("./provider-runtime.js").normalizeProviderModelIdWithPlugin;
 let prepareProviderExtraParams: typeof import("./provider-runtime.js").prepareProviderExtraParams;
 let resolveProviderStreamFn: typeof import("./provider-runtime.js").resolveProviderStreamFn;
 let resolveProviderCacheTtlEligibility: typeof import("./provider-runtime.js").resolveProviderCacheTtlEligibility;
@@ -192,6 +193,7 @@ describe("provider-runtime", () => {
       buildProviderMissingAuthMessageWithPlugin,
       buildProviderUnknownModelHintWithPlugin,
       formatProviderAuthProfileApiKeyWithPlugin,
+      normalizeProviderModelIdWithPlugin,
       prepareProviderExtraParams,
       resolveProviderStreamFn,
       resolveProviderCacheTtlEligibility,
@@ -245,6 +247,34 @@ describe("provider-runtime", () => {
     expectProviderRuntimePluginLoad({
       provider: "anthropic",
     });
+  });
+
+  it("can normalize model ids through provider aliases without changing ownership", () => {
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "google",
+        label: "Google",
+        aliases: ["google-vertex"],
+        auth: [],
+        normalizeModelId: ({ modelId }) => modelId.replace("flash-lite", "flash-lite-preview"),
+      },
+    ]);
+
+    expect(
+      normalizeProviderModelIdWithPlugin({
+        provider: "google-vertex",
+        context: {
+          provider: "google-vertex",
+          modelId: "gemini-3.1-flash-lite",
+        },
+      }),
+    ).toBe("gemini-3.1-flash-lite-preview");
+    expect(resolveOwningPluginIdsForProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "google-vertex",
+      }),
+    );
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
   });
 
   it("invalidates cached runtime providers when config mutates in place", () => {
@@ -342,6 +372,7 @@ describe("provider-runtime", () => {
           id: DEMO_PROVIDER_ID,
           label: "Demo",
           auth: [],
+          normalizeModelId: ({ modelId }) => modelId.replace("-legacy", ""),
           resolveDynamicModel: () => MODEL,
           prepareDynamicModel,
           capabilities: {
@@ -394,6 +425,16 @@ describe("provider-runtime", () => {
         }),
       }),
     ).toMatchObject(MODEL);
+
+    expect(
+      normalizeProviderModelIdWithPlugin({
+        provider: DEMO_PROVIDER_ID,
+        context: {
+          provider: DEMO_PROVIDER_ID,
+          modelId: "demo-model-legacy",
+        },
+      }),
+    ).toBe("demo-model");
 
     await prepareProviderDynamicModel({
       provider: DEMO_PROVIDER_ID,
