@@ -287,27 +287,33 @@ static void ws_handle_frame(const gchar *text) {
                 /* connect-ok */
                 gchar *auth_src = NULL;
                 gdouble tick_ms = DEFAULT_TICK_INTERVAL_MS;
-                gateway_protocol_parse_hello_ok(frame, &auth_src, &tick_ms);
+                
+                if (!gateway_protocol_parse_hello_ok(frame, &auth_src, &tick_ms)) {
+                    OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY, "ws protocol validation failed: malformed hello-ok response");
+                    ws_set_error("Protocol validation failed: invalid hello response");
+                    ws_set_state(GATEWAY_WS_ERROR);
+                    ws_cleanup_connection();
+                } else {
+                    g_free(ws_client->auth_source);
+                    ws_client->auth_source = auth_src;
+                    ws_client->tick_interval_ms = tick_ms;
+                    ws_client->rpc_ok = TRUE;
+                    ws_client->backoff_ms = BACKOFF_INITIAL_MS;
+                    ws_client->reconnect_paused_for_auth = FALSE;
+                    ws_client->last_tick_us = g_get_monotonic_time();
 
-                g_free(ws_client->auth_source);
-                ws_client->auth_source = auth_src;
-                ws_client->tick_interval_ms = tick_ms;
-                ws_client->rpc_ok = TRUE;
-                ws_client->backoff_ms = BACKOFF_INITIAL_MS;
-                ws_client->reconnect_paused_for_auth = FALSE;
-                ws_client->last_tick_us = g_get_monotonic_time();
+                    if (ws_client->connect_timeout_id) {
+                        g_source_remove(ws_client->connect_timeout_id);
+                        ws_client->connect_timeout_id = 0;
+                    }
 
-                if (ws_client->connect_timeout_id) {
-                    g_source_remove(ws_client->connect_timeout_id);
-                    ws_client->connect_timeout_id = 0;
+                    OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY, "ws connected auth_source=%s tick_ms=%.0f",
+                              auth_src ? auth_src : "none", tick_ms);
+
+                    ws_start_keepalive();
+                    ws_start_tick_watchdog();
+                    ws_set_state(GATEWAY_WS_CONNECTED);
                 }
-
-                OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY, "ws connected auth_source=%s tick_ms=%.0f",
-                          auth_src ? auth_src : "none", tick_ms);
-
-                ws_start_keepalive();
-                ws_start_tick_watchdog();
-                ws_set_state(GATEWAY_WS_CONNECTED);
             }
         }
         break;

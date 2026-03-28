@@ -158,6 +158,56 @@ static void test_helpers_get_user_unit_paths_contains_all(void) {
     g_ptr_array_free(paths, TRUE);
 }
 
+static void test_parse_unit_env_simple(void) {
+    const gchar *contents =
+        "[Unit]\nDescription=OpenClaw Gateway\n\n"
+        "[Service]\nExecStart=/usr/bin/openclaw gateway run\n"
+        "Environment=OPENCLAW_STATE_DIR=/home/user/.openclaw-work\n"
+        "Environment=OPENCLAW_SERVICE_KIND=gateway\n";
+
+    gchar *state_dir = systemd_helpers_parse_unit_env(contents, "OPENCLAW_STATE_DIR");
+    g_assert_cmpstr(state_dir, ==, "/home/user/.openclaw-work");
+    g_free(state_dir);
+
+    gchar *kind = systemd_helpers_parse_unit_env(contents, "OPENCLAW_SERVICE_KIND");
+    g_assert_cmpstr(kind, ==, "gateway");
+    g_free(kind);
+
+    gchar *missing = systemd_helpers_parse_unit_env(contents, "OPENCLAW_CONFIG_PATH");
+    g_assert_null(missing);
+}
+
+static void test_parse_unit_env_quoted(void) {
+    const gchar *contents =
+        "[Service]\n"
+        "Environment=\"OPENCLAW_STATE_DIR=/home/user/.openclaw-work\"\n"
+        "Environment=\"OPENCLAW_CONFIG_PATH=/etc/openclaw/config.json\"\n";
+
+    gchar *state_dir = systemd_helpers_parse_unit_env(contents, "OPENCLAW_STATE_DIR");
+    g_assert_cmpstr(state_dir, ==, "/home/user/.openclaw-work");
+    g_free(state_dir);
+
+    gchar *config_path = systemd_helpers_parse_unit_env(contents, "OPENCLAW_CONFIG_PATH");
+    g_assert_cmpstr(config_path, ==, "/etc/openclaw/config.json");
+    g_free(config_path);
+}
+
+static void test_parse_unit_env_null_safe(void) {
+    g_assert_null(systemd_helpers_parse_unit_env(NULL, "KEY"));
+    g_assert_null(systemd_helpers_parse_unit_env("Environment=KEY=val", NULL));
+    g_assert_null(systemd_helpers_parse_unit_env("Environment=KEY=val", ""));
+}
+
+static void test_parse_unit_env_no_false_prefix_match(void) {
+    /* OPENCLAW_STATE_DIR_EXTRA should not match OPENCLAW_STATE_DIR */
+    const gchar *contents =
+        "[Service]\n"
+        "Environment=OPENCLAW_STATE_DIR_EXTRA=/wrong/path\n";
+
+    gchar *result = systemd_helpers_parse_unit_env(contents, "OPENCLAW_STATE_DIR");
+    g_assert_null(result);
+}
+
 static void test_helpers_get_system_unit_paths_contains_all(void) {
     GPtrArray *paths = systemd_helpers_get_system_unit_paths();
     
@@ -212,6 +262,11 @@ int main(int argc, char **argv) {
 
     g_test_add_func("/systemd/helpers_get_user_unit_paths_contains_all", test_helpers_get_user_unit_paths_contains_all);
     g_test_add_func("/systemd/helpers_get_system_unit_paths_contains_all", test_helpers_get_system_unit_paths_contains_all);
-    
+
+    g_test_add_func("/systemd/parse_unit_env_simple", test_parse_unit_env_simple);
+    g_test_add_func("/systemd/parse_unit_env_quoted", test_parse_unit_env_quoted);
+    g_test_add_func("/systemd/parse_unit_env_null_safe", test_parse_unit_env_null_safe);
+    g_test_add_func("/systemd/parse_unit_env_no_false_prefix_match", test_parse_unit_env_no_false_prefix_match);
+
     return g_test_run();
 }

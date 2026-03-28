@@ -34,7 +34,7 @@ static void test_config_defaults_no_token_is_invalid(void) {
     clear_env();
     g_setenv("OPENCLAW_HOME", "/nonexistent_test_home_12345", TRUE);
 
-    GatewayConfig *config = gateway_config_load();
+    GatewayConfig *config = gateway_config_load(NULL);
     g_assert_nonnull(config);
     g_assert_false(config->valid);
     g_assert_cmpint(config->error_code, ==, GW_CFG_ERR_TOKEN_MISSING);
@@ -53,7 +53,7 @@ static void test_config_env_port_override(void) {
     g_setenv("OPENCLAW_GATEWAY_PORT", "9999", TRUE);
     g_setenv("OPENCLAW_GATEWAY_TOKEN", "tok", TRUE);
 
-    GatewayConfig *config = gateway_config_load();
+    GatewayConfig *config = gateway_config_load(NULL);
     g_assert_nonnull(config);
     g_assert_true(config->valid);
     g_assert_cmpint(config->port, ==, 9999);
@@ -67,7 +67,7 @@ static void test_config_env_token_override(void) {
     g_setenv("OPENCLAW_HOME", "/nonexistent_test_home_12345", TRUE);
     g_setenv("OPENCLAW_GATEWAY_TOKEN", "test-token-123", TRUE);
 
-    GatewayConfig *config = gateway_config_load();
+    GatewayConfig *config = gateway_config_load(NULL);
     g_assert_nonnull(config);
     g_assert_true(config->valid);
     g_assert_cmpstr(config->token, ==, "test-token-123");
@@ -82,7 +82,7 @@ static void test_config_http_url(void) {
     g_setenv("OPENCLAW_HOME", "/nonexistent_test_home_12345", TRUE);
     g_setenv("OPENCLAW_GATEWAY_TOKEN", "tok", TRUE);
 
-    GatewayConfig *config = gateway_config_load();
+    GatewayConfig *config = gateway_config_load(NULL);
     g_assert_nonnull(config);
     g_autofree gchar *url = gateway_config_http_url(config);
     g_assert_cmpstr(url, ==, "http://127.0.0.1:18789");
@@ -96,7 +96,7 @@ static void test_config_ws_url(void) {
     g_setenv("OPENCLAW_HOME", "/nonexistent_test_home_12345", TRUE);
     g_setenv("OPENCLAW_GATEWAY_TOKEN", "tok", TRUE);
 
-    GatewayConfig *config = gateway_config_load();
+    GatewayConfig *config = gateway_config_load(NULL);
     g_assert_nonnull(config);
     g_autofree gchar *url = gateway_config_ws_url(config);
     g_assert_cmpstr(url, ==, "ws://127.0.0.1:18789");
@@ -114,7 +114,7 @@ static void test_config_invalid_json(void) {
     clear_env();
     g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
 
-    GatewayConfig *config = gateway_config_load();
+    GatewayConfig *config = gateway_config_load(NULL);
     g_assert_nonnull(config);
     g_assert_false(config->valid);
     g_assert_cmpint(config->error_code, ==, GW_CFG_ERR_PARSE);
@@ -137,7 +137,7 @@ static void test_config_valid_json_with_auth_token(void) {
     clear_env();
     g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
 
-    GatewayConfig *config = gateway_config_load();
+    GatewayConfig *config = gateway_config_load(NULL);
     g_assert_nonnull(config);
     g_assert_true(config->valid);
     g_assert_cmpint(config->error_code, ==, GW_CFG_OK);
@@ -163,7 +163,7 @@ static void test_config_auth_password_from_config(void) {
     clear_env();
     g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
 
-    GatewayConfig *config = gateway_config_load();
+    GatewayConfig *config = gateway_config_load(NULL);
     g_assert_nonnull(config);
     g_assert_true(config->valid);
     g_assert_cmpstr(config->auth_mode, ==, "password");
@@ -186,7 +186,7 @@ static void test_config_auth_mode_none_no_credentials_needed(void) {
     clear_env();
     g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
 
-    GatewayConfig *config = gateway_config_load();
+    GatewayConfig *config = gateway_config_load(NULL);
     g_assert_nonnull(config);
     g_assert_true(config->valid);
     g_assert_cmpstr(config->auth_mode, ==, "none");
@@ -209,7 +209,7 @@ static void test_config_auth_mode_inferred_from_password(void) {
     clear_env();
     g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
 
-    GatewayConfig *config = gateway_config_load();
+    GatewayConfig *config = gateway_config_load(NULL);
     g_assert_nonnull(config);
     g_assert_true(config->valid);
     g_assert_cmpstr(config->auth_mode, ==, "password");
@@ -231,7 +231,7 @@ static void test_config_auth_unsupported_mode(void) {
     clear_env();
     g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
 
-    GatewayConfig *config = gateway_config_load();
+    GatewayConfig *config = gateway_config_load(NULL);
     g_assert_nonnull(config);
     g_assert_false(config->valid);
     g_assert_cmpint(config->error_code, ==, GW_CFG_ERR_AUTH_MODE_UNSUPPORTED);
@@ -253,7 +253,7 @@ static void test_config_env_overrides_config_token(void) {
     g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
     g_setenv("OPENCLAW_GATEWAY_TOKEN", "env-token", TRUE);
 
-    GatewayConfig *config = gateway_config_load();
+    GatewayConfig *config = gateway_config_load(NULL);
     g_assert_nonnull(config);
     g_assert_true(config->valid);
     g_assert_cmpstr(config->token, ==, "env-token");
@@ -274,7 +274,7 @@ static void test_config_password_mode_missing_password(void) {
     clear_env();
     g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
 
-    GatewayConfig *config = gateway_config_load();
+    GatewayConfig *config = gateway_config_load(NULL);
     g_assert_nonnull(config);
     g_assert_false(config->valid);
     g_assert_cmpint(config->error_code, ==, GW_CFG_ERR_PASSWORD_MISSING);
@@ -295,13 +295,99 @@ static void test_config_remote_mode_rejected(void) {
     clear_env();
     g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
 
-    GatewayConfig *config = gateway_config_load();
+    GatewayConfig *config = gateway_config_load(NULL);
     g_assert_nonnull(config);
     g_assert_false(config->valid);
     g_assert_cmpint(config->error_code, ==, GW_CFG_ERR_MODE_UNSUPPORTED);
     gateway_config_free(config);
 
     g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_secret_ref_unsupported(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"mode\":\"token\",\"token\":{\"_secret\":\"my-key\"}}}}", -1, NULL);
+
+    clear_env();
+    GatewayConfigContext ctx = { .explicit_config_path = config_path };
+    GatewayConfig *config = gateway_config_load(&ctx);
+
+    g_assert_nonnull(config);
+    g_assert_false(config->valid);
+    g_assert_cmpint(config->error_code, ==, GW_CFG_ERR_SECRET_REF_UNSUPPORTED);
+    gateway_config_free(config);
+
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_precedence_explicit_over_state_dir(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_autofree gchar *explicit_path = g_build_filename(tmpdir, "explicit.json", NULL);
+    g_autofree gchar *state_dir_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    
+    g_file_set_contents(explicit_path,
+        "{\"gateway\":{\"auth\":{\"mode\":\"none\"},\"port\":1001}}", -1, NULL);
+    g_file_set_contents(state_dir_path,
+        "{\"gateway\":{\"auth\":{\"mode\":\"none\"},\"port\":1002}}", -1, NULL);
+
+    clear_env();
+    GatewayConfigContext ctx = { 
+        .explicit_config_path = explicit_path,
+        .effective_state_dir = tmpdir
+    };
+    GatewayConfig *config = gateway_config_load(&ctx);
+
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_cmpint(config->port, ==, 1001);
+    gateway_config_free(config);
+
+    g_unlink(explicit_path);
+    g_unlink(state_dir_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_precedence_state_dir_over_home(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_autofree gchar *state_dir = g_build_filename(tmpdir, "state", NULL);
+    g_autofree gchar *home_dir = g_build_filename(tmpdir, "home", NULL);
+    g_mkdir(state_dir, 0700);
+    g_mkdir(home_dir, 0700);
+    g_autofree gchar *home_dot = g_build_filename(home_dir, ".openclaw", NULL);
+    g_mkdir(home_dot, 0700);
+    
+    g_autofree gchar *state_path = g_build_filename(state_dir, "openclaw.json", NULL);
+    g_autofree gchar *home_path = g_build_filename(home_dot, "openclaw.json", NULL);
+
+    g_file_set_contents(state_path,
+        "{\"gateway\":{\"auth\":{\"mode\":\"none\"},\"port\":2001}}", -1, NULL);
+    g_file_set_contents(home_path,
+        "{\"gateway\":{\"auth\":{\"mode\":\"none\"},\"port\":2002}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_HOME", home_dir, TRUE);
+    GatewayConfigContext ctx = { 
+        .effective_state_dir = state_dir
+    };
+    GatewayConfig *config = gateway_config_load(&ctx);
+
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_cmpint(config->port, ==, 2001);
+    gateway_config_free(config);
+
+    g_unlink(state_path);
+    g_unlink(home_path);
+    g_rmdir(state_dir);
+    g_rmdir(home_dot);
+    g_rmdir(home_dir);
     g_rmdir(tmpdir);
     clear_env();
 }
@@ -317,8 +403,8 @@ static void test_config_equiv_identical(void) {
     clear_env();
     g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
 
-    GatewayConfig *a = gateway_config_load();
-    GatewayConfig *b = gateway_config_load();
+    GatewayConfig *a = gateway_config_load(NULL);
+    GatewayConfig *b = gateway_config_load(NULL);
     g_assert_true(gateway_config_equivalent(a, b));
     gateway_config_free(a);
     gateway_config_free(b);
@@ -337,11 +423,11 @@ static void test_config_equiv_token_change_not_equivalent(void) {
 
     g_file_set_contents(config_path,
         "{\"gateway\":{\"auth\":{\"token\":\"token-A\"}}}", -1, NULL);
-    GatewayConfig *a = gateway_config_load();
+    GatewayConfig *a = gateway_config_load(NULL);
 
     g_file_set_contents(config_path,
         "{\"gateway\":{\"auth\":{\"token\":\"token-B\"}}}", -1, NULL);
-    GatewayConfig *b = gateway_config_load();
+    GatewayConfig *b = gateway_config_load(NULL);
 
     g_assert_false(gateway_config_equivalent(a, b));
     gateway_config_free(a);
@@ -361,11 +447,11 @@ static void test_config_equiv_auth_mode_change_not_equivalent(void) {
 
     g_file_set_contents(config_path,
         "{\"gateway\":{\"auth\":{\"mode\":\"token\",\"token\":\"tok\"}}}", -1, NULL);
-    GatewayConfig *a = gateway_config_load();
+    GatewayConfig *a = gateway_config_load(NULL);
 
     g_file_set_contents(config_path,
         "{\"gateway\":{\"auth\":{\"mode\":\"none\"}}}", -1, NULL);
-    GatewayConfig *b = gateway_config_load();
+    GatewayConfig *b = gateway_config_load(NULL);
 
     g_assert_false(gateway_config_equivalent(a, b));
     gateway_config_free(a);
@@ -387,14 +473,14 @@ static void test_config_equiv_invalid_different_reasons_not_equivalent(void) {
     /* Missing token: token mode but no token */
     g_file_set_contents(config_path,
         "{\"gateway\":{\"auth\":{\"mode\":\"token\"}}}", -1, NULL);
-    GatewayConfig *a = gateway_config_load();
+    GatewayConfig *a = gateway_config_load(NULL);
     g_assert_false(a->valid);
     g_assert_cmpint(a->error_code, ==, GW_CFG_ERR_TOKEN_MISSING);
 
     /* Unsupported auth mode */
     g_file_set_contents(config_path,
         "{\"gateway\":{\"auth\":{\"mode\":\"trusted-proxy\"}}}", -1, NULL);
-    GatewayConfig *b = gateway_config_load();
+    GatewayConfig *b = gateway_config_load(NULL);
     g_assert_false(b->valid);
     g_assert_cmpint(b->error_code, ==, GW_CFG_ERR_AUTH_MODE_UNSUPPORTED);
 
@@ -417,8 +503,8 @@ static void test_config_equiv_same_invalid_reason_same_fields(void) {
 
     g_file_set_contents(config_path,
         "{\"gateway\":{\"auth\":{\"mode\":\"token\"}}}", -1, NULL);
-    GatewayConfig *a = gateway_config_load();
-    GatewayConfig *b = gateway_config_load();
+    GatewayConfig *a = gateway_config_load(NULL);
+    GatewayConfig *b = gateway_config_load(NULL);
     g_assert_false(a->valid);
     g_assert_false(b->valid);
     g_assert_true(gateway_config_equivalent(a, b));
@@ -442,12 +528,12 @@ static void test_config_equiv_invalid_different_port_not_equivalent(void) {
     g_file_set_contents(p1,
         "{\"gateway\":{\"port\":1111,\"auth\":{\"mode\":\"token\"}}}", -1, NULL);
     g_setenv("OPENCLAW_CONFIG_PATH", p1, TRUE);
-    GatewayConfig *a = gateway_config_load();
+    GatewayConfig *a = gateway_config_load(NULL);
 
     g_file_set_contents(p2,
         "{\"gateway\":{\"port\":2222,\"auth\":{\"mode\":\"token\"}}}", -1, NULL);
     g_setenv("OPENCLAW_CONFIG_PATH", p2, TRUE);
-    GatewayConfig *b = gateway_config_load();
+    GatewayConfig *b = gateway_config_load(NULL);
 
     g_assert_false(a->valid);
     g_assert_false(b->valid);
@@ -492,6 +578,26 @@ static void test_protocol_parse_response_ok(void) {
     g_assert_cmpstr(auth_source, ==, "token");
     g_assert_cmpfloat_with_epsilon(tick_ms, 25000.0, 0.1);
     g_free(auth_source);
+
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_response_malformed_hello(void) {
+    /* Valid JSON, 'res' frame, ok=true (no error), but payload doesn't match expected hello shape */
+    const gchar *json = "{\"type\":\"res\",\"id\":\"req-1\",\"payload\":{\"not_hello\":\"something\"}}";
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_cmpstr(frame->id, ==, "req-1");
+    g_assert_null(frame->error);
+
+    gchar *auth_source = NULL;
+    gdouble tick_ms = 0;
+    gboolean ok = gateway_protocol_parse_hello_ok(frame, &auth_source, &tick_ms);
+    
+    /* The parse must fail because the payload is not a valid hello-ok */
+    g_assert_false(ok);
+    g_assert_null(auth_source);
 
     gateway_frame_free(frame);
 }
@@ -679,6 +785,9 @@ int main(int argc, char **argv) {
     g_test_add_func("/gateway/config/env_overrides_config_token", test_config_env_overrides_config_token);
     g_test_add_func("/gateway/config/password_mode_missing_password", test_config_password_mode_missing_password);
     g_test_add_func("/gateway/config/remote_mode_rejected", test_config_remote_mode_rejected);
+    g_test_add_func("/gateway/config/secret_ref_unsupported", test_config_secret_ref_unsupported);
+    g_test_add_func("/gateway/config/precedence_explicit_over_state_dir", test_config_precedence_explicit_over_state_dir);
+    g_test_add_func("/gateway/config/precedence_state_dir_over_home", test_config_precedence_state_dir_over_home);
 
     /* Config equivalence tests */
     g_test_add_func("/gateway/config/equiv_identical", test_config_equiv_identical);
@@ -691,6 +800,7 @@ int main(int argc, char **argv) {
     /* Protocol tests */
     g_test_add_func("/gateway/protocol/parse_event", test_protocol_parse_event);
     g_test_add_func("/gateway/protocol/parse_response_ok", test_protocol_parse_response_ok);
+    g_test_add_func("/gateway/protocol/parse_response_malformed_hello", test_protocol_parse_response_malformed_hello);
     g_test_add_func("/gateway/protocol/parse_response_error", test_protocol_parse_response_error);
     g_test_add_func("/gateway/protocol/parse_request", test_protocol_parse_request);
     g_test_add_func("/gateway/protocol/parse_invalid", test_protocol_parse_invalid);

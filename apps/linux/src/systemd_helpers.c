@@ -89,3 +89,84 @@ GPtrArray* systemd_helpers_get_system_unit_paths(void) {
     g_ptr_array_add(paths, g_strdup("/lib/systemd/system"));
     return paths;
 }
+
+gchar* systemd_helpers_find_unit_file(const gchar *unit_name, const gchar *home_dir) {
+    if (!unit_name) return NULL;
+
+    GPtrArray *paths = systemd_helpers_get_user_unit_paths(home_dir);
+    gchar *result = NULL;
+
+    for (guint i = 0; i < paths->len && !result; i++) {
+        gchar *candidate = g_build_filename(
+            (const gchar *)g_ptr_array_index(paths, i), unit_name, NULL);
+        if (g_file_test(candidate, G_FILE_TEST_EXISTS)) {
+            result = candidate;
+        } else {
+            g_free(candidate);
+        }
+    }
+
+    g_ptr_array_free(paths, TRUE);
+    return result;
+}
+
+gchar* systemd_helpers_parse_unit_env(const gchar *unit_contents, const gchar *key) {
+    if (!unit_contents || !key || key[0] == '\0') return NULL;
+
+    gchar *search_key = g_strdup_printf("%s=", key);
+    gsize search_key_len = strlen(search_key);
+    gchar **lines = g_strsplit(unit_contents, "\n", -1);
+    gchar *result = NULL;
+
+    for (gint i = 0; lines[i] && !result; i++) {
+        gchar *line = g_strstrip(g_strdup(lines[i]));
+
+        if (!g_str_has_prefix(line, "Environment=")) {
+            g_free(line);
+            continue;
+        }
+
+        /*
+         * The installer emits one Environment= per line, in one of these forms:
+         *   Environment=KEY=VALUE
+         *   Environment="KEY=VALUE"
+         * (see src/daemon/systemd-unit.ts:renderEnvLines)
+         *
+         * We strip the Environment= prefix, then an optional leading/trailing
+         * double-quote, then search for KEY= within the assignment body.
+         */
+        const gchar *body = line + 12; /* strlen("Environment=") */
+
+        /* Strip optional surrounding quotes */
+        gchar *unquoted;
+        gsize body_len = strlen(body);
+        if (body_len >= 2 && body[0] == '"' && body[body_len - 1] == '"') {
+            unquoted = g_strndup(body + 1, body_len - 2);
+        } else {
+            unquoted = g_strdup(body);
+        }
+
+        /* Find KEY= within the (possibly multi-assignment) body */
+        const gchar *pos = strstr(unquoted, search_key);
+        if (pos) {
+            /* Ensure KEY= is at start of body or preceded by a space (multi-val) */
+            if (pos == unquoted || *(pos - 1) == ' ') {
+                const gchar *val_start = pos + search_key_len;
+                const gchar *val_end = val_start;
+                while (*val_end && *val_end != ' ' && *val_end != '"') {
+                    val_end++;
+                }
+                if (val_end > val_start) {
+                    result = g_strndup(val_start, val_end - val_start);
+                }
+            }
+        }
+
+        g_free(unquoted);
+        g_free(line);
+    }
+
+    g_strfreev(lines);
+    g_free(search_key);
+    return result;
+}

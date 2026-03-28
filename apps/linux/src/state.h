@@ -78,6 +78,7 @@ SystemdState* state_get_systemd(void);
 HealthState* state_get_health(void);
 
 const gchar* systemd_get_canonical_unit_name(void);
+void systemd_get_runtime_context(gchar **out_profile, gchar **out_state_dir, gchar **out_config_path);
 
 /* Callbacks (implemented elsewhere) */
 void notify_on_transition(AppState old_state, AppState new_state);

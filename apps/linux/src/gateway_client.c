@@ -30,6 +30,33 @@ static gboolean initialized = FALSE;
 static guint health_poll_timer_id = 0;
 #define HEALTH_POLL_INTERVAL_S 10
 
+static GatewayConfig* load_config_with_context(void) {
+    GatewayConfigContext ctx = {0};
+    gchar *derived_state_dir = NULL;
+    gchar *derived_profile = NULL;
+    gchar *derived_config_path = NULL;
+
+    systemd_get_runtime_context(&derived_profile, &derived_state_dir, &derived_config_path);
+
+    if (derived_config_path) {
+        ctx.explicit_config_path = derived_config_path;
+    }
+    if (derived_state_dir) {
+        ctx.effective_state_dir = derived_state_dir;
+    }
+    if (derived_profile) {
+        ctx.profile = derived_profile;
+    }
+
+    GatewayConfig *cfg = gateway_config_load(&ctx);
+    
+    g_free(derived_config_path);
+    g_free(derived_state_dir);
+    g_free(derived_profile);
+    
+    return cfg;
+}
+
 static void publish_health_state(gboolean http_ok, gboolean ws_connected,
                                   gboolean rpc_ok, gboolean auth_ok,
                                   const gchar *gateway_version,
@@ -206,7 +233,7 @@ void gateway_client_init(void) {
     gateway_ws_init();
 
     /* Load config */
-    current_config = gateway_config_load();
+    current_config = load_config_with_context();
     if (!current_config || !current_config->valid) {
         OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY, "gateway config invalid: %s",
                   current_config ? current_config->error : "load failed");
@@ -224,7 +251,7 @@ void gateway_client_refresh(void) {
     }
 
     /* Always reload config */
-    GatewayConfig *new_config = gateway_config_load();
+    GatewayConfig *new_config = load_config_with_context();
     gboolean equivalent = gateway_config_equivalent(current_config, new_config);
 
     if (equivalent) {

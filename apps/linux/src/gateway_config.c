@@ -25,10 +25,18 @@
 #include <json-glib/json-glib.h>
 #include <string.h>
 
-static gchar* resolve_config_path(void) {
+static gchar* resolve_config_path(const GatewayConfigContext *ctx) {
     const gchar *override = g_getenv("OPENCLAW_CONFIG_PATH");
     if (override && override[0] != '\0') {
         return g_strdup(override);
+    }
+
+    if (ctx && ctx->explicit_config_path && ctx->explicit_config_path[0] != '\0') {
+        return g_strdup(ctx->explicit_config_path);
+    }
+
+    if (ctx && ctx->effective_state_dir && ctx->effective_state_dir[0] != '\0') {
+        return g_build_filename(ctx->effective_state_dir, "openclaw.json", NULL);
     }
 
     const gchar *state_dir_override = g_getenv("OPENCLAW_STATE_DIR");
@@ -42,7 +50,7 @@ static gchar* resolve_config_path(void) {
         return NULL;
     }
 
-    /* Primary: ~/.openclaw/openclaw.json */
+    /* Primary fallback: ~/.openclaw/openclaw.json */
     gchar *primary = g_build_filename(home, ".openclaw", "openclaw.json", NULL);
     if (g_file_test(primary, G_FILE_TEST_EXISTS)) {
         return primary;
@@ -109,15 +117,25 @@ static void resolve_auth(JsonObject *auth_obj, GatewayConfig *config) {
             }
         }
         if (json_object_has_member(auth_obj, "token")) {
-            const gchar *tok = json_object_get_string_member(auth_obj, "token");
-            if (tok && tok[0] != '\0') {
-                cfg_token = g_strdup(tok);
+            JsonNode *tok_node = json_object_get_member(auth_obj, "token");
+            if (JSON_NODE_HOLDS_OBJECT(tok_node)) {
+                config->token_is_secret_ref = TRUE;
+            } else if (json_node_get_value_type(tok_node) == G_TYPE_STRING) {
+                const gchar *tok = json_node_get_string(tok_node);
+                if (tok && tok[0] != '\0') {
+                    cfg_token = g_strdup(tok);
+                }
             }
         }
         if (json_object_has_member(auth_obj, "password")) {
-            const gchar *pw = json_object_get_string_member(auth_obj, "password");
-            if (pw && pw[0] != '\0') {
-                cfg_password = g_strdup(pw);
+            JsonNode *pw_node = json_object_get_member(auth_obj, "password");
+            if (JSON_NODE_HOLDS_OBJECT(pw_node)) {
+                config->password_is_secret_ref = TRUE;
+            } else if (json_node_get_value_type(pw_node) == G_TYPE_STRING) {
+                const gchar *pw = json_node_get_string(pw_node);
+                if (pw && pw[0] != '\0') {
+                    cfg_password = g_strdup(pw);
+                }
             }
         }
     }
@@ -127,19 +145,21 @@ static void resolve_auth(JsonObject *auth_obj, GatewayConfig *config) {
     if (env_token && env_token[0] != '\0') {
         g_free(cfg_token);
         cfg_token = g_strdup(env_token);
+        config->token_is_secret_ref = FALSE;
     }
 
     const gchar *env_password = g_getenv("OPENCLAW_GATEWAY_PASSWORD");
     if (env_password && env_password[0] != '\0') {
         g_free(cfg_password);
         cfg_password = g_strdup(env_password);
+        config->password_is_secret_ref = FALSE;
     }
 
     /* 3. Infer auth_mode if not explicitly set (matches gateway server auth.ts:256-268) */
     if (!cfg_auth_mode) {
-        if (cfg_password) {
+        if (cfg_password || config->password_is_secret_ref) {
             cfg_auth_mode = g_strdup("password");
-        } else if (cfg_token) {
+        } else if (cfg_token || config->token_is_secret_ref) {
             cfg_auth_mode = g_strdup("token");
         } else {
             cfg_auth_mode = g_strdup("token");
@@ -168,33 +188,49 @@ static gboolean validate_auth(GatewayConfig *config) {
         return FALSE;
     }
 
-    if (g_strcmp0(config->auth_mode, "token") == 0 && !config->token) {
-        config->valid = FALSE;
-        config->error_code = GW_CFG_ERR_TOKEN_MISSING;
-        config->error = g_strdup(
-            "Gateway auth mode is token, but no token was configured "
-            "(set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)");
-        return FALSE;
+    if (g_strcmp0(config->auth_mode, "token") == 0) {
+        if (config->token_is_secret_ref) {
+            config->valid = FALSE;
+            config->error_code = GW_CFG_ERR_SECRET_REF_UNSUPPORTED;
+            config->error = g_strdup("Gateway token is configured as a SecretRef object, which is not yet supported by the Linux companion.");
+            return FALSE;
+        }
+        if (!config->token) {
+            config->valid = FALSE;
+            config->error_code = GW_CFG_ERR_TOKEN_MISSING;
+            config->error = g_strdup(
+                "Gateway auth mode is token, but no token was configured "
+                "(set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)");
+            return FALSE;
+        }
     }
 
-    if (g_strcmp0(config->auth_mode, "password") == 0 && !config->password) {
-        config->valid = FALSE;
-        config->error_code = GW_CFG_ERR_PASSWORD_MISSING;
-        config->error = g_strdup(
-            "Gateway auth mode is password, but no password was configured "
-            "(set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)");
-        return FALSE;
+    if (g_strcmp0(config->auth_mode, "password") == 0) {
+        if (config->password_is_secret_ref) {
+            config->valid = FALSE;
+            config->error_code = GW_CFG_ERR_SECRET_REF_UNSUPPORTED;
+            config->error = g_strdup("Gateway password is configured as a SecretRef object, which is not yet supported by the Linux companion.");
+            return FALSE;
+        }
+        if (!config->password) {
+            config->valid = FALSE;
+            config->error_code = GW_CFG_ERR_PASSWORD_MISSING;
+            config->error = g_strdup(
+                "Gateway auth mode is password, but no password was configured "
+                "(set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)");
+            return FALSE;
+        }
     }
 
     return TRUE;
 }
 
-GatewayConfig* gateway_config_load(void) {
+GatewayConfig* gateway_config_load(const GatewayConfigContext *ctx) {
     GatewayConfig *config = g_new0(GatewayConfig, 1);
     config->host = g_strdup(GATEWAY_DEFAULT_HOST);
     config->port = GATEWAY_DEFAULT_PORT;
     config->error_code = GW_CFG_OK;
-    config->config_path = resolve_config_path();
+    config->config_path = resolve_config_path(ctx);
 
     if (!config->config_path) {
         config->valid = FALSE;
@@ -343,6 +379,8 @@ gboolean gateway_config_equivalent(const GatewayConfig *a, const GatewayConfig *
     /* credentials */
     if (g_strcmp0(a->token, b->token) != 0) return FALSE;
     if (g_strcmp0(a->password, b->password) != 0) return FALSE;
+    if (a->token_is_secret_ref != b->token_is_secret_ref) return FALSE;
+    if (a->password_is_secret_ref != b->password_is_secret_ref) return FALSE;
 
     /* Derived normalized URLs (catches any normalization edge cases) */
     g_autofree gchar *a_http = gateway_config_http_url(a);
