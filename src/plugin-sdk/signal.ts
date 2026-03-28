@@ -4,13 +4,18 @@
 export type { ChannelMessageActionAdapter } from "../channels/plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { SignalAccountConfig } from "../config/types.js";
-export type { ResolvedSignalAccount } from "../../extensions/signal/api.js";
+export type { ResolvedSignalAccount } from "./signal-surface.js";
 export type {
   ChannelMessageActionContext,
   ChannelPlugin,
   OpenClawPluginApi,
   PluginRuntime,
 } from "./channel-plugin-common.js";
+export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
+export type {
+  ChannelSetupWizard,
+  ChannelSetupWizardTextInput,
+} from "../channels/plugins/setup-wizard.js";
 export {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
@@ -24,6 +29,10 @@ export {
   normalizeAccountId,
   setAccountEnabledInConfigSection,
 } from "./channel-plugin-common.js";
+export {
+  createPatchedAccountSetupAdapter,
+  createSetupInputPresenceValidator,
+} from "../channels/plugins/setup-helpers.js";
 export { formatCliCommand } from "../cli/command-format.js";
 export { formatDocsLink } from "../terminal/links.js";
 
@@ -42,6 +51,18 @@ export { SignalConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { normalizeE164 } from "../utils.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
+export {
+  createCliPathTextInput,
+  createDelegatedTextInputShouldPrompt,
+} from "../channels/plugins/setup-wizard-binary.js";
+export { createDelegatedSetupWizardProxy } from "../channels/plugins/setup-wizard-proxy.js";
+export {
+  createTopLevelChannelDmPolicy,
+  parseSetupEntriesAllowingWildcard,
+  promptParsedAllowFromForAccount,
+  setAccountAllowFromForChannel,
+  setSetupChannelEnabled,
+} from "../channels/plugins/setup-wizard-helpers.js";
 
 export {
   buildBaseAccountStatusSnapshot,
@@ -54,10 +75,12 @@ export {
   listEnabledSignalAccounts,
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
-} from "../../extensions/signal/api.js";
-export { monitorSignalProvider } from "../../extensions/signal/api.js";
-export { probeSignal } from "../../extensions/signal/api.js";
-export { resolveSignalReactionLevel } from "../../extensions/signal/api.js";
-export { removeReactionSignal, sendReactionSignal } from "../../extensions/signal/api.js";
-export { sendMessageSignal } from "../../extensions/signal/api.js";
-export { signalMessageActions } from "../../extensions/signal/api.js";
+} from "./signal-surface.js";
+export { isSignalSenderAllowed } from "./signal-surface.js";
+export type { SignalSender } from "./signal-surface.js";
+export { monitorSignalProvider } from "./signal-surface.js";
+export { probeSignal } from "./signal-surface.js";
+export { resolveSignalReactionLevel } from "./signal-surface.js";
+export { removeReactionSignal, sendReactionSignal } from "./signal-surface.js";
+export { sendMessageSignal } from "./signal-surface.js";
+export { signalMessageActions } from "./signal-surface.js";

@@ -1,9 +1,9 @@
 import { beforeEach, describe } from "vitest";
-import { __testing as discordThreadBindingTesting } from "../../../../extensions/discord/runtime-api.js";
-import { feishuThreadBindingTesting } from "../../../../extensions/feishu/api.js";
-import { resetMatrixThreadBindingsForTests } from "../../../../extensions/matrix/api.js";
-import { telegramThreadBindingTesting } from "../../../../extensions/telegram/runtime-api.js";
 import { __testing as sessionBindingTesting } from "../../../infra/outbound/session-binding-service.js";
+import { discordThreadBindingTesting } from "../../../plugin-sdk/discord.js";
+import { feishuThreadBindingTesting } from "../../../plugin-sdk/feishu-conversation.js";
+import { resetMatrixThreadBindingsForTests } from "../../../plugin-sdk/matrix.js";
+import { resetTelegramThreadBindingsForTests } from "../../../plugin-sdk/telegram-runtime-surface.js";
 import {
   actionContractRegistry,
   directoryContractRegistry,
@@ -97,7 +97,7 @@ describe("session binding contract registry", () => {
     discordThreadBindingTesting.resetThreadBindingsForTests();
     feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
     resetMatrixThreadBindingsForTests();
-    await telegramThreadBindingTesting.resetTelegramThreadBindingsForTests();
+    await resetTelegramThreadBindingsForTests();
   });
 
   for (const entry of sessionBindingContractRegistry) {

@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -844,6 +843,7 @@ export async function runEmbeddedAttempt(
         workspaceDir: params.workspaceDir,
       });
 
+      const defaultSessionStreamFn = activeSession.agent.streamFn;
       const providerStreamFn = registerProviderStreamForModel({
         model: params.model,
         cfg: params.config,
@@ -865,15 +865,14 @@ export async function runEmbeddedAttempt(
           });
         } else {
           log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
-          activeSession.agent.streamFn = streamSimple;
+          activeSession.agent.streamFn = defaultSessionStreamFn;
         }
       } else if (params.model.provider === "anthropic-vertex") {
         // Anthropic Vertex AI: inject AnthropicVertex client into pi-ai's
         // streamAnthropic for GCP IAM auth instead of Anthropic API keys.
         activeSession.agent.streamFn = createAnthropicVertexStreamFnForModel(params.model);
       } else {
-        // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
-        activeSession.agent.streamFn = streamSimple;
+        activeSession.agent.streamFn = defaultSessionStreamFn;
       }
 
       const { effectiveExtraParams } = applyExtraParamsToAgent(
@@ -1331,6 +1330,7 @@ export async function runEmbeddedAttempt(
           },
         );
         const hookCtx = {
+          runId: params.runId,
           agentId: hookAgentId,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
@@ -1463,6 +1463,7 @@ export async function runEmbeddedAttempt(
                   imagesCount: imageResult.images.length,
                 },
                 {
+                  runId: params.runId,
                   agentId: hookAgentId,
                   sessionKey: params.sessionKey,
                   sessionId: params.sessionId,
@@ -1693,6 +1694,7 @@ export async function runEmbeddedAttempt(
                 durationMs: Date.now() - promptStartedAt,
               },
               {
+                runId: params.runId,
                 agentId: hookAgentId,
                 sessionKey: params.sessionKey,
                 sessionId: params.sessionId,
@@ -1755,6 +1757,7 @@ export async function runEmbeddedAttempt(
               usage: getUsageTotals(),
             },
             {
+              runId: params.runId,
               agentId: hookAgentId,
               sessionKey: params.sessionKey,
               sessionId: params.sessionId,

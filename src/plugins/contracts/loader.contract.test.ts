@@ -15,6 +15,8 @@ function resolveBundledManifestProviderPluginIds() {
   );
 }
 
+const demoAllowEntry = "demo-allowed";
+
 describe("plugin loader contract", () => {
   let providerPluginIds: string[];
   let manifestProviderPluginIds: string[];
@@ -31,14 +33,14 @@ describe("plugin loader contract", () => {
     compatPluginIds = providerTesting.resolveBundledProviderCompatPluginIds({
       config: {
         plugins: {
-          allow: ["openrouter"],
+          allow: [demoAllowEntry],
         },
       },
     });
     compatConfig = withBundledPluginAllowlistCompat({
       config: {
         plugins: {
-          allow: ["openrouter"],
+          allow: [demoAllowEntry],
         },
       },
       pluginIds: compatPluginIds,
@@ -55,7 +57,7 @@ describe("plugin loader contract", () => {
     webSearchAllowlistCompatConfig = withBundledPluginAllowlistCompat({
       config: {
         plugins: {
-          allow: ["openrouter"],
+          allow: [demoAllowEntry],
         },
       },
       pluginIds: webSearchPluginIds,

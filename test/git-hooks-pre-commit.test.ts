@@ -73,7 +73,7 @@ describe("git-hooks/pre-commit (integration)", () => {
     expect(staged).toEqual(["--all"]);
   });
 
-  it("skips pnpm format and pnpm check when FAST_COMMIT is enabled", () => {
+  it("skips pnpm check when FAST_COMMIT is enabled", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-pre-commit-yolo-"));
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
 
@@ -96,7 +96,7 @@ describe("git-hooks/pre-commit (integration)", () => {
       "process.exit(0);\n",
       "utf8",
     );
-    writeFileSync(path.join(dir, "package.json"), "{\"name\":\"tmp\"}\n", "utf8");
+    writeFileSync(path.join(dir, "package.json"), '{"name":"tmp"}\n', "utf8");
     writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
 
     const fakeBinDir = path.join(dir, "bin");
@@ -116,8 +116,6 @@ describe("git-hooks/pre-commit (integration)", () => {
       FAST_COMMIT: "1",
     });
 
-    expect(output).toContain(
-      "FAST_COMMIT enabled: skipping pnpm format and pnpm check in pre-commit hook.",
-    );
+    expect(output).toContain("FAST_COMMIT enabled: skipping pnpm check in pre-commit hook.");
   });
 });

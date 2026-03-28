@@ -1,12 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  __testing as feishuThreadBindingTesting,
-  createFeishuThreadBindingManager,
-} from "../../../../extensions/feishu/api.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   __testing as sessionBindingTesting,
   getSessionBindingService,
+  registerSessionBindingAdapter,
+  type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import { buildCommandTestParams } from "../commands-spawn.test-harness.js";
 import {
@@ -20,9 +18,39 @@ const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
 
+function registerFeishuBindingAdapterForTest(accountId: string) {
+  const bindings: SessionBindingRecord[] = [];
+  registerSessionBindingAdapter({
+    channel: "feishu",
+    accountId,
+    capabilities: { placements: ["current"] },
+    bind: async (input) => {
+      const record: SessionBindingRecord = {
+        bindingId: `${input.conversation.channel}:${input.conversation.accountId}:${input.conversation.conversationId}`,
+        targetSessionKey: input.targetSessionKey,
+        targetKind: input.targetKind,
+        conversation: input.conversation,
+        status: "active",
+        boundAt: Date.now(),
+        ...(input.metadata ? { metadata: input.metadata } : {}),
+      };
+      bindings.push(record);
+      return record;
+    },
+    listBySession: (targetSessionKey) =>
+      bindings.filter((binding) => binding.targetSessionKey === targetSessionKey),
+    resolveByConversation: (ref) =>
+      bindings.find(
+        (binding) =>
+          binding.conversation.channel === ref.channel &&
+          binding.conversation.accountId === ref.accountId &&
+          binding.conversation.conversationId === ref.conversationId,
+      ) ?? null,
+  });
+}
+
 describe("commands-acp context", () => {
   beforeEach(() => {
-    feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
   });
 
@@ -233,7 +261,7 @@ describe("commands-acp context", () => {
   });
 
   it("preserves sender-scoped Feishu topic ids after ACP takeover from the live binding record", async () => {
-    createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "work" });
+    registerFeishuBindingAdapterForTest("work");
     await getSessionBindingService().bind({
       targetSessionKey: "agent:codex:acp:binding:feishu:work:abc123",
       targetKind: "session",

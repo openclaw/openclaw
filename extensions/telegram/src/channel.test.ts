@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { PluginApprovalRequest } from "../../../src/infra/plugin-approvals.js";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
@@ -7,7 +8,7 @@ import * as auditModule from "./audit.js";
 import { telegramPlugin } from "./channel.js";
 import * as monitorModule from "./monitor.js";
 import * as probeModule from "./probe.js";
-import { setTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 
 const probeTelegramMock = vi.hoisted(() => vi.fn());
 const collectTelegramUnmentionedGroupIdsMock = vi.hoisted(() => vi.fn());
@@ -78,7 +79,16 @@ function installTelegramRuntime(telegram?: Record<string, unknown>) {
   } as unknown as PluginRuntime);
 }
 
-function installGatewayRuntime(params?: { probeOk?: boolean; botUsername?: string }) {
+function installGatewayRuntime(params?: {
+  probeOk?: boolean;
+  botUsername?: string;
+  runtimeHelpers?: {
+    probeTelegram?: typeof probeModule.probeTelegram;
+    collectTelegramUnmentionedGroupIds?: typeof auditModule.collectTelegramUnmentionedGroupIds;
+    auditTelegramGroupMembership?: typeof auditModule.auditTelegramGroupMembership;
+    monitorTelegramProvider?: typeof monitorModule.monitorTelegramProvider;
+  };
+}) {
   const monitorTelegramProvider = vi
     .spyOn(monitorModule, "monitorTelegramProvider")
     .mockImplementation(async () => undefined);
@@ -106,7 +116,15 @@ function installGatewayRuntime(params?: { probeOk?: boolean; botUsername?: strin
       groups: [],
       elapsedMs: 0,
     }));
-  installTelegramRuntime();
+  installTelegramRuntime({
+    probeTelegram: params?.runtimeHelpers?.probeTelegram ?? probeTelegram,
+    collectTelegramUnmentionedGroupIds:
+      params?.runtimeHelpers?.collectTelegramUnmentionedGroupIds ?? collectUnmentionedGroupIds,
+    auditTelegramGroupMembership:
+      params?.runtimeHelpers?.auditTelegramGroupMembership ?? auditGroupMembership,
+    monitorTelegramProvider:
+      params?.runtimeHelpers?.monitorTelegramProvider ?? monitorTelegramProvider,
+  });
   return {
     monitorTelegramProvider,
     probeTelegram,
@@ -144,8 +162,29 @@ function installSendMessageRuntime(
   return sendMessageTelegram;
 }
 
+function createPluginApprovalRequest(
+  overrides: Partial<PluginApprovalRequest["request"]> = {},
+): PluginApprovalRequest {
+  return {
+    id: "plugin:12345678-1234-1234-1234-1234567890ab",
+    request: {
+      title: "Sensitive plugin action",
+      description: "The plugin requested a sensitive operation.",
+      severity: "warning",
+      toolName: "plugin.tool",
+      pluginId: "plugin-test",
+      agentId: "agent-main",
+      sessionKey: "agent:agent-main:telegram:12345",
+      ...overrides,
+    },
+    createdAtMs: 1_000,
+    expiresAtMs: 61_000,
+  };
+}
+
 afterEach(() => {
-  vi.restoreAllMocks();
+  clearTelegramRuntime();
+  vi.clearAllMocks();
 });
 
 describe("telegramPlugin groups", () => {
@@ -266,13 +305,70 @@ describe("telegramPlugin duplicate token guard", () => {
     expect(monitorTelegramProvider).toHaveBeenCalled();
   });
 
-  it("passes account proxy and network settings into Telegram probes", async () => {
-    const runtimeProbeTelegram = vi.fn(async () => {
-      throw new Error("runtime probe should not be used");
+  it("falls back to direct probe helpers when Telegram runtime is uninitialized", async () => {
+    try {
+      clearTelegramRuntime();
+      const cfg = createCfg();
+      const account = resolveAccount(cfg, "ops");
+
+      await expect(
+        telegramPlugin.status!.probeAccount!({
+          account,
+          timeoutMs: 1234,
+          cfg,
+        }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          ok: expect.any(Boolean),
+          elapsedMs: expect.any(Number),
+        }),
+      );
+    } finally {
+      installTelegramRuntime();
+    }
+  });
+
+  it("prefers runtime Telegram helpers over imported module mocks when runtime is set", async () => {
+    probeTelegramMock.mockReset();
+    const runtimeProbeTelegram = vi.fn(async () => ({
+      ok: true,
+      bot: { username: "runtimebot" },
+      elapsedMs: 7,
+    }));
+    probeTelegramMock.mockResolvedValue({
+      ok: true,
+      bot: { username: "modulebot" },
+      elapsedMs: 1,
     });
     installTelegramRuntime({
       probeTelegram: runtimeProbeTelegram,
     });
+
+    const cfg = createCfg();
+    const account = resolveAccount(cfg, "ops");
+
+    await expect(
+      telegramPlugin.status!.probeAccount!({
+        account,
+        timeoutMs: 4321,
+        cfg,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      bot: { username: "runtimebot" },
+      elapsedMs: 7,
+    });
+    expect(runtimeProbeTelegram).toHaveBeenCalledWith("token-ops", 4321, {
+      accountId: "ops",
+      proxyUrl: undefined,
+      network: undefined,
+      apiRoot: undefined,
+    });
+    expect(probeTelegramMock).not.toHaveBeenCalled();
+  });
+
+  it("passes account proxy and network settings into Telegram probes", async () => {
+    installGatewayRuntime();
     probeTelegramMock.mockResolvedValue({
       ok: true,
       bot: { username: "opsbot" },
@@ -295,20 +391,10 @@ describe("telegramPlugin duplicate token guard", () => {
         dnsResultOrder: "ipv4first",
       },
     });
-    expect(runtimeProbeTelegram).not.toHaveBeenCalled();
   });
 
   it("passes account proxy and network settings into Telegram membership audits", async () => {
-    const runtimeCollectUnmentionedGroupIds = vi.fn(() => {
-      throw new Error("runtime audit helper should not be used");
-    });
-    const runtimeAuditGroupMembership = vi.fn(async () => {
-      throw new Error("runtime audit helper should not be used");
-    });
-    installTelegramRuntime({
-      collectUnmentionedGroupIds: runtimeCollectUnmentionedGroupIds,
-      auditGroupMembership: runtimeAuditGroupMembership,
-    });
+    installGatewayRuntime();
     collectTelegramUnmentionedGroupIdsMock.mockReturnValue({
       groupIds: ["-100123"],
       unresolvedGroups: 0,
@@ -352,8 +438,6 @@ describe("telegramPlugin duplicate token guard", () => {
       },
       timeoutMs: 5000,
     });
-    expect(runtimeCollectUnmentionedGroupIds).not.toHaveBeenCalled();
-    expect(runtimeAuditGroupMembership).not.toHaveBeenCalled();
   });
 
   it("forwards mediaLocalRoots to sendMessageTelegram for outbound media sends", async () => {
@@ -466,6 +550,34 @@ describe("telegramPlugin duplicate token guard", () => {
       (sendMessageTelegram.mock.calls[1]?.[2] as Record<string, unknown>)?.buttons,
     ).toBeUndefined();
     expect(result).toMatchObject({ channel: "telegram", messageId: "tg-4" });
+  });
+
+  it("builds plugin approval pending payload with callback ids that preserve allow-always", () => {
+    const request = createPluginApprovalRequest();
+    const payload = telegramPlugin.execApprovals?.buildPluginPendingPayload?.({
+      cfg: createCfg(),
+      request,
+      target: { channel: "telegram", to: "12345" },
+      nowMs: 2_000,
+    });
+
+    expect(payload?.text).toContain("Plugin approval required");
+    const channelData = payload?.channelData as
+      | {
+          execApproval?: { approvalId?: string; approvalSlug?: string };
+          telegram?: { buttons?: Array<Array<{ text: string; callback_data: string }>> };
+        }
+      | undefined;
+    expect(channelData?.execApproval?.approvalId).toBe(request.id);
+    expect(channelData?.execApproval?.approvalSlug).toBe(request.id);
+    const buttons = channelData?.telegram?.buttons;
+    expect(buttons).toBeDefined();
+    expect(buttons?.[0]?.some((button) => button.text === "Allow Always")).toBe(true);
+    for (const row of buttons ?? []) {
+      for (const button of row) {
+        expect(Buffer.byteLength(button.callback_data, "utf8")).toBeLessThanOrEqual(64);
+      }
+    }
   });
 
   it("ignores accounts with missing tokens during duplicate-token checks", async () => {

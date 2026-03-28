@@ -587,6 +587,27 @@ describe("plugin sdk alias helpers", () => {
     expect(shouldPreferNativeJiti("/repo/extensions/discord/src/channel.runtime.ts")).toBe(false);
   });
 
+  it("disables native Jiti loads under Bun even for built JavaScript entries", () => {
+    const originalVersions = process.versions;
+    Object.defineProperty(process, "versions", {
+      configurable: true,
+      value: {
+        ...originalVersions,
+        bun: "1.2.0",
+      },
+    });
+
+    try {
+      expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(false);
+      expect(shouldPreferNativeJiti("/repo/dist/extensions/browser/index.js")).toBe(false);
+    } finally {
+      Object.defineProperty(process, "versions", {
+        configurable: true,
+        value: originalVersions,
+      });
+    }
+  });
+
   it("loads source runtime shims through the non-native Jiti boundary", async () => {
     const copiedExtensionRoot = path.join(makeTempDir(), "extensions", "discord");
     const copiedSourceDir = path.join(copiedExtensionRoot, "src");

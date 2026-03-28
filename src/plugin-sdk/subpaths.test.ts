@@ -123,7 +123,6 @@ describe("plugin-sdk subpath exports", () => {
       "acpx",
       "compat",
       "device-pair",
-      "google",
       "lobster",
       "pairing-access",
       "provider-model-definitions",
@@ -237,6 +236,13 @@ describe("plugin-sdk subpath exports", () => {
       "registerBuiltDiscordComponentMessage",
       "resolveDiscordAccount",
     ]);
+    expectSourceMentions("huggingface", [
+      "buildHuggingfaceModelDefinition",
+      "buildHuggingfaceProvider",
+      "discoverHuggingfaceModels",
+      "HUGGINGFACE_MODEL_CATALOG",
+      "isHuggingfacePolicyLocked",
+    ]);
     expectSourceMentions("conversation-runtime", [
       "recordInboundSession",
       "recordInboundSessionMetaSafe",
@@ -332,7 +338,6 @@ describe("plugin-sdk subpath exports", () => {
       "canonicalizeAllowlistWithResolvedIds",
       "mergeAllowlist",
       "patchAllowlistUsersInConfigEntries",
-      "resolveChannelConfigWrites",
       "resolvePayloadMediaUrls",
       "resolveScopedChannelMediaMaxBytes",
       "sendPayloadMediaSequenceAndFinalize",
@@ -432,7 +437,7 @@ describe("plugin-sdk subpath exports", () => {
       "resolveChannelMatchConfig",
       "resolveTargetsWithOptionalToken",
     ]);
-    expectSourceMentions("channel-config-helpers", [
+    expectSourceMentions("channel-config-writes", [
       "authorizeConfigWrite",
       "canBypassConfigWritePolicy",
       "formatConfigWriteDeniedMessage",
@@ -535,6 +540,14 @@ describe("plugin-sdk subpath exports", () => {
         "resolveZaiBaseUrl",
       ],
     });
+    expectSourceContract("provider-model-shared", {
+      mentions: ["DEFAULT_CONTEXT_TOKENS", "normalizeModelCompat", "cloneFirstTemplateModel"],
+      omits: ["applyOpenAIConfig", "buildKilocodeModelDefinition", "discoverHuggingfaceModels"],
+    });
+    expectSourceContract("provider-catalog-shared", {
+      mentions: ["buildSingleProviderApiKeyCatalog", "buildPairedProviderApiKeyCatalog"],
+      omits: ["buildDeepSeekProvider", "buildOpenAICodexProvider", "buildVeniceProvider"],
+    });
 
     expectSourceMentions("setup", [
       "DEFAULT_ACCOUNT_ID",
@@ -627,7 +640,9 @@ describe("plugin-sdk subpath exports", () => {
     const [
       coreSdk,
       channelActionsSdk,
+      globalSingletonSdk,
       textRuntimeSdk,
+      huggingfaceSdk,
       pluginEntrySdk,
       channelLifecycleSdk,
       channelPairingSdk,
@@ -636,7 +651,9 @@ describe("plugin-sdk subpath exports", () => {
     ] = await Promise.all([
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/core"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-actions"),
+      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/global-singleton"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/text-runtime"),
+      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/huggingface"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/plugin-entry"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-lifecycle"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-pairing"),
@@ -650,9 +667,15 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof coreSdk.optionalStringEnum).toBe("function");
     expect(typeof channelActionsSdk.optionalStringEnum).toBe("function");
     expect(typeof channelActionsSdk.stringEnum).toBe("function");
+    expect(typeof globalSingletonSdk.resolveGlobalMap).toBe("function");
+    expect(typeof globalSingletonSdk.resolveGlobalSingleton).toBe("function");
+    expect(typeof globalSingletonSdk.createScopedExpiringIdCache).toBe("function");
     expect(typeof textRuntimeSdk.createScopedExpiringIdCache).toBe("function");
     expect(typeof textRuntimeSdk.resolveGlobalMap).toBe("function");
     expect(typeof textRuntimeSdk.resolveGlobalSingleton).toBe("function");
+    expect(typeof huggingfaceSdk.buildHuggingfaceProvider).toBe("function");
+    expect(typeof huggingfaceSdk.discoverHuggingfaceModels).toBe("function");
+    expect(Array.isArray(huggingfaceSdk.HUGGINGFACE_MODEL_CATALOG)).toBe(true);
 
     expectSourceMentions("infra-runtime", ["createRuntimeOutboundDelegates"]);
     expectSourceContains("infra-runtime", "../infra/outbound/send-deps.js");

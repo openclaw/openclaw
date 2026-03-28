@@ -506,7 +506,8 @@ Useful env vars:
 
 ## Docs sanity
 
-Run docs checks after doc edits: `pnpm docs:list`.
+Run docs checks after doc edits: `pnpm check:docs`.
+Run full Mintlify anchor validation when you need in-page heading checks too: `pnpm docs:check-links:anchors`.
 
 ## Offline regression (CI-safe)
 
@@ -538,7 +539,9 @@ Future evals should stay deterministic first:
 
 Contract tests verify that every registered plugin and channel conforms to its
 interface contract. They iterate over all discovered plugins and run a suite of
-shape and behavior assertions.
+shape and behavior assertions. The default `pnpm test` unit lane intentionally
+skips these shared seam and smoke files; run the contract commands explicitly
+when you touch shared channel or provider surfaces.
 
 ### Commands
 
@@ -559,6 +562,11 @@ Located in `src/channels/plugins/contracts/*.contract.test.ts`:
 - **threading** - Thread ID handling
 - **directory** - Directory/roster API
 - **group-policy** - Group policy enforcement
+
+### Provider status contracts
+
+Located in `src/plugins/contracts/*.contract.test.ts`.
+
 - **status** - Channel status probes
 - **registry** - Plugin registry shape
 
