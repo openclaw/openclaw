@@ -54,30 +54,35 @@ function expectPairedCatalogProviders(
 }
 
 describe("buildSingleProviderApiKeyCatalog", () => {
-  it("matches provider templates case-insensitively", () => {
-    const result = findCatalogTemplate({
+  it.each([
+    {
+      name: "matches provider templates case-insensitively",
       entries: [
         { provider: "Demo Provider", id: "demo-model" },
         { provider: "other", id: "fallback" },
       ],
       providerId: "demo provider",
       templateIds: ["missing", "DEMO-MODEL"],
-    });
-
-    expect(result).toEqual({ provider: "Demo Provider", id: "demo-model" });
-  });
-
-  it("matches provider templates across canonical provider aliases", () => {
-    const result = findCatalogTemplate({
+      expected: { provider: "Demo Provider", id: "demo-model" },
+    },
+    {
+      name: "matches provider templates across canonical provider aliases",
       entries: [
         { provider: "z.ai", id: "glm-4.7" },
         { provider: "other", id: "fallback" },
       ],
       providerId: "z-ai",
       templateIds: ["GLM-4.7"],
+      expected: { provider: "z.ai", id: "glm-4.7" },
+    },
+  ] as const)("$name", ({ entries, providerId, templateIds, expected }) => {
+    const result = findCatalogTemplate({
+      entries,
+      providerId,
+      templateIds,
     });
 
-    expect(result).toEqual({ provider: "z.ai", id: "glm-4.7" });
+    expect(result).toEqual(expected);
   });
   it.each([
     ["returns null when api key is missing", createCatalogContext({}), undefined, null],
