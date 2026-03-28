@@ -88,6 +88,7 @@ function runPlannerPlan(args: string[], envOverrides: NodeJS.ProcessEnv = {}): s
     cwd: REPO_ROOT,
     env: createPlannerEnv(envOverrides),
     encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
   });
 }
 
@@ -469,6 +470,24 @@ describe("scripts/test-parallel lane planning", () => {
 
     expect(output).toContain("mode=local intent=normal memoryBand=high");
     expect(output).toContain("unit-deliver-isolated filters=1");
+  });
+
+  it("prints collect-all failure policy in planner output for wrapper-native flag", () => {
+    const output = runPlannerPlan(["--plan", "--collect-failures", "--surface", "unit"]);
+
+    expect(output).toContain("failurePolicy=collect-all");
+  });
+
+  it("maps --bail=0 to collect-all failure policy in planner output", () => {
+    const output = runPlannerPlan(["--plan", "--surface", "unit", "--", "--bail=0"]);
+
+    expect(output).toContain("failurePolicy=collect-all");
+  });
+
+  it("rejects wrapper-level positive --bail values", () => {
+    expect(() => runPlannerPlan(["--plan", "--surface", "unit", "--", "--bail=2"])).toThrowError(
+      /Unsupported wrapper-level --bail value/u,
+    );
   });
 
   it("rejects removed machine-name profiles", () => {

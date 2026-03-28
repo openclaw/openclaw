@@ -14,7 +14,7 @@ import {
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createOpenClawChannelMcpServer, OpenClawChannelBridge } from "./channel-server.js";
 
-installGatewayTestHooks();
+installGatewayTestHooks({ scope: "suite" });
 
 const ClaudeChannelNotificationSchema = z.object({
   method: z.literal("notifications/claude/channel"),
@@ -136,6 +136,24 @@ describe("openclaw channel mcp server", () => {
             timestamp: Date.now(),
           },
         },
+        {
+          id: "msg-attachment",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "attached image" },
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/png",
+                  data: "abc",
+                },
+              },
+            ],
+            timestamp: Date.now() + 1,
+          },
+        },
       ],
     });
 
@@ -175,6 +193,27 @@ describe("openclaw channel mcp server", () => {
         role: "assistant",
         content: [{ type: "text", text: "hello from transcript" }],
       });
+      expect(read.structuredContent?.messages?.[1]).toMatchObject({
+        __openclaw: {
+          id: "msg-attachment",
+        },
+      });
+
+      const attachments = (await mcp.client.callTool({
+        name: "attachments_fetch",
+        arguments: { session_key: sessionKey, message_id: "msg-attachment" },
+      })) as {
+        structuredContent?: { attachments?: Array<Record<string, unknown>> };
+        isError?: boolean;
+      };
+      expect(attachments.isError).not.toBe(true);
+      expect(attachments.structuredContent?.attachments).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "image",
+          }),
+        ]),
+      );
 
       const waitPromise = mcp.client.callTool({
         name: "events_wait",
@@ -453,6 +492,28 @@ describe("openclaw channel mcp server", () => {
       expect(permissionNotifications[0]).toEqual({
         request_id: "abcde",
         behavior: "allow",
+      });
+
+      emitSessionTranscriptUpdate({
+        sessionFile: path.join(path.dirname(storePath), "sess-claude.jsonl"),
+        sessionKey,
+        messageId: "msg-user-3",
+        message: {
+          role: "user",
+          content: "plain string user turn",
+          timestamp: Date.now(),
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(channelNotifications).toHaveLength(2);
+      });
+      expect(channelNotifications[1]).toMatchObject({
+        content: "plain string user turn",
+        meta: expect.objectContaining({
+          session_key: sessionKey,
+          message_id: "msg-user-3",
+        }),
       });
     } finally {
       await mcp?.close();

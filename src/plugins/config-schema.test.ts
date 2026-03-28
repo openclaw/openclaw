@@ -7,16 +7,21 @@ function expectSafeParseCases(
   cases: ReadonlyArray<readonly [unknown, unknown]>,
 ) {
   expect(safeParse).toBeDefined();
-  for (const [value, expected] of cases) {
-    expect(safeParse?.(value)).toEqual(expected);
-  }
+  expect(cases.map(([value]) => safeParse?.(value))).toEqual(cases.map(([, expected]) => expected));
+}
+
+function expectJsonSchema(
+  result: ReturnType<typeof buildPluginConfigSchema>,
+  expected: Record<string, unknown>,
+) {
+  expect(result.jsonSchema).toMatchObject(expected);
 }
 
 describe("buildPluginConfigSchema", () => {
   it("builds json schema when toJSONSchema is available", () => {
     const schema = z.strictObject({ enabled: z.boolean().default(true) });
     const result = buildPluginConfigSchema(schema);
-    expect(result.jsonSchema).toMatchObject({
+    expectJsonSchema(result, {
       type: "object",
       additionalProperties: false,
       properties: { enabled: { type: "boolean", default: true } },
@@ -53,7 +58,7 @@ describe("buildPluginConfigSchema", () => {
   it("falls back when toJSONSchema is missing", () => {
     const legacySchema = {} as unknown as Parameters<typeof buildPluginConfigSchema>[0];
     const result = buildPluginConfigSchema(legacySchema);
-    expect(result.jsonSchema).toEqual({ type: "object", additionalProperties: true });
+    expectJsonSchema(result, { type: "object", additionalProperties: true });
   });
 
   it("uses zod runtime parsing by default", () => {

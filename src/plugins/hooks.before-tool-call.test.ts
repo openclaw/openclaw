@@ -1,24 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { addTestHook } from "./hooks.test-helpers.js";
+import { addStaticTestHooks } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type { PluginHookToolContext } from "./types.js";
-import type { PluginHookBeforeToolCallResult, PluginHookRegistration } from "./types.js";
-
-function addBeforeToolCallHook(
-  registry: PluginRegistry,
-  pluginId: string,
-  handler: () => PluginHookBeforeToolCallResult | Promise<PluginHookBeforeToolCallResult>,
-  priority?: number,
-) {
-  addTestHook({
-    registry,
-    pluginId,
-    hookName: "before_tool_call",
-    handler: handler as PluginHookRegistration["handler"],
-    priority,
-  });
-}
+import type { PluginHookBeforeToolCallResult } from "./types.js";
 
 const stubCtx: PluginHookToolContext = {
   toolName: "bash",
@@ -34,9 +19,10 @@ async function runBeforeToolCallWithHooks(
     priority?: number;
   }>,
 ) {
-  for (const { pluginId, result, priority } of hooks) {
-    addBeforeToolCallHook(registry, pluginId, () => result, priority);
-  }
+  addStaticTestHooks(registry, {
+    hookName: "before_tool_call",
+    hooks,
+  });
   const runner = createHookRunner(registry);
   return await runner.runBeforeToolCall({ toolName: "bash", params: {} }, stubCtx);
 }

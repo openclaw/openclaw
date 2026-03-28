@@ -2,12 +2,12 @@ import {
   buildDmGroupAccountAllowlistAdapter,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { buildPluginApprovalRequestMessage } from "openclaw/plugin-sdk/approval-runtime";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
-import { buildPluginApprovalRequestMessage } from "openclaw/plugin-sdk/infra-runtime";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
@@ -730,13 +730,16 @@ export const telegramPlugin = createChatChannelPlugin({
       idLabel: "telegramUserId",
       message: PAIRING_APPROVED_MESSAGE,
       normalizeAllowEntry: createPairingPrefixStripper(/^(telegram|tg):/i),
-      notify: async ({ cfg, id, message }) => {
-        const { token } = getTelegramRuntime().channel.telegram.resolveTelegramToken(cfg);
+      notify: async ({ cfg, id, message, accountId }) => {
+        const { token } = getTelegramRuntime().channel.telegram.resolveTelegramToken(cfg, {
+          accountId,
+        });
         if (!token) {
           throw new Error("telegram token not configured");
         }
         await getTelegramRuntime().channel.telegram.sendMessageTelegram(id, message, {
           token,
+          accountId,
         });
       },
     },

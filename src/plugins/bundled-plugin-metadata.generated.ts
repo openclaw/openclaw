@@ -1369,6 +1369,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         docsLabel: "discord",
         blurb: "very well supported right now.",
         systemImage: "bubble.left.and.bubble.right",
+        markdownCapable: true,
       },
       install: {
         npmSpec: "@openclaw/discord",
@@ -5574,9 +5575,11 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         detailLabel: "Google Chat",
         docsPath: "/channels/googlechat",
         docsLabel: "googlechat",
-        blurb: "Google Workspace Chat app via HTTP webhooks.",
+        blurb: "Google Workspace Chat app with HTTP webhook.",
         aliases: ["gchat", "google-chat"],
         order: 55,
+        systemImage: "message.badge",
+        markdownCapable: true,
       },
       install: {
         npmSpec: "@openclaw/googlechat",
@@ -6368,7 +6371,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
             additionalProperties: false,
           },
           label: "Google Chat",
-          description: "Google Workspace Chat app via HTTP webhooks.",
+          description: "Google Workspace Chat app with HTTP webhook.",
         },
       },
     },
@@ -7094,6 +7097,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         docsPath: "/channels/irc",
         docsLabel: "irc",
         blurb: "classic IRC networks with DM/channel routing and pairing controls.",
+        aliases: ["internet-relay-chat"],
         systemImage: "network",
       },
       install: {
@@ -7851,9 +7855,11 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         id: "line",
         label: "LINE",
         selectionLabel: "LINE (Messaging API)",
+        detailLabel: "LINE Bot",
         docsPath: "/channels/line",
         docsLabel: "line",
-        blurb: "LINE Messaging API bot for Japan/Taiwan/Thailand markets.",
+        blurb: "LINE Messaging API webhook bot.",
+        systemImage: "message",
         order: 75,
         quickstartAllowFrom: true,
       },
@@ -8105,7 +8111,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
             additionalProperties: false,
           },
           label: "LINE",
-          description: "LINE Messaging API bot for Japan/Taiwan/Thailand markets.",
+          description: "LINE Messaging API webhook bot.",
         },
       },
     },
@@ -8320,7 +8326,70 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                 type: "string",
               },
               accessToken: {
-                type: "string",
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
               },
               password: {
                 anyOf: [
@@ -10105,6 +10174,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                 type: "string",
                 enum: ["length", "newline"],
               },
+              blockStreaming: {
+                type: "boolean",
+              },
               blockStreamingCoalesce: {
                 type: "object",
                 properties: {
@@ -11872,6 +11944,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         docsLabel: "signal",
         blurb: 'signal-cli linked device; more setup (David Reagans: "Hop on Discord.").',
         systemImage: "antenna.radiowaves.left.and.right",
+        markdownCapable: true,
       },
     },
     manifest: {
@@ -12568,6 +12641,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         docsLabel: "slack",
         blurb: "supported (Socket Mode).",
         systemImage: "number",
+        markdownCapable: true,
       },
     },
     manifest: {
@@ -14483,6 +14557,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         docsLabel: "telegram",
         blurb: "simplest way to get started — register a bot with @BotFather and get going.",
         systemImage: "paperplane",
+        selectionDocsPrefix: "",
+        selectionDocsOmitLabel: true,
+        selectionExtras: ["https://openclaw.ai"],
+        markdownCapable: true,
       },
     },
     manifest: {

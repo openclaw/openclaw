@@ -1,68 +1,37 @@
 import { normalizeConversationText } from "../../../acp/conversation-id.js";
-import { resolveChannelConfiguredBindingProviderByChannel } from "../../../channels/plugins/binding-provider.js";
-import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
 import type { HandleCommandsParams } from "../commands-types.js";
+import {
+  resolveConversationBindingAccountIdFromMessage,
+  resolveConversationBindingChannelFromMessage,
+  resolveConversationBindingContextFromAcpCommand,
+  resolveConversationBindingThreadIdFromMessage,
+} from "../conversation-binding-input.js";
 
 export function resolveAcpCommandChannel(params: HandleCommandsParams): string {
-  const raw =
-    params.ctx.OriginatingChannel ??
-    params.command.channel ??
-    params.ctx.Surface ??
-    params.ctx.Provider;
-  return normalizeConversationText(raw).toLowerCase();
+  const resolved = resolveConversationBindingChannelFromMessage(params.ctx, params.command.channel);
+  return normalizeConversationText(resolved).toLowerCase();
 }
 
 export function resolveAcpCommandAccountId(params: HandleCommandsParams): string {
-  const accountId = normalizeConversationText(params.ctx.AccountId);
-  return accountId || "default";
+  return resolveConversationBindingAccountIdFromMessage(params.ctx);
 }
 
 export function resolveAcpCommandThreadId(params: HandleCommandsParams): string | undefined {
-  const threadId =
-    params.ctx.MessageThreadId != null
-      ? normalizeConversationText(String(params.ctx.MessageThreadId))
-      : "";
-  return threadId || undefined;
+  return resolveConversationBindingThreadIdFromMessage(params.ctx);
 }
 
 function resolveAcpCommandConversationRef(params: HandleCommandsParams): {
   conversationId: string;
   parentConversationId?: string;
 } | null {
-  const channel = resolveAcpCommandChannel(params);
-  const threadId = resolveAcpCommandThreadId(params);
-  const provider = resolveChannelConfiguredBindingProviderByChannel(channel);
-  const resolvedByProvider = provider?.resolveCommandConversation?.({
-    accountId: resolveAcpCommandAccountId(params),
-    threadId,
-    threadParentId: normalizeConversationText(params.ctx.ThreadParentId),
-    senderId: normalizeConversationText(params.command.senderId ?? params.ctx.SenderId),
-    sessionKey: params.sessionKey,
-    parentSessionKey: normalizeConversationText(params.ctx.ParentSessionKey),
-    originatingTo: params.ctx.OriginatingTo,
-    commandTo: params.command.to,
-    fallbackTo: params.ctx.To,
-  });
-  if (resolvedByProvider?.conversationId) {
-    return resolvedByProvider;
-  }
-  const targets = [params.ctx.OriginatingTo, params.command.to, params.ctx.To];
-  const conversationId = resolveConversationIdFromTargets({
-    threadId,
-    targets,
-  });
-  if (!conversationId) {
+  const resolved = resolveConversationBindingContextFromAcpCommand(params);
+  if (!resolved) {
     return null;
   }
-  const parentConversationId = threadId
-    ? resolveConversationIdFromTargets({
-        targets,
-      })
-    : undefined;
   return {
-    conversationId,
-    ...(parentConversationId && parentConversationId !== conversationId
-      ? { parentConversationId }
+    conversationId: resolved.conversationId,
+    ...(resolved.parentConversationId && resolved.parentConversationId !== resolved.conversationId
+      ? { parentConversationId: resolved.parentConversationId }
       : {}),
   };
 }

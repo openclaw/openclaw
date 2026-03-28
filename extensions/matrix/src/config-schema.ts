@@ -54,7 +54,7 @@ export const MatrixConfigSchema = z.object({
   homeserver: z.string().optional(),
   allowPrivateNetwork: z.boolean().optional(),
   userId: z.string().optional(),
-  accessToken: z.string().optional(),
+  accessToken: buildSecretInputSchema().optional(),
   password: buildSecretInputSchema().optional(),
   deviceId: z.string().optional(),
   deviceName: z.string().optional(),

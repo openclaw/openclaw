@@ -1265,14 +1265,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           },
                           toolSchemaProfile: {
                             type: "string",
-                            const: "xai",
+                          },
+                          unsupportedToolSchemaKeywords: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                              minLength: 1,
+                            },
                           },
                           nativeWebSearchTool: {
                             type: "boolean",
                           },
                           toolCallArgumentsEncoding: {
                             type: "string",
-                            const: "html-entities",
                           },
                           requiresMistralToolIds: {
                             type: "boolean",

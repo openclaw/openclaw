@@ -21,11 +21,11 @@ const BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS = 300_000;
 installGeneratedPluginTempRootCleanup();
 
 function expectTestOnlyArtifactsExcluded(artifacts: readonly string[]) {
-  for (const artifact of artifacts) {
+  artifacts.forEach((artifact) => {
     expect(artifact).not.toMatch(/^test-/);
     expect(artifact).not.toContain(".test-");
     expect(artifact).not.toMatch(/\.test\.js$/);
-  }
+  });
 }
 
 function expectGeneratedPathResolution(tempRoot: string, expectedRelativePath: string) {
@@ -35,6 +35,22 @@ function expectGeneratedPathResolution(tempRoot: string, expectedRelativePath: s
       built: "plugin/index.js",
     }),
   ).toBe(path.join(tempRoot, expectedRelativePath));
+}
+
+function expectArtifactPresence(
+  artifacts: readonly string[] | undefined,
+  params: { contains?: readonly string[]; excludes?: readonly string[] },
+) {
+  if (params.contains) {
+    for (const artifact of params.contains) {
+      expect(artifacts).toContain(artifact);
+    }
+  }
+  if (params.excludes) {
+    for (const artifact of params.excludes) {
+      expect(artifacts).not.toContain(artifact);
+    }
+  }
 }
 
 async function writeGeneratedMetadataModule(params: {
@@ -47,6 +63,19 @@ async function writeGeneratedMetadataModule(params: {
     outputPath: params.outputPath ?? "src/plugins/bundled-plugin-metadata.generated.ts",
     ...(params.check ? { check: true } : {}),
   });
+}
+
+async function expectGeneratedMetadataModuleState(params: {
+  repoRoot: string;
+  check?: boolean;
+  expected: { changed?: boolean; wrote?: boolean };
+}) {
+  const result = await writeGeneratedMetadataModule({
+    repoRoot: params.repoRoot,
+    ...(params.check ? { check: true } : {}),
+  });
+  expect(result).toEqual(expect.objectContaining(params.expected));
+  return result;
 }
 
 describe("bundled plugin metadata", () => {
@@ -64,11 +93,13 @@ describe("bundled plugin metadata", () => {
     const discord = BUNDLED_PLUGIN_METADATA.find((entry) => entry.dirName === "discord");
     expect(discord?.source).toEqual({ source: "./index.ts", built: "index.js" });
     expect(discord?.setupSource).toEqual({ source: "./setup-entry.ts", built: "setup-entry.js" });
-    expect(discord?.publicSurfaceArtifacts).toContain("api.js");
-    expect(discord?.publicSurfaceArtifacts).toContain("runtime-api.js");
-    expect(discord?.publicSurfaceArtifacts).toContain("session-key-api.js");
-    expect(discord?.publicSurfaceArtifacts).not.toContain("test-api.js");
-    expect(discord?.runtimeSidecarArtifacts).toContain("runtime-api.js");
+    expectArtifactPresence(discord?.publicSurfaceArtifacts, {
+      contains: ["api.js", "runtime-api.js", "session-key-api.js"],
+      excludes: ["test-api.js"],
+    });
+    expectArtifactPresence(discord?.runtimeSidecarArtifacts, {
+      contains: ["runtime-api.js"],
+    });
     expect(discord?.manifest.id).toBe("discord");
     expect(discord?.manifest.channelConfigs?.discord).toEqual(
       expect.objectContaining({
@@ -109,12 +140,16 @@ describe("bundled plugin metadata", () => {
       configSchema: { type: "object" },
     });
 
-    const initial = await writeGeneratedMetadataModule({ repoRoot: tempRoot });
-    expect(initial.wrote).toBe(true);
+    await expectGeneratedMetadataModuleState({
+      repoRoot: tempRoot,
+      expected: { wrote: true },
+    });
 
-    const current = await writeGeneratedMetadataModule({ repoRoot: tempRoot, check: true });
-    expect(current.changed).toBe(false);
-    expect(current.wrote).toBe(false);
+    await expectGeneratedMetadataModuleState({
+      repoRoot: tempRoot,
+      check: true,
+      expected: { changed: false, wrote: false },
+    });
 
     fs.writeFileSync(
       path.join(tempRoot, "src/plugins/bundled-plugin-metadata.generated.ts"),
@@ -122,9 +157,11 @@ describe("bundled plugin metadata", () => {
       "utf8",
     );
 
-    const stale = await writeGeneratedMetadataModule({ repoRoot: tempRoot, check: true });
-    expect(stale.changed).toBe(true);
-    expect(stale.wrote).toBe(false);
+    await expectGeneratedMetadataModuleState({
+      repoRoot: tempRoot,
+      check: true,
+      expected: { changed: true, wrote: false },
+    });
   });
 
   it("merges generated channel schema metadata with manifest-owned channel config fields", async () => {

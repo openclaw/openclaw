@@ -50,7 +50,6 @@ export async function runMediaUnderstandingFile(
   if (attachments.length === 0) {
     return { text: undefined };
   }
-
   const config = params.cfg.tools?.media?.[params.capability];
   if (config?.enabled === false) {
     // Avoid loading plugin-backed providers when the capability is disabled.

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { ensureAuthProfileStore } from "./auth-profiles.js";
+import { clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
 
 describe("ensureAuthProfileStore", () => {
@@ -230,6 +230,78 @@ describe("ensureAuthProfileStore", () => {
         key: "sk-ant-legacy",
       });
     });
+  });
+
+  it("merges legacy oauth.json into auth-profiles.json", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oauth-migrate-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      const agentDir = path.join(root, "agent");
+      const oauthDir = path.join(root, "credentials");
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.mkdirSync(oauthDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(oauthDir, "oauth.json"),
+        `${JSON.stringify(
+          {
+            "openai-codex": {
+              access: "access-token",
+              refresh: "refresh-token",
+              expires: Date.now() + 60_000,
+              accountId: "acct_123",
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      process.env.OPENCLAW_STATE_DIR = root;
+      process.env.OPENCLAW_AGENT_DIR = agentDir;
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = ensureAuthProfileStore(agentDir);
+      expect(store.profiles["openai-codex:default"]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "access-token",
+        refresh: "refresh-token",
+      });
+
+      const persisted = JSON.parse(
+        fs.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf8"),
+      ) as {
+        profiles: Record<string, unknown>;
+      };
+      expect(persisted.profiles["openai-codex:default"]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "access-token",
+        refresh: "refresh-token",
+      });
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      if (previousAgentDir === undefined) {
+        delete process.env.OPENCLAW_AGENT_DIR;
+      } else {
+        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
+      }
+      if (previousPiAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("logs one warning with aggregated reasons for rejected auth-profiles entries", () => {

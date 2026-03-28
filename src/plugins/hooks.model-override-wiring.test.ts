@@ -81,6 +81,84 @@ describe("model override pipeline wiring", () => {
     return await runner.runBeforePromptBuild({ prompt: "test", messages }, stubCtx);
   }
 
+  async function expectBeforeModelResolve(params: {
+    event: PluginHookBeforeModelResolveEvent;
+    expected: Partial<PluginHookBeforeModelResolveResult>;
+    withBrokenHook?: boolean;
+    catchErrors?: boolean;
+  }) {
+    const handlerSpy = vi.fn(
+      (_event: PluginHookBeforeModelResolveEvent) =>
+        ({
+          modelOverride: "demo-local-model",
+          providerOverride: "demo-local-provider",
+        }) as PluginHookBeforeModelResolveResult,
+    );
+
+    if (params.withBrokenHook) {
+      addBeforeModelResolveHook(
+        registry,
+        "broken-plugin",
+        () => {
+          throw new Error("plugin crashed");
+        },
+        10,
+      );
+    }
+    addBeforeModelResolveHook(registry, "router-plugin", handlerSpy);
+    const runner = createHookRunner(
+      registry,
+      params.catchErrors ? { catchErrors: true } : undefined,
+    );
+    const result = await runner.runBeforeModelResolve(params.event, stubCtx);
+
+    expect(handlerSpy).toHaveBeenCalledTimes(1);
+    expect(handlerSpy).toHaveBeenCalledWith(params.event, stubCtx);
+    expect(result).toEqual(expect.objectContaining(params.expected));
+    return result;
+  }
+
+  async function expectPromptBuildPrependContext(params: {
+    messages: unknown[];
+    expectedPrependContext: string;
+    legacyPrependContext?: string;
+  }) {
+    const handlerSpy = vi.fn(
+      (event: PluginHookBeforePromptBuildEvent) =>
+        ({
+          prependContext: params.legacyPrependContext
+            ? "new context"
+            : `Saw ${event.messages.length} messages`,
+        }) as PluginHookBeforePromptBuildResult,
+    );
+
+    addBeforePromptBuildHook(registry, "context-plugin", handlerSpy);
+    if (params.legacyPrependContext) {
+      addLegacyBeforeAgentStartHook({
+        prependContext: params.legacyPrependContext,
+      });
+    }
+    const result = await runPromptBuildWithMessages(params.messages);
+
+    expect(handlerSpy).toHaveBeenCalledTimes(1);
+    if (!params.legacyPrependContext) {
+      expect(result?.prependContext).toBe(params.expectedPrependContext);
+      return result;
+    }
+
+    const runner = createHookRunner(registry);
+    const legacy = await runner.runBeforeAgentStart(
+      { prompt: "test", messages: params.messages },
+      stubCtx,
+    );
+    const prependContext = joinPresentTextSegments([
+      result?.prependContext,
+      legacy?.prependContext,
+    ]);
+    expect(prependContext).toBe(params.expectedPrependContext);
+    return result;
+  }
+
   describe("before_model_resolve (run.ts pattern)", () => {
     it.each([
       {
@@ -102,31 +180,7 @@ describe("model override pipeline wiring", () => {
         },
       },
     ] as const)("$name", async ({ event, expected, withBrokenHook, catchErrors }) => {
-      const handlerSpy = vi.fn(
-        (_event: PluginHookBeforeModelResolveEvent) =>
-          ({
-            modelOverride: "demo-local-model",
-            providerOverride: "demo-local-provider",
-          }) as PluginHookBeforeModelResolveResult,
-      );
-
-      if (withBrokenHook) {
-        addBeforeModelResolveHook(
-          registry,
-          "broken-plugin",
-          () => {
-            throw new Error("plugin crashed");
-          },
-          10,
-        );
-      }
-      addBeforeModelResolveHook(registry, "router-plugin", handlerSpy);
-      const runner = createHookRunner(registry, catchErrors ? { catchErrors: true } : undefined);
-      const result = await runner.runBeforeModelResolve(event, stubCtx);
-
-      expect(handlerSpy).toHaveBeenCalledTimes(1);
-      expect(handlerSpy).toHaveBeenCalledWith(event, stubCtx);
-      expect(result).toEqual(expect.objectContaining(expected));
+      await expectBeforeModelResolve({ event, expected, withBrokenHook, catchErrors });
     });
 
     it("new hook overrides beat legacy before_agent_start fallback", async () => {
@@ -166,36 +220,11 @@ describe("model override pipeline wiring", () => {
         expectedPrependContext: "new context\n\nlegacy context",
       },
     ] as const)("$name", async ({ messages, legacyPrependContext, expectedPrependContext }) => {
-      const handlerSpy = vi.fn(
-        (event: PluginHookBeforePromptBuildEvent) =>
-          ({
-            prependContext: legacyPrependContext
-              ? "new context"
-              : `Saw ${event.messages.length} messages`,
-          }) as PluginHookBeforePromptBuildResult,
-      );
-
-      addBeforePromptBuildHook(registry, "context-plugin", handlerSpy);
-      if (legacyPrependContext) {
-        addLegacyBeforeAgentStartHook({
-          prependContext: legacyPrependContext,
-        });
-      }
-      const result = await runPromptBuildWithMessages(messages);
-
-      expect(handlerSpy).toHaveBeenCalledTimes(1);
-      if (!legacyPrependContext) {
-        expect(result?.prependContext).toBe(expectedPrependContext);
-        return;
-      }
-
-      const runner = createHookRunner(registry);
-      const legacy = await runner.runBeforeAgentStart({ prompt: "test", messages }, stubCtx);
-      const prependContext = joinPresentTextSegments([
-        result?.prependContext,
-        legacy?.prependContext,
-      ]);
-      expect(prependContext).toBe(expectedPrependContext);
+      await expectPromptBuildPrependContext({
+        messages,
+        legacyPrependContext,
+        expectedPrependContext,
+      });
     });
   });
 

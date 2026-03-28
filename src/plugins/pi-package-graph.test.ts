@@ -37,15 +37,19 @@ function readPiDependencySpecs() {
   }));
 }
 
+function expectNoGraphViolations(violations: string[], message: string) {
+  expect(violations, message).toEqual([]);
+}
+
 describe("pi package graph guardrails", () => {
   it("keeps root Pi packages aligned to the same exact version", () => {
     const specs = readPiDependencySpecs();
 
     const missing = specs.filter((entry) => !entry.spec).map((entry) => entry.name);
-    expect(
+    expectNoGraphViolations(
       missing,
       `Missing required root Pi dependencies: ${missing.join(", ") || "<none>"}. Mixed or incomplete Pi root dependencies create an unsupported package graph.`,
-    ).toEqual([]);
+    );
 
     const presentSpecs = specs.map((entry) => entry.spec);
     const uniqueSpecs = [...new Set(presentSpecs)];
@@ -55,10 +59,10 @@ describe("pi package graph guardrails", () => {
     ).toHaveLength(1);
 
     const inexact = specs.filter((entry) => !isExactPinnedVersion(entry.spec));
-    expect(
-      inexact,
+    expectNoGraphViolations(
+      inexact.map((entry) => `${entry.name}=${entry.spec}`),
       `Root Pi dependencies must use exact pins, not ranges. Found: ${inexact.map((entry) => `${entry.name}=${entry.spec}`).join(", ") || "<none>"}. Range-based Pi specs can silently create an unsupported package graph.`,
-    ).toEqual([]);
+    );
   });
 
   it("forbids pnpm overrides that target Pi packages", () => {
@@ -66,9 +70,9 @@ describe("pi package graph guardrails", () => {
     const overrides = manifest.pnpm?.overrides ?? {};
     const piOverrides = Object.keys(overrides).filter(isPiOverrideKey);
 
-    expect(
+    expectNoGraphViolations(
       piOverrides,
       `pnpm.overrides must not target Pi packages. Found: ${piOverrides.join(", ") || "<none>"}. Pi-specific overrides can silently create an unsupported package graph.`,
-    ).toEqual([]);
+    );
   });
 });

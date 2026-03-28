@@ -603,6 +603,10 @@ export type ChannelConfiguredBindingProvider = {
   ) => ChannelConfiguredBindingConversationRef | null;
 };
 
+export type ChannelConversationBindingSupport = {
+  supportsCurrentConversationBinding?: boolean;
+};
+
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
   resolveDmPolicy?: (
     ctx: ChannelSecurityContext<ResolvedAccount>,

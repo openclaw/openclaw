@@ -24,9 +24,11 @@
       "id": "line",
       "label": "LINE",
       "selectionLabel": "LINE (Messaging API)",
+      "detailLabel": "LINE Bot",
       "docsPath": "/channels/line",
       "docsLabel": "line",
-      "blurb": "LINE Messaging API bot for Japan/Taiwan/Thailand markets.",
+      "blurb": "LINE Messaging API webhook bot.",
+      "systemImage": "message",
       "order": 75,
       "quickstartAllowFrom": true
     },
