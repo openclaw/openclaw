@@ -27,7 +27,9 @@ export function resolveCommandStdio(params: {
   hasInput: boolean;
   preferInherit: boolean;
 }): ["pipe" | "inherit" | "ignore", "pipe", "pipe"] {
-  const stdin = params.hasInput ? "pipe" : params.preferInherit ? "inherit" : "pipe";
+  // If we are not writing input and the current process is non-interactive,
+  // closing stdin entirely is safer than leaving an unread pipe open.
+  const stdin = params.hasInput ? "pipe" : params.preferInherit ? "inherit" : "ignore";
   return [stdin, "pipe", "pipe"];
 }
 

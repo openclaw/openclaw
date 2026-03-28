@@ -223,7 +223,11 @@ export async function runCommandWithTimeout(
   const hasInput = input !== undefined;
   const resolvedEnv = resolveCommandEnv({ argv, env });
 
-  const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
+  // Keep stdin interactive only when the current parent stdin is a real TTY.
+  const stdio = resolveCommandStdio({
+    hasInput,
+    preferInherit: process.stdin.isTTY ?? false,
+  });
   const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
   const resolvedCommand = finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
   const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
@@ -242,7 +246,7 @@ export async function runCommandWithTimeout(
         : {}),
     },
   );
-  // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
+  // Interactive callers still inherit stdin; non-interactive callers close it.
   return await new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";

@@ -110,6 +110,33 @@ describe("windows command wrapper behavior", () => {
     }
   });
 
+  it("ignores stdin for non-interactive windows commands", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const previousIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: false,
+    });
+
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    try {
+      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
+      expect(captured?.[2].stdio).toEqual(["ignore", "pipe", "pipe"]);
+    } finally {
+      if (previousIsTTY) {
+        Object.defineProperty(process.stdin, "isTTY", previousIsTTY);
+      } else {
+        Reflect.deleteProperty(process.stdin, "isTTY");
+      }
+      platformSpy.mockRestore();
+    }
+  });
+
   it("keeps child exitCode when close reports null on Windows npm shims", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const child = createMockChild({ closeCode: null, exitCode: 0 });
