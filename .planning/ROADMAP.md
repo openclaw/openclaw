@@ -148,7 +148,7 @@
    Plans:
 
 - [x] 07-01-PLAN.md — ProjectGatewayService class and RPC handler module with unit tests
-- [ ] 07-02-PLAN.md — Wire service and handlers into gateway lifecycle, method registry, and scopes
+- [x] 07-02-PLAN.md — Wire service and handlers into gateway lifecycle, method registry, and scopes
       **Estimated complexity**: M
 
 ### Phase 8: CLI Commands
