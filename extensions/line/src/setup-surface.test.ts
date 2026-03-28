@@ -220,7 +220,6 @@ describe("probeLineBot", () => {
 
 describe("linePlugin status.probeAccount", () => {
   it("falls back to the direct probe helper when runtime is not initialized", async () => {
-    clearLineRuntime();
     MessagingApiClientMock.mockReset();
     MessagingApiClientMock.mockImplementation(function () {
       return { getBotInfo: getBotInfoMock };
@@ -232,7 +231,10 @@ describe("linePlugin status.probeAccount", () => {
       pictureUrl: "https://example.com/bot.png",
     });
 
+    const { linePlugin: freshLinePlugin } = await import("./channel.js");
+    const { clearLineRuntime: clearFreshLineRuntime } = await import("./runtime.js");
     const { probeLineBot: directProbeLineBot } = await import("./probe.js");
+    clearFreshLineRuntime();
     const params = {
       cfg: {} as OpenClawConfig,
       account: {
@@ -245,7 +247,7 @@ describe("linePlugin status.probeAccount", () => {
       timeoutMs: 50,
     };
 
-    await expect(linePlugin.status!.probeAccount!(params)).resolves.toEqual(
+    await expect(freshLinePlugin.status!.probeAccount!(params)).resolves.toEqual(
       await directProbeLineBot("token", 50),
     );
   });
