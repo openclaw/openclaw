@@ -91,6 +91,13 @@ function hasPluginIdMismatchWarning(
   );
 }
 
+function expectRegistryDiagnosticContains(
+  registry: ReturnType<typeof loadPluginManifestRegistry>,
+  fragment: string,
+) {
+  expect(registry.diagnostics.some((diag) => diag.message.includes(fragment))).toBe(true);
+}
+
 function prepareLinkedManifestFixture(params: { id: string; mode: "symlink" | "hardlink" }): {
   rootDir: string;
   linked: boolean;
@@ -182,6 +189,33 @@ function expectUnsafeWorkspaceManifestRejected(params: {
   });
   expect(registry.plugins).toHaveLength(0);
   expect(hasUnsafeManifestDiagnostic(registry)).toBe(true);
+}
+
+function createDuplicateCandidateRegistry(params: {
+  pluginId: string;
+  duplicateOrigin: "global" | "workspace";
+}) {
+  const bundledDir = makeTempDir();
+  const duplicateDir = makeTempDir();
+  const manifest = { id: params.pluginId, configSchema: { type: "object" } };
+  writeManifest(bundledDir, manifest);
+  writeManifest(duplicateDir, manifest);
+
+  return loadPluginManifestRegistry({
+    cache: false,
+    candidates: [
+      createPluginCandidate({
+        idHint: params.pluginId,
+        rootDir: bundledDir,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: params.pluginId,
+        rootDir: duplicateDir,
+        origin: params.duplicateOrigin,
+      }),
+    ],
+  });
 }
 
 afterEach(() => {
@@ -398,118 +432,66 @@ describe("loadPluginManifestRegistry", () => {
 
     expect(registry.plugins[0]?.contracts).toBeUndefined();
   });
-  it("skips plugins whose minHostVersion is newer than the current host", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
-
-    const registry = loadRegistryForMinHostVersionCase({
-      rootDir: dir,
+  it.each([
+    {
+      name: "skips plugins whose minHostVersion is newer than the current host",
       minHostVersion: ">=2026.3.22",
-      env: { OPENCLAW_VERSION: "2026.3.21" },
-    });
-
-    expect(registry.plugins).toEqual([]);
-    expect(
-      registry.diagnostics.some((diag) =>
-        diag.message.includes("plugin requires OpenClaw >=2026.3.22, but this host is 2026.3.21"),
-      ),
-    ).toBe(true);
-  });
-
-  it("rejects invalid minHostVersion metadata", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
-
-    const registry = loadRegistryForMinHostVersionCase({
-      rootDir: dir,
+      env: { OPENCLAW_VERSION: "2026.3.21" } as NodeJS.ProcessEnv,
+      expectedMessage: "plugin requires OpenClaw >=2026.3.22, but this host is 2026.3.21",
+      expectWarn: false,
+    },
+    {
+      name: "rejects invalid minHostVersion metadata",
       minHostVersion: "2026.3.22",
-    });
-
-    expect(registry.plugins).toEqual([]);
-    expect(
-      registry.diagnostics.some((diag) =>
-        diag.message.includes("plugin manifest invalid | openclaw.install.minHostVersion must use"),
-      ),
-    ).toBe(true);
-  });
-
-  it("warns distinctly when host version cannot be determined", () => {
+      expectedMessage: "plugin manifest invalid | openclaw.install.minHostVersion must use",
+      expectWarn: false,
+    },
+    {
+      name: "warns distinctly when host version cannot be determined",
+      minHostVersion: ">=2026.3.22",
+      env: { OPENCLAW_VERSION: "unknown" } as NodeJS.ProcessEnv,
+      expectedMessage: "host version could not be determined",
+      expectWarn: true,
+    },
+  ] as const)("$name", ({ minHostVersion, env, expectedMessage, expectWarn }) => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
 
     const registry = loadRegistryForMinHostVersionCase({
       rootDir: dir,
-      minHostVersion: ">=2026.3.22",
-      env: { OPENCLAW_VERSION: "unknown" },
+      minHostVersion,
+      ...(env ? { env } : {}),
     });
 
     expect(registry.plugins).toEqual([]);
-    expect(
-      registry.diagnostics.some((diag) =>
-        diag.message.includes("host version could not be determined"),
-      ),
-    ).toBe(true);
-    expect(registry.diagnostics.some((diag) => diag.level === "warn")).toBe(true);
+    expectRegistryDiagnosticContains(registry, expectedMessage);
+    if (expectWarn) {
+      expect(registry.diagnostics.some((diag) => diag.level === "warn")).toBe(true);
+    }
   });
 
-  it("reports bundled plugins as the duplicate winner for auto-discovered globals", () => {
-    const bundledDir = makeTempDir();
-    const globalDir = makeTempDir();
-    const manifest = { id: "feishu", configSchema: { type: "object" } };
-    writeManifest(bundledDir, manifest);
-    writeManifest(globalDir, manifest);
-
-    const registry = loadPluginManifestRegistry({
-      cache: false,
-      candidates: [
-        createPluginCandidate({
-          idHint: "feishu",
-          rootDir: bundledDir,
-          origin: "bundled",
+  it.each([
+    {
+      name: "reports bundled plugins as the duplicate winner for auto-discovered globals",
+      registry: () =>
+        createDuplicateCandidateRegistry({
+          pluginId: "feishu",
+          duplicateOrigin: "global",
         }),
-        createPluginCandidate({
-          idHint: "feishu",
-          rootDir: globalDir,
-          origin: "global",
+      expectedMessage: "global plugin will be overridden by bundled plugin",
+    },
+    {
+      name: "reports bundled plugins as the duplicate winner for workspace duplicates",
+      registry: () =>
+        createDuplicateCandidateRegistry({
+          pluginId: "shadowed",
+          duplicateOrigin: "workspace",
         }),
-      ],
-    });
-
-    expect(
-      registry.diagnostics.some((diag) =>
-        diag.message.includes("global plugin will be overridden by bundled plugin"),
-      ),
-    ).toBe(true);
-  });
-
-  it("reports bundled plugins as the duplicate winner for workspace duplicates", () => {
-    const bundledDir = makeTempDir();
-    const workspaceDir = makeTempDir();
-    const manifest = { id: "shadowed", configSchema: { type: "object" } };
-    writeManifest(bundledDir, manifest);
-    writeManifest(workspaceDir, manifest);
-
-    const registry = loadPluginManifestRegistry({
-      cache: false,
-      candidates: [
-        createPluginCandidate({
-          idHint: "shadowed",
-          rootDir: bundledDir,
-          origin: "bundled",
-        }),
-        createPluginCandidate({
-          idHint: "shadowed",
-          rootDir: workspaceDir,
-          origin: "workspace",
-        }),
-      ],
-    });
-
-    expect(
-      registry.diagnostics.some((diag) =>
-        diag.message.includes("workspace plugin will be overridden by bundled plugin"),
-      ),
-    ).toBe(true);
+      expectedMessage: "workspace plugin will be overridden by bundled plugin",
+    },
+  ] as const)("$name", ({ registry: buildRegistry, expectedMessage }) => {
+    const registry = buildRegistry();
+    expectRegistryDiagnosticContains(registry, expectedMessage);
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {

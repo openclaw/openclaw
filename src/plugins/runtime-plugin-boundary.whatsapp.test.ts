@@ -84,6 +84,20 @@ function createBundledWhatsAppRuntimeFixture() {
   return path.join(rootDir, "dist-runtime", "extensions", "whatsapp");
 }
 
+function loadWhatsAppBoundaryModules(runtimePluginDir: string) {
+  const loaders = new Map<boolean, ReturnType<typeof import("jiti").createJiti>>();
+  return {
+    light: loadPluginBoundaryModuleWithJiti<LightModule>(
+      path.join(runtimePluginDir, "light-runtime-api.js"),
+      loaders,
+    ),
+    heavy: loadPluginBoundaryModuleWithJiti<HeavyModule>(
+      path.join(runtimePluginDir, "runtime-api.js"),
+      loaders,
+    ),
+  };
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0, tempDirs.length)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -93,15 +107,7 @@ afterEach(() => {
 describe("runtime plugin boundary whatsapp seam", () => {
   it("shares listener state between staged light and heavy runtime modules", () => {
     const runtimePluginDir = createBundledWhatsAppRuntimeFixture();
-    const loaders = new Map<boolean, ReturnType<typeof import("jiti").createJiti>>();
-    const light = loadPluginBoundaryModuleWithJiti<LightModule>(
-      path.join(runtimePluginDir, "light-runtime-api.js"),
-      loaders,
-    );
-    const heavy = loadPluginBoundaryModuleWithJiti<HeavyModule>(
-      path.join(runtimePluginDir, "runtime-api.js"),
-      loaders,
-    );
+    const { light, heavy } = loadWhatsAppBoundaryModules(runtimePluginDir);
     const listener = {
       sendMessage: async () => ({ messageId: "msg-1" }),
     };
