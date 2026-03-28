@@ -111,6 +111,20 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
+async function withoutEnv<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const previous = process.env[key];
+  delete process.env[key];
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = previous;
+    }
+  }
+}
+
 function createCustomProviderConfig(
   baseUrl: string,
   modelId = "llama3",
@@ -386,23 +400,25 @@ describe("resolveUsableCustomProviderApiKey", () => {
 
 describe("resolveApiKeyForProvider", () => {
   it("reuses the xai plugin web search key without models.providers.xai", async () => {
-    const resolved = await resolveApiKeyForProvider({
-      provider: "xai",
-      cfg: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-plugin-fallback-key", // pragma: allowlist secret
+    const resolved = await withoutEnv("XAI_API_KEY", () =>
+      resolveApiKeyForProvider({
+        provider: "xai",
+        cfg: {
+          plugins: {
+            entries: {
+              xai: {
+                config: {
+                  webSearch: {
+                    apiKey: "xai-plugin-fallback-key", // pragma: allowlist secret
+                  },
                 },
               },
             },
           },
         },
-      },
-      store: { version: 1, profiles: {} },
-    });
+        store: { version: 1, profiles: {} },
+      }),
+    );
 
     expect(resolved).toMatchObject({
       apiKey: "xai-plugin-fallback-key",
@@ -440,11 +456,13 @@ describe("resolveApiKeyForProvider", () => {
     };
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
-    const resolved = await resolveApiKeyForProvider({
-      provider: "xai",
-      cfg: sourceConfig,
-      store: { version: 1, profiles: {} },
-    });
+    const resolved = await withoutEnv("XAI_API_KEY", () =>
+      resolveApiKeyForProvider({
+        provider: "xai",
+        cfg: sourceConfig,
+        store: { version: 1, profiles: {} },
+      }),
+    );
 
     expect(resolved).toMatchObject({
       apiKey: "xai-runtime-key",
@@ -455,24 +473,26 @@ describe("resolveApiKeyForProvider", () => {
 
   it("does not reuse xai fallback auth when the xai plugin is disabled", async () => {
     await expect(
-      resolveApiKeyForProvider({
-        provider: "xai",
-        cfg: {
-          plugins: {
-            entries: {
-              xai: {
-                enabled: false,
-                config: {
-                  webSearch: {
-                    apiKey: "xai-plugin-fallback-key", // pragma: allowlist secret
+      withoutEnv("XAI_API_KEY", () =>
+        resolveApiKeyForProvider({
+          provider: "xai",
+          cfg: {
+            plugins: {
+              entries: {
+                xai: {
+                  enabled: false,
+                  config: {
+                    webSearch: {
+                      apiKey: "xai-plugin-fallback-key", // pragma: allowlist secret
+                    },
                   },
                 },
               },
             },
           },
-        },
-        store: { version: 1, profiles: {} },
-      }),
+          store: { version: 1, profiles: {} },
+        }),
+      ),
     ).rejects.toThrow('No API key found for provider "xai"');
   });
 });
