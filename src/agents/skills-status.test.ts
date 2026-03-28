@@ -1,3 +1,4 @@
+import { createSyntheticSourceInfo } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
 import type { SkillEntry } from "./skills/types.js";
@@ -48,12 +49,17 @@ function createFixtureSkill(params: {
   baseDir: string;
   source: string;
 }): SkillEntry["skill"] {
-  return {
+  const skill: SkillEntry["skill"] & { source?: string } = {
     name: params.name,
     description: params.description,
     filePath: params.filePath,
     baseDir: params.baseDir,
+    sourceInfo: createSyntheticSourceInfo(params.filePath, {
+      source: params.source,
+      baseDir: params.baseDir,
+    }),
     source: params.source,
     disableModelInvocation: false,
   };
+  return skill;
 }
