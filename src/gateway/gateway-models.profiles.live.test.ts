@@ -67,6 +67,10 @@ const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "google/gemini-3.1-flash-lite-preview",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3.1-pro-preview-customtools",
+  "openai/gpt-5.2-pro",
+]);
+const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
+  "google/gemini-3.1-flash-lite-preview",
 ]);
 const GATEWAY_LIVE_MAX_MODELS = resolveGatewayLiveMaxModels();
 const GATEWAY_LIVE_SUITE_TIMEOUT_MS = resolveGatewayLiveSuiteTimeoutMs(GATEWAY_LIVE_MAX_MODELS);
@@ -307,6 +311,21 @@ function maybeStripAssistantScaffoldingForLiveModel(text: string, modelKey?: str
   return stripAssistantInternalScaffolding(text).trim();
 }
 
+function shouldSkipExecReadNonceMissForLiveModel(modelKey?: string): boolean {
+  if (!modelKey) {
+    return false;
+  }
+  if (GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS.has(modelKey)) {
+    return true;
+  }
+  const [provider, ...rest] = modelKey.split("/");
+  if (provider !== "google" || rest.length === 0) {
+    return false;
+  }
+  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  return GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
+}
+
 describe("maybeStripAssistantScaffoldingForLiveModel", () => {
   it("strips scaffolding for Gemini preview models with known transcript wrappers", () => {
     expect(
@@ -341,6 +360,15 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
     ).toBe("<think>hidden</think>Visible");
   });
 
+  it("strips scaffolding for known OpenAI transcript wrappers", () => {
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.2-pro"),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.2"),
+    ).toBe("<final>Visible</final>");
+  });
+
   it("strips scaffolding for MiniMax transcript wrappers", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel(
@@ -357,6 +385,16 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "minimax/MiniMax-M2.7"),
     ).toBe("Visible");
+  });
+});
+
+describe("shouldSkipExecReadNonceMissForLiveModel", () => {
+  it("matches the known Gemini lite exec/read isolation case", () => {
+    expect(shouldSkipExecReadNonceMissForLiveModel("google/gemini-3.1-flash-lite-preview")).toBe(
+      true,
+    );
+    expect(shouldSkipExecReadNonceMissForLiveModel("google/gemini-3.1-flash-lite")).toBe(true);
+    expect(shouldSkipExecReadNonceMissForLiveModel("google/gemini-3.1-flash-preview")).toBe(false);
   });
 });
 
@@ -432,6 +470,10 @@ function isToolNonceRefusal(error: string): boolean {
 function isToolNonceProbeMiss(error: string): boolean {
   const msg = error.toLowerCase();
   return msg.includes("tool probe missing nonce") || msg.includes("exec+read probe missing nonce");
+}
+
+function isExecReadNonceProbeMiss(error: string): boolean {
+  return error.toLowerCase().includes("exec+read probe missing nonce");
 }
 
 function isMissingProfileError(error: string): boolean {
@@ -1451,6 +1493,14 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           ) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (tool probe refusal)`);
+            break;
+          }
+          if (
+            isExecReadNonceProbeMiss(message) &&
+            shouldSkipExecReadNonceMissForLiveModel(modelKey)
+          ) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (exec/read workspace isolation)`);
             break;
           }
           if (
