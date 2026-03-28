@@ -27,7 +27,7 @@ export {
   normalizeE164,
   normalizeSignalMessagingTarget,
   resolveChannelMediaMaxBytes,
-} from "openclaw/plugin-sdk/signal-core";
+} from "openclaw/plugin-sdk/signal";
 export { detectBinary, installSignalCli } from "openclaw/plugin-sdk/setup-tools";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
