@@ -491,7 +491,9 @@ export function createAgentEventHandler({
         // over re-resolving via loadSessionEntry, which may pick the wrong agent for bare
         // aliases like "main" in multi-agent setups.
         const runCtx = opts?.runId ? getAgentRunContext(opts.runId) : undefined;
-        let canonicalKey = canonicalKeyCache.get(sessionKey) ?? runCtx?.sessionKey;
+        // Run-scoped context takes priority: it's always correct for the current run.
+        // Cache may contain stale mappings from other agents' runs that resolved the same alias.
+        let canonicalKey = runCtx?.sessionKey ?? canonicalKeyCache.get(sessionKey);
         if (canonicalKey === undefined) {
           canonicalKey = loadSessionEntry(sessionKey).canonicalKey;
         }
