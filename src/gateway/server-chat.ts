@@ -479,15 +479,19 @@ export function createAgentEventHandler({
     event: "chat",
     payload: Record<string, unknown>,
     sessionKey: string | undefined,
-    opts?: { dropIfSlow?: boolean },
+    opts?: { dropIfSlow?: boolean; runId?: string },
   ) => {
     if (sessionKey) {
       // Try the key as-is first (chatLink and eventSessionKey are typically canonical).
-      // If no subscribers found, try canonicalizing via loadSessionEntry to handle
-      // fallback keys from resolveSessionKeyForRun that may not match subscriber store keys.
+      // If no subscribers found, try canonicalizing to handle fallback keys from
+      // resolveSessionKeyForRun that may not match subscriber store keys.
       let subscribers = sessionMessageSubscribers.get(sessionKey);
       if (!subscribers || subscribers.size === 0) {
-        let canonicalKey = canonicalKeyCache.get(sessionKey);
+        // Prefer run-scoped context (set at registration time with the full canonical key)
+        // over re-resolving via loadSessionEntry, which may pick the wrong agent for bare
+        // aliases like "main" in multi-agent setups.
+        const runCtx = opts?.runId ? getAgentRunContext(opts.runId) : undefined;
+        let canonicalKey = canonicalKeyCache.get(sessionKey) ?? runCtx?.sessionKey;
         if (canonicalKey === undefined) {
           if (canonicalKeyCache.size >= CANONICAL_KEY_CACHE_LIMIT) {
             const oldest = canonicalKeyCache.keys().next().value;
@@ -496,8 +500,8 @@ export function createAgentEventHandler({
             }
           }
           canonicalKey = loadSessionEntry(sessionKey).canonicalKey;
-          canonicalKeyCache.set(sessionKey, canonicalKey);
         }
+        canonicalKeyCache.set(sessionKey, canonicalKey);
         if (canonicalKey !== sessionKey) {
           subscribers = sessionMessageSubscribers.get(canonicalKey);
         }
@@ -627,7 +631,7 @@ export function createAgentEventHandler({
         timestamp: now,
       },
     };
-    broadcastChatToSession("chat", payload, sessionKey, { dropIfSlow: true });
+    broadcastChatToSession("chat", payload, sessionKey, { dropIfSlow: true, runId: sourceRunId });
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
@@ -684,7 +688,10 @@ export function createAgentEventHandler({
         timestamp: now,
       },
     };
-    broadcastChatToSession("chat", flushPayload, sessionKey, { dropIfSlow: true });
+    broadcastChatToSession("chat", flushPayload, sessionKey, {
+      dropIfSlow: true,
+      runId: sourceRunId,
+    });
     nodeSendToSession(sessionKey, "chat", flushPayload);
     chatRunState.deltaLastBroadcastLen.set(clientRunId, text.length);
     chatRunState.deltaSentAt.set(clientRunId, now);
@@ -724,7 +731,7 @@ export function createAgentEventHandler({
               }
             : undefined,
       };
-      broadcastChatToSession("chat", payload, sessionKey);
+      broadcastChatToSession("chat", payload, sessionKey, { runId: sourceRunId });
       nodeSendToSession(sessionKey, "chat", payload);
       return;
     }
@@ -735,7 +742,7 @@ export function createAgentEventHandler({
       state: "error" as const,
       errorMessage: error ? formatForLog(error) : undefined,
     };
-    broadcastChatToSession("chat", payload, sessionKey);
+    broadcastChatToSession("chat", payload, sessionKey, { runId: sourceRunId });
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
