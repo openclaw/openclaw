@@ -1,3 +1,4 @@
+import type { Bot } from "grammy";
 import {
   computeBackoff,
   sleepWithAbort,
@@ -19,11 +20,13 @@ type ChatAction =
   | "upload_video_note"
   | "choose_sticker";
 
+type TelegramSendChatActionParams = Parameters<Bot["api"]["sendChatAction"]>[2];
+
 type SendChatActionFn = (
   chatId: number | string,
   action: ChatAction,
-  threadParams?: unknown,
-) => Promise<unknown>;
+  threadParams?: TelegramSendChatActionParams,
+) => Promise<true>;
 
 export type TelegramSendChatActionHandler = {
   /**
@@ -33,7 +36,7 @@ export type TelegramSendChatActionHandler = {
   sendChatAction: (
     chatId: number | string,
     action: ChatAction,
-    threadParams?: unknown,
+    threadParams?: TelegramSendChatActionParams,
   ) => Promise<void>;
   isSuspended: () => boolean;
   reset: () => void;
@@ -85,7 +88,7 @@ export function createTelegramSendChatActionHandler({
   const sendChatAction = async (
     chatId: number | string,
     action: ChatAction,
-    threadParams?: unknown,
+    threadParams?: TelegramSendChatActionParams,
   ): Promise<void> => {
     if (suspended) {
       return;
