@@ -25,17 +25,8 @@ function supportsChannelAuthMode(plugin: ChannelPlugin, mode: ChannelAuthMode): 
 }
 
 function isConfiguredAuthPlugin(plugin: ChannelPlugin, cfg: OpenClawConfig): boolean {
-  const channels = cfg.channels as Record<string, unknown> | undefined;
   const key = plugin.id;
-  if (
-    !channels ||
-    isBlockedObjectKey(key) ||
-    !Object.prototype.hasOwnProperty.call(channels, key)
-  ) {
-    return false;
-  }
-  const channelCfg = channels[key];
-  if (!channelCfg || typeof channelCfg !== "object") {
+  if (isBlockedObjectKey(key)) {
     return false;
   }
 
