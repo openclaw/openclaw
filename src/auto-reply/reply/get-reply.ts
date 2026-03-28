@@ -421,7 +421,9 @@ export async function getReplyFromConfig(
         // This mirrors collectImageModelKeys in model-selection.ts for consistency.
         // Providerless models should resolve against the image model's provider,
         // not the agent's default provider (to handle mixed-provider configs correctly).
-        let imageModelDefaultProvider = defaultProvider;
+        // Initialize to empty string (not defaultProvider) so the fallback scanning block
+        // can correctly determine if provider was derived from primary or fallbacks.
+        let imageModelDefaultProvider = "";
 
         const primaryTrimmed = imageModelPrimary?.trim() ?? "";
         const primaryHasProvider = primaryTrimmed.includes("/");
@@ -464,7 +466,7 @@ export async function getReplyFromConfig(
           }
 
           // Second pass: scan fallbacks for first with explicit provider
-          if (imageModelDefaultProvider === defaultProvider) {
+          if (!imageModelDefaultProvider) {
             for (const fb of fallbacks) {
               if (!fb?.trim()) {
                 continue;
@@ -481,7 +483,7 @@ export async function getReplyFromConfig(
           // Only use provider from fallbacks that are actual aliases.
           // Providerless non-alias fallbacks (e.g., "gpt-4.1") would resolve to
           // defaultProvider which is wrong in mixed-provider configs.
-          if (imageModelDefaultProvider === defaultProvider) {
+          if (!imageModelDefaultProvider && defaultProvider) {
             for (const fb of fallbacks) {
               if (!fb?.trim()) {
                 continue;
