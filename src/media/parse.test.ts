@@ -10,13 +10,19 @@ describe("splitMediaFromOutput", () => {
       audioAsVoice?: boolean;
     },
   ) {
-    const output = splitMediaFromOutput(input);
-    expect(output.text).toBe(expected.text ?? "");
-    if ("mediaUrls" in expected) {
-      expect(output.mediaUrls).toEqual(expected.mediaUrls);
-    }
+    const result = splitMediaFromOutput(input);
+    expect(result.text).toBe(expected.text ?? "");
     if ("audioAsVoice" in expected) {
-      expect(output.audioAsVoice).toBe(expected.audioAsVoice);
+      expect(result.audioAsVoice).toBe(expected.audioAsVoice);
+    } else {
+      expect(result.audioAsVoice).toBeUndefined();
+    }
+    if ("mediaUrls" in expected) {
+      expect(result.mediaUrls).toEqual(expected.mediaUrls);
+      expect(result.mediaUrl).toBe(expected.mediaUrls?.[0]);
+    } else {
+      expect(result.mediaUrls).toBeUndefined();
+      expect(result.mediaUrl).toBeUndefined();
     }
   }
 
