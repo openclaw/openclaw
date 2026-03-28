@@ -1,5 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
 
+const SAFE_IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+/** Validate and double-quote a SQL identifier to prevent injection. */
+function quoteIdentifier(name: string): string {
+  if (!SAFE_IDENTIFIER.test(name)) {
+    throw new Error(`Unsafe SQL identifier: ${JSON.stringify(name)}`);
+  }
+  return `"${name}"`;
+}
+
 export function ensureMemoryIndexSchema(params: {
   db: DatabaseSync;
   embeddingCacheTable: string;
@@ -37,8 +47,9 @@ export function ensureMemoryIndexSchema(params: {
     );
   `);
   if (params.cacheEnabled) {
+    const cacheTable = quoteIdentifier(params.embeddingCacheTable);
     params.db.exec(`
-      CREATE TABLE IF NOT EXISTS ${params.embeddingCacheTable} (
+      CREATE TABLE IF NOT EXISTS ${cacheTable} (
         provider TEXT NOT NULL,
         model TEXT NOT NULL,
         provider_key TEXT NOT NULL,
@@ -50,7 +61,7 @@ export function ensureMemoryIndexSchema(params: {
       );
     `);
     params.db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_embedding_cache_updated_at ON ${params.embeddingCacheTable}(updated_at);`,
+      `CREATE INDEX IF NOT EXISTS idx_embedding_cache_updated_at ON ${cacheTable}(updated_at);`,
     );
   }
 
@@ -58,8 +69,9 @@ export function ensureMemoryIndexSchema(params: {
   let ftsError: string | undefined;
   if (params.ftsEnabled) {
     try {
+      const ftsTableName = quoteIdentifier(params.ftsTable);
       params.db.exec(
-        `CREATE VIRTUAL TABLE IF NOT EXISTS ${params.ftsTable} USING fts5(\n` +
+        `CREATE VIRTUAL TABLE IF NOT EXISTS ${ftsTableName} USING fts5(\n` +
           `  text,\n` +
           `  id UNINDEXED,\n` +
           `  path UNINDEXED,\n` +
@@ -85,15 +97,23 @@ export function ensureMemoryIndexSchema(params: {
   return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
 }
 
+/** Allowlisted column definitions for ensureColumn (only known-safe types). */
+const ALLOWED_COLUMN_DEFINITIONS = new Set(["TEXT NOT NULL DEFAULT 'memory'"]);
+
 function ensureColumn(
   db: DatabaseSync,
   table: "files" | "chunks",
   column: string,
   definition: string,
 ): void {
-  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!ALLOWED_COLUMN_DEFINITIONS.has(definition)) {
+    throw new Error(`Unsafe column definition: ${JSON.stringify(definition)}`);
+  }
+  const quotedTable = quoteIdentifier(table);
+  const quotedColumn = quoteIdentifier(column);
+  const rows = db.prepare(`PRAGMA table_info(${quotedTable})`).all() as Array<{ name: string }>;
   if (rows.some((row) => row.name === column)) {
     return;
   }
-  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  db.exec(`ALTER TABLE ${quotedTable} ADD COLUMN ${quotedColumn} ${definition}`);
 }
