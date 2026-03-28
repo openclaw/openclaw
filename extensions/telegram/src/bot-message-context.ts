@@ -19,6 +19,7 @@ import { buildTelegramInboundContextPayload } from "./bot-message-context.sessio
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 import {
   buildTypingThreadParams,
+  extractTelegramForumFlag,
   resolveTelegramForumFlag,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
@@ -83,7 +84,7 @@ export const buildTelegramMessageContext = async ({
     chatId,
     chatType: msg.chat.type,
     isGroup,
-    isForum: (msg.chat as { is_forum?: boolean }).is_forum,
+    isForum: extractTelegramForumFlag(msg.chat),
     getChat: getChatApi,
   });
   const threadSpec = resolveTelegramThreadSpec({
