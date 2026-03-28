@@ -51,6 +51,7 @@ function createHost() {
     assistantAvatar: null,
     assistantAgentId: null,
     serverVersion: null,
+    seamColor: null,
     chatHasAutoScrolled: false,
     chatManualRefreshInFlight: false,
     chatLoading: false,

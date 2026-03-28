@@ -361,13 +361,17 @@ export function handleControlUiHttpRequest(
       res.end();
       return true;
     }
-    sendJson(res, 200, {
+    const bootstrapPayload: ControlUiBootstrapConfig = {
       basePath,
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
       assistantAgentId: identity.agentId,
       serverVersion: resolveRuntimeServiceVersion(process.env),
-    } satisfies ControlUiBootstrapConfig);
+    };
+    if (opts?.config?.ui?.seamColor) {
+      bootstrapPayload.seamColor = opts.config.ui.seamColor;
+    }
+    sendJson(res, 200, bootstrapPayload);
     return true;
   }
 

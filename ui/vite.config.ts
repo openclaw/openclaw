@@ -51,6 +51,7 @@ export default defineConfig(() => {
                 assistantName: "",
                 assistantAvatar: "",
                 assistantAgentId: "",
+                seamColor: "#ff5c5c",
               }),
             );
           });
