@@ -198,20 +198,8 @@ describe("normalizeRegisteredProvider", () => {
         ]);
       },
     },
-  ] as const)(
-    "$name",
-    ({ provider: inputProvider, expectedProvider, expectedDiagnostics, assert }) => {
-      expectProviderNormalizationResult({
-        provider: inputProvider,
-        ...(expectedProvider ? { expectedProvider } : {}),
-        ...(expectedDiagnostics ? { expectedDiagnostics } : {}),
-        ...(assert ? { assert } : {}),
-      });
-    },
-  );
-
-  it("prefers catalog when a provider registers both catalog and discovery", () => {
-    const { provider } = expectNormalizedProviderFixture({
+    {
+      name: "prefers catalog when a provider registers both catalog and discovery",
       provider: makeProvider({
         catalog: {
           run: async () => null,
@@ -228,9 +216,27 @@ describe("normalizeRegisteredProvider", () => {
       expectedDiagnosticText: [
         'provider "demo" registered both catalog and discovery; using catalog',
       ],
-    });
-
-    expect(provider?.catalog).toBeDefined();
-    expect(provider?.discovery).toBeUndefined();
-  });
+      assert: (provider: ReturnType<typeof normalizeRegisteredProvider>) => {
+        expect(provider?.catalog).toBeDefined();
+        expect(provider?.discovery).toBeUndefined();
+      },
+    },
+  ] as const)(
+    "$name",
+    ({
+      provider: inputProvider,
+      expectedProvider,
+      expectedDiagnostics,
+      expectedDiagnosticText,
+      assert,
+    }) => {
+      expectProviderNormalizationResult({
+        provider: inputProvider,
+        ...(expectedProvider ? { expectedProvider } : {}),
+        ...(expectedDiagnostics ? { expectedDiagnostics } : {}),
+        ...(expectedDiagnosticText ? { expectedDiagnosticText } : {}),
+        ...(assert ? { assert } : {}),
+      });
+    },
+  );
 });

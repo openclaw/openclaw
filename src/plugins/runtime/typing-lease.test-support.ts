@@ -1,7 +1,13 @@
-import { expect, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { MockFn } from "../../test-utils/vitest-mock-fn.js";
 
-export function expectTypingPulseCount(pulse: { mock: { calls: unknown[] } }, expected: number) {
+type MockedPulse = { mock: { calls: unknown[] } };
+
+function asMockedPulse(pulse: unknown): MockedPulse {
+  return pulse as MockedPulse;
+}
+
+export function expectTypingPulseCount(pulse: MockedPulse, expected: number) {
   expect(pulse.mock.calls).toHaveLength(expected);
 }
 
@@ -28,21 +34,22 @@ export async function expectIndependentTypingLeases<
 }) {
   vi.useFakeTimers();
   const pulse: MockFn<TParams["pulse"]> = vi.fn(async () => undefined) as MockFn<TParams["pulse"]>;
+  const mockedPulse = asMockedPulse(pulse);
 
   const leaseA = await params.createLease(params.buildParams(pulse));
   const leaseB = await params.createLease(params.buildParams(pulse));
 
-  expectTypingPulseCount(pulse as unknown as { mock: { calls: unknown[] } }, 2);
+  expectTypingPulseCount(mockedPulse, 2);
 
   await vi.advanceTimersByTimeAsync(2_000);
-  expectTypingPulseCount(pulse as unknown as { mock: { calls: unknown[] } }, 4);
+  expectTypingPulseCount(mockedPulse, 4);
 
   leaseA.stop();
   await vi.advanceTimersByTimeAsync(2_000);
-  expectTypingPulseCount(pulse as unknown as { mock: { calls: unknown[] } }, 5);
+  expectTypingPulseCount(mockedPulse, 5);
 
   await leaseB.refresh();
-  expectTypingPulseCount(pulse as unknown as { mock: { calls: unknown[] } }, 6);
+  expectTypingPulseCount(mockedPulse, 6);
 
   leaseB.stop();
 }
@@ -56,11 +63,59 @@ export async function expectBackgroundTypingPulseFailuresAreSwallowed<
   pulse: TParams["pulse"];
 }) {
   vi.useFakeTimers();
+  const mockedPulse = asMockedPulse(params.pulse);
 
   const lease = await params.createLease(params.buildParams(params.pulse));
 
   await expect(vi.advanceTimersByTimeAsync(2_000)).resolves.toBe(vi);
-  expectTypingPulseCount(params.pulse as unknown as { mock: { calls: unknown[] } }, 2);
+  expectTypingPulseCount(mockedPulse, 2);
+
+  lease.stop();
+}
+
+export function registerSharedTypingLeaseTests<
+  TParams extends { intervalMs?: number; pulse: (...args: never[]) => Promise<unknown> },
+  TLease extends { refresh: () => Promise<void>; stop: () => void },
+>(params: {
+  createLease: (params: TParams) => Promise<TLease>;
+  buildParams: (pulse: TParams["pulse"]) => TParams;
+}) {
+  it("pulses immediately and keeps leases independent", async () => {
+    await expectIndependentTypingLeases(params);
+  });
+
+  it("swallows background pulse failures", async () => {
+    const pulse = createPulseWithBackgroundFailure<TParams["pulse"]>();
+
+    await expectBackgroundTypingPulseFailuresAreSwallowed({
+      createLease: params.createLease,
+      pulse,
+      buildParams: params.buildParams,
+    });
+  });
+}
+
+export async function expectDefaultTypingLeaseInterval<
+  TParams extends { intervalMs?: number; pulse: (...args: never[]) => Promise<unknown> },
+  TLease extends { stop: () => void },
+>(params: {
+  createLease: (params: TParams) => Promise<TLease>;
+  buildParams: (pulse: TParams["pulse"]) => TParams;
+  defaultIntervalMs: number;
+}) {
+  vi.useFakeTimers();
+  const pulse = vi.fn(async () => undefined);
+
+  const lease = await params.createLease({
+    ...params.buildParams(pulse as TParams["pulse"]),
+    intervalMs: Number.NaN,
+  });
+
+  expectTypingPulseCount(asMockedPulse(pulse), 1);
+  await vi.advanceTimersByTimeAsync(params.defaultIntervalMs - 1);
+  expectTypingPulseCount(asMockedPulse(pulse), 1);
+  await vi.advanceTimersByTimeAsync(1);
+  expectTypingPulseCount(asMockedPulse(pulse), 2);
 
   lease.stop();
 }

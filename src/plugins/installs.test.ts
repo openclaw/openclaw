@@ -23,11 +23,11 @@ function createExpectedResolutionFields(
   };
 }
 
-function expectResolutionFields(
-  input: Parameters<typeof buildNpmResolutionInstallFields>[0],
-  overrides: Partial<ReturnType<typeof buildNpmResolutionInstallFields>>,
-) {
-  expect(buildNpmResolutionInstallFields(input)).toEqual(createExpectedResolutionFields(overrides));
+function expectResolutionFieldsCase(params: {
+  input: Parameters<typeof buildNpmResolutionInstallFields>[0];
+  expected: ReturnType<typeof buildNpmResolutionInstallFields>;
+}) {
+  expect(buildNpmResolutionInstallFields(params.input)).toEqual(params.expected);
 }
 
 describe("buildNpmResolutionInstallFields", () => {
@@ -56,20 +56,16 @@ describe("buildNpmResolutionInstallFields", () => {
       input: undefined,
       expected: createExpectedResolutionFields({}),
     },
-  ] as const)("$name", ({ input, expected }) => {
-    expect(buildNpmResolutionInstallFields(input)).toEqual(expected);
-  });
-
-  it("keeps missing partial resolution fields undefined", () => {
-    expectResolutionFields(
-      {
+    {
+      name: "keeps missing partial resolution fields undefined",
+      input: {
         name: "@openclaw/demo",
       },
-      {
+      expected: createExpectedResolutionFields({
         resolvedName: "@openclaw/demo",
-      },
-    );
-  });
+      }),
+    },
+  ] as const)("$name", expectResolutionFieldsCase);
 });
 
 describe("recordPluginInstall", () => {

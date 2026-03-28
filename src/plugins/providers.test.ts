@@ -19,11 +19,36 @@ vi.mock("./manifest-registry.js", () => ({
 let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProviders;
 
+function createManifestProviderPlugin(params: {
+  id: string;
+  providerIds: string[];
+  origin?: "bundled" | "workspace";
+}) {
+  return {
+    id: params.id,
+    providers: params.providerIds,
+    origin: params.origin ?? "bundled",
+  };
+}
+
 function setManifestPlugins(plugins: Array<Record<string, unknown>>) {
   loadPluginManifestRegistryMock.mockReturnValue({
     plugins,
     diagnostics: [],
   });
+}
+
+function setOwningProviderManifestPlugins() {
+  setManifestPlugins([
+    createManifestProviderPlugin({
+      id: "minimax",
+      providerIds: ["minimax", "minimax-portal"],
+    }),
+    createManifestProviderPlugin({
+      id: "openai",
+      providerIds: ["openai", "openai-codex"],
+    }),
+  ]);
 }
 
 function getLastLoadPluginsCall(): Record<string, unknown> {
@@ -151,12 +176,16 @@ describe("resolvePluginProviders", () => {
       changes: [],
     }));
     setManifestPlugins([
-      { id: "google", providers: ["google"], origin: "bundled" },
-      { id: "browser", providers: [], origin: "bundled" },
-      { id: "kilocode", providers: ["kilocode"], origin: "bundled" },
-      { id: "moonshot", providers: ["moonshot"], origin: "bundled" },
-      { id: "google-gemini-cli-auth", providers: [], origin: "bundled" },
-      { id: "workspace-provider", providers: ["workspace-provider"], origin: "workspace" },
+      createManifestProviderPlugin({ id: "google", providerIds: ["google"] }),
+      createManifestProviderPlugin({ id: "browser", providerIds: [] }),
+      createManifestProviderPlugin({ id: "kilocode", providerIds: ["kilocode"] }),
+      createManifestProviderPlugin({ id: "moonshot", providerIds: ["moonshot"] }),
+      createManifestProviderPlugin({ id: "google-gemini-cli-auth", providerIds: [] }),
+      createManifestProviderPlugin({
+        id: "workspace-provider",
+        providerIds: ["workspace-provider"],
+        origin: "workspace",
+      }),
     ]);
     ({ resolveOwningPluginIdsForProvider } = await import("./providers.js"));
     ({ resolvePluginProviders } = await import("./providers.runtime.js"));
@@ -311,10 +340,7 @@ describe("resolvePluginProviders", () => {
   ] as const)(
     "maps $provider to owning plugin ids via manifests",
     ({ provider, expectedPluginIds }) => {
-      setManifestPlugins([
-        { id: "minimax", providers: ["minimax", "minimax-portal"] },
-        { id: "openai", providers: ["openai", "openai-codex"] },
-      ]);
+      setOwningProviderManifestPlugins();
 
       expectOwningPluginIds(provider, expectedPluginIds);
     },

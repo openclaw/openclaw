@@ -22,21 +22,6 @@ function makeProvider(overrides: Partial<ProviderPlugin> & Pick<ProviderPlugin, 
   } satisfies ProviderPlugin;
 }
 
-function createSglangSetupProvider() {
-  return makeProvider({
-    id: "sglang",
-    label: "SGLang",
-    auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
-    wizard: {
-      setup: {
-        choiceLabel: "SGLang setup",
-        groupId: "sglang",
-        groupLabel: "SGLang",
-      },
-    },
-  });
-}
-
 function createSglangWizardProvider(params?: {
   includeSetup?: boolean;
   includeModelPicker?: boolean;
@@ -190,6 +175,18 @@ function expectSingleWizardChoice(params: {
   });
 }
 
+function expectModelPickerEntries(
+  provider: ProviderPlugin,
+  expected: Array<{
+    value: string;
+    label: string;
+    hint?: string;
+  }>,
+) {
+  setResolvedProviders(provider);
+  expect(resolveProviderModelPickerEntries({})).toEqual(expected);
+}
+
 describe("provider wizard boundaries", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -256,79 +253,76 @@ describe("provider wizard boundaries", () => {
       },
       resolveWizard: (provider: ProviderPlugin) => provider.auth[0]?.wizard,
     },
-  ] as const)("$name", ({ provider, choice, expectedOption, resolveWizard }) => {
-    expectSingleWizardChoice({
-      provider,
-      choice,
-      expectedOption,
-      expectedWizard: resolveWizard(provider),
-    });
-  });
-
-  it("preserves onboarding scopes on wizard options", () => {
-    const provider = makeProvider({
-      id: "fal",
-      label: "fal",
-      auth: [
-        {
-          id: "api-key",
-          label: "fal API key",
-          kind: "api_key",
-          wizard: {
-            choiceId: "fal-api-key",
-            choiceLabel: "fal API key",
-            groupId: "fal",
-            groupLabel: "fal",
-            onboardingScopes: ["image-generation"],
+    {
+      name: "preserves onboarding scopes on wizard options",
+      provider: makeProvider({
+        id: "fal",
+        label: "fal",
+        auth: [
+          {
+            id: "api-key",
+            label: "fal API key",
+            kind: "api_key",
+            wizard: {
+              choiceId: "fal-api-key",
+              choiceLabel: "fal API key",
+              groupId: "fal",
+              groupLabel: "fal",
+              onboardingScopes: ["image-generation"],
+            },
+            run: vi.fn(),
           },
-          run: vi.fn(),
-        },
-      ],
-    });
-    setResolvedProviders(provider);
-
-    expect(resolveProviderWizardOptions({})).toEqual([
-      {
+        ],
+      }),
+      choice: "fal-api-key",
+      expectedOption: {
         value: "fal-api-key",
         label: "fal API key",
         groupId: "fal",
         groupLabel: "fal",
         onboardingScopes: ["image-generation"],
       },
-    ]);
-  });
-
-  it("returns method wizard metadata for canonical choices", () => {
-    const provider = makeProvider({
-      id: "anthropic",
-      label: "Anthropic",
-      auth: [
-        {
-          id: "setup-token",
-          label: "setup-token",
-          kind: "token",
-          wizard: {
-            choiceId: "token",
-            modelAllowlist: {
-              allowedKeys: ["anthropic/claude-sonnet-4-6"],
-              initialSelections: ["anthropic/claude-sonnet-4-6"],
-              message: "Anthropic OAuth models",
+      resolveWizard: (provider: ProviderPlugin) => provider.auth[0]?.wizard,
+    },
+    {
+      name: "returns method wizard metadata for canonical choices",
+      provider: makeProvider({
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [
+          {
+            id: "setup-token",
+            label: "setup-token",
+            kind: "token",
+            wizard: {
+              choiceId: "token",
+              modelAllowlist: {
+                allowedKeys: ["anthropic/claude-sonnet-4-6"],
+                initialSelections: ["anthropic/claude-sonnet-4-6"],
+                message: "Anthropic OAuth models",
+              },
             },
+            run: vi.fn(),
           },
-          run: vi.fn(),
-        },
-      ],
-    });
-
-    expect(
-      resolveProviderPluginChoice({
-        providers: [provider],
-        choice: "token",
+        ],
       }),
-    ).toEqual({
+      choice: "token",
+      expectedOption: {
+        value: "token",
+        label: "Anthropic",
+        groupId: "anthropic",
+        groupLabel: "Anthropic",
+        groupHint: undefined,
+        hint: undefined,
+      },
+      resolveWizard: (provider: ProviderPlugin) => provider.auth[0]?.wizard,
+    },
+  ] as const)("$name", ({ provider, choice, expectedOption, resolveWizard }) => {
+    expectSingleWizardChoice({
       provider,
-      method: provider.auth[0],
-      wizard: provider.auth[0]?.wizard,
+      choice,
+      expectedOption,
+      expectedWizard: resolveWizard(provider),
     });
   });
 
@@ -348,9 +342,7 @@ describe("provider wizard boundaries", () => {
         },
       },
     });
-    setResolvedProviders(provider);
-
-    expect(resolveProviderModelPickerEntries({})).toEqual([
+    expectModelPickerEntries(provider, [
       {
         value: buildProviderPluginMethodChoice("sglang", "server"),
         label: "SGLang server",
@@ -377,7 +369,7 @@ describe("provider wizard boundaries", () => {
     const env = createHomeEnv("-a");
 
     expectWizardCacheInvalidationCount({
-      provider: createSglangSetupProvider(),
+      provider: createSglangWizardProvider(),
       config,
       env,
       mutate: () => {
@@ -402,7 +394,7 @@ describe("provider wizard boundaries", () => {
     },
   ] as const)("$name", ({ env }) => {
     expectWizardResolutionCount({
-      provider: createSglangSetupProvider(),
+      provider: createSglangWizardProvider(),
       config: createSglangConfig(),
       env,
       expectedCount: 2,
@@ -411,7 +403,7 @@ describe("provider wizard boundaries", () => {
 
   it("expires provider-wizard memoization after the shortest plugin cache ttl", () => {
     vi.useFakeTimers();
-    const provider = createSglangSetupProvider();
+    const provider = createSglangWizardProvider();
     const config = {};
     const env = createHomeEnv("", {
       OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5",
@@ -436,7 +428,7 @@ describe("provider wizard boundaries", () => {
     });
 
     expectWizardCacheInvalidationCount({
-      provider: createSglangSetupProvider(),
+      provider: createSglangWizardProvider(),
       config,
       env,
       mutate: () => {
