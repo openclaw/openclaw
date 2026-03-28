@@ -7,6 +7,7 @@ const resolveGatewayClientConnection = vi.fn();
 const gatewayClientRequest = vi.fn();
 const gatewayClientStopAndWait = vi.fn();
 let lastGatewayClientOptions: Record<string, unknown> | undefined;
+let mockGatewayMethods: string[] = [];
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
@@ -32,7 +33,13 @@ vi.mock("../gateway/client.js", () => {
     }
 
     start() {
-      void (lastGatewayClientOptions?.onHelloOk as (() => void) | undefined)?.();
+      void (
+        lastGatewayClientOptions?.onHelloOk as
+          | ((hello: { features?: { methods?: string[] } }) => void)
+          | undefined
+      )?.({
+        features: { methods: mockGatewayMethods },
+      });
     }
 
     request(...args: unknown[]) {
@@ -70,6 +77,7 @@ describe("logs cli", () => {
     gatewayClientRequest.mockReset();
     gatewayClientStopAndWait.mockReset();
     lastGatewayClientOptions = undefined;
+    mockGatewayMethods = [];
     vi.restoreAllMocks();
   });
 
@@ -191,6 +199,48 @@ describe("logs cli", () => {
     });
     expect(callGatewayFromCli).not.toHaveBeenCalled();
     expect(gatewayClientStopAndWait).toHaveBeenCalledTimes(1);
+    expect(stderrWrites.join("")).toContain("output stdout closed");
+  });
+
+  it("uses streaming follow when the gateway advertises logs.subscribe", async () => {
+    mockGatewayMethods = ["logs.subscribe", "logs.unsubscribe"];
+    resolveGatewayClientConnection.mockResolvedValueOnce({
+      clientOptions: {
+        url: "ws://127.0.0.1:18789",
+      },
+      connectionDetails: {
+        message: "Gateway URL: ws://127.0.0.1:18789",
+      },
+    });
+    gatewayClientRequest
+      .mockResolvedValueOnce({
+        file: "/tmp/openclaw.log",
+        cursor: 1,
+        lines: ["line one"],
+      })
+      .mockResolvedValueOnce({});
+    gatewayClientStopAndWait.mockResolvedValueOnce(undefined);
+
+    const stderrWrites: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation(() => {
+      const err = new Error("EPIPE") as NodeJS.ErrnoException;
+      err.code = "EPIPE";
+      throw err;
+    });
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      stderrWrites.push(String(chunk));
+      return true;
+    });
+
+    await runLogsCli(["logs", "--follow"]);
+
+    expect(gatewayClientRequest).toHaveBeenNthCalledWith(1, "logs.subscribe", {
+      cursor: undefined,
+      limit: 200,
+      maxBytes: 250_000,
+    });
+    expect(gatewayClientRequest).toHaveBeenNthCalledWith(2, "logs.unsubscribe");
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
     expect(stderrWrites.join("")).toContain("output stdout closed");
   });
 

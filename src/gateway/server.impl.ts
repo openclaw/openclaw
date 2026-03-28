@@ -92,7 +92,7 @@ import {
 } from "./events.js";
 import { createExecApprovalIosPushDelivery } from "./exec-approval-ios-push.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
-import { startMcpLoopbackServer } from "./mcp-http.js";
+import { createGatewayLogStream } from "./log-stream.js";
 import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
 import { NodeRegistry } from "./node-registry.js";
 import { createChannelManager } from "./server-channels.js";
@@ -887,6 +887,7 @@ export async function startGatewayServer(
   let stopModelPricingRefresh = () => {};
   let mcpServer: { port: number; close: () => Promise<void> } | undefined;
   let configReloader: { stop: () => Promise<void> } = { stop: async () => {} };
+  let stopLogStream = () => {};
   const closeOnStartupFailure = async () => {
     if (diagnosticsEnabled) {
       stopDiagnosticHeartbeat();
@@ -912,6 +913,7 @@ export async function startGatewayServer(
       pluginServices,
       cron,
       heartbeatRunner,
+      logStreamStop: stopLogStream,
       updateCheckStop: stopGatewayUpdateCheck,
       nodePresenceTimers,
       broadcast,
@@ -936,6 +938,21 @@ export async function startGatewayServer(
   const nodeSubscriptions = createNodeSubscriptionManager();
   const sessionEventSubscribers = createSessionEventSubscriberRegistry();
   const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
+  const logStream = createGatewayLogStream({
+    getClientByConnId: (connId: string) => {
+      const normalizedConnId = connId.trim();
+      if (!normalizedConnId) {
+        return undefined;
+      }
+      for (const gatewayClient of clients) {
+        if (gatewayClient.connId === normalizedConnId) {
+          return gatewayClient;
+        }
+      }
+      return undefined;
+    },
+  });
+  stopLogStream = logStream.close;
   const nodeSendEvent = (opts: { nodeId: string; event: string; payloadJSON?: string | null }) => {
     const payload = safeParseJson(opts.payloadJSON ?? null);
     nodeRegistry.sendEvent(opts.nodeId, opts.event, payload);
@@ -1417,9 +1434,13 @@ export async function startGatewayServer(
       unsubscribeSessionEvents: sessionEventSubscribers.unsubscribe,
       subscribeSessionMessageEvents: sessionMessageSubscribers.subscribe,
       unsubscribeSessionMessageEvents: sessionMessageSubscribers.unsubscribe,
+      subscribeLogEvents: logStream.subscribe,
+      activateLogEvents: logStream.activate,
+      unsubscribeLogEvents: logStream.unsubscribe,
       unsubscribeAllSessionEvents: (connId: string) => {
         sessionEventSubscribers.unsubscribe(connId);
         sessionMessageSubscribers.unsubscribeAll(connId);
+        logStream.unsubscribe(connId);
       },
       getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
       registerToolEventRecipient: toolEventRecipients.add,
@@ -1687,6 +1708,7 @@ export async function startGatewayServer(
     pluginServices,
     cron,
     heartbeatRunner,
+    logStreamStop: stopLogStream,
     updateCheckStop: stopGatewayUpdateCheck,
     stopTaskRegistryMaintenance,
     nodePresenceTimers,

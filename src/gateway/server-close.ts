@@ -22,6 +22,7 @@ export function createGatewayCloseHandler(params: {
   pluginServices: PluginServicesHandle | null;
   cron: { stop: () => void };
   heartbeatRunner: HeartbeatRunner;
+  logStreamStop?: (() => void) | null;
   updateCheckStop?: (() => void) | null;
   stopTaskRegistryMaintenance?: (() => void) | null;
   nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
@@ -83,7 +84,7 @@ export function createGatewayCloseHandler(params: {
       params.cron.stop();
       params.heartbeatRunner.stop();
       try {
-        params.stopTaskRegistryMaintenance?.();
+        params.logStreamStop?.();
       } catch {
         /* ignore */
       }
