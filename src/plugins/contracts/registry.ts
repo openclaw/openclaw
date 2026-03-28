@@ -15,6 +15,11 @@ import type {
   SpeechProviderPlugin,
   WebSearchProviderPlugin,
 } from "../types.js";
+import {
+  loadVitestImageGenerationProviderContractRegistry,
+  loadVitestMediaUnderstandingProviderContractRegistry,
+  loadVitestSpeechProviderContractRegistry,
+} from "./speech-vitest-registry.js";
 
 type CapabilityContractEntry<T> = {
   pluginId: string;
@@ -172,46 +177,45 @@ function loadWebSearchProviderContractRegistry(): WebSearchProviderContractEntry
 
 function loadSpeechProviderContractRegistry(): SpeechProviderContractEntry[] {
   if (!speechProviderContractRegistryCache) {
-    const registry = loadBundledCapabilityRuntimeRegistry({
-      pluginIds: BUNDLED_SPEECH_PLUGIN_IDS,
-      pluginSdkResolution: "dist",
-    });
-    speechProviderContractRegistryCache = registry.speechProviders.map((entry) => ({
-      pluginId: entry.pluginId,
-      provider: entry.provider,
-    }));
+    speechProviderContractRegistryCache = process.env.VITEST
+      ? loadVitestSpeechProviderContractRegistry()
+      : loadBundledCapabilityRuntimeRegistry({
+          pluginIds: BUNDLED_SPEECH_PLUGIN_IDS,
+          pluginSdkResolution: "dist",
+        }).speechProviders.map((entry) => ({
+          pluginId: entry.pluginId,
+          provider: entry.provider,
+        }));
   }
   return speechProviderContractRegistryCache;
 }
 
 function loadMediaUnderstandingProviderContractRegistry(): MediaUnderstandingProviderContractEntry[] {
   if (!mediaUnderstandingProviderContractRegistryCache) {
-    const registry = loadBundledCapabilityRuntimeRegistry({
-      pluginIds: BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS,
-      pluginSdkResolution: "dist",
-    });
-    mediaUnderstandingProviderContractRegistryCache = registry.mediaUnderstandingProviders.map(
-      (entry) => ({
-        pluginId: entry.pluginId,
-        provider: entry.provider,
-      }),
-    );
+    mediaUnderstandingProviderContractRegistryCache = process.env.VITEST
+      ? loadVitestMediaUnderstandingProviderContractRegistry()
+      : loadBundledCapabilityRuntimeRegistry({
+          pluginIds: BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS,
+          pluginSdkResolution: "dist",
+        }).mediaUnderstandingProviders.map((entry) => ({
+          pluginId: entry.pluginId,
+          provider: entry.provider,
+        }));
   }
   return mediaUnderstandingProviderContractRegistryCache;
 }
 
 function loadImageGenerationProviderContractRegistry(): ImageGenerationProviderContractEntry[] {
   if (!imageGenerationProviderContractRegistryCache) {
-    const registry = loadBundledCapabilityRuntimeRegistry({
-      pluginIds: BUNDLED_IMAGE_GENERATION_PLUGIN_IDS,
-      pluginSdkResolution: "dist",
-    });
-    imageGenerationProviderContractRegistryCache = registry.imageGenerationProviders.map(
-      (entry) => ({
-        pluginId: entry.pluginId,
-        provider: entry.provider,
-      }),
-    );
+    imageGenerationProviderContractRegistryCache = process.env.VITEST
+      ? loadVitestImageGenerationProviderContractRegistry()
+      : loadBundledCapabilityRuntimeRegistry({
+          pluginIds: BUNDLED_IMAGE_GENERATION_PLUGIN_IDS,
+          pluginSdkResolution: "dist",
+        }).imageGenerationProviders.map((entry) => ({
+          pluginId: entry.pluginId,
+          provider: entry.provider,
+        }));
   }
   return imageGenerationProviderContractRegistryCache;
 }

@@ -10,55 +10,91 @@ import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 type BundledChannelRuntimeMap = ReadonlyMap<string, ChannelConfigRuntimeSchema>;
 type BundledChannelConfigSchemaMap = ReadonlyMap<string, ChannelConfigSchema>;
+type BundledChannelPluginShape = {
+  id: string;
+  configSchema?: ChannelConfigSchema;
+};
+type BundledChannelMaps = {
+  runtimeMap: Map<string, ChannelConfigRuntimeSchema>;
+  configSchemaMap: Map<string, ChannelConfigSchema>;
+};
 
-const bundledChannelRuntimeMap = new Map<string, ChannelConfigRuntimeSchema>();
-const bundledChannelConfigSchemaMap = new Map<string, ChannelConfigSchema>();
 const staticBundledChannelSchemas = new Map<string, ChannelConfigSchema>([
   ["msteams", buildChannelConfigSchema(MSTeamsConfigSchema)],
   ["whatsapp", buildChannelConfigSchema(WhatsAppConfigSchema)],
 ]);
-const configuredBundledChannelPlugins = Array.isArray(bundledChannelModule.bundledChannelPlugins)
-  ? bundledChannelModule.bundledChannelPlugins
-  : [];
+let cachedBundledChannelMaps: BundledChannelMaps | undefined;
 
-for (const plugin of configuredBundledChannelPlugins) {
-  const channelSchema = plugin.configSchema;
-  if (!channelSchema) {
-    continue;
-  }
-  bundledChannelConfigSchemaMap.set(plugin.id, channelSchema);
-  if (channelSchema.runtime) {
-    bundledChannelRuntimeMap.set(plugin.id, channelSchema.runtime);
-  }
-}
-for (const entry of BUNDLED_PLUGIN_METADATA) {
-  const channelConfigs = entry.manifest.channelConfigs;
-  if (!channelConfigs) {
-    continue;
-  }
-  for (const [channelId, channelConfig] of Object.entries(channelConfigs)) {
-    const channelSchema = channelConfig?.schema as Record<string, unknown> | undefined;
+function buildBundledChannelMaps(
+  plugins: readonly BundledChannelPluginShape[],
+): BundledChannelMaps {
+  const runtimeMap = new Map<string, ChannelConfigRuntimeSchema>();
+  const configSchemaMap = new Map<string, ChannelConfigSchema>();
+
+  for (const plugin of plugins) {
+    const channelSchema = plugin.configSchema;
     if (!channelSchema) {
       continue;
     }
-    if (!bundledChannelConfigSchemaMap.has(channelId)) {
-      bundledChannelConfigSchemaMap.set(channelId, { schema: channelSchema });
+    configSchemaMap.set(plugin.id, channelSchema);
+    if (channelSchema.runtime) {
+      runtimeMap.set(plugin.id, channelSchema.runtime);
     }
   }
+
+  for (const entry of BUNDLED_PLUGIN_METADATA) {
+    const channelConfigs = entry.manifest.channelConfigs;
+    if (!channelConfigs) {
+      continue;
+    }
+    for (const [channelId, channelConfig] of Object.entries(channelConfigs)) {
+      const channelSchema = channelConfig?.schema as Record<string, unknown> | undefined;
+      if (!channelSchema) {
+        continue;
+      }
+      if (!configSchemaMap.has(channelId)) {
+        configSchemaMap.set(channelId, { schema: channelSchema });
+      }
+    }
+  }
+
+  for (const [channelId, channelSchema] of staticBundledChannelSchemas) {
+    if (!configSchemaMap.has(channelId)) {
+      configSchemaMap.set(channelId, channelSchema);
+    }
+    if (channelSchema.runtime && !runtimeMap.has(channelId)) {
+      runtimeMap.set(channelId, channelSchema.runtime);
+    }
+  }
+
+  return { runtimeMap, configSchemaMap };
 }
-for (const [channelId, channelSchema] of staticBundledChannelSchemas) {
-  if (!bundledChannelConfigSchemaMap.has(channelId)) {
-    bundledChannelConfigSchemaMap.set(channelId, channelSchema);
+
+function readBundledChannelPlugins(): readonly BundledChannelPluginShape[] | undefined {
+  return Array.isArray(bundledChannelModule.bundledChannelPlugins)
+    ? (bundledChannelModule.bundledChannelPlugins as readonly BundledChannelPluginShape[])
+    : undefined;
+}
+
+function getBundledChannelMaps(): BundledChannelMaps {
+  const plugins = readBundledChannelPlugins();
+  if (plugins && cachedBundledChannelMaps) {
+    return cachedBundledChannelMaps;
   }
-  if (channelSchema.runtime && !bundledChannelRuntimeMap.has(channelId)) {
-    bundledChannelRuntimeMap.set(channelId, channelSchema.runtime);
+
+  const maps = buildBundledChannelMaps(plugins ?? []);
+  // Tests and some import cycles can temporarily expose an incomplete bundled list.
+  // Only cache once the exported plugin array is actually available.
+  if (plugins) {
+    cachedBundledChannelMaps = maps;
   }
+  return maps;
 }
 
 export function getBundledChannelRuntimeMap(): BundledChannelRuntimeMap {
-  return bundledChannelRuntimeMap;
+  return getBundledChannelMaps().runtimeMap;
 }
 
 export function getBundledChannelConfigSchemaMap(): BundledChannelConfigSchemaMap {
-  return bundledChannelConfigSchemaMap;
+  return getBundledChannelMaps().configSchemaMap;
 }
