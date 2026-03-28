@@ -926,11 +926,15 @@ export async function startGatewayServer(
       : onSessionTranscriptUpdate((update) => {
           const sessionKey =
             update.sessionKey ?? resolveSessionKeyForTranscriptFile(update.sessionFile);
-          if (!sessionKey || update.message === undefined) {
+          if (!sessionKey) {
+            return;
+          }
+          const sessionEventConnIds = sessionEventSubscribers.getAll();
+          if (update.message === undefined && sessionEventConnIds.size === 0) {
             return;
           }
           const connIds = new Set<string>();
-          for (const connId of sessionEventSubscribers.getAll()) {
+          for (const connId of sessionEventConnIds) {
             connIds.add(connId);
           }
           for (const connId of sessionMessageSubscribers.get(sessionKey)) {
@@ -994,24 +998,25 @@ export async function startGatewayServer(
                 runtimeMs: sessionRow.runtimeMs,
               }
             : {};
-          const message = attachOpenClawTranscriptMeta(update.message, {
-            ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
-            ...(typeof messageSeq === "number" ? { seq: messageSeq } : {}),
-          });
-          broadcastToConnIds(
-            "session.message",
-            {
-              sessionKey,
-              message,
-              ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-              ...(typeof messageSeq === "number" ? { messageSeq } : {}),
-              ...sessionSnapshot,
-            },
-            connIds,
-            { dropIfSlow: true },
-          );
+          if (update.message !== undefined) {
+            const message = attachOpenClawTranscriptMeta(update.message, {
+              ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
+              ...(typeof messageSeq === "number" ? { seq: messageSeq } : {}),
+            });
+            broadcastToConnIds(
+              "session.message",
+              {
+                sessionKey,
+                message,
+                ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+                ...(typeof messageSeq === "number" ? { messageSeq } : {}),
+                ...sessionSnapshot,
+              },
+              connIds,
+              { dropIfSlow: true },
+            );
+          }
 
-          const sessionEventConnIds = sessionEventSubscribers.getAll();
           if (sessionEventConnIds.size > 0) {
             broadcastToConnIds(
               "sessions.changed",
