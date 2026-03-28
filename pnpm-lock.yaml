@@ -683,7 +683,7 @@ importers:
     dependencies:
       '@create-markdown/preview':
         specifier: ^2.0.0
-        version: 2.0.0(@create-markdown/core@2.0.0)(shiki@3.23.0)
+        version: 2.0.0(shiki@3.23.0)
       '@noble/ed25519':
         specifier: 3.0.1
         version: 3.0.1
@@ -1036,10 +1036,6 @@ packages:
   '@colors/colors@1.5.0':
     resolution: {integrity: sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==}
     engines: {node: '>=0.1.90'}
-
-  '@create-markdown/core@2.0.0':
-    resolution: {integrity: sha512-xOmhoiDSa82EzjXp3aViQdB+xfCP4E2jEKxJiKJ702sup3p/CTCtL8fZBKQ3BvzASQRpq/xKCRXZZwRrg1DmZQ==}
-    engines: {node: '>=20.0.0'}
 
   '@create-markdown/preview@2.0.0':
     resolution: {integrity: sha512-3WTGCrCOVBy9wH2X82Oa2ZHJ+eiEqu8AlucckenWVtFSbzRKzkxgci0BRw7IDvsOsTUEMxS9Ltc9/hSUHkdidA==}
@@ -7478,12 +7474,8 @@ snapshots:
   '@colors/colors@1.5.0':
     optional: true
 
-  '@create-markdown/core@2.0.0':
-    optional: true
-
-  '@create-markdown/preview@2.0.0(@create-markdown/core@2.0.0)(shiki@3.23.0)':
+  '@create-markdown/preview@2.0.0(shiki@3.23.0)':
     optionalDependencies:
-      '@create-markdown/core': 2.0.0
       shiki: 3.23.0
 
   '@csstools/color-helpers@6.0.2': {}

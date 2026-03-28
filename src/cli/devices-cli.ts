@@ -99,9 +99,28 @@ function normalizeErrorMessage(error: unknown): string {
   return String(error);
 }
 
+function shouldPreferLocalPairingAccess(opts: DevicesRpcOpts): boolean {
+  if (typeof opts.url === "string" && opts.url.trim().length > 0) {
+    return false;
+  }
+  const connection = buildGatewayConnectionDetails();
+  if (connection.urlSource !== "local loopback") {
+    return false;
+  }
+  try {
+    return isLoopbackHost(new URL(connection.url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): boolean {
   const message = normalizeErrorMessage(error).toLowerCase();
-  if (!message.includes("pairing required")) {
+  const isRecoverableLocalFailure =
+    message.includes("pairing required") ||
+    message.includes("gateway timeout") ||
+    message.includes("gateway client stopped");
+  if (!isRecoverableLocalFailure) {
     return false;
   }
   if (typeof opts.url === "string" && opts.url.trim().length > 0) {
@@ -129,6 +148,13 @@ function redactLocalPairedDevice(device: InfraPairedDevice): PairedDevice {
 }
 
 async function listPairingWithFallback(opts: DevicesRpcOpts): Promise<DevicePairingList> {
+  if (shouldPreferLocalPairingAccess(opts)) {
+    const local = await listDevicePairing();
+    return {
+      pending: local.pending as PendingDevice[],
+      paired: local.paired.map((device) => redactLocalPairedDevice(device)),
+    };
+  }
   try {
     return parseDevicePairingList(await callGatewayCli("device.pair.list", opts, {}));
   } catch (error) {
@@ -150,6 +176,16 @@ async function approvePairingWithFallback(
   opts: DevicesRpcOpts,
   requestId: string,
 ): Promise<Record<string, unknown> | null> {
+  if (shouldPreferLocalPairingAccess(opts)) {
+    const approved = await approveDevicePairing(requestId);
+    if (!approved) {
+      return null;
+    }
+    return {
+      requestId,
+      device: redactLocalPairedDevice(approved.device),
+    };
+  }
   try {
     return await callGatewayCli("device.pair.approve", opts, { requestId });
   } catch (error) {
