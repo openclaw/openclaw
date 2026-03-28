@@ -1,7 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { resolvePluginTools } from "../plugins/tools.js";
-import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
+import {
+  getActiveSecretsRuntimeSnapshot,
+  getActiveRuntimeWebToolsMetadata,
+} from "../secrets/runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
@@ -31,7 +34,6 @@ import {
   createCodeExecutionTool,
   createWebFetchTool,
   createWebSearchTool,
-  createXSearchTool,
 } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
@@ -125,6 +127,7 @@ export function createOpenClawTools(
     threadId: options?.agentThreadId,
   });
   const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
+  const runtimeSnapshot = getActiveSecretsRuntimeSnapshot();
   const sandbox =
     options?.sandboxRoot && options?.sandboxFsBridge
       ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
@@ -159,10 +162,6 @@ export function createOpenClawTools(
     config: options?.config,
     sandboxed: options?.sandboxed,
     runtimeWebSearch: runtimeWebTools?.search,
-  });
-  const xSearchTool = createXSearchTool({
-    config: options?.config,
-    runtimeXSearch: runtimeWebTools?.xSearch,
   });
   const codeExecutionTool = createCodeExecutionTool({
     config: options?.config,
@@ -263,7 +262,6 @@ export function createOpenClawTools(
       sandboxed: options?.sandboxed,
     }),
     ...(webSearchTool ? [webSearchTool] : []),
-    ...(xSearchTool ? [xSearchTool] : []),
     ...(codeExecutionTool ? [codeExecutionTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
@@ -273,6 +271,7 @@ export function createOpenClawTools(
   const pluginTools = resolvePluginTools({
     context: {
       config: options?.config,
+      runtimeConfig: runtimeSnapshot?.config,
       workspaceDir,
       agentDir: options?.agentDir,
       agentId: sessionAgentId,

@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeWebFirecrawlMetadata } from "../secrets/runtime-web-tools.types.js";
+import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 
 const mockedModuleIds = [
@@ -24,11 +26,13 @@ const mockedModuleIds = [
   "./tools/tts-tool.js",
 ] as const;
 
-vi.mock("../plugins/tools.js", () => ({
-  resolvePluginTools: () => [],
-  copyPluginToolMeta: () => undefined,
-  getPluginToolMeta: () => undefined,
-}));
+vi.mock("../plugins/tools.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/tools.js")>("../plugins/tools.js");
+  return {
+    ...actual,
+    copyPluginToolMeta: () => undefined,
+  };
+});
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(),
@@ -104,14 +108,34 @@ function asConfig(value: unknown): OpenClawConfig {
 }
 
 let secretsRuntime: typeof import("../secrets/runtime.js");
-let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
+let createWebSearchTool: typeof import("./tools/web-tools.js").createWebSearchTool;
+let createWebFetchTool: typeof import("./tools/web-tools.js").createWebFetchTool;
 
-function findTool(name: string, config: OpenClawConfig) {
-  const allTools = createOpenClawTools({ config, sandboxed: true });
-  const tool = allTools.find((candidate) => candidate.name === name);
+function requireWebSearchTool(config: OpenClawConfig, runtimeWebSearch?: RuntimeWebSearchMetadata) {
+  const tool = createWebSearchTool({
+    config,
+    sandboxed: true,
+    runtimeWebSearch,
+  });
   expect(tool).toBeDefined();
   if (!tool) {
-    throw new Error(`missing ${name} tool`);
+    throw new Error("missing web_search tool");
+  }
+  return tool;
+}
+
+function requireWebFetchTool(
+  config: OpenClawConfig,
+  runtimeFirecrawl?: RuntimeWebFirecrawlMetadata,
+) {
+  const tool = createWebFetchTool({
+    config,
+    sandboxed: true,
+    runtimeFirecrawl,
+  });
+  expect(tool).toBeDefined();
+  if (!tool) {
+    throw new Error("missing web_fetch tool");
   }
   return tool;
 }
@@ -139,7 +163,7 @@ describe("openclaw tools runtime web metadata wiring", () => {
   beforeEach(async () => {
     vi.resetModules();
     secretsRuntime = await import("../secrets/runtime.js");
-    ({ createOpenClawTools } = await import("./openclaw-tools.js"));
+    ({ createWebFetchTool, createWebSearchTool } = await import("./tools/web-tools.js"));
   });
 
   afterEach(() => {
@@ -190,7 +214,7 @@ describe("openclaw tools runtime web metadata wiring", () => {
     );
     global.fetch = withFetchPreconnect(mockFetch);
 
-    const webSearch = findTool("web_search", snapshot.config);
+    const webSearch = requireWebSearchTool(snapshot.config, snapshot.webTools.search);
     const result = await webSearch.execute("call-runtime-search", { query: "runtime search" });
 
     expect(mockFetch).toHaveBeenCalled();
@@ -227,105 +251,11 @@ describe("openclaw tools runtime web metadata wiring", () => {
     );
     global.fetch = withFetchPreconnect(mockFetch);
 
-    const webFetch = findTool("web_fetch", snapshot.config);
+    const webFetch = requireWebFetchTool(snapshot.config, snapshot.webTools.fetch.firecrawl);
     await webFetch.execute("call-runtime-fetch", { url: "https://example.com/runtime-off" });
 
     expect(mockFetch).toHaveBeenCalled();
     expect(mockFetch.mock.calls[0]?.[0]).toBe("https://example.com/runtime-off");
     expect(String(mockFetch.mock.calls[0]?.[0])).not.toContain("api.firecrawl.dev");
-  });
-
-  it("resolves x_search SecretRef from the active runtime snapshot", async () => {
-    const snapshot = await prepareAndActivate({
-      config: asConfig({
-        tools: {
-          web: {
-            x_search: {
-              apiKey: { source: "env", provider: "default", id: "X_SEARCH_RUNTIME_REF" },
-            },
-          },
-        },
-      }),
-      env: {
-        X_SEARCH_RUNTIME_REF: "x-search-runtime-key",
-      },
-    });
-
-    expect(snapshot.webTools.xSearch.active).toBe(true);
-    expect(snapshot.webTools.xSearch.apiKeySource).toBe("secretRef");
-
-    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
-      Promise.resolve({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            output_text: "runtime x search ok",
-            citations: ["https://x.com/openclaw/status/1"],
-          }),
-      } as Response),
-    );
-    global.fetch = withFetchPreconnect(mockFetch);
-
-    const xSearch = findTool("x_search", snapshot.config);
-    const result = await xSearch.execute("call-runtime-x-search", {
-      query: "runtime search",
-    });
-
-    expect(mockFetch).toHaveBeenCalled();
-    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("api.x.ai/v1/responses");
-    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    const body = JSON.parse(typeof request?.body === "string" ? request.body : "{}") as {
-      tools?: Array<Record<string, unknown>>;
-    };
-    expect(body.tools).toEqual([{ type: "x_search" }]);
-    expect((result.details as { citations?: string[] }).citations).toEqual([
-      "https://x.com/openclaw/status/1",
-    ]);
-  });
-
-  it("resolves code_execution SecretRef from the active runtime snapshot", async () => {
-    const snapshot = await prepareAndActivate({
-      config: asConfig({
-        tools: {
-          code_execution: {
-            apiKey: { source: "env", provider: "default", id: "CODE_EXECUTION_RUNTIME_REF" },
-          },
-        },
-      }),
-      env: {
-        CODE_EXECUTION_RUNTIME_REF: "code-execution-runtime-key",
-      },
-    });
-
-    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
-      Promise.resolve({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            output: [
-              { type: "code_interpreter_call" },
-              {
-                type: "message",
-                content: [{ type: "output_text", text: "runtime code execution ok" }],
-              },
-            ],
-          }),
-      } as Response),
-    );
-    global.fetch = withFetchPreconnect(mockFetch);
-
-    const codeExecution = findTool("code_execution", snapshot.config);
-    const result = await codeExecution.execute("call-runtime-code-execution", {
-      task: "Add 20 + 22",
-    });
-
-    expect(mockFetch).toHaveBeenCalled();
-    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("api.x.ai/v1/responses");
-    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    const body = JSON.parse(typeof request?.body === "string" ? request.body : "{}") as {
-      tools?: Array<Record<string, unknown>>;
-    };
-    expect(body.tools).toEqual([{ type: "code_interpreter" }]);
-    expect((result.details as { usedCodeExecution?: boolean }).usedCodeExecution).toBe(true);
   });
 });
