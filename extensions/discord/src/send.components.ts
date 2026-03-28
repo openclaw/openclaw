@@ -140,6 +140,51 @@ function collapseClassicComponentText(spec: DiscordComponentMessageSpec): string
   return parts.join("\n\n");
 }
 
+/** Build a plain-text representation of a component message for session transcript context. */
+export function buildComponentTranscriptText(spec: DiscordComponentMessageSpec): string {
+  const parts: string[] = [];
+  if (spec.text?.trim()) {
+    parts.push(spec.text.trim());
+  }
+  for (const block of spec.blocks ?? []) {
+    switch (block.type) {
+      case "text":
+        if (block.text?.trim()) parts.push(block.text.trim());
+        break;
+      case "section":
+        if (block.text?.trim()) parts.push(block.text.trim());
+        for (const t of block.texts ?? []) {
+          if (t?.trim()) parts.push(t.trim());
+        }
+        if (block.accessory?.type === "button" && block.accessory.button.label) {
+          parts.push(`[${block.accessory.button.label}]`);
+        }
+        break;
+      case "actions":
+        if (block.buttons?.length) {
+          parts.push(block.buttons.map((b) => `[${b.label}]`).join(" "));
+        }
+        if (block.select) {
+          const opts = block.select.options;
+          if (opts?.length) {
+            parts.push(opts.map((o) => `[${o.label}]`).join(" "));
+          } else {
+            parts.push(`[${block.select.placeholder ?? "select"}]`);
+          }
+        }
+        break;
+      // media-gallery, file, and separator blocks carry no meaningful text
+      // content, so they are intentionally omitted from the transcript summary.
+      default:
+        break;
+    }
+  }
+  if (spec.modal?.triggerLabel?.trim()) {
+    parts.push(`[${spec.modal.triggerLabel.trim()}]`);
+  }
+  return parts.join("\n");
+}
+
 type DiscordComponentSendOpts = {
   cfg?: OpenClawConfig;
   accountId?: string;
@@ -147,7 +192,9 @@ type DiscordComponentSendOpts = {
   rest?: RequestClient;
   silent?: boolean;
   replyTo?: string;
+  /** Used by buildDiscordComponentMessage to bind interaction callbacks to the agent session. */
   sessionKey?: string;
+  /** Used by buildDiscordComponentMessage to bind interaction callbacks to the agent session. */
   agentId?: string;
   mediaUrl?: string;
   mediaAccess?: {
