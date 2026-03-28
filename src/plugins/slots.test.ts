@@ -29,6 +29,21 @@ describe("applyExclusiveSlotSelection", () => {
       },
     });
 
+  function expectSelectionWarnings(
+    warnings: string[],
+    params: {
+      contains?: readonly string[];
+      excludes?: readonly string[];
+    },
+  ) {
+    for (const warning of params.contains ?? []) {
+      expect(warnings).toContain(warning);
+    }
+    for (const warning of params.excludes ?? []) {
+      expect(warnings).not.toContain(warning);
+    }
+  }
+
   it("selects the slot and disables other entries for the same kind", () => {
     const config = createMemoryConfig({
       slots: { memory: "memory-core" },
@@ -61,35 +76,38 @@ describe("applyExclusiveSlotSelection", () => {
     expect(result.config).toBe(config);
   });
 
-  it("warns when the slot falls back to a default", () => {
-    const config = createMemoryConfig();
-    const result = applyExclusiveSlotSelection({
-      config,
+  it.each([
+    {
+      name: "warns when the slot falls back to a default",
+      config: createMemoryConfig(),
       selectedId: "memory",
-      selectedKind: "memory",
-      registry: { plugins: [{ id: "memory", kind: "memory" }] },
-    });
-
-    expect(result.changed).toBe(true);
-    expect(result.warnings).toContain(
-      'Exclusive slot "memory" switched from "memory-core" to "memory".',
-    );
-  });
-
-  it("keeps disabled competing plugins disabled without adding disable warnings", () => {
-    const config = createMemoryConfig({
-      entries: {
-        "memory-core": { enabled: false },
+      expectedDisabled: undefined,
+      warningChecks: {
+        contains: ['Exclusive slot "memory" switched from "memory-core" to "memory".'],
       },
-    });
-    const result = runMemorySelection(config);
+    },
+    {
+      name: "keeps disabled competing plugins disabled without adding disable warnings",
+      config: createMemoryConfig({
+        entries: {
+          "memory-core": { enabled: false },
+        },
+      }),
+      selectedId: "memory",
+      expectedDisabled: false,
+      warningChecks: {
+        contains: ['Exclusive slot "memory" switched from "memory-core" to "memory".'],
+        excludes: ['Disabled other "memory" slot plugins: memory-core.'],
+      },
+    },
+  ] as const)("$name", ({ config, selectedId, expectedDisabled, warningChecks }) => {
+    const result = runMemorySelection(config, selectedId);
 
     expect(result.changed).toBe(true);
-    expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(false);
-    expect(result.warnings).toContain(
-      'Exclusive slot "memory" switched from "memory-core" to "memory".',
-    );
-    expect(result.warnings).not.toContain('Disabled other "memory" slot plugins: memory-core.');
+    if (expectedDisabled != null) {
+      expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(expectedDisabled);
+    }
+    expectSelectionWarnings(result.warnings, warningChecks);
   });
 
   it("skips changes when no exclusive slot applies", () => {
