@@ -10,6 +10,7 @@ export function createPulseWithBackgroundFailure<
   const pulse = vi.fn(
     async (..._args: never[]) => undefined as Awaited<ReturnType<TPulse>>,
   ) as ReturnType<typeof vi.fn<TPulse>>;
+  pulse.mockResolvedValueOnce(undefined as Awaited<ReturnType<TPulse>>);
   pulse.mockRejectedValueOnce(new Error("boom"));
   return pulse;
 }
