@@ -1,4 +1,8 @@
 import { toBrowserErrorResponse } from "../errors.js";
+import {
+  assertBrowserNavigationResultAllowed,
+  withBrowserNavigationPolicy,
+} from "../navigation-guard.js";
 import type { PwAiModule } from "../pw-ai-module.js";
 import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
@@ -80,6 +84,29 @@ export async function requirePwAi(
     ].join("\n"),
   );
   return null;
+}
+
+export async function assertPlaywrightTabTargetAllowed(params: {
+  ctx: BrowserRouteContext;
+  pw: PwAiModule;
+  cdpUrl: string;
+  targetId: string;
+  url: string;
+}): Promise<void> {
+  try {
+    await assertBrowserNavigationResultAllowed({
+      url: params.url,
+      ...withBrowserNavigationPolicy(params.ctx.state().resolved.ssrfPolicy),
+    });
+  } catch (err) {
+    await params.pw
+      .closePageViaPlaywright({
+        cdpUrl: params.cdpUrl,
+        targetId: params.targetId,
+      })
+      .catch(() => {});
+    throw err;
+  }
 }
 
 type RouteTabContext = {

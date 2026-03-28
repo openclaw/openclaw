@@ -1,5 +1,6 @@
 import type { BrowserRouteContext } from "../server-context.js";
 import {
+  assertPlaywrightTabTargetAllowed,
   readBody,
   resolveTargetIdFromBody,
   resolveTargetIdFromQuery,
@@ -163,6 +164,13 @@ export function registerBrowserAgentStorageRoutes(
       targetId,
       feature: "storage get",
       run: async ({ cdpUrl, tab, pw }) => {
+        await assertPlaywrightTabTargetAllowed({
+          ctx,
+          pw,
+          cdpUrl,
+          targetId: tab.targetId,
+          url: tab.url,
+        });
         const result = await pw.storageGetViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
@@ -192,6 +200,13 @@ export function registerBrowserAgentStorageRoutes(
       targetId: mutation.parsed.targetId,
       feature: "storage set",
       run: async ({ cdpUrl, tab, pw }) => {
+        await assertPlaywrightTabTargetAllowed({
+          ctx,
+          pw,
+          cdpUrl,
+          targetId: tab.targetId,
+          url: tab.url,
+        });
         await pw.storageSetViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
@@ -217,6 +232,13 @@ export function registerBrowserAgentStorageRoutes(
       targetId: mutation.parsed.targetId,
       feature: "storage clear",
       run: async ({ cdpUrl, tab, pw }) => {
+        await assertPlaywrightTabTargetAllowed({
+          ctx,
+          pw,
+          cdpUrl,
+          targetId: tab.targetId,
+          url: tab.url,
+        });
         await pw.storageClearViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
