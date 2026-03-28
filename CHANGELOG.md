@@ -116,6 +116,7 @@ Docs: https://docs.openclaw.ai
 - Discord/replies: preserve leading indentation when stripping inline reply tags so reply-tagged plain text and fenced code blocks keep their formatting. (#55960) Thanks @Nanako0129.
 - Daemon/status: surface immediate gateway close reasons from lightweight probes and prefer those concrete auth or pairing failures over generic timeouts in `openclaw daemon status`. (#56282) Thanks @mbelinky.
 - Agents/failover: classify HTTP 410 errors as retryable timeouts by default while still preserving explicit session-expired, billing, and auth signals from the payload. (#55201) thanks @nikus-pan.
+- Agents/subagents: restore completion announce delivery for extension channels like BlueBubbles. (#56348)
 
 ## 2026.3.24
 

@@ -21,11 +21,7 @@ import {
   normalizeDeliveryContext,
   resolveConversationDeliveryTarget,
 } from "../utils/delivery-context.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  isDeliverableMessageChannel,
-  isInternalMessageChannel,
-} from "../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, isInternalMessageChannel } from "../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey, resolveQueueAnnounceId } from "./announce-idempotency.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./pi-embedded.js";
@@ -263,7 +259,10 @@ export async function resolveSubagentCompletionOrigin(params: {
       },
     );
     const hookOrigin = normalizeDeliveryContext(result?.origin);
-    if (!hookOrigin || (hookOrigin.channel && !isDeliverableMessageChannel(hookOrigin.channel))) {
+    if (!hookOrigin) {
+      return requesterOrigin;
+    }
+    if (hookOrigin.channel && isInternalMessageChannel(hookOrigin.channel)) {
       return requesterOrigin;
     }
     return mergeDeliveryContext(hookOrigin, requesterOrigin);
@@ -459,19 +458,17 @@ async function sendSubagentAnnounceDirectly(params: {
       params.expectsCompletionMessage && completionDirectOrigin
         ? completionDirectOrigin
         : directOrigin;
-    const directChannelRaw =
+    const directChannel =
       typeof effectiveDirectOrigin?.channel === "string"
         ? effectiveDirectOrigin.channel.trim()
         : "";
-    const directChannel =
-      directChannelRaw && isDeliverableMessageChannel(directChannelRaw) ? directChannelRaw : "";
     const directTo =
       typeof effectiveDirectOrigin?.to === "string" ? effectiveDirectOrigin.to.trim() : "";
-    const hasDeliverableDirectTarget =
-      !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
     const shouldDeliverExternally =
       !params.requesterIsSubagent &&
-      (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
+      Boolean(directChannel) &&
+      Boolean(directTo) &&
+      !isInternalMessageChannel(directChannel);
 
     const threadId =
       effectiveDirectOrigin?.threadId != null && effectiveDirectOrigin.threadId !== ""
@@ -497,10 +494,10 @@ async function sendSubagentAnnounceDirectly(params: {
             deliver: shouldDeliverExternally,
             bestEffortDeliver: params.bestEffortDeliver,
             internalEvents: params.internalEvents,
-            channel: shouldDeliverExternally ? directChannel : undefined,
-            accountId: shouldDeliverExternally ? effectiveDirectOrigin?.accountId : undefined,
-            to: shouldDeliverExternally ? directTo : undefined,
-            threadId: shouldDeliverExternally ? threadId : undefined,
+            channel: !params.requesterIsSubagent ? directChannel || undefined : undefined,
+            accountId: !params.requesterIsSubagent ? effectiveDirectOrigin?.accountId : undefined,
+            to: !params.requesterIsSubagent ? directTo || undefined : undefined,
+            threadId: !params.requesterIsSubagent ? threadId : undefined,
             inputProvenance: {
               kind: "inter_session",
               sourceSessionKey: params.sourceSessionKey,
