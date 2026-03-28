@@ -1,3 +1,4 @@
+import type { ReactionTypeEmoji } from "@grammyjs/types";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_EMOJIS } from "../../../src/channels/status-reactions.js";
@@ -138,7 +139,7 @@ describe("isTelegramSupportedReactionEmoji", () => {
 
 describe("extractTelegramAllowedEmojiReactions", () => {
   it("returns undefined when chat does not include available_reactions", () => {
-    const result = extractTelegramAllowedEmojiReactions({ id: 1 });
+    const result = extractTelegramAllowedEmojiReactions({});
     expect(result).toBeUndefined();
   });
 
@@ -170,11 +171,11 @@ describe("extractTelegramAllowedEmojiReactions", () => {
 describe("resolveTelegramAllowedEmojiReactions", () => {
   it("uses getChat lookup when message chat does not include available_reactions", async () => {
     const getChat = async () => ({
-      available_reactions: [{ type: "emoji", emoji: "👍" }],
+      available_reactions: [{ type: "emoji", emoji: "👍" as ReactionTypeEmoji["emoji"] } as const],
     });
 
     const result = await resolveTelegramAllowedEmojiReactions({
-      chat: { id: 1 },
+      chat: {},
       chatId: 1,
       getChat,
     });
@@ -188,7 +189,7 @@ describe("resolveTelegramAllowedEmojiReactions", () => {
     };
 
     const result = await resolveTelegramAllowedEmojiReactions({
-      chat: { id: 1 },
+      chat: {},
       chatId: 1,
       getChat,
     });

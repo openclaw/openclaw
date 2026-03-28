@@ -3606,12 +3606,12 @@ describe("getCompatibleActivePluginRegistry", () => {
         "sessions.get": () => undefined,
       },
     };
-    const { cacheKey } = resolvePluginLoadCacheContext(loadOptions);
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
     setActivePluginRegistry(registry, cacheKey);
 
-    expect(getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
+    expect(__testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
     expect(
-      getCompatibleActivePluginRegistry({
+      __testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         coreGatewayHandlers: {
           "sessions.get": () => undefined,

@@ -1,3 +1,4 @@
+import type { ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAckReaction } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
@@ -42,6 +43,40 @@ export type {
   TelegramMediaRef,
 } from "./bot-message-context.types.js";
 
+type TelegramMessageContextPayload = Awaited<ReturnType<typeof buildTelegramInboundContextPayload>>;
+type TelegramReactionApi = (
+  chatId: number | string,
+  messageId: number,
+  reactions: Array<{ type: "emoji"; emoji: ReactionTypeEmoji["emoji"] }>,
+) => Promise<unknown>;
+
+export type TelegramMessageContext = {
+  ctxPayload: TelegramMessageContextPayload["ctxPayload"];
+  primaryCtx: BuildTelegramMessageContextParams["primaryCtx"];
+  msg: BuildTelegramMessageContextParams["primaryCtx"]["message"];
+  chatId: number | string;
+  isGroup: boolean;
+  groupConfig?: ReturnType<
+    BuildTelegramMessageContextParams["resolveTelegramGroupConfig"]
+  >["groupConfig"];
+  resolvedThreadId?: number;
+  threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
+  replyThreadId?: number;
+  isForum: boolean;
+  historyKey?: string;
+  historyLimit: BuildTelegramMessageContextParams["historyLimit"];
+  groupHistories: BuildTelegramMessageContextParams["groupHistories"];
+  route: ReturnType<typeof resolveTelegramConversationRoute>["route"];
+  skillFilter: TelegramMessageContextPayload["skillFilter"];
+  sendTyping: () => Promise<void>;
+  sendRecordVoice: () => Promise<void>;
+  ackReactionPromise: Promise<boolean> | null;
+  reactionApi: TelegramReactionApi | null;
+  removeAckAfterReply: boolean;
+  statusReactionController: StatusReactionController | null;
+  accountId: string;
+};
+
 export const buildTelegramMessageContext = async ({
   primaryCtx,
   allMedia,
@@ -64,7 +99,7 @@ export const buildTelegramMessageContext = async ({
   loadFreshConfig,
   upsertPairingRequest,
   sendChatActionHandler,
-}: BuildTelegramMessageContextParams) => {
+}: BuildTelegramMessageContextParams): Promise<TelegramMessageContext | null> => {
   const msg = primaryCtx.message;
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
@@ -378,7 +413,7 @@ export const buildTelegramMessageContext = async ({
                   return;
                 }
                 await reactionApi(chatId, msg.message_id, [
-                  { type: "emoji", emoji: resolvedEmoji },
+                  { type: "emoji", emoji: resolvedEmoji as ReactionTypeEmoji["emoji"] },
                 ]);
               }
             },
@@ -404,7 +439,10 @@ export const buildTelegramMessageContext = async ({
     : shouldAckReaction() && msg.message_id && reactionApi
       ? withTelegramApiErrorLogging({
           operation: "setMessageReaction",
-          fn: () => reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReaction }]),
+          fn: () =>
+            reactionApi(chatId, msg.message_id, [
+              { type: "emoji", emoji: ackReaction as ReactionTypeEmoji["emoji"] },
+            ]),
         }).then(
           () => true,
           (err) => {
@@ -469,7 +507,3 @@ export const buildTelegramMessageContext = async ({
     accountId: account.accountId,
   };
 };
-
-export type TelegramMessageContext = NonNullable<
-  Awaited<ReturnType<typeof buildTelegramMessageContext>>
->;

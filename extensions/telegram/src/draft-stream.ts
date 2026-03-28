@@ -12,7 +12,7 @@ const DRAFT_METHOD_UNAVAILABLE_RE =
 const DRAFT_CHAT_UNSUPPORTED_RE = /(can't be used|can be used only)/i;
 
 type TelegramSendMessageDraft = (
-  chatId: number,
+  chatId: Parameters<Bot["api"]["sendMessage"]>[0],
   draftId: number,
   text: string,
   params?: {
@@ -105,7 +105,7 @@ type SupersededTelegramPreview = {
 
 export function createTelegramDraftStream(params: {
   api: Bot["api"];
-  chatId: number;
+  chatId: Parameters<Bot["api"]["sendMessage"]>[0];
   maxChars?: number;
   thread?: TelegramThreadSpec | null;
   previewTransport?: "auto" | "message" | "draft";
@@ -180,8 +180,8 @@ export function createTelegramDraftStream(params: {
         }
       : replyParams;
     const usedThreadParams =
-      "message_thread_id" in (sendParams ?? {}) &&
-      typeof sendParams?.message_thread_id === "number";
+      typeof (sendParams as { message_thread_id?: unknown } | undefined)?.message_thread_id ===
+      "number";
     try {
       return {
         sent: await params.api.sendMessage(chatId, sendArgs.renderedText, sendParams),
