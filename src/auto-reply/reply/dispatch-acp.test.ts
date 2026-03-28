@@ -256,6 +256,28 @@ describe("tryDispatchAcpReply", () => {
         unbind: (input: unknown) => bindingServiceMocks.unbind(input),
       }),
     }));
+    // Mock modules that cause hang during vi.resetModules()+dynamic import:
+    // tool-display.ts uses JSON import assertions (`with { type: "json" }`) which
+    // deadlocks in Vitest forks pool when re-evaluated via vi.resetModules().
+    // Mock it at the source so acp-projector.ts can still load with real logic.
+    // formatToolSummary must vary by input so repeat-suppression doesn't collapse distinct events.
+    vi.doMock("../../agents/tool-display.js", () => ({
+      resolveToolDisplay: vi.fn((params: { name?: string; meta?: string }) => ({
+        name: params?.name ?? "tool",
+        emoji: "🔧",
+        title: params?.meta ?? "tool call",
+        label: params?.meta ?? "tool call",
+      })),
+      formatToolSummary: vi.fn((display: { emoji?: string; label?: string; detail?: string }) =>
+        display?.detail
+          ? `${display.emoji ?? "🔧"} ${display.label ?? "tool"}: ${display.detail}`
+          : `${display.emoji ?? "🔧"} ${display.label ?? "tool"}`,
+      ),
+      formatToolDetail: vi.fn(() => undefined),
+    }));
+    vi.doMock("../../media-understanding/apply.js", () => ({
+      applyMediaUnderstanding: vi.fn(async () => {}),
+    }));
     ({ tryDispatchAcpReply } = await import("./dispatch-acp.js"));
     managerMocks.resolveSession.mockReset();
     managerMocks.runTurn.mockReset();
