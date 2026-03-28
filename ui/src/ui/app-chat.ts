@@ -145,6 +145,7 @@ async function sendChatMessageNow(
   const ok = Boolean(runId);
   if (!ok && opts?.previousDraft != null) {
     host.chatMessage = opts.previousDraft;
+    (host as unknown as OpenClawApp).requestUpdate();
   }
   if (!ok && opts?.previousAttachments) {
     host.chatAttachments = opts.previousAttachments;
