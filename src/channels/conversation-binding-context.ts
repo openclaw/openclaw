@@ -64,6 +64,18 @@ function resolveChannelTargetId(params: {
     return undefined;
   }
 
+  const lower = target.toLowerCase();
+  const channelPrefix = `${params.channel}:`;
+  if (lower.startsWith(channelPrefix)) {
+    return resolveChannelTargetId({
+      channel: params.channel,
+      target: target.slice(channelPrefix.length),
+    });
+  }
+  if (CANONICAL_TARGET_PREFIXES.some((prefix) => lower.startsWith(prefix))) {
+    return target;
+  }
+
   const parsed = parseExplicitTargetForChannel(params.channel, target);
   const parsedTarget = normalizeText(parsed?.to);
   if (parsedTarget) {
@@ -72,15 +84,6 @@ function resolveChannelTargetId(params: {
         targets: [parsedTarget],
       }) ?? parsedTarget
     );
-  }
-
-  const lower = target.toLowerCase();
-  const channelPrefix = `${params.channel}:`;
-  if (lower.startsWith(channelPrefix)) {
-    return normalizeText(target.slice(channelPrefix.length));
-  }
-  if (CANONICAL_TARGET_PREFIXES.some((prefix) => lower.startsWith(prefix))) {
-    return target;
   }
 
   const explicitConversationId = resolveConversationIdFromTargets({

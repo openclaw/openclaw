@@ -1,49 +1,30 @@
 import { normalizeConversationText } from "../../../acp/conversation-id.js";
-import { resolveConversationBindingContext } from "../../../channels/conversation-binding-context.js";
 import type { HandleCommandsParams } from "../commands-types.js";
+import {
+  resolveConversationBindingAccountIdFromMessage,
+  resolveConversationBindingChannelFromMessage,
+  resolveConversationBindingContextFromAcpCommand,
+  resolveConversationBindingThreadIdFromMessage,
+} from "../conversation-binding-input.js";
 
 export function resolveAcpCommandChannel(params: HandleCommandsParams): string {
-  const raw =
-    params.ctx.OriginatingChannel ??
-    params.command.channel ??
-    params.ctx.Surface ??
-    params.ctx.Provider;
-  return normalizeConversationText(raw).toLowerCase();
+  const resolved = resolveConversationBindingChannelFromMessage(params.ctx, params.command.channel);
+  return normalizeConversationText(resolved).toLowerCase();
 }
 
 export function resolveAcpCommandAccountId(params: HandleCommandsParams): string {
-  const accountId = normalizeConversationText(params.ctx.AccountId);
-  return accountId || "default";
+  return resolveConversationBindingAccountIdFromMessage(params.ctx);
 }
 
 export function resolveAcpCommandThreadId(params: HandleCommandsParams): string | undefined {
-  const threadId =
-    params.ctx.MessageThreadId != null
-      ? normalizeConversationText(String(params.ctx.MessageThreadId))
-      : "";
-  return threadId || undefined;
+  return resolveConversationBindingThreadIdFromMessage(params.ctx);
 }
 
 function resolveAcpCommandConversationRef(params: HandleCommandsParams): {
   conversationId: string;
   parentConversationId?: string;
 } | null {
-  const resolved = resolveConversationBindingContext({
-    cfg: params.cfg,
-    channel: resolveAcpCommandChannel(params),
-    accountId: resolveAcpCommandAccountId(params),
-    chatType: params.ctx.ChatType,
-    threadId: resolveAcpCommandThreadId(params),
-    threadParentId: params.ctx.ThreadParentId,
-    senderId: params.command.senderId ?? params.ctx.SenderId,
-    sessionKey: params.sessionKey,
-    parentSessionKey: params.ctx.ParentSessionKey,
-    originatingTo: params.ctx.OriginatingTo,
-    commandTo: params.command.to,
-    fallbackTo: params.ctx.To,
-    from: params.ctx.From,
-    nativeChannelId: params.ctx.NativeChannelId,
-  });
+  const resolved = resolveConversationBindingContextFromAcpCommand(params);
   if (!resolved) {
     return null;
   }

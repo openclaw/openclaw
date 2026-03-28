@@ -100,6 +100,9 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
         isConfigured: (account) => account.configured,
         describeAccount: (account): ChannelAccountSnapshot => describeBlueBubblesAccount(account),
       },
+      conversationBindings: {
+        supportsCurrentConversationBinding: true,
+      },
       actions: bluebubblesMessageActions,
       bindings: {
         compileConfiguredBinding: ({ conversationId }) =>
