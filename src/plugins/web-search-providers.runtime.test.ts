@@ -428,7 +428,7 @@ describe("resolvePluginWebSearchProviders", () => {
       bundledAllowlistCompat: true,
       env,
     });
-    const { cacheKey } = loaderModule.resolvePluginLoadCacheContext({
+    const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
       config,
       workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
       env,
