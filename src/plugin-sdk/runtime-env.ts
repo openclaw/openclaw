@@ -16,6 +16,7 @@ export {
   success,
   warn,
 } from "../globals.js";
+export { isTruthyEnvValue } from "../infra/env.js";
 export * from "../logging.js";
 export { waitForAbortSignal } from "../infra/abort-signal.js";
 export { retryAsync } from "../infra/retry.js";
