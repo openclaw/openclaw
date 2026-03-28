@@ -32,8 +32,10 @@ function buildScheduledTaskRestartScript(taskName: string, taskScriptPath?: stri
     `timeout /t ${TASK_RESTART_RETRY_DELAY_SEC} /nobreak >nul`,
     "set /a attempts+=1",
     // Check if the task is already running (e.g. CLI restart beat us to it).
-    // schtasks /Query output contains "Running" when the task is active.
-    `schtasks /Query /TN ${quotedTaskName} /FO LIST 2>nul | findstr /I "Running" >nul 2>&1`,
+    // Use PowerShell Get-ScheduledTask instead of schtasks /Query because
+    // schtasks outputs localized status strings on non-English Windows,
+    // while Get-ScheduledTask .State is always an English enum.
+    `powershell -Command "(Get-ScheduledTask -TaskName '${taskName}' -ErrorAction SilentlyContinue).State" 2>nul | findstr /I "Running" >nul 2>&1`,
     "if not errorlevel 1 goto cleanup",
     `schtasks /Run /TN ${quotedTaskName} >nul 2>&1`,
     "if not errorlevel 1 goto cleanup",
