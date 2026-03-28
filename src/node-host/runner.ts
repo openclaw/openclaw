@@ -169,9 +169,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const browserProxyEnabled =
     cfg.nodeHost?.browserProxy?.enabled !== false && resolvedBrowser.enabled;
 
+  const isRemoteGateway = cfg.gateway?.mode === "remote";
+  const skipControlServer = process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER === "true";
+
   // Start the browser HTTP control server (port 18791) so that MacNodeBrowserProxy
   // (macOS app in remote mode) can reach it via direct HTTP on localhost.
-  if (browserProxyEnabled) {
+  // In local mode the gateway process already owns this port.
+  if (browserProxyEnabled && isRemoteGateway && !skipControlServer) {
     await startBrowserControlServerFromConfig();
   }
   const { token, password } = await resolveNodeHostGatewayCredentials({
