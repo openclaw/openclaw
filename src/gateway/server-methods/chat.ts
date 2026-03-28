@@ -1711,6 +1711,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             }
 
             // Second pass: if no fallback had explicit provider, try alias resolution
+            // Only use provider from fallbacks that are actual aliases.
+            // Providerless non-alias fallbacks (e.g., "gpt-4.1") would resolve to
+            // defaultProvider which is wrong in mixed-provider configs.
             if (!imageModelProvider) {
               for (const fb of imageModelConfigFallbacks) {
                 if (!fb?.trim()) {
@@ -1721,7 +1724,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   defaultProvider,
                   aliasIndex,
                 });
-                if (resolved?.ref.provider) {
+                if (resolved?.alias && resolved.ref.provider) {
                   imageModelProvider = resolved.ref.provider;
                   break;
                 }
