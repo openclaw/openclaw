@@ -111,10 +111,16 @@ export function resolveSlackChannelConfig(params: {
   // entry-scan. buildChannelKeyCandidates deduplicates identical keys.
   const channelIdLower = channelId.toLowerCase();
   const channelIdUpper = channelId.toUpperCase();
+  const channelTarget = `channel:${channelId}`;
+  const channelTargetLower = `channel:${channelIdLower}`;
+  const channelTargetUpper = `channel:${channelIdUpper}`;
   const candidates = buildChannelKeyCandidates(
     channelId,
     channelIdLower !== channelId ? channelIdLower : undefined,
     channelIdUpper !== channelId ? channelIdUpper : undefined,
+    channelTarget,
+    channelTargetLower !== channelTarget ? channelTargetLower : undefined,
+    channelTargetUpper !== channelTarget ? channelTargetUpper : undefined,
     allowNameMatching ? (channelName ? `#${directName}` : undefined) : undefined,
     allowNameMatching ? directName : undefined,
     allowNameMatching ? normalizedName : undefined,

@@ -82,6 +82,31 @@ describe("resolveSlackChannelConfig", () => {
     expect(res).toMatchObject({ allowed: true, requireMention: false });
   });
 
+  it("matches channel config keys prefixed with channel: when runtime passes a bare Slack channel id", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C0AJYR3BVTJ",
+      channels: { "channel:C0AJYR3BVTJ": { allow: true, requireMention: false } },
+      defaultRequireMention: true,
+    });
+    expect(res).toMatchObject({
+      allowed: true,
+      requireMention: false,
+      matchKey: "channel:C0AJYR3BVTJ",
+    });
+  });
+
+  it("matches lowercase channel:-prefixed config keys when Slack delivers uppercase channel IDs", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C0AJYR3BVTJ",
+      channels: { "channel:c0ajyr3bvtj": { allow: true, requireMention: false } },
+      defaultRequireMention: true,
+    });
+    expect(res).toMatchObject({
+      allowed: true,
+      requireMention: false,
+    });
+  });
+
   it("blocks channel-name route matches by default", () => {
     const res = resolveSlackChannelConfig({
       channelId: "C1",
