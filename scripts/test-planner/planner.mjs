@@ -97,13 +97,13 @@ const normalizeSurfaces = (values = []) => [
   ),
 ];
 
-const EXPLICIT_PLAN_SURFACES = new Set(["unit", "extensions", "channels", "gateway"]);
+const EXPLICIT_PLAN_SURFACES = new Set(["unit", "extensions", "channels", "contracts", "gateway"]);
 
 const validateExplicitSurfaces = (surfaces) => {
   const invalidSurfaces = surfaces.filter((surface) => !EXPLICIT_PLAN_SURFACES.has(surface));
   if (invalidSurfaces.length > 0) {
     throw new Error(
-      `Unsupported --surface value(s): ${invalidSurfaces.join(", ")}. Supported surfaces: unit, extensions, channels, gateway.`,
+      `Unsupported --surface value(s): ${invalidSurfaces.join(", ")}. Supported surfaces: unit, extensions, channels, contracts, gateway.`,
     );
   }
 };
@@ -124,6 +124,9 @@ const buildRequestedSurfaces = (request, env) => {
   }
   if (env.OPENCLAW_TEST_INCLUDE_CHANNELS === "1") {
     surfaces.push("channels");
+  }
+  if (env.OPENCLAW_TEST_INCLUDE_CONTRACTS === "1") {
+    surfaces.push("contracts");
   }
   if (env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1") {
     surfaces.push("gateway");
@@ -288,6 +291,9 @@ const resolveMaxWorkersForUnit = (unit, context) => {
   if (unit.surface === "channels") {
     return budget.channelSharedWorkers ?? budget.unitSharedWorkers;
   }
+  if (unit.surface === "contracts") {
+    return budget.unitSharedWorkers;
+  }
   if (unit.surface === "gateway") {
     return budget.gatewayWorkers;
   }
@@ -383,6 +389,7 @@ const buildDefaultUnits = (context, request) => {
   const selectedSurfaceSet = new Set(selectedSurfaces);
   const unitOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("unit");
   const channelsOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("channels");
+  const contractsOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("contracts");
   const extensionsOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("extensions");
 
   const {
@@ -610,6 +617,19 @@ const buildDefaultUnits = (context, request) => {
         }),
       );
     }
+  }
+
+  if (selectedSurfaceSet.has("contracts")) {
+    units.push(
+      createExecutionUnit(context, {
+        id: "contracts",
+        surface: "contracts",
+        isolate: false,
+        serialPhase: contractsOnlyRun ? undefined : "contracts",
+        args: ["vitest", "run", "--config", "vitest.contracts.config.ts", ...noIsolateArgs],
+        reasons: ["contracts-shared"],
+      }),
+    );
   }
 
   if (selectedSurfaceSet.has("extensions")) {
