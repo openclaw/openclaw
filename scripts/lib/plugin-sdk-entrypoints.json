@@ -66,6 +66,7 @@
   "byteplus",
   "chutes",
   "command-auth",
+  "direct-dm",
   "deepseek",
   "device-bootstrap",
   "diagnostics-otel",

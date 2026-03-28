@@ -494,6 +494,12 @@ describe("plugin-sdk subpath exports", () => {
       "attachChannelToResult",
       "buildChannelSendResult",
     ]);
+    expectSourceMentions("direct-dm", [
+      "createDirectDmPreCryptoGuardPolicy",
+      "createPreCryptoDirectDmAuthorizer",
+      "dispatchInboundDirectDmWithRuntime",
+      "resolveInboundDirectDmAccessWithRuntime",
+    ]);
 
     expectSourceMentions("conversation-runtime", [
       "DISCORD_THREAD_BINDING_CHANNEL",
