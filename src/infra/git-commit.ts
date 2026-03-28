@@ -14,7 +14,7 @@ const formatCommit = (value?: string | null) => {
   return trimmed.length > 7 ? trimmed.slice(0, 7) : trimmed;
 };
 
-let cachedCommit: string | null | undefined;
+let cachedBuildOrPackageCommit: string | null | undefined;
 
 const readCommitFromPackageJson = () => {
   try {
@@ -52,49 +52,46 @@ const readCommitFromBuildInfo = () => {
   }
 };
 
-export const resolveCommitHash = (options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) => {
-  if (cachedCommit !== undefined) {
-    return cachedCommit;
+const resolveBuildOrPackageCommit = () => {
+  if (cachedBuildOrPackageCommit !== undefined) {
+    return cachedBuildOrPackageCommit;
   }
+  cachedBuildOrPackageCommit = readCommitFromBuildInfo() ?? readCommitFromPackageJson();
+  return cachedBuildOrPackageCommit;
+};
+
+export const resolveCommitHash = (options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) => {
   const env = options.env ?? process.env;
   const envCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
   const normalized = formatCommit(envCommit);
   if (normalized) {
-    cachedCommit = normalized;
-    return cachedCommit;
+    return normalized;
   }
-  const buildInfoCommit = readCommitFromBuildInfo();
-  if (buildInfoCommit) {
-    cachedCommit = buildInfoCommit;
-    return cachedCommit;
-  }
-  const pkgCommit = readCommitFromPackageJson();
-  if (pkgCommit) {
-    cachedCommit = pkgCommit;
-    return cachedCommit;
+  const buildOrPackageCommit = resolveBuildOrPackageCommit();
+  if (buildOrPackageCommit) {
+    return buildOrPackageCommit;
   }
   try {
     const headPath = resolveGitHeadPath(options.cwd ?? process.cwd());
     if (!headPath) {
-      cachedCommit = null;
-      return cachedCommit;
+      return null;
     }
     const head = fs.readFileSync(headPath, "utf-8").trim();
     if (!head) {
-      cachedCommit = null;
-      return cachedCommit;
+      return null;
     }
     if (head.startsWith("ref:")) {
       const ref = head.replace(/^ref:\s*/i, "").trim();
       const refPath = path.resolve(path.dirname(headPath), ref);
       const refHash = fs.readFileSync(refPath, "utf-8").trim();
-      cachedCommit = formatCommit(refHash);
-      return cachedCommit;
+      return formatCommit(refHash);
     }
-    cachedCommit = formatCommit(head);
-    return cachedCommit;
+    return formatCommit(head);
   } catch {
-    cachedCommit = null;
-    return cachedCommit;
+    return null;
   }
 };
+
+export function resetCommitHashCacheForTests(): void {
+  cachedBuildOrPackageCommit = undefined;
+}
