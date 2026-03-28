@@ -34,6 +34,7 @@ export {
   collectInstalledSkillsCodeSafetyFindings,
   collectPluginsCodeSafetyFindings,
   collectPluginsTrustFindings,
+  collectSkillIntegrityFindings,
   collectStateDeepFilesystemFindings,
   collectWorkspaceSkillSymlinkEscapeFindings,
   readConfigSnapshotForAudit,

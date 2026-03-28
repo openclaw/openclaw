@@ -26,15 +26,16 @@ export type ClawHubSkillOrigin = {
   installedAt: number;
 };
 
+export type ClawHubSkillsLockfileEntry = {
+  version: string;
+  installedAt: number;
+  sha256?: string;
+  scannedAt?: number;
+};
+
 export type ClawHubSkillsLockfile = {
   version: 1;
-  skills: Record<
-    string,
-    {
-      version: string;
-      installedAt: number;
-    }
-  >;
+  skills: Record<string, ClawHubSkillsLockfileEntry>;
 };
 
 export type InstallClawHubSkillResult =
@@ -316,10 +317,12 @@ async function performClawHubSkillInstall(
         installedVersion: version,
         installedAt,
       });
+      const sha256 = await computeSkillFingerprint(install.targetDir).catch(() => undefined);
       const lock = await readClawHubSkillsLockfile(params.workspaceDir);
       lock.skills[params.slug] = {
         version,
         installedAt,
+        ...(sha256 ? { sha256, scannedAt: installedAt } : {}),
       };
       await writeClawHubSkillsLockfile(params.workspaceDir, lock);
 
@@ -499,4 +502,55 @@ export async function computeSkillFingerprint(skillDir: string): Promise<string>
     }
   }
   return digest.digest("hex");
+}
+
+export type SkillIntegrityResult = {
+  slug: string;
+  status: "ok" | "missing_hash" | "hash_mismatch" | "error";
+  expectedHash?: string;
+  actualHash?: string;
+  error?: string;
+};
+
+export async function verifySkillIntegrity(params: {
+  workspaceDir: string;
+  skillDir: string;
+  slug: string;
+}): Promise<SkillIntegrityResult> {
+  try {
+    const lock = await readClawHubSkillsLockfile(params.workspaceDir);
+    const entry = lock.skills[params.slug];
+    if (!entry?.sha256) {
+      return { slug: params.slug, status: "missing_hash" };
+    }
+    const actualHash = await computeSkillFingerprint(params.skillDir);
+    if (actualHash !== entry.sha256) {
+      return {
+        slug: params.slug,
+        status: "hash_mismatch",
+        expectedHash: entry.sha256,
+        actualHash,
+      };
+    }
+    return { slug: params.slug, status: "ok", expectedHash: entry.sha256, actualHash };
+  } catch (err) {
+    return { slug: params.slug, status: "error", error: String(err) };
+  }
+}
+
+export async function verifyAllSkillIntegrity(params: {
+  workspaceDir: string;
+  skillRootDir: string;
+}): Promise<SkillIntegrityResult[]> {
+  const lock = await readClawHubSkillsLockfile(params.workspaceDir);
+  const results: SkillIntegrityResult[] = [];
+  for (const slug of Object.keys(lock.skills)) {
+    const skillDir = path.join(params.skillRootDir, slug);
+    const dirExists = await fileExists(skillDir);
+    if (!dirExists) {
+      continue;
+    }
+    results.push(await verifySkillIntegrity({ workspaceDir: params.workspaceDir, skillDir, slug }));
+  }
+  return results;
 }
