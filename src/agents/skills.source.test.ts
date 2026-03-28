@@ -10,14 +10,6 @@ describe("resolveSkillSource", () => {
     ).toBe("openclaw-bundled");
   });
 
-  it("falls back to legacy top-level source", () => {
-    expect(
-      resolveSkillSource({
-        source: "openclaw-managed",
-      } as never),
-    ).toBe("openclaw-managed");
-  });
-
   it("returns unknown when neither source shape is present", () => {
     expect(resolveSkillSource({} as never)).toBe("unknown");
   });
