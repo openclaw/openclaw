@@ -77,6 +77,29 @@ function createBundledProviderCompatOptions(params?: { onlyPluginIds?: readonly 
   };
 }
 
+function createAutoEnabledProviderConfig() {
+  const rawConfig = {
+    plugins: {},
+  };
+  const autoEnabledConfig = {
+    ...rawConfig,
+    plugins: {
+      entries: {
+        google: { enabled: true },
+      },
+    },
+  };
+  return { rawConfig, autoEnabledConfig };
+}
+
+function expectAutoEnabledProviderLoad(params: { rawConfig: unknown; autoEnabledConfig: unknown }) {
+  expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
+    config: params.rawConfig,
+    env: process.env,
+  });
+  expectBundledProviderLoad({ config: params.autoEnabledConfig });
+}
+
 function expectResolvedAllowlistState(params?: {
   expectedAllow?: readonly string[];
   unexpectedAllow?: readonly string[];
@@ -261,26 +284,15 @@ describe("resolvePluginProviders", () => {
   });
 
   it("loads provider plugins from the auto-enabled config snapshot", () => {
-    const rawConfig = {
-      plugins: {},
-    };
-    const autoEnabledConfig = {
-      ...rawConfig,
-      plugins: {
-        entries: {
-          google: { enabled: true },
-        },
-      },
-    };
+    const { rawConfig, autoEnabledConfig } = createAutoEnabledProviderConfig();
     applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
 
     resolvePluginProviders({ config: rawConfig });
 
-    expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
-      config: rawConfig,
-      env: process.env,
+    expectAutoEnabledProviderLoad({
+      rawConfig,
+      autoEnabledConfig,
     });
-    expectBundledProviderLoad({ config: autoEnabledConfig });
   });
 
   it.each([
