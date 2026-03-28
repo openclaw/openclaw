@@ -76,7 +76,6 @@ describe("handleGatewayPostJsonEndpoint", () => {
   it("returns body when auth succeeds and JSON parsing succeeds", async () => {
     vi.mocked(authorizeGatewayBearerRequestOrReply).mockResolvedValue(true);
     vi.mocked(readJsonBodyOrError).mockResolvedValue({ hello: "world" });
-    vi.mocked(authorizeOperatorScopesForMethod).mockReturnValue({ allowed: true });
     const result = await handleGatewayPostJsonEndpoint(
       {
         url: "/v1/ok",

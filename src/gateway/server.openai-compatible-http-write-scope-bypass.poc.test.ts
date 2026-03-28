@@ -50,6 +50,27 @@ describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
       expect(body.error?.type).toBe("forbidden");
       expect(body.error?.message).toBe("missing scope: operator.write");
       expect(agentCommand).toHaveBeenCalledTimes(0);
+
+      agentCommand.mockClear();
+      const missingHeaderRes = await fetch(`http://127.0.0.1:${started.port}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer secret",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+
+      expect(missingHeaderRes.status).toBe(403);
+      const missingHeaderBody = (await missingHeaderRes.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(missingHeaderBody.error?.type).toBe("forbidden");
+      expect(missingHeaderBody.error?.message).toBe("missing scope: operator.write");
+      expect(agentCommand).toHaveBeenCalledTimes(0);
     } finally {
       started.ws.close();
       await started.server.close();
