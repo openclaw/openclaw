@@ -520,8 +520,11 @@ async function maybeFetchFirecrawlWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
+  // Include allowFakeIp in cache key to partition by security mode.
+  // Without this, content fetched with allowFakeIp=true could be replayed
+  // to later calls with allowFakeIp=false, bypassing stricter SSRF policy.
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}:${params.allowFakeIp}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
