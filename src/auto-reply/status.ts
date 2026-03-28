@@ -429,6 +429,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     cfg: selectionConfig,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: false,
   });
   const selectedProvider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
   const selectedModel = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
@@ -737,11 +738,13 @@ export function buildStatusMessage(args: StatusArgs): string {
     const aliasIndex = buildModelAliasIndex({
       cfg: args.config,
       defaultProvider: DEFAULT_PROVIDER,
+      allowPluginNormalization: false,
     });
     const resolvedOverride = resolveModelRefFromString({
       raw: channelOverride.model,
       defaultProvider: DEFAULT_PROVIDER,
       aliasIndex,
+      allowPluginNormalization: false,
     });
     if (!resolvedOverride) {
       return undefined;
