@@ -14,6 +14,14 @@ vi.mock("./loader.js", () => ({
 
 import { registerPluginCliCommands } from "./cli.js";
 
+function createProgram(existingCommandName?: string) {
+  const program = new Command();
+  if (existingCommandName) {
+    program.command(existingCommandName);
+  }
+  return program;
+}
+
 describe("registerPluginCliCommands", () => {
   beforeEach(() => {
     mocks.memoryRegister.mockClear();
@@ -38,8 +46,7 @@ describe("registerPluginCliCommands", () => {
   });
 
   it("skips plugin CLI registrars when commands already exist", () => {
-    const program = new Command();
-    program.command("memory");
+    const program = createProgram("memory");
 
     // oxlint-disable-next-line typescript/no-explicit-any
     registerPluginCliCommands(program, {} as any);
@@ -49,7 +56,7 @@ describe("registerPluginCliCommands", () => {
   });
 
   it("forwards an explicit env to plugin loading", () => {
-    const program = new Command();
+    const program = createProgram();
     const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
 
     registerPluginCliCommands(program, {} as OpenClawConfig, env);

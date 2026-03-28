@@ -11,42 +11,52 @@ import {
   setGatewaySubagentRuntime,
 } from "./index.js";
 
+function createCommandResult() {
+  return {
+    pid: 12345,
+    stdout: "hello\n",
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    noOutputTimedOut: false,
+    termination: "exit" as const,
+  };
+}
+
 describe("plugin runtime command execution", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     clearGatewaySubagentRuntime();
   });
 
-  it("exposes runtime.system.runCommandWithTimeout by default", async () => {
-    const commandResult = {
-      pid: 12345,
-      stdout: "hello\n",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      noOutputTimedOut: false,
-      termination: "exit" as const,
-    };
-    const runCommandWithTimeoutMock = vi
-      .spyOn(execModule, "runCommandWithTimeout")
-      .mockResolvedValue(commandResult);
+  it.each([
+    {
+      name: "exposes runtime.system.runCommandWithTimeout by default",
+      mockKind: "resolve" as const,
+      expected: "resolve" as const,
+    },
+    {
+      name: "forwards runtime.system.runCommandWithTimeout errors",
+      mockKind: "reject" as const,
+      expected: "reject" as const,
+    },
+  ] as const)("$name", async ({ mockKind, expected }) => {
+    const commandResult = createCommandResult();
+    const runCommandWithTimeoutMock = vi.spyOn(execModule, "runCommandWithTimeout");
+    if (mockKind === "resolve") {
+      runCommandWithTimeoutMock.mockResolvedValue(commandResult);
+    } else {
+      runCommandWithTimeoutMock.mockRejectedValue(new Error("boom"));
+    }
 
     const runtime = createPluginRuntime();
-    await expect(
-      runtime.system.runCommandWithTimeout(["echo", "hello"], { timeoutMs: 1000 }),
-    ).resolves.toEqual(commandResult);
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["echo", "hello"], { timeoutMs: 1000 });
-  });
-
-  it("forwards runtime.system.runCommandWithTimeout errors", async () => {
-    const runCommandWithTimeoutMock = vi
-      .spyOn(execModule, "runCommandWithTimeout")
-      .mockRejectedValue(new Error("boom"));
-    const runtime = createPluginRuntime();
-    await expect(
-      runtime.system.runCommandWithTimeout(["echo", "hello"], { timeoutMs: 1000 }),
-    ).rejects.toThrow("boom");
+    const command = runtime.system.runCommandWithTimeout(["echo", "hello"], { timeoutMs: 1000 });
+    if (expected === "resolve") {
+      await expect(command).resolves.toEqual(commandResult);
+    } else {
+      await expect(command).rejects.toThrow("boom");
+    }
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["echo", "hello"], { timeoutMs: 1000 });
   });
 
@@ -56,48 +66,61 @@ describe("plugin runtime command execution", () => {
     expect(runtime.events.onSessionTranscriptUpdate).toBe(onSessionTranscriptUpdate);
   });
 
-  it("exposes runtime.mediaUnderstanding helpers and keeps stt as an alias", () => {
+  it.each([
+    {
+      name: "exposes runtime.mediaUnderstanding helpers and keeps stt as an alias",
+      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expect(typeof runtime.mediaUnderstanding.runFile).toBe("function");
+        expect(typeof runtime.mediaUnderstanding.describeImageFile).toBe("function");
+        expect(typeof runtime.mediaUnderstanding.describeImageFileWithModel).toBe("function");
+        expect(typeof runtime.mediaUnderstanding.describeVideoFile).toBe("function");
+        expect(runtime.mediaUnderstanding.transcribeAudioFile).toBe(
+          runtime.stt.transcribeAudioFile,
+        );
+      },
+    },
+    {
+      name: "exposes runtime.imageGeneration helpers",
+      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expect(typeof runtime.imageGeneration.generate).toBe("function");
+        expect(typeof runtime.imageGeneration.listProviders).toBe("function");
+      },
+    },
+    {
+      name: "exposes runtime.webSearch helpers",
+      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expect(typeof runtime.webSearch.listProviders).toBe("function");
+        expect(typeof runtime.webSearch.search).toBe("function");
+      },
+    },
+    {
+      name: "exposes runtime.agent host helpers",
+      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expect(runtime.agent.defaults).toEqual({
+          model: DEFAULT_MODEL,
+          provider: DEFAULT_PROVIDER,
+        });
+        expect(typeof runtime.agent.runEmbeddedPiAgent).toBe("function");
+        expect(typeof runtime.agent.resolveAgentDir).toBe("function");
+        expect(typeof runtime.agent.session.resolveSessionFilePath).toBe("function");
+      },
+    },
+    {
+      name: "exposes runtime.modelAuth with getApiKeyForModel and resolveApiKeyForProvider",
+      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expect(runtime.modelAuth).toBeDefined();
+        expect(typeof runtime.modelAuth.getApiKeyForModel).toBe("function");
+        expect(typeof runtime.modelAuth.resolveApiKeyForProvider).toBe("function");
+      },
+    },
+  ] as const)("$name", ({ assert }) => {
     const runtime = createPluginRuntime();
-    expect(typeof runtime.mediaUnderstanding.runFile).toBe("function");
-    expect(typeof runtime.mediaUnderstanding.describeImageFile).toBe("function");
-    expect(typeof runtime.mediaUnderstanding.describeImageFileWithModel).toBe("function");
-    expect(typeof runtime.mediaUnderstanding.describeVideoFile).toBe("function");
-    expect(runtime.mediaUnderstanding.transcribeAudioFile).toBe(runtime.stt.transcribeAudioFile);
-  });
-
-  it("exposes runtime.imageGeneration helpers", () => {
-    const runtime = createPluginRuntime();
-    expect(typeof runtime.imageGeneration.generate).toBe("function");
-    expect(typeof runtime.imageGeneration.listProviders).toBe("function");
-  });
-
-  it("exposes runtime.webSearch helpers", () => {
-    const runtime = createPluginRuntime();
-    expect(typeof runtime.webSearch.listProviders).toBe("function");
-    expect(typeof runtime.webSearch.search).toBe("function");
+    assert(runtime);
   });
 
   it("exposes runtime.system.requestHeartbeatNow", () => {
     const runtime = createPluginRuntime();
     expect(runtime.system.requestHeartbeatNow).toBe(requestHeartbeatNow);
-  });
-
-  it("exposes runtime.agent host helpers", () => {
-    const runtime = createPluginRuntime();
-    expect(runtime.agent.defaults).toEqual({
-      model: DEFAULT_MODEL,
-      provider: DEFAULT_PROVIDER,
-    });
-    expect(typeof runtime.agent.runEmbeddedPiAgent).toBe("function");
-    expect(typeof runtime.agent.resolveAgentDir).toBe("function");
-    expect(typeof runtime.agent.session.resolveSessionFilePath).toBe("function");
-  });
-
-  it("exposes runtime.modelAuth with getApiKeyForModel and resolveApiKeyForProvider", () => {
-    const runtime = createPluginRuntime();
-    expect(runtime.modelAuth).toBeDefined();
-    expect(typeof runtime.modelAuth.getApiKeyForModel).toBe("function");
-    expect(typeof runtime.modelAuth.resolveApiKeyForProvider).toBe("function");
   });
 
   it("modelAuth wrappers strip agentDir and store to prevent credential steering", async () => {

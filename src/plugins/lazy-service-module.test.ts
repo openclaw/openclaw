@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startLazyPluginServiceModule } from "./lazy-service-module.js";
 
+function createAsyncHookMock() {
+  return vi.fn(async () => {});
+}
+
 describe("startLazyPluginServiceModule", () => {
   afterEach(() => {
     delete process.env.OPENCLAW_LAZY_SERVICE_SKIP;
@@ -8,8 +12,8 @@ describe("startLazyPluginServiceModule", () => {
   });
 
   it("starts the default module and returns its stop hook", async () => {
-    const start = vi.fn(async () => {});
-    const stop = vi.fn(async () => {});
+    const start = createAsyncHookMock();
+    const stop = createAsyncHookMock();
 
     const handle = await startLazyPluginServiceModule({
       loadDefaultModule: async () => ({
@@ -28,7 +32,7 @@ describe("startLazyPluginServiceModule", () => {
 
   it("honors skip env before loading the module", async () => {
     process.env.OPENCLAW_LAZY_SERVICE_SKIP = "1";
-    const loadDefaultModule = vi.fn(async () => ({ startDefault: vi.fn(async () => {}) }));
+    const loadDefaultModule = vi.fn(async () => ({ startDefault: createAsyncHookMock() }));
 
     const handle = await startLazyPluginServiceModule({
       skipEnvVar: "OPENCLAW_LAZY_SERVICE_SKIP",
@@ -42,12 +46,12 @@ describe("startLazyPluginServiceModule", () => {
 
   it("uses the override module when configured", async () => {
     process.env.OPENCLAW_LAZY_SERVICE_OVERRIDE = "virtual:service";
-    const start = vi.fn(async () => {});
+    const start = createAsyncHookMock();
     const loadOverrideModule = vi.fn(async () => ({ startOverride: start }));
 
     await startLazyPluginServiceModule({
       overrideEnvVar: "OPENCLAW_LAZY_SERVICE_OVERRIDE",
-      loadDefaultModule: async () => ({ startDefault: vi.fn(async () => {}) }),
+      loadDefaultModule: async () => ({ startDefault: createAsyncHookMock() }),
       loadOverrideModule,
       startExportNames: ["startOverride", "startDefault"],
     });
