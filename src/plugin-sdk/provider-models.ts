@@ -15,13 +15,7 @@ export {
   createMoonshotThinkingWrapper,
   hasNativeWebSearchTool,
   HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
-  isMiniMaxModernModelId,
   matchesExactOrPrefix,
-  MINIMAX_DEFAULT_MODEL_ID,
-  MINIMAX_DEFAULT_MODEL_REF,
-  MINIMAX_TEXT_MODEL_CATALOG,
-  MINIMAX_TEXT_MODEL_ORDER,
-  MINIMAX_TEXT_MODEL_REFS,
   normalizeModelCompat,
   normalizeProviderId,
   resolveMoonshotThinkingType,
@@ -30,6 +24,14 @@ export {
   XAI_TOOL_SCHEMA_PROFILE,
 } from "./provider-model-shared.js";
 export { applyXaiModelCompat, normalizeXaiModelId } from "./xai.js";
+export {
+  isMiniMaxModernModelId,
+  MINIMAX_DEFAULT_MODEL_ID,
+  MINIMAX_DEFAULT_MODEL_REF,
+  MINIMAX_TEXT_MODEL_CATALOG,
+  MINIMAX_TEXT_MODEL_ORDER,
+  MINIMAX_TEXT_MODEL_REFS,
+} from "./minimax.js";
 
 // Deprecated compat aliases. Prefer provider-specific subpaths.
 export { applyGoogleGeminiModelDefault, GOOGLE_GEMINI_DEFAULT_MODEL } from "./google.js";
