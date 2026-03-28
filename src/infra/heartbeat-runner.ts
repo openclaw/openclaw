@@ -80,7 +80,13 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { peekSystemEventEntries, resolveSystemEventDeliveryContext } from "./system-events.js";
+import {
+  type SystemEvent,
+  drainSystemEventEntries,
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  resolveSystemEventDeliveryContext,
+} from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -190,6 +196,43 @@ function resolveHeartbeatSession(
     return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
   }
 
+  // Configured heartbeat session takes priority over the originating
+  // (forced) session key.  System-event-triggered heartbeats pass the
+  // originating DM session as forcedSessionKey, but the user's explicit
+  // heartbeat.session config should always win.
+  const trimmed = heartbeat?.session?.trim() ?? "";
+  if (trimmed) {
+    const normalized = trimmed.toLowerCase();
+    if (normalized === "main" || normalized === "global") {
+      return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+    }
+    if (normalized !== "main" && normalized !== "global") {
+      const candidate = toAgentStoreSessionKey({
+        agentId: resolvedAgentId,
+        requestKey: trimmed,
+        mainKey: cfg.session?.mainKey,
+      });
+      const canonical = canonicalizeMainSessionAlias({
+        cfg,
+        agentId: resolvedAgentId,
+        sessionKey: candidate,
+      });
+      if (canonical !== "global") {
+        const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
+        if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
+          return {
+            sessionKey: canonical,
+            storePath,
+            store,
+            entry: store[canonical],
+          };
+        }
+      }
+    }
+  }
+
+  // Fall back to the originating session when no explicit heartbeat
+  // session is configured.
   const forced = forcedSessionKey?.trim();
   if (forced) {
     const forcedCandidate = toAgentStoreSessionKey({
@@ -212,38 +255,6 @@ function resolveHeartbeatSession(
           entry: store[forcedCanonical],
         };
       }
-    }
-  }
-
-  const trimmed = heartbeat?.session?.trim() ?? "";
-  if (!trimmed) {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
-  }
-
-  const normalized = trimmed.toLowerCase();
-  if (normalized === "main" || normalized === "global") {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
-  }
-
-  const candidate = toAgentStoreSessionKey({
-    agentId: resolvedAgentId,
-    requestKey: trimmed,
-    mainKey: cfg.session?.mainKey,
-  });
-  const canonical = canonicalizeMainSessionAlias({
-    cfg,
-    agentId: resolvedAgentId,
-    sessionKey: candidate,
-  });
-  if (canonical !== "global") {
-    const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
-    if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
-      return {
-        sessionKey: canonical,
-        storePath,
-        store,
-        entry: store[canonical],
-      };
     }
   }
 
@@ -404,6 +415,20 @@ type HeartbeatPreflight = HeartbeatReasonFlags & {
   skipReason?: HeartbeatSkipReason;
 };
 
+// Returns true when a system event is related to the heartbeat trigger reason
+// (exec-completion or cron). Unrelated events (model notices, maintenance, etc.)
+// should stay in the originating session and not be migrated.
+function isHeartbeatTriggerEvent(event: SystemEvent, reasonFlags: HeartbeatReasonFlags): boolean {
+  const key = event.contextKey ?? "";
+  if (reasonFlags.isExecEventReason) {
+    return key === "exec" || key.startsWith("exec:");
+  }
+  if (reasonFlags.isCronEventReason) {
+    return key.startsWith("cron:");
+  }
+  return false;
+}
+
 function resolveHeartbeatReasonFlags(reason?: string): HeartbeatReasonFlags {
   const reasonKind = resolveHeartbeatReasonKind(reason);
   return {
@@ -427,6 +452,48 @@ async function resolveHeartbeatPreflight(params: {
     params.heartbeat,
     params.forcedSessionKey,
   );
+
+  // When the resolved heartbeat session differs from the originating session
+  // (e.g. system-event-triggered heartbeat routed to a dedicated heartbeat
+  // session), migrate only trigger-related system events so they are visible
+  // in the session where the heartbeat actually runs. Unrelated events
+  // (model notices, maintenance, etc.) stay in the originating session.
+  const originatingSessionKey = params.forcedSessionKey?.trim();
+  if (originatingSessionKey && originatingSessionKey !== session.sessionKey) {
+    const originEvents = drainSystemEventEntries(originatingSessionKey);
+    const triggerRelated: SystemEvent[] = [];
+    const unrelated: SystemEvent[] = [];
+    for (const event of originEvents) {
+      if (isHeartbeatTriggerEvent(event, reasonFlags)) {
+        triggerRelated.push(event);
+      } else {
+        unrelated.push(event);
+      }
+    }
+
+    // Re-enqueue unrelated events back into the originating session so they
+    // remain visible in the user's conversation.
+    for (const event of unrelated) {
+      enqueueSystemEvent(event.text, {
+        sessionKey: originatingSessionKey,
+        contextKey: event.contextKey,
+        deliveryContext: event.deliveryContext,
+      });
+    }
+
+    // Drain destination events first so `lastText` is reset — prevents
+    // the consecutive-duplicate guard in enqueueSystemEvent from silently
+    // dropping migrated events whose text matches the destination's tail.
+    const existingEvents = drainSystemEventEntries(session.sessionKey);
+    for (const event of [...existingEvents, ...triggerRelated]) {
+      enqueueSystemEvent(event.text, {
+        sessionKey: session.sessionKey,
+        contextKey: event.contextKey,
+        deliveryContext: event.deliveryContext,
+      });
+    }
+  }
+
   const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
   const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
