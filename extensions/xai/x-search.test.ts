@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { withFetchPreconnect } from "../../src/test-utils/fetch-mock.js";
 import { createXSearchTool } from "./x-search.js";
 
 function installXSearchFetch(payload?: Record<string, unknown>) {
@@ -43,14 +43,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("x_search tool", () => {
+describe("xai x_search tool", () => {
   it("enables x_search when runtime metadata marks an xAI key active", () => {
     const tool = createXSearchTool({
       config: {},
-      runtimeXSearch: {
-        active: true,
-        apiKeySource: "env",
-        diagnostics: [],
+      runtimeConfig: {
+        tools: {
+          web: {
+            x_search: {
+              apiKey: "x-search-runtime-key", // pragma: allowlist secret
+            },
+          },
+        },
       },
     });
 
@@ -147,6 +151,39 @@ describe("x_search tool", () => {
     const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
     expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
       "Bearer xai-plugin-key",
+    );
+  });
+
+  it("prefers the active runtime config for SecretRef-backed x_search keys", async () => {
+    const mockFetch = installXSearchFetch();
+    const tool = createXSearchTool({
+      config: {
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
+            },
+          },
+        },
+      },
+      runtimeConfig: {
+        tools: {
+          web: {
+            x_search: {
+              apiKey: "x-search-runtime-key", // pragma: allowlist secret
+            },
+          },
+        },
+      },
+    });
+
+    await tool?.execute?.("x-search:runtime-key", {
+      query: "runtime key search",
+    });
+
+    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+      "Bearer x-search-runtime-key",
     );
   });
 
