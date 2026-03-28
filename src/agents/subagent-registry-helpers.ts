@@ -1,9 +1,11 @@
-import { promises as fs } from "node:fs";
+import { existsSync, readFileSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   resolveStorePath,
   updateSessionStore,
   type SessionEntry,
@@ -11,8 +13,14 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
-import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
+import {
+  type SubagentRunOutcome,
+  withSubagentOutcomeTiming,
+} from "./subagent-announce-output.js";
+import {
+  SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_ERROR,
+} from "./subagent-lifecycle-events.js";
 import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -205,6 +213,64 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
   }
 }
 
+/**
+ * Check whether a subagent run's transcript contains a completed (non-pending) assistant reply.
+ * Used to recover runs that finished successfully before a gateway restart but whose
+ * completion wasn't persisted to the run registry.
+ */
+function hasCompletedTranscript(entry: SubagentRunRecord): boolean {
+  try {
+    const childSessionKey = entry.childSessionKey?.trim();
+    if (!childSessionKey) {
+      return false;
+    }
+    const cfg = loadConfig();
+    const agentId = resolveAgentIdFromSessionKey(childSessionKey);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    const store = loadSessionStore(storePath);
+    const sessionEntry = findSessionEntryByKey(store, childSessionKey);
+    if (!sessionEntry?.sessionId) {
+      return false;
+    }
+    const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
+    const sessionFilePath = resolveSessionFilePath(
+      sessionEntry.sessionId,
+      sessionEntry,
+      sessionPathOpts,
+    );
+    if (!existsSync(sessionFilePath)) {
+      return false;
+    }
+    const lines = readFileSync(sessionFilePath, "utf-8").split("\n").filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const parsed = JSON.parse(lines[i]) as { message?: unknown };
+        const msg = (parsed.message ?? parsed) as { role?: string; content?: unknown };
+        if (msg.role === "assistant" && msg.content) {
+          const blocks = Array.isArray(msg.content) ? msg.content : [msg.content];
+          const hasPendingTool = blocks.some(
+            (b: unknown) =>
+              typeof b === "object" &&
+              b !== null &&
+              (b as Record<string, unknown>).type === "tool_use",
+          );
+          if (!hasPendingTool) {
+            return true;
+          }
+        }
+        if (msg.role === "user" || msg.role === "system") {
+          break;
+        }
+      } catch {
+        // skip malformed lines
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export function reconcileOrphanedRun(params: {
   runId: string;
   entry: SubagentRunRecord;
@@ -215,6 +281,28 @@ export function reconcileOrphanedRun(params: {
 }) {
   const now = Date.now();
   let changed = false;
+  // Before marking as errored, check whether the transcript shows the run already
+  // completed successfully. This recovers runs that finished before a gateway restart
+  // but whose completion wasn't flushed to the run registry.
+  if (typeof params.entry.endedAt !== "number" && hasCompletedTranscript(params.entry)) {
+    params.entry.endedAt = now;
+    const completedOutcome: SubagentRunOutcome = withSubagentOutcomeTiming(
+      { status: "ok" },
+      {
+        startedAt: params.entry.startedAt,
+        endedAt: params.entry.endedAt,
+      },
+    );
+    if (shouldUpdateRunOutcome(params.entry.outcome, completedOutcome)) {
+      params.entry.outcome = completedOutcome;
+      changed = true;
+    }
+    params.entry.endedReason = SUBAGENT_ENDED_REASON_COMPLETE;
+    defaultRuntime.log(
+      `[info] subagent-restart: recovered completed run=${params.runId} child=${params.entry.childSessionKey} (transcript had final assistant reply)`,
+    );
+    return true;
+  }
   if (typeof params.entry.endedAt !== "number") {
     params.entry.endedAt = now;
     changed = true;
