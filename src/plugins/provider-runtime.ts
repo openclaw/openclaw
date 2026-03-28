@@ -19,6 +19,7 @@ import type {
   ProviderCreateStreamFnContext,
   ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
+  ProviderNormalizeModelIdContext,
   ProviderModernModelPolicyContext,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareDynamicModelContext,
@@ -215,6 +216,25 @@ export function normalizeProviderResolvedModelWithPlugin(params: {
   return (
     resolveProviderRuntimePlugin(params)?.normalizeResolvedModel?.(params.context) ?? undefined
   );
+}
+
+export function normalizeProviderModelIdWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderNormalizeModelIdContext;
+}): string | undefined {
+  const plugin =
+    resolveProviderRuntimePlugin(params) ??
+    resolveProviderPluginsForHooks({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }).find((candidate) => matchesProviderId(candidate, params.provider));
+  const normalized = plugin?.normalizeModelId?.(params.context);
+  const trimmed = normalized?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 export function resolveProviderCapabilitiesWithPlugin(params: {

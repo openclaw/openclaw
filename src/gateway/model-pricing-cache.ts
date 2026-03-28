@@ -9,8 +9,7 @@ import {
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeGoogleModelId } from "../plugin-sdk/google.js";
-import { normalizeXaiModelId } from "../plugin-sdk/xai.js";
+import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 
 export type CachedModelPricing = {
   input: number;
@@ -151,12 +150,14 @@ function canonicalizeOpenRouterLookupId(id: string): string {
       .replace(/^claude-(\d+)\.(\d+)-/u, "claude-$1-$2-")
       .replace(/^claude-([a-z]+)-(\d+)\.(\d+)$/u, "claude-$1-$2-$3");
   }
-  if (provider === "google") {
-    model = normalizeGoogleModelId(model);
-  }
-  if (provider === "x-ai") {
-    model = normalizeXaiModelId(model);
-  }
+  model =
+    normalizeProviderModelIdWithPlugin({
+      provider,
+      context: {
+        provider,
+        modelId: model,
+      },
+    }) ?? model;
   return `${provider}/${model}`;
 }
 
