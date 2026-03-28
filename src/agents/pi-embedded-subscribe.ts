@@ -565,9 +565,30 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
 
   const emitReasoningStream = (text: string) => {
-    if (!state.streamReasoning || !params.onReasoningStream) {
+    if (!text) {
       return;
     }
+
+    // Always broadcast raw thinking via agent events so HTTP listeners
+    // (e.g. OpenResponses /v1/responses) can capture reasoning content
+    // even when the channel-specific streamReasoning mode is off.
+    const rawPrior = state.lastStreamedReasoningRaw ?? "";
+    const rawDelta = text.startsWith(rawPrior) ? text.slice(rawPrior.length) : text;
+    state.lastStreamedReasoningRaw = text;
+
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "thinking",
+      data: {
+        rawText: text,
+        rawDelta,
+      },
+    });
+
+    if (!state.streamReasoning) {
+      return;
+    }
+
     const formatted = formatReasoningMessage(text);
     if (!formatted) {
       return;
@@ -575,23 +596,23 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (formatted === state.lastStreamedReasoning) {
       return;
     }
-    // Compute delta: new text since the last emitted reasoning.
-    // Guard against non-prefix changes (e.g. trim/format altering earlier content).
     const prior = state.lastStreamedReasoning ?? "";
     const delta = formatted.startsWith(prior) ? formatted.slice(prior.length) : formatted;
     state.lastStreamedReasoning = formatted;
 
-    // Broadcast thinking event to WebSocket clients in real-time
+    // Re-emit with formatted text for channel-specific consumers
     emitAgentEvent({
       runId: params.runId,
       stream: "thinking",
       data: {
         text: formatted,
         delta,
+        rawText: text,
+        rawDelta,
       },
     });
 
-    void params.onReasoningStream({
+    void params.onReasoningStream?.({
       text: formatted,
     });
   };

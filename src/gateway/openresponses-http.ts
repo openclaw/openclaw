@@ -683,6 +683,23 @@ export async function handleOpenResponsesHttpRequest(
       : undefined;
 
   if (!stream) {
+    let collectedThinking = "";
+    let currentThinkingSegment = "";
+    const unsubThinking = onAgentEvent((evt) => {
+      if (evt.runId !== responseId || evt.stream !== "thinking") {
+        return;
+      }
+      const raw = typeof evt.data?.rawText === "string" ? evt.data.rawText : "";
+      if (!raw) {
+        return;
+      }
+      if (currentThinkingSegment) {
+        collectedThinking += (collectedThinking ? "\n\n" : "") + currentThinkingSegment;
+        currentThinkingSegment = "";
+      }
+      currentThinkingSegment = raw;
+    });
+
     try {
       const result = await runResponsesAgentCommand({
         message: prompt.message,
@@ -697,7 +714,12 @@ export async function handleOpenResponsesHttpRequest(
         deps,
       });
 
-      const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+      unsubThinking();
+      if (currentThinkingSegment) {
+        collectedThinking += (collectedThinking ? "\n\n" : "") + currentThinkingSegment;
+        currentThinkingSegment = "";
+      }
+
       const usage = extractUsageFromResult(result);
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
@@ -707,6 +729,7 @@ export async function handleOpenResponsesHttpRequest(
         const functionCall = pendingToolCalls[0];
         const functionCallItemId = `call_${randomUUID()}`;
 
+        const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
         const assistantText =
           Array.isArray(payloads) && payloads.length > 0
             ? payloads
@@ -716,6 +739,13 @@ export async function handleOpenResponsesHttpRequest(
             : "";
 
         const output: OutputItem[] = [];
+        if (collectedThinking) {
+          output.push({
+            type: "reasoning",
+            id: `reasoning_${randomUUID()}`,
+            content: collectedThinking,
+          });
+        }
         if (assistantText) {
           output.push(
             createAssistantOutputItem({
@@ -746,27 +776,41 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
 
+      const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
       const content =
         Array.isArray(payloads) && payloads.length > 0
           ? payloads
               .map((p) => (typeof p.text === "string" ? p.text : ""))
               .filter(Boolean)
               .join("\n\n")
-          : "No response from OpenClaw.";
+          : "";
+      const text = content || collectedThinking || "No response from OpenClaw.";
+
+      const output: OutputItem[] = [];
+      if (collectedThinking) {
+        output.push({
+          type: "reasoning",
+          id: `reasoning_${randomUUID()}`,
+          content: collectedThinking,
+        });
+      }
+      output.push(createAssistantOutputItem({ id: outputItemId, text, status: "completed" }));
 
       const response = createResponseResource({
         id: responseId,
         model,
         status: "completed",
-        output: [
-          createAssistantOutputItem({ id: outputItemId, text: content, status: "completed" }),
-        ],
+        output,
         usage,
       });
 
       rememberResponseSession();
       sendJson(res, 200, response);
     } catch (err) {
+      unsubThinking();
+      if (currentThinkingSegment) {
+        collectedThinking += (collectedThinking ? "\n\n" : "") + currentThinkingSegment;
+      }
       logWarn(`openresponses: non-stream response failed: ${String(err)}`);
       const response = createResponseResource({
         id: responseId,
@@ -788,11 +832,14 @@ export async function handleOpenResponsesHttpRequest(
   setSseHeaders(res);
 
   let accumulatedText = "";
+  let accumulatedThinking = "";
+  let currentStreamThinkingSegment = "";
   let sawAssistantDelta = false;
   let closed = false;
   let unsubscribe = () => {};
   let finalUsage: Usage | undefined;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
+  const reasoningItemId = `reasoning_${randomUUID()}`;
 
   const maybeFinalize = () => {
     if (closed) {
@@ -900,6 +947,27 @@ export async function handleOpenResponsesHttpRequest(
       return;
     }
 
+    if (evt.stream === "thinking") {
+      const raw = typeof evt.data?.rawText === "string" ? evt.data.rawText : "";
+      if (!raw) {
+        return;
+      }
+      if (currentStreamThinkingSegment) {
+        accumulatedThinking += (accumulatedThinking ? "\n\n" : "") + currentStreamThinkingSegment;
+        currentStreamThinkingSegment = "";
+      }
+      currentStreamThinkingSegment = raw;
+
+      writeSseEvent(res, {
+        type: "response.reasoning.delta",
+        item_id: reasoningItemId,
+        text: accumulatedThinking
+          ? accumulatedThinking + "\n\n" + currentStreamThinkingSegment
+          : currentStreamThinkingSegment,
+      });
+      return;
+    }
+
     if (evt.stream === "assistant") {
       const content = resolveAssistantStreamDeltaText(evt);
       if (!content) {
@@ -922,9 +990,20 @@ export async function handleOpenResponsesHttpRequest(
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
-        const finalText = accumulatedText || "No response from OpenClaw.";
+        if (currentStreamThinkingSegment) {
+          accumulatedThinking += (accumulatedThinking ? "\n\n" : "") + currentStreamThinkingSegment;
+          currentStreamThinkingSegment = "";
+        }
+        if (accumulatedThinking) {
+          writeSseEvent(res, {
+            type: "response.reasoning.done",
+            item_id: reasoningItemId,
+            text: accumulatedThinking,
+          });
+        }
+        const fallback = accumulatedText || accumulatedThinking || "No response from OpenClaw.";
         const finalStatus = phase === "error" ? "failed" : "completed";
-        requestFinalize(finalStatus, finalText);
+        requestFinalize(finalStatus, fallback);
       }
     }
   });
@@ -1056,9 +1135,10 @@ export async function handleOpenResponsesHttpRequest(
                 .map((p) => (typeof p.text === "string" ? p.text : ""))
                 .filter(Boolean)
                 .join("\n\n")
-            : "No response from OpenClaw.";
+            : "";
 
-        accumulatedText = content;
+        const fallback = content || accumulatedThinking || "No response from OpenClaw.";
+        accumulatedText = fallback;
         sawAssistantDelta = true;
 
         writeSseEvent(res, {
@@ -1066,7 +1146,7 @@ export async function handleOpenResponsesHttpRequest(
           item_id: outputItemId,
           output_index: 0,
           content_index: 0,
-          delta: content,
+          delta: fallback,
         });
       }
     } catch (err) {
