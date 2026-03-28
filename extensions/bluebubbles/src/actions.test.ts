@@ -125,8 +125,9 @@ describe("bluebubblesMessageActions", () => {
       expect(actions).toContain("unsend");
     });
 
-    it("hides private-api actions when private API is disabled", () => {
-      vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
+    it("keeps actions available when private API status is unknown/disabled", async () => {
+      const probe = await import("./probe.js");
+      vi.spyOn(probe, "getCachedBlueBubblesPrivateApiStatus").mockReturnValue(false);
       const cfg: OpenClawConfig = {
         channels: {
           bluebubbles: {
@@ -139,16 +140,11 @@ describe("bluebubblesMessageActions", () => {
       const actions = describeMessageTool({ cfg })?.actions ?? [];
       expect(actions).toContain("upload-file");
       expect(actions).not.toContain("sendAttachment");
-      expect(actions).not.toContain("react");
-      expect(actions).not.toContain("reply");
-      expect(actions).not.toContain("sendWithEffect");
-      expect(actions).not.toContain("edit");
-      expect(actions).not.toContain("unsend");
-      expect(actions).not.toContain("renameGroup");
-      expect(actions).not.toContain("setGroupIcon");
-      expect(actions).not.toContain("addParticipant");
-      expect(actions).not.toContain("removeParticipant");
-      expect(actions).not.toContain("leaveGroup");
+      expect(actions).toContain("react");
+      expect(actions).toContain("reply");
+      expect(actions).toContain("sendWithEffect");
+      expect(actions).toContain("edit");
+      expect(actions).toContain("unsend");
     });
   });
 
@@ -276,8 +272,9 @@ describe("bluebubblesMessageActions", () => {
       ).rejects.toThrow(/emoji/i);
     });
 
-    it("throws a private-api error for private-only actions when disabled", async () => {
-      vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
+    it("allows react action even when private API status is reported disabled", async () => {
+      const probe = await import("./probe.js");
+      vi.spyOn(probe, "getCachedBlueBubblesPrivateApiStatus").mockReturnValue(false);
       const cfg: OpenClawConfig = {
         channels: {
           bluebubbles: {
@@ -293,7 +290,7 @@ describe("bluebubblesMessageActions", () => {
           cfg,
           accountId: null,
         }),
-      ).rejects.toThrow("requires Private API");
+      ).resolves.toMatchObject({ details: { ok: true, added: "❤️" } });
     });
 
     it("throws when messageId is missing", async () => {
