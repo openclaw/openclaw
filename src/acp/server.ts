@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
+import { AgentSideConnection, PROTOCOL_VERSION, ndJsonStream } from "@agentclientprotocol/sdk";
+import type { Stream } from "@agentclientprotocol/sdk";
 import { loadConfig } from "../config/config.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
@@ -11,6 +12,41 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode, type AcpServerOptions } from "./types.js";
+
+// Some MCP-native clients (e.g. VS Code 1.113+, Cursor) send the MCP date-string
+// protocolVersion (like "2025-11-25") when connecting to an ACP server.  The ACP
+// SDK expects protocolVersion to be a uint16 integer (0-65535) and rejects the
+// string with -32602 Invalid params.  This wrapper coerces non-integer values to
+// the current ACP PROTOCOL_VERSION so the initialize handshake succeeds.
+function coerceAcpStream(stream: Stream): Stream {
+  const transform = new TransformStream<Record<string, unknown>, Record<string, unknown>>({
+    transform(message, controller) {
+      if (
+        message &&
+        typeof message === "object" &&
+        "method" in message &&
+        message.method === "initialize" &&
+        "params" in message &&
+        message.params &&
+        typeof message.params === "object"
+      ) {
+        const params = message.params as Record<string, unknown>;
+        if ("protocolVersion" in params && typeof params.protocolVersion !== "number") {
+          controller.enqueue({
+            ...message,
+            params: { ...params, protocolVersion: PROTOCOL_VERSION },
+          });
+          return;
+        }
+      }
+      controller.enqueue(message);
+    },
+  });
+  return {
+    readable: (stream.readable as ReadableStream<Record<string, unknown>>).pipeThrough(transform),
+    writable: stream.writable,
+  } as unknown as Stream;
+}
 
 export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
   const cfg = loadConfig();
@@ -122,7 +158,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
 
   const input = Writable.toWeb(process.stdout);
   const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
-  const stream = ndJsonStream(input, output);
+  const stream = coerceAcpStream(ndJsonStream(input, output));
 
   new AgentSideConnection((conn: AgentSideConnection) => {
     agent = new AcpGatewayAgent(conn, gateway, opts);
