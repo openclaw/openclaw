@@ -742,10 +742,9 @@ export async function runWithModelFallback<T>(params: {
     // Only set when there are remaining candidates after this one — the last
     // candidate has nothing to fall back to and should not get the flag.
     const hasRemainingCandidates = i < candidates.length - 1;
-    const effectiveOptions =
-      hasRemainingCandidates && hasFallbackCandidates
-        ? { ...runOptions, externalFallbackActive: true }
-        : runOptions;
+    const effectiveOptions = hasRemainingCandidates
+      ? { ...runOptions, externalFallbackActive: true }
+      : runOptions;
 
     const attemptRun = await runFallbackAttempt({
       run: params.run,
