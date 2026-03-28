@@ -1,7 +1,11 @@
 import { Type } from "@sinclair/typebox";
 import { callGateway } from "../../gateway/call.js";
 import { captureSubagentCompletionReply } from "../subagent-announce.js";
-import { getSubagentRunByChildSessionKey, setSuppressAutoAnnounce } from "../subagent-registry.js";
+import {
+  clearSuppressAutoAnnounce,
+  getSubagentRunByChildSessionKey,
+  setSuppressAutoAnnounce,
+} from "../subagent-registry.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 
@@ -79,20 +83,26 @@ export function createSessionsAwaitTool(_opts?: { agentSessionKey?: string }): A
 
       const activeEntries = lookups.filter((e) => e.run && typeof e.run.endedAt !== "number");
 
+      // Wait for active runs and capture the gateway response status directly.
+      const waitResults = new Map<string, { status?: string; error?: string }>();
       if (activeEntries.length > 0) {
         const remainingMs = Math.max(1, deadline - Date.now());
-        await Promise.allSettled(
-          activeEntries.map((e) =>
-            callGateway<{ status?: string }>({
+        const settled = await Promise.allSettled(
+          activeEntries.map(async (e) => {
+            const resp = await callGateway<{ status?: string; error?: string }>({
               method: "agent.wait",
               params: { runId: e.run!.runId, timeoutMs: remainingMs },
               timeoutMs: remainingMs + 10_000,
-            }).catch(() => undefined),
-          ),
+            }).catch(() => undefined);
+            waitResults.set(e.run!.runId, resp ?? {});
+          }),
         );
+        // Suppress lint for unused settled binding
+        void settled;
       }
 
-      // Re-read registry state after waiting and capture replies.
+      // Build results using wait response status (authoritative) with registry
+      // fallback for already-completed runs.
       const results: AwaitResult[] = await Promise.all(
         sessionKeys.map(async (sessionKey) => {
           const run = getSubagentRunByChildSessionKey(sessionKey);
@@ -104,7 +114,13 @@ export function createSessionsAwaitTool(_opts?: { agentSessionKey?: string }): A
             };
           }
 
-          if (typeof run.endedAt !== "number") {
+          const waitResp = waitResults.get(run.runId);
+          const isTimedOut =
+            waitResp?.status === "timeout" || (typeof run.endedAt !== "number" && !waitResp);
+
+          if (isTimedOut) {
+            // Restore auto-announce so the child can still deliver if it completes later.
+            clearSuppressAutoAnnounce(run.runId);
             return {
               sessionKey,
               status: "timeout" as const,
@@ -113,7 +129,7 @@ export function createSessionsAwaitTool(_opts?: { agentSessionKey?: string }): A
             };
           }
 
-          const isError = run.outcome?.status === "error";
+          const isError = waitResp?.status === "error" || run.outcome?.status === "error";
           const reply = await captureSubagentCompletionReply(sessionKey);
           const replyText = reply?.trim() || run.frozenResultText?.trim() || undefined;
 
@@ -122,7 +138,9 @@ export function createSessionsAwaitTool(_opts?: { agentSessionKey?: string }): A
             status: isError ? ("error" as const) : ("completed" as const),
             runId: run.runId,
             reply: replyText,
-            ...(isError && run.outcome?.error ? { error: String(run.outcome.error) } : {}),
+            ...(isError
+              ? { error: waitResp?.error || String(run.outcome?.error || "subagent error") }
+              : {}),
           };
         }),
       );

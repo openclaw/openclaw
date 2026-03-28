@@ -542,6 +542,23 @@ export function setSuppressAutoAnnounce(runId: string): boolean {
   return true;
 }
 
+/**
+ * Restore auto-announce for a run (e.g. after an inline wait times out).
+ * This allows the normal announce flow to fire if the run completes later.
+ */
+export function clearSuppressAutoAnnounce(runId: string): void {
+  const key = runId.trim();
+  if (!key) {
+    return;
+  }
+  const entry = subagentRuns.get(key);
+  if (!entry || entry.suppressAutoAnnounce !== true) {
+    return;
+  }
+  entry.suppressAutoAnnounce = false;
+  persistSubagentRuns();
+}
+
 export function replaceSubagentRunAfterSteer(params: {
   previousRunId: string;
   nextRunId: string;

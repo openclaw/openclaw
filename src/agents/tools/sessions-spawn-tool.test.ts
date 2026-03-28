@@ -22,7 +22,7 @@ vi.mock("../acp-spawn.js", () => ({
 
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
 
-async function loadFreshSessionsSpawnToolModuleForTest() {
+async function loadFreshSessionsSpawnToolModuleForTest(opts?: { awaitEnabled?: boolean }) {
   vi.resetModules();
   vi.doMock("../subagent-spawn.js", () => ({
     SUBAGENT_SPAWN_MODES: ["run", "session"],
@@ -32,6 +32,11 @@ async function loadFreshSessionsSpawnToolModuleForTest() {
     ACP_SPAWN_MODES: ["run", "session"],
     ACP_SPAWN_STREAM_TARGETS: ["parent"],
     spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
+  }));
+  vi.doMock("../../config/config.js", () => ({
+    loadConfig: () => ({
+      agents: { defaults: { subagents: { awaitEnabled: opts?.awaitEnabled ?? false } } },
+    }),
   }));
   ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
 }
@@ -95,6 +100,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("defaults to waitForCompletion for openresponses sessions", async () => {
+    await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
     const tool = createSessionsSpawnTool({
       agentSessionKey: "openresponses-user:alice",
     });
@@ -113,6 +119,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("defaults to waitForCompletion for canonical openresponses agent session keys", async () => {
+    await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:openresponses-user:alice",
     });
@@ -131,6 +138,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("allows overriding waitForCompletion=false for openresponses sessions", async () => {
+    await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
     const tool = createSessionsSpawnTool({
       agentSessionKey: "openresponses-user:alice",
     });
@@ -149,6 +157,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("passes suppressAnnounce through to spawnSubagentDirect", async () => {
+    await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
