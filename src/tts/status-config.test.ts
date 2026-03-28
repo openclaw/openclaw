@@ -22,7 +22,17 @@ describe("resolveStatusTtsSnapshot", () => {
         }),
       );
 
-      expect(resolveStatusTtsSnapshot({ cfg: {} as OpenClawConfig })).toEqual({
+      expect(
+        resolveStatusTtsSnapshot({
+          cfg: {
+            messages: {
+              tts: {
+                prefsPath,
+              },
+            },
+          } as OpenClawConfig,
+        }),
+      ).toEqual({
         autoMode: "always",
         provider: "microsoft",
         maxLength: 2048,
