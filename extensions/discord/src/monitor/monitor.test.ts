@@ -77,6 +77,19 @@ async function createInfraRuntimeMock(
 vi.mock("openclaw/plugin-sdk/infra-runtime", createInfraRuntimeMock);
 vi.mock("openclaw/plugin-sdk/infra-runtime.js", createInfraRuntimeMock);
 
+async function createChannelRuntimeMock(
+  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/channel-runtime")>,
+) {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  };
+}
+
+vi.mock("openclaw/plugin-sdk/channel-runtime", createChannelRuntimeMock);
+vi.mock("openclaw/plugin-sdk/channel-runtime.js", createChannelRuntimeMock);
+
 vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
   return {

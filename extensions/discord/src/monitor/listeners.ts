@@ -8,8 +8,8 @@ import {
   ThreadUpdateListener,
   type User,
 } from "@buape/carbon";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   createSubsystemLogger,
