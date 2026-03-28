@@ -23,6 +23,7 @@ import RealityKit
 import QuartzCore
 import simd
 
+@MainActor
 final class SpatialManager {
 
     private var session = ARKitSession()
@@ -188,13 +189,12 @@ final class SpatialManager {
                 start: vertexSource.buffer.contents().assumingMemoryBound(to: Float.self),
                 count: vertexSource.count * vertexSource.componentsPerVector
             ))
-            for i in 0..<vertexSource.count {
-                let offset = i * vertexSource.stride / MemoryLayout<Float>.stride
-                let floatBuffer = vertexData.withUnsafeBytes { $0.baseAddress!.assumingMemoryBound(to: Float.self) }
-                let x = floatBuffer[offset]
-                let y = floatBuffer[offset + 1]
-                let z = floatBuffer[offset + 2]
-                vertices.append([x, y, z])
+            vertexData.withUnsafeBytes { raw in
+                let floatBuffer = raw.baseAddress!.assumingMemoryBound(to: Float.self)
+                for i in 0..<vertexSource.count {
+                    let offset = i * vertexSource.stride / MemoryLayout<Float>.stride
+                    vertices.append([floatBuffer[offset], floatBuffer[offset + 1], floatBuffer[offset + 2]])
+                }
             }
 
             // Faces: extract UInt32 indices from GeometryElement
@@ -204,10 +204,12 @@ final class SpatialManager {
                 start: faceElement.buffer.contents().assumingMemoryBound(to: UInt32.self),
                 count: faceElement.count * 3
             ))
-            for i in 0..<faceElement.count {
-                let base = i * 3
-                let idxBuffer = faceData.withUnsafeBytes { $0.baseAddress!.assumingMemoryBound(to: UInt32.self) }
-                faces.append([Int(idxBuffer[base]), Int(idxBuffer[base + 1]), Int(idxBuffer[base + 2])])
+            faceData.withUnsafeBytes { raw in
+                let idxBuffer = raw.baseAddress!.assumingMemoryBound(to: UInt32.self)
+                for i in 0..<faceElement.count {
+                    let base = i * 3
+                    faces.append([Int(idxBuffer[base]), Int(idxBuffer[base + 1]), Int(idxBuffer[base + 2])])
+                }
             }
 
             return [
