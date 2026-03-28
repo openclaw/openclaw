@@ -675,9 +675,16 @@ function validateConfigObjectWithPluginsBase(
         }
       }
       if (!allowedChannels.has(trimmed)) {
-        issues.push({
+        // Channel IDs that reach here are not in CHANNEL_IDS (built-in) and
+        // not registered by any loaded plugin. This typically means a plugin-
+        // provided channel whose plugin is not currently installed — e.g.,
+        // "matrix" after it was moved from bundled to external. Downgrade to
+        // a warning so the gateway can still start with remaining channels,
+        // consistent with how plugins.entries handles missing plugins
+        // (pushMissingPluginIssue with warnOnly: true).
+        warnings.push({
           path: `channels.${trimmed}`,
-          message: `unknown channel id: ${trimmed}`,
+          message: `unknown channel id: ${trimmed} (channel skipped; install the plugin or remove the channel config)`,
         });
         continue;
       }
