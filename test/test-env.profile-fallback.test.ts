@@ -65,4 +65,24 @@ describe("installTestEnv shell fallback", () => {
     expect(testEnv.tempHome).toBe(realHome);
     expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
   });
+
+  it("prefers HOME-local live state over unrelated OPENCLAW_STATE_DIR overrides", async () => {
+    const realHome = createTempHome();
+    const unrelatedStateDir = createTempHome();
+    writeFile(path.join(realHome, ".profile"), "export TEST_PROFILE_ONLY=from-profile\n");
+    writeFile(path.join(realHome, ".openclaw", "credentials", "token.txt"), "secret\n");
+
+    process.env.HOME = realHome;
+    process.env.USERPROFILE = realHome;
+    process.env.OPENCLAW_LIVE_TEST = "1";
+    process.env.OPENCLAW_LIVE_TEST_QUIET = "1";
+    process.env.OPENCLAW_STATE_DIR = unrelatedStateDir;
+
+    const { installTestEnv } = await import("./test-env.js?state-override");
+    const testEnv = installTestEnv();
+
+    expect(
+      fs.existsSync(path.join(testEnv.tempHome, ".openclaw", "credentials", "token.txt")),
+    ).toBe(true);
+  });
 });

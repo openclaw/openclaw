@@ -287,20 +287,39 @@ function copyLiveAuthProfiles(realStateDir: string, tempStateDir: string): void 
   }
 }
 
+function collectLiveStateDirs(params: { env: NodeJS.ProcessEnv; realHome: string }): string[] {
+  const homeStateDir = path.join(params.realHome, ".openclaw");
+  const explicitStateDir = params.env.OPENCLAW_STATE_DIR?.trim()
+    ? resolveHomeRelativePath(params.env.OPENCLAW_STATE_DIR, params.realHome)
+    : null;
+  const candidates = [explicitStateDir, homeStateDir].filter((value): value is string =>
+    Boolean(value),
+  );
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const candidate of candidates) {
+    if (seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+    ordered.push(candidate);
+  }
+  return ordered;
+}
+
 function stageLiveTestState(params: {
   env: NodeJS.ProcessEnv;
   realHome: string;
   tempHome: string;
 }): void {
-  const realStateDir = params.env.OPENCLAW_STATE_DIR?.trim()
-    ? resolveHomeRelativePath(params.env.OPENCLAW_STATE_DIR, params.realHome)
-    : path.join(params.realHome, ".openclaw");
+  const realStateDirs = collectLiveStateDirs(params);
+  const primaryStateDir = realStateDirs[0] ?? path.join(params.realHome, ".openclaw");
   const tempStateDir = path.join(params.tempHome, ".openclaw");
   fs.mkdirSync(tempStateDir, { recursive: true });
 
   const realConfigPath = params.env.OPENCLAW_CONFIG_PATH?.trim()
     ? resolveHomeRelativePath(params.env.OPENCLAW_CONFIG_PATH, params.realHome)
-    : path.join(realStateDir, "openclaw.json");
+    : path.join(primaryStateDir, "openclaw.json");
   if (fs.existsSync(realConfigPath)) {
     const rawConfig = fs.readFileSync(realConfigPath, "utf8");
     fs.writeFileSync(
@@ -310,8 +329,10 @@ function stageLiveTestState(params: {
     );
   }
 
-  copyDirIfExists(path.join(realStateDir, "credentials"), path.join(tempStateDir, "credentials"));
-  copyLiveAuthProfiles(realStateDir, tempStateDir);
+  for (const realStateDir of realStateDirs) {
+    copyDirIfExists(path.join(realStateDir, "credentials"), path.join(tempStateDir, "credentials"));
+    copyLiveAuthProfiles(realStateDir, tempStateDir);
+  }
 
   for (const authDir of LIVE_EXTERNAL_AUTH_DIRS) {
     copyDirIfExists(path.join(params.realHome, authDir), path.join(params.tempHome, authDir));
