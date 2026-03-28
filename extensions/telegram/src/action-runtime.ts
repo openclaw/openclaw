@@ -90,7 +90,6 @@ function readTelegramForumTopicIconColor(
   }
   return iconColor as TelegramForumTopicIconColor;
 }
-
 function resolveTelegramPollVisibility(params: {
   pollAnonymous?: boolean;
   pollPublic?: boolean;
