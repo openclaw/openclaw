@@ -107,6 +107,25 @@ describe("inbound_claim hook runner", () => {
     expect(second).not.toHaveBeenCalled();
   });
 
+  it("can target a loaded non-default plugin without mutating the helper registry", async () => {
+    const first = vi.fn().mockResolvedValue({ handled: true });
+    const second = vi.fn().mockResolvedValue({ handled: true });
+    const { runner } = createHookRunnerWithRegistry([
+      { hookName: "inbound_claim", handler: first, pluginId: "alpha-plugin" },
+      { hookName: "inbound_claim", handler: second, pluginId: "beta-plugin" },
+    ]);
+
+    const result = await runner.runInboundClaimForPlugin(
+      "beta-plugin",
+      inboundClaimEvent,
+      inboundClaimCtx,
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
   it("reports missing_plugin when the bound plugin is not loaded", async () => {
     const { registry, runner } = createHookRunnerWithRegistry([]);
     registry.plugins = [];
