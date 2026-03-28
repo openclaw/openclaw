@@ -166,6 +166,7 @@ describe("Feishu bot-menu lifecycle", () => {
       event,
       dispatchReplyFromConfigMock,
       createFeishuReplyDispatcherMock,
+      waitTimeoutMs: 5_000,
     });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();
