@@ -202,7 +202,10 @@ export function createExecApprovalHandlers(
         }
       }
 
-      if (!hasExecApprovalClients && !forwarded) {
+      // Single-phase callers (e.g. CLI) fail fast when nobody can approve.
+      // Two-phase callers (agent tools) keep the request pending so Control UI /
+      // webchat can connect with operator.approvals scope and resolve before timeout.
+      if (!twoPhase && !hasExecApprovalClients && !forwarded) {
         manager.expire(record.id, "no-approval-route");
         respond(
           true,
