@@ -290,6 +290,19 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
     announceTimeoutMs?: number;
+    /**
+     * Workspace context scope for spawned subagents:
+     * - "full": All bootstrap files (AGENTS.md, MEMORY.md, etc.) - default
+     * - "essential": AGENTS.md, TOOLS.md, BOOTSTRAP.md only
+     * - "minimal": BOOTSTRAP.md only
+     * - "none": No workspace context injected
+     */
+    workspaceScope?: "full" | "essential" | "minimal" | "none";
+    /**
+     * Custom allowlist of bootstrap files for subagents (overrides workspaceScope).
+     * Example: ["AGENTS.md", "TOOLS.md"]
+     */
+    workspaceFiles?: string[];
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;

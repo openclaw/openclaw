@@ -16,6 +16,18 @@ import {
 export type BootstrapContextMode = "full" | "lightweight";
 export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
 
+/**
+ * Workspace scope for subagents - controls which bootstrap files are injected.
+ * - "full": All bootstrap files (AGENTS.md, MEMORY.md, SOUL.md, etc.)
+ * - "essential": AGENTS.md, TOOLS.md, BOOTSTRAP.md only
+ * - "minimal": BOOTSTRAP.md only
+ * - "none": No workspace context injected
+ */
+export type SubagentWorkspaceScope = "full" | "essential" | "minimal" | "none";
+
+const ESSENTIAL_BOOTSTRAP_FILES = new Set(["AGENTS.md", "TOOLS.md", "BOOTSTRAP.md"]);
+const MINIMAL_BOOTSTRAP_FILES = new Set(["BOOTSTRAP.md"]);
+
 export function makeBootstrapWarn(params: {
   sessionLabel: string;
   warn?: (message: string) => void;
@@ -61,6 +73,36 @@ function applyContextModeFilter(params: {
   return [];
 }
 
+/**
+ * Filter bootstrap files based on subagent workspace scope.
+ * Used to reduce token consumption for narrow, stateless subagent tasks.
+ */
+export function applySubagentWorkspaceScopeFilter(params: {
+  files: WorkspaceBootstrapFile[];
+  scope?: SubagentWorkspaceScope;
+  customFiles?: string[];
+}): WorkspaceBootstrapFile[] {
+  // If custom allowlist is provided, use it exclusively
+  if (params.customFiles && params.customFiles.length > 0) {
+    const customSet = new Set(params.customFiles);
+    return params.files.filter((file) => customSet.has(file.name));
+  }
+
+  const scope = params.scope ?? "full";
+  
+  switch (scope) {
+    case "none":
+      return [];
+    case "minimal":
+      return params.files.filter((file) => MINIMAL_BOOTSTRAP_FILES.has(file.name));
+    case "essential":
+      return params.files.filter((file) => ESSENTIAL_BOOTSTRAP_FILES.has(file.name));
+    case "full":
+    default:
+      return params.files;
+  }
+}
+
 export async function resolveBootstrapFilesForRun(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -70,6 +112,10 @@ export async function resolveBootstrapFilesForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  /** Optional workspace scope filter for subagents (reduces token usage). */
+  subagentWorkspaceScope?: SubagentWorkspaceScope;
+  /** Optional custom allowlist of bootstrap files (overrides subagentWorkspaceScope). */
+  subagentWorkspaceFiles?: string[];
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
   const rawFiles = params.sessionKey
@@ -78,11 +124,20 @@ export async function resolveBootstrapFilesForRun(params: {
         sessionKey: params.sessionKey,
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
-  const bootstrapFiles = applyContextModeFilter({
+  let bootstrapFiles = applyContextModeFilter({
     files: filterBootstrapFilesForSession(rawFiles, sessionKey),
     contextMode: params.contextMode,
     runKind: params.runKind,
   });
+  
+  // Apply subagent workspace scope filter if specified
+  if (params.subagentWorkspaceScope || params.subagentWorkspaceFiles) {
+    bootstrapFiles = applySubagentWorkspaceScopeFilter({
+      files: bootstrapFiles,
+      scope: params.subagentWorkspaceScope,
+      customFiles: params.subagentWorkspaceFiles,
+    });
+  }
 
   const updated = await applyBootstrapHookOverrides({
     files: bootstrapFiles,
@@ -104,6 +159,10 @@ export async function resolveBootstrapContextForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  /** Optional workspace scope filter for subagents (reduces token usage). */
+  subagentWorkspaceScope?: SubagentWorkspaceScope;
+  /** Optional custom allowlist of bootstrap files (overrides subagentWorkspaceScope). */
+  subagentWorkspaceFiles?: string[];
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
