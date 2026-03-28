@@ -7470,6 +7470,26 @@
       "hasChildren": false
     },
     {
+      "path": "auth.cooldowns.transientCooldownMinutes",
+      "kind": "core",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "auth.cooldowns.transientFailureThreshold",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "auth.order",
       "kind": "core",
       "type": "object",
