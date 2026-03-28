@@ -235,6 +235,28 @@ describe("applyAuthProfileConfig", () => {
     expect(next.auth?.order?.kilocode).toEqual(["kilocode:default", "kilocode:legacy"]);
   });
 
+  it("repairs aliased auth.order keys instead of duplicating them", () => {
+    const next = applyAuthProfileConfig(
+      {
+        auth: {
+          profiles: {
+            "zai:default": { provider: "z.ai", mode: "api_key" },
+          },
+          order: { "z.ai": ["zai:default"] },
+        },
+      },
+      {
+        profileId: "zai:work",
+        provider: "z-ai",
+        mode: "oauth",
+      },
+    );
+
+    expect(next.auth?.order).toEqual({
+      zai: ["zai:work", "zai:default"],
+    });
+  });
+
   it("keeps implicit round-robin when no mixed provider modes are present", () => {
     const next = applyAuthProfileConfig(
       {
