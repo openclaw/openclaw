@@ -309,9 +309,12 @@ async function connectMcpClient(params: {
     process.stderr.write(`[openclaw mcp] ${String(chunk)}`);
   });
   const rawMessages: unknown[] = [];
-  transport.addEventListener("message", (event) => {
-    rawMessages.push(event.data);
-  });
+  // The MCP stdio transport here exposes a writable onmessage callback at
+  // runtime, not an EventTarget-style addEventListener API.
+  // oxlint-disable-next-line unicorn/prefer-add-event-listener
+  transport.onmessage = (message) => {
+    rawMessages.push(message);
+  };
 
   const client = new Client({ name: "docker-mcp-channels", version: "1.0.0" });
   await client.connect(transport);
