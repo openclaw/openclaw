@@ -253,7 +253,7 @@
           "exportName": "CliBackendPlugin",
           "kind": "type",
           "source": {
-            "line": 1488,
+            "line": 1490,
             "path": "src/plugins/types.ts"
           }
         },
@@ -415,7 +415,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1532,
+            "line": 1534,
             "path": "src/plugins/types.ts"
           }
         },
@@ -2755,7 +2755,7 @@
           "exportName": "resolveCommandAuthorization",
           "kind": "function",
           "source": {
-            "line": 461,
+            "line": 463,
             "path": "src/auto-reply/command-auth.ts"
           }
         },
@@ -3576,7 +3576,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1532,
+            "line": 1534,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3585,7 +3585,7 @@
           "exportName": "OpenClawPluginCommandDefinition",
           "kind": "type",
           "source": {
-            "line": 1258,
+            "line": 1260,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3603,7 +3603,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1514,
+            "line": 1516,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3612,7 +3612,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1481,
+            "line": 1483,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3621,7 +3621,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1473,
+            "line": 1475,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3657,7 +3657,7 @@
           "exportName": "PluginInteractiveTelegramHandlerContext",
           "kind": "type",
           "source": {
-            "line": 1287,
+            "line": 1289,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4091,7 +4091,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1532,
+            "line": 1534,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4100,7 +4100,7 @@
           "exportName": "OpenClawPluginCommandDefinition",
           "kind": "type",
           "source": {
-            "line": 1258,
+            "line": 1260,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4118,7 +4118,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1514,
+            "line": 1516,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4127,7 +4127,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1481,
+            "line": 1483,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4136,7 +4136,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1473,
+            "line": 1475,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4172,7 +4172,7 @@
           "exportName": "PluginInteractiveTelegramHandlerContext",
           "kind": "type",
           "source": {
-            "line": 1287,
+            "line": 1289,
             "path": "src/plugins/types.ts"
           }
         },

@@ -9,12 +9,12 @@ import type {
   Usage,
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
-import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/agent-runtime";
 import type {
   OpenClawConfig,
   ProviderRuntimeModel,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import {
   DEFAULT_CONTEXT_TOKENS,
   normalizeProviderId,
