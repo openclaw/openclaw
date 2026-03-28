@@ -9,6 +9,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import {
+  chunkTextForOutbound,
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
   formatTrimmedAllowFromEntries,
@@ -21,7 +22,6 @@ import {
   resolveIMessageGroupToolPolicy,
 } from "./group-policy.js";
 import type { IMessageProbe } from "./probe.js";
-import { getIMessageRuntime } from "./runtime.js";
 import { imessageSetupAdapter } from "./setup-core.js";
 import {
   createIMessagePluginBase,
@@ -194,7 +194,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
     outbound: {
       base: {
         deliveryMode: "direct",
-        chunker: (text, limit) => getIMessageRuntime().channel.text.chunkText(text, limit),
+        chunker: chunkTextForOutbound,
         chunkerMode: "text",
         textChunkLimit: 4000,
       },
