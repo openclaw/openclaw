@@ -219,6 +219,17 @@ The bundled Google plugin also registers a default for `google-gemini-cli`:
 - `sessionMode: "existing"`
 - `sessionIdFields: ["session_id", "sessionId"]`
 
+The bundled Cursor Agent plugin registers a default for `cursor-agent`:
+
+- `command: "agent"`
+- `args: ["-p", "--trust"]`
+- `output: "text"`
+- `modelArg: "--model"`
+- `sessionMode: "none"`
+
+Cursor Agent authenticates via browser login (`agent login`), no API key needed.
+Use `cursor-agent/<model>` model refs (e.g. `cursor-agent/claude-4.6-opus-high`).
+
 Override only if needed (common: absolute `command` path).
 
 ## Plugin-owned defaults

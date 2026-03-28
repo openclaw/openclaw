@@ -1,0 +1,10 @@
+{
+  "id": "cursor-agent",
+  "enabledByDefault": true,
+  "cliBackends": ["cursor-agent"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

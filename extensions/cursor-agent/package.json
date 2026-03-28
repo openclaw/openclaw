@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/cursor-agent",
+  "version": "2026.3.27",
+  "private": true,
+  "description": "OpenClaw Cursor Agent CLI backend",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
