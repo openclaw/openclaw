@@ -59,6 +59,9 @@ type SlackBoltResolvedExports = {
   App: SlackAppConstructor;
   HTTPReceiver: SlackHttpReceiverConstructor;
 };
+type SlackSocketShutdownClient = {
+  shuttingDown?: boolean;
+};
 type Constructor = abstract new (...args: never[]) => unknown;
 
 function isConstructorFunction<T extends Constructor>(value: unknown): value is T {
@@ -169,6 +172,29 @@ function publishSlackDisconnectedStatus(
     lastDisconnect: message ? { at, error: message } : { at },
     lastError: message ?? null,
   });
+}
+
+function resolveSlackSocketShutdownClient(app: unknown): SlackSocketShutdownClient | undefined {
+  if (!app || typeof app !== "object") {
+    return undefined;
+  }
+  const receiver = Reflect.get(app, "receiver");
+  if (!receiver || typeof receiver !== "object") {
+    return undefined;
+  }
+  const client = Reflect.get(receiver, "client");
+  if (!client || typeof client !== "object") {
+    return undefined;
+  }
+  return client as SlackSocketShutdownClient;
+}
+
+async function gracefulStopSlackApp(app: { stop: () => unknown }) {
+  const socketClient = resolveSlackSocketShutdownClient(app);
+  if (socketClient) {
+    socketClient.shuttingDown = true;
+  }
+  await Promise.resolve(app.stop()).catch(() => undefined);
 }
 
 function formatSlackResolvedLabel(params: {
@@ -319,6 +345,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           clientOptions,
         },
   );
+
+  // Pre-set shuttingDown on the SocketModeClient before app.stop() to prevent
+  // a race where the library's internal ping timeout fires disconnect() before
+  // shuttingDown is set, causing orphaned reconnects with leaked ping intervals.
+  // See: openclaw/openclaw#56508
+  const gracefulStop = async () => {
+    await gracefulStopSlackApp(app);
+  };
+
   const slackHttpHandler =
     slackMode === "http" && receiver
       ? async (req: IncomingMessage, res: ServerResponse) => {
@@ -529,7 +564,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   const stopOnAbort = () => {
     if (opts.abortSignal?.aborted && slackMode === "socket") {
-      void app.stop();
+      void gracefulStop();
     }
   };
   opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
@@ -607,7 +642,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             disconnect.error ? ` (${formatUnknownError(disconnect.error)})` : ""
           }`,
         );
-        await app.stop().catch(() => undefined);
+        await gracefulStop();
         try {
           await sleepWithAbort(delayMs, opts.abortSignal);
         } catch {
@@ -628,7 +663,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterHttpHandler?.();
     await execApprovalsHandler?.stop().catch(() => undefined);
-    await app.stop().catch(() => undefined);
+    await gracefulStop();
   }
 }
 
@@ -641,6 +676,8 @@ export const __testing = {
   formatSlackUserResolved,
   publishSlackConnectedStatus,
   publishSlackDisconnectedStatus,
+  resolveSlackSocketShutdownClient,
+  gracefulStopSlackApp,
   resolveSlackRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveSlackBoltInterop,
