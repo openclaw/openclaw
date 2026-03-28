@@ -21,6 +21,42 @@
   - Extensions (channel plugins): `extensions/*` (e.g. `extensions/msteams`, `extensions/matrix`, `extensions/zalo`, `extensions/zalouser`, `extensions/voice-call`)
 - When adding channels/extensions/apps/docs, update `.github/labeler.yml` and create matching GitHub labels (use existing channel/extension label colors).
 
+## Architecture Boundaries
+
+- Start here for the repo map:
+  - `extensions/*` = bundled plugins and the closest example surface for third-party plugins
+  - `src/plugin-sdk/*` = the public plugin contract that extensions are allowed to import
+  - `src/channels/*` = core channel implementation details behind the plugin/channel boundary
+  - `src/plugins/*` = plugin discovery, manifest validation, loader, registry, and contract enforcement
+  - `src/gateway/protocol/*` = typed Gateway control-plane and node wire protocol
+- Progressive disclosure lives in local boundary guides:
+  - `extensions/AGENTS.md`
+  - `src/plugin-sdk/AGENTS.md`
+  - `src/channels/AGENTS.md`
+  - `src/plugins/AGENTS.md`
+  - `src/gateway/protocol/AGENTS.md`
+- Plugin and extension boundary:
+  - Public docs: `docs/plugins/building-plugins.md`, `docs/plugins/architecture.md`, `docs/plugins/sdk-overview.md`, `docs/plugins/sdk-entrypoints.md`, `docs/plugins/sdk-runtime.md`, `docs/plugins/manifest.md`, `docs/plugins/sdk-channel-plugins.md`, `docs/plugins/sdk-provider-plugins.md`
+  - Definition files: `src/plugin-sdk/plugin-entry.ts`, `src/plugin-sdk/core.ts`, `src/plugin-sdk/provider-entry.ts`, `src/plugin-sdk/channel-contract.ts`, `scripts/lib/plugin-sdk-entrypoints.json`, `package.json`
+  - Rule: extensions must cross into core only through `openclaw/plugin-sdk/*`, manifest metadata, and documented runtime helpers. Do not import `src/**` from extension production code.
+  - Compatibility: new plugin seams are allowed, but they must be added as documented, backwards-compatible, versioned contracts. We have third-party plugins in the wild and do not break them casually.
+- Channel boundary:
+  - Public docs: `docs/plugins/sdk-channel-plugins.md`, `docs/plugins/architecture.md`
+  - Definition files: `src/channels/plugins/types.plugin.ts`, `src/channels/plugins/types.core.ts`, `src/channels/plugins/types.adapters.ts`, `src/plugin-sdk/core.ts`, `src/plugin-sdk/channel-contract.ts`
+  - Rule: `src/channels/**` is core implementation. If plugin authors need a new seam, add it to the Plugin SDK instead of telling them to import channel internals.
+- Provider/model boundary:
+  - Public docs: `docs/plugins/sdk-provider-plugins.md`, `docs/concepts/model-providers.md`, `docs/plugins/architecture.md`
+  - Definition files: `src/plugins/types.ts`, `src/plugin-sdk/provider-entry.ts`, `src/plugin-sdk/provider-auth.ts`, `src/plugin-sdk/provider-catalog-shared.ts`, `src/plugin-sdk/provider-model-shared.ts`
+  - Rule: core owns the generic inference loop; provider plugins own provider-specific behavior through registration and typed hooks. Do not solve provider needs by reaching into unrelated core internals.
+- Gateway protocol boundary:
+  - Public docs: `docs/gateway/protocol.md`, `docs/gateway/bridge-protocol.md`, `docs/concepts/architecture.md`
+  - Definition files: `src/gateway/protocol/schema.ts`, `src/gateway/protocol/schema/*.ts`, `src/gateway/protocol/index.ts`
+  - Rule: protocol changes are contract changes. Prefer additive evolution; incompatible changes require explicit versioning, docs, and client/codegen follow-through.
+- Bundled plugin contract boundary:
+  - Public docs: `docs/plugins/architecture.md`, `docs/plugins/manifest.md`, `docs/plugins/sdk-overview.md`
+  - Definition files: `src/plugins/contracts/registry.ts`, `src/plugins/types.ts`, `src/extensions/public-artifacts.ts`
+  - Rule: keep manifest metadata, runtime registration, public SDK exports, and contract tests aligned. Do not create a hidden path around the declared plugin interfaces.
+
 ## Docs Linking (Mintlify)
 
 - Docs are hosted on Mintlify (docs.openclaw.ai).
