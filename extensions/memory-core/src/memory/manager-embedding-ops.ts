@@ -553,11 +553,19 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           .run(pathname, source);
       } catch {}
     }
-    if (this.fts.enabled && this.fts.available && this.provider) {
+    if (this.fts.enabled && this.fts.available) {
       try {
-        this.db
-          .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-          .run(pathname, source, this.provider.model);
+        if (this.provider) {
+          // Scoped to current model — avoids removing rows from a different model.
+          this.db
+            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+            .run(pathname, source, this.provider.model);
+        } else {
+          // FTS-only: searchKeyword matches all models, so clear all to avoid stale rows.
+          this.db
+            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+            .run(pathname, source);
+        }
       } catch {}
     }
     this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(pathname, source);

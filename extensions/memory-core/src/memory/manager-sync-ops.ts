@@ -1021,8 +1021,9 @@ export abstract class MemoryManagerSyncOps {
     const needsFullReindex =
       (params?.force && !hasTargetSessionFiles) ||
       !meta ||
-      (this.provider && meta.model !== this.provider.model) ||
-      (this.provider && meta.provider !== this.provider.id) ||
+      // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
+      (this.provider ? meta.model !== this.provider.model : meta.model !== "fts-only") ||
+      (this.provider ? meta.provider !== this.provider.id : meta.provider !== "none") ||
       meta.providerKey !== this.providerKey ||
       this.metaSourcesDiffer(meta, configuredSources) ||
       meta.scopeHash !== configuredScopeHash ||
