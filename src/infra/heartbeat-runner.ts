@@ -415,18 +415,13 @@ type HeartbeatPreflight = HeartbeatReasonFlags & {
   skipReason?: HeartbeatSkipReason;
 };
 
-// Returns true when a system event is related to the heartbeat trigger reason
-// (exec-completion or cron). Unrelated events (model notices, maintenance, etc.)
-// should stay in the originating session and not be migrated.
-function isHeartbeatTriggerEvent(event: SystemEvent, reasonFlags: HeartbeatReasonFlags): boolean {
+// Returns true when a system event is session-scoped and should NOT be migrated
+// to the heartbeat session. All other events (exec, cron, hook, wake,
+// notifications, watchdog, etc.) are migrated so they are visible in the
+// session where the heartbeat actually runs.
+function isSessionScopedEvent(event: SystemEvent): boolean {
   const key = event.contextKey ?? "";
-  if (reasonFlags.isExecEventReason) {
-    return key === "exec" || key.startsWith("exec:");
-  }
-  if (reasonFlags.isCronEventReason) {
-    return key.startsWith("cron:");
-  }
-  return false;
+  return key === "session-maintenance" || key.startsWith("session-maintenance:");
 }
 
 function resolveHeartbeatReasonFlags(reason?: string): HeartbeatReasonFlags {
@@ -455,25 +450,25 @@ async function resolveHeartbeatPreflight(params: {
 
   // When the resolved heartbeat session differs from the originating session
   // (e.g. system-event-triggered heartbeat routed to a dedicated heartbeat
-  // session), migrate only trigger-related system events so they are visible
-  // in the session where the heartbeat actually runs. Unrelated events
-  // (model notices, maintenance, etc.) stay in the originating session.
+  // session), migrate all events to the heartbeat session so they are visible
+  // where the heartbeat actually runs. Only session-scoped events (like
+  // session-maintenance warnings) stay in the originating session.
   const originatingSessionKey = params.forcedSessionKey?.trim();
   if (originatingSessionKey && originatingSessionKey !== session.sessionKey) {
     const originEvents = drainSystemEventEntries(originatingSessionKey);
-    const triggerRelated: SystemEvent[] = [];
-    const unrelated: SystemEvent[] = [];
+    const toMigrate: SystemEvent[] = [];
+    const sessionScoped: SystemEvent[] = [];
     for (const event of originEvents) {
-      if (isHeartbeatTriggerEvent(event, reasonFlags)) {
-        triggerRelated.push(event);
+      if (isSessionScopedEvent(event)) {
+        sessionScoped.push(event);
       } else {
-        unrelated.push(event);
+        toMigrate.push(event);
       }
     }
 
-    // Re-enqueue unrelated events back into the originating session so they
-    // remain visible in the user's conversation.
-    for (const event of unrelated) {
+    // Re-enqueue session-scoped events back into the originating session so
+    // they remain visible in the user's conversation.
+    for (const event of sessionScoped) {
       enqueueSystemEvent(event.text, {
         sessionKey: originatingSessionKey,
         contextKey: event.contextKey,
@@ -485,7 +480,7 @@ async function resolveHeartbeatPreflight(params: {
     // the consecutive-duplicate guard in enqueueSystemEvent from silently
     // dropping migrated events whose text matches the destination's tail.
     const existingEvents = drainSystemEventEntries(session.sessionKey);
-    for (const event of [...existingEvents, ...triggerRelated]) {
+    for (const event of [...existingEvents, ...toMigrate]) {
       enqueueSystemEvent(event.text, {
         sessionKey: session.sessionKey,
         contextKey: event.contextKey,

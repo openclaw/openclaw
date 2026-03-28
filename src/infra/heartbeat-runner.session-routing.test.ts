@@ -313,7 +313,7 @@ describe("system-event-triggered heartbeat session routing", () => {
     replySpy.mockRestore();
   });
 
-  it("leaves unrelated system events in the originating session during migration", async () => {
+  it("migrates all non-session-scoped events and keeps session-scoped events in originating session", async () => {
     const tmpDir = await createCaseDir("hb-event-filter");
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -371,21 +371,25 @@ describe("system-event-triggered heartbeat session routing", () => {
       }),
     );
 
-    // Enqueue a mix of exec-related and unrelated events into the DM session
+    // Enqueue a mix of trigger events, general notices, and session-scoped events
     enqueueSystemEvent("exec finished (run-42, code 0) :: backup done", {
       sessionKey: dmSessionKey,
       contextKey: "exec:run-42",
     });
-    enqueueSystemEvent("Model update: sonnet-4.6 is now available", {
+    enqueueSystemEvent("Hook wake: deploy webhook fired", {
       sessionKey: dmSessionKey,
-      // No contextKey — general notice
+      contextKey: "hook:wake",
     });
-    enqueueSystemEvent("Scheduled maintenance window at 02:00 UTC", {
+    enqueueSystemEvent("Notification: disk usage at 90%", {
       sessionKey: dmSessionKey,
-      contextKey: "maintenance:2026-03-28",
+      contextKey: "notifications-event",
+    });
+    enqueueSystemEvent("Session would be evicted", {
+      sessionKey: dmSessionKey,
+      contextKey: "session-maintenance:warn",
     });
 
-    expect(peekSystemEventEntries(dmSessionKey)).toHaveLength(3);
+    expect(peekSystemEventEntries(dmSessionKey)).toHaveLength(4);
     expect(hasSystemEvents(heartbeatSessionKey)).toBe(false);
 
     replySpy.mockResolvedValue([{ text: "Backup completed" }]);
@@ -402,17 +406,18 @@ describe("system-event-triggered heartbeat session routing", () => {
       deps: createHeartbeatDeps(sendTelegram),
     });
 
-    // Only the exec event should have migrated to the heartbeat session
+    // All non-session-scoped events should migrate to the heartbeat session
     const heartbeatEntries = peekSystemEventEntries(heartbeatSessionKey);
-    expect(heartbeatEntries).toHaveLength(1);
+    expect(heartbeatEntries).toHaveLength(3);
     expect(heartbeatEntries[0].text).toContain("backup done");
-    expect(heartbeatEntries[0].contextKey).toBe("exec:run-42");
+    expect(heartbeatEntries[1].text).toContain("Hook wake");
+    expect(heartbeatEntries[2].text).toContain("disk usage");
 
-    // Unrelated events should remain in the originating DM session
+    // Only session-scoped events should remain in the originating DM session
     const dmEntries = peekSystemEventEntries(dmSessionKey);
-    expect(dmEntries).toHaveLength(2);
-    expect(dmEntries[0].text).toContain("Model update");
-    expect(dmEntries[1].text).toContain("maintenance window");
+    expect(dmEntries).toHaveLength(1);
+    expect(dmEntries[0].text).toContain("Session would be evicted");
+    expect(dmEntries[0].contextKey).toBe("session-maintenance:warn");
 
     replySpy.mockRestore();
   });
