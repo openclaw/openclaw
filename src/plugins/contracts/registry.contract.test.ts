@@ -9,77 +9,99 @@ import {
   providerContractPluginIds,
   speechProviderContractRegistry,
 } from "./registry.js";
+import { uniqueSortedStrings } from "./testkit.js";
 
 const REGISTRY_CONTRACT_TIMEOUT_MS = 300_000;
 
 describe("plugin contract registry", () => {
+  function expectUniqueIds(ids: readonly string[]) {
+    expect(ids).toEqual([...new Set(ids)]);
+  }
+
+  function expectRegistryPluginIds(params: {
+    actualPluginIds: readonly string[];
+    predicate: (plugin: {
+      origin: string;
+      providers: unknown[];
+      contracts?: { speechProviders?: unknown[] };
+    }) => boolean;
+  }) {
+    expect(uniqueSortedStrings(params.actualPluginIds)).toEqual(
+      resolveBundledManifestPluginIds(params.predicate),
+    );
+  }
+
+  function resolveBundledManifestPluginIds(
+    predicate: (plugin: {
+      origin: string;
+      providers: unknown[];
+      contracts?: { speechProviders?: unknown[] };
+    }) => boolean,
+  ) {
+    return loadPluginManifestRegistry({})
+      .plugins.filter(predicate)
+      .map((plugin) => plugin.id)
+      .toSorted((left, right) => left.localeCompare(right));
+  }
+
   it("loads bundled non-provider capability registries without import-time failure", () => {
     expect(providerContractLoadError).toBeUndefined();
     expect(pluginRegistrationContractRegistry.length).toBeGreaterThan(0);
   });
 
-  it("does not duplicate bundled provider ids", () => {
-    const ids = pluginRegistrationContractRegistry.flatMap((entry) => entry.providerIds);
-    expect(ids).toEqual([...new Set(ids)]);
-  });
-
-  it("does not duplicate bundled web search provider ids", () => {
-    const ids = pluginRegistrationContractRegistry.flatMap((entry) => entry.webSearchProviderIds);
-    expect(ids).toEqual([...new Set(ids)]);
+  it.each([
+    {
+      name: "does not duplicate bundled provider ids",
+      ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.providerIds),
+    },
+    {
+      name: "does not duplicate bundled web search provider ids",
+      ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.webSearchProviderIds),
+    },
+    {
+      name: "does not duplicate bundled media provider ids",
+      ids: () => mediaUnderstandingProviderContractRegistry.map((entry) => entry.provider.id),
+    },
+    {
+      name: "does not duplicate bundled image-generation provider ids",
+      ids: () => imageGenerationProviderContractRegistry.map((entry) => entry.provider.id),
+    },
+  ] as const)("$name", ({ ids }) => {
+    expectUniqueIds(ids());
   });
 
   it(
     "does not duplicate bundled speech provider ids",
     { timeout: REGISTRY_CONTRACT_TIMEOUT_MS },
     () => {
-      const ids = speechProviderContractRegistry.map((entry) => entry.provider.id);
-      expect(ids).toEqual([...new Set(ids)]);
+      expectUniqueIds(speechProviderContractRegistry.map((entry) => entry.provider.id));
     },
   );
 
-  it("does not duplicate bundled media provider ids", () => {
-    const ids = mediaUnderstandingProviderContractRegistry.map((entry) => entry.provider.id);
-    expect(ids).toEqual([...new Set(ids)]);
-  });
-
   it("covers every bundled provider plugin discovered from manifests", () => {
-    const bundledProviderPluginIds = loadPluginManifestRegistry({})
-      .plugins.filter((plugin) => plugin.origin === "bundled" && plugin.providers.length > 0)
-      .map((plugin) => plugin.id)
-      .toSorted((left, right) => left.localeCompare(right));
-
-    expect(providerContractPluginIds).toEqual(bundledProviderPluginIds);
+    expectRegistryPluginIds({
+      actualPluginIds: providerContractPluginIds,
+      predicate: (plugin) => plugin.origin === "bundled" && plugin.providers.length > 0,
+    });
   });
 
   it("covers every bundled speech plugin discovered from manifests", () => {
-    const bundledSpeechPluginIds = loadPluginManifestRegistry({})
-      .plugins.filter(
-        (plugin) =>
-          plugin.origin === "bundled" && (plugin.contracts?.speechProviders?.length ?? 0) > 0,
-      )
-      .map((plugin) => plugin.id)
-      .toSorted((left, right) => left.localeCompare(right));
-
-    expect(
-      [...new Set(speechProviderContractRegistry.map((entry) => entry.pluginId))].toSorted(
-        (left, right) => left.localeCompare(right),
-      ),
-    ).toEqual(bundledSpeechPluginIds);
+    expectRegistryPluginIds({
+      actualPluginIds: speechProviderContractRegistry.map((entry) => entry.pluginId),
+      predicate: (plugin) =>
+        plugin.origin === "bundled" && (plugin.contracts?.speechProviders?.length ?? 0) > 0,
+    });
   });
 
   it("covers every bundled web search plugin from the shared resolver", () => {
     const bundledWebSearchPluginIds = resolveBundledWebSearchPluginIds({});
 
     expect(
-      pluginRegistrationContractRegistry
-        .filter((entry) => entry.webSearchProviderIds.length > 0)
-        .map((entry) => entry.pluginId)
-        .toSorted((left, right) => left.localeCompare(right)),
+      uniqueSortedStrings(
+        pluginRegistrationContractRegistry
+          .filter((entry) => entry.webSearchProviderIds.length > 0)
+          .map((entry) => entry.pluginId),
+      ),
     ).toEqual(bundledWebSearchPluginIds);
-  });
-
-  it("does not duplicate bundled image-generation provider ids", () => {
-    const ids = imageGenerationProviderContractRegistry.map((entry) => entry.provider.id);
-    expect(ids).toEqual([...new Set(ids)]);
   });
 });

@@ -4,10 +4,9 @@ import {
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { resolveRuntimePluginRegistry } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistry } from "./registry.js";
-import { getActivePluginRegistry } from "./runtime.js";
 
 type CapabilityProviderRegistryKey =
   | "speechProviders"
@@ -67,17 +66,14 @@ function resolveCapabilityProviderConfig(params: {
 export function resolvePluginCapabilityProviders<K extends CapabilityProviderRegistryKey>(params: {
   key: K;
   cfg?: OpenClawConfig;
-  useActiveRegistryWhen?: (active: PluginRegistry | undefined) => boolean;
 }): CapabilityProviderForKey<K>[] {
-  const active = getActivePluginRegistry() ?? undefined;
-  const shouldUseActive =
-    params.useActiveRegistryWhen?.(active) ?? (active?.[params.key].length ?? 0) > 0;
-  const registry =
-    shouldUseActive || !params.cfg
-      ? active
-      : loadOpenClawPlugins({
+  const loadOptions =
+    params.cfg === undefined
+      ? undefined
+      : {
           config: resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg }),
-        });
+        };
+  const registry = resolveRuntimePluginRegistry(loadOptions);
   return (registry?.[params.key] ?? []).map(
     (entry) => entry.provider,
   ) as CapabilityProviderForKey<K>[];

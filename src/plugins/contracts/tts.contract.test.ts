@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { __testing as pluginLoaderTesting } from "../../plugins/loader.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { SpeechProviderPlugin } from "../../plugins/types.js";
@@ -106,6 +107,16 @@ const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMe
   timestamp: Date.now(),
 });
 
+function createSummarizeTextDeps() {
+  return {
+    completeSimple,
+    getApiKeyForModel: getApiKeyForModelMock,
+    prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
+    requireApiKey: requireApiKeyMock,
+    resolveModelAsync: resolveModelAsyncMock,
+  };
+}
+
 function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawConfig {
   return {
     messages: {
@@ -124,6 +135,23 @@ function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawC
 
 function createAudioBuffer(length = 2): Buffer {
   return Buffer.from(new Uint8Array(length).fill(1));
+}
+
+async function withMockedSpeechFetch(
+  run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
+  audioLength: number,
+) {
+  const originalFetch = globalThis.fetch;
+  const fetchMock = vi.fn(async () => ({
+    ok: true,
+    arrayBuffer: async () => new ArrayBuffer(audioLength),
+  }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  try {
+    await run(fetchMock);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 }
 
 function resolveBaseUrl(rawValue: unknown, fallback: string): string {
@@ -317,7 +345,8 @@ describe("tts", () => {
       { pluginId: "microsoft", provider: buildTestMicrosoftSpeechProvider(), source: "test" },
       { pluginId: "elevenlabs", provider: buildTestElevenLabsSpeechProvider(), source: "test" },
     ];
-    setActivePluginRegistry(registry, "tts-test");
+    const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
+    setActivePluginRegistry(registry, cacheKey);
     vi.clearAllMocks();
     vi.mocked(completeSimple).mockResolvedValue(
       mockAssistantMessage([{ type: "text", text: "Summary" }]),
@@ -330,33 +359,30 @@ describe("tts", () => {
       messages: { tts: {} },
     };
 
-    it("uses default edge output format unless overridden", () => {
-      const cases = [
-        {
-          name: "default",
-          cfg: baseCfg,
-          expected: "audio-24khz-48kbitrate-mono-mp3",
-        },
-        {
-          name: "override",
-          cfg: {
-            ...baseCfg,
-            messages: {
-              tts: {
-                edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
-              },
+    it.each([
+      {
+        name: "default",
+        cfg: baseCfg,
+        expected: "audio-24khz-48kbitrate-mono-mp3",
+      },
+      {
+        name: "override",
+        cfg: {
+          ...baseCfg,
+          messages: {
+            tts: {
+              edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
             },
-          } as OpenClawConfig,
-          expected: "audio-24khz-96kbitrate-mono-mp3",
-        },
-      ] as const;
-      for (const testCase of cases) {
-        const config = resolveTtsConfig(testCase.cfg);
-        const providerConfig = getResolvedSpeechProviderConfig(config, "microsoft") as {
-          outputFormat?: string;
-        };
-        expect(providerConfig.outputFormat, testCase.name).toBe(testCase.expected);
-      }
+          },
+        } as OpenClawConfig,
+        expected: "audio-24khz-96kbitrate-mono-mp3",
+      },
+    ] as const)("$name", ({ cfg, expected, name }) => {
+      const config = resolveTtsConfig(cfg);
+      const providerConfig = getResolvedSpeechProviderConfig(config, "microsoft") as {
+        outputFormat?: string;
+      };
+      expect(providerConfig.outputFormat, name).toBe(expected);
     });
   });
 
@@ -451,30 +477,36 @@ describe("tts", () => {
       messages: { tts: {} },
     };
 
+    async function runSummarizeText(params?: {
+      text?: string;
+      targetLength?: number;
+      cfg?: OpenClawConfig;
+    }) {
+      const cfg = params?.cfg ?? baseCfg;
+      const config = resolveTtsConfig(cfg);
+      return await summarizeText(
+        {
+          text: params?.text ?? "Long text to summarize",
+          targetLength: params?.targetLength ?? 500,
+          cfg,
+          config,
+          timeoutMs: 30_000,
+        },
+        createSummarizeTextDeps(),
+      );
+    }
+
     it("summarizes text and returns result with metrics", async () => {
       const mockSummary = "This is a summarized version of the text.";
-      const baseConfig = resolveTtsConfig(baseCfg);
       vi.mocked(completeSimple).mockResolvedValue(
         mockAssistantMessage([{ type: "text", text: mockSummary }]),
       );
 
       const longText = "A".repeat(2000);
-      const result = await summarizeText(
-        {
-          text: longText,
-          targetLength: 1500,
-          cfg: baseCfg,
-          config: baseConfig,
-          timeoutMs: 30_000,
-        },
-        {
-          completeSimple,
-          getApiKeyForModel: getApiKeyForModelMock,
-          prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
-          requireApiKey: requireApiKeyMock,
-          resolveModelAsync: resolveModelAsyncMock,
-        },
-      );
+      const result = await runSummarizeText({
+        text: longText,
+        targetLength: 1500,
+      });
 
       expect(result.summary).toBe(mockSummary);
       expect(result.inputLength).toBe(2000);
@@ -484,23 +516,7 @@ describe("tts", () => {
     });
 
     it("calls the summary model with the expected parameters", async () => {
-      const baseConfig = resolveTtsConfig(baseCfg);
-      await summarizeText(
-        {
-          text: "Long text to summarize",
-          targetLength: 500,
-          cfg: baseCfg,
-          config: baseConfig,
-          timeoutMs: 30_000,
-        },
-        {
-          completeSimple,
-          getApiKeyForModel: getApiKeyForModelMock,
-          prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
-          requireApiKey: requireApiKeyMock,
-          resolveModelAsync: resolveModelAsyncMock,
-        },
-      );
+      await runSummarizeText();
 
       const callArgs = vi.mocked(completeSimple).mock.calls[0];
       expect(callArgs?.[1]?.messages?.[0]?.role).toBe("user");
@@ -514,29 +530,12 @@ describe("tts", () => {
         agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
         messages: { tts: { summaryModel: "openai/gpt-4.1-mini" } },
       };
-      const config = resolveTtsConfig(cfg);
-      await summarizeText(
-        {
-          text: "Long text to summarize",
-          targetLength: 500,
-          cfg,
-          config,
-          timeoutMs: 30_000,
-        },
-        {
-          completeSimple,
-          getApiKeyForModel: getApiKeyForModelMock,
-          prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
-          requireApiKey: requireApiKeyMock,
-          resolveModelAsync: resolveModelAsyncMock,
-        },
-      );
+      await runSummarizeText({ cfg });
 
       expect(resolveModelAsyncMock).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
     });
 
     it("keeps the Ollama api for direct summarization", async () => {
-      const baseConfig = resolveTtsConfig(baseCfg);
       vi.mocked(resolveModelAsyncMock).mockResolvedValue({
         ...createResolvedModel("ollama", "qwen3:8b", "ollama"),
         model: {
@@ -545,140 +544,95 @@ describe("tts", () => {
         },
       } as never);
 
-      await summarizeText(
-        {
-          text: "Long text to summarize",
-          targetLength: 500,
-          cfg: baseCfg,
-          config: baseConfig,
-          timeoutMs: 30_000,
-        },
-        {
-          completeSimple,
-          getApiKeyForModel: getApiKeyForModelMock,
-          prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
-          requireApiKey: requireApiKeyMock,
-          resolveModelAsync: resolveModelAsyncMock,
-        },
-      );
+      await runSummarizeText();
 
       expect(vi.mocked(completeSimple).mock.calls[0]?.[0]?.api).toBe("ollama");
       expect(ensureCustomApiRegisteredMock).not.toHaveBeenCalled();
     });
 
-    it("validates targetLength bounds", async () => {
-      const baseConfig = resolveTtsConfig(baseCfg);
-      const cases = [
-        { targetLength: 99, shouldThrow: true },
-        { targetLength: 100, shouldThrow: false },
-        { targetLength: 10000, shouldThrow: false },
-        { targetLength: 10001, shouldThrow: true },
-      ] as const;
-      for (const testCase of cases) {
-        const call = summarizeText(
-          {
-            text: "text",
-            targetLength: testCase.targetLength,
-            cfg: baseCfg,
-            config: baseConfig,
-            timeoutMs: 30_000,
-          },
-          {
-            completeSimple,
-            getApiKeyForModel: getApiKeyForModelMock,
-            prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
-            requireApiKey: requireApiKeyMock,
-            resolveModelAsync: resolveModelAsyncMock,
-          },
+    it.each([
+      { targetLength: 99, shouldThrow: true },
+      { targetLength: 100, shouldThrow: false },
+      { targetLength: 10000, shouldThrow: false },
+      { targetLength: 10001, shouldThrow: true },
+    ] as const)("validates targetLength bounds: $targetLength", async (testCase) => {
+      const call = runSummarizeText({ text: "text", targetLength: testCase.targetLength });
+      if (testCase.shouldThrow) {
+        await expect(call, String(testCase.targetLength)).rejects.toThrow(
+          `Invalid targetLength: ${testCase.targetLength}`,
         );
-        if (testCase.shouldThrow) {
-          await expect(call, String(testCase.targetLength)).rejects.toThrow(
-            `Invalid targetLength: ${testCase.targetLength}`,
-          );
-        } else {
-          await expect(call, String(testCase.targetLength)).resolves.toBeDefined();
-        }
+      } else {
+        await expect(call, String(testCase.targetLength)).resolves.toBeDefined();
       }
     });
 
-    it("throws when summary output is missing or empty", async () => {
-      const baseConfig = resolveTtsConfig(baseCfg);
-      const cases = [
-        { name: "no summary blocks", message: mockAssistantMessage([]) },
-        {
-          name: "empty summary content",
-          message: mockAssistantMessage([{ type: "text", text: "   " }]),
-        },
-      ] as const;
-      for (const testCase of cases) {
-        vi.mocked(completeSimple).mockResolvedValue(testCase.message);
-        await expect(
-          summarizeText(
-            {
-              text: "text",
-              targetLength: 500,
-              cfg: baseCfg,
-              config: baseConfig,
-              timeoutMs: 30_000,
-            },
-            {
-              completeSimple,
-              getApiKeyForModel: getApiKeyForModelMock,
-              prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
-              requireApiKey: requireApiKeyMock,
-              resolveModelAsync: resolveModelAsyncMock,
-            },
-          ),
-          testCase.name,
-        ).rejects.toThrow("No summary returned");
-      }
+    it.each([
+      { name: "no summary blocks", message: mockAssistantMessage([]) },
+      {
+        name: "empty summary content",
+        message: mockAssistantMessage([{ type: "text", text: "   " }]),
+      },
+    ] as const)("throws when summary output is missing or empty: $name", async (testCase) => {
+      vi.mocked(completeSimple).mockResolvedValue(testCase.message);
+      await expect(runSummarizeText({ text: "text" }), testCase.name).rejects.toThrow(
+        "No summary returned",
+      );
     });
   });
 
   describe("getTtsProvider", () => {
-    const baseCfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-      messages: { tts: {} },
-    };
-
-    it("selects provider based on available API keys", () => {
-      const cases = [
-        {
-          env: {
-            OPENAI_API_KEY: "test-openai-key",
-            ELEVENLABS_API_KEY: undefined,
-            XI_API_KEY: undefined,
-          },
-          prefsPath: "/tmp/tts-prefs-openai.json",
-          expected: "openai",
+    it.each([
+      {
+        name: "openai key available",
+        env: {
+          OPENAI_API_KEY: "test-openai-key",
+          ELEVENLABS_API_KEY: undefined,
+          XI_API_KEY: undefined,
         },
-        {
-          env: {
-            OPENAI_API_KEY: undefined,
-            ELEVENLABS_API_KEY: "test-elevenlabs-key",
-            XI_API_KEY: undefined,
-          },
-          prefsPath: "/tmp/tts-prefs-elevenlabs.json",
-          expected: "elevenlabs",
+        prefsPath: "/tmp/tts-prefs-openai.json",
+        expected: "openai",
+      },
+      {
+        name: "elevenlabs key available",
+        env: {
+          OPENAI_API_KEY: undefined,
+          ELEVENLABS_API_KEY: "test-elevenlabs-key",
+          XI_API_KEY: undefined,
         },
-        {
-          env: {
-            OPENAI_API_KEY: undefined,
-            ELEVENLABS_API_KEY: undefined,
-            XI_API_KEY: undefined,
-          },
-          prefsPath: "/tmp/tts-prefs-microsoft.json",
-          expected: "microsoft",
+        prefsPath: "/tmp/tts-prefs-elevenlabs.json",
+        expected: "elevenlabs",
+      },
+      {
+        name: "falls back to microsoft",
+        env: {
+          OPENAI_API_KEY: undefined,
+          ELEVENLABS_API_KEY: undefined,
+          XI_API_KEY: undefined,
         },
-      ] as const;
-
-      for (const testCase of cases) {
-        withEnv(testCase.env, () => {
-          const config = resolveTtsConfig(baseCfg);
-          const provider = getTtsProvider(config, testCase.prefsPath);
-          expect(provider).toBe(testCase.expected);
-        });
-      }
+        prefsPath: "/tmp/tts-prefs-microsoft.json",
+        expected: "microsoft",
+      },
+    ] as const)("selects provider based on available API keys: $name", (testCase) => {
+      withEnv(testCase.env, () => {
+        const config = {
+          auto: "off",
+          mode: "final",
+          provider: "openai",
+          providerSource: "default",
+          summaryModel: undefined,
+          modelOverrides: resolveModelOverridePolicy(undefined),
+          providerConfigs: {
+            openai: {},
+            microsoft: {},
+            elevenlabs: {},
+          },
+          prefsPath: undefined,
+          maxTextLength: 4000,
+          timeoutMs: 30_000,
+        } as ReturnType<typeof resolveTtsConfig>;
+        const provider = getTtsProvider(config, testCase.prefsPath);
+        expect(provider).toBe(testCase.expected);
+      });
     });
   });
 
@@ -707,49 +661,50 @@ describe("tts", () => {
       messages: { tts: {} },
     };
 
-    it("resolves openai.baseUrl from config/env with config precedence and slash trimming", () => {
-      for (const testCase of [
-        {
-          name: "default endpoint",
-          cfg: baseCfg,
-          env: { OPENAI_TTS_BASE_URL: undefined },
-          expected: "https://api.openai.com/v1",
-        },
-        {
-          name: "env override",
-          cfg: baseCfg,
-          env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
-          expected: "http://localhost:8880/v1",
-        },
-        {
-          name: "config wins over env",
-          cfg: {
-            ...baseCfg,
-            messages: {
-              tts: { openai: { baseUrl: "http://my-server:9000/v1" } },
-            },
-          } as OpenClawConfig,
-          env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
-          expected: "http://my-server:9000/v1",
-        },
-        {
-          name: "config slash trimming",
-          cfg: {
-            ...baseCfg,
-            messages: {
-              tts: { openai: { baseUrl: "http://my-server:9000/v1///" } },
-            },
-          } as OpenClawConfig,
-          env: { OPENAI_TTS_BASE_URL: undefined },
-          expected: "http://my-server:9000/v1",
-        },
-        {
-          name: "env slash trimming",
-          cfg: baseCfg,
-          env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1/" },
-          expected: "http://localhost:8880/v1",
-        },
-      ] as const) {
+    it.each([
+      {
+        name: "default endpoint",
+        cfg: baseCfg,
+        env: { OPENAI_TTS_BASE_URL: undefined },
+        expected: "https://api.openai.com/v1",
+      },
+      {
+        name: "env override",
+        cfg: baseCfg,
+        env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
+        expected: "http://localhost:8880/v1",
+      },
+      {
+        name: "config wins over env",
+        cfg: {
+          ...baseCfg,
+          messages: {
+            tts: { openai: { baseUrl: "http://my-server:9000/v1" } },
+          },
+        } as OpenClawConfig,
+        env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
+        expected: "http://my-server:9000/v1",
+      },
+      {
+        name: "config slash trimming",
+        cfg: {
+          ...baseCfg,
+          messages: {
+            tts: { openai: { baseUrl: "http://my-server:9000/v1///" } },
+          },
+        } as OpenClawConfig,
+        env: { OPENAI_TTS_BASE_URL: undefined },
+        expected: "http://my-server:9000/v1",
+      },
+      {
+        name: "env slash trimming",
+        cfg: baseCfg,
+        env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1/" },
+        expected: "http://localhost:8880/v1",
+      },
+    ] as const)(
+      "resolves openai.baseUrl from config/env with config precedence and slash trimming: $name",
+      (testCase) => {
         withEnv(testCase.env, () => {
           const config = resolveTtsConfig(testCase.cfg);
           const openaiConfig = getResolvedSpeechProviderConfig(config, "openai") as {
@@ -757,32 +712,16 @@ describe("tts", () => {
           };
           expect(openaiConfig.baseUrl, testCase.name).toBe(testCase.expected);
         });
-      }
-    });
+      },
+    );
   });
 
   describe("textToSpeechTelephony – openai instructions", () => {
-    const withMockedTelephonyFetch = async (
-      run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
-    ) => {
-      const originalFetch = globalThis.fetch;
-      const fetchMock = vi.fn(async () => ({
-        ok: true,
-        arrayBuffer: async () => new ArrayBuffer(2),
-      }));
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
-      try {
-        await run(fetchMock);
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-    };
-
     async function expectTelephonyInstructions(
       model: "tts-1" | "gpt-4o-mini-tts",
       expectedInstructions: string | undefined,
     ) {
-      await withMockedTelephonyFetch(async (fetchMock) => {
+      await withMockedSpeechFetch(async (fetchMock) => {
         const result = await tts.textToSpeechTelephony({
           text: "Hello there, friendly caller.",
           cfg: createOpenAiTelephonyCfg(model),
@@ -794,17 +733,22 @@ describe("tts", () => {
         expect(typeof init.body).toBe("string");
         const body = JSON.parse(init.body as string) as Record<string, unknown>;
         expect(body.instructions).toBe(expectedInstructions);
-      });
+      }, 2);
     }
 
-    it("only includes instructions for supported telephony models", async () => {
-      for (const testCase of [
-        { model: "tts-1", expectedInstructions: undefined },
-        { model: "gpt-4o-mini-tts", expectedInstructions: "Speak warmly" },
-      ] as const) {
+    it.each([
+      { name: "tts-1 omits instructions", model: "tts-1", expectedInstructions: undefined },
+      {
+        name: "gpt-4o-mini-tts keeps instructions",
+        model: "gpt-4o-mini-tts",
+        expectedInstructions: "Speak warmly",
+      },
+    ] as const)(
+      "only includes instructions for supported telephony models: $name",
+      async (testCase) => {
         await expectTelephonyInstructions(testCase.model, testCase.expectedInstructions);
-      }
-    });
+      },
+    );
   });
 
   describe("maybeApplyTtsToPayload", () => {
@@ -824,16 +768,9 @@ describe("tts", () => {
     ) => {
       const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
       process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
-      const originalFetch = globalThis.fetch;
-      const fetchMock = vi.fn(async () => ({
-        ok: true,
-        arrayBuffer: async () => new ArrayBuffer(1),
-      }));
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
       try {
-        await run(fetchMock);
+        await withMockedSpeechFetch(run, 1);
       } finally {
-        globalThis.fetch = originalFetch;
         process.env.OPENCLAW_TTS_PREFS = prevPrefs;
       }
     };
@@ -846,79 +783,84 @@ describe("tts", () => {
       },
     };
 
-    it("applies inbound auto-TTS gating by audio status and cleaned text length", async () => {
-      const cases = [
-        {
-          name: "inbound gating blocks non-audio",
-          payload: { text: "Hello world" },
-          inboundAudio: false,
-          expectedFetchCalls: 0,
-          expectSamePayload: true,
-        },
-        {
-          name: "inbound gating blocks too-short cleaned text",
-          payload: { text: "### **bold**" },
-          inboundAudio: true,
-          expectedFetchCalls: 0,
-          expectSamePayload: true,
-        },
-        {
-          name: "inbound gating allows audio with real text",
-          payload: { text: "Hello world" },
-          inboundAudio: true,
-          expectedFetchCalls: 1,
-          expectSamePayload: false,
-        },
-      ] as const;
-
-      for (const testCase of cases) {
-        await withMockedAutoTtsFetch(async (fetchMock) => {
-          const result = await maybeApplyTtsToPayload({
-            payload: testCase.payload,
-            cfg: baseCfg,
-            kind: "final",
-            inboundAudio: testCase.inboundAudio,
-          });
-          expect(fetchMock, testCase.name).toHaveBeenCalledTimes(testCase.expectedFetchCalls);
-          if (testCase.expectSamePayload) {
-            expect(result, testCase.name).toBe(testCase.payload);
-          } else {
-            expect(result.mediaUrl, testCase.name).toBeDefined();
-          }
+    async function expectAutoTtsOutcome(params: {
+      cfg: OpenClawConfig;
+      payload: { text: string };
+      inboundAudio?: boolean;
+      expectedFetchCalls: number;
+      expectSamePayload: boolean;
+    }) {
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const result = await maybeApplyTtsToPayload({
+          payload: params.payload,
+          cfg: params.cfg,
+          kind: "final",
+          ...(params.inboundAudio !== undefined ? { inboundAudio: params.inboundAudio } : {}),
         });
-      }
-    });
+        expect(fetchMock).toHaveBeenCalledTimes(params.expectedFetchCalls);
+        if (params.expectSamePayload) {
+          expect(result).toBe(params.payload);
+        } else {
+          expect(result.mediaUrl).toBeDefined();
+        }
+      });
+    }
 
-    it("respects tagged-mode auto-TTS gating", async () => {
-      for (const testCase of [
-        {
-          name: "plain text is skipped",
-          payload: { text: "Hello world" },
-          expectedFetchCalls: 0,
-          expectSamePayload: true,
-        },
-        {
-          name: "tagged text is synthesized",
-          payload: { text: "[[tts:text]]Hello world[[/tts:text]]" },
-          expectedFetchCalls: 1,
-          expectSamePayload: false,
-        },
-      ] as const) {
-        await withMockedAutoTtsFetch(async (fetchMock) => {
-          const result = await maybeApplyTtsToPayload({
-            payload: testCase.payload,
-            cfg: taggedCfg,
-            kind: "final",
-          });
-
-          expect(fetchMock, testCase.name).toHaveBeenCalledTimes(testCase.expectedFetchCalls);
-          if (testCase.expectSamePayload) {
-            expect(result, testCase.name).toBe(testCase.payload);
-          } else {
-            expect(result.mediaUrl, testCase.name).toBeDefined();
-          }
+    it.each([
+      {
+        name: "inbound gating blocks non-audio",
+        payload: { text: "Hello world" },
+        inboundAudio: false,
+        expectedFetchCalls: 0,
+        expectSamePayload: true,
+      },
+      {
+        name: "inbound gating blocks too-short cleaned text",
+        payload: { text: "### **bold**" },
+        inboundAudio: true,
+        expectedFetchCalls: 0,
+        expectSamePayload: true,
+      },
+      {
+        name: "inbound gating allows audio with real text",
+        payload: { text: "Hello world" },
+        inboundAudio: true,
+        expectedFetchCalls: 1,
+        expectSamePayload: false,
+      },
+    ] as const)(
+      "applies inbound auto-TTS gating by audio status and cleaned text length: $name",
+      async (testCase) => {
+        await expectAutoTtsOutcome({
+          cfg: baseCfg,
+          payload: testCase.payload,
+          inboundAudio: testCase.inboundAudio,
+          expectedFetchCalls: testCase.expectedFetchCalls,
+          expectSamePayload: testCase.expectSamePayload,
         });
-      }
+      },
+    );
+
+    it.each([
+      {
+        name: "plain text is skipped",
+        payload: { text: "Hello world" },
+        expectedFetchCalls: 0,
+        expectSamePayload: true,
+      },
+      {
+        name: "tagged text is synthesized",
+        payload: { text: "[[tts:text]]Hello world[[/tts:text]]" },
+        expectedFetchCalls: 1,
+        expectSamePayload: false,
+      },
+    ] as const)("respects tagged-mode auto-TTS gating: $name", async (testCase) => {
+      await expectAutoTtsOutcome({
+        cfg: taggedCfg,
+        payload: testCase.payload,
+        expectedFetchCalls: testCase.expectedFetchCalls,
+        expectSamePayload: testCase.expectSamePayload,
+      });
     });
   });
 });

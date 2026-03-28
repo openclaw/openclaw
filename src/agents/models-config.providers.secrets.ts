@@ -324,16 +324,6 @@ export function createProviderAuthResolver(
   authStore: ReturnType<typeof ensureAuthProfileStore>,
 ): ProviderAuthResolver {
   return (provider: string, options?: { oauthMarker?: string }) => {
-    const envVar = resolveEnvApiKeyVarName(provider, env);
-    if (envVar) {
-      return {
-        apiKey: envVar,
-        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-        mode: "api_key" as const,
-        source: "env" as const,
-      };
-    }
-
     const ids = listProfilesForProvider(authStore, provider);
     let oauthCandidate:
       | {
@@ -373,6 +363,16 @@ export function createProviderAuthResolver(
     }
     if (oauthCandidate) {
       return oauthCandidate;
+    }
+
+    const envVar = resolveEnvApiKeyVarName(provider, env);
+    if (envVar) {
+      return {
+        apiKey: envVar,
+        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
+        mode: "api_key" as const,
+        source: "env" as const,
+      };
     }
 
     return {

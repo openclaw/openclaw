@@ -607,6 +607,10 @@ describe("gateway server sessions", () => {
           verboseLevel: "on",
           responseUsage: "full",
           fastMode: true,
+          lastChannel: "telegram",
+          lastTo: "-100123",
+          lastAccountId: "acct-1",
+          lastThreadId: 42,
         },
       },
     });
@@ -643,6 +647,10 @@ describe("gateway server sessions", () => {
         verboseLevel: "on",
         responseUsage: "full",
         fastMode: true,
+        lastChannel: "telegram",
+        lastTo: "-100123",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
       }),
       new Set(["conn-1"]),
       { dropIfSlow: true },
@@ -691,6 +699,64 @@ describe("gateway server sessions", () => {
         sessionKey: "agent:main:main",
         reason: "patch",
         sendPolicy: "deny",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+  });
+
+  test("sessions.changed mutation events include subagent ownership metadata", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        "subagent:child": {
+          sessionId: "sess-child",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:main",
+          spawnedWorkspaceDir: "/tmp/subagent-workspace",
+          forkedFromParent: true,
+          spawnDepth: 2,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+        },
+      },
+    });
+
+    const broadcastToConnIds = vi.fn();
+    const respond = vi.fn();
+    const sessionsHandlers = await getSessionsHandlers();
+    await sessionsHandlers["sessions.patch"]({
+      req: {} as never,
+      params: {
+        key: "subagent:child",
+        label: "Child",
+      },
+      respond,
+      context: {
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        loadGatewayModelCatalog: async () => ({ providers: [] }),
+      } as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, key: "agent:main:subagent:child" }),
+      undefined,
+    );
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:subagent:child",
+        reason: "patch",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent-workspace",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
       }),
       new Set(["conn-1"]),
       { dropIfSlow: true },

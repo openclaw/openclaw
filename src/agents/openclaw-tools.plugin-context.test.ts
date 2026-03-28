@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -54,6 +55,53 @@ describe("createOpenClawTools plugin context", () => {
         context: expect.objectContaining({
           sessionKey: "agent:main:telegram:direct:12345",
           sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        }),
+      }),
+    );
+  });
+
+  it("infers the default agent workspace for plugin tools when workspaceDir is omitted", () => {
+    const workspaceDir = path.join(process.cwd(), "tmp-main-workspace");
+    createOpenClawTools({
+      config: {
+        agents: {
+          defaults: { workspace: workspaceDir },
+          list: [{ id: "main", default: true }],
+        },
+      } as never,
+      agentSessionKey: "main",
+    });
+
+    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          agentId: "main",
+          workspaceDir,
+        }),
+      }),
+    );
+  });
+
+  it("infers the session agent workspace for plugin tools when workspaceDir is omitted", () => {
+    const supportWorkspace = path.join(process.cwd(), "tmp-support-workspace");
+    createOpenClawTools({
+      config: {
+        agents: {
+          defaults: { workspace: path.join(process.cwd(), "tmp-default-workspace") },
+          list: [
+            { id: "main", default: true },
+            { id: "support", workspace: supportWorkspace },
+          ],
+        },
+      } as never,
+      agentSessionKey: "agent:support:main",
+    });
+
+    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          agentId: "support",
+          workspaceDir: supportWorkspace,
         }),
       }),
     );
@@ -127,7 +175,7 @@ describe("createOpenClawTools plugin context", () => {
     );
   });
 
-  it("injects ambient thread defaults without mutating shared plugin tool instances", async () => {
+  it("does not inject ambient thread defaults into plugin tools", async () => {
     const executeMock = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "ok" }],
       details: {},
@@ -157,18 +205,17 @@ describe("createOpenClawTools plugin context", () => {
 
     expect(first).toBeDefined();
     expect(second).toBeDefined();
-    expect(first).not.toBe(sharedTool);
-    expect(second).not.toBe(sharedTool);
-    expect(first).not.toBe(second);
+    expect(first).toBe(sharedTool);
+    expect(second).toBe(sharedTool);
 
     await first?.execute("call-1", {});
     await second?.execute("call-2", {});
 
-    expect(executeMock).toHaveBeenNthCalledWith(1, "call-1", { threadId: "111.222" });
-    expect(executeMock).toHaveBeenNthCalledWith(2, "call-2", { threadId: "333.444" });
+    expect(executeMock).toHaveBeenNthCalledWith(1, "call-1", {});
+    expect(executeMock).toHaveBeenNthCalledWith(2, "call-2", {});
   });
 
-  it("injects messageThreadId defaults for missing params objects", async () => {
+  it("does not inject messageThreadId defaults for missing params objects", async () => {
     const executeMock = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "ok" }],
       details: {},
@@ -194,10 +241,10 @@ describe("createOpenClawTools plugin context", () => {
 
     await wrapped?.execute("call-1", undefined);
 
-    expect(executeMock).toHaveBeenCalledWith("call-1", { messageThreadId: 77 });
+    expect(executeMock).toHaveBeenCalledWith("call-1", undefined);
   });
 
-  it("preserves string thread ids for tools that declare string thread parameters", async () => {
+  it("does not infer string thread ids for tools that declare thread parameters", async () => {
     const executeMock = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "ok" }],
       details: {},
@@ -223,10 +270,10 @@ describe("createOpenClawTools plugin context", () => {
 
     await wrapped?.execute("call-1", {});
 
-    expect(executeMock).toHaveBeenCalledWith("call-1", { threadId: "77" });
+    expect(executeMock).toHaveBeenCalledWith("call-1", {});
   });
 
-  it("does not override explicit thread params when ambient defaults exist", async () => {
+  it("preserves explicit thread params when ambient defaults exist", async () => {
     const executeMock = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "ok" }],
       details: {},

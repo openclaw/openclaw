@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import type { loadConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -416,11 +417,15 @@ export function loadGatewayPlugins(params: {
   baseMethods: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
 }) {
-  const pluginRegistry = loadOpenClawPlugins({
+  const resolvedConfig = applyPluginAutoEnable({
     config: params.cfg,
+    env: process.env,
+  }).config;
+  const pluginRegistry = loadOpenClawPlugins({
+    config: resolvedConfig,
     workspaceDir: params.workspaceDir,
     onlyPluginIds: resolveGatewayStartupPluginIds({
-      config: params.cfg,
+      config: resolvedConfig,
       workspaceDir: params.workspaceDir,
       env: process.env,
     }),

@@ -1,40 +1,29 @@
-import { afterEach, describe, it, vi } from "vitest";
-import { createDiscordTypingLease } from "./runtime-discord-typing.js";
+import { afterEach, describe, vi } from "vitest";
 import {
-  expectBackgroundTypingPulseFailuresAreSwallowed,
-  expectIndependentTypingLeases,
-} from "./typing-lease.test-support.js";
+  createDiscordTypingLease,
+  type CreateDiscordTypingLeaseParams,
+} from "./runtime-discord-typing.js";
+import { registerSharedTypingLeaseTests } from "./typing-lease.test-support.js";
+
+const DISCORD_TYPING_INTERVAL_MS = 2_000;
+
+function buildDiscordTypingParams(
+  pulse: CreateDiscordTypingLeaseParams["pulse"],
+): CreateDiscordTypingLeaseParams {
+  return {
+    channelId: "123",
+    intervalMs: DISCORD_TYPING_INTERVAL_MS,
+    pulse,
+  };
+}
 
 describe("createDiscordTypingLease", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("pulses immediately and keeps leases independent", async () => {
-    await expectIndependentTypingLeases({
-      createLease: createDiscordTypingLease,
-      buildParams: (pulse) => ({
-        channelId: "123",
-        intervalMs: 2_000,
-        pulse,
-      }),
-    });
-  });
-
-  it("swallows background pulse failures", async () => {
-    const pulse = vi
-      .fn<(params: { channelId: string; accountId?: string; cfg?: unknown }) => Promise<void>>()
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("boom"));
-
-    await expectBackgroundTypingPulseFailuresAreSwallowed({
-      createLease: createDiscordTypingLease,
-      pulse,
-      buildParams: (pulse) => ({
-        channelId: "123",
-        intervalMs: 2_000,
-        pulse,
-      }),
-    });
+  registerSharedTypingLeaseTests({
+    createLease: createDiscordTypingLease,
+    buildParams: buildDiscordTypingParams,
   });
 });

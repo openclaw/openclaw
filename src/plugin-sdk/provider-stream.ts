@@ -3,7 +3,7 @@
 export {
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
-} from "../agents/pi-embedded-runner/anthropic-stream-wrappers.js";
+} from "../agents/pi-embedded-runner/bedrock-stream-wrappers.js";
 export {
   createGoogleThinkingPayloadWrapper,
   sanitizeGoogleThinkingPayload,

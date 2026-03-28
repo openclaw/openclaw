@@ -11,14 +11,13 @@ import {
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import {
   createAnthropicBetaHeadersWrapper,
-  createBedrockNoCacheWrapper,
   createAnthropicFastModeWrapper,
   createAnthropicToolPayloadCompatibilityWrapper,
-  isAnthropicBedrockModel,
   resolveAnthropicFastMode,
   resolveAnthropicBetas,
   resolveCacheRetention,
 } from "./anthropic-stream-wrappers.js";
+import { createBedrockNoCacheWrapper, isAnthropicBedrockModel } from "./bedrock-stream-wrappers.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
 import { createMinimaxFastModeWrapper } from "./minimax-stream-wrappers.js";
@@ -39,7 +38,6 @@ import {
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
-import { createXaiFastModeWrapper } from "./xai-stream-wrappers.js";
 
 const defaultProviderRuntimeDeps = {
   prepareProviderExtraParams: prepareProviderExtraParamsRuntime,
@@ -379,13 +377,6 @@ function applyPostPluginStreamWrappers(
       `applying MiniMax fast mode=${ctx.effectiveExtraParams.fastMode} for ${ctx.provider}/${ctx.modelId}`,
     );
     ctx.agent.streamFn = createMinimaxFastModeWrapper(
-      ctx.agent.streamFn,
-      ctx.effectiveExtraParams.fastMode,
-    );
-    log.debug(
-      `applying xAI fast mode=${ctx.effectiveExtraParams.fastMode} for ${ctx.provider}/${ctx.modelId}`,
-    );
-    ctx.agent.streamFn = createXaiFastModeWrapper(
       ctx.agent.streamFn,
       ctx.effectiveExtraParams.fastMode,
     );

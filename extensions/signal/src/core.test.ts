@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { signalPlugin } from "./channel.js";
 import * as clientModule from "./client.js";
 import { classifySignalCliLogLine } from "./daemon.js";
 import {
@@ -8,6 +9,7 @@ import {
   resolveSignalSender,
 } from "./identity.js";
 import { probeSignal } from "./probe.js";
+import { clearSignalRuntime } from "./runtime.js";
 import { normalizeSignalAccountInput, parseSignalAllowFromEntries } from "./setup-core.js";
 
 describe("looksLikeUuid", () => {
@@ -60,6 +62,45 @@ describe("signal sender identity", () => {
 });
 
 describe("probeSignal", () => {
+  it("falls back to the direct probe helper when runtime is not initialized", async () => {
+    clearSignalRuntime();
+    vi.spyOn(clientModule, "signalCheck")
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        error: null,
+      });
+    vi.spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValueOnce({ version: "0.13.22" })
+      .mockResolvedValueOnce({ version: "0.13.22" });
+
+    const params = {
+      cfg: {} as never,
+      account: {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        baseUrl: "http://127.0.0.1:8080",
+      } as never,
+      timeoutMs: 1000,
+    };
+
+    const expected = await probeSignal("http://127.0.0.1:8080", 1000);
+    await expect(signalPlugin.status!.probeAccount!(params)).resolves.toEqual(
+      expect.objectContaining({
+        ok: expected.ok,
+        status: expected.status,
+        error: expected.error,
+        version: expected.version,
+      }),
+    );
+  });
+
   it("extracts version from {version} result", async () => {
     vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
       ok: true,
@@ -87,6 +128,18 @@ describe("probeSignal", () => {
     expect(res.ok).toBe(false);
     expect(res.status).toBe(503);
     expect(res.version).toBe(null);
+  });
+});
+
+describe("signal outbound", () => {
+  it("chunks outbound text without requiring Signal runtime initialization", () => {
+    clearSignalRuntime();
+    const chunker = signalPlugin.outbound?.chunker;
+    if (!chunker) {
+      throw new Error("signal outbound.chunker unavailable");
+    }
+
+    expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
   });
 });
 

@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   __resetGatewayModelPricingCacheForTest,
   __setGatewayModelPricingForTest,
-} from "../gateway/model-pricing-cache.js";
+} from "../gateway/model-pricing-cache-state.js";
 import {
   __resetUsageFormatCachesForTest,
   estimateUsageCost,
