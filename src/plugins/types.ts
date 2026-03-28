@@ -114,6 +114,8 @@ export type OpenClawPluginConfigSchema = {
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
+  /** Active runtime-resolved config snapshot when one is available. */
+  runtimeConfig?: OpenClawConfig;
   workspaceDir?: string;
   agentDir?: string;
   agentId?: string;
@@ -1130,7 +1132,28 @@ export type ProviderPlugin = {
     ctx: ProviderAuthDoctorHintContext,
   ) => string | Promise<string | null | undefined> | null | undefined;
   /**
-   * Provider-owned synthetic auth marker.
+   * Provider-owned config-backed auth resolution.
+   *
+   * Providers own any provider-specific fallback secret rules here so core
+   * auth/discovery code can stay generic and avoid parsing provider-private
+   * config layouts.
+   *
+   * The returned `apiKey` may be:
+   * - a real credential from the active runtime snapshot, suitable for runtime use
+   * - a non-secret marker (for example a managed SecretRef marker), suitable only
+   *   for discovery/bootstrap callers
+   *
+   * Runtime callers must not treat non-secret markers as runnable credentials;
+   * they should retry against the active runtime snapshot when available.
+   *
+   * This hook is the canonical seam for provider-specific fallback auth
+   * derived from plugin/private config. It may return:
+   * - a runnable literal credential for runtime callers
+   * - a non-secret marker for managed-secret source config, which is still useful
+   *   for discovery/bootstrap callers
+   *
+   * Runtime callers must not treat non-secret markers as runnable credentials;
+   * they should retry against the active runtime snapshot when available.
    *
    * Use this when the provider can operate without a real secret for certain
    * configured local/self-hosted cases and wants auth resolution to treat that
