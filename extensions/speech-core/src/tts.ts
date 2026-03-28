@@ -113,6 +113,21 @@ type TtsStatusEntry = {
 
 let lastTtsAttempt: TtsStatusEntry | undefined;
 
+function resolveConfiguredTtsAutoMode(raw: TtsConfig): TtsAutoMode {
+  return normalizeTtsAutoMode(raw.auto) ?? (raw.enabled ? "always" : "off");
+}
+
+function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
+  if (prefsPath?.trim()) {
+    return resolveUserPath(prefsPath.trim());
+  }
+  const envPath = process.env.OPENCLAW_TTS_PREFS?.trim();
+  if (envPath) {
+    return resolveUserPath(envPath);
+  }
+  return path.join(CONFIG_DIR, "settings", "tts.json");
+}
+
 function resolveModelOverridePolicy(
   overrides: TtsModelOverrideConfig | undefined,
 ): ResolvedTtsModelOverrides {
@@ -205,7 +220,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
   const raw: TtsConfig = cfg.messages?.tts ?? {};
   const providerSource = raw.provider ? "config" : "default";
   const timeoutMs = raw.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const auto = normalizeTtsAutoMode(raw.auto) ?? (raw.enabled ? "always" : "off");
+  const auto = resolveConfiguredTtsAutoMode(raw);
   return {
     auto,
     mode: raw.mode ?? "final",
@@ -223,14 +238,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
 }
 
 export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {
-  if (config.prefsPath?.trim()) {
-    return resolveUserPath(config.prefsPath.trim());
-  }
-  const envPath = process.env.OPENCLAW_TTS_PREFS?.trim();
-  if (envPath) {
-    return resolveUserPath(envPath);
-  }
-  return path.join(CONFIG_DIR, "settings", "tts.json");
+  return resolveTtsPrefsPathValue(config.prefsPath);
 }
 
 function resolveTtsAutoModeFromPrefs(prefs: TtsUserPrefs): TtsAutoMode | undefined {
@@ -260,13 +268,32 @@ export function resolveTtsAutoMode(params: {
   return params.config.auto;
 }
 
+function resolveEffectiveTtsAutoState(params: { cfg: OpenClawConfig; sessionAuto?: string }): {
+  autoMode: TtsAutoMode;
+  prefsPath: string;
+} {
+  const raw: TtsConfig = params.cfg.messages?.tts ?? {};
+  const prefsPath = resolveTtsPrefsPathValue(raw.prefsPath);
+  const sessionAuto = normalizeTtsAutoMode(params.sessionAuto);
+  if (sessionAuto) {
+    return { autoMode: sessionAuto, prefsPath };
+  }
+  const prefsAuto = resolveTtsAutoModeFromPrefs(readPrefs(prefsPath));
+  if (prefsAuto) {
+    return { autoMode: prefsAuto, prefsPath };
+  }
+  return {
+    autoMode: resolveConfiguredTtsAutoMode(raw),
+    prefsPath,
+  };
+}
+
 export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefined {
-  const config = resolveTtsConfig(cfg);
-  const prefsPath = resolveTtsPrefsPath(config);
-  const autoMode = resolveTtsAutoMode({ config, prefsPath });
+  const { autoMode, prefsPath } = resolveEffectiveTtsAutoState({ cfg });
   if (autoMode === "off") {
     return undefined;
   }
+  const config = resolveTtsConfig(cfg);
   const maxLength = getTtsMaxLength(prefsPath);
   const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
   const autoHint =
@@ -700,16 +727,14 @@ export async function maybeApplyTtsToPayload(params: {
   if (params.payload.isCompactionNotice) {
     return params.payload;
   }
-  const config = resolveTtsConfig(params.cfg);
-  const prefsPath = resolveTtsPrefsPath(config);
-  const autoMode = resolveTtsAutoMode({
-    config,
-    prefsPath,
+  const { autoMode, prefsPath } = resolveEffectiveTtsAutoState({
+    cfg: params.cfg,
     sessionAuto: params.ttsAuto,
   });
   if (autoMode === "off") {
     return params.payload;
   }
+  const config = resolveTtsConfig(params.cfg);
 
   const reply = resolveSendableOutboundReplyParts(params.payload);
   const text = reply.text;
