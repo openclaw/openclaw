@@ -402,9 +402,22 @@ function listDmPolicyOpen(cfg: OpenClawConfig): string[] {
       continue;
     }
     const section = value as Record<string, unknown>;
+    
+    // Check direct dmPolicy field
     if (section.dmPolicy === "open") {
       out.push(`channels.${channelId}.dmPolicy`);
     }
+    
+    // Check legacy nested dm.policy field (e.g., googlechat)
+    const dm = section.dm;
+    if (dm && typeof dm === "object") {
+      const dmConfig = dm as Record<string, unknown>;
+      if (dmConfig.policy === "open") {
+        out.push(`channels.${channelId}.dm.policy`);
+      }
+    }
+    
+    // Check accounts level
     const accounts = section.accounts;
     if (accounts && typeof accounts === "object") {
       for (const [accountId, accountVal] of Object.entries(accounts)) {
@@ -412,8 +425,19 @@ function listDmPolicyOpen(cfg: OpenClawConfig): string[] {
           continue;
         }
         const acc = accountVal as Record<string, unknown>;
+        
+        // Check direct dmPolicy field
         if (acc.dmPolicy === "open") {
           out.push(`channels.${channelId}.accounts.${accountId}.dmPolicy`);
+        }
+        
+        // Check legacy nested dm.policy field
+        const accDm = acc.dm;
+        if (accDm && typeof accDm === "object") {
+          const accDmConfig = accDm as Record<string, unknown>;
+          if (accDmConfig.policy === "open") {
+            out.push(`channels.${channelId}.accounts.${accountId}.dm.policy`);
+          }
         }
       }
     }

@@ -190,6 +190,18 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        workspaceScope: z
+          .enum(["full", "essential", "minimal", "none"])
+          .optional()
+          .describe(
+            "Workspace context scope for spawned subagents: full (all files), essential (AGENTS.md, TOOLS.md, BOOTSTRAP.md), minimal (BOOTSTRAP.md only), none (no files).",
+          ),
+        workspaceFiles: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Custom allowlist of bootstrap files for subagents (overrides workspaceScope).",
+          ),
       })
       .strict()
       .optional(),
