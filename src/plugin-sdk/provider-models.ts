@@ -124,7 +124,7 @@ export {
   KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
   KIMI_CODING_DEFAULT_MAX_TOKENS,
   KIMI_MODEL_CATALOG,
-} from "../agents/kimi-models.js";
+} from "./kimi-coding.js";
 export {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
