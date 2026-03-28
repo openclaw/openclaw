@@ -166,7 +166,7 @@
    **Plans:** 2 plans
    Plans:
 
-- [ ] 08-01-PLAN.md — Create and list commands with route registration for all 5 subcommands
+- [x] 08-01-PLAN.md — Create and list commands with route registration for all 5 subcommands
 - [ ] 08-02-PLAN.md — Status, reindex, and validate commands
       **Estimated complexity**: M
 

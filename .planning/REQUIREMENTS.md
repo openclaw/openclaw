@@ -76,8 +76,8 @@ Requirements for Phase 1 release. Each maps to roadmap phases.
 
 ### CLI
 
-- [ ] **CLI-01**: `openclaw projects create <name>` scaffolds project folder with PROJECT.md, queue.md, tasks/
-- [ ] **CLI-02**: `openclaw projects list` shows all projects with status summary
+- [x] **CLI-01**: `openclaw projects create <name>` scaffolds project folder with PROJECT.md, queue.md, tasks/
+- [x] **CLI-02**: `openclaw projects list` shows all projects with status summary
 - [ ] **CLI-03**: `openclaw projects status <name>` shows detailed project status including task counts and agent activity
 - [ ] **CLI-04**: `openclaw projects reindex` regenerates all `.index/` JSON files and clears stale locks
 - [ ] **CLI-05**: `openclaw projects validate` checks all frontmatter for parse errors
@@ -169,8 +169,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | GATE-02     | Phase 7  | Complete |
 | GATE-03     | Phase 7  | Complete |
 | GATE-04     | Phase 7  | Complete |
-| CLI-01      | Phase 8  | Pending  |
-| CLI-02      | Phase 8  | Pending  |
+| CLI-01      | Phase 8  | Complete |
+| CLI-02      | Phase 8  | Complete |
 | CLI-03      | Phase 8  | Pending  |
 | CLI-04      | Phase 8  | Pending  |
 | CLI-05      | Phase 8  | Pending  |
