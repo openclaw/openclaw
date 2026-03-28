@@ -118,7 +118,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
 }
 
 export type CronFailureDeliveryPlan = {
-  mode: "announce" | "webhook";
+  mode: "announce" | "webhook" | "agent-turn";
   channel?: CronMessageChannel;
   to?: string;
   accountId?: string;
@@ -128,15 +128,15 @@ export type CronFailureDestinationInput = {
   channel?: CronMessageChannel;
   to?: string;
   accountId?: string;
-  mode?: "announce" | "webhook";
+  mode?: "announce" | "webhook" | "agent-turn";
 };
 
-function normalizeFailureMode(value: unknown): "announce" | "webhook" | undefined {
+function normalizeFailureMode(value: unknown): "announce" | "webhook" | "agent-turn" | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
   const trimmed = value.trim().toLowerCase();
-  if (trimmed === "announce" || trimmed === "webhook") {
+  if (trimmed === "announce" || trimmed === "webhook" || trimmed === "agent-turn") {
     return trimmed;
   }
   return undefined;

@@ -303,6 +303,11 @@ export function buildGatewayCronService(params: {
       });
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
+      // agent-turn mode is handled directly in timer.ts via enqueueSystemEvent;
+      // it should never reach here, but guard just in case.
+      if (mode === "agent-turn") {
+        return;
+      }
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const webhookToken = trimToOptionalString(params.cfg.cron?.webhookToken);
 
