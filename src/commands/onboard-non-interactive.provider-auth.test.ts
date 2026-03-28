@@ -3,6 +3,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "../plugin-sdk/minimax.js";
+import { OPENAI_DEFAULT_MODEL } from "../plugin-sdk/openai.js";
 import {
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
@@ -15,7 +16,6 @@ import {
   readJsonFile,
   type NonInteractiveRuntime,
 } from "./onboard-non-interactive.test-helpers.js";
-import { OPENAI_DEFAULT_MODEL } from "./openai-model-default.js";
 
 type OnboardEnv = {
   configPath: string;
@@ -45,7 +45,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     import("../plugins/provider-api-key-auth.runtime.js"),
     import("../plugins/provider-self-hosted-setup.js"),
     import("./zai-endpoint-detect.js"),
-    import("./openai-model-default.js"),
+    import("../plugin-sdk/openai.js"),
   ]);
 
   const ZAI_FALLBACKS = {
