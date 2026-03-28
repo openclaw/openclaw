@@ -177,14 +177,10 @@ describe("registerSlackMessageEvents", () => {
       calls: 0,
     },
     {
-      name: "blocks thread_broadcast system events without an authenticated sender",
+      name: "does not emit system events for thread_broadcast (processed as regular message)",
       input: {
         overrides: { dmPolicy: "open" },
-        event: {
-          ...makeThreadBroadcastEvent(),
-          user: undefined,
-          message: { ts: "123.456" },
-        },
+        event: makeThreadBroadcastEvent(),
       },
       calls: 0,
     },
@@ -192,6 +188,17 @@ describe("registerSlackMessageEvents", () => {
   it.each(cases)("$name", async ({ input, calls }) => {
     await runMessageCase(input);
     expect(messageQueueMock).toHaveBeenCalledTimes(calls);
+  });
+
+  it("routes thread_broadcast messages to the message handler instead of system events", async () => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "message",
+      overrides: { dmPolicy: "open" },
+      event: makeThreadBroadcastEvent(),
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
   it("passes regular message events to the message handler", async () => {
