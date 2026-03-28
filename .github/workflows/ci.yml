@@ -53,83 +53,83 @@ jobs:
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
+        fetch-tags: false
+        persist-credentials: false
+        submodules: false
 
-      - name: Ensure preflight base commit
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+    - name: Ensure preflight base commit
+      uses: ./.github/actions/ensure-base-commit
+      with:
+        base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+        fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
-      - name: Detect docs-only changes
-        id: docs_scope
-        uses: ./.github/actions/detect-docs-changes
+    - name: Detect docs-only changes
+      id: docs_scope
+      uses: ./.github/actions/detect-docs-changes
 
-      - name: Detect changed scopes
-        id: changed_scope
-        if: steps.docs_scope.outputs.docs_only != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
+    - name: Detect changed scopes
+      id: changed_scope
+      if: steps.docs_scope.outputs.docs_only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "push" ]; then
-            BASE="${{ github.event.before }}"
-          else
-            BASE="${{ github.event.pull_request.base.sha }}"
-          fi
+        if [ "${{ github.event_name }}" = "push" ]; then
+          BASE="${{ github.event.before }}"
+        else
+          BASE="${{ github.event.pull_request.base.sha }}"
+        fi
 
-          node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
+        node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
 
-      - name: Setup Node environment
-        if: steps.docs_scope.outputs.docs_only != 'true'
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          install-deps: "false"
-          use-sticky-disk: "false"
+    - name: Setup Node environment
+      if: steps.docs_scope.outputs.docs_only != 'true'
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "false"
+        install-deps: "false"
+        use-sticky-disk: "false"
 
-      - name: Detect changed extensions
-        id: changed_extensions
-        if: steps.docs_scope.outputs.docs_only != 'true' && steps.changed_scope.outputs.run_node == 'true'
-        env:
-          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          BASE_REF: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
-        run: |
-          node --input-type=module <<'EOF'
-          import { appendFileSync } from "node:fs";
-          import { listChangedExtensionIds } from "./scripts/test-extension.mjs";
+    - name: Detect changed extensions
+      id: changed_extensions
+      if: steps.docs_scope.outputs.docs_only != 'true' && steps.changed_scope.outputs.run_node == 'true'
+      env:
+        BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+        BASE_REF: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+      run: |
+        node --input-type=module <<'EOF'
+        import { appendFileSync } from "node:fs";
+        import { listChangedExtensionIds } from "./scripts/test-extension.mjs";
 
-          const extensionIds = listChangedExtensionIds({
-            base: process.env.BASE_SHA,
-            head: "HEAD",
-            fallbackBaseRef: process.env.BASE_REF,
-            unavailableBaseBehavior: "all",
-          });
-          const matrix = JSON.stringify({ include: extensionIds.map((extension) => ({ extension })) });
+        const extensionIds = listChangedExtensionIds({
+          base: process.env.BASE_SHA,
+          head: "HEAD",
+          fallbackBaseRef: process.env.BASE_REF,
+          unavailableBaseBehavior: "all",
+        });
+        const matrix = JSON.stringify({ include: extensionIds.map((extension) => ({ extension })) });
 
-          appendFileSync(process.env.GITHUB_OUTPUT, `has_changed_extensions=${extensionIds.length > 0}\n`, "utf8");
-          appendFileSync(process.env.GITHUB_OUTPUT, `changed_extensions_matrix=${matrix}\n`, "utf8");
-          EOF
+        appendFileSync(process.env.GITHUB_OUTPUT, `has_changed_extensions=${extensionIds.length > 0}\n`, "utf8");
+        appendFileSync(process.env.GITHUB_OUTPUT, `changed_extensions_matrix=${matrix}\n`, "utf8");
+        EOF
 
-      - name: Build CI manifest
-        id: manifest
-        env:
-          OPENCLAW_CI_DOCS_ONLY: ${{ steps.docs_scope.outputs.docs_only }}
-          OPENCLAW_CI_DOCS_CHANGED: ${{ steps.docs_scope.outputs.docs_changed }}
-          OPENCLAW_CI_RUN_NODE: ${{ steps.changed_scope.outputs.run_node || 'false' }}
-          OPENCLAW_CI_RUN_MACOS: ${{ steps.changed_scope.outputs.run_macos || 'false' }}
-          OPENCLAW_CI_RUN_ANDROID: ${{ steps.changed_scope.outputs.run_android || 'false' }}
-          OPENCLAW_CI_RUN_WINDOWS: ${{ steps.changed_scope.outputs.run_windows || 'false' }}
-          OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
-          OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
-          OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
-        run: node scripts/ci-write-manifest-outputs.mjs --workflow ci
+    - name: Build CI manifest
+      id: manifest
+      env:
+        OPENCLAW_CI_DOCS_ONLY: ${{ steps.docs_scope.outputs.docs_only }}
+        OPENCLAW_CI_DOCS_CHANGED: ${{ steps.docs_scope.outputs.docs_changed }}
+        OPENCLAW_CI_RUN_NODE: ${{ steps.changed_scope.outputs.run_node || 'false' }}
+        OPENCLAW_CI_RUN_MACOS: ${{ steps.changed_scope.outputs.run_macos || 'false' }}
+        OPENCLAW_CI_RUN_ANDROID: ${{ steps.changed_scope.outputs.run_android || 'false' }}
+        OPENCLAW_CI_RUN_WINDOWS: ${{ steps.changed_scope.outputs.run_windows || 'false' }}
+        OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
+        OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
+        OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
+      run: node scripts/ci-write-manifest-outputs.mjs --workflow ci
 
   # Run the fast security/SCM checks in parallel with scope detection so the
   # main Node jobs do not have to wait for Python/pre-commit setup.
@@ -140,142 +140,255 @@ jobs:
     env:
       PRE_COMMIT_CACHE_KEY_SUFFIX: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
+        fetch-tags: false
+        persist-credentials: false
+        submodules: false
 
-      - name: Ensure security base commit
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+    - name: Ensure security base commit
+      uses: ./.github/actions/ensure-base-commit
+      with:
+        base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+        fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
-      - name: Prepare trusted pre-commit config
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          trusted_config="$RUNNER_TEMP/pre-commit-base.yaml"
-          git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"
-          echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
+    - name: Setup Parallel Secret Detection
+      uses: arter841/parallel-secret-detection@v0.0.5
+      with:
+        args: --parallel=${{ matrix.shard }}
+    - name: Prepare trusted pre-commit config
+      if: github.event_name == 'pull_request'
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: |
+        set -euo pipefail
+        trusted_config="$RUNNER_TEMP/pre-commit-base.yaml"
+        git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"
+        echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          install-deps: "false"
-          use-sticky-disk: "false"
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "false"
+        install-deps: "false"
+        use-sticky-disk: "false"
 
-      - name: Setup Python
-        id: setup-python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-          cache-dependency-path: |
-            pyproject.toml
-            .pre-commit-config.yaml
-            .github/workflows/ci.yml
+    - name: Setup Python
+      id: setup-python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+        cache: "pip"
+        cache-dependency-path: |
+          pyproject.toml
+          .pre-commit-config.yaml
+          .github/workflows/ci.yml
 
-      - name: Restore pre-commit cache
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/pre-commit
-          key: pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.PRE_COMMIT_CACHE_KEY_SUFFIX }}
-          restore-keys: |
-            pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}-
+    - name: Restore pre-commit cache
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.PRE_COMMIT_CACHE_KEY_SUFFIX }}
+        restore-keys: |
+          pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}-
 
-      - name: Install pre-commit
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pre-commit==4.2.0
+    - name: Install pre-commit
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install pre-commit==4.2.0
 
-      - name: Detect committed private keys
-        run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-private-key
+    - name: Detect committed private keys
+      run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-private-key
 
-      - name: Audit changed GitHub workflows with zizmor
-        env:
-          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
+    - name: Audit changed GitHub workflows with zizmor
+      env:
+        BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+      run: |
+        set -euo pipefail
 
-          if [ -z "${BASE_SHA:-}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
-            echo "No usable base SHA detected; skipping zizmor."
-            exit 0
-          fi
+        if [ -z "${BASE_SHA:-}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+          echo "No usable base SHA detected; skipping zizmor."
+          exit 0
+        fi
 
-          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            echo "Base SHA ${BASE_SHA} is unavailable; skipping zizmor."
-            exit 0
-          fi
+        if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+          echo "Base SHA ${BASE_SHA} is unavailable; skipping zizmor."
+          exit 0
+        fi
 
-          mapfile -t workflow_files < <(
-            git diff --name-only "${BASE_SHA}" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
-          )
-          if [ "${#workflow_files[@]}" -eq 0 ]; then
-            echo "No workflow changes detected; skipping zizmor."
-            exit 0
-          fi
+        mapfile -t workflow_files < <(
+          git diff --name-only "${BASE_SHA}" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
+        )
+        if [ "${#workflow_files[@]}" -eq 0 ]; then
+          echo "No workflow changes detected; skipping zizmor."
+          exit 0
+        fi
 
-          printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
-          pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
+        printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
+        pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
 
-      - name: Audit production dependencies
-        run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files pnpm-audit-prod
+    - name: Audit production dependencies
+      run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files pnpm-audit-prod
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   # Keep this overlapping with the fast correctness lanes so green PRs get heavy
   # test/build feedback sooner instead of waiting behind a full `check` pass.
+    strategy:
+      fail-fast: false
+      max-parallel: 104
+      matrix:
+        shard:
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+        - 6
+        - 7
+        - 8
+        - 9
+        - 10
+        - 11
+        - 12
+        - 13
+        - 14
+        - 15
+        - 16
+        - 17
+        - 18
+        - 19
+        - 20
+        - 21
+        - 22
+        - 23
+        - 24
+        - 25
+        - 26
+        - 27
+        - 28
+        - 29
+        - 30
+        - 31
+        - 32
+        - 33
+        - 34
+        - 35
+        - 36
+        - 37
+        - 38
+        - 39
+        - 40
+        - 41
+        - 42
+        - 43
+        - 44
+        - 45
+        - 46
+        - 47
+        - 48
+        - 49
+        - 50
+        - 51
+        - 52
+        - 53
+        - 54
+        - 55
+        - 56
+        - 57
+        - 58
+        - 59
+        - 60
+        - 61
+        - 62
+        - 63
+        - 64
+        - 65
+        - 66
+        - 67
+        - 68
+        - 69
+        - 70
+        - 71
+        - 72
+        - 73
+        - 74
+        - 75
+        - 76
+        - 77
+        - 78
+        - 79
+        - 80
+        - 81
+        - 82
+        - 83
+        - 84
+        - 85
+        - 86
+        - 87
+        - 88
+        - 89
+        - 90
+        - 91
+        - 92
+        - 93
+        - 94
+        - 95
+        - 96
+        - 97
+        - 98
+        - 99
+        - 100
+        - 101
+        - 102
+        - 103
+        - 104
   build-artifacts:
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+        submodules: false
 
-      - name: Ensure secrets base commit (PR fast path)
-        if: github.event_name == 'pull_request'
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event.pull_request.base.ref }}
+    - name: Ensure secrets base commit (PR fast path)
+      if: github.event_name == 'pull_request'
+      uses: ./.github/actions/ensure-base-commit
+      with:
+        base-sha: ${{ github.event.pull_request.base.sha }}
+        fetch-ref: ${{ github.event.pull_request.base.ref }}
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "false"
+        use-sticky-disk: "false"
 
-      - name: Build dist
-        run: pnpm build
+    - name: Build dist
+      run: pnpm build
 
-      - name: Build Control UI
-        run: pnpm ui:build
+    - name: Build Control UI
+      run: pnpm ui:build
 
-      - name: Upload dist artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: dist-build
-          path: dist/
-          retention-days: 1
+    - name: Upload dist artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: dist-build
+        path: dist/
+        retention-days: 1
 
-      - name: Upload A2UI bundle artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: canvas-a2ui-bundle
-          path: src/canvas-host/a2ui/
-          include-hidden-files: true
-          retention-days: 1
+    - name: Upload A2UI bundle artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: canvas-a2ui-bundle
+        path: src/canvas-host/a2ui/
+        include-hidden-files: true
+        retention-days: 1
 
   checks-fast:
     name: ${{ matrix.check_name }}
@@ -287,38 +400,38 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_matrix) }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+        submodules: false
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "false"
+        use-sticky-disk: "false"
 
-      - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        env:
-          TASK: ${{ matrix.task }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$TASK" in
-            extensions)
-              pnpm test:extensions
-              ;;
-            contracts|contracts-protocol)
-              pnpm build
-              pnpm test:contracts
-              pnpm protocol:check
-              ;;
-            *)
-              echo "Unsupported checks-fast task: $TASK" >&2
-              exit 1
-              ;;
-          esac
+    - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
+      env:
+        TASK: ${{ matrix.task }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "$TASK" in
+          extensions)
+            pnpm test:extensions
+            ;;
+          contracts|contracts-protocol)
+            pnpm build
+            pnpm test:contracts
+            pnpm protocol:check
+            ;;
+          *)
+            echo "Unsupported checks-fast task: $TASK" >&2
+            exit 1
+            ;;
+        esac
 
   checks:
     name: ${{ matrix.check_name }}
@@ -330,86 +443,86 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.checks_matrix) }}
     steps:
-      - name: Skip compatibility lanes on pull requests
-        if: github.event_name == 'pull_request' && matrix.task == 'compat-node22'
-        run: echo "Skipping push-only lane on pull requests."
+    - name: Skip compatibility lanes on pull requests
+      if: github.event_name == 'pull_request' && matrix.task == 'compat-node22'
+      run: echo "Skipping push-only lane on pull requests."
 
-      - name: Checkout
-        if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+    - name: Checkout
+      if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
+      uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+        submodules: false
 
-      - name: Setup Node environment
-        if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: "${{ matrix.node_version || '24.x' }}"
-          cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
-          install-bun: "false"
-          use-sticky-disk: "false"
+    - name: Setup Node environment
+      if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
+      uses: ./.github/actions/setup-node-env
+      with:
+        node-version: "${{ matrix.node_version || '24.x' }}"
+        cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
+        install-bun: "false"
+        use-sticky-disk: "false"
 
-      - name: Configure Node test resources
-        if: (github.event_name != 'pull_request' || matrix.task != 'compat-node22') && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'channels' || matrix.task == 'compat-node22')
-        env:
-          TASK: ${{ matrix.task }}
-          SHARD_COUNT: ${{ matrix.shard_count || '' }}
-          SHARD_INDEX: ${{ matrix.shard_index || '' }}
-        run: |
-          # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns multiple Node processes.
-          # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
-          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
-          if [ "$TASK" = "channels" ]; then
-            echo "OPENCLAW_TEST_WORKERS=1" >> "$GITHUB_ENV"
-            echo "OPENCLAW_TEST_ISOLATE=1" >> "$GITHUB_ENV"
-          fi
-          if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
-            echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
-            echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
-          fi
+    - name: Configure Node test resources
+      if: (github.event_name != 'pull_request' || matrix.task != 'compat-node22') && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'channels' || matrix.task == 'compat-node22')
+      env:
+        TASK: ${{ matrix.task }}
+        SHARD_COUNT: ${{ matrix.shard_count || '' }}
+        SHARD_INDEX: ${{ matrix.shard_index || '' }}
+      run: |
+        # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns multiple Node processes.
+        # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
+        echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
+        echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
+        if [ "$TASK" = "channels" ]; then
+          echo "OPENCLAW_TEST_WORKERS=1" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_ISOLATE=1" >> "$GITHUB_ENV"
+        fi
+        if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
+          echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
+        fi
 
-      - name: Download dist artifact
-        if: matrix.task == 'test'
-        uses: actions/download-artifact@v8
-        with:
-          name: dist-build
-          path: dist/
+    - name: Download dist artifact
+      if: matrix.task == 'test'
+      uses: actions/download-artifact@v8
+      with:
+        name: dist-build
+        path: dist/
 
-      - name: Download A2UI bundle artifact
-        if: matrix.task == 'test' || matrix.task == 'channels'
-        uses: actions/download-artifact@v8
-        with:
-          name: canvas-a2ui-bundle
-          path: src/canvas-host/a2ui/
+    - name: Download A2UI bundle artifact
+      if: matrix.task == 'test' || matrix.task == 'channels'
+      uses: actions/download-artifact@v8
+      with:
+        name: canvas-a2ui-bundle
+        path: src/canvas-host/a2ui/
 
-      - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
-        env:
-          TASK: ${{ matrix.task }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$TASK" in
-            test)
-              pnpm test
-              ;;
-            channels)
-              pnpm test:channels
-              ;;
-            compat-node22)
-              pnpm build
-              pnpm ui:build
-              node openclaw.mjs --help
-              node openclaw.mjs status --json --timeout 1
-              pnpm test:build:singleton
-              ;;
-            *)
-              echo "Unsupported checks task: $TASK" >&2
-              exit 1
-              ;;
-          esac
+    - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
+      if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
+      env:
+        TASK: ${{ matrix.task }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "$TASK" in
+          test)
+            pnpm test
+            ;;
+          channels)
+            pnpm test:channels
+            ;;
+          compat-node22)
+            pnpm build
+            pnpm ui:build
+            node openclaw.mjs --help
+            node openclaw.mjs status --json --timeout 1
+            pnpm test:build:singleton
+            ;;
+          *)
+            echo "Unsupported checks task: $TASK" >&2
+            exit 1
+            ;;
+        esac
 
   extension-fast:
     name: "extension-fast"
@@ -421,22 +534,22 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.extension_fast_matrix) }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+        submodules: false
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "false"
+        use-sticky-disk: "false"
 
-      - name: Run changed extension tests
-        env:
-          OPENCLAW_CHANGED_EXTENSION: ${{ matrix.extension }}
-        run: pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
+    - name: Run changed extension tests
+      env:
+        OPENCLAW_CHANGED_EXTENSION: ${{ matrix.extension }}
+      run: pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
 
   # Types, lint, and format check.
   check:
@@ -446,23 +559,23 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+        submodules: false
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "false"
+        use-sticky-disk: "false"
 
-      - name: Check types and lint and oxfmt
-        run: pnpm check
+    - name: Check types and lint and oxfmt
+      run: pnpm check
 
-      - name: Strict TS build smoke
-        run: pnpm build:strict-smoke
+    - name: Strict TS build smoke
+      run: pnpm build:strict-smoke
 
   check-additional:
     name: "check-additional"
@@ -471,153 +584,153 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+        submodules: false
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "false"
+        use-sticky-disk: "false"
 
-      - name: Run plugin extension boundary guard
-        id: plugin_extension_boundary
-        continue-on-error: true
-        run: pnpm run lint:plugins:no-extension-imports
+    - name: Run plugin extension boundary guard
+      id: plugin_extension_boundary
+      continue-on-error: true
+      run: pnpm run lint:plugins:no-extension-imports
 
-      - name: Run no-random-messaging guard
-        id: no_random_messaging
-        continue-on-error: true
-        run: pnpm run lint:tmp:no-random-messaging
+    - name: Run no-random-messaging guard
+      id: no_random_messaging
+      continue-on-error: true
+      run: pnpm run lint:tmp:no-random-messaging
 
-      - name: Run channel-agnostic boundary guard
-        id: channel_agnostic_boundaries
-        continue-on-error: true
-        run: pnpm run lint:tmp:channel-agnostic-boundaries
+    - name: Run channel-agnostic boundary guard
+      id: channel_agnostic_boundaries
+      continue-on-error: true
+      run: pnpm run lint:tmp:channel-agnostic-boundaries
 
-      - name: Run no-raw-channel-fetch guard
-        id: no_raw_channel_fetch
-        continue-on-error: true
-        run: pnpm run lint:tmp:no-raw-channel-fetch
+    - name: Run no-raw-channel-fetch guard
+      id: no_raw_channel_fetch
+      continue-on-error: true
+      run: pnpm run lint:tmp:no-raw-channel-fetch
 
-      - name: Run ingress owner guard
-        id: ingress_owner
-        continue-on-error: true
-        run: pnpm run lint:agent:ingress-owner
+    - name: Run ingress owner guard
+      id: ingress_owner
+      continue-on-error: true
+      run: pnpm run lint:agent:ingress-owner
 
-      - name: Run no-register-http-handler guard
-        id: no_register_http_handler
-        continue-on-error: true
-        run: pnpm run lint:plugins:no-register-http-handler
+    - name: Run no-register-http-handler guard
+      id: no_register_http_handler
+      continue-on-error: true
+      run: pnpm run lint:plugins:no-register-http-handler
 
-      - name: Run no-monolithic plugin-sdk entry import guard
-        id: no_monolithic_plugin_sdk_entry_imports
-        continue-on-error: true
-        run: pnpm run lint:plugins:no-monolithic-plugin-sdk-entry-imports
+    - name: Run no-monolithic plugin-sdk entry import guard
+      id: no_monolithic_plugin_sdk_entry_imports
+      continue-on-error: true
+      run: pnpm run lint:plugins:no-monolithic-plugin-sdk-entry-imports
 
-      - name: Run no-extension-src-imports guard
-        id: no_extension_src_imports
-        continue-on-error: true
-        run: pnpm run lint:plugins:no-extension-src-imports
+    - name: Run no-extension-src-imports guard
+      id: no_extension_src_imports
+      continue-on-error: true
+      run: pnpm run lint:plugins:no-extension-src-imports
 
-      - name: Run no-extension-test-core-imports guard
-        id: no_extension_test_core_imports
-        continue-on-error: true
-        run: pnpm run lint:plugins:no-extension-test-core-imports
+    - name: Run no-extension-test-core-imports guard
+      id: no_extension_test_core_imports
+      continue-on-error: true
+      run: pnpm run lint:plugins:no-extension-test-core-imports
 
-      - name: Run plugin-sdk subpaths exported guard
-        id: plugin_sdk_subpaths_exported
-        continue-on-error: true
-        run: pnpm run lint:plugins:plugin-sdk-subpaths-exported
+    - name: Run plugin-sdk subpaths exported guard
+      id: plugin_sdk_subpaths_exported
+      continue-on-error: true
+      run: pnpm run lint:plugins:plugin-sdk-subpaths-exported
 
-      - name: Run web search provider boundary guard
-        id: web_search_provider_boundary
-        continue-on-error: true
-        run: pnpm run lint:web-search-provider-boundaries
+    - name: Run web search provider boundary guard
+      id: web_search_provider_boundary
+      continue-on-error: true
+      run: pnpm run lint:web-search-provider-boundaries
 
-      - name: Run extension src boundary guard
-        id: extension_src_outside_plugin_sdk_boundary
-        continue-on-error: true
-        run: pnpm run lint:extensions:no-src-outside-plugin-sdk
+    - name: Run extension src boundary guard
+      id: extension_src_outside_plugin_sdk_boundary
+      continue-on-error: true
+      run: pnpm run lint:extensions:no-src-outside-plugin-sdk
 
-      - name: Run extension plugin-sdk-internal guard
-        id: extension_plugin_sdk_internal_boundary
-        continue-on-error: true
-        run: pnpm run lint:extensions:no-plugin-sdk-internal
+    - name: Run extension plugin-sdk-internal guard
+      id: extension_plugin_sdk_internal_boundary
+      continue-on-error: true
+      run: pnpm run lint:extensions:no-plugin-sdk-internal
 
-      - name: Run extension relative-outside-package guard
-        id: extension_relative_outside_package_boundary
-        continue-on-error: true
-        run: pnpm run lint:extensions:no-relative-outside-package
+    - name: Run extension relative-outside-package guard
+      id: extension_relative_outside_package_boundary
+      continue-on-error: true
+      run: pnpm run lint:extensions:no-relative-outside-package
 
-      - name: Enforce safe external URL opening policy
-        id: no_raw_window_open
-        continue-on-error: true
-        run: pnpm lint:ui:no-raw-window-open
+    - name: Enforce safe external URL opening policy
+      id: no_raw_window_open
+      continue-on-error: true
+      run: pnpm lint:ui:no-raw-window-open
 
-      - name: Run gateway watch regression harness
-        id: gateway_watch_regression
-        continue-on-error: true
-        run: pnpm test:gateway:watch-regression
+    - name: Run gateway watch regression harness
+      id: gateway_watch_regression
+      continue-on-error: true
+      run: pnpm test:gateway:watch-regression
 
-      - name: Upload gateway watch regression artifacts
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: gateway-watch-regression
-          path: .local/gateway-watch-regression/
-          retention-days: 7
+    - name: Upload gateway watch regression artifacts
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: gateway-watch-regression
+        path: .local/gateway-watch-regression/
+        retention-days: 7
 
-      - name: Fail if any additional check failed
-        if: always()
-        env:
-          PLUGIN_EXTENSION_BOUNDARY_OUTCOME: ${{ steps.plugin_extension_boundary.outcome }}
-          NO_RANDOM_MESSAGING_OUTCOME: ${{ steps.no_random_messaging.outcome }}
-          CHANNEL_AGNOSTIC_BOUNDARIES_OUTCOME: ${{ steps.channel_agnostic_boundaries.outcome }}
-          NO_RAW_CHANNEL_FETCH_OUTCOME: ${{ steps.no_raw_channel_fetch.outcome }}
-          INGRESS_OWNER_OUTCOME: ${{ steps.ingress_owner.outcome }}
-          NO_REGISTER_HTTP_HANDLER_OUTCOME: ${{ steps.no_register_http_handler.outcome }}
-          NO_MONOLITHIC_PLUGIN_SDK_ENTRY_IMPORTS_OUTCOME: ${{ steps.no_monolithic_plugin_sdk_entry_imports.outcome }}
-          NO_EXTENSION_SRC_IMPORTS_OUTCOME: ${{ steps.no_extension_src_imports.outcome }}
-          NO_EXTENSION_TEST_CORE_IMPORTS_OUTCOME: ${{ steps.no_extension_test_core_imports.outcome }}
-          PLUGIN_SDK_SUBPATHS_EXPORTED_OUTCOME: ${{ steps.plugin_sdk_subpaths_exported.outcome }}
-          WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME: ${{ steps.web_search_provider_boundary.outcome }}
-          EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME: ${{ steps.extension_src_outside_plugin_sdk_boundary.outcome }}
-          EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME: ${{ steps.extension_plugin_sdk_internal_boundary.outcome }}
-          EXTENSION_RELATIVE_OUTSIDE_PACKAGE_BOUNDARY_OUTCOME: ${{ steps.extension_relative_outside_package_boundary.outcome }}
-          NO_RAW_WINDOW_OPEN_OUTCOME: ${{ steps.no_raw_window_open.outcome }}
-          GATEWAY_WATCH_REGRESSION_OUTCOME: ${{ steps.gateway_watch_regression.outcome }}
-        run: |
-          failures=0
-          for result in \
-            "plugin-extension-boundary|$PLUGIN_EXTENSION_BOUNDARY_OUTCOME" \
-            "lint:tmp:no-random-messaging|$NO_RANDOM_MESSAGING_OUTCOME" \
-            "lint:tmp:channel-agnostic-boundaries|$CHANNEL_AGNOSTIC_BOUNDARIES_OUTCOME" \
-            "lint:tmp:no-raw-channel-fetch|$NO_RAW_CHANNEL_FETCH_OUTCOME" \
-            "lint:agent:ingress-owner|$INGRESS_OWNER_OUTCOME" \
-            "lint:plugins:no-register-http-handler|$NO_REGISTER_HTTP_HANDLER_OUTCOME" \
-            "lint:plugins:no-monolithic-plugin-sdk-entry-imports|$NO_MONOLITHIC_PLUGIN_SDK_ENTRY_IMPORTS_OUTCOME" \
-            "lint:plugins:no-extension-src-imports|$NO_EXTENSION_SRC_IMPORTS_OUTCOME" \
-            "lint:plugins:no-extension-test-core-imports|$NO_EXTENSION_TEST_CORE_IMPORTS_OUTCOME" \
-            "lint:plugins:plugin-sdk-subpaths-exported|$PLUGIN_SDK_SUBPATHS_EXPORTED_OUTCOME" \
-            "web-search-provider-boundary|$WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME" \
-            "extension-src-outside-plugin-sdk-boundary|$EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME" \
-            "extension-plugin-sdk-internal-boundary|$EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME" \
-            "extension-relative-outside-package-boundary|$EXTENSION_RELATIVE_OUTSIDE_PACKAGE_BOUNDARY_OUTCOME" \
-            "lint:ui:no-raw-window-open|$NO_RAW_WINDOW_OPEN_OUTCOME" \
-            "gateway-watch-regression|$GATEWAY_WATCH_REGRESSION_OUTCOME"; do
-            name="${result%%|*}"
-            outcome="${result#*|}"
-            if [ "$outcome" != "success" ]; then
-              echo "::error title=${name} failed::${name} outcome: ${outcome}"
-              failures=1
-            fi
-          done
+    - name: Fail if any additional check failed
+      if: always()
+      env:
+        PLUGIN_EXTENSION_BOUNDARY_OUTCOME: ${{ steps.plugin_extension_boundary.outcome }}
+        NO_RANDOM_MESSAGING_OUTCOME: ${{ steps.no_random_messaging.outcome }}
+        CHANNEL_AGNOSTIC_BOUNDARIES_OUTCOME: ${{ steps.channel_agnostic_boundaries.outcome }}
+        NO_RAW_CHANNEL_FETCH_OUTCOME: ${{ steps.no_raw_channel_fetch.outcome }}
+        INGRESS_OWNER_OUTCOME: ${{ steps.ingress_owner.outcome }}
+        NO_REGISTER_HTTP_HANDLER_OUTCOME: ${{ steps.no_register_http_handler.outcome }}
+        NO_MONOLITHIC_PLUGIN_SDK_ENTRY_IMPORTS_OUTCOME: ${{ steps.no_monolithic_plugin_sdk_entry_imports.outcome }}
+        NO_EXTENSION_SRC_IMPORTS_OUTCOME: ${{ steps.no_extension_src_imports.outcome }}
+        NO_EXTENSION_TEST_CORE_IMPORTS_OUTCOME: ${{ steps.no_extension_test_core_imports.outcome }}
+        PLUGIN_SDK_SUBPATHS_EXPORTED_OUTCOME: ${{ steps.plugin_sdk_subpaths_exported.outcome }}
+        WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME: ${{ steps.web_search_provider_boundary.outcome }}
+        EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME: ${{ steps.extension_src_outside_plugin_sdk_boundary.outcome }}
+        EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME: ${{ steps.extension_plugin_sdk_internal_boundary.outcome }}
+        EXTENSION_RELATIVE_OUTSIDE_PACKAGE_BOUNDARY_OUTCOME: ${{ steps.extension_relative_outside_package_boundary.outcome }}
+        NO_RAW_WINDOW_OPEN_OUTCOME: ${{ steps.no_raw_window_open.outcome }}
+        GATEWAY_WATCH_REGRESSION_OUTCOME: ${{ steps.gateway_watch_regression.outcome }}
+      run: |
+        failures=0
+        for result in \
+          "plugin-extension-boundary|$PLUGIN_EXTENSION_BOUNDARY_OUTCOME" \
+          "lint:tmp:no-random-messaging|$NO_RANDOM_MESSAGING_OUTCOME" \
+          "lint:tmp:channel-agnostic-boundaries|$CHANNEL_AGNOSTIC_BOUNDARIES_OUTCOME" \
+          "lint:tmp:no-raw-channel-fetch|$NO_RAW_CHANNEL_FETCH_OUTCOME" \
+          "lint:agent:ingress-owner|$INGRESS_OWNER_OUTCOME" \
+          "lint:plugins:no-register-http-handler|$NO_REGISTER_HTTP_HANDLER_OUTCOME" \
+          "lint:plugins:no-monolithic-plugin-sdk-entry-imports|$NO_MONOLITHIC_PLUGIN_SDK_ENTRY_IMPORTS_OUTCOME" \
+          "lint:plugins:no-extension-src-imports|$NO_EXTENSION_SRC_IMPORTS_OUTCOME" \
+          "lint:plugins:no-extension-test-core-imports|$NO_EXTENSION_TEST_CORE_IMPORTS_OUTCOME" \
+          "lint:plugins:plugin-sdk-subpaths-exported|$PLUGIN_SDK_SUBPATHS_EXPORTED_OUTCOME" \
+          "web-search-provider-boundary|$WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME" \
+          "extension-src-outside-plugin-sdk-boundary|$EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME" \
+          "extension-plugin-sdk-internal-boundary|$EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME" \
+          "extension-relative-outside-package-boundary|$EXTENSION_RELATIVE_OUTSIDE_PACKAGE_BOUNDARY_OUTCOME" \
+          "lint:ui:no-raw-window-open|$NO_RAW_WINDOW_OPEN_OUTCOME" \
+          "gateway-watch-regression|$GATEWAY_WATCH_REGRESSION_OUTCOME"; do
+          name="${result%%|*}"
+          outcome="${result#*|}"
+          if [ "$outcome" != "success" ]; then
+            echo "::error title=${name} failed::${name} outcome: ${outcome}"
+            failures=1
+          fi
+        done
 
-          exit "$failures"
+        exit "$failures"
 
   build-smoke:
     name: "build-smoke"
@@ -626,40 +739,40 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+        submodules: false
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "false"
+        use-sticky-disk: "false"
 
-      - name: Download dist artifact
-        if: github.event_name == 'push'
-        uses: actions/download-artifact@v8
-        with:
-          name: dist-build
-          path: dist/
+    - name: Download dist artifact
+      if: github.event_name == 'push'
+      uses: actions/download-artifact@v8
+      with:
+        name: dist-build
+        path: dist/
 
-      - name: Build dist
-        if: github.event_name != 'push'
-        run: pnpm build
+    - name: Build dist
+      if: github.event_name != 'push'
+      run: pnpm build
 
-      - name: Smoke test CLI launcher help
-        run: node openclaw.mjs --help
+    - name: Smoke test CLI launcher help
+      run: node openclaw.mjs --help
 
-      - name: Smoke test CLI launcher status json
-        run: node openclaw.mjs status --json --timeout 1
+    - name: Smoke test CLI launcher status json
+      run: node openclaw.mjs status --json --timeout 1
 
-      - name: Smoke test built bundled plugin singleton
-        run: pnpm test:build:singleton
+    - name: Smoke test built bundled plugin singleton
+      run: pnpm test:build:singleton
 
-      - name: Check CLI startup memory
-        run: pnpm test:startup:memory
+    - name: Check CLI startup memory
+      run: pnpm test:startup:memory
 
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
@@ -668,20 +781,20 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+        submodules: false
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "false"
+        use-sticky-disk: "false"
 
-      - name: Check docs
-        run: pnpm check:docs
+    - name: Check docs
+      run: pnpm check:docs
 
   skills-python:
     needs: [preflight]
@@ -689,27 +802,27 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+        submodules: false
 
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
+    - name: Setup Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
 
-      - name: Install Python tooling
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pytest ruff pyyaml
+    - name: Install Python tooling
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install pytest ruff pyyaml
 
-      - name: Lint Python skill scripts
-        run: python -m ruff check skills
+    - name: Lint Python skill scripts
+      run: python -m ruff check skills
 
-      - name: Test skill Python scripts
-        run: python -m pytest -q skills
+    - name: Test skill Python scripts
+      run: python -m pytest -q skills
 
   checks-windows:
     name: ${{ matrix.check_name }}
@@ -729,109 +842,109 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.checks_windows_matrix) }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+        submodules: false
 
-      - name: Try to exclude workspace from Windows Defender (best-effort)
-        shell: pwsh
-        run: |
-          $cmd = Get-Command Add-MpPreference -ErrorAction SilentlyContinue
-          if (-not $cmd) {
-            Write-Host "Add-MpPreference not available, skipping Defender exclusions."
-            exit 0
-          }
+    - name: Try to exclude workspace from Windows Defender (best-effort)
+      shell: pwsh
+      run: |
+        $cmd = Get-Command Add-MpPreference -ErrorAction SilentlyContinue
+        if (-not $cmd) {
+          Write-Host "Add-MpPreference not available, skipping Defender exclusions."
+          exit 0
+        }
 
-          try {
-            # Defender sometimes intercepts process spawning (vitest workers). If this fails
-            # (eg hardened images), keep going and rely on worker limiting above.
-            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction Stop
-            Add-MpPreference -ExclusionProcess "node.exe" -ErrorAction Stop
-            Write-Host "Defender exclusions applied."
-          } catch {
-            Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
-          }
+        try {
+          # Defender sometimes intercepts process spawning (vitest workers). If this fails
+          # (eg hardened images), keep going and rely on worker limiting above.
+          Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction Stop
+          Add-MpPreference -ExclusionProcess "node.exe" -ErrorAction Stop
+          Write-Host "Defender exclusions applied."
+        } catch {
+          Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
+        }
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24.x
-          check-latest: false
+    - name: Setup Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: 24.x
+        check-latest: false
 
-      - name: Setup pnpm + cache store
-        uses: ./.github/actions/setup-pnpm-store-cache
-        with:
-          pnpm-version: "10.23.0"
-          cache-key-suffix: "node24"
+    - name: Setup pnpm + cache store
+      uses: ./.github/actions/setup-pnpm-store-cache
+      with:
+        pnpm-version: "10.23.0"
+        cache-key-suffix: "node24"
           # Sticky disk mount currently retries/fails on every shard and adds ~50s
           # before install while still yielding zero pnpm store reuse.
           # Try exact-key actions/cache restores instead to recover store reuse
           # without the sticky-disk mount penalty.
-          use-sticky-disk: "false"
-          use-restore-keys: "false"
-          use-actions-cache: "true"
+        use-sticky-disk: "false"
+        use-restore-keys: "false"
+        use-actions-cache: "true"
 
-      - name: Runtime versions
-        run: |
-          node -v
-          npm -v
-          pnpm -v
+    - name: Runtime versions
+      run: |
+        node -v
+        npm -v
+        pnpm -v
 
-      - name: Capture node path
-        run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
+    - name: Capture node path
+      run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
 
-      - name: Install dependencies
-        env:
-          CI: true
-        run: |
-          export PATH="$NODE_BIN:$PATH"
-          which node
-          node -v
-          pnpm -v
-          # Persist Windows-native postinstall outputs in the pnpm store so restored
-          # caches can skip repeated rebuild/download work on later shards/runs.
-          pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+    - name: Install dependencies
+      env:
+        CI: true
+      run: |
+        export PATH="$NODE_BIN:$PATH"
+        which node
+        node -v
+        pnpm -v
+        # Persist Windows-native postinstall outputs in the pnpm store so restored
+        # caches can skip repeated rebuild/download work on later shards/runs.
+        pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
-      - name: Configure test shard (Windows)
-        if: matrix.task == 'test'
-        env:
-          SHARD_COUNT: ${{ matrix.shard_count }}
-          SHARD_INDEX: ${{ matrix.shard_index }}
-        run: |
-          echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
+    - name: Configure test shard (Windows)
+      if: matrix.task == 'test'
+      env:
+        SHARD_COUNT: ${{ matrix.shard_count }}
+        SHARD_INDEX: ${{ matrix.shard_index }}
+      run: |
+        echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
+        echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
 
-      - name: Download dist artifact
-        if: matrix.task == 'test'
-        uses: actions/download-artifact@v8
-        with:
-          name: dist-build
-          path: dist/
+    - name: Download dist artifact
+      if: matrix.task == 'test'
+      uses: actions/download-artifact@v8
+      with:
+        name: dist-build
+        path: dist/
 
-      - name: Download A2UI bundle artifact
-        if: matrix.task == 'test'
-        uses: actions/download-artifact@v8
-        with:
-          name: canvas-a2ui-bundle
-          path: src/canvas-host/a2ui/
+    - name: Download A2UI bundle artifact
+      if: matrix.task == 'test'
+      uses: actions/download-artifact@v8
+      with:
+        name: canvas-a2ui-bundle
+        path: src/canvas-host/a2ui/
 
-      - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        env:
-          TASK: ${{ matrix.task }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$TASK" in
-            test)
-              pnpm test
-              ;;
-            *)
-              echo "Unsupported Windows checks task: $TASK" >&2
-              exit 1
-              ;;
-          esac
+    - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
+      env:
+        TASK: ${{ matrix.task }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "$TASK" in
+          test)
+            pnpm test
+            ;;
+          *)
+            echo "Unsupported Windows checks task: $TASK" >&2
+            exit 1
+            ;;
+        esac
 
   macos-node:
     name: ${{ matrix.check_name }}
@@ -843,53 +956,53 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.macos_node_matrix) }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+        submodules: false
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "false"
 
-      - name: Download dist artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: dist-build
-          path: dist/
+    - name: Download dist artifact
+      uses: actions/download-artifact@v8
+      with:
+        name: dist-build
+        path: dist/
 
-      - name: Download A2UI bundle artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: canvas-a2ui-bundle
-          path: src/canvas-host/a2ui/
+    - name: Download A2UI bundle artifact
+      uses: actions/download-artifact@v8
+      with:
+        name: canvas-a2ui-bundle
+        path: src/canvas-host/a2ui/
 
-      - name: Configure test shard (macOS)
-        env:
-          SHARD_COUNT: ${{ matrix.shard_count }}
-          SHARD_INDEX: ${{ matrix.shard_index }}
-        run: |
-          echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
+    - name: Configure test shard (macOS)
+      env:
+        SHARD_COUNT: ${{ matrix.shard_count }}
+        SHARD_INDEX: ${{ matrix.shard_index }}
+      run: |
+        echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
+        echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
 
-      - name: TS tests (macOS)
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
-          TASK: ${{ matrix.task }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$TASK" in
-            test)
-              pnpm test
-              ;;
-            *)
-              echo "Unsupported macOS node task: $TASK" >&2
-              exit 1
-              ;;
-          esac
+    - name: TS tests (macOS)
+      env:
+        NODE_OPTIONS: --max-old-space-size=4096
+        TASK: ${{ matrix.task }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "$TASK" in
+          test)
+            pnpm test
+            ;;
+          *)
+            echo "Unsupported macOS node task: $TASK" >&2
+            exit 1
+            ;;
+        esac
 
   macos-swift:
     name: "macos-swift"
@@ -898,62 +1011,62 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+        submodules: false
 
-      - name: Select Xcode 26.1
-        run: |
-          sudo xcode-select -s /Applications/Xcode_26.1.app
-          xcodebuild -version
+    - name: Select Xcode 26.1
+      run: |
+        sudo xcode-select -s /Applications/Xcode_26.1.app
+        xcodebuild -version
 
-      - name: Install XcodeGen / SwiftLint / SwiftFormat
-        run: brew install xcodegen swiftlint swiftformat
+    - name: Install XcodeGen / SwiftLint / SwiftFormat
+      run: brew install xcodegen swiftlint swiftformat
 
-      - name: Cache SwiftPM
-        uses: actions/cache@v5
-        with:
-          path: ~/Library/Caches/org.swift.swiftpm
-          key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
-          restore-keys: |
-            ${{ runner.os }}-swiftpm-
+    - name: Cache SwiftPM
+      uses: actions/cache@v5
+      with:
+        path: ~/Library/Caches/org.swift.swiftpm
+        key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
+        restore-keys: |
+          ${{ runner.os }}-swiftpm-
 
-      - name: Show toolchain
-        run: |
-          sw_vers
-          xcodebuild -version
-          swift --version
+    - name: Show toolchain
+      run: |
+        sw_vers
+        xcodebuild -version
+        swift --version
 
-      - name: Swift lint
-        run: |
-          swiftlint --config .swiftlint.yml
-          swiftformat --lint apps/macos/Sources --config .swiftformat
+    - name: Swift lint
+      run: |
+        swiftlint --config .swiftlint.yml
+        swiftformat --lint apps/macos/Sources --config .swiftformat
 
-      - name: Swift build (release)
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            if swift build --package-path apps/macos --configuration release; then
-              exit 0
-            fi
-            echo "swift build failed (attempt $attempt/3). Retrying…"
-            sleep $((attempt * 20))
-          done
-          exit 1
+    - name: Swift build (release)
+      run: |
+        set -euo pipefail
+        for attempt in 1 2 3; do
+          if swift build --package-path apps/macos --configuration release; then
+            exit 0
+          fi
+          echo "swift build failed (attempt $attempt/3). Retrying…"
+          sleep $((attempt * 20))
+        done
+        exit 1
 
-      - name: Swift test
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            if swift test --package-path apps/macos --parallel --enable-code-coverage --show-codecov-path; then
-              exit 0
-            fi
-            echo "swift test failed (attempt $attempt/3). Retrying…"
-            sleep $((attempt * 20))
-          done
-          exit 1
+    - name: Swift test
+      run: |
+        set -euo pipefail
+        for attempt in 1 2 3; do
+          if swift test --package-path apps/macos --parallel --enable-code-coverage --show-codecov-path; then
+            exit 0
+          fi
+          echo "swift test failed (attempt $attempt/3). Retrying…"
+          sleep $((attempt * 20))
+        done
+        exit 1
 
   android:
     name: ${{ matrix.check_name }}
@@ -965,73 +1078,73 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.android_matrix) }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+        submodules: false
 
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
+    - name: Setup Java
+      uses: actions/setup-java@v5
+      with:
+        distribution: temurin
           # Keep sdkmanager on the stable JDK path for Linux CI runners.
-          java-version: 17
+        java-version: 17
 
-      - name: Setup Android SDK cmdline-tools
-        run: |
-          set -euo pipefail
-          ANDROID_SDK_ROOT="$HOME/.android-sdk"
-          CMDLINE_TOOLS_VERSION="12266719"
-          ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
-          URL="https://dl.google.com/android/repository/${ARCHIVE}"
+    - name: Setup Android SDK cmdline-tools
+      run: |
+        set -euo pipefail
+        ANDROID_SDK_ROOT="$HOME/.android-sdk"
+        CMDLINE_TOOLS_VERSION="12266719"
+        ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
+        URL="https://dl.google.com/android/repository/${ARCHIVE}"
 
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-          curl -fsSL "$URL" -o "/tmp/${ARCHIVE}"
-          rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-          unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
-          mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+        mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+        curl -fsSL "$URL" -o "/tmp/${ARCHIVE}"
+        rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+        unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
+        mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
 
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+        echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+        echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+        echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+        echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
-        with:
-          gradle-version: 8.11.1
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c   # v5
+      with:
+        gradle-version: 8.11.1
 
-      - name: Install Android SDK packages
-        run: |
-          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
-          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
-            "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0"
+    - name: Install Android SDK packages
+      run: |
+        yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
+        sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
+          "platform-tools" \
+          "platforms;android-36" \
+          "build-tools;36.0.0"
 
-      - name: Run Android ${{ matrix.task }}
-        working-directory: apps/android
-        env:
-          TASK: ${{ matrix.task }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$TASK" in
-            test-play)
-              ./gradlew --no-daemon :app:testPlayDebugUnitTest
-              ;;
-            test-third-party)
-              ./gradlew --no-daemon :app:testThirdPartyDebugUnitTest
-              ;;
-            build-play)
-              ./gradlew --no-daemon :app:assemblePlayDebug
-              ;;
-            build-third-party)
-              ./gradlew --no-daemon :app:assembleThirdPartyDebug
-              ;;
-            *)
-              echo "Unsupported Android task: $TASK" >&2
-              exit 1
-              ;;
-          esac
+    - name: Run Android ${{ matrix.task }}
+      working-directory: apps/android
+      env:
+        TASK: ${{ matrix.task }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "$TASK" in
+          test-play)
+            ./gradlew --no-daemon :app:testPlayDebugUnitTest
+            ;;
+          test-third-party)
+            ./gradlew --no-daemon :app:testThirdPartyDebugUnitTest
+            ;;
+          build-play)
+            ./gradlew --no-daemon :app:assemblePlayDebug
+            ;;
+          build-third-party)
+            ./gradlew --no-daemon :app:assembleThirdPartyDebug
+            ;;
+          *)
+            echo "Unsupported Android task: $TASK" >&2
+            exit 1
+            ;;
+        esac
