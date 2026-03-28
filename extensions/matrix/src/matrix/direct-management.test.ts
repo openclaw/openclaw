@@ -9,6 +9,7 @@ function createClient(overrides: Partial<MatrixClient> = {}): MatrixClient {
     getAccountData: vi.fn(async () => undefined),
     getJoinedRooms: vi.fn(async () => [] as string[]),
     getJoinedRoomMembers: vi.fn(async () => [] as string[]),
+    getRoomStateEvent: vi.fn(async () => ({})),
     setAccountData: vi.fn(async () => undefined),
     createDirectRoom: vi.fn(async () => "!created:example.org"),
     ...overrides,
@@ -61,6 +62,27 @@ describe("inspectMatrixDirectRooms", () => {
 
     expect(result.activeRoomId).toBe("!fresh:example.org");
     expect(result.discoveredStrictRoomIds).toEqual(["!fresh:example.org"]);
+  });
+
+  it("prefers discovered rooms marked direct in member state over plain strict rooms", async () => {
+    const client = createClient({
+      getJoinedRooms: vi.fn(async () => ["!fallback:example.org", "!explicit:example.org"]),
+      getJoinedRoomMembers: vi.fn(async () => ["@bot:example.org", "@alice:example.org"]),
+      getRoomStateEvent: vi.fn(async (roomId: string, _eventType: string, userId: string) => ({
+        is_direct: roomId === "!explicit:example.org" && userId === "@alice:example.org",
+      })),
+    });
+
+    const result = await inspectMatrixDirectRooms({
+      client,
+      remoteUserId: "@alice:example.org",
+    });
+
+    expect(result.activeRoomId).toBe("!explicit:example.org");
+    expect(result.discoveredStrictRoomIds).toEqual([
+      "!fallback:example.org",
+      "!explicit:example.org",
+    ]);
   });
 });
 
