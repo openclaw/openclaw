@@ -22,6 +22,7 @@ import {
   resolveTelegramForumFlag,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
+import type { TelegramGetChat } from "./bot/types.js";
 import {
   resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
@@ -74,17 +75,16 @@ export const buildTelegramMessageContext = async ({
       messageId: number,
       reactions: Array<{ type: "emoji"; emoji: string }>,
     ) => Promise<void>;
-    getChat?: (chatId: number | string) => Promise<unknown>;
   };
   const reactionApi =
     typeof api.setMessageReaction === "function" ? api.setMessageReaction.bind(api) : null;
-  const getChatApi = typeof api.getChat === "function" ? api.getChat.bind(api) : null;
+  const getChatApi: TelegramGetChat = bot.api.getChat.bind(bot.api);
   const isForum = await resolveTelegramForumFlag({
     chatId,
     chatType: msg.chat.type,
     isGroup,
     isForum: (msg.chat as { is_forum?: boolean }).is_forum,
-    getChat: getChatApi ?? undefined,
+    getChat: getChatApi,
   });
   const threadSpec = resolveTelegramThreadSpec({
     isGroup,

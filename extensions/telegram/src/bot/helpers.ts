@@ -9,7 +9,7 @@ import type {
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
-import type { TelegramStreamMode } from "./types.js";
+import type { TelegramGetChat, TelegramStreamMode } from "./types.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
@@ -31,7 +31,7 @@ export async function resolveTelegramForumFlag(params: {
   chatType?: Chat["type"];
   isGroup: boolean;
   isForum?: boolean;
-  getChat?: (chatId: string | number) => Promise<unknown>;
+  getChat?: TelegramGetChat;
 }): Promise<boolean> {
   if (typeof params.isForum === "boolean") {
     return params.isForum;
