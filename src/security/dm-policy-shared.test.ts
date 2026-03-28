@@ -332,84 +332,83 @@ describe("security/dm-policy-shared", () => {
     };
   }
 
-  it("keeps message/reaction policy parity table across channels", () => {
-    const cases = [
-      createParityCase({
-        name: "dmPolicy=open",
-        dmPolicy: "open",
-        expectedDecision: "allow",
-        expectedReactionAllowed: true,
-      }),
-      createParityCase({
-        name: "dmPolicy=disabled",
-        dmPolicy: "disabled",
-        expectedDecision: "block",
-        expectedReactionAllowed: false,
-      }),
-      createParityCase({
-        name: "dmPolicy=allowlist unauthorized",
-        dmPolicy: "allowlist",
-        allowFrom: ["owner"],
-        isSenderAllowed: () => false,
-        expectedDecision: "block",
-        expectedReactionAllowed: false,
-      }),
-      createParityCase({
-        name: "dmPolicy=allowlist authorized",
-        dmPolicy: "allowlist",
-        allowFrom: ["owner"],
-        isSenderAllowed: () => true,
-        expectedDecision: "allow",
-        expectedReactionAllowed: true,
-      }),
-      createParityCase({
-        name: "dmPolicy=pairing unauthorized",
-        dmPolicy: "pairing",
-        isSenderAllowed: () => false,
-        expectedDecision: "pairing",
-        expectedReactionAllowed: false,
-      }),
-      createParityCase({
-        name: "groupPolicy=allowlist rejects DM-paired sender not in explicit group list",
-        isGroup: true,
-        dmPolicy: "pairing",
-        allowFrom: ["owner"],
-        groupAllowFrom: ["group-owner"],
-        storeAllowFrom: ["paired-user"],
-        isSenderAllowed: (allowFrom: string[]) => allowFrom.includes("paired-user"),
-        expectedDecision: "block",
-        expectedReactionAllowed: false,
-      }),
-    ];
+  function expectParityCase(channel: (typeof channels)[number], testCase: ParityCase) {
+    const access = resolveDmGroupAccessWithLists({
+      isGroup: testCase.isGroup,
+      dmPolicy: testCase.dmPolicy,
+      groupPolicy: testCase.groupPolicy,
+      allowFrom: testCase.allowFrom,
+      groupAllowFrom: testCase.groupAllowFrom,
+      storeAllowFrom: testCase.storeAllowFrom,
+      isSenderAllowed: testCase.isSenderAllowed,
+    });
+    const reactionAllowed = access.decision === "allow";
+    expect(access.decision, `[${channel}] ${testCase.name}`).toBe(testCase.expectedDecision);
+    expect(reactionAllowed, `[${channel}] ${testCase.name} reaction`).toBe(
+      testCase.expectedReactionAllowed,
+    );
+  }
 
-    for (const channel of channels) {
-      for (const {
-        name,
-        isGroup,
-        dmPolicy,
-        groupPolicy,
-        allowFrom,
-        groupAllowFrom,
-        storeAllowFrom,
-        isSenderAllowed,
-        expectedDecision,
-        expectedReactionAllowed,
-      } of cases) {
-        const access = resolveDmGroupAccessWithLists({
-          isGroup,
-          dmPolicy,
-          groupPolicy,
-          allowFrom,
-          groupAllowFrom,
-          storeAllowFrom,
-          isSenderAllowed,
-        });
-        const reactionAllowed = access.decision === "allow";
-        expect(access.decision, `[${channel}] ${name}`).toBe(expectedDecision);
-        expect(reactionAllowed, `[${channel}] ${name} reaction`).toBe(expectedReactionAllowed);
-      }
-    }
-  });
+  it.each(
+    channels.flatMap((channel) =>
+      [
+        createParityCase({
+          name: "dmPolicy=open",
+          dmPolicy: "open",
+          expectedDecision: "allow",
+          expectedReactionAllowed: true,
+        }),
+        createParityCase({
+          name: "dmPolicy=disabled",
+          dmPolicy: "disabled",
+          expectedDecision: "block",
+          expectedReactionAllowed: false,
+        }),
+        createParityCase({
+          name: "dmPolicy=allowlist unauthorized",
+          dmPolicy: "allowlist",
+          allowFrom: ["owner"],
+          isSenderAllowed: () => false,
+          expectedDecision: "block",
+          expectedReactionAllowed: false,
+        }),
+        createParityCase({
+          name: "dmPolicy=allowlist authorized",
+          dmPolicy: "allowlist",
+          allowFrom: ["owner"],
+          isSenderAllowed: () => true,
+          expectedDecision: "allow",
+          expectedReactionAllowed: true,
+        }),
+        createParityCase({
+          name: "dmPolicy=pairing unauthorized",
+          dmPolicy: "pairing",
+          isSenderAllowed: () => false,
+          expectedDecision: "pairing",
+          expectedReactionAllowed: false,
+        }),
+        createParityCase({
+          name: "groupPolicy=allowlist rejects DM-paired sender not in explicit group list",
+          isGroup: true,
+          dmPolicy: "pairing",
+          allowFrom: ["owner"],
+          groupAllowFrom: ["group-owner"],
+          storeAllowFrom: ["paired-user"],
+          isSenderAllowed: (allowFrom: string[]) => allowFrom.includes("paired-user"),
+          expectedDecision: "block",
+          expectedReactionAllowed: false,
+        }),
+      ].map((testCase) => ({
+        channel,
+        testCase,
+      })),
+    ),
+  )(
+    "keeps message/reaction policy parity table across channels: [$channel] $testCase.name",
+    ({ channel, testCase }) => {
+      expectParityCase(channel, testCase);
+    },
+  );
 
   const decisionCases: DecisionCase[] = [
     {
@@ -508,16 +507,19 @@ describe("security/dm-policy-shared", () => {
     },
   ];
 
-  for (const channel of channels) {
-    for (const testCase of decisionCases) {
-      it(`[${channel}] ${testCase.name}`, () => {
-        const decision = resolveDmGroupAccessDecision(testCase.input);
-        if ("reasonCode" in testCase.expected && "reason" in testCase.expected) {
-          expect(decision).toEqual(testCase.expected);
-          return;
-        }
-        expect(decision).toMatchObject(testCase.expected);
-      });
+  it.each(
+    channels.flatMap((channel) =>
+      decisionCases.map((testCase) => ({
+        channel,
+        testCase,
+      })),
+    ),
+  )("[$channel] $testCase.name", ({ testCase }) => {
+    const decision = resolveDmGroupAccessDecision(testCase.input);
+    if ("reasonCode" in testCase.expected && "reason" in testCase.expected) {
+      expect(decision).toEqual(testCase.expected);
+      return;
     }
-  }
+    expect(decision).toMatchObject(testCase.expected);
+  });
 });
