@@ -27,6 +27,13 @@ function expectBundledWebSearchIds(actual: readonly string[], expected: readonly
   expect(actual).toEqual(expected);
 }
 
+function expectBundledWebSearchAlignment(params: {
+  actual: readonly string[];
+  expected: readonly string[];
+}) {
+  expectBundledWebSearchIds(params.actual, params.expected);
+}
+
 describe("bundled web search metadata", () => {
   it.each([
     [
@@ -40,6 +47,6 @@ describe("bundled web search metadata", () => {
       resolveRegistryBundledWebSearchPluginIds(),
     ],
   ] as const)("%s", (_name, actual, expected) => {
-    expectBundledWebSearchIds(actual, expected);
+    expectBundledWebSearchAlignment({ actual, expected });
   });
 });

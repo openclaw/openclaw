@@ -28,6 +28,12 @@ function createVoiceCommand(overrides: Partial<Parameters<typeof registerPluginC
   };
 }
 
+function registerVoiceCommandForTest(
+  overrides: Partial<Parameters<typeof registerPluginCommand>[1]> = {},
+) {
+  return registerPluginCommand("demo-plugin", createVoiceCommand(overrides));
+}
+
 function resolveBindingConversationFromCommand(
   params: Parameters<typeof __testing.resolveBindingConversationFromCommand>[0],
 ) {
@@ -45,6 +51,50 @@ function expectCommandMatch(
     }),
     args: params.args,
   });
+}
+
+function expectProviderCommandSpecs(
+  provider: Parameters<typeof getPluginCommandSpecs>[0],
+  expectedNames: readonly string[],
+) {
+  expect(getPluginCommandSpecs(provider)).toEqual(
+    expectedNames.map((name) => ({
+      name,
+      description: "Demo command",
+      acceptsArgs: false,
+    })),
+  );
+}
+
+function expectProviderCommandSpecCases(
+  cases: ReadonlyArray<{
+    provider: Parameters<typeof getPluginCommandSpecs>[0];
+    expectedNames: readonly string[];
+  }>,
+) {
+  cases.forEach(({ provider, expectedNames }) => {
+    expectProviderCommandSpecs(provider, expectedNames);
+  });
+}
+
+function expectUnsupportedBindingApiResult(result: { text?: string }) {
+  expect(result.text).toBe(
+    JSON.stringify({
+      requested: {
+        status: "error",
+        message: "This command cannot bind the current conversation.",
+      },
+      current: null,
+      detached: { removed: false },
+    }),
+  );
+}
+
+function expectBindingConversationCase(
+  params: Parameters<typeof resolveBindingConversationFromCommand>[0],
+  expected: ReturnType<typeof resolveBindingConversationFromCommand>,
+) {
+  expect(resolveBindingConversationFromCommand(params)).toEqual(expected);
 }
 
 beforeEach(() => {
@@ -110,40 +160,21 @@ describe("registerPluginCommand", () => {
   });
 
   it("supports provider-specific native command aliases", () => {
-    const result = registerPluginCommand(
-      "demo-plugin",
-      createVoiceCommand({
-        nativeNames: {
-          default: "talkvoice",
-          discord: "discordvoice",
-        },
-        description: "Demo command",
-      }),
-    );
+    const result = registerVoiceCommandForTest({
+      nativeNames: {
+        default: "talkvoice",
+        discord: "discordvoice",
+      },
+      description: "Demo command",
+    });
 
     expect(result).toEqual({ ok: true });
-    expect(getPluginCommandSpecs()).toEqual([
-      {
-        name: "talkvoice",
-        description: "Demo command",
-        acceptsArgs: false,
-      },
+    expectProviderCommandSpecCases([
+      { provider: undefined, expectedNames: ["talkvoice"] },
+      { provider: "discord", expectedNames: ["discordvoice"] },
+      { provider: "telegram", expectedNames: ["talkvoice"] },
+      { provider: "slack", expectedNames: [] },
     ]);
-    expect(getPluginCommandSpecs("discord")).toEqual([
-      {
-        name: "discordvoice",
-        description: "Demo command",
-        acceptsArgs: false,
-      },
-    ]);
-    expect(getPluginCommandSpecs("telegram")).toEqual([
-      {
-        name: "talkvoice",
-        description: "Demo command",
-        acceptsArgs: false,
-      },
-    ]);
-    expect(getPluginCommandSpecs("slack")).toEqual([]);
   });
 
   it("shares plugin commands across duplicate module instances", async () => {
@@ -180,28 +211,26 @@ describe("registerPluginCommand", () => {
     second.clearPluginCommands();
   });
 
-  it("matches provider-specific native aliases back to the canonical command", () => {
-    const result = registerPluginCommand(
-      "demo-plugin",
-      createVoiceCommand({
+  it.each(["/talkvoice now", "/discordvoice now"] as const)(
+    "matches provider-specific native alias %s back to the canonical command",
+    (commandBody) => {
+      const result = registerVoiceCommandForTest({
         nativeNames: {
           default: "talkvoice",
           discord: "discordvoice",
         },
         description: "Demo command",
         acceptsArgs: true,
-      }),
-    );
+      });
 
-    expect(result).toEqual({ ok: true });
-    for (const commandBody of ["/talkvoice now", "/discordvoice now"]) {
+      expect(result).toEqual({ ok: true });
       expectCommandMatch(commandBody, {
         name: "voice",
         pluginId: "demo-plugin",
         args: "now",
       });
-    }
-  });
+    },
+  );
 
   it.each([
     {
@@ -348,7 +377,7 @@ describe("registerPluginCommand", () => {
       expected: null,
     },
   ] as const)("$name", ({ params, expected }) => {
-    expect(resolveBindingConversationFromCommand(params)).toEqual(expected);
+    expectBindingConversationCase(params, expected);
   });
 
   it("does not expose binding APIs to plugin commands on unsupported channels", async () => {
@@ -400,15 +429,6 @@ describe("registerPluginCommand", () => {
       accountId: "default",
     });
 
-    expect(result.text).toBe(
-      JSON.stringify({
-        requested: {
-          status: "error",
-          message: "This command cannot bind the current conversation.",
-        },
-        current: null,
-        detached: { removed: false },
-      }),
-    );
+    expectUnsupportedBindingApiResult(result);
   });
 });

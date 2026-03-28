@@ -49,6 +49,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";',
     'export type { ChannelDirectoryEntry, ChannelMessageActionContext, OpenClawConfig, PluginRuntime, RuntimeLogger, RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/matrix";',
     'export { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix";',
+    'export { chunkTextForOutbound } from "openclaw/plugin-sdk/matrix";',
   ],
   "extensions/nextcloud-talk/runtime-api.ts": [
     'export * from "openclaw/plugin-sdk/nextcloud-talk";',

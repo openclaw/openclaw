@@ -6,9 +6,8 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeGoogleModelId } from "../plugin-sdk/google.js";
-import { normalizeXaiModelId } from "../plugin-sdk/xai.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
+import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
@@ -125,12 +124,6 @@ function normalizeProviderModelId(provider: string, model: string): string {
       return `anthropic/${normalizedAnthropicModel}`;
     }
   }
-  if (provider === "google" || provider === "google-vertex") {
-    return normalizeGoogleModelId(model);
-  }
-  if (provider === "xai") {
-    return normalizeXaiModelId(model);
-  }
   // OpenRouter-native models (e.g. "openrouter/aurora-alpha") need the full
   // "openrouter/<name>" as the model ID sent to the API. Models from external
   // providers already contain a slash (e.g. "anthropic/claude-sonnet-4-5") and
@@ -138,7 +131,15 @@ function normalizeProviderModelId(provider: string, model: string): string {
   if (provider === "openrouter" && !model.includes("/")) {
     return `openrouter/${model}`;
   }
-  return model;
+  return (
+    normalizeProviderModelIdWithPlugin({
+      provider,
+      context: {
+        provider,
+        modelId: model,
+      },
+    }) ?? model
+  );
 }
 
 export function normalizeModelRef(provider: string, model: string): ModelRef {

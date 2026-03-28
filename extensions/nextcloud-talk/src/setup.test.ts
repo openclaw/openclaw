@@ -22,6 +22,11 @@ vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
   getBundledChannelConfigSchemaMap: () => new Map(),
 }));
 
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
+}));
+
 const hoisted = vi.hoisted(() => ({
   monitorNextcloudTalkProvider: vi.fn(),
   loadConfig: vi.fn(),
@@ -68,7 +73,7 @@ vi.mock("./signature.js", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const original = (await importOriginal()) as Record<string, unknown>;
   return {
     ...original,

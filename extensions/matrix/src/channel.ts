@@ -293,6 +293,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         resolveRequireMention: resolveMatrixGroupRequireMention,
         resolveToolPolicy: resolveMatrixGroupToolPolicy,
       },
+      conversationBindings: {
+        supportsCurrentConversationBinding: true,
+      },
       messaging: {
         normalizeTarget: normalizeMatrixMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveMatrixOutboundSessionRoute(params),

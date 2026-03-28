@@ -33,6 +33,29 @@ function writeManifest(dir: string, manifest: Record<string, unknown>) {
   fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), JSON.stringify(manifest), "utf-8");
 }
 
+function writeTextFile(rootDir: string, relativePath: string, value: string) {
+  mkdirSafe(path.dirname(path.join(rootDir, relativePath)));
+  fs.writeFileSync(path.join(rootDir, relativePath), value, "utf-8");
+}
+
+function setupBundleFixture(params: {
+  bundleDir: string;
+  dirs?: readonly string[];
+  textFiles?: Readonly<Record<string, string>>;
+  manifestRelativePath?: string;
+  manifest?: Record<string, unknown>;
+}) {
+  for (const relativeDir of params.dirs ?? []) {
+    mkdirSafe(path.join(params.bundleDir, relativeDir));
+  }
+  for (const [relativePath, value] of Object.entries(params.textFiles ?? {})) {
+    writeTextFile(params.bundleDir, relativePath, value);
+  }
+  if (params.manifestRelativePath && params.manifest) {
+    writeTextFile(params.bundleDir, params.manifestRelativePath, JSON.stringify(params.manifest));
+  }
+}
+
 function createPluginCandidate(params: {
   idHint: string;
   rootDir: string;
@@ -216,6 +239,68 @@ function createDuplicateCandidateRegistry(params: {
       }),
     ],
   });
+}
+
+function createManifestPluginRoot(params: {
+  baseDir: string;
+  pluginId: string;
+  name: string;
+  relativePath?: string;
+}) {
+  const pluginRoot = path.join(
+    params.baseDir,
+    ...(params.relativePath ? [params.relativePath] : []),
+  );
+  mkdirSafe(pluginRoot);
+  writeManifest(pluginRoot, {
+    id: params.pluginId,
+    name: params.name,
+    configSchema: { type: "object" },
+  });
+  fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export default {}", "utf-8");
+  return pluginRoot;
+}
+
+function loadBundleRegistry(params: {
+  idHint: string;
+  bundleFormat: "codex" | "claude" | "cursor";
+  setup: (bundleDir: string) => void;
+}) {
+  const bundleDir = makeTempDir();
+  params.setup(bundleDir);
+  return loadRegistry([
+    createPluginCandidate({
+      idHint: params.idHint,
+      rootDir: bundleDir,
+      origin: "global",
+      format: "bundle",
+      bundleFormat: params.bundleFormat,
+    }),
+  ]);
+}
+
+function expectPluginRoot(
+  registry: ReturnType<typeof loadPluginManifestRegistry>,
+  pluginId: string,
+) {
+  const plugin = registry.plugins.find((entry) => entry.id === pluginId);
+  expect(plugin).toBeDefined();
+  return plugin?.rootDir ?? "";
+}
+
+function expectCachedPluginRoot(params: {
+  first: ReturnType<typeof loadPluginManifestRegistry>;
+  second: ReturnType<typeof loadPluginManifestRegistry>;
+  pluginId: string;
+  firstRoot: string;
+  secondRoot: string;
+}) {
+  expect(fs.realpathSync(expectPluginRoot(params.first, params.pluginId))).toBe(
+    fs.realpathSync(params.firstRoot),
+  );
+  expect(fs.realpathSync(expectPluginRoot(params.second, params.pluginId))).toBe(
+    fs.realpathSync(params.secondRoot),
+  );
 }
 
 afterEach(() => {
@@ -594,146 +679,124 @@ describe("loadPluginManifestRegistry", () => {
     ).toBe(true);
   });
 
-  it("loads Codex bundle manifests into the registry", () => {
-    const bundleDir = makeTempDir();
-    mkdirSafe(path.join(bundleDir, ".codex-plugin"));
-    mkdirSafe(path.join(bundleDir, "skills"));
-    fs.writeFileSync(
-      path.join(bundleDir, ".codex-plugin", "plugin.json"),
-      JSON.stringify({
-        name: "Sample Bundle",
-        description: "Bundle fixture",
-        skills: "skills",
-        hooks: "hooks",
-      }),
-      "utf-8",
-    );
-    mkdirSafe(path.join(bundleDir, "hooks"));
-
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "sample-bundle",
-        rootDir: bundleDir,
-        origin: "global",
+  it.each([
+    {
+      name: "loads Codex bundle manifests into the registry",
+      idHint: "sample-bundle",
+      bundleFormat: "codex" as const,
+      setup: (bundleDir: string) => {
+        setupBundleFixture({
+          bundleDir,
+          dirs: [".codex-plugin", "skills", "hooks"],
+          manifestRelativePath: ".codex-plugin/plugin.json",
+          manifest: {
+            name: "Sample Bundle",
+            description: "Bundle fixture",
+            skills: "skills",
+            hooks: "hooks",
+          },
+        });
+      },
+      expected: {
+        id: "sample-bundle",
         format: "bundle",
         bundleFormat: "codex",
-      }),
-    ]);
-
-    expect(registry.plugins).toHaveLength(1);
-    expect(registry.plugins[0]).toMatchObject({
-      id: "sample-bundle",
-      format: "bundle",
-      bundleFormat: "codex",
-      hooks: ["hooks"],
-      skills: ["skills"],
-      bundleCapabilities: expect.arrayContaining(["hooks", "skills"]),
-    });
-  });
-
-  it("loads Claude bundle manifests with command roots and settings files", () => {
-    const bundleDir = makeTempDir();
-    mkdirSafe(path.join(bundleDir, ".claude-plugin"));
-    mkdirSafe(path.join(bundleDir, "skill-packs", "starter"));
-    mkdirSafe(path.join(bundleDir, "commands-pack"));
-    fs.writeFileSync(path.join(bundleDir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
-    fs.writeFileSync(
-      path.join(bundleDir, ".claude-plugin", "plugin.json"),
-      JSON.stringify({
-        name: "Claude Sample",
-        skills: ["skill-packs/starter"],
-        commands: "commands-pack",
-      }),
-      "utf-8",
-    );
-
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "claude-sample",
-        rootDir: bundleDir,
-        origin: "global",
+        hooks: ["hooks"],
+        skills: ["skills"],
+        bundleCapabilities: expect.arrayContaining(["hooks", "skills"]),
+      },
+    },
+    {
+      name: "loads Claude bundle manifests with command roots and settings files",
+      idHint: "claude-sample",
+      bundleFormat: "claude" as const,
+      setup: (bundleDir: string) => {
+        setupBundleFixture({
+          bundleDir,
+          dirs: [".claude-plugin", "skill-packs/starter", "commands-pack"],
+          textFiles: {
+            "settings.json": '{"hideThinkingBlock":true}',
+          },
+          manifestRelativePath: ".claude-plugin/plugin.json",
+          manifest: {
+            name: "Claude Sample",
+            skills: ["skill-packs/starter"],
+            commands: "commands-pack",
+          },
+        });
+      },
+      expected: {
+        id: "claude-sample",
         format: "bundle",
         bundleFormat: "claude",
-      }),
-    ]);
-
-    expect(registry.plugins).toHaveLength(1);
-    expect(registry.plugins[0]).toMatchObject({
-      id: "claude-sample",
-      format: "bundle",
-      bundleFormat: "claude",
-      skills: ["skill-packs/starter", "commands-pack"],
-      settingsFiles: ["settings.json"],
-      bundleCapabilities: expect.arrayContaining(["skills", "commands", "settings"]),
-    });
-  });
-
-  it("loads manifestless Claude bundles into the registry", () => {
-    const bundleDir = makeTempDir();
-    mkdirSafe(path.join(bundleDir, "commands"));
-    fs.writeFileSync(path.join(bundleDir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
-
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "manifestless-claude",
-        rootDir: bundleDir,
-        origin: "global",
+        skills: ["skill-packs/starter", "commands-pack"],
+        settingsFiles: ["settings.json"],
+        bundleCapabilities: expect.arrayContaining(["skills", "commands", "settings"]),
+      },
+    },
+    {
+      name: "loads manifestless Claude bundles into the registry",
+      idHint: "manifestless-claude",
+      bundleFormat: "claude" as const,
+      setup: (bundleDir: string) => {
+        setupBundleFixture({
+          bundleDir,
+          dirs: ["commands"],
+          textFiles: {
+            "settings.json": '{"hideThinkingBlock":true}',
+          },
+        });
+      },
+      expected: {
         format: "bundle",
         bundleFormat: "claude",
-      }),
-    ]);
-
-    expect(registry.plugins).toHaveLength(1);
-    expect(registry.plugins[0]).toMatchObject({
-      format: "bundle",
-      bundleFormat: "claude",
-      skills: ["commands"],
-      settingsFiles: ["settings.json"],
-      bundleCapabilities: expect.arrayContaining(["skills", "commands", "settings"]),
-    });
-  });
-
-  it("loads Cursor bundle manifests into the registry", () => {
-    const bundleDir = makeTempDir();
-    mkdirSafe(path.join(bundleDir, ".cursor-plugin"));
-    mkdirSafe(path.join(bundleDir, "skills"));
-    mkdirSafe(path.join(bundleDir, ".cursor", "commands"));
-    mkdirSafe(path.join(bundleDir, ".cursor", "rules"));
-    fs.writeFileSync(path.join(bundleDir, ".cursor", "hooks.json"), '{"hooks":[]}', "utf-8");
-    fs.writeFileSync(
-      path.join(bundleDir, ".cursor-plugin", "plugin.json"),
-      JSON.stringify({
-        name: "Cursor Sample",
-        mcpServers: "./.mcp.json",
-      }),
-      "utf-8",
-    );
-    fs.writeFileSync(path.join(bundleDir, ".mcp.json"), '{"servers":{}}', "utf-8");
-
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "cursor-sample",
-        rootDir: bundleDir,
-        origin: "global",
+        skills: ["commands"],
+        settingsFiles: ["settings.json"],
+        bundleCapabilities: expect.arrayContaining(["skills", "commands", "settings"]),
+      },
+    },
+    {
+      name: "loads Cursor bundle manifests into the registry",
+      idHint: "cursor-sample",
+      bundleFormat: "cursor" as const,
+      setup: (bundleDir: string) => {
+        setupBundleFixture({
+          bundleDir,
+          dirs: [".cursor-plugin", "skills", ".cursor/commands", ".cursor/rules"],
+          textFiles: {
+            ".cursor/hooks.json": '{"hooks":[]}',
+            ".mcp.json": '{"servers":{}}',
+          },
+          manifestRelativePath: ".cursor-plugin/plugin.json",
+          manifest: {
+            name: "Cursor Sample",
+            mcpServers: "./.mcp.json",
+          },
+        });
+      },
+      expected: {
+        id: "cursor-sample",
         format: "bundle",
         bundleFormat: "cursor",
-      }),
-    ]);
+        skills: ["skills", ".cursor/commands"],
+        bundleCapabilities: expect.arrayContaining([
+          "skills",
+          "commands",
+          "rules",
+          "hooks",
+          "mcpServers",
+        ]),
+      },
+    },
+  ] as const)("$name", ({ idHint, bundleFormat, setup, expected }) => {
+    const registry = loadBundleRegistry({
+      idHint,
+      bundleFormat,
+      setup,
+    });
 
     expect(registry.plugins).toHaveLength(1);
-    expect(registry.plugins[0]).toMatchObject({
-      id: "cursor-sample",
-      format: "bundle",
-      bundleFormat: "cursor",
-      skills: ["skills", ".cursor/commands"],
-      bundleCapabilities: expect.arrayContaining([
-        "skills",
-        "commands",
-        "rules",
-        "hooks",
-        "mcpServers",
-      ]),
-    });
+    expect(registry.plugins[0]).toMatchObject(expected);
   });
 
   it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {
@@ -796,22 +859,18 @@ describe("loadPluginManifestRegistry", () => {
   it("does not reuse cached bundled plugin roots across env changes", () => {
     const bundledA = makeTempDir();
     const bundledB = makeTempDir();
-    const matrixA = path.join(bundledA, "matrix");
-    const matrixB = path.join(bundledB, "matrix");
-    mkdirSafe(matrixA);
-    mkdirSafe(matrixB);
-    writeManifest(matrixA, {
-      id: "matrix",
+    const matrixA = createManifestPluginRoot({
+      baseDir: bundledA,
+      pluginId: "matrix",
       name: "Matrix A",
-      configSchema: { type: "object" },
+      relativePath: "matrix",
     });
-    writeManifest(matrixB, {
-      id: "matrix",
+    const matrixB = createManifestPluginRoot({
+      baseDir: bundledB,
+      pluginId: "matrix",
       name: "Matrix B",
-      configSchema: { type: "object" },
+      relativePath: "matrix",
     });
-    fs.writeFileSync(path.join(matrixA, "index.ts"), "export default {}", "utf-8");
-    fs.writeFileSync(path.join(matrixB, "index.ts"), "export default {}", "utf-8");
 
     const first = loadPluginManifestRegistry({
       cache: true,
@@ -826,33 +885,30 @@ describe("loadPluginManifestRegistry", () => {
       }),
     });
 
-    expect(
-      fs.realpathSync(first.plugins.find((plugin) => plugin.id === "matrix")?.rootDir ?? ""),
-    ).toBe(fs.realpathSync(matrixA));
-    expect(
-      fs.realpathSync(second.plugins.find((plugin) => plugin.id === "matrix")?.rootDir ?? ""),
-    ).toBe(fs.realpathSync(matrixB));
+    expectCachedPluginRoot({
+      first,
+      second,
+      pluginId: "matrix",
+      firstRoot: matrixA,
+      secondRoot: matrixB,
+    });
   });
 
   it("does not reuse cached load-path manifests across env home changes", () => {
     const homeA = makeTempDir();
     const homeB = makeTempDir();
-    const demoA = path.join(homeA, "plugins", "demo");
-    const demoB = path.join(homeB, "plugins", "demo");
-    mkdirSafe(demoA);
-    mkdirSafe(demoB);
-    writeManifest(demoA, {
-      id: "demo",
+    const demoA = createManifestPluginRoot({
+      baseDir: homeA,
+      pluginId: "demo",
       name: "Demo A",
-      configSchema: { type: "object" },
+      relativePath: path.join("plugins", "demo"),
     });
-    writeManifest(demoB, {
-      id: "demo",
+    const demoB = createManifestPluginRoot({
+      baseDir: homeB,
+      pluginId: "demo",
       name: "Demo B",
-      configSchema: { type: "object" },
+      relativePath: path.join("plugins", "demo"),
     });
-    fs.writeFileSync(path.join(demoA, "index.ts"), "export default {}", "utf-8");
-    fs.writeFileSync(path.join(demoB, "index.ts"), "export default {}", "utf-8");
 
     const config = {
       plugins: {
@@ -881,12 +937,13 @@ describe("loadPluginManifestRegistry", () => {
       }),
     });
 
-    expect(
-      fs.realpathSync(first.plugins.find((plugin) => plugin.id === "demo")?.rootDir ?? ""),
-    ).toBe(fs.realpathSync(demoA));
-    expect(
-      fs.realpathSync(second.plugins.find((plugin) => plugin.id === "demo")?.rootDir ?? ""),
-    ).toBe(fs.realpathSync(demoB));
+    expectCachedPluginRoot({
+      first,
+      second,
+      pluginId: "demo",
+      firstRoot: demoA,
+      secondRoot: demoB,
+    });
   });
 
   it("does not reuse cached manifests across host version changes", () => {

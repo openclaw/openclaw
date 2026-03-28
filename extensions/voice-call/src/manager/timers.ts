@@ -1,11 +1,15 @@
 import { TerminalStates, type CallId } from "../types.js";
 import type { CallManagerContext } from "./context.js";
+import { persistCallRecord } from "./store.js";
 
 type TimerContext = Pick<
   CallManagerContext,
-  "activeCalls" | "maxDurationTimers" | "config" | "transcriptWaiters"
+  "activeCalls" | "maxDurationTimers" | "config" | "storePath" | "transcriptWaiters"
 >;
-type MaxDurationTimerContext = Pick<TimerContext, "activeCalls" | "maxDurationTimers" | "config">;
+type MaxDurationTimerContext = Pick<
+  TimerContext,
+  "activeCalls" | "maxDurationTimers" | "config" | "storePath"
+>;
 type TranscriptWaiterContext = Pick<TimerContext, "transcriptWaiters">;
 
 export function clearMaxDurationTimer(
@@ -38,6 +42,8 @@ export function startMaxDurationTimer(params: {
       console.log(
         `[voice-call] Max duration reached (${params.ctx.config.maxDurationSeconds}s), ending call ${params.callId}`,
       );
+      call.endReason = "timeout";
+      persistCallRecord(params.ctx.storePath, call);
       await params.onTimeout(params.callId);
     }
   }, maxDurationMs);

@@ -76,6 +76,25 @@ function expectSuccessfulUninstall(result: UninstallResult) {
   return result;
 }
 
+function expectSuccessfulUninstallActions(
+  result: UninstallResult,
+  params: {
+    directory: boolean;
+    loadPath?: boolean;
+    warnings?: string[];
+  },
+) {
+  const successfulResult = expectSuccessfulUninstall(result);
+  expect(successfulResult.actions.directory).toBe(params.directory);
+  if (params.loadPath !== undefined) {
+    expect(successfulResult.actions.loadPath).toBe(params.loadPath);
+  }
+  if (params.warnings) {
+    expect(successfulResult.warnings).toEqual(params.warnings);
+  }
+  return successfulResult;
+}
+
 function createSinglePluginEntries(pluginId = "my-plugin") {
   return {
     [pluginId]: { enabled: true },
@@ -189,6 +208,15 @@ async function createPluginDirFixture(baseDir: string, pluginId = "my-plugin") {
   return pluginDir;
 }
 
+async function expectPathAccessState(pathToCheck: string, expected: "exists" | "missing") {
+  const accessExpectation = fs.access(pathToCheck);
+  if (expected === "exists") {
+    await expect(accessExpectation).resolves.toBeUndefined();
+    return;
+  }
+  await expect(accessExpectation).rejects.toThrow();
+}
+
 describe("resolveUninstallChannelConfigKeys", () => {
   it("falls back to pluginId when channelIds are unknown", () => {
     expect(resolveUninstallChannelConfigKeys("timbot")).toEqual(["timbot"]);
@@ -274,34 +302,38 @@ describe("removePluginFromConfig", () => {
     expect(actions.loadPath).toBe(true);
   });
 
-  it("clears memory slot when uninstalling active memory plugin", () => {
-    const config = createPluginConfig({
-      entries: {
-        "memory-plugin": { enabled: true },
-      },
-      slots: {
-        memory: "memory-plugin",
-      },
-    });
+  it.each([
+    {
+      name: "clears memory slot when uninstalling active memory plugin",
+      config: createPluginConfig({
+        entries: {
+          "memory-plugin": { enabled: true },
+        },
+        slots: {
+          memory: "memory-plugin",
+        },
+      }),
+      pluginId: "memory-plugin",
+      expectedMemory: "memory-core",
+      expectedChanged: true,
+    },
+    {
+      name: "does not modify memory slot when uninstalling non-memory plugin",
+      config: createPluginConfig({
+        entries: createSinglePluginEntries(),
+        slots: {
+          memory: "memory-core",
+        },
+      }),
+      pluginId: "my-plugin",
+      expectedMemory: "memory-core",
+      expectedChanged: false,
+    },
+  ] as const)("$name", ({ config, pluginId, expectedMemory, expectedChanged }) => {
+    const { config: result, actions } = removePluginFromConfig(config, pluginId);
 
-    const { config: result, actions } = removePluginFromConfig(config, "memory-plugin");
-
-    expect(result.plugins?.slots?.memory).toBe("memory-core");
-    expect(actions.memorySlot).toBe(true);
-  });
-
-  it("does not modify memory slot when uninstalling non-memory plugin", () => {
-    const config = createPluginConfig({
-      entries: createSinglePluginEntries(),
-      slots: {
-        memory: "memory-core",
-      },
-    });
-
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins?.slots?.memory).toBe("memory-core");
-    expect(actions.memorySlot).toBe(false);
+    expect(result.plugins?.slots?.memory).toBe(expectedMemory);
+    expect(actions.memorySlot).toBe(expectedChanged);
   });
 
   it("removes plugins object when uninstall leaves only empty slots", () => {
@@ -613,66 +645,76 @@ describe("uninstallPlugin", () => {
     const { pluginDir, result } = await runDeleteInstalledNpmPluginFixture(tempDir);
 
     try {
-      const successfulResult = expectSuccessfulUninstall(result);
-      expect(successfulResult.actions.directory).toBe(true);
+      expectSuccessfulUninstallActions(result, {
+        directory: true,
+      });
       await expect(fs.access(pluginDir)).rejects.toThrow();
     } finally {
       await fs.rm(pluginDir, { recursive: true, force: true });
     }
   });
 
-  it("preserves directory for linked plugins", async () => {
-    const pluginDir = await createPluginDirFixture(tempDir);
-
-    const config = createPluginConfig({
-      entries: createSinglePluginEntries(),
-      installs: {
-        "my-plugin": createPathInstallRecord(pluginDir),
+  it.each([
+    {
+      name: "preserves directory for linked plugins",
+      setup: async (baseDir: string) => {
+        const pluginDir = await createPluginDirFixture(baseDir);
+        return {
+          config: createPluginConfig({
+            entries: createSinglePluginEntries(),
+            installs: {
+              "my-plugin": createPathInstallRecord(pluginDir),
+            },
+            loadPaths: [pluginDir],
+          }),
+          deleteFiles: true,
+          accessPath: pluginDir,
+          expectedAccess: "exists" as const,
+          expectedActions: {
+            directory: false,
+            loadPath: true,
+          },
+        };
       },
-      loadPaths: [pluginDir],
-    });
-
+    },
+    {
+      name: "does not delete directory when deleteFiles is false",
+      setup: async (baseDir: string) => {
+        const pluginDir = await createPluginDirFixture(baseDir);
+        return {
+          config: createSingleNpmInstallConfig(pluginDir),
+          deleteFiles: false,
+          accessPath: pluginDir,
+          expectedAccess: "exists" as const,
+          expectedActions: {
+            directory: false,
+          },
+        };
+      },
+    },
+    {
+      name: "succeeds even if directory does not exist",
+      setup: async () => ({
+        config: createSingleNpmInstallConfig("/nonexistent/path"),
+        deleteFiles: true,
+        expectedActions: {
+          directory: false,
+          warnings: [],
+        },
+      }),
+    },
+  ] as const)("$name", async ({ setup }) => {
+    const params = await setup(tempDir);
     const result = await uninstallPlugin({
-      config,
+      config: params.config,
       pluginId: "my-plugin",
-      deleteFiles: true,
+      deleteFiles: params.deleteFiles,
     });
 
-    const successfulResult = expectSuccessfulUninstall(result);
-    expect(successfulResult.actions.directory).toBe(false);
-    expect(successfulResult.actions.loadPath).toBe(true);
-    await expect(fs.access(pluginDir)).resolves.toBeUndefined();
-  });
-
-  it("does not delete directory when deleteFiles is false", async () => {
-    const pluginDir = await createPluginDirFixture(tempDir);
-
-    const config = createSingleNpmInstallConfig(pluginDir);
-
-    const result = await uninstallPlugin({
-      config,
-      pluginId: "my-plugin",
-      deleteFiles: false,
-    });
-
-    const successfulResult = expectSuccessfulUninstall(result);
-    expect(successfulResult.actions.directory).toBe(false);
-    await expect(fs.access(pluginDir)).resolves.toBeUndefined();
-  });
-
-  it("succeeds even if directory does not exist", async () => {
-    const config = createSingleNpmInstallConfig("/nonexistent/path");
-
-    const result = await uninstallPlugin({
-      config,
-      pluginId: "my-plugin",
-      deleteFiles: true,
-    });
-
-    // Should succeed; directory deletion failure is not fatal
-    const successfulResult = expectSuccessfulUninstall(result);
-    expect(successfulResult.actions.directory).toBe(false);
-    expect(successfulResult.warnings).toEqual([]);
+    expectSuccessfulUninstallActions(result, params.expectedActions);
+    if ("accessPath" in params && "expectedAccess" in params) {
+      await expectPathAccessState(params.accessPath, params.expectedAccess);
+    }
   });
 
   it("returns a warning when directory deletion fails unexpectedly", async () => {
@@ -680,8 +722,9 @@ describe("uninstallPlugin", () => {
     try {
       const { result } = await runDeleteInstalledNpmPluginFixture(tempDir);
 
-      const successfulResult = expectSuccessfulUninstall(result);
-      expect(successfulResult.actions.directory).toBe(false);
+      const successfulResult = expectSuccessfulUninstallActions(result, {
+        directory: false,
+      });
       expect(successfulResult.warnings).toHaveLength(1);
       expect(successfulResult.warnings[0]).toContain("Failed to remove plugin directory");
     } finally {
@@ -704,8 +747,9 @@ describe("uninstallPlugin", () => {
       extensionsDir,
     });
 
-    const successfulResult = expectSuccessfulUninstall(result);
-    expect(successfulResult.actions.directory).toBe(false);
+    expectSuccessfulUninstallActions(result, {
+      directory: false,
+    });
     await expect(fs.access(outsideDir)).resolves.toBeUndefined();
   });
 });

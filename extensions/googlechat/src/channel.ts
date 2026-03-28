@@ -317,8 +317,8 @@ export const googlechatPlugin = createChatChannelPlugin({
       idLabel: "googlechatUserId",
       message: PAIRING_APPROVED_MESSAGE,
       normalizeAllowEntry: (entry) => formatAllowFromEntry(entry),
-      notify: async ({ cfg, id, message }) => {
-        const account = resolveGoogleChatAccount({ cfg: cfg });
+      notify: async ({ cfg, id, message, accountId }) => {
+        const account = resolveGoogleChatAccount({ cfg: cfg, accountId });
         if (account.credentialSource === "none") {
           return;
         }

@@ -1161,12 +1161,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         idLabel: "feishuUserId",
         message: PAIRING_APPROVED_MESSAGE,
         normalizeAllowEntry: createPairingPrefixStripper(/^(feishu|user|open_id):/i),
-        notify: async ({ cfg, id, message }) => {
+        notify: async ({ cfg, id, message, accountId }) => {
           const { sendMessageFeishu } = await loadFeishuChannelRuntime();
           await sendMessageFeishu({
             cfg,
             to: id,
             text: message,
+            accountId,
           });
         },
       },

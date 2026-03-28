@@ -2,8 +2,7 @@
  * Test: subagent_spawning, subagent_delivery_target, subagent_spawned & subagent_ended hook wiring
  */
 import { describe, expect, it, vi } from "vitest";
-import { createHookRunner } from "./hooks.js";
-import { createMockPluginRegistry } from "./hooks.test-helpers.js";
+import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
 
 describe("subagent hook runner methods", () => {
   const baseRequester = {
@@ -18,6 +17,34 @@ describe("subagent hook runner methods", () => {
     childSessionKey: "agent:main:subagent:child",
     requesterSessionKey: "agent:main:main",
   };
+
+  async function invokeSubagentHook(params: {
+    hookName:
+      | "subagent_spawning"
+      | "subagent_spawned"
+      | "subagent_delivery_target"
+      | "subagent_ended";
+    event: Record<string, unknown>;
+    ctx: Record<string, unknown>;
+    handlerResult?: unknown;
+  }) {
+    const handler = vi.fn(async () => ({ status: "ok", threadBindingReady: true as const }));
+    if (params.handlerResult !== undefined) {
+      handler.mockResolvedValue(params.handlerResult as never);
+    }
+    const { runner } = createHookRunnerWithRegistry([{ hookName: params.hookName, handler }]);
+    const result =
+      params.hookName === "subagent_spawning"
+        ? await runner.runSubagentSpawning(params.event as never, params.ctx as never)
+        : params.hookName === "subagent_spawned"
+          ? await runner.runSubagentSpawned(params.event as never, params.ctx as never)
+          : params.hookName === "subagent_delivery_target"
+            ? await runner.runSubagentDeliveryTarget(params.event as never, params.ctx as never)
+            : await runner.runSubagentEnded(params.event as never, params.ctx as never);
+
+    expect(handler).toHaveBeenCalledWith(params.event, params.ctx);
+    return result;
+  }
 
   it.each([
     {
@@ -99,36 +126,17 @@ describe("subagent hook runner methods", () => {
       },
       ctx: baseSubagentCtx,
     },
-  ] as const)(
-    "$name",
-    async ({ hookName, methodName, event, ctx, handlerResult, expectedResult }) => {
-      const handler = vi.fn(async () => ({ status: "ok", threadBindingReady: true as const }));
-      if (handlerResult !== undefined) {
-        handler.mockResolvedValue(handlerResult as never);
-      }
-      const registry = createMockPluginRegistry([{ hookName, handler }]);
-      const runner = createHookRunner(registry);
-      const result =
-        methodName === "runSubagentSpawning"
-          ? await runner.runSubagentSpawning(event, ctx)
-          : methodName === "runSubagentSpawned"
-            ? await runner.runSubagentSpawned(event, ctx)
-            : methodName === "runSubagentDeliveryTarget"
-              ? await runner.runSubagentDeliveryTarget(event, ctx)
-              : await runner.runSubagentEnded(event, ctx);
-
-      expect(handler).toHaveBeenCalledWith(event, ctx);
-      if (expectedResult !== undefined) {
-        expect(result).toEqual(expectedResult);
-        return;
-      }
-      expect(result).toBeUndefined();
-    },
-  );
+  ] as const)("$name", async ({ hookName, event, ctx, handlerResult, expectedResult }) => {
+    const result = await invokeSubagentHook({ hookName, event, ctx, handlerResult });
+    if (expectedResult !== undefined) {
+      expect(result).toEqual(expectedResult);
+      return;
+    }
+    expect(result).toBeUndefined();
+  });
 
   it("runSubagentDeliveryTarget returns undefined when no matching hooks are registered", async () => {
-    const registry = createMockPluginRegistry([]);
-    const runner = createHookRunner(registry);
+    const { runner } = createHookRunnerWithRegistry([]);
     const result = await runner.runSubagentDeliveryTarget(
       {
         childSessionKey: "agent:main:subagent:child",
@@ -144,11 +152,10 @@ describe("subagent hook runner methods", () => {
   });
 
   it("hasHooks returns true for registered subagent hooks", () => {
-    const registry = createMockPluginRegistry([
+    const { runner } = createHookRunnerWithRegistry([
       { hookName: "subagent_spawning", handler: vi.fn() },
       { hookName: "subagent_delivery_target", handler: vi.fn() },
     ]);
-    const runner = createHookRunner(registry);
 
     expect(runner.hasHooks("subagent_spawning")).toBe(true);
     expect(runner.hasHooks("subagent_delivery_target")).toBe(true);

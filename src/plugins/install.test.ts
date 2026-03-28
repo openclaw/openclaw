@@ -288,9 +288,9 @@ function expectFailedInstallResult<
     expect(params.result.code).toBe(params.code);
   }
   expect(params.result.error).toBeDefined();
-  for (const fragment of params.messageIncludes) {
+  params.messageIncludes.forEach((fragment) => {
     expect(params.result.error).toContain(fragment);
-  }
+  });
   return params.result;
 }
 
@@ -302,6 +302,12 @@ function mockSuccessfulCommandRun(run: ReturnType<typeof vi.mocked<typeof runCom
     signal: null,
     killed: false,
     termination: "exit",
+  });
+}
+
+function expectInstalledFiles(targetDir: string, expectedFiles: readonly string[]) {
+  expectedFiles.forEach((relativePath) => {
+    expect(fs.existsSync(path.join(targetDir, relativePath))).toBe(true);
   });
 }
 
@@ -553,14 +559,16 @@ beforeAll(async () => {
     "utf-8",
   );
 
-  for (const preset of DYNAMIC_ARCHIVE_TEMPLATE_PRESETS) {
-    await ensureDynamicArchiveTemplate({
-      packageJson: preset.packageJson,
-      outName: preset.outName,
-      withDistIndex: preset.withDistIndex,
-      flatRoot: false,
-    });
-  }
+  await Promise.all(
+    DYNAMIC_ARCHIVE_TEMPLATE_PRESETS.map((preset) =>
+      ensureDynamicArchiveTemplate({
+        packageJson: preset.packageJson,
+        outName: preset.outName,
+        withDistIndex: preset.withDistIndex,
+        flatRoot: false,
+      }),
+    ),
+  );
 });
 
 beforeEach(() => {
@@ -1003,9 +1011,7 @@ describe("installPluginFromDir", () => {
     if (!res.ok) {
       return;
     }
-    for (const relativePath of expectedFiles) {
-      expect(fs.existsSync(path.join(res.targetDir, relativePath))).toBe(true);
-    }
+    expectInstalledFiles(res.targetDir, expectedFiles);
   });
 
   it("prefers native package installs over bundle installs for dual-format directories", async () => {

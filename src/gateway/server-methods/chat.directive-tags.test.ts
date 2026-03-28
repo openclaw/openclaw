@@ -18,6 +18,7 @@ const mockState = vi.hoisted(() => ({
   sessionId: "sess-1",
   mainSessionKey: "main",
   finalText: "[[reply_to_current]]",
+  dispatchError: null as Error | null,
   triggerAgentRunStart: false,
   agentRunId: "run-agent-1",
   sessionEntry: {} as Record<string, unknown>,
@@ -88,6 +89,9 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
     }) => {
       mockState.lastDispatchCtx = params.ctx;
       mockState.lastDispatchImages = params.replyOptions?.images;
+      if (mockState.dispatchError) {
+        throw mockState.dispatchError;
+      }
       if (mockState.triggerAgentRunStart) {
         params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
       }
@@ -326,6 +330,7 @@ async function runNonStreamingChatSend(params: {
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   afterEach(() => {
     mockState.finalText = "[[reply_to_current]]";
+    mockState.dispatchError = null;
     mockState.mainSessionKey = "main";
     mockState.triggerAgentRunStart = false;
     mockState.agentRunId = "run-agent-1";
@@ -1204,6 +1209,85 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("chat.send accepts admin-scoped synthetic originating routes without external delivery", async () => {
+    createTranscriptFixture("openclaw-chat-send-synthetic-origin-admin-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-synthetic-origin-admin",
+      client: {
+        connect: {
+          scopes: ["operator.admin"],
+          client: {
+            id: "openclaw-cli",
+            mode: "cli",
+            displayName: "openclaw-cli",
+            version: "1.0.0",
+          },
+        },
+      },
+      requestParams: {
+        originatingChannel: "slack",
+        originatingTo: "D123",
+        originatingAccountId: "default",
+        originatingThreadId: "thread-42",
+      },
+      deliver: false,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "slack",
+        OriginatingTo: "D123",
+        ExplicitDeliverRoute: false,
+        AccountId: "default",
+        MessageThreadId: "thread-42",
+      }),
+    );
+  });
+
+  it("rejects synthetic originating routes when the caller lacks admin scope", async () => {
+    createTranscriptFixture("openclaw-chat-send-synthetic-origin-reject-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-synthetic-origin-reject",
+      client: {
+        connect: {
+          scopes: ["operator.write"],
+          client: {
+            id: "openclaw-cli",
+            mode: "cli",
+            displayName: "openclaw-cli",
+            version: "1.0.0",
+          },
+        },
+      },
+      requestParams: {
+        originatingChannel: "slack",
+        originatingTo: "D123",
+      },
+      expectBroadcast: false,
+      waitForCompletion: false,
+    });
+
+    const [ok, _payload, error] = respond.mock.calls.at(-1) ?? [];
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({
+      message: "originating route fields require admin scope",
+    });
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+  });
+
   it("rejects reserved system provenance fields for non-ACP clients", async () => {
     createTranscriptFixture("openclaw-chat-send-system-provenance-reject-");
     mockState.finalText = "ok";
@@ -1709,6 +1793,40 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         content: "quick command",
         timestamp: expect.any(Number),
       },
+    });
+  });
+
+  it("emits a user transcript update when chat.send fails before an agent run starts", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-error-no-run-");
+    mockState.dispatchError = new Error("upstream unavailable");
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-error-no-run",
+      message: "hello from failed dispatch",
+      expectBroadcast: false,
+    });
+
+    await waitForAssertion(() => {
+      expect(context.dedupe.get("chat:idem-user-transcript-error-no-run")?.ok).toBe(false);
+      const userUpdate = mockState.emittedTranscriptUpdates.find(
+        (update) =>
+          typeof update.message === "object" &&
+          update.message !== null &&
+          (update.message as { role?: unknown }).role === "user",
+      );
+      expect(userUpdate).toMatchObject({
+        sessionFile: expect.stringMatching(/sess\.jsonl$/),
+        sessionKey: "main",
+        message: {
+          role: "user",
+          content: "hello from failed dispatch",
+          timestamp: expect.any(Number),
+        },
+      });
     });
   });
 });
