@@ -169,7 +169,15 @@ export function recordRemoteNodeBins(nodeId: string, bins: string[]) {
 }
 
 export function removeRemoteNodeInfo(nodeId: string) {
+  const existing = remoteNodes.get(nodeId);
   remoteNodes.delete(nodeId);
+  if (
+    existing &&
+    isMacPlatform(existing.platform, existing.deviceFamily) &&
+    supportsSystemRun(existing.commands)
+  ) {
+    bumpSkillsSnapshotVersion({ reason: "remote-node" });
+  }
 }
 
 function collectRequiredBins(entries: SkillEntry[], targetPlatform: string): string[] {
