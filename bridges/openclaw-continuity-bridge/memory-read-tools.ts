@@ -144,8 +144,6 @@ type MemoryRetrievalModule = {
   ) => MemoryListRetrieval;
 };
 
-const memoryRetrieval = (await import(resolveMemoryRetrievalModuleUrl())) as MemoryRetrievalModule;
-
 interface MemoryRuntime {
   db?: Database.Database;
   dbPath: string;
@@ -154,6 +152,9 @@ interface MemoryRuntime {
   generateId: () => string;
   env: Record<string, string | undefined>;
   allowTelemetryPersistence: boolean;
+  memoryRetrieval?: MemoryRetrievalModule;
+  memoryRetrievalPromise?: Promise<MemoryRetrievalModule>;
+  memoryRetrievalLoader: () => Promise<MemoryRetrievalModule>;
 }
 
 export interface MemoryReadToolDefinition {
@@ -171,6 +172,8 @@ export interface MemoryReadToolOptions {
   generateId?: () => string;
   env?: Record<string, string | undefined>;
   allowTelemetryPersistence?: boolean;
+  memoryRetrieval?: MemoryRetrievalModule;
+  memoryRetrievalLoader?: () => Promise<MemoryRetrievalModule>;
 }
 
 export interface MemoryReadToolRegistrar {
@@ -394,7 +397,26 @@ function createRuntime(options: MemoryReadToolOptions): MemoryRuntime {
     generateId: options.generateId ?? randomUUID,
     env: options.env ?? (process.env as Record<string, string | undefined>),
     allowTelemetryPersistence: options.allowTelemetryPersistence ?? true,
+    memoryRetrieval: options.memoryRetrieval,
+    memoryRetrievalLoader: options.memoryRetrievalLoader ?? loadDefaultMemoryRetrievalModule,
   };
+}
+
+async function loadDefaultMemoryRetrievalModule(): Promise<MemoryRetrievalModule> {
+  return (await import(resolveMemoryRetrievalModuleUrl())) as MemoryRetrievalModule;
+}
+
+async function getMemoryRetrieval(runtime: MemoryRuntime): Promise<MemoryRetrievalModule> {
+  if (runtime.memoryRetrieval) {
+    return runtime.memoryRetrieval;
+  }
+
+  if (!runtime.memoryRetrievalPromise) {
+    runtime.memoryRetrievalPromise = runtime.memoryRetrievalLoader();
+  }
+
+  runtime.memoryRetrieval = await runtime.memoryRetrievalPromise;
+  return runtime.memoryRetrieval;
 }
 
 function resolveMemoryRetrievalModuleUrl(): string {
@@ -540,7 +562,11 @@ function mapMemoryType(memoryClass: string): string {
   return MEMORY_CLASS_MAP[memoryClass] ?? memoryClass;
 }
 
-function formatMemory(row: MemoryRow, options: FormatOptions = {}): Record<string, unknown> {
+function formatMemory(
+  memoryRetrieval: MemoryRetrievalModule,
+  row: MemoryRow,
+  options: FormatOptions = {},
+): Record<string, unknown> {
   const score =
     typeof options.scoreOverride === "number"
       ? options.scoreOverride
@@ -582,6 +608,7 @@ function resolveWorkspaceId(workspaceId: unknown, runtime: MemoryRuntime): strin
 }
 
 function enforceRolloutAccess(
+  memoryRetrieval: MemoryRetrievalModule,
   workspaceId: string,
   runtime: MemoryRuntime,
 ): {
@@ -724,9 +751,10 @@ async function handleMemoryContext(
   const workspaceId = resolveWorkspaceId(input.workspace_id, runtime);
   let readHandle: { db: Database.Database; close: () => void } | undefined;
   try {
+    const memoryRetrieval = await getMemoryRetrieval(runtime);
     readHandle = openReadDb(runtime);
     const roleHint = memoryRetrieval.normalizeRole(asOptionalString(input.role));
-    const rolloutGate = enforceRolloutAccess(workspaceId, runtime);
+    const rolloutGate = enforceRolloutAccess(memoryRetrieval, workspaceId, runtime);
     if (rolloutGate.deniedResponse) {
       return rolloutGate.deniedResponse;
     }
@@ -851,8 +879,9 @@ async function handleMemorySearch(
   const workspaceId = resolveWorkspaceId(input.workspace_id, runtime);
   let readHandle: { db: Database.Database; close: () => void } | undefined;
   try {
+    const memoryRetrieval = await getMemoryRetrieval(runtime);
     readHandle = openReadDb(runtime);
-    const rolloutGate = enforceRolloutAccess(workspaceId, runtime);
+    const rolloutGate = enforceRolloutAccess(memoryRetrieval, workspaceId, runtime);
     if (rolloutGate.deniedResponse) {
       return rolloutGate.deniedResponse;
     }
@@ -1004,8 +1033,9 @@ async function handleMemoryRead(
   const workspaceId = resolveWorkspaceId(input.workspace_id, runtime);
   let readHandle: { db: Database.Database; close: () => void } | undefined;
   try {
+    const memoryRetrieval = await getMemoryRetrieval(runtime);
     readHandle = openReadDb(runtime);
-    const rolloutGate = enforceRolloutAccess(workspaceId, runtime);
+    const rolloutGate = enforceRolloutAccess(memoryRetrieval, workspaceId, runtime);
     if (rolloutGate.deniedResponse) {
       return rolloutGate.deniedResponse;
     }
@@ -1047,7 +1077,7 @@ async function handleMemoryRead(
     }
 
     const response: Record<string, unknown> = {
-      ...formatMemory(row),
+      ...formatMemory(memoryRetrieval, row),
       workspace_id: workspaceId,
       max_age_days_applied: normalizedMaxAgeDays,
       value_json: valueJson,
@@ -1079,9 +1109,10 @@ async function handleMemoryList(
   const workspaceId = resolveWorkspaceId(input.workspace_id, runtime);
   let readHandle: { db: Database.Database; close: () => void } | undefined;
   try {
+    const memoryRetrieval = await getMemoryRetrieval(runtime);
     readHandle = openReadDb(runtime);
     const roleHint = memoryRetrieval.normalizeRole(asOptionalString(input.role));
-    const rolloutGate = enforceRolloutAccess(workspaceId, runtime);
+    const rolloutGate = enforceRolloutAccess(memoryRetrieval, workspaceId, runtime);
     if (rolloutGate.deniedResponse) {
       return rolloutGate.deniedResponse;
     }

@@ -63,6 +63,35 @@ describe("memory read tools", () => {
     });
   });
 
+  it("returns a structured error when the shared retrieval module cannot be resolved", async () => {
+    const definition = findTool(
+      createMemoryReadToolDefinitions({
+        db,
+        defaultWorkspaceId: WORKSPACE_ID,
+        allowTelemetryPersistence: false,
+        memoryRetrievalLoader: async () => {
+          throw new Error("Unable to locate shared memory retrieval module.");
+        },
+      }),
+      "memory_read",
+    );
+    const schema = z.object(definition.schema);
+    const parsedInput = schema.parse({
+      id: "11111111-1111-4111-8111-111111111111",
+    });
+    const result = await definition.handler(parsedInput);
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      code: "MEMORY_TOOL_EXECUTION_FAILED",
+      tool: "memory_read",
+      workspace_id: WORKSPACE_ID,
+    });
+    expect(JSON.parse(result.content[0].text).detail).toContain(
+      "Unable to locate shared memory retrieval module.",
+    );
+  });
+
   async function invoke(
     toolName: string,
     input: Record<string, unknown>,
@@ -81,6 +110,7 @@ describe("memory read tools", () => {
       db,
       defaultWorkspaceId: WORKSPACE_ID,
       allowTelemetryPersistence: false,
+      memoryRetrieval: createMemoryRetrievalStub(),
       ...overrides,
     });
   }
@@ -131,4 +161,56 @@ function createSchema(db: Database.Database): void {
       chunk_text TEXT
     );
   `);
+}
+
+function createMemoryRetrievalStub(): NonNullable<MemoryReadToolOptions["memoryRetrieval"]> {
+  return {
+    DEFAULT_SEARCH_LIMIT: 10,
+    MAX_SEARCH_LIMIT: 100,
+    DEFAULT_LIST_LIMIT: 20,
+    MAX_LIST_LIMIT: 100,
+    normalizeRole: (value) => (typeof value === "string" ? value : null),
+    normalizeMaxAgeDays: (value) => (typeof value === "number" ? value : undefined),
+    resolveMemoryRolloutState: (workspaceId, env) => ({
+      internal_only: env.AIRYA_MEMORY_INTERNAL_ONLY === "1",
+      workspace_allowed: (env.AIRYA_MEMORY_INTERNAL_WORKSPACE_IDS ?? "")
+        .split(",")
+        .includes(workspaceId),
+    }),
+    computeMemoryScore: () => 0,
+    formatMemoryForMcp: () => ({}),
+    selectRankedItemsWithinTokenBudget: () => ({
+      results: [],
+      selectedItems: [],
+      truncated: false,
+      tokensUsedEstimate: 0,
+    }),
+    normalizeTemporalField: () => null,
+    buildActiveReadWhereClause: () => ({ clause: "1 = 1", params: [] }),
+    summarizeCitationCoverage: (rows) => ({
+      total: rows.length,
+      required_present: rows.length,
+      coverage_ratio: rows.length === 0 ? 1 : 1,
+    }),
+    buildRetrievalTelemetrySummary: () => ({}),
+    clampInteger: (value, defaultValue, min, max) =>
+      Math.min(Math.max(value ?? defaultValue, min), max),
+    normalizeSearchQuery: (value) => value.trim(),
+    buildMemorySearchHybridOptions: () => ({}),
+    retrieveMemorySearch: () => ({
+      rows: [],
+      items: [],
+      query: "",
+      limitApplied: 10,
+      searchMethod: "hybrid",
+    }),
+    retrieveMemoryList: () => ({ rows: [], items: [] }),
+    retrieveMemoryContext: () => ({
+      rows: [],
+      items: [],
+      tokenBudget: 4000,
+      totalAvailable: 0,
+      totalBeforeDedupe: 0,
+    }),
+  };
 }

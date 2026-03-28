@@ -27,4 +27,4 @@ The sync step copies only the bridge-owned runtime files. It does not overwrite 
 
 ## External dependency
 
-`memory-read-tools.ts` intentionally keeps the existing runtime contract: it resolves the shared memory retrieval module from the AiRYA checkout at `~/Projects/airya` unless `AIRYA_REPO_ROOT` overrides that path.
+`memory-read-tools.ts` intentionally keeps the existing runtime contract: memory tool calls resolve the shared memory retrieval module from the AiRYA checkout at `~/Projects/airya` unless `AIRYA_REPO_ROOT` overrides that path. The bridge package can now load and test without that sibling checkout, but live memory tool invocations still require the AiRYA source or dist module to be present.
