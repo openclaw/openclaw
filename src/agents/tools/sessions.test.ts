@@ -469,6 +469,51 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.resolve" });
   });
 
+  it("prefers sessionKey when sessionKey and label are both present", async () => {
+    const tool = createMainSessionsSendTool();
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.list") {
+        return { sessions: [{ key: "main", sessionId: "sess-main" }] };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-both", acceptedAt: 123 };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "done" }],
+              timestamp: 1,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-both-present", {
+      sessionKey: "main",
+      label: "should-be-ignored",
+      message: "hello",
+      timeoutSeconds: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      reply: "done",
+      sessionKey: "main",
+    });
+    expect(callGatewayMock.mock.calls.some((call) => call[0]?.method === "sessions.resolve")).toBe(
+      false,
+    );
+  });
+
   it("blocks cross-agent sends when tools.agentToAgent.enabled is false", async () => {
     const tool = createMainSessionsSendTool();
 
