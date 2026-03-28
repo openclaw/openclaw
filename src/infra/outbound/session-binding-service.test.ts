@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  pinActivePluginChannelRegistry,
+  releasePinnedPluginChannelRegistry,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import {
   __testing,
   getSessionBindingService,
@@ -356,6 +362,50 @@ describe("session binding service", () => {
         conversationId: "19:chatid@thread.v2",
       },
     });
+  });
+
+  it("does not advertise generic plugin bindings from a stale global registry when the active channel registry is empty", async () => {
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.channels.push({
+      plugin: {
+        id: "external-chat",
+        meta: { aliases: ["external-chat-alias"] },
+      } as never,
+    } as never);
+    setActivePluginRegistry(activeRegistry);
+    const pinnedEmptyChannelRegistry = createEmptyPluginRegistry();
+    pinActivePluginChannelRegistry(pinnedEmptyChannelRegistry);
+
+    try {
+      const service = getSessionBindingService();
+      expect(
+        service.getCapabilities({
+          channel: "external-chat-alias",
+          accountId: "default",
+        }),
+      ).toEqual({
+        adapterAvailable: false,
+        bindSupported: false,
+        unbindSupported: false,
+        placements: [],
+      });
+
+      await expect(
+        service.bind({
+          targetSessionKey: "agent:codex:acp:external-chat",
+          targetKind: "session",
+          conversation: {
+            channel: "external-chat-alias",
+            accountId: "default",
+            conversationId: "room-1",
+          },
+        }),
+      ).rejects.toMatchObject({
+        code: "BINDING_ADAPTER_UNAVAILABLE",
+      });
+    } finally {
+      releasePinnedPluginChannelRegistry(pinnedEmptyChannelRegistry);
+    }
   });
 
   it("keeps the first live adapter authoritative until it unregisters", () => {
