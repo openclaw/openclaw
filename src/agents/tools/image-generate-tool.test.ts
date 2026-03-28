@@ -180,6 +180,44 @@ describe("createImageGenerateTool", () => {
     expect(createImageGenerateTool({ config: {} })).toBeNull();
   });
 
+  it("matches image-generation providers across canonical provider aliases", () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "z.ai",
+        aliases: ["z-ai"],
+        defaultModel: "glm-4.5-image",
+        models: ["glm-4.5-image"],
+        capabilities: {
+          generate: {
+            maxCount: 4,
+          },
+          edit: {
+            enabled: false,
+            maxInputImages: 0,
+          },
+          geometry: {},
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+
+    expect(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "z-ai/glm-4.5-image",
+              },
+            },
+          },
+        },
+      }),
+    ).not.toBeNull();
+  });
+
   it("infers an OpenAI image-generation model from env-backed auth", () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
