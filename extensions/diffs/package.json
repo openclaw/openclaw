@@ -13,6 +13,9 @@
     "playwright-core": "1.58.2"
   },
   "openclaw": {
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
     "extensions": [
       "./index.ts"
     ]
