@@ -112,6 +112,7 @@ export function createNativeCommandTestParams(
       byProvider: new Map<string, Set<string>>(),
       providers: [],
       resolvedDefault: { provider: "openai", model: "gpt-4.1" },
+      modelNames: new Map<string, string>(),
     })) as TelegramBotDeps["buildModelsProviderData"],
     listSkillCommandsForAgents,
     wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],

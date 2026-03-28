@@ -21,5 +21,6 @@ export function createModelsProviderData(
       provider: defaultProvider,
       model: entries[defaultProvider]?.[0] ?? "gpt-4o",
     },
+    modelNames: new Map<string, string>(),
   };
 }
