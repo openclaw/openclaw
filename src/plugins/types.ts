@@ -1599,6 +1599,10 @@ export type OpenClawPluginApi = {
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
   ) => void;
+  /** Register a compaction provider (pluggable summarization backend). */
+  registerCompactionProvider: (
+    provider: import("./compaction-provider.js").CompactionProvider,
+  ) => void;
   /** Register the system prompt section builder for this memory plugin (exclusive slot). */
   registerMemoryPromptSection: (
     builder: import("./memory-state.js").MemoryPromptSectionBuilder,

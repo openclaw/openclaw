@@ -54,6 +54,26 @@ This also works with local models, for example a second Ollama model dedicated t
 
 When unset, compaction uses the agent's primary model.
 
+## Pluggable compaction providers
+
+Plugins can register a custom compaction provider via `registerCompactionProvider()` on the plugin API. When a provider is registered and configured, OpenClaw delegates summarization to it instead of the built-in LLM pipeline.
+
+To use a registered provider, set the provider id in your config:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "provider": "my-provider"
+      }
+    }
+  }
+}
+```
+
+Setting a `provider` automatically forces `mode: "safeguard"`. If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization.
+
 ## Auto-compaction (default on)
 
 When a session nears or exceeds the model’s context window, OpenClaw triggers auto-compaction and may retry the original request using the compacted context.
