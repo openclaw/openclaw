@@ -23,8 +23,8 @@ import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
-import { hasBundledWebSearchCredential } from "../plugins/bundled-web-search-registry.js";
 import { resolveBrowserConfig } from "../plugin-sdk/browser-runtime.js";
+import { hasBundledWebSearchCredential } from "../plugins/bundled-web-search-registry.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
 
@@ -1318,8 +1318,7 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
         `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
         `Risky tool exposure contexts:\n${riskyContexts.map((line) => `- ${line}`).join("\n")}\n` +
         "Prompt injection in open groups can trigger command/file actions in these contexts.",
-      remediation:
-        'For open groups, prefer tools.profile="messaging" (or deny group:runtime/group:fs), set tools.fs.workspaceOnly=true, and use agents.defaults.sandbox.mode="all" for exposed agents.',
+      remediation: `For open groups, prefer tools.profile="messaging" (or deny group:runtime/group:fs), run ${formatCliCommand("openclaw config set tools.fs.workspaceOnly true")} to enable workspace-only filesystem tools globally, and use agents.defaults.sandbox.mode="all" for exposed agents.`,
     });
   }
 
