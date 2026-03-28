@@ -243,7 +243,7 @@ describe("sessions", () => {
 
     const store = loadSessionStore(storePath);
     expect(store[mainSessionKey]?.sessionId).toBe("sess-1");
-    expect(store[mainSessionKey]?.updatedAt).toBeGreaterThanOrEqual(123);
+    expect(store[mainSessionKey]?.updatedAt).toBe(123);
     expect(store[mainSessionKey]?.lastChannel).toBe("telegram");
     expect(store[mainSessionKey]?.lastTo).toBe("12345");
     expect(store[mainSessionKey]?.deliveryContext).toEqual({
@@ -279,6 +279,7 @@ describe("sessions", () => {
     });
 
     const store = loadSessionStore(storePath);
+    expect(store[mainSessionKey]?.updatedAt).toBeGreaterThan(0);
     expect(store[mainSessionKey]?.lastChannel).toBe("telegram");
     expect(store[mainSessionKey]?.lastTo).toBe("222");
     expect(store[mainSessionKey]?.lastAccountId).toBe("primary");
