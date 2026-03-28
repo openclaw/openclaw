@@ -249,7 +249,7 @@ describe("tool-loop-detection", () => {
   });
 
   describe("detectToolCallLoop", () => {
-    it("is disabled by default", () => {
+    it("is enabled by default", () => {
       const state = createState();
 
       for (let i = 0; i < 20; i += 1) {
@@ -257,6 +257,23 @@ describe("tool-loop-detection", () => {
       }
 
       const loopResult = detectToolCallLoop(state, "read", { path: "/same.txt" });
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("generic_repeat");
+      }
+    });
+
+    it("can be explicitly disabled via config", () => {
+      const state = createState();
+
+      for (let i = 0; i < 20; i += 1) {
+        recordToolCall(state, "read", { path: "/same.txt" }, `disabled-${i}`);
+      }
+
+      const loopResult = detectToolCallLoop(state, "read", { path: "/same.txt" }, {
+        enabled: false,
+      });
       expect(loopResult.stuck).toBe(false);
     });
 
@@ -542,6 +559,174 @@ describe("tool-loop-detection", () => {
 
       const result = detectToolCallLoop(state, "tool", { arg: 1 }, enabledLoopDetectionConfig);
       expect(result.stuck).toBe(false);
+    });
+  });
+
+    describe("session-0328 clawhub search infinite loop reproduction", () => {
+    /**
+     * Reproduces the exact bug from session 77e66a25 (2026-03-28).
+     *
+     * User asked: "npx skills add cobosteven/cobo-agent-wallet-manual"
+     * Agent (Gemini Flash) was redirected by the clawhub SKILL.md and ran
+     *   `clawhub search "cobosteven" --no-input`
+     * 100 times in a row (09:59 → 10:08, ~9 minutes).
+     *
+     * Root cause: DEFAULT_LOOP_DETECTION_CONFIG.enabled = false.
+     * The framework never intervened.
+     */
+
+    // Exact tool name and args from the session
+    const CLAWHUB_SEARCH_TOOL = "exec";
+    const CLAWHUB_SEARCH_PARAMS = {
+      command: 'npx -y clawhub search "cobosteven" --no-input',
+    };
+    // clawhub search returned the same empty result every time
+    const CLAWHUB_SEARCH_RESULT = {
+      content: [{ type: "text", text: "- Searching" }],
+      details: { ok: true },
+    };
+
+    it("FIXED: default config (enabled=true) now detects 100 identical calls", () => {
+      const state = createState();
+
+      // Replay all 100 calls from the session
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: CLAWHUB_SEARCH_TOOL,
+        toolParams: CLAWHUB_SEARCH_PARAMS,
+        result: CLAWHUB_SEARCH_RESULT,
+        count: 100,
+      });
+
+      // With default config (now enabled=true), loop IS detected
+      const loopResult = detectToolCallLoop(
+        state,
+        CLAWHUB_SEARCH_TOOL,
+        CLAWHUB_SEARCH_PARAMS,
+        // no config → uses DEFAULT_LOOP_DETECTION_CONFIG with enabled: true (fixed)
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+      }
+    });
+
+    it("REGRESSION: explicitly disabled config still allows the loop (old behavior)", () => {
+      const state = createState();
+
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: CLAWHUB_SEARCH_TOOL,
+        toolParams: CLAWHUB_SEARCH_PARAMS,
+        result: CLAWHUB_SEARCH_RESULT,
+        count: 100,
+      });
+
+      // Users can still opt out if they want
+      const loopResult = detectToolCallLoop(
+        state,
+        CLAWHUB_SEARCH_TOOL,
+        CLAWHUB_SEARCH_PARAMS,
+        { enabled: false },
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("FIX: with enabled=true, generic_repeat warns at call #10", () => {
+      const state = createState();
+
+      // Replay the first 10 calls
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: CLAWHUB_SEARCH_TOOL,
+        toolParams: CLAWHUB_SEARCH_PARAMS,
+        result: CLAWHUB_SEARCH_RESULT,
+        count: WARNING_THRESHOLD,
+      });
+
+      const loopResult = detectToolCallLoop(
+        state,
+        CLAWHUB_SEARCH_TOOL,
+        CLAWHUB_SEARCH_PARAMS,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("generic_repeat");
+        expect(loopResult.count).toBe(WARNING_THRESHOLD);
+        expect(loopResult.message).toContain(`${WARNING_THRESHOLD} times`);
+      }
+    });
+
+    it("FIX: with enabled=true, global circuit breaker blocks at call #30", () => {
+      const state = createState();
+
+      // Replay 30 calls (global circuit breaker threshold)
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: CLAWHUB_SEARCH_TOOL,
+        toolParams: CLAWHUB_SEARCH_PARAMS,
+        result: CLAWHUB_SEARCH_RESULT,
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
+
+      const loopResult = detectToolCallLoop(
+        state,
+        CLAWHUB_SEARCH_TOOL,
+        CLAWHUB_SEARCH_PARAMS,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+        expect(loopResult.message).toContain("global circuit breaker");
+        expect(loopResult.message).toContain(
+          `${GLOBAL_CIRCUIT_BREAKER_THRESHOLD} times`,
+        );
+      }
+    });
+
+    it("FIX: the initial exploration phase (varying search terms) does NOT trigger false alarm", () => {
+      const state = createState();
+
+      // First 6 calls from session used DIFFERENT commands — should not trigger
+      const explorationCommands = [
+        'npx -y clawhub add cobosteven/cobo-agent-wallet-manual --skill cobo-agentic-wallet-sandbox --yes --global',
+        'npx -y clawhub install cobosteven/cobo-agent-wallet-manual --yes --global',
+        'npx -y clawhub install cobosteven/cobo-agent-wallet-manual',
+        'npx -y clawhub search "cobo agent wallet"',
+        'npx -y clawhub search "cobosteven"',
+        'npx -y clawhub search "wallet" --no-input',
+        'npx -y clawhub search "cobo-agent-wallet-manual" --no-input',
+        'npx -y clawhub search "agent wallet"',
+      ];
+
+      for (let i = 0; i < explorationCommands.length; i += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          { command: explorationCommands[i] },
+          CLAWHUB_SEARCH_RESULT,
+          i,
+        );
+      }
+
+      // Each command is unique, so no loop detected — correct behavior
+      const loopResult = detectToolCallLoop(
+        state,
+        "exec",
+        { command: 'npx -y clawhub search "caw"' },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
     });
   });
 

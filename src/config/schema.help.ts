@@ -538,7 +538,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.2" or "openai/gpt-5.2").',
   "tools.loopDetection.enabled":
-    "Enable repetitive tool-call loop detection and backoff safety checks (default: false).",
+    "Enable repetitive tool-call loop detection and backoff safety checks (default: true).",
   "tools.loopDetection.historySize": "Tool history window size for loop detection (default: 30).",
   "tools.loopDetection.warningThreshold":
     "Warning threshold for repetitive patterns when detector is enabled (default: 10).",
