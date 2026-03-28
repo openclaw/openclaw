@@ -1,30 +1,121 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { buildAnthropicCliBackend } from "../../extensions/anthropic/cli-backend.js";
-import { buildGoogleGeminiCliBackend } from "../../extensions/google/cli-backend.js";
-import { buildOpenAICodexCliBackend } from "../../extensions/openai/cli-backend.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { CliBackendConfig } from "../config/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 
+function createBackendEntry(params: {
+  pluginId: string;
+  id: string;
+  config: CliBackendConfig;
+  bundleMcp?: boolean;
+  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
+}) {
+  return {
+    pluginId: params.pluginId,
+    source: "test",
+    backend: {
+      id: params.id,
+      config: params.config,
+      ...(params.bundleMcp ? { bundleMcp: params.bundleMcp } : {}),
+      ...(params.normalizeConfig ? { normalizeConfig: params.normalizeConfig } : {}),
+    },
+  };
+}
+
 beforeEach(() => {
   const registry = createEmptyPluginRegistry();
   registry.cliBackends = [
-    {
+    createBackendEntry({
       pluginId: "anthropic",
-      backend: buildAnthropicCliBackend(),
-      source: "test",
-    },
-    {
+      id: "claude-cli",
+      config: {
+        command: "claude",
+        args: ["stream-json", "--verbose", "--permission-mode", "bypassPermissions"],
+        resumeArgs: [
+          "stream-json",
+          "--verbose",
+          "--permission-mode",
+          "bypassPermissions",
+          "--resume",
+          "{sessionId}",
+        ],
+        output: "jsonl",
+      },
+      normalizeConfig: (config) => {
+        const normalizeArgs = (args: string[] | undefined) => {
+          if (!args) {
+            return args;
+          }
+          const next = args.filter((arg) => arg !== "--dangerously-skip-permissions");
+          const hasPermissionMode = next.some(
+            (arg, index) =>
+              arg === "--permission-mode" || next[index - 1]?.startsWith("--permission-mode="),
+          );
+          return hasPermissionMode ? next : [...next, "--permission-mode", "bypassPermissions"];
+        };
+        return {
+          ...config,
+          args: normalizeArgs(config.args),
+          resumeArgs: normalizeArgs(config.resumeArgs),
+        };
+      },
+    }),
+    createBackendEntry({
       pluginId: "openai",
-      backend: buildOpenAICodexCliBackend(),
-      source: "test",
-    },
-    {
+      id: "codex-cli",
+      config: {
+        command: "codex",
+        args: [
+          "exec",
+          "--json",
+          "--color",
+          "never",
+          "--sandbox",
+          "workspace-write",
+          "--skip-git-repo-check",
+        ],
+        resumeArgs: [
+          "exec",
+          "resume",
+          "{sessionId}",
+          "--color",
+          "never",
+          "--sandbox",
+          "workspace-write",
+          "--skip-git-repo-check",
+        ],
+        reliability: {
+          watchdog: {
+            fresh: {
+              noOutputTimeoutRatio: 0.8,
+              minMs: 60_000,
+              maxMs: 180_000,
+            },
+            resume: {
+              noOutputTimeoutRatio: 0.3,
+              minMs: 60_000,
+              maxMs: 180_000,
+            },
+          },
+        },
+      },
+    }),
+    createBackendEntry({
       pluginId: "google",
-      backend: buildGoogleGeminiCliBackend(),
-      source: "test",
-    },
+      id: "google-gemini-cli",
+      bundleMcp: false,
+      config: {
+        command: "gemini",
+        args: ["--prompt", "--output-format", "json"],
+        resumeArgs: ["--resume", "{sessionId}", "--prompt", "--output-format", "json"],
+        modelArg: "--model",
+        sessionMode: "existing",
+        sessionIdFields: ["session_id", "sessionId"],
+        modelAliases: { pro: "gemini-3.1-pro-preview" },
+      },
+    }),
   ];
   setActivePluginRegistry(registry);
 });
@@ -92,9 +183,14 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     const resolved = resolveCliBackendConfig("claude-cli");
 
     expect(resolved).not.toBeNull();
+    expect(resolved?.config.output).toBe("jsonl");
+    expect(resolved?.config.args).toContain("stream-json");
+    expect(resolved?.config.args).toContain("--verbose");
     expect(resolved?.config.args).toContain("--permission-mode");
     expect(resolved?.config.args).toContain("bypassPermissions");
     expect(resolved?.config.args).not.toContain("--dangerously-skip-permissions");
+    expect(resolved?.config.resumeArgs).toContain("stream-json");
+    expect(resolved?.config.resumeArgs).toContain("--verbose");
     expect(resolved?.config.resumeArgs).toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).not.toContain("--dangerously-skip-permissions");
@@ -212,5 +308,45 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
     expect(resolved?.config.sessionMode).toBe("existing");
     expect(resolved?.config.sessionIdFields).toEqual(["session_id", "sessionId"]);
     expect(resolved?.config.modelAliases?.pro).toBe("gemini-3.1-pro-preview");
+  });
+});
+
+describe("resolveCliBackendConfig alias precedence", () => {
+  it("prefers the canonical backend key over legacy aliases when both are configured", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.cliBackends = [
+      createBackendEntry({
+        pluginId: "moonshot",
+        id: "kimi",
+        config: {
+          command: "kimi",
+          args: ["--default"],
+        },
+      }),
+    ];
+    setActivePluginRegistry(registry);
+
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "kimi-coding": {
+              command: "kimi-legacy",
+              args: ["--legacy"],
+            },
+            kimi: {
+              command: "kimi-canonical",
+              args: ["--canonical"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveCliBackendConfig("kimi", cfg);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.command).toBe("kimi-canonical");
+    expect(resolved?.config.args).toEqual(["--canonical"]);
   });
 });

@@ -27,6 +27,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`agent`](/cli/agent)
 - [`agents`](/cli/agents)
 - [`acp`](/cli/acp)
+- [`mcp`](/cli/mcp)
 - [`status`](/cli/status)
 - [`health`](/cli/health)
 - [`sessions`](/cli/sessions)
@@ -155,6 +156,7 @@ openclaw [--dev] [--profile <name>] <command>
     add
     delete
   acp
+  mcp
   status
   health
   sessions
@@ -871,6 +873,13 @@ openclaw models status
 Policy note: this is technical compatibility. Anthropic has blocked some
 subscription usage outside Claude Code in the past; verify current Anthropic
 terms before relying on setup-token in production.
+
+Anthropic Claude CLI migration:
+
+```bash
+openclaw models auth login --provider anthropic --method cli --set-default
+openclaw onboard --auth-choice anthropic-cli
+```
 
 ### `models` (root)
 

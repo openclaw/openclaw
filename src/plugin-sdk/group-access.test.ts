@@ -8,256 +8,306 @@ import {
 } from "./group-access.js";
 
 describe("resolveSenderScopedGroupPolicy", () => {
-  it("preserves disabled policy", () => {
-    expect(
-      resolveSenderScopedGroupPolicy({
+  const cases: Array<{
+    name: string;
+    input: Parameters<typeof resolveSenderScopedGroupPolicy>[0];
+    expected: ReturnType<typeof resolveSenderScopedGroupPolicy>;
+  }> = [
+    {
+      name: "preserves disabled policy",
+      input: {
         groupPolicy: "disabled",
         groupAllowFrom: ["a"],
-      }),
-    ).toBe("disabled");
-  });
-
-  it("maps open/allowlist based on effective sender allowlist", () => {
-    expect(
-      resolveSenderScopedGroupPolicy({
+      },
+      expected: "disabled",
+    },
+    {
+      name: "keeps allowlist policy when sender allowlist is present",
+      input: {
         groupPolicy: "allowlist",
         groupAllowFrom: ["a"],
-      }),
-    ).toBe("allowlist");
-    expect(
-      resolveSenderScopedGroupPolicy({
+      },
+      expected: "allowlist",
+    },
+    {
+      name: "maps allowlist to open when sender allowlist is empty",
+      input: {
         groupPolicy: "allowlist",
         groupAllowFrom: [],
-      }),
-    ).toBe("open");
+      },
+      expected: "open",
+    },
+  ];
+
+  it.each(cases)("$name", ({ input, expected }) => {
+    expect(resolveSenderScopedGroupPolicy(input)).toBe(expected);
   });
 });
 
 describe("evaluateSenderGroupAccessForPolicy", () => {
-  it("blocks disabled policy", () => {
-    const decision = evaluateSenderGroupAccessForPolicy({
-      groupPolicy: "disabled",
-      groupAllowFrom: ["123"],
-      senderId: "123",
-      isSenderAllowed: () => true,
-    });
+  const cases: Array<{
+    name: string;
+    input: Parameters<typeof evaluateSenderGroupAccessForPolicy>[0];
+    expected: Partial<ReturnType<typeof evaluateSenderGroupAccessForPolicy>>;
+  }> = [
+    {
+      name: "blocks disabled policy",
+      input: {
+        groupPolicy: "disabled",
+        groupAllowFrom: ["123"],
+        senderId: "123",
+        isSenderAllowed: () => true,
+      },
+      expected: { allowed: false, reason: "disabled", groupPolicy: "disabled" },
+    },
+    {
+      name: "blocks allowlist with empty list",
+      input: {
+        groupPolicy: "allowlist",
+        groupAllowFrom: [],
+        senderId: "123",
+        isSenderAllowed: () => true,
+      },
+      expected: {
+        allowed: false,
+        reason: "empty_allowlist",
+        groupPolicy: "allowlist",
+      },
+    },
+  ];
 
-    expect(decision).toMatchObject({ allowed: false, reason: "disabled", groupPolicy: "disabled" });
-  });
-
-  it("blocks allowlist with empty list", () => {
-    const decision = evaluateSenderGroupAccessForPolicy({
-      groupPolicy: "allowlist",
-      groupAllowFrom: [],
-      senderId: "123",
-      isSenderAllowed: () => true,
-    });
-
-    expect(decision).toMatchObject({
-      allowed: false,
-      reason: "empty_allowlist",
-      groupPolicy: "allowlist",
-    });
+  it.each(cases)("$name", ({ input, expected }) => {
+    expect(evaluateSenderGroupAccessForPolicy(input)).toMatchObject(expected);
   });
 });
 
 describe("evaluateGroupRouteAccessForPolicy", () => {
-  it("blocks disabled policy", () => {
-    expect(
-      evaluateGroupRouteAccessForPolicy({
+  const cases: Array<{
+    name: string;
+    input: Parameters<typeof evaluateGroupRouteAccessForPolicy>[0];
+    expected: ReturnType<typeof evaluateGroupRouteAccessForPolicy>;
+  }> = [
+    {
+      name: "blocks disabled policy",
+      input: {
         groupPolicy: "disabled",
         routeAllowlistConfigured: true,
         routeMatched: true,
         routeEnabled: true,
-      }),
-    ).toEqual({
-      allowed: false,
-      groupPolicy: "disabled",
-      reason: "disabled",
-    });
-  });
-
-  it("blocks allowlist without configured routes", () => {
-    expect(
-      evaluateGroupRouteAccessForPolicy({
+      },
+      expected: {
+        allowed: false,
+        groupPolicy: "disabled",
+        reason: "disabled",
+      },
+    },
+    {
+      name: "blocks allowlist without configured routes",
+      input: {
         groupPolicy: "allowlist",
         routeAllowlistConfigured: false,
         routeMatched: false,
-      }),
-    ).toEqual({
-      allowed: false,
-      groupPolicy: "allowlist",
-      reason: "empty_allowlist",
-    });
-  });
-
-  it("blocks unmatched allowlist route", () => {
-    expect(
-      evaluateGroupRouteAccessForPolicy({
+      },
+      expected: {
+        allowed: false,
+        groupPolicy: "allowlist",
+        reason: "empty_allowlist",
+      },
+    },
+    {
+      name: "blocks unmatched allowlist route",
+      input: {
         groupPolicy: "allowlist",
         routeAllowlistConfigured: true,
         routeMatched: false,
-      }),
-    ).toEqual({
-      allowed: false,
-      groupPolicy: "allowlist",
-      reason: "route_not_allowlisted",
-    });
-  });
-
-  it("blocks disabled matched route even when group policy is open", () => {
-    expect(
-      evaluateGroupRouteAccessForPolicy({
+      },
+      expected: {
+        allowed: false,
+        groupPolicy: "allowlist",
+        reason: "route_not_allowlisted",
+      },
+    },
+    {
+      name: "blocks disabled matched route even when group policy is open",
+      input: {
         groupPolicy: "open",
         routeAllowlistConfigured: true,
         routeMatched: true,
         routeEnabled: false,
-      }),
-    ).toEqual({
-      allowed: false,
-      groupPolicy: "open",
-      reason: "route_disabled",
-    });
+      },
+      expected: {
+        allowed: false,
+        groupPolicy: "open",
+        reason: "route_disabled",
+      },
+    },
+  ];
+
+  it.each(cases)("$name", ({ input, expected }) => {
+    expect(evaluateGroupRouteAccessForPolicy(input)).toEqual(expected);
   });
 });
 
 describe("evaluateMatchedGroupAccessForPolicy", () => {
-  it("blocks disabled policy", () => {
-    expect(
-      evaluateMatchedGroupAccessForPolicy({
+  const cases: Array<{
+    name: string;
+    input: Parameters<typeof evaluateMatchedGroupAccessForPolicy>[0];
+    expected: ReturnType<typeof evaluateMatchedGroupAccessForPolicy>;
+  }> = [
+    {
+      name: "blocks disabled policy",
+      input: {
         groupPolicy: "disabled",
         allowlistConfigured: true,
         allowlistMatched: true,
-      }),
-    ).toEqual({
-      allowed: false,
-      groupPolicy: "disabled",
-      reason: "disabled",
-    });
-  });
-
-  it("blocks allowlist without configured entries", () => {
-    expect(
-      evaluateMatchedGroupAccessForPolicy({
+      },
+      expected: {
+        allowed: false,
+        groupPolicy: "disabled",
+        reason: "disabled",
+      },
+    },
+    {
+      name: "blocks allowlist without configured entries",
+      input: {
         groupPolicy: "allowlist",
         allowlistConfigured: false,
         allowlistMatched: false,
-      }),
-    ).toEqual({
-      allowed: false,
-      groupPolicy: "allowlist",
-      reason: "empty_allowlist",
-    });
-  });
-
-  it("blocks allowlist when required match input is missing", () => {
-    expect(
-      evaluateMatchedGroupAccessForPolicy({
+      },
+      expected: {
+        allowed: false,
+        groupPolicy: "allowlist",
+        reason: "empty_allowlist",
+      },
+    },
+    {
+      name: "blocks allowlist when required match input is missing",
+      input: {
         groupPolicy: "allowlist",
         requireMatchInput: true,
         hasMatchInput: false,
         allowlistConfigured: true,
         allowlistMatched: false,
-      }),
-    ).toEqual({
-      allowed: false,
-      groupPolicy: "allowlist",
-      reason: "missing_match_input",
-    });
-  });
-
-  it("blocks unmatched allowlist sender", () => {
-    expect(
-      evaluateMatchedGroupAccessForPolicy({
+      },
+      expected: {
+        allowed: false,
+        groupPolicy: "allowlist",
+        reason: "missing_match_input",
+      },
+    },
+    {
+      name: "blocks unmatched allowlist sender",
+      input: {
         groupPolicy: "allowlist",
         allowlistConfigured: true,
         allowlistMatched: false,
-      }),
-    ).toEqual({
-      allowed: false,
-      groupPolicy: "allowlist",
-      reason: "not_allowlisted",
-    });
-  });
-
-  it("allows open policy", () => {
-    expect(
-      evaluateMatchedGroupAccessForPolicy({
+      },
+      expected: {
+        allowed: false,
+        groupPolicy: "allowlist",
+        reason: "not_allowlisted",
+      },
+    },
+    {
+      name: "allows open policy",
+      input: {
         groupPolicy: "open",
         allowlistConfigured: false,
         allowlistMatched: false,
-      }),
-    ).toEqual({
-      allowed: true,
-      groupPolicy: "open",
-      reason: "allowed",
-    });
+      },
+      expected: {
+        allowed: true,
+        groupPolicy: "open",
+        reason: "allowed",
+      },
+    },
+  ];
+
+  it.each(cases)("$name", ({ input, expected }) => {
+    expect(evaluateMatchedGroupAccessForPolicy(input)).toEqual(expected);
   });
 });
 
 describe("evaluateSenderGroupAccess", () => {
-  it("defaults missing provider config to allowlist", () => {
-    const decision = evaluateSenderGroupAccess({
-      providerConfigPresent: false,
-      configuredGroupPolicy: undefined,
-      defaultGroupPolicy: "open",
-      groupAllowFrom: ["123"],
-      senderId: "123",
-      isSenderAllowed: () => true,
-    });
+  const cases: Array<{
+    name: string;
+    input: Parameters<typeof evaluateSenderGroupAccess>[0];
+    expected: Partial<ReturnType<typeof evaluateSenderGroupAccess>>;
+    matcher: "equal" | "match";
+  }> = [
+    {
+      name: "defaults missing provider config to allowlist",
+      input: {
+        providerConfigPresent: false,
+        configuredGroupPolicy: undefined,
+        defaultGroupPolicy: "open",
+        groupAllowFrom: ["123"],
+        senderId: "123",
+        isSenderAllowed: () => true,
+      },
+      expected: {
+        allowed: true,
+        groupPolicy: "allowlist",
+        providerMissingFallbackApplied: true,
+        reason: "allowed",
+      },
+      matcher: "equal",
+    },
+    {
+      name: "blocks disabled policy",
+      input: {
+        providerConfigPresent: true,
+        configuredGroupPolicy: "disabled",
+        defaultGroupPolicy: "open",
+        groupAllowFrom: ["123"],
+        senderId: "123",
+        isSenderAllowed: () => true,
+      },
+      expected: { allowed: false, reason: "disabled", groupPolicy: "disabled" },
+      matcher: "match",
+    },
+    {
+      name: "blocks allowlist with empty list",
+      input: {
+        providerConfigPresent: true,
+        configuredGroupPolicy: "allowlist",
+        defaultGroupPolicy: "open",
+        groupAllowFrom: [],
+        senderId: "123",
+        isSenderAllowed: () => true,
+      },
+      expected: {
+        allowed: false,
+        reason: "empty_allowlist",
+        groupPolicy: "allowlist",
+      },
+      matcher: "match",
+    },
+    {
+      name: "blocks sender not allowlisted",
+      input: {
+        providerConfigPresent: true,
+        configuredGroupPolicy: "allowlist",
+        defaultGroupPolicy: "open",
+        groupAllowFrom: ["123"],
+        senderId: "999",
+        isSenderAllowed: () => false,
+      },
+      expected: {
+        allowed: false,
+        reason: "sender_not_allowlisted",
+        groupPolicy: "allowlist",
+      },
+      matcher: "match",
+    },
+  ];
 
-    expect(decision).toEqual({
-      allowed: true,
-      groupPolicy: "allowlist",
-      providerMissingFallbackApplied: true,
-      reason: "allowed",
-    });
-  });
-
-  it("blocks disabled policy", () => {
-    const decision = evaluateSenderGroupAccess({
-      providerConfigPresent: true,
-      configuredGroupPolicy: "disabled",
-      defaultGroupPolicy: "open",
-      groupAllowFrom: ["123"],
-      senderId: "123",
-      isSenderAllowed: () => true,
-    });
-
-    expect(decision).toMatchObject({ allowed: false, reason: "disabled", groupPolicy: "disabled" });
-  });
-
-  it("blocks allowlist with empty list", () => {
-    const decision = evaluateSenderGroupAccess({
-      providerConfigPresent: true,
-      configuredGroupPolicy: "allowlist",
-      defaultGroupPolicy: "open",
-      groupAllowFrom: [],
-      senderId: "123",
-      isSenderAllowed: () => true,
-    });
-
-    expect(decision).toMatchObject({
-      allowed: false,
-      reason: "empty_allowlist",
-      groupPolicy: "allowlist",
-    });
-  });
-
-  it("blocks sender not allowlisted", () => {
-    const decision = evaluateSenderGroupAccess({
-      providerConfigPresent: true,
-      configuredGroupPolicy: "allowlist",
-      defaultGroupPolicy: "open",
-      groupAllowFrom: ["123"],
-      senderId: "999",
-      isSenderAllowed: () => false,
-    });
-
-    expect(decision).toMatchObject({
-      allowed: false,
-      reason: "sender_not_allowlisted",
-      groupPolicy: "allowlist",
-    });
+  it.each(cases)("$name", ({ input, expected, matcher }) => {
+    const decision = evaluateSenderGroupAccess(input);
+    if (matcher === "equal") {
+      expect(decision).toEqual(expected);
+      return;
+    }
+    expect(decision).toMatchObject(expected);
   });
 });

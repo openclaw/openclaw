@@ -553,20 +553,28 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     expect(emitUnhandledRejection(await makeTaggedPollingFetchError())).toBe(true);
     expect(firstCycle.stop).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(2));
+    // Unhandled polling rejections restart via TelegramPollingSession backoff,
+    // so the second runner cycle is not immediate.
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(2), { timeout: 4_000 });
     abort.abort();
     await monitor;
     expectRecoverableRetryState(2);
   });
 
-  it("reuses the resolved transport across polling restarts", async () => {
+  it("rebuilds the resolved transport after a stalled polling restart", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const telegramTransport = {
         fetch: globalThis.fetch,
         sourceFetch: globalThis.fetch,
       };
-      resolveTelegramTransportSpy.mockReturnValueOnce(telegramTransport);
+      const rebuiltTransport = {
+        fetch: globalThis.fetch,
+        sourceFetch: globalThis.fetch,
+      };
+      resolveTelegramTransportSpy
+        .mockReturnValueOnce(telegramTransport)
+        .mockReturnValueOnce(rebuiltTransport);
 
       const abort = new AbortController();
       mockRunOnceWithStalledPollingRunner();
@@ -578,13 +586,42 @@ describe("monitorTelegramProvider (grammY)", () => {
       vi.advanceTimersByTime(120_000);
       await monitor;
 
-      expect(resolveTelegramTransportSpy).toHaveBeenCalledTimes(1);
+      expect(resolveTelegramTransportSpy).toHaveBeenCalledTimes(2);
       expect(createTelegramBotCalls).toHaveLength(2);
       expect(createTelegramBotCalls[0]?.telegramTransport).toBe(telegramTransport);
-      expect(createTelegramBotCalls[1]?.telegramTransport).toBe(telegramTransport);
+      expect(createTelegramBotCalls[1]?.telegramTransport).toBe(rebuiltTransport);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("rebuilds the resolved transport after an unhandled polling network rejection", async () => {
+    const abort = new AbortController();
+    const firstCycle = mockRunOnceWithStalledPollingRunner();
+    const telegramTransport = {
+      fetch: globalThis.fetch,
+      sourceFetch: globalThis.fetch,
+    };
+    const rebuiltTransport = {
+      fetch: globalThis.fetch,
+      sourceFetch: globalThis.fetch,
+    };
+    resolveTelegramTransportSpy
+      .mockReturnValueOnce(telegramTransport)
+      .mockReturnValueOnce(rebuiltTransport);
+    mockRunOnceAndAbort(abort);
+
+    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+
+    expect(emitUnhandledRejection(await makeTaggedPollingFetchError())).toBe(true);
+    expect(firstCycle.stop).toHaveBeenCalledTimes(1);
+    await monitor;
+
+    expect(resolveTelegramTransportSpy).toHaveBeenCalledTimes(2);
+    expect(createTelegramBotCalls).toHaveLength(2);
+    expect(createTelegramBotCalls[0]?.telegramTransport).toBe(telegramTransport);
+    expect(createTelegramBotCalls[1]?.telegramTransport).toBe(rebuiltTransport);
   });
 
   it("aborts the active Telegram fetch when unhandled network rejection forces restart", async () => {
@@ -717,6 +754,11 @@ describe("monitorTelegramProvider (grammY)", () => {
     const abort = new AbortController();
     api.deleteWebhook.mockReset();
     api.deleteWebhook.mockResolvedValue(true);
+    const telegramTransport = {
+      fetch: globalThis.fetch,
+      sourceFetch: globalThis.fetch,
+    };
+    resolveTelegramTransportSpy.mockReturnValueOnce(telegramTransport);
 
     const conflictError = Object.assign(
       new Error("Conflict: terminated by other getUpdates request"),
@@ -749,6 +791,9 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
     expect(pollingCycle).toBe(2);
     expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(resolveTelegramTransportSpy).toHaveBeenCalledTimes(1);
+    expect(createTelegramBotCalls[0]?.telegramTransport).toBe(telegramTransport);
+    expect(createTelegramBotCalls[1]?.telegramTransport).toBe(telegramTransport);
   });
 
   it("falls back to configured webhookSecret when not passed explicitly", async () => {

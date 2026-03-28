@@ -87,6 +87,25 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "agents.list[].identity.avatar": "avatars/openclaw.png",
 };
 
+const CHANNEL_NAMESPACE_PREFIX = "channels.";
+const CHANNEL_KERNEL_HINT_PREFIXES = ["channels.defaults", "channels.modelByChannel"] as const;
+
+function isKernelOwnedChannelHintPath(path: string): boolean {
+  if (path === "channels") {
+    return true;
+  }
+  return CHANNEL_KERNEL_HINT_PREFIXES.some(
+    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
+  );
+}
+
+export function isPluginOwnedChannelHintPath(path: string): boolean {
+  if (!path.startsWith(CHANNEL_NAMESPACE_PREFIX)) {
+    return false;
+  }
+  return !isKernelOwnedChannelHintPath(path);
+}
+
 /**
  * Non-sensitive field names that happen to match sensitive patterns.
  * These are explicitly excluded from redaction (plugin config) and
@@ -113,6 +132,7 @@ const SENSITIVE_PATTERNS = [
   /password/i,
   /secret/i,
   /api.?key/i,
+  /encrypt.?key/i,
   /serviceaccount(?:ref)?$/i,
 ];
 
@@ -139,14 +159,23 @@ export function buildBaseHints(): ConfigUiHints {
     };
   }
   for (const [path, label] of Object.entries(FIELD_LABELS)) {
+    if (isPluginOwnedChannelHintPath(path)) {
+      continue;
+    }
     const current = hints[path];
     hints[path] = current ? { ...current, label } : { label };
   }
   for (const [path, help] of Object.entries(FIELD_HELP)) {
+    if (isPluginOwnedChannelHintPath(path)) {
+      continue;
+    }
     const current = hints[path];
     hints[path] = current ? { ...current, help } : { help };
   }
   for (const [path, placeholder] of Object.entries(FIELD_PLACEHOLDERS)) {
+    if (isPluginOwnedChannelHintPath(path)) {
+      continue;
+    }
     const current = hints[path];
     hints[path] = current ? { ...current, placeholder } : { placeholder };
   }
@@ -158,15 +187,14 @@ export function applySensitiveHints(
   allowedKeys?: ReadonlySet<string>,
 ): ConfigUiHints {
   const next = { ...hints };
-  for (const key of Object.keys(next)) {
-    if (allowedKeys && !allowedKeys.has(key)) {
-      continue;
-    }
-    if (next[key]?.sensitive !== undefined) {
+  const keys = allowedKeys ? [...allowedKeys] : Object.keys(next);
+  for (const key of keys) {
+    const current = next[key];
+    if (current?.sensitive !== undefined) {
       continue;
     }
     if (isSensitiveConfigPath(key)) {
-      next[key] = { ...next[key], sensitive: true };
+      next[key] = { ...current, sensitive: true };
     }
   }
   return next;

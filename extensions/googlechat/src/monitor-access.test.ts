@@ -58,6 +58,61 @@ function primeCommonDefaults() {
   warnMissingProviderGroupPolicyFallbackOnce.mockReturnValue(undefined);
 }
 
+const baseAccessConfig = {
+  channels: { googlechat: {} },
+  commands: { useAccessGroups: true },
+} as const;
+
+const defaultSender = {
+  senderId: "users/alice",
+  senderName: "Alice",
+  senderEmail: "alice@example.com",
+} as const;
+
+function allowInboundGroupTraffic(options?: {
+  effectiveGroupAllowFrom?: string[];
+  effectiveWasMentioned?: boolean;
+}) {
+  createChannelPairingController.mockReturnValue({
+    readAllowFromStore: vi.fn(async () => []),
+    issueChallenge: vi.fn(),
+  });
+  resolveDmGroupAccessWithLists.mockReturnValue({
+    decision: "allow",
+    effectiveAllowFrom: [],
+    effectiveGroupAllowFrom: options?.effectiveGroupAllowFrom ?? ["users/alice"],
+  });
+  resolveMentionGatingWithBypass.mockReturnValue({
+    shouldSkip: false,
+    effectiveWasMentioned: options?.effectiveWasMentioned ?? true,
+  });
+}
+
+async function applyInboundAccessPolicy(
+  overrides: Partial<
+    Parameters<
+      Awaited<typeof import("./monitor-access.js")>["applyGoogleChatInboundAccessPolicy"]
+    >[0]
+  >,
+) {
+  const { applyGoogleChatInboundAccessPolicy } = await import("./monitor-access.js");
+  return applyGoogleChatInboundAccessPolicy({
+    account: {
+      accountId: "default",
+      config: {},
+    } as never,
+    config: baseAccessConfig as never,
+    core: createCore() as never,
+    space: { name: "spaces/AAA", displayName: "Team Room" } as never,
+    message: { annotations: [] } as never,
+    isGroup: true,
+    rawBody: "hello team",
+    logVerbose: vi.fn(),
+    ...defaultSender,
+    ...overrides,
+  } as never);
+}
+
 describe("googlechat inbound access policy", () => {
   it("issues a pairing challenge for unauthorized DMs in pairing mode", async () => {
     primeCommonDefaults();
@@ -120,27 +175,13 @@ describe("googlechat inbound access policy", () => {
 
   it("allows group traffic when sender and mention gates pass", async () => {
     primeCommonDefaults();
-    createChannelPairingController.mockReturnValue({
-      readAllowFromStore: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
-    resolveDmGroupAccessWithLists.mockReturnValue({
-      decision: "allow",
-      effectiveAllowFrom: [],
-      effectiveGroupAllowFrom: ["users/alice"],
-    });
-    resolveMentionGatingWithBypass.mockReturnValue({
-      shouldSkip: false,
-      effectiveWasMentioned: true,
-    });
+    allowInboundGroupTraffic();
     const core = createCore();
     core.channel.commands.shouldComputeCommandAuthorized.mockReturnValue(true);
     core.channel.commands.resolveCommandAuthorizedFromAuthorizers.mockReturnValue(true);
 
-    const { applyGoogleChatInboundAccessPolicy } = await import("./monitor-access.js");
-
     await expect(
-      applyGoogleChatInboundAccessPolicy({
+      applyInboundAccessPolicy({
         account: {
           accountId: "default",
           config: {
@@ -154,12 +195,7 @@ describe("googlechat inbound access policy", () => {
             },
           },
         } as never,
-        config: {
-          channels: { googlechat: {} },
-          commands: { useAccessGroups: true },
-        } as never,
         core: core as never,
-        space: { name: "spaces/AAA", displayName: "Team Room" } as never,
         message: {
           annotations: [
             {
@@ -168,12 +204,6 @@ describe("googlechat inbound access policy", () => {
             },
           ],
         } as never,
-        isGroup: true,
-        senderId: "users/alice",
-        senderName: "Alice",
-        senderEmail: "alice@example.com",
-        rawBody: "hello team",
-        logVerbose: vi.fn(),
       }),
     ).resolves.toEqual({
       ok: true,
@@ -183,19 +213,49 @@ describe("googlechat inbound access policy", () => {
     });
   });
 
+  it("preserves allowlist group policy when a routed space has no sender allowlist", async () => {
+    primeCommonDefaults();
+    allowInboundGroupTraffic({
+      effectiveGroupAllowFrom: [],
+      effectiveWasMentioned: false,
+    });
+    resolveSenderScopedGroupPolicy.mockReturnValue("open");
+    resolveSenderScopedGroupPolicy.mockClear();
+    resolveDmGroupAccessWithLists.mockClear();
+
+    await expect(
+      applyInboundAccessPolicy({
+        account: {
+          accountId: "default",
+          config: {
+            groups: {
+              "spaces/AAA": {
+                allow: true,
+              },
+            },
+          },
+        } as never,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      commandAuthorized: undefined,
+      effectiveWasMentioned: false,
+      groupSystemPrompt: undefined,
+    });
+
+    expect(resolveSenderScopedGroupPolicy).not.toHaveBeenCalled();
+    expect(resolveDmGroupAccessWithLists).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groupPolicy: "allowlist",
+        groupAllowFrom: [],
+      }),
+    );
+  });
+
   it("drops unauthorized group control commands", async () => {
     primeCommonDefaults();
-    createChannelPairingController.mockReturnValue({
-      readAllowFromStore: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
-    resolveDmGroupAccessWithLists.mockReturnValue({
-      decision: "allow",
-      effectiveAllowFrom: [],
+    allowInboundGroupTraffic({
       effectiveGroupAllowFrom: [],
-    });
-    resolveMentionGatingWithBypass.mockReturnValue({
-      shouldSkip: false,
       effectiveWasMentioned: false,
     });
     const core = createCore();
@@ -204,25 +264,9 @@ describe("googlechat inbound access policy", () => {
     core.channel.commands.isControlCommandMessage.mockReturnValue(true);
     const logVerbose = vi.fn();
 
-    const { applyGoogleChatInboundAccessPolicy } = await import("./monitor-access.js");
-
     await expect(
-      applyGoogleChatInboundAccessPolicy({
-        account: {
-          accountId: "default",
-          config: {},
-        } as never,
-        config: {
-          channels: { googlechat: {} },
-          commands: { useAccessGroups: true },
-        } as never,
+      applyInboundAccessPolicy({
         core: core as never,
-        space: { name: "spaces/AAA", displayName: "Team Room" } as never,
-        message: { annotations: [] } as never,
-        isGroup: true,
-        senderId: "users/alice",
-        senderName: "Alice",
-        senderEmail: "alice@example.com",
         rawBody: "/admin",
         logVerbose,
       }),
@@ -233,25 +277,11 @@ describe("googlechat inbound access policy", () => {
 
   it("does not match group policy by mutable space displayName when the stable id differs", async () => {
     primeCommonDefaults();
-    createChannelPairingController.mockReturnValue({
-      readAllowFromStore: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
-    resolveDmGroupAccessWithLists.mockReturnValue({
-      decision: "allow",
-      effectiveAllowFrom: [],
-      effectiveGroupAllowFrom: ["users/alice"],
-    });
-    resolveMentionGatingWithBypass.mockReturnValue({
-      shouldSkip: false,
-      effectiveWasMentioned: true,
-    });
+    allowInboundGroupTraffic();
     const logVerbose = vi.fn();
 
-    const { applyGoogleChatInboundAccessPolicy } = await import("./monitor-access.js");
-
     await expect(
-      applyGoogleChatInboundAccessPolicy({
+      applyInboundAccessPolicy({
         account: {
           accountId: "default",
           config: {
@@ -264,10 +294,6 @@ describe("googlechat inbound access policy", () => {
             },
           },
         } as never,
-        config: {
-          channels: { googlechat: {} },
-          commands: { useAccessGroups: true },
-        } as never,
         core: createCore() as never,
         space: { name: "spaces/BBB", displayName: "Finance Ops" } as never,
         message: {
@@ -278,10 +304,6 @@ describe("googlechat inbound access policy", () => {
             },
           ],
         } as never,
-        isGroup: true,
-        senderId: "users/alice",
-        senderName: "Alice",
-        senderEmail: "alice@example.com",
         rawBody: "show quarter close status",
         logVerbose,
       }),
@@ -301,25 +323,11 @@ describe("googlechat inbound access policy", () => {
       groupPolicy: "open",
       providerMissingFallbackApplied: false,
     });
-    createChannelPairingController.mockReturnValue({
-      readAllowFromStore: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
-    resolveDmGroupAccessWithLists.mockReturnValue({
-      decision: "allow",
-      effectiveAllowFrom: [],
-      effectiveGroupAllowFrom: ["users/alice"],
-    });
-    resolveMentionGatingWithBypass.mockReturnValue({
-      shouldSkip: false,
-      effectiveWasMentioned: true,
-    });
+    allowInboundGroupTraffic();
     const logVerbose = vi.fn();
 
-    const { applyGoogleChatInboundAccessPolicy } = await import("./monitor-access.js");
-
     await expect(
-      applyGoogleChatInboundAccessPolicy({
+      applyInboundAccessPolicy({
         account: {
           accountId: "default",
           config: {
@@ -335,17 +343,8 @@ describe("googlechat inbound access policy", () => {
             },
           },
         } as never,
-        config: {
-          channels: { googlechat: {} },
-          commands: { useAccessGroups: true },
-        } as never,
         core: createCore() as never,
         space: { name: "spaces/BBB", displayName: "Finance Ops" } as never,
-        message: { annotations: [] } as never,
-        isGroup: true,
-        senderId: "users/alice",
-        senderName: "Alice",
-        senderEmail: "alice@example.com",
         rawBody: "show quarter close status",
         logVerbose,
       }),

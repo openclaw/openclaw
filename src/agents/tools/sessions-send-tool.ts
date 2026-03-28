@@ -33,6 +33,28 @@ const SessionsSendToolSchema = Type.Object({
 });
 
 type GatewayCaller = typeof callGateway;
+const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
+
+function resolveLatestAssistantReplySnapshot(messages: unknown[]): {
+  text?: string;
+  fingerprint?: string;
+} {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const text = extractAssistantText(message);
+    if (!text) {
+      continue;
+    }
+    let fingerprint: string | undefined;
+    try {
+      fingerprint = JSON.stringify(message);
+    } catch {
+      fingerprint = text;
+    }
+    return { text, fingerprint };
+  }
+  return {};
+}
 
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
@@ -307,6 +329,14 @@ export function createSessionsSendTool(opts?: {
       }
       runId = start.runId;
 
+      const historyBefore = await gatewayCall<{ messages: Array<unknown> }>({
+        method: "chat.history",
+        params: { sessionKey: resolvedKey, limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT },
+      });
+      const baselineReply = resolveLatestAssistantReplySnapshot(
+        stripToolMessages(Array.isArray(historyBefore?.messages) ? historyBefore.messages : []),
+      );
+
       let waitStatus: string | undefined;
       let waitError: string | undefined;
       try {
@@ -350,11 +380,15 @@ export function createSessionsSendTool(opts?: {
 
       const history = await gatewayCall<{ messages: Array<unknown> }>({
         method: "chat.history",
-        params: { sessionKey: resolvedKey, limit: 50 },
+        params: { sessionKey: resolvedKey, limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT },
       });
-      const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
-      const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
-      const reply = last ? extractAssistantText(last) : undefined;
+      const latestReply = resolveLatestAssistantReplySnapshot(
+        stripToolMessages(Array.isArray(history?.messages) ? history.messages : []),
+      );
+      const reply =
+        latestReply.text && latestReply.fingerprint !== baselineReply.fingerprint
+          ? latestReply.text
+          : undefined;
       startA2AFlow(reply ?? undefined);
 
       return jsonResult({

@@ -41,6 +41,7 @@ import {
   readConfigIncludeFileWithGuards,
   resolveConfigIncludes,
 } from "./includes.js";
+import { migrateLegacyConfig } from "./legacy-migrate.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { applyMergePatch } from "./merge-patch.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
@@ -109,6 +110,18 @@ type ConfigWriteAuditRecord = {
   nextHash: string | null;
   previousBytes: number | null;
   nextBytes: number | null;
+  previousDev: string | null;
+  nextDev: string | null;
+  previousIno: string | null;
+  nextIno: string | null;
+  previousMode: number | null;
+  nextMode: number | null;
+  previousNlink: number | null;
+  nextNlink: number | null;
+  previousUid: number | null;
+  nextUid: number | null;
+  previousGid: number | null;
+  nextGid: number | null;
   changedPathCount: number | null;
   hasMetaBefore: boolean;
   hasMetaAfter: boolean;
@@ -124,6 +137,12 @@ type ConfigHealthFingerprint = {
   bytes: number;
   mtimeMs: number | null;
   ctimeMs: number | null;
+  dev: string | null;
+  ino: string | null;
+  mode: number | null;
+  nlink: number | null;
+  uid: number | null;
+  gid: number | null;
   hasMeta: boolean;
   gatewayMode: string | null;
   observedAt: string;
@@ -155,6 +174,12 @@ type ConfigObserveAuditRecord = {
   bytes: number | null;
   mtimeMs: number | null;
   ctimeMs: number | null;
+  dev: string | null;
+  ino: string | null;
+  mode: number | null;
+  nlink: number | null;
+  uid: number | null;
+  gid: number | null;
   hasMeta: boolean;
   gatewayMode: string | null;
   suspicious: string[];
@@ -162,11 +187,23 @@ type ConfigObserveAuditRecord = {
   lastKnownGoodBytes: number | null;
   lastKnownGoodMtimeMs: number | null;
   lastKnownGoodCtimeMs: number | null;
+  lastKnownGoodDev: string | null;
+  lastKnownGoodIno: string | null;
+  lastKnownGoodMode: number | null;
+  lastKnownGoodNlink: number | null;
+  lastKnownGoodUid: number | null;
+  lastKnownGoodGid: number | null;
   lastKnownGoodGatewayMode: string | null;
   backupHash: string | null;
   backupBytes: number | null;
   backupMtimeMs: number | null;
   backupCtimeMs: number | null;
+  backupDev: string | null;
+  backupIno: string | null;
+  backupMode: number | null;
+  backupNlink: number | null;
+  backupUid: number | null;
+  backupGid: number | null;
   backupGatewayMode: string | null;
   clobberedPath: string | null;
 };
@@ -595,6 +632,33 @@ function resolveConfigHealthStatePath(env: NodeJS.ProcessEnv, homedir: () => str
   return path.join(resolveStateDir(env, homedir), "logs", CONFIG_HEALTH_STATE_FILENAME);
 }
 
+function normalizeStatNumber(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeStatId(value: number | bigint | null | undefined): string | null {
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return null;
+}
+
+function resolveConfigStatMetadata(
+  stat: fs.Stats | null,
+): Pick<ConfigHealthFingerprint, "dev" | "ino" | "mode" | "nlink" | "uid" | "gid"> {
+  return {
+    dev: normalizeStatId(stat?.dev ?? null),
+    ino: normalizeStatId(stat?.ino ?? null),
+    mode: normalizeStatNumber(stat ? stat.mode & 0o777 : null),
+    nlink: normalizeStatNumber(stat?.nlink ?? null),
+    uid: normalizeStatNumber(stat?.uid ?? null),
+    gid: normalizeStatNumber(stat?.gid ?? null),
+  };
+}
+
 function resolveConfigWriteSuspiciousReasons(params: {
   existsBefore: boolean;
   previousBytes: number | null;
@@ -787,6 +851,7 @@ async function readConfigFingerprintForPath(
       bytes: Buffer.byteLength(raw, "utf-8"),
       mtimeMs: stat?.mtimeMs ?? null,
       ctimeMs: stat?.ctimeMs ?? null,
+      ...resolveConfigStatMetadata(stat),
       hasMeta: hasConfigMeta(parsed),
       gatewayMode: resolveGatewayMode(parsed),
       observedAt: new Date().toISOString(),
@@ -810,6 +875,7 @@ function readConfigFingerprintForPathSync(
       bytes: Buffer.byteLength(raw, "utf-8"),
       mtimeMs: stat?.mtimeMs ?? null,
       ctimeMs: stat?.ctimeMs ?? null,
+      ...resolveConfigStatMetadata(stat),
       hasMeta: hasConfigMeta(parsed),
       gatewayMode: resolveGatewayMode(parsed),
       observedAt: new Date().toISOString(),
@@ -873,6 +939,12 @@ function sameFingerprint(
     left.bytes === right.bytes &&
     left.mtimeMs === right.mtimeMs &&
     left.ctimeMs === right.ctimeMs &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mode === right.mode &&
+    left.nlink === right.nlink &&
+    left.uid === right.uid &&
+    left.gid === right.gid &&
     left.hasMeta === right.hasMeta &&
     left.gatewayMode === right.gatewayMode
   );
@@ -893,6 +965,7 @@ async function observeConfigSnapshot(
     bytes: Buffer.byteLength(snapshot.raw, "utf-8"),
     mtimeMs: stat?.mtimeMs ?? null,
     ctimeMs: stat?.ctimeMs ?? null,
+    ...resolveConfigStatMetadata(stat),
     hasMeta: hasConfigMeta(snapshot.parsed),
     gatewayMode: resolveGatewayMode(snapshot.resolved),
     observedAt: now,
@@ -962,6 +1035,12 @@ async function observeConfigSnapshot(
     bytes: current.bytes,
     mtimeMs: current.mtimeMs,
     ctimeMs: current.ctimeMs,
+    dev: current.dev,
+    ino: current.ino,
+    mode: current.mode,
+    nlink: current.nlink,
+    uid: current.uid,
+    gid: current.gid,
     hasMeta: current.hasMeta,
     gatewayMode: current.gatewayMode,
     suspicious,
@@ -969,11 +1048,23 @@ async function observeConfigSnapshot(
     lastKnownGoodBytes: entry.lastKnownGood?.bytes ?? null,
     lastKnownGoodMtimeMs: entry.lastKnownGood?.mtimeMs ?? null,
     lastKnownGoodCtimeMs: entry.lastKnownGood?.ctimeMs ?? null,
+    lastKnownGoodDev: entry.lastKnownGood?.dev ?? null,
+    lastKnownGoodIno: entry.lastKnownGood?.ino ?? null,
+    lastKnownGoodMode: entry.lastKnownGood?.mode ?? null,
+    lastKnownGoodNlink: entry.lastKnownGood?.nlink ?? null,
+    lastKnownGoodUid: entry.lastKnownGood?.uid ?? null,
+    lastKnownGoodGid: entry.lastKnownGood?.gid ?? null,
     lastKnownGoodGatewayMode: entry.lastKnownGood?.gatewayMode ?? null,
     backupHash: backup?.hash ?? null,
     backupBytes: backup?.bytes ?? null,
     backupMtimeMs: backup?.mtimeMs ?? null,
     backupCtimeMs: backup?.ctimeMs ?? null,
+    backupDev: backup?.dev ?? null,
+    backupIno: backup?.ino ?? null,
+    backupMode: backup?.mode ?? null,
+    backupNlink: backup?.nlink ?? null,
+    backupUid: backup?.uid ?? null,
+    backupGid: backup?.gid ?? null,
     backupGatewayMode: backup?.gatewayMode ?? null,
     clobberedPath,
   });
@@ -1000,6 +1091,7 @@ function observeConfigSnapshotSync(
     bytes: Buffer.byteLength(snapshot.raw, "utf-8"),
     mtimeMs: stat?.mtimeMs ?? null,
     ctimeMs: stat?.ctimeMs ?? null,
+    ...resolveConfigStatMetadata(stat),
     hasMeta: hasConfigMeta(snapshot.parsed),
     gatewayMode: resolveGatewayMode(snapshot.resolved),
     observedAt: now,
@@ -1069,6 +1161,12 @@ function observeConfigSnapshotSync(
     bytes: current.bytes,
     mtimeMs: current.mtimeMs,
     ctimeMs: current.ctimeMs,
+    dev: current.dev,
+    ino: current.ino,
+    mode: current.mode,
+    nlink: current.nlink,
+    uid: current.uid,
+    gid: current.gid,
     hasMeta: current.hasMeta,
     gatewayMode: current.gatewayMode,
     suspicious,
@@ -1076,11 +1174,23 @@ function observeConfigSnapshotSync(
     lastKnownGoodBytes: entry.lastKnownGood?.bytes ?? null,
     lastKnownGoodMtimeMs: entry.lastKnownGood?.mtimeMs ?? null,
     lastKnownGoodCtimeMs: entry.lastKnownGood?.ctimeMs ?? null,
+    lastKnownGoodDev: entry.lastKnownGood?.dev ?? null,
+    lastKnownGoodIno: entry.lastKnownGood?.ino ?? null,
+    lastKnownGoodMode: entry.lastKnownGood?.mode ?? null,
+    lastKnownGoodNlink: entry.lastKnownGood?.nlink ?? null,
+    lastKnownGoodUid: entry.lastKnownGood?.uid ?? null,
+    lastKnownGoodGid: entry.lastKnownGood?.gid ?? null,
     lastKnownGoodGatewayMode: entry.lastKnownGood?.gatewayMode ?? null,
     backupHash: backup?.hash ?? null,
     backupBytes: backup?.bytes ?? null,
     backupMtimeMs: backup?.mtimeMs ?? null,
     backupCtimeMs: backup?.ctimeMs ?? null,
+    backupDev: backup?.dev ?? null,
+    backupIno: backup?.ino ?? null,
+    backupMode: backup?.mode ?? null,
+    backupNlink: backup?.nlink ?? null,
+    backupUid: backup?.uid ?? null,
+    backupGid: backup?.gid ?? null,
     backupGatewayMode: backup?.gatewayMode ?? null,
     clobberedPath,
   });
@@ -1185,6 +1295,11 @@ type ConfigReadResolution = {
   envWarnings: EnvSubstitutionWarning[];
 };
 
+type LegacyMigrationResolution = {
+  effectiveConfigRaw: unknown;
+  sourceLegacyIssues: LegacyConfigIssue[];
+};
+
 function resolveConfigIncludesForRead(
   parsed: unknown,
   configPath: string,
@@ -1222,6 +1337,21 @@ function resolveConfigForRead(
     // Capture env snapshot after substitution for write-time ${VAR} restoration.
     envSnapshotForRestore: { ...env } as Record<string, string | undefined>,
     envWarnings,
+  };
+}
+
+function resolveLegacyConfigForRead(
+  resolvedConfigRaw: unknown,
+  sourceRaw: unknown,
+): LegacyMigrationResolution {
+  const sourceLegacyIssues = findLegacyConfigIssues(resolvedConfigRaw, sourceRaw);
+  if (sourceLegacyIssues.length === 0) {
+    return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues };
+  }
+  const migrated = migrateLegacyConfig(resolvedConfigRaw);
+  return {
+    effectiveConfigRaw: migrated.config ?? resolvedConfigRaw,
+    sourceLegacyIssues,
   };
 }
 
@@ -1275,13 +1405,15 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         deps.env,
       );
       const resolvedConfig = readResolution.resolvedConfigRaw;
+      const legacyResolution = resolveLegacyConfigForRead(resolvedConfig, parsed);
+      const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
       for (const w of readResolution.envWarnings) {
         deps.logger.warn(
           `Config (${configPath}): missing env var "${w.varName}" at ${w.configPath} — feature using this value will be unavailable`,
         );
       }
-      warnOnConfigMiskeys(resolvedConfig, deps.logger);
-      if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
+      warnOnConfigMiskeys(effectiveConfigRaw, deps.logger);
+      if (typeof effectiveConfigRaw !== "object" || effectiveConfigRaw === null) {
         observeLoadConfigSnapshot({
           path: configPath,
           exists: true,
@@ -1293,31 +1425,31 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           hash,
           issues: [],
           warnings: [],
-          legacyIssues: [],
+          legacyIssues: legacyResolution.sourceLegacyIssues,
         });
         return {};
       }
-      const preValidationDuplicates = findDuplicateAgentDirs(resolvedConfig as OpenClawConfig, {
+      const preValidationDuplicates = findDuplicateAgentDirs(effectiveConfigRaw as OpenClawConfig, {
         env: deps.env,
         homedir: deps.homedir,
       });
       if (preValidationDuplicates.length > 0) {
         throw new DuplicateAgentDirError(preValidationDuplicates);
       }
-      const validated = validateConfigObjectWithPlugins(resolvedConfig, { env: deps.env });
+      const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
       if (!validated.ok) {
         observeLoadConfigSnapshot({
           path: configPath,
           exists: true,
           raw,
           parsed,
-          resolved: coerceConfig(resolvedConfig),
+          resolved: coerceConfig(effectiveConfigRaw),
           valid: false,
-          config: coerceConfig(resolvedConfig),
+          config: coerceConfig(effectiveConfigRaw),
           hash,
           issues: validated.issues,
           warnings: validated.warnings,
-          legacyIssues: findLegacyConfigIssues(resolvedConfig, parsed),
+          legacyIssues: legacyResolution.sourceLegacyIssues,
         });
         const details = validated.issues
           .map(
@@ -1362,13 +1494,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         exists: true,
         raw,
         parsed,
-        resolved: coerceConfig(resolvedConfig),
+        resolved: coerceConfig(effectiveConfigRaw),
         valid: true,
         config: cfg,
         hash,
         issues: [],
         warnings: validated.warnings,
-        legacyIssues: findLegacyConfigIssues(resolvedConfig, parsed),
+        legacyIssues: legacyResolution.sourceLegacyIssues,
       });
 
       const duplicates = findDuplicateAgentDirs(cfg, {
@@ -1536,11 +1668,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }));
 
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
-      // Detect legacy keys on resolved config, but only mark source-literal legacy
-      // entries (for auto-migration) when they are present in the parsed source.
-      const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw, parsedRes.parsed);
+      const legacyResolution = resolveLegacyConfigForRead(resolvedConfigRaw, parsedRes.parsed);
+      const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
 
-      const validated = validateConfigObjectWithPlugins(resolvedConfigRaw, { env: deps.env });
+      const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
       if (!validated.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
           snapshot: {
@@ -1548,13 +1679,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             exists: true,
             raw,
             parsed: parsedRes.parsed,
-            resolved: coerceConfig(resolvedConfigRaw),
+            resolved: coerceConfig(effectiveConfigRaw),
             valid: false,
-            config: coerceConfig(resolvedConfigRaw),
+            config: coerceConfig(effectiveConfigRaw),
             hash,
             issues: validated.issues,
             warnings: [...validated.warnings, ...envVarWarnings],
-            legacyIssues,
+            legacyIssues: legacyResolution.sourceLegacyIssues,
           },
         });
       }
@@ -1580,13 +1711,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           parsed: parsedRes.parsed,
           // Use resolvedConfigRaw (after $include and ${ENV} substitution but BEFORE runtime defaults)
           // for config set/unset operations (issue #6070)
-          resolved: coerceConfig(resolvedConfigRaw),
+          resolved: coerceConfig(effectiveConfigRaw),
           valid: true,
           config: snapshotConfig,
           hash,
           issues: [],
           warnings: [...validated.warnings, ...envVarWarnings],
-          legacyIssues,
+          legacyIssues: legacyResolution.sourceLegacyIssues,
         },
         envSnapshotForRestore: readResolution.envSnapshotForRestore,
       });
@@ -1755,6 +1886,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     const previousBytes =
       typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
     const nextBytes = Buffer.byteLength(json, "utf-8");
+    const previousStat = snapshot.exists
+      ? await deps.fs.promises.stat(configPath).catch(() => null)
+      : null;
     const hasMetaBefore = hasConfigMeta(snapshot.parsed);
     const hasMetaAfter = hasConfigMeta(stampedOutputConfig);
     const gatewayModeBefore = resolveGatewayMode(snapshot.resolved);
@@ -1820,6 +1954,18 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       nextHash,
       previousBytes,
       nextBytes,
+      previousDev: resolveConfigStatMetadata(previousStat).dev,
+      nextDev: null,
+      previousIno: resolveConfigStatMetadata(previousStat).ino,
+      nextIno: null,
+      previousMode: resolveConfigStatMetadata(previousStat).mode,
+      nextMode: null,
+      previousNlink: resolveConfigStatMetadata(previousStat).nlink,
+      nextNlink: null,
+      previousUid: resolveConfigStatMetadata(previousStat).uid,
+      nextUid: null,
+      previousGid: resolveConfigStatMetadata(previousStat).gid,
+      nextGid: null,
       changedPathCount: typeof changedPathCount === "number" ? changedPathCount : null,
       hasMetaBefore,
       hasMetaAfter,
@@ -1827,7 +1973,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       gatewayModeAfter,
       suspicious: suspiciousReasons,
     };
-    const appendWriteAudit = async (result: ConfigWriteAuditResult, err?: unknown) => {
+    const appendWriteAudit = async (
+      result: ConfigWriteAuditResult,
+      err?: unknown,
+      nextStat?: fs.Stats | null,
+    ) => {
       const errorCode =
         err && typeof err === "object" && "code" in err && typeof err.code === "string"
           ? err.code
@@ -1836,11 +1986,18 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         err && typeof err === "object" && "message" in err && typeof err.message === "string"
           ? err.message
           : undefined;
+      const nextMetadata = resolveConfigStatMetadata(nextStat ?? null);
       await appendConfigAuditRecord(deps, {
         ...auditRecordBase,
         result,
         nextHash: result === "failed" ? null : auditRecordBase.nextHash,
         nextBytes: result === "failed" ? null : auditRecordBase.nextBytes,
+        nextDev: result === "failed" ? null : nextMetadata.dev,
+        nextIno: result === "failed" ? null : nextMetadata.ino,
+        nextMode: result === "failed" ? null : nextMetadata.mode,
+        nextNlink: result === "failed" ? null : nextMetadata.nlink,
+        nextUid: result === "failed" ? null : nextMetadata.uid,
+        nextGid: result === "failed" ? null : nextMetadata.gid,
         errorCode,
         errorMessage,
       });
@@ -1876,7 +2033,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           });
           logConfigOverwrite();
           logConfigWriteAnomalies();
-          await appendWriteAudit("copy-fallback");
+          await appendWriteAudit(
+            "copy-fallback",
+            undefined,
+            await deps.fs.promises.stat(configPath).catch(() => null),
+          );
           return;
         }
         await deps.fs.promises.unlink(tmp).catch(() => {
@@ -1886,7 +2047,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       logConfigOverwrite();
       logConfigWriteAnomalies();
-      await appendWriteAudit("rename");
+      await appendWriteAudit(
+        "rename",
+        undefined,
+        await deps.fs.promises.stat(configPath).catch(() => null),
+      );
     } catch (err) {
       await appendWriteAudit("failed", err);
       throw err;

@@ -1341,6 +1341,11 @@ describe("listSessionsFromStore subagent metadata", () => {
         sessionId: "sess-child",
         updatedAt: now - 1_000,
         spawnedBy: "agent:main:subagent:parent",
+        spawnedWorkspaceDir: "/tmp/child-workspace",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
       } as SessionEntry,
       "agent:main:subagent:failed": {
         sessionId: "sess-failed",
@@ -1416,6 +1421,11 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(child?.startedAt).toBe(now - 7_500);
     expect(child?.endedAt).toBe(now - 2_500);
     expect(child?.runtimeMs).toBe(5_000);
+    expect(child?.spawnedWorkspaceDir).toBe("/tmp/child-workspace");
+    expect(child?.forkedFromParent).toBe(true);
+    expect(child?.spawnDepth).toBe(2);
+    expect(child?.subagentRole).toBe("orchestrator");
+    expect(child?.subagentControlScope).toBe("children");
     expect(child?.childSessions).toBeUndefined();
 
     const failed = result.sessions.find((session) => session.key === "agent:main:subagent:failed");
@@ -1983,6 +1993,33 @@ describe("listSessionsFromStore subagent metadata", () => {
     const child = result.sessions.find((session) => session.key === "agent:main:dashboard:child");
     expect(main?.childSessions).toEqual(["agent:main:dashboard:child"]);
     expect(child?.parentSessionKey).toBe("agent:main:main");
+  });
+
+  test("returns dashboard child sessions when filtering by parentSessionKey owner", () => {
+    resetSubagentRegistryForTests({ persist: false });
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now,
+      } as SessionEntry,
+      "agent:main:dashboard:child": {
+        sessionId: "sess-dashboard-child",
+        updatedAt: now - 1_000,
+        parentSessionKey: "agent:main:main",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {
+        spawnedBy: "agent:main:main",
+      },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:dashboard:child"]);
   });
 
   test("falls back to persisted subagent timing after run archival", () => {

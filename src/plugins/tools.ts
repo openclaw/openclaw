@@ -1,10 +1,10 @@
 import { normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { resolveRuntimePluginRegistry } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
-import { getActivePluginRegistry, getActivePluginRegistryKey } from "./runtime.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -61,27 +61,28 @@ export function resolvePluginTools(params: {
   // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
   // This matters a lot for unit tests and for tool construction hot paths.
   const env = params.env ?? process.env;
-  const effectiveConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
+  const baseConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
+  const effectiveConfig = applyPluginAutoEnable({ config: baseConfig, env }).config;
   const normalized = normalizePluginsConfig(effectiveConfig.plugins);
   if (!normalized.enabled) {
     return [];
   }
 
-  const activeRegistry = getActivePluginRegistry();
-  const registry =
-    getActivePluginRegistryKey() && activeRegistry
-      ? activeRegistry
-      : loadOpenClawPlugins({
-          config: effectiveConfig,
-          workspaceDir: params.context.workspaceDir,
-          runtimeOptions: params.allowGatewaySubagentBinding
-            ? {
-                allowGatewaySubagentBinding: true,
-              }
-            : undefined,
-          env,
-          logger: createPluginLoaderLogger(log),
-        });
+  const loadOptions = {
+    config: effectiveConfig,
+    workspaceDir: params.context.workspaceDir,
+    runtimeOptions: params.allowGatewaySubagentBinding
+      ? {
+          allowGatewaySubagentBinding: true,
+        }
+      : undefined,
+    env,
+    logger: createPluginLoaderLogger(log),
+  };
+  const registry = resolveRuntimePluginRegistry(loadOptions);
+  if (!registry) {
+    return [];
+  }
 
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();

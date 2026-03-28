@@ -7,7 +7,6 @@ import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
-import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -15,12 +14,13 @@ import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
-import android.util.Base64
 import android.util.Log
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import androidx.core.content.ContextCompat
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.isCanonicalMainSessionKey
-import java.io.File
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
@@ -86,8 +86,6 @@ class TalkModeManager(
   private var lastSpokenText: String? = null
   private var lastInterruptedAtSeconds: Double? = null
 
-  private var currentVoiceId: String? = null
-  private var currentModelId: String? = null
   // Interrupt-on-speech is disabled by default: starting a SpeechRecognizer during
   // TTS creates an audio session conflict on some OEMs. Can be enabled via gateway talk config.
   private var interruptOnSpeech: Boolean = false
@@ -104,8 +102,10 @@ class TalkModeManager(
   private val playbackGeneration = AtomicLong(0L)
 
   private var ttsJob: Job? = null
-  private val playerLock = Any()
-  private var player: MediaPlayer? = null
+  private val ttsLock = Any()
+  private var textToSpeech: TextToSpeech? = null
+  private var textToSpeechInit: CompletableDeferred<TextToSpeech>? = null
+  @Volatile private var currentUtteranceId: String? = null
   @Volatile private var finalizeInFlight = false
   private var listenWatchdogJob: Job? = null
 
@@ -340,6 +340,7 @@ class TalkModeManager(
       recognizer?.destroy()
       recognizer = null
     }
+    shutdownTextToSpeech()
   }
 
   private fun startListeningInternal(markListening: Boolean) {
@@ -647,19 +648,6 @@ class TalkModeManager(
     val cleaned = parsed.stripped.trim()
     if (cleaned.isEmpty()) return
     _lastAssistantText.value = cleaned
-
-    val requestedVoice = directive?.voiceId?.trim()?.takeIf { it.isNotEmpty() }
-
-    if (directive?.voiceId != null) {
-      if (directive.once != true) {
-        currentVoiceId = requestedVoice
-      }
-    }
-    if (directive?.modelId != null) {
-      if (directive.once != true) {
-        currentModelId = directive.modelId?.trim()?.takeIf { it.isNotEmpty() }
-      }
-    }
     ensurePlaybackActive(playbackToken)
 
     _statusText.value = "Speaking…"
@@ -670,145 +658,96 @@ class TalkModeManager(
 
     try {
       val ttsStarted = SystemClock.elapsedRealtime()
-      val speech = requestTalkSpeak(cleaned, directive)
-      playGatewaySpeech(speech, playbackToken)
-      Log.d(tag, "talk.speak ok durMs=${SystemClock.elapsedRealtime() - ttsStarted} provider=${speech.provider}")
+      speakWithSystemTts(cleaned, directive, playbackToken)
+      Log.d(tag, "system tts ok durMs=${SystemClock.elapsedRealtime() - ttsStarted}")
     } catch (err: Throwable) {
       if (isPlaybackCancelled(err, playbackToken)) {
         Log.d(tag, "assistant speech cancelled")
         return
       }
       _statusText.value = "Speak failed: ${err.message ?: err::class.simpleName}"
-      Log.w(tag, "talk.speak failed: ${err.message ?: err::class.simpleName}")
+      Log.w(tag, "system tts failed: ${err.message ?: err::class.simpleName}")
     } finally {
 
       _isSpeaking.value = false
     }
   }
 
-  private data class GatewayTalkSpeech(
-    val audioBase64: String,
-    val provider: String,
-    val outputFormat: String?,
-    val mimeType: String?,
-    val fileExtension: String?,
-  )
-
-  private suspend fun requestTalkSpeak(text: String, directive: TalkDirective?): GatewayTalkSpeech {
-    val modelId =
-      directive?.modelId?.trim()?.takeIf { it.isNotEmpty() } ?: currentModelId?.trim()?.takeIf { it.isNotEmpty() }
-    val voiceId =
-      directive?.voiceId?.trim()?.takeIf { it.isNotEmpty() } ?: currentVoiceId?.trim()?.takeIf { it.isNotEmpty() }
-    val params =
-      buildJsonObject {
-        put("text", JsonPrimitive(text))
-        voiceId?.let { put("voiceId", JsonPrimitive(it)) }
-        modelId?.let { put("modelId", JsonPrimitive(it)) }
-        TalkModeRuntime.resolveSpeed(directive?.speed, directive?.rateWpm)?.let {
-          put("speed", JsonPrimitive(it))
-        }
-        TalkModeRuntime.validatedStability(directive?.stability, modelId)?.let {
-          put("stability", JsonPrimitive(it))
-        }
-        TalkModeRuntime.validatedUnit(directive?.similarity)?.let {
-          put("similarity", JsonPrimitive(it))
-        }
-        TalkModeRuntime.validatedUnit(directive?.style)?.let {
-          put("style", JsonPrimitive(it))
-        }
-        directive?.speakerBoost?.let { put("speakerBoost", JsonPrimitive(it)) }
-        TalkModeRuntime.validatedSeed(directive?.seed)?.let { put("seed", JsonPrimitive(it)) }
-        TalkModeRuntime.validatedNormalize(directive?.normalize)?.let {
-          put("normalize", JsonPrimitive(it))
-        }
-        TalkModeRuntime.validatedLanguage(directive?.language)?.let {
-          put("language", JsonPrimitive(it))
-        }
-        directive?.outputFormat?.trim()?.takeIf { it.isNotEmpty() }?.let {
-          put("outputFormat", JsonPrimitive(it))
-        }
-      }
-    val res = session.request("talk.speak", params.toString())
-    val root = json.parseToJsonElement(res).asObjectOrNull() ?: error("talk.speak returned invalid JSON")
-    val audioBase64 = root["audioBase64"].asStringOrNull()?.trim().orEmpty()
-    val provider = root["provider"].asStringOrNull()?.trim().orEmpty()
-    if (audioBase64.isEmpty()) {
-      error("talk.speak missing audioBase64")
-    }
-    if (provider.isEmpty()) {
-      error("talk.speak missing provider")
-    }
-    return GatewayTalkSpeech(
-      audioBase64 = audioBase64,
-      provider = provider,
-      outputFormat = root["outputFormat"].asStringOrNull()?.trim(),
-      mimeType = root["mimeType"].asStringOrNull()?.trim(),
-      fileExtension = root["fileExtension"].asStringOrNull()?.trim(),
-    )
-  }
-
-  private suspend fun playGatewaySpeech(speech: GatewayTalkSpeech, playbackToken: Long) {
+  private suspend fun speakWithSystemTts(text: String, directive: TalkDirective?, playbackToken: Long) {
     ensurePlaybackActive(playbackToken)
-    cleanupPlayer()
-    ensurePlaybackActive(playbackToken)
-
-    val audioBytes =
-      try {
-        Base64.decode(speech.audioBase64, Base64.DEFAULT)
-      } catch (err: IllegalArgumentException) {
-        throw IllegalStateException("talk.speak returned invalid audio", err)
+    val engine = ensureTextToSpeech()
+    val utteranceId = UUID.randomUUID().toString()
+    val finished = CompletableDeferred<Unit>()
+    withContext(Dispatchers.Main) {
+      ensurePlaybackActive(playbackToken)
+      synchronized(ttsLock) {
+        currentUtteranceId = utteranceId
+        engine.stop()
       }
-    val suffix = resolveGatewayAudioSuffix(speech)
-    val tempFile =
-      withContext(Dispatchers.IO) { File.createTempFile("tts_", suffix, context.cacheDir) }
-    try {
-      withContext(Dispatchers.IO) { tempFile.writeBytes(audioBytes) }
-      val player = MediaPlayer()
-      synchronized(playerLock) {
-        this.player = player
+      val locale =
+        TalkModeRuntime.validatedLanguage(directive?.language)?.let { Locale.forLanguageTag(it) }
+      if (locale != null) {
+        val localeResult = engine.setLanguage(locale)
+        if (
+          localeResult == TextToSpeech.LANG_MISSING_DATA ||
+            localeResult == TextToSpeech.LANG_NOT_SUPPORTED
+        ) {
+          throw IllegalStateException("Language unavailable on this device")
+        }
       }
-      val finished = CompletableDeferred<Unit>()
-      player.setAudioAttributes(
+      engine.setSpeechRate((TalkModeRuntime.resolveSpeed(directive?.speed, directive?.rateWpm) ?: 1.0).toFloat())
+      engine.setAudioAttributes(
         AudioAttributes.Builder()
           .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
           .setUsage(AudioAttributes.USAGE_MEDIA)
           .build(),
       )
-      player.setOnCompletionListener { finished.complete(Unit) }
-      player.setOnErrorListener { _, what, extra ->
-        finished.completeExceptionally(IllegalStateException("MediaPlayer error what=$what extra=$extra"))
-        true
+      engine.setOnUtteranceProgressListener(
+        object : UtteranceProgressListener() {
+          override fun onStart(utteranceId: String?) = Unit
+
+          override fun onDone(utteranceId: String?) {
+            if (utteranceId == currentUtteranceId) {
+              finished.complete(Unit)
+            }
+          }
+
+          @Suppress("OVERRIDE_DEPRECATION")
+          @Deprecated("Deprecated in Java")
+          override fun onError(utteranceId: String?) {
+            if (utteranceId == currentUtteranceId) {
+              finished.completeExceptionally(IllegalStateException("TextToSpeech playback failed"))
+            }
+          }
+
+          override fun onError(utteranceId: String?, errorCode: Int) {
+            if (utteranceId == currentUtteranceId) {
+              finished.completeExceptionally(IllegalStateException("TextToSpeech playback failed ($errorCode)"))
+            }
+          }
+
+          override fun onStop(utteranceId: String?, interrupted: Boolean) {
+            if (utteranceId == currentUtteranceId) {
+              finished.completeExceptionally(CancellationException("assistant speech cancelled"))
+            }
+          }
+        },
+      )
+      val result = engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+      if (result != TextToSpeech.SUCCESS) {
+        throw IllegalStateException("TextToSpeech start failed")
       }
-      player.setDataSource(tempFile.absolutePath)
-      withContext(Dispatchers.IO) { player.prepare() }
-      ensurePlaybackActive(playbackToken)
-      player.start()
+    }
+    try {
       finished.await()
       ensurePlaybackActive(playbackToken)
     } finally {
-      try {
-        cleanupPlayer(player)
-      } catch (_: Throwable) {}
-      tempFile.delete()
+      synchronized(ttsLock) {
+        if (currentUtteranceId == utteranceId) {
+          currentUtteranceId = null
+        }
+      }
     }
-  }
-
-  private fun resolveGatewayAudioSuffix(speech: GatewayTalkSpeech): String {
-    val extension = speech.fileExtension?.trim()
-    if (!extension.isNullOrEmpty()) {
-      return if (extension.startsWith(".")) extension else ".$extension"
-    }
-    val mimeType = speech.mimeType?.trim()?.lowercase()
-    if (mimeType == "audio/mpeg") return ".mp3"
-    if (mimeType == "audio/ogg") return ".ogg"
-    if (mimeType == "audio/wav") return ".wav"
-    if (mimeType == "audio/webm") return ".webm"
-    val outputFormat = speech.outputFormat?.trim()?.lowercase().orEmpty()
-    if (outputFormat == "mp3" || outputFormat.startsWith("mp3_") || outputFormat.endsWith("-mp3")) return ".mp3"
-    if (outputFormat == "opus" || outputFormat.startsWith("opus_")) return ".ogg"
-    if (outputFormat.endsWith("-wav")) return ".wav"
-    if (outputFormat.endsWith("-webm")) return ".webm"
-    return ".audio"
   }
 
   fun stopTts() {
@@ -819,19 +758,14 @@ class TalkModeManager(
 
   private fun stopSpeaking(resetInterrupt: Boolean = true) {
     if (!_isSpeaking.value) {
-      cleanupPlayer()
+      stopTextToSpeechPlayback()
       abandonAudioFocus()
       return
     }
     if (resetInterrupt) {
-      val currentMs = synchronized(playerLock) {
-        try {
-          player?.currentPosition?.toDouble() ?: 0.0
-        } catch (_: IllegalStateException) { 0.0 }
-      }
-      lastInterruptedAtSeconds = currentMs / 1000.0
+      lastInterruptedAtSeconds = null
     }
-    cleanupPlayer()
+    stopTextToSpeechPlayback()
     _isSpeaking.value = false
     abandonAudioFocus()
   }
@@ -871,15 +805,79 @@ class TalkModeManager(
     audioFocusRequest = null
   }
 
-  private fun cleanupPlayer(expectedPlayer: MediaPlayer? = null) {
-    synchronized(playerLock) {
-      val p = player ?: return
-      if (expectedPlayer != null && p !== expectedPlayer) return
-      player = null
-      try {
-        p.stop()
-      } catch (_: IllegalStateException) {}
-      p.release()
+  private suspend fun ensureTextToSpeech(): TextToSpeech {
+    val existing = synchronized(ttsLock) { textToSpeech }
+    if (existing != null) {
+      return existing
+    }
+    val deferred: CompletableDeferred<TextToSpeech>
+    val created: Boolean
+    synchronized(ttsLock) {
+      val ready = textToSpeech
+      if (ready != null) {
+        deferred = CompletableDeferred<TextToSpeech>().also { it.complete(ready) }
+        created = false
+      } else {
+        val pending = textToSpeechInit
+        if (pending != null) {
+          deferred = pending
+          created = false
+        } else {
+          deferred = CompletableDeferred<TextToSpeech>()
+          textToSpeechInit = deferred
+          created = true
+        }
+      }
+    }
+    if (!created) {
+      return deferred.await()
+    }
+    withContext(Dispatchers.Main) {
+      synchronized(ttsLock) {
+        textToSpeech?.let {
+          textToSpeechInit = null
+          deferred.complete(it)
+          return@withContext
+        }
+      }
+      var engine: TextToSpeech? = null
+      engine = TextToSpeech(context) { status ->
+        if (status == TextToSpeech.SUCCESS) {
+          val initialized = engine ?: run {
+            deferred.completeExceptionally(IllegalStateException("TextToSpeech init failed"))
+            return@TextToSpeech
+          }
+          synchronized(ttsLock) {
+            textToSpeech = initialized
+            textToSpeechInit = null
+          }
+          deferred.complete(initialized)
+        } else {
+          synchronized(ttsLock) {
+            textToSpeechInit = null
+          }
+          engine?.shutdown()
+          deferred.completeExceptionally(IllegalStateException("TextToSpeech init failed ($status)"))
+        }
+      }
+    }
+    return deferred.await()
+  }
+
+  private fun stopTextToSpeechPlayback() {
+    synchronized(ttsLock) {
+      currentUtteranceId = null
+      textToSpeech?.stop()
+    }
+  }
+
+  private fun shutdownTextToSpeech() {
+    synchronized(ttsLock) {
+      currentUtteranceId = null
+      textToSpeech?.stop()
+      textToSpeech?.shutdown()
+      textToSpeech = null
+      textToSpeechInit = null
     }
   }
 
@@ -942,32 +940,6 @@ class TalkModeManager(
         return speed
       }
       return null
-    }
-
-    fun validatedUnit(value: Double?): Double? {
-      if (value == null) return null
-      if (value < 0 || value > 1) return null
-      return value
-    }
-
-    fun validatedStability(value: Double?, modelId: String?): Double? {
-      if (value == null) return null
-      val normalized = modelId?.trim()?.lowercase()
-      if (normalized == "eleven_v3") {
-        return if (value == 0.0 || value == 0.5 || value == 1.0) value else null
-      }
-      return validatedUnit(value)
-    }
-
-    fun validatedSeed(value: Long?): Long? {
-      if (value == null) return null
-      if (value < 0 || value > 4294967295L) return null
-      return value
-    }
-
-    fun validatedNormalize(value: String?): String? {
-      val normalized = value?.trim()?.lowercase() ?: return null
-      return if (normalized in listOf("auto", "on", "off")) normalized else null
     }
 
     fun validatedLanguage(value: String?): String? {

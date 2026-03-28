@@ -9,10 +9,9 @@ import {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
+import { DiscordChannelConfigSchema } from "./config-schema.js";
 import {
   createScopedChannelConfigAdapter,
-  buildChannelConfigSchema,
-  DiscordConfigSchema,
   getChatChannelMeta,
   type ChannelPlugin,
 } from "./runtime-api.js";
@@ -70,7 +69,7 @@ export function createDiscordPluginBase(params: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     reload: { configPrefixes: ["channels.discord"] },
-    configSchema: buildChannelConfigSchema(DiscordConfigSchema),
+    configSchema: DiscordChannelConfigSchema,
     config: {
       ...discordConfigAdapter,
       isConfigured: (account) => Boolean(account.token?.trim()),

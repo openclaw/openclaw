@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { ServerResponse, type IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/mattermost";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -104,11 +104,11 @@ vi.mock("./slash-commands.js", () => ({
   resolveCommandText: mockState.resolveCommandText,
 }));
 
-import { createSlashCommandHttpHandler } from "./slash-http.js";
+let createSlashCommandHttpHandler: typeof import("./slash-http.js").createSlashCommandHttpHandler;
 
 function createRequest(body = "token=valid-token"): IncomingMessage {
   const req = new PassThrough();
-  const incoming = req as unknown as IncomingMessage;
+  const incoming = req as PassThrough & IncomingMessage;
   incoming.method = "POST";
   incoming.headers = {
     "content-type": "application/x-www-form-urlencoded",
@@ -124,13 +124,38 @@ function createResponse(): {
   getBody: () => string;
 } {
   let body = "";
-  const res = {
-    statusCode: 200,
-    setHeader() {},
-    end(chunk?: string | Buffer) {
+  class TestServerResponse extends ServerResponse {
+    override setHeader() {
+      return this;
+    }
+
+    override end(): this;
+    override end(cb: () => void): this;
+    override end(chunk: string | Buffer | Uint8Array, cb?: () => void): this;
+    override end(
+      chunk: string | Buffer | Uint8Array,
+      encoding: BufferEncoding,
+      cb?: () => void,
+    ): this;
+    override end(
+      chunkOrCb?: string | Buffer | Uint8Array | (() => void),
+      encodingOrCb?: BufferEncoding | (() => void),
+      cb?: () => void,
+    ): this {
+      const chunk = typeof chunkOrCb === "function" ? undefined : chunkOrCb;
+      const callback =
+        typeof chunkOrCb === "function"
+          ? chunkOrCb
+          : typeof encodingOrCb === "function"
+            ? encodingOrCb
+            : cb;
       body = chunk ? String(chunk) : "";
-    },
-  } as unknown as ServerResponse;
+      callback?.();
+      return this;
+    }
+  }
+
+  const res = new TestServerResponse(createRequest(""));
   return {
     res,
     getBody: () => body,
@@ -148,7 +173,8 @@ const accountFixture: ResolvedMattermostAccount = {
 };
 
 describe("slash-http cfg threading", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     mockState.readRequestBodyWithLimit.mockClear();
     mockState.parseSlashCommandPayload.mockClear();
     mockState.resolveCommandText.mockClear();
@@ -159,6 +185,7 @@ describe("slash-http cfg threading", () => {
     mockState.fetchMattermostChannel.mockClear();
     mockState.sendMessageMattermost.mockClear();
     mockState.normalizeMattermostAllowList.mockClear();
+    ({ createSlashCommandHttpHandler } = await import("./slash-http.js"));
   });
 
   it("passes cfg through the no-models slash reply send path", async () => {
