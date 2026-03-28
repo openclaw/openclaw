@@ -160,6 +160,7 @@ function createAnthropicOAuthAuthWrapper(baseStreamFn: StreamFn): StreamFn {
       }
     }
     headers.Authorization = `Bearer ${apiKey}`;
+    headers["anthropic-beta"] = "oauth-2025-04-20";
     headers["anthropic-version"] = headers["anthropic-version"] ?? "2023-06-01";
 
     return baseStreamFn(model, context, {

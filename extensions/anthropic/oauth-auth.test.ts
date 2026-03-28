@@ -16,6 +16,7 @@ describe("Anthropic OAuth authentication", () => {
         wrapStreamFn = config.wrapStreamFn;
       }),
       registerMediaUnderstandingProvider: vi.fn(),
+      registerCliBackend: vi.fn(),
     };
 
     anthropicPlugin.register(mockApi as never);
@@ -61,6 +62,7 @@ describe("Anthropic OAuth authentication", () => {
         wrapStreamFn = config.wrapStreamFn;
       }),
       registerMediaUnderstandingProvider: vi.fn(),
+      registerCliBackend: vi.fn(),
     };
 
     anthropicPlugin.register(mockApi as never);
@@ -103,6 +105,7 @@ describe("Anthropic OAuth authentication", () => {
         wrapStreamFn = config.wrapStreamFn;
       }),
       registerMediaUnderstandingProvider: vi.fn(),
+      registerCliBackend: vi.fn(),
     };
 
     anthropicPlugin.register(mockApi as never);
