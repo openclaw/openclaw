@@ -563,6 +563,12 @@ describe("gateway agent handler", () => {
       return await updater(store);
     });
     mocks.loadGatewaySessionRow.mockReturnValue({
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
       fastMode: true,
       sendPolicy: "deny",
       lastChannel: "telegram",
@@ -600,6 +606,12 @@ describe("gateway agent handler", () => {
       expect.objectContaining({
         sessionKey: "agent:main:main",
         reason: "send",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
         fastMode: true,
         sendPolicy: "deny",
         lastChannel: "telegram",
