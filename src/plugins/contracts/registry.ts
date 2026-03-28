@@ -75,6 +75,7 @@ function uniqueStrings(values: readonly string[]): string[] {
 }
 
 let providerContractRegistryCache: ProviderContractEntry[] | null = null;
+let providerContractRegistryByPluginIdCache: Map<string, ProviderContractEntry[]> | null = null;
 let webSearchProviderContractRegistryCache: WebSearchProviderContractEntry[] | null = null;
 let speechProviderContractRegistryCache: SpeechProviderContractEntry[] | null = null;
 let mediaUnderstandingProviderContractRegistryCache:
@@ -89,8 +90,38 @@ export let providerContractLoadError: Error | undefined;
 function loadProviderContractEntriesForPluginIds(
   pluginIds: readonly string[],
 ): ProviderContractEntry[] {
-  const allowed = new Set(pluginIds);
-  return loadProviderContractRegistry().filter((entry) => allowed.has(entry.pluginId));
+  return pluginIds.flatMap((pluginId) => loadProviderContractEntriesForPluginId(pluginId));
+}
+
+function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContractEntry[] {
+  if (providerContractRegistryCache) {
+    return providerContractRegistryCache.filter((entry) => entry.pluginId === pluginId);
+  }
+
+  const cache =
+    providerContractRegistryByPluginIdCache ?? new Map<string, ProviderContractEntry[]>();
+  providerContractRegistryByPluginIdCache = cache;
+  const cached = cache.get(pluginId);
+  if (cached) {
+    return cached;
+  }
+
+  try {
+    providerContractLoadError = undefined;
+    const entries = loadBundledCapabilityRuntimeRegistry({
+      pluginIds: [pluginId],
+      pluginSdkResolution: "dist",
+    }).providers.map((entry) => ({
+      pluginId: entry.pluginId,
+      provider: entry.provider,
+    }));
+    cache.set(pluginId, entries);
+    return entries;
+  } catch (error) {
+    providerContractLoadError = error instanceof Error ? error : new Error(String(error));
+    cache.set(pluginId, []);
+    return [];
+  }
 }
 
 function loadProviderContractRegistry(): ProviderContractEntry[] {
