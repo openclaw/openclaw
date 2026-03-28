@@ -169,6 +169,19 @@ export function createExecutionArtifacts(env = process.env) {
 const ensureNodeOptionFlag = (nodeOptions, flagPrefix, nextValue) =>
   nodeOptions.includes(flagPrefix) ? nodeOptions : `${nodeOptions} ${nextValue}`.trim();
 
+const ensureNodeOptionFilePathFlag = (nodeOptions, flag, filePath) => {
+  const normalized = nodeOptions.trim();
+  const emptyAssignmentPattern = new RegExp(`(^|\\s)${flag}=(?=\\s|$)`, "u");
+  if (emptyAssignmentPattern.test(normalized)) {
+    return normalized.replace(emptyAssignmentPattern, `$1${flag}=${filePath}`);
+  }
+  const bareFlagPattern = new RegExp(`(^|\\s)${flag}(?=\\s|$)`, "u");
+  if (bareFlagPattern.test(normalized)) {
+    return normalized.replace(bareFlagPattern, `$1${flag}=${filePath}`);
+  }
+  return ensureNodeOptionFlag(normalized, `${flag}=`, `${flag}=${filePath}`);
+};
+
 const isNodeLikeProcess = (command) => /(?:^|\/)node(?:$|\.exe$)/iu.test(command);
 
 const getShardLabel = (args) => {
@@ -429,6 +442,15 @@ export async function executePlan(plan, options = {}) {
         maxOldSpaceSizeMb && !nextNodeOptions.includes("--max-old-space-size=")
           ? `${nextNodeOptions} --max-old-space-size=${maxOldSpaceSizeMb}`.trim()
           : nextNodeOptions;
+      const localStorageFilePath = path.join(
+        artifacts.ensureTempArtifactDir(),
+        `${artifactStem}.localstorage.json`,
+      );
+      resolvedNodeOptions = ensureNodeOptionFilePathFlag(
+        resolvedNodeOptions,
+        "--localstorage-file",
+        localStorageFilePath,
+      );
       if (heapSnapshotEnabled && heapSnapshotDir) {
         try {
           fs.mkdirSync(heapSnapshotDir, { recursive: true });

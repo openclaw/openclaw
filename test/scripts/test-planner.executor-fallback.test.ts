@@ -139,4 +139,73 @@ describe("test planner executor", () => {
 
     artifacts.cleanupTempArtifacts();
   });
+
+  it("injects a valid localstorage file path into child NODE_OPTIONS", async () => {
+    vi.useRealTimers();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const fakeChild = Object.assign(new EventEmitter(), {
+      stdout,
+      stderr,
+      pid: 123,
+      kill: vi.fn(),
+    });
+    let capturedEnv;
+    const spawnMock = vi.fn((_command, _args, options) => {
+      capturedEnv = options?.env;
+      setTimeout(() => {
+        fakeChild.emit("exit", 0, null);
+        fakeChild.emit("close", 0, null);
+      }, 0);
+      return fakeChild;
+    });
+    vi.doMock("node:child_process", () => ({
+      spawn: spawnMock,
+    }));
+
+    const { executePlan, createExecutionArtifacts } = await importFreshModule<
+      typeof import("../../scripts/test-planner/executor.mjs")
+    >(import.meta.url, "../../scripts/test-planner/executor.mjs?scope=localstorage-file");
+    const artifacts = createExecutionArtifacts({
+      NODE_OPTIONS: "--max_old_space_size=4096 --localstorage-file",
+    });
+    await expect(
+      executePlan(
+        {
+          failurePolicy: "fail-fast",
+          passthroughMetadataOnly: false,
+          passthroughOptionArgs: [],
+          targetedUnits: [],
+          parallelUnits: [{ id: "unit-a", args: ["vitest", "run", "src/alpha.test.ts"] }],
+          serialUnits: [],
+          serialPrefixUnits: [],
+          shardCount: 1,
+          shardIndexOverride: null,
+          topLevelSingleShardAssignments: new Map(),
+          runtimeCapabilities: { isWindowsCi: false, isCI: false, isWindows: false },
+          topLevelParallelEnabled: false,
+          topLevelParallelLimit: 1,
+          deferredRunConcurrency: 1,
+          passthroughRequiresSingleRun: false,
+        },
+        {
+          env: {
+            NODE_OPTIONS: "--max_old_space_size=4096 --localstorage-file",
+          },
+          artifacts,
+        },
+      ),
+    ).resolves.toMatchObject({
+      exitCode: 0,
+    });
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(capturedEnv?.NODE_OPTIONS).toContain("--max_old_space_size=4096");
+    expect(capturedEnv?.NODE_OPTIONS).toMatch(
+      /--localstorage-file=[^\s]+\.localstorage\.json(?:\s|$)/u,
+    );
+    expect(capturedEnv?.NODE_OPTIONS).not.toMatch(/(^|\s)--localstorage-file(?=\s|$)/u);
+
+    artifacts.cleanupTempArtifacts();
+  });
 });
