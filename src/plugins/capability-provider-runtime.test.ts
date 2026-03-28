@@ -70,6 +70,24 @@ function expectBundledCompatLoadPath(params: {
   });
 }
 
+function setBundledCapabilityFixture(contractKey: string) {
+  mocks.loadPluginManifestRegistry.mockReturnValue({
+    plugins: [
+      {
+        id: "openai",
+        origin: "bundled",
+        contracts: { [contractKey]: ["openai"] },
+      },
+      {
+        id: "custom-plugin",
+        origin: "workspace",
+        contracts: {},
+      },
+    ] as never,
+    diagnostics: [],
+  });
+}
+
 describe("resolvePluginCapabilityProviders", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -127,21 +145,7 @@ describe("resolvePluginCapabilityProviders", () => {
         entries: { openai: { enabled: true } },
       },
     };
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "openai",
-          origin: "bundled",
-          contracts: { [contractKey]: ["openai"] },
-        },
-        {
-          id: "custom-plugin",
-          origin: "workspace",
-          contracts: {},
-        },
-      ] as never,
-      diagnostics: [],
-    });
+    setBundledCapabilityFixture(contractKey);
     mocks.withBundledPluginAllowlistCompat.mockReturnValue(allowlistCompat);
     mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
     mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);

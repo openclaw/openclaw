@@ -13,27 +13,31 @@ import {
   resolveManifestProviderOnboardAuthFlags,
 } from "./provider-auth-choices.js";
 
+function setManifestPlugins(plugins: Array<Record<string, unknown>>) {
+  loadPluginManifestRegistry.mockReturnValue({
+    plugins,
+  });
+}
+
 describe("provider auth choice manifest helpers", () => {
   it("flattens manifest auth choices", () => {
-    loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "openai",
-          providerAuthChoices: [
-            {
-              provider: "openai",
-              method: "api-key",
-              choiceId: "openai-api-key",
-              choiceLabel: "OpenAI API key",
-              onboardingScopes: ["text-inference"],
-              optionKey: "openaiApiKey",
-              cliFlag: "--openai-api-key",
-              cliOption: "--openai-api-key <key>",
-            },
-          ],
-        },
-      ],
-    });
+    setManifestPlugins([
+      {
+        id: "openai",
+        providerAuthChoices: [
+          {
+            provider: "openai",
+            method: "api-key",
+            choiceId: "openai-api-key",
+            choiceLabel: "OpenAI API key",
+            onboardingScopes: ["text-inference"],
+            optionKey: "openaiApiKey",
+            cliFlag: "--openai-api-key",
+            cliOption: "--openai-api-key <key>",
+          },
+        ],
+      },
+    ]);
 
     expect(resolveManifestProviderAuthChoices()).toEqual([
       {
@@ -118,9 +122,7 @@ describe("provider auth choice manifest helpers", () => {
       },
     },
   ])("$name", ({ plugins, run }) => {
-    loadPluginManifestRegistry.mockReturnValue({
-      plugins,
-    });
+    setManifestPlugins(plugins);
     run();
   });
 });
