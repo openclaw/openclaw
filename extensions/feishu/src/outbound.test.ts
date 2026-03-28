@@ -48,6 +48,74 @@ function resetOutboundMocks() {
   sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
 }
 
+describe("feishuOutbound NO_REPLY guard", () => {
+  beforeEach(() => {
+    resetOutboundMocks();
+  });
+
+  it("suppresses NO_REPLY text before any Feishu API call", async () => {
+    const result = await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "NO_REPLY",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ messageId: "suppressed" }));
+  });
+
+  it("suppresses NO_REPLY with surrounding whitespace", async () => {
+    const result = await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "  NO_REPLY  ",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ messageId: "suppressed" }));
+  });
+
+  it("does not suppress substantive text containing NO_REPLY", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "This is not a NO_REPLY situation",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "This is not a NO_REPLY situation",
+      }),
+    );
+  });
+
+  it("suppresses NO_REPLY text caption in sendMedia but still sends media", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "NO_REPLY",
+      mediaUrl: "https://example.com/image.png",
+      accountId: "main",
+    });
+
+    // Text should be suppressed
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    // Media should still be sent
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/image.png",
+      }),
+    );
+  });
+});
+
 describe("feishuOutbound.sendText local-image auto-convert", () => {
   beforeEach(() => {
     resetOutboundMocks();

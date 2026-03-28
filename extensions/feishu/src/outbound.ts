@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { sendMediaFeishu } from "./media.js";
@@ -94,6 +95,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       mediaLocalRoots,
       identity,
     }) => {
+      // Defense-in-depth: suppress NO_REPLY token before any Feishu API call.
+      // Heartbeat/cron pushes without reply context can bypass the upstream
+      // normalize pipeline, leaking the internal silent token to end users.
+      const trimmedText = text?.trim() ?? "";
+      if (isSilentReplyText(trimmedText)) {
+        return { messageId: "suppressed", chatId: "" };
+      }
+
       const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
       // Scheme A compatibility shim:
       // when upstream accidentally returns a local image path as plain text,
@@ -156,8 +165,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       threadId,
     }) => {
       const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
-      // Send text first if provided
-      if (text?.trim()) {
+      // Send text first if provided (suppress NO_REPLY silent token)
+      if (text?.trim() && !isSilentReplyText(text.trim())) {
         await sendOutboundText({
           cfg,
           to,
