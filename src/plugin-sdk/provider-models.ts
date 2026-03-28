@@ -11,19 +11,23 @@ export type {
 
 export {
   DEFAULT_CONTEXT_TOKENS,
+  applyModelCompatPatch,
   cloneFirstTemplateModel,
   createMoonshotThinkingWrapper,
+  hasToolSchemaProfile,
   hasNativeWebSearchTool,
-  HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
   matchesExactOrPrefix,
   normalizeModelCompat,
   normalizeProviderId,
   resolveMoonshotThinkingType,
   resolveToolCallArgumentsEncoding,
-  usesXaiToolSchemaProfile,
-  XAI_TOOL_SCHEMA_PROFILE,
 } from "./provider-model-shared.js";
-export { applyXaiModelCompat, normalizeXaiModelId } from "./xai.js";
+export {
+  applyXaiModelCompat,
+  HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
+  normalizeXaiModelId,
+  XAI_TOOL_SCHEMA_PROFILE,
+} from "./xai.js";
 export {
   isMiniMaxModernModelId,
   MINIMAX_DEFAULT_MODEL_ID,
