@@ -862,7 +862,7 @@ describe("/acp command", () => {
         conversation: expect.objectContaining({
           channel: "slack",
           accountId: "default",
-          conversationId: "U123",
+          conversationId: "user:U123",
         }),
       }),
     );

@@ -1,7 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createXaiFastModeWrapper } from "../../extensions/xai/stream.js";
 import { createConfiguredOllamaCompatNumCtxWrapper } from "../plugin-sdk/ollama.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import {
@@ -39,6 +38,27 @@ import {
   resolvePreparedExtraParams,
 } from "./pi-embedded-runner.js";
 import { log } from "./pi-embedded-runner/logger.js";
+
+function createXaiFastModeWrapper(baseStreamFn: StreamFn | undefined, fastMode: boolean): StreamFn {
+  const fastModelIds = new Map<string, string>([
+    ["grok-3", "grok-3-fast"],
+    ["grok-3-mini", "grok-3-mini-fast"],
+    ["grok-4", "grok-4-fast"],
+    ["grok-4-0709", "grok-4-fast"],
+  ]);
+  return (model, context, options) => {
+    if (!fastMode || model.api !== "openai-completions" || model.provider !== "xai") {
+      return (baseStreamFn as StreamFn)(model, context, options);
+    }
+    const fastModelId =
+      typeof model.id === "string" ? fastModelIds.get(model.id.trim()) : undefined;
+    return (baseStreamFn as StreamFn)(
+      fastModelId ? { ...model, id: fastModelId } : model,
+      context,
+      options,
+    );
+  };
+}
 
 beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({

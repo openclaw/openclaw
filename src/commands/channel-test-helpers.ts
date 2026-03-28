@@ -1,3 +1,4 @@
+import { googlechatPlugin } from "../../extensions/googlechat/test-api.js";
 import { matrixPlugin, setMatrixRuntime } from "../../extensions/matrix/test-api.js";
 import { msteamsPlugin } from "../../extensions/msteams/test-api.js";
 import { nostrPlugin } from "../../extensions/nostr/test-api.js";
@@ -41,6 +42,7 @@ export function setDefaultChannelPluginRegistryForTests(): void {
     msteamsPlugin,
     nostrPlugin,
     tlonPlugin,
+    googlechatPlugin,
     whatsappPlugin,
   ].map((plugin) => ({
     pluginId: plugin.id,
