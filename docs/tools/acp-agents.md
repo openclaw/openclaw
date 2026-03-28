@@ -106,9 +106,10 @@ Examples:
 
 Current-conversation binding support:
 
-- Any message channel can use `--bind here` through the shared conversation-binding path.
+- Chat/message channels that advertise current-conversation binding support can use `--bind here` through the shared conversation-binding path.
 - Channels with custom thread/topic semantics can still provide channel-specific canonicalization behind the same shared interface.
-- `--bind here` always means "bind the current conversation in place"; it does not require a per-channel ACP adapter anymore.
+- `--bind here` always means "bind the current conversation in place".
+- Generic current-conversation binds use the shared OpenClaw binding store and survive normal gateway restarts.
 
 Notes:
 
@@ -436,7 +437,7 @@ Notes:
 
 - `--bind here` is the simplest operator path for "make this channel or chat Codex-backed."
 - `--bind here` does not create a child thread.
-- `--bind here` is only available on adapters that expose current-conversation ACP bindings.
+- `--bind here` is only available on channels that expose current-conversation binding support.
 - `--bind` and `--thread` cannot be combined in the same `/acp spawn` call.
 
 ## Spawn thread modes
