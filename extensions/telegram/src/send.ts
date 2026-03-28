@@ -6,9 +6,9 @@ import type {
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError } from "grammy";
 import * as grammy from "grammy";
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/infra-runtime";
 import { formatUncaughtError } from "openclaw/plugin-sdk/infra-runtime";
 import { createTelegramRetryRunner } from "openclaw/plugin-sdk/infra-runtime";
