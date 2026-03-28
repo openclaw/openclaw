@@ -77,6 +77,23 @@ async function runMessageSendingWithHooks(
   return await runner.runMessageSending(messageEvent, messageCtx);
 }
 
+function expectTerminalHookState<
+  TResult extends { block?: boolean; blockReason?: string; cancel?: boolean; content?: string },
+>(result: TResult | undefined, expected: Partial<TResult>) {
+  if ("block" in expected) {
+    expect(result?.block).toBe(expected.block);
+  }
+  if ("blockReason" in expected) {
+    expect(result?.blockReason).toBe(expected.blockReason);
+  }
+  if ("cancel" in expected) {
+    expect(result?.cancel).toBe(expected.cancel);
+  }
+  if ("content" in expected) {
+    expect(result?.content).toBe(expected.content);
+  }
+}
+
 describe("before_tool_call terminal block semantics", () => {
   let registry: PluginRegistry;
 
@@ -117,11 +134,7 @@ describe("before_tool_call terminal block semantics", () => {
     },
   ] as const)("$name", async ({ hooks, expected }) => {
     const result = await runBeforeToolCallWithHooks(registry, hooks);
-    if (expected.block === undefined) {
-      expect(result?.block).toBeUndefined();
-      return;
-    }
-    expect(result).toEqual(expect.objectContaining(expected));
+    expectTerminalHookState(result, expected);
   });
 
   it("short-circuits lower-priority hooks after block=true", async () => {
@@ -223,11 +236,7 @@ describe("message_sending terminal cancel semantics", () => {
     },
   ] as const)("$name", async ({ hooks, expected }) => {
     const result = await runMessageSendingWithHooks(registry, hooks);
-    if (expected.cancel === undefined) {
-      expect(result?.cancel).toBeUndefined();
-      return;
-    }
-    expect(result).toEqual(expect.objectContaining(expected));
+    expectTerminalHookState(result, expected);
   });
 
   it("short-circuits lower-priority hooks after cancel=true", async () => {

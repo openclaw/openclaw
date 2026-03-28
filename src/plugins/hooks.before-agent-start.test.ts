@@ -47,6 +47,19 @@ describe("before_agent_start hook merger", () => {
     return result;
   };
 
+  const expectMergedBeforeAgentStart = async (
+    hooks: Array<{
+      pluginId: string;
+      result: PluginHookBeforeAgentStartResult;
+      priority?: number;
+    }>,
+    expected: Partial<PluginHookBeforeAgentStartResult>,
+  ) => {
+    const result = await runWithHooks(hooks);
+    expect(result).toEqual(expect.objectContaining(expected));
+    return result;
+  };
+
   const runWithHooks = async (
     hooks: Array<{
       pluginId: string;
@@ -101,16 +114,17 @@ describe("before_agent_start hook merger", () => {
       },
     ],
   ] as const)("%s", async (_name, hookResult, expected) => {
-    const result = await runWithHooks([{ pluginId: "plugin-a", result: hookResult }]);
-    expect(result).toEqual(expect.objectContaining(expected));
+    await expectMergedBeforeAgentStart([{ pluginId: "plugin-a", result: hookResult }], expected);
   });
 
   it("higher-priority plugin wins for modelOverride", async () => {
-    const result = await runWithHooks([
-      { pluginId: "low-priority", result: { modelOverride: "gpt-5.4" }, priority: 1 },
-      { pluginId: "high-priority", result: { modelOverride: "llama3.3:8b" }, priority: 10 },
-    ]);
-
+    const result = await expectMergedBeforeAgentStart(
+      [
+        { pluginId: "low-priority", result: { modelOverride: "gpt-5.4" }, priority: 1 },
+        { pluginId: "high-priority", result: { modelOverride: "llama3.3:8b" }, priority: 10 },
+      ],
+      { modelOverride: "llama3.3:8b" },
+    );
     expect(result?.modelOverride).toBe("llama3.3:8b");
   });
 
@@ -154,12 +168,7 @@ describe("before_agent_start hook merger", () => {
   });
 
   it("backward compat: plugin returning only prependContext produces no modelOverride", async () => {
-    addBeforeAgentStartHook(registry, "legacy-plugin", () => ({
-      prependContext: "legacy context",
-    }));
-
-    const runner = createHookRunner(registry);
-    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    const result = await runWithSingleHook({ prependContext: "legacy context" });
 
     expect(result?.prependContext).toBe("legacy context");
     expect(result?.modelOverride).toBeUndefined();

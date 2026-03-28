@@ -41,6 +41,23 @@ async function runBeforeToolCallWithHooks(
   return await runner.runBeforeToolCall({ toolName: "bash", params: {} }, stubCtx);
 }
 
+function expectRequireApprovalResult(
+  result: PluginHookBeforeToolCallResult | undefined,
+  expected: {
+    block?: boolean;
+    blockReason?: string;
+    params?: Record<string, unknown>;
+    requireApproval?: Record<string, unknown>;
+  },
+) {
+  expect(result?.block).toBe(expected.block);
+  expect(result?.blockReason).toBe(expected.blockReason);
+  expect(result?.params).toEqual(expected.params);
+  expect(result?.requireApproval).toEqual(
+    expected.requireApproval ? expect.objectContaining(expected.requireApproval) : undefined,
+  );
+}
+
 describe("before_tool_call hook merger — requireApproval", () => {
   let registry: PluginRegistry;
 
@@ -139,7 +156,7 @@ describe("before_tool_call hook merger — requireApproval", () => {
     },
   ] as const)("$name", async ({ hooks, expectedApproval }) => {
     const result = await runBeforeToolCallWithHooks(registry, hooks);
-    expect(result?.requireApproval).toEqual(expect.objectContaining(expectedApproval));
+    expectRequireApprovalResult(result, { requireApproval: expectedApproval });
   });
 
   it("merges block and requireApproval from different plugins", async () => {
@@ -235,9 +252,6 @@ describe("before_tool_call hook merger — requireApproval", () => {
     },
   ] as const)("$name", async ({ hooks, expected }) => {
     const result = await runBeforeToolCallWithHooks(registry, hooks);
-    expect(result?.block).toBe(expected.block);
-    expect(result?.blockReason).toBe(expected.blockReason);
-    expect(result?.params).toEqual(expected.params);
-    expect(result?.requireApproval).toEqual(expect.objectContaining(expected.requireApproval));
+    expectRequireApprovalResult(result, expected);
   });
 });
