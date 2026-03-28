@@ -11,6 +11,7 @@ import {
 import { __testing as loaderTesting } from "../plugins/loader.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 
 let describeImageFile: typeof import("./runtime.js").describeImageFile;
 let runMediaUnderstandingFile: typeof import("./runtime.js").runMediaUnderstandingFile;
