@@ -19,6 +19,24 @@ type ObfuscationPattern = {
 
 const MAX_COMMAND_CHARS = 10_000;
 
+/**
+ * Options for obfuscation detection.
+ */
+export type ObfuscationDetectionOptions = {
+  /**
+   * The exec security mode for the current session ("full" | "allowlist" | "deny").
+   * When "full", the length-only heuristic is skipped — the user has explicitly opted
+   * out of exec restrictions. Pattern-based checks still run regardless of this setting.
+   */
+  securityMode?: string;
+  /**
+   * Override the default MAX_COMMAND_CHARS threshold.
+   * Set to Infinity to disable the length check entirely.
+   * Note: passing 0 falls back to the default threshold (MAX_COMMAND_CHARS).
+   */
+  maxCommandChars?: number;
+};
+
 const INVISIBLE_UNICODE_CODE_POINTS = new Set<number>([
   0x00ad,
   0x034f,
@@ -214,11 +232,24 @@ function shouldSuppressCurlPipeShell(command: string): boolean {
   );
 }
 
-export function detectCommandObfuscation(command: string): ObfuscationDetection {
+export function detectCommandObfuscation(
+  command: string,
+  options: ObfuscationDetectionOptions = {},
+): ObfuscationDetection {
   if (!command || !command.trim()) {
     return { detected: false, reasons: [], matchedPatterns: [] };
   }
-  if (command.length > MAX_COMMAND_CHARS) {
+
+  // When security=full the user has explicitly opted out of exec restrictions.
+  // Skip the blunt length-only heuristic, but still run all pattern-based checks
+  // (those catch real attacks regardless of command length).
+  const skipLengthCheck = options.securityMode === "full";
+  const maxChars =
+    options.maxCommandChars !== undefined && options.maxCommandChars > 0
+      ? options.maxCommandChars
+      : MAX_COMMAND_CHARS;
+
+  if (!skipLengthCheck && command.length > maxChars) {
     return {
       detected: true,
       reasons: ["Command too long; potential obfuscation"],
