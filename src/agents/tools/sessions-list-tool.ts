@@ -153,7 +153,11 @@ export function createSessionsListTool(opts?: {
         const deliveryAccountId =
           typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined;
         const deliveryThreadId =
-          typeof deliveryContext?.threadId === "string" ? deliveryContext.threadId : undefined;
+          typeof deliveryContext?.threadId === "string" ||
+          (typeof deliveryContext?.threadId === "number" &&
+            Number.isFinite(deliveryContext.threadId))
+            ? deliveryContext.threadId
+            : undefined;
         const lastChannel =
           deliveryChannel ??
           (typeof entry.lastChannel === "string" ? entry.lastChannel : undefined);
