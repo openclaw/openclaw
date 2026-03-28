@@ -43,6 +43,7 @@ Scope intent:
 - `tools.web.search.grok.apiKey`
 - `tools.web.search.kimi.apiKey`
 - `tools.web.search.perplexity.apiKey`
+- `tools.code_execution.apiKey`
 - `gateway.auth.password`
 - `gateway.auth.token`
 - `gateway.remote.token`
