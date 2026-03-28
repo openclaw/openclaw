@@ -20,10 +20,11 @@ vi.mock("./bot.js", () => ({
 }));
 
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
+const updateCardFeishuMock = vi.hoisted(() => vi.fn());
 vi.mock("./send.js", () => ({
   sendCardFeishu: sendCardFeishuMock,
   sendMessageFeishu: vi.fn(),
-  updateCardFeishu: vi.fn(),
+  updateCardFeishu: updateCardFeishuMock,
   buildMarkdownCard: vi.fn().mockReturnValue({ schema: "2.0" }),
 }));
 
@@ -63,9 +64,10 @@ describe("Feishu Card Update Integration", () => {
     // Step 2: Handle card action
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    // Step 3: Verify card updated to processing
-    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
-    const processingCall = sendCardFeishuMock.mock.calls[0][0];
+    // Step 3: Verify original card updated to processing
+    expect(updateCardFeishuMock).toHaveBeenCalledTimes(1);
+    const processingCall = updateCardFeishuMock.mock.calls[0][0];
+    expect(processingCall.messageId).toBe("msg_original_456");
     expect(processingCall.card.header.title.content).toBe("Processing...");
 
     // Step 4: Verify agent was dispatched
@@ -106,10 +108,10 @@ describe("Feishu Card Update Integration", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    // Verify processing card sent
-    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+    // Verify processing card updated in place
+    expect(updateCardFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        to: "chat:p2p_chat_xyz",
+        messageId: "msg_p2p_789",
       }),
     );
 
@@ -185,7 +187,7 @@ describe("Feishu Card Update Integration", () => {
 
     // Should only dispatch once
     expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
-    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(updateCardFeishuMock).toHaveBeenCalledTimes(1);
   });
 
   it("rejects update action missing messageId", async () => {
@@ -238,7 +240,7 @@ describe("Feishu Card Update Integration", () => {
     await handleFeishuCardAction({ cfg, event, runtime });
 
     // Verify processing card includes the prompt
-    const processingCall = sendCardFeishuMock.mock.calls[0][0];
+    const processingCall = updateCardFeishuMock.mock.calls[0][0];
     const elements = processingCall.card.body.elements;
     const hasPromptElement = elements.some(
       (el: { tag: string; content?: string }) =>

@@ -9,7 +9,7 @@ import {
   FEISHU_APPROVAL_CONFIRM_ACTION,
   FEISHU_APPROVAL_REQUEST_ACTION,
 } from "./card-ux-approval.js";
-import { sendCardFeishu, sendMessageFeishu } from "./send.js";
+import { sendCardFeishu, sendMessageFeishu, updateCardFeishu } from "./send.js";
 
 export type FeishuCardActionEvent = {
   operator: {
@@ -335,10 +335,10 @@ export async function handleFeishuCardAction(params: {
           `feishu[${account.accountId}]: handling card update ${updateId} for message ${messageId}`,
         );
 
-        // Send processing card to update in place
-        await sendCardFeishu({
+        // Update the original card in place to show processing state
+        await updateCardFeishu({
           cfg,
-          to: resolveCallbackTarget(event),
+          messageId,
           card: buildProcessingCard({ prompt: prompt || command }),
           accountId,
         });

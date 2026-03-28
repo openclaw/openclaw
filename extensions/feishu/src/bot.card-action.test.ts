@@ -26,10 +26,12 @@ vi.mock("./bot.js", () => ({
 
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
+const updateCardFeishuMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./send.js", () => ({
   sendCardFeishu: sendCardFeishuMock,
   sendMessageFeishu: sendMessageFeishuMock,
+  updateCardFeishu: updateCardFeishuMock,
 }));
 
 import { handleFeishuMessage } from "./bot.js";
@@ -430,10 +432,10 @@ describe("Card Update Flow", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime, accountId: "main" });
 
-    // Should immediately update card to processing state
-    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+    // Should immediately update original card to processing state
+    expect(updateCardFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        to: "chat:chat1",
+        messageId: "msg_original_123",
         card: expect.objectContaining({
           header: expect.objectContaining({
             title: expect.objectContaining({ content: "Processing..." }),
