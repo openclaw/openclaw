@@ -59,10 +59,10 @@ describe("speech provider registry", () => {
     const providers = listSpeechProviders();
 
     expect(providers.map((provider) => provider.id)).toEqual(["demo-speech"]);
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(undefined);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith();
   });
 
-  it("loads speech providers from plugins when config is provided", () => {
+  it("uses active plugin speech providers even when config is provided", () => {
     resolveRuntimePluginRegistryMock.mockReturnValue({
       ...createEmptyPluginRegistry(),
       speechProviders: [
@@ -73,6 +73,29 @@ describe("speech provider registry", () => {
         },
       ],
     });
+
+    const cfg = {} as OpenClawConfig;
+
+    expect(listSpeechProviders(cfg).map((provider) => provider.id)).toEqual(["microsoft"]);
+    expect(getSpeechProvider("edge", cfg)?.id).toBe("microsoft");
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith();
+  });
+
+  it("loads speech providers from plugins when config is provided and no active providers exist", () => {
+    resolveRuntimePluginRegistryMock.mockImplementation((params?: unknown) =>
+      params === undefined
+        ? createEmptyPluginRegistry()
+        : {
+            ...createEmptyPluginRegistry(),
+            speechProviders: [
+              {
+                pluginId: "test-microsoft",
+                source: "test",
+                provider: createSpeechProvider("microsoft", ["edge"]),
+              },
+            ],
+          },
+    );
 
     const cfg = {} as OpenClawConfig;
 
@@ -94,7 +117,7 @@ describe("speech provider registry", () => {
   it("returns no providers when neither plugins nor active registry provide speech support", () => {
     expect(listSpeechProviders()).toEqual([]);
     expect(getSpeechProvider("demo-speech")).toBeUndefined();
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(undefined);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith();
   });
 
   it("canonicalizes the legacy edge alias to microsoft", () => {
