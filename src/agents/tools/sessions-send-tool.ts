@@ -96,7 +96,7 @@ export function createSessionsSendTool(opts?: {
       const labelAgentIdParam = readStringParam(params, "agentId")?.trim() || undefined;
 
       // Be tolerant when upstream adapters or model tool-call layers redundantly send both.
-      // sessionKey is the less ambiguous selector, so prefer it and ignore label when present.
+      // sessionKey is the more explicit selector, so prefer it and ignore label when present.
       let sessionKey = sessionKeyParam;
       if (!sessionKey && labelParam) {
         const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
