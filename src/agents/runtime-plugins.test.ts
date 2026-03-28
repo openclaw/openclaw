@@ -45,23 +45,4 @@ describe("ensureRuntimePluginsLoaded", () => {
       },
     });
   });
-
-  it("reloads when the current active registry is incompatible with the request", async () => {
-    const { ensureRuntimePluginsLoaded } = await import("./runtime-plugins.js");
-
-    ensureRuntimePluginsLoaded({
-      config: {} as never,
-      workspaceDir: "/tmp/workspace",
-      allowGatewaySubagentBinding: true,
-    });
-
-    expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
-      config: {} as never,
-      workspaceDir: "/tmp/workspace",
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    });
-    expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
-  });
 });

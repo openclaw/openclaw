@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 
 const resolveRuntimePluginRegistryMock = vi.fn();
@@ -34,7 +33,6 @@ function createSpeechProvider(id: string, aliases?: string[]): SpeechProviderPlu
 describe("speech provider registry", () => {
   beforeEach(async () => {
     vi.resetModules();
-    resetPluginRuntimeStateForTest();
     resolveRuntimePluginRegistryMock.mockReset();
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
     ({
@@ -45,21 +43,9 @@ describe("speech provider registry", () => {
     } = await import("./provider-registry.js"));
   });
 
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-  });
+  afterEach(() => {});
 
   it("uses active plugin speech providers without reloading plugins", () => {
-    setActivePluginRegistry({
-      ...createEmptyPluginRegistry(),
-      speechProviders: [
-        {
-          pluginId: "test-demo-speech",
-          source: "test",
-          provider: createSpeechProvider("demo-speech"),
-        },
-      ],
-    });
     resolveRuntimePluginRegistryMock.mockReturnValue({
       ...createEmptyPluginRegistry(),
       speechProviders: [
@@ -112,16 +98,6 @@ describe("speech provider registry", () => {
   });
 
   it("canonicalizes the legacy edge alias to microsoft", () => {
-    setActivePluginRegistry({
-      ...createEmptyPluginRegistry(),
-      speechProviders: [
-        {
-          pluginId: "test-microsoft",
-          source: "test",
-          provider: createSpeechProvider("microsoft", ["edge"]),
-        },
-      ],
-    });
     resolveRuntimePluginRegistryMock.mockReturnValue({
       ...createEmptyPluginRegistry(),
       speechProviders: [
