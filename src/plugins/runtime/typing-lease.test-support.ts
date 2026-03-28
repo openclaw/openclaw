@@ -7,11 +7,14 @@ export function expectTypingPulseCount(pulse: { mock: { calls: unknown[] } }, ex
 export function createPulseWithBackgroundFailure<
   TPulse extends (...args: never[]) => Promise<unknown>,
 >() {
-  const pulse = vi.fn(
-    async (..._args: never[]) => undefined as Awaited<ReturnType<TPulse>>,
-  ) as ReturnType<typeof vi.fn<TPulse>>;
-  pulse.mockResolvedValueOnce(undefined as Awaited<ReturnType<TPulse>>);
-  pulse.mockRejectedValueOnce(new Error("boom"));
+  let callCount = 0;
+  const pulse = vi.fn((() => {
+    callCount += 1;
+    if (callCount === 2) {
+      return Promise.reject(new Error("boom"));
+    }
+    return Promise.resolve(undefined);
+  }) as TPulse);
   return pulse;
 }
 
