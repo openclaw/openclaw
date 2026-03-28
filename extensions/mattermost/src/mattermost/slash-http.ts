@@ -6,16 +6,17 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import {
   buildModelsProviderData,
-  createReplyPrefixOptions,
-  createTypingCallbacks,
+  createChannelReplyPipeline,
+  isRequestBodyLimitError,
   logTypingFailure,
+  readRequestBodyWithLimit,
   type OpenClawConfig,
   type ReplyPayload,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk/mattermost";
-import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
+} from "../runtime-api.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
   createMattermostClient,
@@ -35,6 +36,7 @@ import {
   authorizeMattermostCommandInvocation,
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
+import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import { sendMessageMattermost } from "./send.js";
 import {
   parseSlashCommandPayload,
@@ -53,24 +55,16 @@ type SlashHttpHandlerParams = {
   log?: (msg: string) => void;
 };
 
+const MAX_BODY_BYTES = 64 * 1024;
+const BODY_READ_TIMEOUT_MS = 5_000;
+
 /**
  * Read the full request body as a string.
  */
 function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    req.on("data", (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > maxBytes) {
-        req.destroy();
-        reject(new Error("Request body too large"));
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
+  return readRequestBodyWithLimit(req, {
+    maxBytes,
+    timeoutMs: BODY_READ_TIMEOUT_MS,
   });
 }
 
@@ -214,8 +208,6 @@ async function authorizeSlashInvocation(params: {
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
   const { account, cfg, runtime, commandTokens, triggerMap, log } = params;
 
-  const MAX_BODY_BYTES = 64 * 1024; // 64KB
-
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.method !== "POST") {
       res.statusCode = 405;
@@ -227,7 +219,12 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     let body: string;
     try {
       body = await readBody(req, MAX_BODY_BYTES);
-    } catch {
+    } catch (error) {
+      if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
+        res.statusCode = 408;
+        res.end("Request body timeout");
+        return;
+      }
       res.statusCode = 413;
       res.end("Payload Too Large");
       return;
@@ -263,6 +260,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     const client = createMattermostClient({
       baseUrl: account.baseUrl ?? "",
       botToken: account.botToken ?? "",
+      allowPrivateNetwork: account.config?.allowPrivateNetwork === true,
     });
 
     const auth = await authorizeSlashInvocation({
@@ -319,6 +317,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       try {
         const to = `channel:${channelId}`;
         await sendMessageMattermost(to, "Sorry, something went wrong processing that command.", {
+          cfg,
           accountId: account.accountId,
         });
       } catch {
@@ -390,6 +389,7 @@ async function handleSlashCommandAsync(params: {
     const data = await buildModelsProviderData(cfg, route.agentId);
     if (data.providers.length === 0) {
       await sendMessageMattermost(to, "No models available.", {
+        cfg,
         accountId: account.accountId,
       });
       return;
@@ -421,6 +421,7 @@ async function handleSlashCommandAsync(params: {
             });
 
     await sendMessageMattermost(to, view.text, {
+      cfg,
       accountId: account.accountId,
       buttons: view.buttons,
     });
@@ -468,62 +469,47 @@ async function handleSlashCommandAsync(params: {
     accountId: account.accountId,
   });
 
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
     cfg,
     agentId: route.agentId,
     channel: "mattermost",
     accountId: account.accountId,
-  });
-
-  const typingCallbacks = createTypingCallbacks({
-    start: () => sendMattermostTyping(client, { channelId }),
-    onStartError: (err) => {
-      logTypingFailure({
-        log: (message) => log?.(message),
-        channel: "mattermost",
-        target: channelId,
-        error: err,
-      });
+    typing: {
+      start: () => sendMattermostTyping(client, { channelId }),
+      onStartError: (err) => {
+        logTypingFailure({
+          log: (message) => log?.(message),
+          channel: "mattermost",
+          target: channelId,
+          error: err,
+        });
+      },
     },
   });
+  const humanDelay = core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId);
 
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
-      ...prefixOptions,
-      humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
+      ...replyPipeline,
+      humanDelay,
       deliver: async (payload: ReplyPayload) => {
-        const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-        const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
-        if (mediaUrls.length === 0) {
-          const chunkMode = core.channel.text.resolveChunkMode(
-            cfg,
-            "mattermost",
-            account.accountId,
-          );
-          const chunks = core.channel.text.chunkMarkdownTextWithMode(text, textLimit, chunkMode);
-          for (const chunk of chunks.length > 0 ? chunks : [text]) {
-            if (!chunk) continue;
-            await sendMessageMattermost(to, chunk, {
-              accountId: account.accountId,
-            });
-          }
-        } else {
-          let first = true;
-          for (const mediaUrl of mediaUrls) {
-            const caption = first ? text : "";
-            first = false;
-            await sendMessageMattermost(to, caption, {
-              accountId: account.accountId,
-              mediaUrl,
-            });
-          }
-        }
+        await deliverMattermostReplyPayload({
+          core,
+          cfg,
+          payload,
+          to,
+          accountId: account.accountId,
+          agentId: route.agentId,
+          textLimit,
+          tableMode,
+          sendMessage: sendMessageMattermost,
+        });
         runtime.log?.(`delivered slash reply to ${to}`);
       },
       onError: (err, info) => {
         runtime.error?.(`mattermost slash ${info.kind} reply failed: ${String(err)}`);
       },
-      onReplyStart: typingCallbacks.onReplyStart,
+      onReplyStart: typingCallbacks?.onReplyStart,
     });
 
   await core.channel.reply.withReplyDispatcher({

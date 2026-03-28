@@ -3,22 +3,41 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ProviderPlugin } from "../plugins/types.js";
 import { captureEnv } from "../test-utils/env.js";
-import { maybeRemoveDeprecatedCliAuthProfiles } from "./doctor-auth.js";
+import {
+  maybeRemoveDeprecatedCliAuthProfiles,
+  maybeRepairLegacyOAuthProfileIds,
+} from "./doctor-auth.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import type { DoctorRepairMode } from "./doctor-repair-mode.js";
+
+const resolvePluginProvidersMock = vi.fn<() => ProviderPlugin[]>(() => []);
+
+vi.mock("../plugins/providers.runtime.js", () => ({
+  resolvePluginProviders: () => resolvePluginProvidersMock(),
+}));
 
 let envSnapshot: ReturnType<typeof captureEnv>;
 let tempAgentDir: string | undefined;
 
 function makePrompter(confirmValue: boolean): DoctorPrompter {
-  return {
-    confirm: vi.fn().mockResolvedValue(confirmValue),
-    confirmRepair: vi.fn().mockResolvedValue(confirmValue),
-    confirmAggressive: vi.fn().mockResolvedValue(confirmValue),
-    confirmSkipInNonInteractive: vi.fn().mockResolvedValue(confirmValue),
-    select: vi.fn().mockResolvedValue(""),
+  const repairMode: DoctorRepairMode = {
     shouldRepair: confirmValue,
     shouldForce: false,
+    nonInteractive: false,
+    canPrompt: true,
+    updateInProgress: false,
+  };
+  return {
+    confirm: vi.fn().mockResolvedValue(confirmValue),
+    confirmAutoFix: vi.fn().mockResolvedValue(confirmValue),
+    confirmAggressiveAutoFix: vi.fn().mockResolvedValue(confirmValue),
+    confirmRuntimeRepair: vi.fn().mockResolvedValue(confirmValue),
+    select: vi.fn().mockResolvedValue(""),
+    shouldRepair: repairMode.shouldRepair,
+    shouldForce: repairMode.shouldForce,
+    repairMode,
   };
 }
 
@@ -27,6 +46,8 @@ beforeEach(() => {
   tempAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
   process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
   process.env.PI_CODING_AGENT_DIR = tempAgentDir;
+  resolvePluginProvidersMock.mockReset();
+  resolvePluginProvidersMock.mockReturnValue([]);
 });
 
 afterEach(() => {
@@ -63,6 +84,13 @@ describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
               refresh: "token-r2",
               expires: Date.now() + 60_000,
             },
+            "openai-codex:default": {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "token-c",
+              refresh: "token-r3",
+              expires: Date.now() + 60_000,
+            },
           },
         },
         null,
@@ -71,15 +99,31 @@ describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
       "utf8",
     );
 
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [],
+        deprecatedProfileIds: ["anthropic:claude-cli"],
+      },
+      {
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        auth: [],
+        deprecatedProfileIds: ["openai-codex:codex-cli"],
+      },
+    ]);
+
     const cfg = {
       auth: {
         profiles: {
           "anthropic:claude-cli": { provider: "anthropic", mode: "oauth" },
           "openai-codex:codex-cli": { provider: "openai-codex", mode: "oauth" },
+          "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
         },
         order: {
           anthropic: ["anthropic:claude-cli"],
-          "openai-codex": ["openai-codex:codex-cli"],
+          "openai-codex": ["openai-codex:codex-cli", "openai-codex:default"],
         },
       },
     } as const;
@@ -94,10 +138,76 @@ describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
     };
     expect(raw.profiles?.["anthropic:claude-cli"]).toBeUndefined();
     expect(raw.profiles?.["openai-codex:codex-cli"]).toBeUndefined();
+    expect(raw.profiles?.["openai-codex:default"]).toBeDefined();
 
     expect(next.auth?.profiles?.["anthropic:claude-cli"]).toBeUndefined();
     expect(next.auth?.profiles?.["openai-codex:codex-cli"]).toBeUndefined();
+    expect(next.auth?.profiles?.["openai-codex:default"]).toBeDefined();
     expect(next.auth?.order?.anthropic).toBeUndefined();
-    expect(next.auth?.order?.["openai-codex"]).toBeUndefined();
+    expect(next.auth?.order?.["openai-codex"]).toEqual(["openai-codex:default"]);
+  });
+});
+
+describe("maybeRepairLegacyOAuthProfileIds", () => {
+  it("repairs provider-owned legacy OAuth profile ids", async () => {
+    if (!tempAgentDir) {
+      throw new Error("Missing temp agent dir");
+    }
+    const authPath = path.join(tempAgentDir, "auth-profiles.json");
+    fs.writeFileSync(
+      authPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "anthropic:user@example.com": {
+              type: "oauth",
+              provider: "anthropic",
+              access: "token-a",
+              refresh: "token-r",
+              expires: Date.now() + 60_000,
+              email: "user@example.com",
+            },
+          },
+          lastGood: {
+            anthropic: "anthropic:user@example.com",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [],
+        oauthProfileIdRepairs: [{ legacyProfileId: "anthropic:default" }],
+      },
+    ]);
+
+    const next = await maybeRepairLegacyOAuthProfileIds(
+      {
+        auth: {
+          profiles: {
+            "anthropic:default": { provider: "anthropic", mode: "oauth" },
+          },
+          order: {
+            anthropic: ["anthropic:default"],
+          },
+        },
+      } as OpenClawConfig,
+      makePrompter(true),
+    );
+
+    expect(next.auth?.profiles?.["anthropic:default"]).toBeUndefined();
+    expect(next.auth?.profiles?.["anthropic:user@example.com"]).toMatchObject({
+      provider: "anthropic",
+      mode: "oauth",
+      email: "user@example.com",
+    });
+    expect(next.auth?.order?.anthropic).toEqual(["anthropic:user@example.com"]);
   });
 });

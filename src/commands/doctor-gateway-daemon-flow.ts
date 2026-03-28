@@ -12,7 +12,7 @@ import {
   launchAgentPlistExists,
   repairLaunchAgentBootstrap,
 } from "../daemon/launchd.js";
-import { resolveGatewayService } from "../daemon/service.js";
+import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
@@ -59,7 +59,7 @@ async function maybeRepairLaunchAgentBootstrap(params: {
 
   note("LaunchAgent is listed but not loaded in launchd.", `${params.title} LaunchAgent`);
 
-  const shouldFix = await params.prompter.confirmSkipInNonInteractive({
+  const shouldFix = await params.prompter.confirmRuntimeRepair({
     message: `Repair ${params.title} LaunchAgent bootstrap now?`,
     initialValue: true,
   });
@@ -153,13 +153,16 @@ export async function maybeRepairGatewayDaemon(params: {
       const systemdAvailable = await isSystemdUserServiceAvailable().catch(() => false);
       if (!systemdAvailable) {
         const wsl = await isWSL();
-        note(renderSystemdUnavailableHints({ wsl }).join("\n"), "Gateway");
+        note(
+          renderSystemdUnavailableHints({ wsl, kind: "generic_unavailable" }).join("\n"),
+          "Gateway",
+        );
         return;
       }
     }
     note("Gateway service not installed.", "Gateway");
     if (params.cfg.gateway?.mode !== "remote") {
-      const install = await params.prompter.confirmSkipInNonInteractive({
+      const install = await params.prompter.confirmRuntimeRepair({
         message: "Install gateway service now?",
         initialValue: true,
       });
@@ -230,16 +233,21 @@ export async function maybeRepairGatewayDaemon(params: {
   }
 
   if (serviceRuntime?.status !== "running") {
-    const start = await params.prompter.confirmSkipInNonInteractive({
+    const start = await params.prompter.confirmRuntimeRepair({
       message: "Start gateway service now?",
       initialValue: true,
     });
     if (start) {
-      await service.restart({
+      const restartResult = await service.restart({
         env: process.env,
         stdout: process.stdout,
       });
-      await sleep(1500);
+      const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
+      if (!restartStatus.scheduled) {
+        await sleep(1500);
+      } else {
+        note(restartStatus.message, "Gateway");
+      }
     }
   }
 
@@ -252,15 +260,20 @@ export async function maybeRepairGatewayDaemon(params: {
   }
 
   if (serviceRuntime?.status === "running") {
-    const restart = await params.prompter.confirmSkipInNonInteractive({
+    const restart = await params.prompter.confirmRuntimeRepair({
       message: "Restart gateway service now?",
       initialValue: true,
     });
     if (restart) {
-      await service.restart({
+      const restartResult = await service.restart({
         env: process.env,
         stdout: process.stdout,
       });
+      const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
+      if (restartStatus.scheduled) {
+        note(restartStatus.message, "Gateway");
+        return;
+      }
       await sleep(1500);
       try {
         await healthCommand({ json: false, timeoutMs: 10_000 }, params.runtime);

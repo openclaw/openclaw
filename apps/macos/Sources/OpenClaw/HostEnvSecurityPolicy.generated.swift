@@ -17,16 +17,30 @@ enum HostEnvSecurityPolicy {
         "BASH_ENV",
         "ENV",
         "GIT_EXTERNAL_DIFF",
+        "GIT_EXEC_PATH",
+        "GIT_TEMPLATE_DIR",
         "SHELL",
         "SHELLOPTS",
         "PS4",
         "GCONV_PATH",
         "IFS",
-        "SSLKEYLOGFILE"
+        "SSLKEYLOGFILE",
+        "JAVA_TOOL_OPTIONS",
+        "_JAVA_OPTIONS",
+        "JDK_JAVA_OPTIONS",
+        "PYTHONBREAKPOINT",
+        "DOTNET_STARTUP_HOOKS",
+        "DOTNET_ADDITIONAL_DEPS",
+        "GLIBC_TUNABLES",
+        "MAVEN_OPTS",
+        "SBT_OPTS",
+        "GRADLE_OPTS",
+        "ANT_OPTS"
     ]
 
     static let blockedOverrideKeys: Set<String> = [
         "HOME",
+        "GRADLE_USER_HOME",
         "ZDOTDIR",
         "GIT_SSH_COMMAND",
         "GIT_SSH",
@@ -50,7 +64,24 @@ enum HostEnvSecurityPolicy {
         "OPENSSL_ENGINES",
         "PYTHONSTARTUP",
         "WGETRC",
-        "CURL_HOME"
+        "CURL_HOME",
+        "CLASSPATH",
+        "CGO_CFLAGS",
+        "CGO_LDFLAGS",
+        "GOFLAGS",
+        "CORECLR_PROFILER_PATH",
+        "PHPRC",
+        "PHP_INI_SCAN_DIR",
+        "DENO_DIR",
+        "BUN_CONFIG_REGISTRY",
+        "LUA_PATH",
+        "LUA_CPATH",
+        "GEM_HOME",
+        "GEM_PATH",
+        "BUNDLE_GEMFILE",
+        "COMPOSER_HOME",
+        "XDG_CONFIG_HOME",
+        "AWS_CONFIG_FILE"
     ]
 
     static let blockedOverridePrefixes: [String] = [

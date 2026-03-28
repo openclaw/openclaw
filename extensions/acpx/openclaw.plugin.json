@@ -8,13 +8,16 @@
     "additionalProperties": false,
     "properties": {
       "command": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "expectedVersion": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "cwd": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "permissionMode": {
         "type": "string",
@@ -42,6 +45,7 @@
           "properties": {
             "command": {
               "type": "string",
+              "minLength": 1,
               "description": "Command to run the MCP server"
             },
             "args": {
@@ -67,7 +71,7 @@
     },
     "expectedVersion": {
       "label": "Expected acpx Version",
-      "help": "Exact version to enforce (for example 0.1.15) or \"any\" to skip strict version matching."
+      "help": "Exact version to enforce or \"any\" to skip strict version matching."
     },
     "cwd": {
       "label": "Default Working Directory",

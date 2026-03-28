@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { saveAuthProfileStore } from "./auth-profiles.js";
-import { discoverAuthStorage } from "./pi-model-discovery.js";
+import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
 async function createAgentDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-auth-storage-"));
@@ -55,6 +55,10 @@ async function readLegacyAuthJson(agentDir: string): Promise<Record<string, unkn
     string,
     unknown
   >;
+}
+
+async function writeModelsJson(agentDir: string, payload: unknown): Promise<void> {
+  await fs.writeFile(path.join(agentDir, "models.json"), `${JSON.stringify(payload, null, 2)}\n`);
 }
 
 describe("discoverAuthStorage", () => {
@@ -145,6 +149,126 @@ describe("discoverAuthStorage", () => {
           delete process.env.OPENCLAW_AUTH_STORE_READONLY;
         } else {
           process.env.OPENCLAW_AUTH_STORE_READONLY = previous;
+        }
+      }
+    });
+  });
+
+  it("includes env-backed provider auth when no auth profile exists", async () => {
+    await withAgentDir(async (agentDir) => {
+      const previous = process.env.MISTRAL_API_KEY;
+      process.env.MISTRAL_API_KEY = "mistral-env-test-key";
+      try {
+        saveAuthProfileStore(
+          {
+            version: 1,
+            profiles: {},
+          },
+          agentDir,
+        );
+
+        const authStorage = discoverAuthStorage(agentDir);
+
+        expect(authStorage.hasAuth("mistral")).toBe(true);
+        await expect(authStorage.getApiKey("mistral")).resolves.toBe("mistral-env-test-key");
+      } finally {
+        if (previous === undefined) {
+          delete process.env.MISTRAL_API_KEY;
+        } else {
+          process.env.MISTRAL_API_KEY = previous;
+        }
+      }
+    });
+  });
+
+  it("normalizes discovered Mistral compat flags for direct callers", async () => {
+    await withAgentDir(async (agentDir) => {
+      const previous = process.env.MISTRAL_API_KEY;
+      process.env.MISTRAL_API_KEY = "mistral-env-test-key";
+      try {
+        saveAuthProfileStore(
+          {
+            version: 1,
+            profiles: {},
+          },
+          agentDir,
+        );
+        await writeModelsJson(agentDir, {
+          providers: {
+            mistral: {
+              api: "openai-completions",
+              baseUrl: "https://api.mistral.ai/v1",
+              apiKey: "MISTRAL_API_KEY",
+              models: [
+                {
+                  id: "mistral-large-latest",
+                  name: "Mistral Large",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 262144,
+                  maxTokens: 16384,
+                },
+              ],
+            },
+          },
+        });
+
+        const authStorage = discoverAuthStorage(agentDir);
+        const modelRegistry = discoverModels(authStorage, agentDir);
+        expect(modelRegistry.getError?.()).toBeUndefined();
+        const model = modelRegistry.find("mistral", "mistral-large-latest") as {
+          api?: string;
+          compat?: {
+            supportsStore?: boolean;
+            supportsReasoningEffort?: boolean;
+            maxTokensField?: string;
+          };
+        } | null;
+        const all = modelRegistry.getAll() as Array<{
+          provider?: string;
+          id?: string;
+          api?: string;
+          compat?: {
+            supportsStore?: boolean;
+            supportsReasoningEffort?: boolean;
+            maxTokensField?: string;
+          };
+        }>;
+        const available = modelRegistry.getAvailable() as Array<{
+          provider?: string;
+          id?: string;
+          api?: string;
+          compat?: {
+            supportsStore?: boolean;
+            supportsReasoningEffort?: boolean;
+            maxTokensField?: string;
+          };
+        }>;
+        const fromAll = all.find(
+          (entry) => entry.provider === "mistral" && entry.id === "mistral-large-latest",
+        );
+        const fromAvailable = available.find(
+          (entry) => entry.provider === "mistral" && entry.id === "mistral-large-latest",
+        );
+
+        expect(model?.api).toBe("openai-completions");
+        expect(fromAll?.api).toBe("openai-completions");
+        expect(fromAvailable?.api).toBe("openai-completions");
+        expect(model?.compat?.supportsStore).toBe(false);
+        expect(model?.compat?.supportsReasoningEffort).toBe(false);
+        expect(model?.compat?.maxTokensField).toBe("max_tokens");
+        expect(fromAll?.compat?.supportsStore).toBe(false);
+        expect(fromAll?.compat?.supportsReasoningEffort).toBe(false);
+        expect(fromAll?.compat?.maxTokensField).toBe("max_tokens");
+        expect(fromAvailable?.compat?.supportsStore).toBe(false);
+        expect(fromAvailable?.compat?.supportsReasoningEffort).toBe(false);
+        expect(fromAvailable?.compat?.maxTokensField).toBe("max_tokens");
+      } finally {
+        if (previous === undefined) {
+          delete process.env.MISTRAL_API_KEY;
+        } else {
+          process.env.MISTRAL_API_KEY = previous;
         }
       }
     });

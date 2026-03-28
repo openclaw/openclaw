@@ -139,6 +139,54 @@ struct LowCoverageHelperTests {
         #expect(emptyReport.summary.contains("Nothing is listening"))
     }
 
+    @Test func `port guardian remote mode does not kill docker`() {
+        #expect(PortGuardian._testIsExpected(
+            command: "com.docker.backend",
+            fullCommand: "com.docker.backend",
+            port: 18789, mode: .remote) == true)
+
+        #expect(PortGuardian._testIsExpected(
+            command: "ssh",
+            fullCommand: "ssh -L 18789:localhost:18789 user@host",
+            port: 18789, mode: .remote) == true)
+
+        #expect(PortGuardian._testIsExpected(
+            command: "podman",
+            fullCommand: "podman",
+            port: 18789, mode: .remote) == true)
+    }
+
+    @Test func `port guardian local mode still rejects unexpected`() {
+        #expect(PortGuardian._testIsExpected(
+            command: "com.docker.backend",
+            fullCommand: "com.docker.backend",
+            port: 18789, mode: .local) == false)
+
+        #expect(PortGuardian._testIsExpected(
+            command: "python",
+            fullCommand: "python server.py",
+            port: 18789, mode: .local) == false)
+
+        #expect(PortGuardian._testIsExpected(
+            command: "node",
+            fullCommand: "node /path/to/gateway-daemon",
+            port: 18789, mode: .local) == true)
+    }
+
+    @Test func `port guardian remote mode report accepts any listener`() {
+        let dockerReport = PortGuardian._testBuildReport(
+            port: 18789, mode: .remote,
+            listeners: [(pid: 99, command: "com.docker.backend",
+                         fullCommand: "com.docker.backend", user: "me")])
+        #expect(dockerReport.offenders.isEmpty)
+
+        let localDockerReport = PortGuardian._testBuildReport(
+            port: 18789, mode: .local,
+            listeners: [(pid: 99, command: "com.docker.backend",
+                         fullCommand: "com.docker.backend", user: "me")])
+        #expect(!localDockerReport.offenders.isEmpty)
+    }
+
     @Test @MainActor func `canvas scheme handler resolves files and errors`() throws {
         let root = FileManager().temporaryDirectory
             .appendingPathComponent("canvas-\(UUID().uuidString)", isDirectory: true)
@@ -166,6 +214,32 @@ struct LowCoverageHelperTests {
 
         #expect(handler._testTextEncodingName(for: "text/html") == "utf-8")
         #expect(handler._testTextEncodingName(for: "application/octet-stream") == nil)
+    }
+
+    @Test @MainActor func `canvas scheme handler blocks symlink escapes`() throws {
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("canvas-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+
+        let session = root.appendingPathComponent("main", isDirectory: true)
+        try FileManager().createDirectory(at: session, withIntermediateDirectories: true)
+
+        let outside = root.deletingLastPathComponent().appendingPathComponent("canvas-secret-\(UUID().uuidString).txt")
+        defer { try? FileManager().removeItem(at: outside) }
+        try "top-secret".write(to: outside, atomically: true, encoding: .utf8)
+
+        let symlink = session.appendingPathComponent("index.html")
+        try FileManager().createSymbolicLink(at: symlink, withDestinationURL: outside)
+
+        let handler = CanvasSchemeHandler(root: root)
+        let url = try #require(CanvasScheme.makeURL(session: "main", path: "index.html"))
+        let response = handler._testResponse(for: url)
+        let body = String(data: response.data, encoding: .utf8) ?? ""
+
+        #expect(response.mime == "text/html")
+        #expect(body.contains("Forbidden"))
+        #expect(!body.contains("top-secret"))
     }
 
     @Test @MainActor func `menu context card injector inserts and finds index`() {

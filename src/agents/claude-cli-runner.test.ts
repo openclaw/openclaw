@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runClaudeCliAgent } from "./claude-cli-runner.js";
 
 const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -50,6 +49,13 @@ function createManagedRun(
   };
 }
 
+let runClaudeCliAgent: typeof import("./claude-cli-runner.js").runClaudeCliAgent;
+
+async function loadFreshClaudeCliRunnerModuleForTest() {
+  vi.resetModules();
+  ({ runClaudeCliAgent } = await import("./claude-cli-runner.js"));
+}
+
 function successExit(payload: { message: string; session_id: string }) {
   return {
     reason: "exit" as const,
@@ -73,7 +79,8 @@ async function waitForCalls(mockFn: { mock: { calls: unknown[][] } }, count: num
 }
 
 describe("runClaudeCliAgent", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadFreshClaudeCliRunnerModuleForTest();
     mocks.spawn.mockClear();
   });
 

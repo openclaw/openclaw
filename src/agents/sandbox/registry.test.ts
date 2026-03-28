@@ -20,15 +20,8 @@ vi.mock("./constants.js", () => ({
   SANDBOX_BROWSER_REGISTRY_PATH,
 }));
 
-import type { SandboxBrowserRegistryEntry, SandboxRegistryEntry } from "./registry.js";
-import {
-  readBrowserRegistry,
-  readRegistry,
-  removeBrowserRegistryEntry,
-  removeRegistryEntry,
-  updateBrowserRegistry,
-  updateRegistry,
-} from "./registry.js";
+type SandboxBrowserRegistryEntry = import("./registry.js").SandboxBrowserRegistryEntry;
+type SandboxRegistryEntry = import("./registry.js").SandboxRegistryEntry;
 
 type WriteDelayConfig = {
   targetFile: "containers.json" | "browsers.json";
@@ -40,6 +33,29 @@ type WriteDelayConfig = {
 
 let activeWriteGate: WriteDelayConfig | null = null;
 const realFsWriteFile = fs.writeFile;
+let readBrowserRegistry: typeof import("./registry.js").readBrowserRegistry;
+let readRegistry: typeof import("./registry.js").readRegistry;
+let removeBrowserRegistryEntry: typeof import("./registry.js").removeBrowserRegistryEntry;
+let removeRegistryEntry: typeof import("./registry.js").removeRegistryEntry;
+let updateBrowserRegistry: typeof import("./registry.js").updateBrowserRegistry;
+let updateRegistry: typeof import("./registry.js").updateRegistry;
+
+async function loadFreshRegistryModuleForTest() {
+  vi.resetModules();
+  vi.doMock("./constants.js", () => ({
+    SANDBOX_STATE_DIR: TEST_STATE_DIR,
+    SANDBOX_REGISTRY_PATH,
+    SANDBOX_BROWSER_REGISTRY_PATH,
+  }));
+  ({
+    readBrowserRegistry,
+    readRegistry,
+    removeBrowserRegistryEntry,
+    removeRegistryEntry,
+    updateBrowserRegistry,
+    updateRegistry,
+  } = await import("./registry.js"));
+}
 
 function payloadMentionsContainer(payload: string, containerName: string): boolean {
   return (
@@ -97,7 +113,7 @@ function installWriteGate(
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   activeWriteGate = null;
   vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
     const [target, content] = args;
@@ -120,6 +136,7 @@ beforeEach(() => {
     }
     return realFsWriteFile(...args);
   });
+  await loadFreshRegistryModuleForTest();
 });
 
 afterEach(async () => {
@@ -172,6 +189,28 @@ async function seedBrowserRegistry(entries: SandboxBrowserRegistryEntry[]) {
 }
 
 describe("registry race safety", () => {
+  it("normalizes legacy registry entries on read", async () => {
+    await seedContainerRegistry([
+      {
+        containerName: "legacy-container",
+        sessionKey: "agent:main",
+        createdAtMs: 1,
+        lastUsedAtMs: 1,
+        image: "openclaw-sandbox:test",
+      },
+    ]);
+
+    const registry = await readRegistry();
+    expect(registry.entries).toEqual([
+      expect.objectContaining({
+        containerName: "legacy-container",
+        backendId: "docker",
+        runtimeLabel: "legacy-container",
+        configLabelKind: "Image",
+      }),
+    ]);
+  });
+
   it("keeps both container updates under concurrent writes", async () => {
     await Promise.all([
       updateRegistry(containerEntry({ containerName: "container-a" })),

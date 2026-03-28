@@ -1,28 +1,60 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
-const resolveAuthProfileOrderMock = vi.hoisted(() => vi.fn());
-const resolveAuthProfileDisplayLabelMock = vi.hoisted(() => vi.fn());
-
 vi.mock("./auth-profiles.js", () => ({
-  ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
-  resolveAuthProfileOrder: (...args: unknown[]) => resolveAuthProfileOrderMock(...args),
-  resolveAuthProfileDisplayLabel: (...args: unknown[]) =>
-    resolveAuthProfileDisplayLabelMock(...args),
+  ensureAuthProfileStore: vi.fn(),
+  resolveAuthProfileOrder: vi.fn(),
+  resolveAuthProfileDisplayLabel: vi.fn(),
 }));
 
 vi.mock("./model-auth.js", () => ({
-  getCustomProviderApiKey: () => undefined,
-  resolveEnvApiKey: () => null,
+  resolveUsableCustomProviderApiKey: vi.fn(() => null),
+  resolveEnvApiKey: vi.fn(() => null),
 }));
 
-const { resolveModelAuthLabel } = await import("./model-auth-label.js");
+type AuthProfilesModule = typeof import("./auth-profiles.js");
+type ModelAuthModule = typeof import("./model-auth.js");
+type ModelAuthLabelModule = typeof import("./model-auth-label.js");
+
+let ensureAuthProfileStoreMock: ReturnType<
+  typeof vi.mocked<AuthProfilesModule["ensureAuthProfileStore"]>
+>;
+let resolveAuthProfileOrderMock: ReturnType<
+  typeof vi.mocked<AuthProfilesModule["resolveAuthProfileOrder"]>
+>;
+let resolveAuthProfileDisplayLabelMock: ReturnType<
+  typeof vi.mocked<AuthProfilesModule["resolveAuthProfileDisplayLabel"]>
+>;
+let resolveUsableCustomProviderApiKeyMock: ReturnType<
+  typeof vi.mocked<ModelAuthModule["resolveUsableCustomProviderApiKey"]>
+>;
+let resolveEnvApiKeyMock: ReturnType<typeof vi.mocked<ModelAuthModule["resolveEnvApiKey"]>>;
+let resolveModelAuthLabel: ModelAuthLabelModule["resolveModelAuthLabel"];
+
+async function loadModelAuthLabelModule() {
+  vi.resetModules();
+  const authProfilesModule = await import("./auth-profiles.js");
+  const modelAuthModule = await import("./model-auth.js");
+  const modelAuthLabelModule = await import("./model-auth-label.js");
+  ensureAuthProfileStoreMock = vi.mocked(authProfilesModule.ensureAuthProfileStore);
+  resolveAuthProfileOrderMock = vi.mocked(authProfilesModule.resolveAuthProfileOrder);
+  resolveAuthProfileDisplayLabelMock = vi.mocked(authProfilesModule.resolveAuthProfileDisplayLabel);
+  resolveUsableCustomProviderApiKeyMock = vi.mocked(
+    modelAuthModule.resolveUsableCustomProviderApiKey,
+  );
+  resolveEnvApiKeyMock = vi.mocked(modelAuthModule.resolveEnvApiKey);
+  resolveModelAuthLabel = modelAuthLabelModule.resolveModelAuthLabel;
+}
 
 describe("resolveModelAuthLabel", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadModelAuthLabelModule();
     ensureAuthProfileStoreMock.mockReset();
     resolveAuthProfileOrderMock.mockReset();
     resolveAuthProfileDisplayLabelMock.mockReset();
+    resolveUsableCustomProviderApiKeyMock.mockReset();
+    resolveUsableCustomProviderApiKeyMock.mockReturnValue(null);
+    resolveEnvApiKeyMock.mockReset();
+    resolveEnvApiKeyMock.mockReturnValue(null);
   });
 
   it("does not include token value in label for token profiles", () => {

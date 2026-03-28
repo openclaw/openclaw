@@ -2,11 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
 import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
+import type { GatewayHelloOk } from "./gateway.ts";
+
+const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
   options: { clientVersion?: string };
+  emitHello: (hello?: GatewayHelloOk) => void;
   emitClose: (info: {
     code: number;
     reason?: string;
@@ -18,7 +22,9 @@ type GatewayClientMock = {
 
 const gatewayClientInstances: GatewayClientMock[] = [];
 
-vi.mock("./gateway.ts", () => {
+vi.mock("./gateway.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./gateway.ts")>();
+
   function resolveGatewayErrorDetailCode(
     error: { details?: unknown } | null | undefined,
   ): string | null {
@@ -37,6 +43,7 @@ vi.mock("./gateway.ts", () => {
     constructor(
       private opts: {
         clientVersion?: string;
+        onHello?: (hello: GatewayHelloOk) => void;
         onClose?: (info: {
           code: number;
           reason: string;
@@ -50,6 +57,15 @@ vi.mock("./gateway.ts", () => {
         start: this.start,
         stop: this.stop,
         options: { clientVersion: this.opts.clientVersion },
+        emitHello: (hello) => {
+          this.opts.onHello?.(
+            hello ?? {
+              type: "hello-ok",
+              protocol: 3,
+              snapshot: {},
+            },
+          );
+        },
         emitClose: (info) => {
           this.opts.onClose?.({
             code: info.code,
@@ -67,7 +83,15 @@ vi.mock("./gateway.ts", () => {
     }
   }
 
-  return { GatewayBrowserClient, resolveGatewayErrorDetailCode };
+  return { ...actual, GatewayBrowserClient, resolveGatewayErrorDetailCode };
+});
+
+vi.mock("./controllers/chat.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./controllers/chat.ts")>();
+  return {
+    ...actual,
+    loadChatHistory: loadChatHistoryMock,
+  };
 });
 
 function createHost() {
@@ -83,6 +107,7 @@ function createHost() {
       splitRatio: 0.6,
       navCollapsed: false,
       navGroupsCollapsed: {},
+      borderRadius: 50,
     },
     password: "",
     clientInstanceId: "instance-test",
@@ -106,7 +131,15 @@ function createHost() {
     assistantAgentId: null,
     serverVersion: null,
     sessionKey: "main",
+    chatMessages: [],
+    chatToolMessages: [],
+    chatStreamSegments: [],
+    chatStream: null,
+    chatStreamStartedAt: null,
     chatRunId: null,
+    toolStreamById: new Map(),
+    toolStreamOrder: [],
+    toolStreamSyncTimer: null,
     refreshSessionsAfterChat: new Set<string>(),
     execApprovalQueue: [],
     execApprovalError: null,
@@ -114,9 +147,37 @@ function createHost() {
   } as unknown as Parameters<typeof connectGateway>[0];
 }
 
+function connectHostGateway() {
+  const host = createHost();
+  connectGateway(host);
+  const client = gatewayClientInstances[0];
+  expect(client).toBeDefined();
+  return { host, client };
+}
+
+function emitToolResultEvent(client: GatewayClientMock) {
+  client.emitEvent({
+    event: "agent",
+    payload: {
+      runId: "engine-run-1",
+      seq: 1,
+      stream: "tool",
+      ts: 1,
+      sessionKey: "main",
+      data: {
+        toolCallId: "tool-1",
+        name: "fetch",
+        phase: "result",
+        result: { text: "ok" },
+      },
+    },
+  });
+}
+
 describe("connectGateway", () => {
   beforeEach(() => {
     gatewayClientInstances.length = 0;
+    loadChatHistoryMock.mockClear();
   });
 
   it("ignores stale client onGap callbacks after reconnect", () => {
@@ -252,6 +313,48 @@ describe("connectGateway", () => {
     expect(host.lastError).toContain("too many failed authentication attempts");
   });
 
+  it("maps generic fetch failures to actionable device identity guidance", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Fetch failed",
+        details: { code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED },
+      },
+    });
+
+    expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED);
+    expect(host.lastError).toContain("device identity required");
+  });
+
+  it("maps generic fetch failures to actionable origin guidance", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Fetch failed",
+        details: { code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED },
+      },
+    });
+
+    expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED);
+    expect(host.lastError).toContain("origin not allowed");
+  });
+
   it("preserves specific close errors even when auth detail codes are present", () => {
     const host = createHost();
 
@@ -293,6 +396,176 @@ describe("connectGateway", () => {
 
     expect(host.lastError).toContain("gateway token mismatch");
     expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
+  });
+
+  it("surfaces shutdown restart reasons before the socket closes", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "shutdown",
+      payload: {
+        reason: "config change requires gateway restart (plugins.installs)",
+        restartExpectedMs: 1500,
+      },
+    });
+    client.emitClose({ code: 1006 });
+
+    expect(host.lastError).toBe(
+      "Restarting: config change requires gateway restart (plugins.installs)",
+    );
+    expect(host.lastErrorCode).toBeNull();
+  });
+
+  it("clears pending shutdown messages on successful hello after reconnect", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "shutdown",
+      payload: {
+        reason: "config change",
+        restartExpectedMs: 1500,
+      },
+    });
+    client.emitClose({ code: 1006 });
+
+    expect(host.lastError).toBe("Restarting: config change");
+
+    client.emitHello();
+    expect(host.lastError).toBeNull();
+
+    client.emitClose({ code: 1006 });
+    expect(host.lastError).toBe("disconnected (1006): no reason");
+  });
+
+  it("keeps shutdown restart reasons on service restart closes", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "shutdown",
+      payload: {
+        reason: "gateway restarting",
+        restartExpectedMs: 1500,
+      },
+    });
+    client.emitClose({ code: 1012, reason: "service restart" });
+
+    expect(host.lastError).toBe("Restarting: gateway restarting");
+    expect(host.lastErrorCode).toBeNull();
+  });
+
+  it("prefers shutdown restart reasons over non-1012 close reasons", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "shutdown",
+      payload: {
+        reason: "gateway restarting",
+        restartExpectedMs: 1500,
+      },
+    });
+    client.emitClose({ code: 1001, reason: "going away" });
+
+    expect(host.lastError).toBe("Restarting: gateway restarting");
+    expect(host.lastErrorCode).toBeNull();
+  });
+
+  it("does not reload chat history for each live tool result event", () => {
+    const { client } = connectHostGateway();
+    emitToolResultEvent(client);
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("routes plugin.approval.requested into execApprovalQueue with kind plugin", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "plugin.approval.requested",
+      payload: {
+        id: "plugin-approval-1",
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 120_000,
+        request: {
+          title: "Dangerous command detected",
+          description: "chmod 777 script.sh",
+          severity: "high",
+          pluginId: "sage",
+          agentId: "agent-1",
+          sessionKey: "main",
+        },
+      },
+    });
+
+    expect(host.execApprovalQueue).toHaveLength(1);
+    expect(host.execApprovalQueue[0]?.id).toBe("plugin-approval-1");
+    expect((host.execApprovalQueue[0] as { kind: string }).kind).toBe("plugin");
+  });
+
+  it("routes plugin.approval.resolved to remove from execApprovalQueue", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    // Add a plugin approval first
+    client.emitEvent({
+      event: "plugin.approval.requested",
+      payload: {
+        id: "plugin-approval-2",
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 120_000,
+        request: { title: "Alert" },
+      },
+    });
+    expect(host.execApprovalQueue).toHaveLength(1);
+
+    // Resolve it
+    client.emitEvent({
+      event: "plugin.approval.resolved",
+      payload: { id: "plugin-approval-2", decision: "allow-once" },
+    });
+    expect(host.execApprovalQueue).toHaveLength(0);
+  });
+
+  it("reloads chat history once after the final chat event when tool output was used", () => {
+    const { client } = connectHostGateway();
+    emitToolResultEvent(client);
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "engine-run-1",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Done" }],
+        },
+      },
+    });
+
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
   });
 });
 

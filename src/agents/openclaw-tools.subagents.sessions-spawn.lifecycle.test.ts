@@ -16,6 +16,7 @@ const fastModeEnv = vi.hoisted(() => {
   return { previous };
 });
 
+<<<<<<< HEAD
 const acpSpawnMocks = vi.hoisted(() => ({
   spawnAcpDirect: vi.fn(),
 }));
@@ -26,6 +27,18 @@ vi.mock("./pi-embedded.js", () => ({
   queueEmbeddedPiMessage: () => false,
   waitForEmbeddedPiRunEnd: async () => true,
 }));
+=======
+vi.mock("./pi-embedded.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./pi-embedded.js")>();
+  return {
+    ...actual,
+    isEmbeddedPiRunActive: () => false,
+    isEmbeddedPiRunStreaming: () => false,
+    queueEmbeddedPiMessage: () => false,
+    waitForEmbeddedPiRunEnd: async () => true,
+  };
+});
+>>>>>>> origin/main
 
 vi.mock("./acp-spawn.js", () => ({
   ACP_SPAWN_MODES: ["run", "session"],
@@ -456,6 +469,8 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       startedAt: 1000,
       endedAt: 2000,
     });
+
+    await waitFor(() => ctx.calls.filter((call) => call.method === "agent").length >= 2);
 
     const agentCalls = ctx.calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(2);

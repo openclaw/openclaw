@@ -56,12 +56,9 @@ describe("Agent-specific tool filtering", () => {
     try {
       const cfg: OpenClawConfig = {
         tools: {
-          allow: ["read", "exec"],
+          allow: ["read", "write", "exec"],
           exec: {
-            applyPatch: {
-              enabled: true,
-              ...(opts.workspaceOnly === false ? { workspaceOnly: false } : {}),
-            },
+            applyPatch: opts.workspaceOnly === false ? { workspaceOnly: false } : {},
           },
         },
       };
@@ -188,13 +185,10 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).not.toContain("apply_patch");
   });
 
-  it("should allow apply_patch when exec is allow-listed and applyPatch is enabled", () => {
+  it("should allow apply_patch for OpenAI models when write is allow-listed", () => {
     const cfg: OpenClawConfig = {
       tools: {
-        allow: ["read", "exec"],
-        exec: {
-          applyPatch: { enabled: true },
-        },
+        allow: ["read", "write", "exec"],
       },
     };
 
@@ -211,6 +205,30 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toContain("read");
     expect(toolNames).toContain("exec");
     expect(toolNames).toContain("apply_patch");
+  });
+
+  it("should allow disabling apply_patch explicitly", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        allow: ["read", "write", "exec"],
+        exec: {
+          applyPatch: { enabled: false },
+        },
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test",
+      agentDir: "/tmp/agent",
+      modelProvider: "openai",
+      modelId: "gpt-5.2",
+    });
+
+    const toolNames = tools.map((t) => t.name);
+    expect(toolNames).toContain("exec");
+    expect(toolNames).not.toContain("apply_patch");
   });
 
   it("defaults apply_patch to workspace-only (blocks traversal)", async () => {
@@ -574,10 +592,13 @@ describe("Agent-specific tool filtering", () => {
       agentDir: "/tmp/agent-restricted",
       sandbox: {
         enabled: true,
+        backendId: "docker",
         sessionKey: "agent:restricted:main",
         workspaceDir: "/tmp/sandbox",
         agentWorkspaceDir: "/tmp/test-restricted",
         workspaceAccess: "none",
+        runtimeId: "test-container",
+        runtimeLabel: "test-container",
         containerName: "test-container",
         containerWorkdir: "/workspace",
         docker: {

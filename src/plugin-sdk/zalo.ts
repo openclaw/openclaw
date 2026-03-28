@@ -1,9 +1,8 @@
-// Narrow plugin-sdk surface for the bundled zalo plugin.
+// Private helper surface for the bundled zalo plugin.
 // Keep this list additive and scoped to symbols used under extensions/zalo.
 
 export { jsonResult, readStringParam } from "../agents/tools/common.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
-export type { ChannelDock } from "../channels/dock.js";
 export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -11,19 +10,14 @@ export {
 export { listDirectoryUserEntriesFromAllowFrom } from "../channels/plugins/directory-config-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
-export type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../channels/plugins/onboarding-types.js";
 export {
   buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
   mergeAllowFromEntries,
-  promptAccountId,
   promptSingleChannelSecretInput,
-  resolveAccountIdForConfigure,
+  runSingleChannelSecretStep,
   setTopLevelChannelDmPolicyWithAllowFrom,
-} from "../channels/plugins/onboarding/helpers.js";
+} from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export {
   applyAccountNameToChannelSection,
@@ -40,9 +34,8 @@ export type {
   ChannelStatusIssue,
 } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export { logTypingFailure } from "../channels/logging.js";
-export { createTypingCallbacks } from "../channels/typing.js";
+export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export {
   resolveDefaultGroupPolicy,
@@ -50,16 +43,17 @@ export {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 export type { GroupPolicy, MarkdownTableMode } from "../config/types.js";
-export type { SecretInput } from "../config/types.secrets.js";
+export type { SecretInput } from "./secret-input.js";
 export {
+  buildSecretInputSchema,
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
-} from "../config/types.secrets.js";
-export { buildSecretInputSchema } from "./secret-input-schema.js";
+} from "./secret-input.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
 export { waitForAbortSignal } from "../infra/abort-signal.js";
 export { createDedupeCache } from "../infra/dedupe.js";
+export { resolveClientIp } from "../gateway/net.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
@@ -67,6 +61,9 @@ export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.j
 export type { RuntimeEnv } from "../runtime.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { formatAllowFromLowercase, isNormalizedSenderAllowed } from "./allow-from.js";
+export { zaloSetupAdapter } from "./zalo-setup.js";
+export { zaloSetupWizard } from "./zalo-setup.js";
+export { evaluateZaloGroupAccess, resolveZaloRuntimeGroupPolicy } from "./zalo-setup.js";
 export {
   resolveDirectDmAuthorizationOutcome,
   resolveSenderCommandAuthorizationWithRuntime,
@@ -75,11 +72,11 @@ export { resolveChannelAccountConfigBasePath } from "./config-paths.js";
 export { evaluateSenderGroupAccess } from "./group-access.js";
 export type { SenderGroupAccessDecision } from "./group-access.js";
 export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "./inbound-envelope.js";
-export { createScopedPairingAccess } from "./pairing-access.js";
-export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
+export { createChannelPairingController } from "./channel-pairing.js";
 export { buildChannelSendResult } from "./channel-send-result.js";
 export type { OutboundReplyPayload } from "./reply-payload.js";
 export {
+  deliverTextOrMediaReply,
   isNumericTargetId,
   resolveOutboundMediaUrls,
   sendMediaWithLeadingCaption,
@@ -92,25 +89,21 @@ export {
 export { chunkTextForOutbound } from "./text-chunking.js";
 export { extractToolSend } from "./tool-send.js";
 export {
+  applyBasicWebhookRequestGuards,
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
+  readJsonWebhookBodyOrReject,
+  registerWebhookTarget,
+  registerWebhookTargetWithPluginRoute,
+  resolveSingleWebhookTarget,
+  resolveWebhookPath,
+  resolveWebhookTargetWithAuthOrRejectSync,
+  resolveWebhookTargets,
   WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
-} from "./webhook-memory-guards.js";
-export { resolveWebhookPath } from "./webhook-path.js";
-export {
-  applyBasicWebhookRequestGuards,
-  readJsonWebhookBodyOrReject,
-} from "./webhook-request-guards.js";
+  withResolvedWebhookRequestPipeline,
+} from "./webhook-ingress.js";
 export type {
   RegisterWebhookPluginRouteOptions,
   RegisterWebhookTargetOptions,
-} from "./webhook-targets.js";
-export {
-  registerWebhookTarget,
-  registerWebhookTargetWithPluginRoute,
-  resolveWebhookTargetWithAuthOrRejectSync,
-  resolveSingleWebhookTarget,
-  resolveWebhookTargets,
-  withResolvedWebhookRequestPipeline,
-} from "./webhook-targets.js";
+} from "./webhook-ingress.js";

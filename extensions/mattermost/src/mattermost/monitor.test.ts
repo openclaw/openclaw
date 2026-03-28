@@ -1,9 +1,12 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   evaluateMattermostMentionGate,
+  resolveMattermostReactionChannelId,
+  resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
+  resolveMattermostThreadSessionContext,
   type MattermostMentionGateInput,
   type MattermostRequireMentionResolverInput,
 } from "./monitor.js";
@@ -109,6 +112,29 @@ describe("mattermost mention gating", () => {
   });
 });
 
+describe("resolveMattermostReplyRootId with block streaming payloads", () => {
+  it("uses threadRootId for block-streamed payloads with replyToId", () => {
+    // When block streaming sends a payload with replyToId from the threading
+    // mode, the deliver callback should still use the existing threadRootId.
+    expect(
+      resolveMattermostReplyRootId({
+        threadRootId: "thread-root-1",
+        replyToId: "streamed-reply-id",
+      }),
+    ).toBe("thread-root-1");
+  });
+
+  it("falls back to payload replyToId when no threadRootId in block streaming", () => {
+    // Top-level channel message: no threadRootId, payload carries the
+    // inbound post id as replyToId from the "all" threading mode.
+    expect(
+      resolveMattermostReplyRootId({
+        replyToId: "inbound-post-for-threading",
+      }),
+    ).toBe("inbound-post-for-threading");
+  });
+});
+
 describe("resolveMattermostReplyRootId", () => {
   it("uses replyToId for top-level replies", () => {
     expect(
@@ -129,5 +155,146 @@ describe("resolveMattermostReplyRootId", () => {
 
   it("falls back to undefined when neither reply target is available", () => {
     expect(resolveMattermostReplyRootId({})).toBeUndefined();
+  });
+});
+
+describe("resolveMattermostEffectiveReplyToId", () => {
+  it("keeps an existing thread root", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "channel",
+        postId: "post-123",
+        replyToMode: "all",
+        threadRootId: "thread-root-456",
+      }),
+    ).toBe("thread-root-456");
+  });
+
+  it("suppresses existing thread roots when replyToMode is off", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "channel",
+        postId: "post-123",
+        replyToMode: "off",
+        threadRootId: "thread-root-456",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("starts a thread for top-level channel messages when replyToMode is all", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "channel",
+        postId: "post-123",
+        replyToMode: "all",
+      }),
+    ).toBe("post-123");
+  });
+
+  it("starts a thread for top-level group messages when replyToMode is first", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "group",
+        postId: "post-123",
+        replyToMode: "first",
+      }),
+    ).toBe("post-123");
+  });
+
+  it("keeps direct messages non-threaded", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "direct",
+        postId: "post-123",
+        replyToMode: "all",
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("resolveMattermostThreadSessionContext", () => {
+  it("forks channel sessions by top-level post when replyToMode is all", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:default:chan-1",
+        kind: "channel",
+        postId: "post-123",
+        replyToMode: "all",
+      }),
+    ).toEqual({
+      effectiveReplyToId: "post-123",
+      sessionKey: "agent:main:mattermost:default:chan-1:thread:post-123",
+      parentSessionKey: "agent:main:mattermost:default:chan-1",
+    });
+  });
+
+  it("keeps existing thread roots for threaded follow-ups", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:default:chan-1",
+        kind: "group",
+        postId: "post-123",
+        replyToMode: "first",
+        threadRootId: "root-456",
+      }),
+    ).toEqual({
+      effectiveReplyToId: "root-456",
+      sessionKey: "agent:main:mattermost:default:chan-1:thread:root-456",
+      parentSessionKey: "agent:main:mattermost:default:chan-1",
+    });
+  });
+
+  it("keeps threaded messages top-level when replyToMode is off", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:default:chan-1",
+        kind: "group",
+        postId: "post-123",
+        replyToMode: "off",
+        threadRootId: "root-456",
+      }),
+    ).toEqual({
+      effectiveReplyToId: undefined,
+      sessionKey: "agent:main:mattermost:default:chan-1",
+      parentSessionKey: undefined,
+    });
+  });
+
+  it("keeps direct-message sessions linear", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:default:user-1",
+        kind: "direct",
+        postId: "post-123",
+        replyToMode: "all",
+      }),
+    ).toEqual({
+      effectiveReplyToId: undefined,
+      sessionKey: "agent:main:mattermost:default:user-1",
+      parentSessionKey: undefined,
+    });
+  });
+});
+
+describe("resolveMattermostReactionChannelId", () => {
+  it("prefers broadcast channel_id when present", () => {
+    expect(
+      resolveMattermostReactionChannelId({
+        broadcast: { channel_id: "chan-broadcast" },
+        data: { channel_id: "chan-data" },
+      }),
+    ).toBe("chan-broadcast");
+  });
+
+  it("falls back to data.channel_id when broadcast channel_id is missing", () => {
+    expect(
+      resolveMattermostReactionChannelId({
+        data: { channel_id: "chan-data" },
+      }),
+    ).toBe("chan-data");
+  });
+
+  it("returns undefined when neither payload location includes channel_id", () => {
+    expect(resolveMattermostReactionChannelId({})).toBeUndefined();
   });
 });

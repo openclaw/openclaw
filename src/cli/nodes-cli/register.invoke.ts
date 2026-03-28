@@ -189,7 +189,6 @@ async function maybeRequestNodesRunApproval(params: {
   opts: NodesRunOpts;
   nodeId: string;
   agentId: string | undefined;
-  preparedCmdText: string;
   approvalPlan: ReturnType<typeof requirePreparedRunPayload>["plan"];
   hostSecurity: ExecSecurity;
   hostAsk: ExecAsk;
@@ -215,8 +214,6 @@ async function maybeRequestNodesRunApproval(params: {
     params.opts,
     {
       id: approvalId,
-      command: params.preparedCmdText,
-      commandArgv: params.approvalPlan.argv,
       systemRunPlan: params.approvalPlan,
       cwd: params.approvalPlan.cwd,
       nodeId: params.nodeId,
@@ -272,7 +269,7 @@ function buildSystemRunInvokeParams(params: {
     command: "system.run",
     params: {
       command: params.approvalPlan.argv,
-      rawCommand: params.approvalPlan.rawCommand,
+      rawCommand: params.approvalPlan.commandText,
       cwd: params.approvalPlan.cwd,
       env: params.nodeEnv,
       timeoutMs: params.timeoutMs,
@@ -336,7 +333,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
           }
 
           const result = await callGatewayCli("node.invoke", opts, invokeParams);
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
         });
       }),
     { timeoutMs: 30_000 },
@@ -403,7 +400,6 @@ export function registerNodesInvokeCommands(nodes: Command) {
             opts,
             nodeId,
             agentId,
-            preparedCmdText: preparedContext.prepared.cmdText,
             approvalPlan,
             hostSecurity: approvals.hostSecurity,
             hostAsk: approvals.hostAsk,
@@ -425,7 +421,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
 
           const result = await callGatewayCli("node.invoke", opts, invokeParams);
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
+            defaultRuntime.writeJson(result);
             return;
           }
 

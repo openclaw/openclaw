@@ -9,6 +9,7 @@ import {
   hasBinaryMock,
   runCommandWithTimeoutMock,
 } from "./skills-install.test-mocks.js";
+import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
 import { resolveSkillToolsRootDir } from "./skills/tools-dir.js";
 import type { SkillEntry, SkillInstallSpec } from "./skills/types.js";
 
@@ -54,17 +55,27 @@ const TAR_GZ_TRAVERSAL_BUFFER = Buffer.from(
 
 function buildEntry(name: string): SkillEntry {
   const skillDir = path.join(workspaceDir, "skills", name);
+  const filePath = path.join(skillDir, "SKILL.md");
   return {
-    skill: {
+    skill: createFixtureSkill({
       name,
       description: `${name} test skill`,
-      source: "openclaw-workspace",
-      filePath: path.join(skillDir, "SKILL.md"),
+      filePath,
       baseDir: skillDir,
-      disableModelInvocation: false,
-    },
+      source: "openclaw-workspace",
+    }),
     frontmatter: {},
   };
+}
+
+function createFixtureSkill(params: {
+  name: string;
+  description: string;
+  filePath: string;
+  baseDir: string;
+  source: string;
+}): SkillEntry["skill"] {
+  return createCanonicalFixtureSkill(params);
 }
 
 function buildDownloadSpec(params: {
@@ -424,5 +435,48 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
       .slice(commandCallCount)
       .some((call) => (call[0] as string[])[1] === "xf");
     expect(extractionAttempted).toBe(false);
+  });
+
+  it("rejects tar.bz2 entries that traverse pre-existing targetDir symlinks", async () => {
+    const entry = buildEntry("tbz2-targetdir-symlink");
+    const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");
+    const outsideDir = path.join(workspaceDir, "tbz2-targetdir-outside");
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.mkdir(outsideDir, { recursive: true });
+    await fs.symlink(
+      outsideDir,
+      path.join(targetDir, "escape"),
+      process.platform === "win32" ? "junction" : undefined,
+    );
+
+    mockArchiveResponse(new Uint8Array([1, 2, 3]));
+
+    runCommandWithTimeoutMock.mockImplementation(async (...argv: unknown[]) => {
+      const cmd = (argv[0] ?? []) as string[];
+      if (cmd[0] === "tar" && cmd[1] === "tf") {
+        return runCommandResult({ stdout: "escape/pwn.txt\n" });
+      }
+      if (cmd[0] === "tar" && cmd[1] === "tvf") {
+        return runCommandResult({ stdout: "-rw-r--r--  0 0 0 0 Jan  1 00:00 escape/pwn.txt\n" });
+      }
+      if (cmd[0] === "tar" && cmd[1] === "xf") {
+        const stagingDir = String(cmd[cmd.indexOf("-C") + 1] ?? "");
+        await fs.mkdir(path.join(stagingDir, "escape"), { recursive: true });
+        await fs.writeFile(path.join(stagingDir, "escape", "pwn.txt"), "owned");
+        return runCommandResult({ stdout: "ok" });
+      }
+      return runCommandResult();
+    });
+
+    const result = await installDownloadSkill({
+      name: "tbz2-targetdir-symlink",
+      url: "https://example.invalid/evil.tbz2",
+      archive: "tar.bz2",
+      targetDir,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr.toLowerCase()).toContain("archive entry traverses symlink in destination");
+    expect(await fileExists(path.join(outsideDir, "pwn.txt"))).toBe(false);
   });
 });

@@ -1,5 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
+import { runBeforeToolCallHook } from "../agents/pi-tools.before-tool-call.js";
+import { resolveToolLoopDetectionConfig } from "../agents/pi-tools.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
@@ -24,15 +27,15 @@ import { isSubagentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
+import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
 import {
   readJsonBodyOrError,
-  sendGatewayAuthFailure,
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
 } from "./http-common.js";
-import { getBearerToken, getHeader } from "./http-utils.js";
+import { getHeader } from "./http-utils.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -153,17 +156,15 @@ export async function handleToolsInvokeHttpRequest(
   }
 
   const cfg = loadConfig();
-  const token = getBearerToken(req);
-  const authResult = await authorizeHttpGatewayConnect({
-    auth: opts.auth,
-    connectAuth: token ? { token, password: token } : null,
+  const ok = await authorizeGatewayBearerRequestOrReply({
     req,
+    res,
+    auth: opts.auth,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
-  if (!authResult.ok) {
-    sendGatewayAuthFailure(res, authResult);
+  if (!ok) {
     return true;
   }
 
@@ -244,6 +245,7 @@ export async function handleToolsInvokeHttpRequest(
   const subagentPolicy = isSubagentSessionKey(sessionKey)
     ? resolveSubagentToolPolicy(cfg)
     : undefined;
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId ?? resolveDefaultAgentId(cfg));
 
   // Build tool list (core + plugin tools).
   const allTools = createOpenClawTools({
@@ -252,9 +254,11 @@ export async function handleToolsInvokeHttpRequest(
     agentAccountId: accountId,
     agentTo,
     agentThreadId,
+    allowGatewaySubagentBinding: true,
     // HTTP callers consume tool output directly; preserve raw media invoke payloads.
     allowMediaInvokeCommands: true,
     config: cfg,
+    workspaceDir,
     pluginToolAllowlist: collectExplicitAllowlist([
       profilePolicy,
       providerProfilePolicy,
@@ -277,8 +281,10 @@ export async function handleToolsInvokeHttpRequest(
       ...buildDefaultToolPolicyPipelineSteps({
         profilePolicy: profilePolicyWithAlsoAllow,
         profile,
+        profileAlsoAllow,
         providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
         providerProfile,
+        providerProfileAlsoAllow,
         globalPolicy,
         globalProviderPolicy,
         agentPolicy,
@@ -311,14 +317,32 @@ export async function handleToolsInvokeHttpRequest(
   }
 
   try {
+    const toolCallId = `http-${Date.now()}`;
     const toolArgs = mergeActionIntoArgsIfSupported({
       // oxlint-disable-next-line typescript/no-explicit-any
       toolSchema: (tool as any).parameters,
       action,
       args,
     });
+    const hookResult = await runBeforeToolCallHook({
+      toolName,
+      params: toolArgs,
+      toolCallId,
+      ctx: {
+        agentId,
+        sessionKey,
+        loopDetection: resolveToolLoopDetectionConfig({ cfg, agentId }),
+      },
+    });
+    if (hookResult.blocked) {
+      sendJson(res, 403, {
+        ok: false,
+        error: { type: "tool_call_blocked", message: hookResult.reason },
+      });
+      return true;
+    }
     // oxlint-disable-next-line typescript/no-explicit-any
-    const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
+    const result = await (tool as any).execute?.(toolCallId, hookResult.params);
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);

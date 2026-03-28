@@ -4,8 +4,10 @@ import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
+import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { logDebug, logError } from "../logger.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
+import { resolveWindowsCommandShim } from "./windows-command.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -75,19 +77,10 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
  * are handled by resolveNpmArgvForWindows to avoid spawn EINVAL (no direct .cmd).
  */
 function resolveCommand(command: string): string {
-  if (process.platform !== "win32") {
-    return command;
-  }
-  const basename = path.basename(command).toLowerCase();
-  const ext = path.extname(basename);
-  if (ext) {
-    return command;
-  }
-  const cmdCommands = ["pnpm", "yarn"];
-  if (cmdCommands.includes(basename)) {
-    return `${command}.cmd`;
-  }
-  return command;
+  return resolveWindowsCommandShim({
+    command,
+    cmdCommands: ["pnpm", "yarn"],
+  });
 }
 
 export function shouldSpawnWithShell(params: {
@@ -180,6 +173,9 @@ export type CommandOptions = {
   noOutputTimeoutMs?: number;
 };
 
+const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
+const WINDOWS_CLOSE_STATE_POLL_MS = 10;
+
 export function resolveCommandEnv(params: {
   argv: string[];
   env?: NodeJS.ProcessEnv;
@@ -213,7 +209,7 @@ export function resolveCommandEnv(params: {
       resolvedEnv.npm_config_fund = "false";
     }
   }
-  return resolvedEnv;
+  return markOpenClawExecEnv(resolvedEnv);
 }
 
 export async function runCommandWithTimeout(
@@ -253,6 +249,8 @@ export async function runCommandWithTimeout(
     let settled = false;
     let timedOut = false;
     let noOutputTimedOut = false;
+    let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+    let closeFallbackTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
     const shouldTrackOutputTimeout =
       typeof noOutputTimeoutMs === "number" &&
@@ -265,6 +263,14 @@ export async function runCommandWithTimeout(
       }
       clearTimeout(noOutputTimer);
       noOutputTimer = null;
+    };
+
+    const clearCloseFallbackTimer = () => {
+      if (!closeFallbackTimer) {
+        return;
+      }
+      clearTimeout(closeFallbackTimer);
+      closeFallbackTimer = null;
     };
 
     const armNoOutputTimer = () => {
@@ -311,32 +317,85 @@ export async function runCommandWithTimeout(
       settled = true;
       clearTimeout(timer);
       clearNoOutputTimer();
+      clearCloseFallbackTimer();
       reject(err);
     });
-    child.on("close", (code, signal) => {
+    child.on("exit", (code, signal) => {
+      childExitState = { code, signal };
+      if (settled || closeFallbackTimer) {
+        return;
+      }
+      closeFallbackTimer = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      }, 250);
+    });
+    const resolveFromClose = (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
       clearNoOutputTimer();
+      clearCloseFallbackTimer();
+      const resolvedCode = childExitState?.code ?? code ?? child.exitCode ?? null;
+      const resolvedSignal = childExitState?.signal ?? signal ?? child.signalCode ?? null;
       const termination = noOutputTimedOut
         ? "no-output-timeout"
         : timedOut
           ? "timeout"
-          : signal != null
+          : resolvedSignal != null
             ? "signal"
             : "exit";
+      const normalizedCode =
+        termination === "timeout" || termination === "no-output-timeout"
+          ? resolvedCode === 0
+            ? 124
+            : resolvedCode
+          : resolvedCode;
       resolve({
         pid: child.pid ?? undefined,
         stdout,
         stderr,
-        code,
-        signal,
+        code: normalizedCode,
+        signal: resolvedSignal,
         killed: child.killed,
         termination,
         noOutputTimedOut,
       });
+    };
+    child.on("close", (code, signal) => {
+      if (
+        process.platform !== "win32" ||
+        childExitState != null ||
+        code != null ||
+        signal != null ||
+        child.exitCode != null ||
+        child.signalCode != null
+      ) {
+        resolveFromClose(code, signal);
+        return;
+      }
+
+      const startedAt = Date.now();
+      const waitForExitState = () => {
+        if (settled) {
+          return;
+        }
+        if (childExitState != null || child.exitCode != null || child.signalCode != null) {
+          resolveFromClose(code, signal);
+          return;
+        }
+        if (Date.now() - startedAt >= WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS) {
+          resolveFromClose(code, signal);
+          return;
+        }
+        setTimeout(waitForExitState, WINDOWS_CLOSE_STATE_POLL_MS);
+      };
+      waitForExitState();
     });
   });
 }

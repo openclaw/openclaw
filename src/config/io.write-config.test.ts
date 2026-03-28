@@ -24,7 +24,21 @@ describe("config io write", () => {
   });
 
   afterAll(async () => {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        await fs.rm(fixtureRoot, { recursive: true, force: true });
+        return;
+      } catch (error) {
+        const code =
+          error && typeof error === "object" && "code" in error
+            ? String((error as { code?: unknown }).code)
+            : "";
+        if ((code !== "ENOTEMPTY" && code !== "EBUSY") || attempt === 4) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+      }
+    }
   });
 
   async function writeConfigAndCreateIo(params: {
@@ -141,6 +155,28 @@ describe("config io write", () => {
       expect(persisted).not.toHaveProperty("sessions.persistence");
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "tightens world-writable state dir when writing the default config",
+    async () => {
+      await withSuiteHome(async (home) => {
+        const stateDir = path.join(home, ".openclaw");
+        await fs.mkdir(stateDir, { recursive: true, mode: 0o777 });
+        await fs.chmod(stateDir, 0o777);
+
+        const io = createConfigIO({
+          env: {} as NodeJS.ProcessEnv,
+          homedir: () => home,
+          logger: silentLogger,
+        });
+
+        await io.writeConfigFile({ gateway: { mode: "local" } });
+
+        const stat = await fs.stat(stateDir);
+        expect(stat.mode & 0o777).toBe(0o700);
+      });
+    },
+  );
 
   it('shows actionable guidance for dmPolicy="open" without wildcard allowFrom', async () => {
     await withSuiteHome(async (home) => {
@@ -505,7 +541,33 @@ describe("config io write", () => {
       expect(last.hasMetaAfter).toBe(true);
       expect(last.previousHash).toBeTypeOf("string");
       expect(last.nextHash).toBeTypeOf("string");
+      expect(last.previousMode).toBeTypeOf("number");
+      expect(last.nextMode).toBeTypeOf("number");
+      expect(last.previousIno).toBeTypeOf("string");
+      expect(last.nextIno).toBeTypeOf("string");
       expect(last.result === "rename" || last.result === "copy-fallback").toBe(true);
+    });
+  });
+
+  it('ignores literal "undefined" home env values when choosing the audit log path', async () => {
+    await withSuiteHome(async (home) => {
+      const { lines } = await writeGatewayPatchAndReadLastAuditEntry({
+        home,
+        initialConfig: { gateway: { mode: "local" } },
+        gatewayPatch: { bind: "loopback" },
+        env: {
+          HOME: "undefined",
+          USERPROFILE: "null",
+          OPENCLAW_HOME: "undefined",
+        } as NodeJS.ProcessEnv,
+      });
+      expect(lines.length).toBeGreaterThan(0);
+      await expect(
+        fs.stat(path.join(home, ".openclaw", "logs", "config-audit.jsonl")),
+      ).resolves.toBeDefined();
+      await expect(
+        fs.stat(path.resolve("undefined", ".openclaw", "logs", "config-audit.jsonl")),
+      ).rejects.toThrow();
     });
   });
 

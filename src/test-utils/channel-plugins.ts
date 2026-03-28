@@ -1,12 +1,13 @@
 import type {
   ChannelCapabilities,
   ChannelId,
+  ChannelMessagingAdapter,
   ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../channels/plugins/types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 
-type TestChannelRegistration = {
+export type TestChannelRegistration = {
   pluginId: string;
   plugin: unknown;
   source: string;
@@ -18,12 +19,23 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
   hooks: [],
   typedHooks: [],
   channels: channels as unknown as PluginRegistry["channels"],
+  channelSetups: channels.map((entry) => ({
+    pluginId: entry.pluginId,
+    plugin: entry.plugin as PluginRegistry["channelSetups"][number]["plugin"],
+    source: entry.source,
+    enabled: true,
+  })),
   providers: [],
+  speechProviders: [],
+  mediaUnderstandingProviders: [],
+  imageGenerationProviders: [],
+  webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
   cliRegistrars: [],
   services: [],
   commands: [],
+  conversationBindingResolvedHandlers: [],
   diagnostics: [],
 });
 
@@ -65,7 +77,7 @@ export const createMSTeamsTestPluginBase = (): Pick<
     meta: {
       ...base.meta,
       selectionLabel: "Microsoft Teams (Bot Framework)",
-      blurb: "Bot Framework; enterprise support.",
+      blurb: "Teams SDK; enterprise support.",
       aliases: ["teams"],
     },
   };
@@ -89,6 +101,7 @@ export const createMSTeamsTestPlugin = (params?: {
 export const createOutboundTestPlugin = (params: {
   id: ChannelId;
   outbound: ChannelOutboundAdapter;
+  messaging?: ChannelMessagingAdapter;
   label?: string;
   docsPath?: string;
   capabilities?: ChannelCapabilities;
@@ -101,4 +114,36 @@ export const createOutboundTestPlugin = (params: {
     config: { listAccountIds: () => [] },
   }),
   outbound: params.outbound,
+  ...(params.messaging ? { messaging: params.messaging } : {}),
+});
+
+export type BindingResolverTestPlugin = Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config"
+> & {
+  setup?: Pick<NonNullable<ChannelPlugin["setup"]>, "resolveBindingAccountId">;
+};
+
+export const createBindingResolverTestPlugin = (params: {
+  id: ChannelId;
+  label?: string;
+  docsPath?: string;
+  capabilities?: ChannelCapabilities;
+  config?: Partial<ChannelPlugin["config"]>;
+  resolveBindingAccountId?: NonNullable<ChannelPlugin["setup"]>["resolveBindingAccountId"];
+}): BindingResolverTestPlugin => ({
+  ...createChannelTestPluginBase({
+    id: params.id,
+    label: params.label,
+    docsPath: params.docsPath,
+    capabilities: params.capabilities,
+    config: params.config,
+  }),
+  ...(params.resolveBindingAccountId
+    ? {
+        setup: {
+          resolveBindingAccountId: params.resolveBindingAccountId,
+        },
+      }
+    : {}),
 });
