@@ -232,10 +232,10 @@ class PipelineExecutor:
         # so stale failures from previous runs don't poison fresh queries.
         reset_circuit_breakers()
 
-        # --- v11.7: LATS tree search for complex tasks ---
+        # --- v13.1: LATS tree search for complex tasks (TaskGroup + early exit) ---
         complexity = classify_complexity(prompt)
-        if complexity == "complex" and not task_type and brigade in ("Dmarket", "Dmarket-Dev"):
-            logger.info("LATS activated: complex task detected", complexity=complexity)
+        if complexity in ("complex", "extreme") and not task_type and brigade in ("Dmarket", "Dmarket-Dev"):
+            logger.info("LATS activated", complexity=complexity)
             if status_callback:
                 await status_callback("LATS", "tree-search", "🌳 LATS: задача сложная — запускаю дерево поиска решений...")
             try:
@@ -245,15 +245,17 @@ class PipelineExecutor:
                 lats_result = await self._lats_engine.search(
                     prompt=prompt, model=lats_model, config=self.config,
                 )
-                if lats_result.best_response:
-                    logger.info("LATS completed", depth=lats_result.depth_reached, score=lats_result.best_score)
+                if lats_result.best_answer:
+                    logger.info("LATS completed", depth=lats_result.depth_reached,
+                                score=lats_result.best_score, early_exit=lats_result.early_exit)
                     return {
-                        "final_response": lats_result.best_response,
+                        "final_response": lats_result.best_answer,
                         "brigade": brigade,
                         "chain_executed": ["LATS_TreeSearch"],
-                        "steps": [{"role": "LATS_TreeSearch", "model": lats_model, "response": lats_result.best_response}],
+                        "steps": [{"role": "LATS_TreeSearch", "model": lats_model, "response": lats_result.best_answer}],
                         "status": "completed",
-                        "meta": {"lats_depth": lats_result.depth_reached, "lats_score": lats_result.best_score},
+                        "meta": {"lats_depth": lats_result.depth_reached, "lats_score": lats_result.best_score,
+                                 "lats_early_exit": lats_result.early_exit},
                     }
             except Exception as e:
                 logger.warning("LATS failed, falling back to linear pipeline", error=str(e))

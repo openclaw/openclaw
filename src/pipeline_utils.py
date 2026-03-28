@@ -84,6 +84,7 @@ def compress_for_next_step(role_name: str, response: str) -> str:
     """
     Smart context compression: preserves JSON blocks, MCP results,
     and respects sentence boundaries instead of blind truncation.
+    v13.1: head/tail truncation for large observations (>2000 chars).
     """
     # 1. Extract and preserve JSON code blocks (instructions for Executor)
     json_blocks = re.findall(r'```json\s*(.*?)\s*```', response, re.DOTALL)
@@ -104,9 +105,21 @@ def compress_for_next_step(role_name: str, response: str) -> str:
     clean = re.sub(r'\[Proof of Work[^\]]*\].*?\n', '', clean)
     clean = re.sub(r'\n{2,}', '\n', clean).strip()
 
-    # 4. Smart truncation: up to 1500 chars, respecting sentence boundaries
+    # 4. v13.1 — head/tail truncation for large observations
     max_chars = 1500
-    if len(clean) > max_chars:
+    if len(clean) > 2000:
+        head = clean[:1000]
+        tail = clean[-1000:]
+        # try to cut at sentence boundary in head
+        hb = max(head.rfind('. '), head.rfind('\n'))
+        if hb > 500:
+            head = head[:hb + 1]
+        # try to cut at sentence boundary in tail
+        tb = tail.find('. ')
+        if tb != -1 and tb < 500:
+            tail = tail[tb + 2:]
+        clean = head + "\n[...truncated...]\n" + tail
+    elif len(clean) > max_chars:
         cut = clean[:max_chars]
         last_boundary = max(cut.rfind('. '), cut.rfind('! '), cut.rfind('? '), cut.rfind('\n'))
         if last_boundary > max_chars // 2:
