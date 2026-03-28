@@ -66,6 +66,7 @@
   "byteplus",
   "chutes",
   "command-auth",
+  "compat",
   "direct-dm",
   "deepseek",
   "device-bootstrap",
