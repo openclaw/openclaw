@@ -45,6 +45,20 @@ function expectGroupedProviderIds(
   expect(grouped.late.map((provider) => provider.id)).toEqual(expected.late);
 }
 
+function createCatalogRuntimeContext() {
+  return {
+    config: {},
+    env: {},
+    resolveProviderApiKey: () => ({ apiKey: undefined }),
+    resolveProviderAuth: () => ({
+      apiKey: undefined,
+      discoveryApiKey: undefined,
+      mode: "none" as const,
+      source: "none" as const,
+    }),
+  };
+}
+
 describe("groupPluginDiscoveryProvidersByOrder", () => {
   it.each([
     {
@@ -138,15 +152,7 @@ describe("runProviderCatalog", () => {
         catalog: { run: catalogRun },
         discovery: { run: discoveryRun },
       },
-      config: {},
-      env: {},
-      resolveProviderApiKey: () => ({ apiKey: undefined }),
-      resolveProviderAuth: () => ({
-        apiKey: undefined,
-        discoveryApiKey: undefined,
-        mode: "none",
-        source: "none",
-      }),
+      ...createCatalogRuntimeContext(),
     });
 
     expect(result).toEqual({

@@ -23,6 +23,10 @@ function resolveRegistryBundledWebSearchPluginIds() {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+function expectBundledWebSearchIds(actual: readonly string[], expected: readonly string[]) {
+  expect(actual).toEqual(expected);
+}
+
 describe("bundled web search metadata", () => {
   it.each([
     [
@@ -36,6 +40,6 @@ describe("bundled web search metadata", () => {
       resolveRegistryBundledWebSearchPluginIds(),
     ],
   ] as const)("%s", (_name, actual, expected) => {
-    expect(actual).toEqual(expected);
+    expectBundledWebSearchIds(actual, expected);
   });
 });

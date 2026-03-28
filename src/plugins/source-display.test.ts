@@ -22,6 +22,26 @@ function createPluginSourceRoots() {
   };
 }
 
+function expectFormattedSource(params: {
+  origin: "bundled" | "workspace" | "global";
+  sourceKey: "stock" | "workspace" | "global";
+  dirName: string;
+  fileName: string;
+  expectedValue: string;
+  expectedRootKey: "stock" | "workspace" | "global";
+}) {
+  const roots = createPluginSourceRoots();
+  const out = formatPluginSourceForTable(
+    {
+      origin: params.origin,
+      source: path.join(roots[params.sourceKey], params.dirName, params.fileName),
+    },
+    roots,
+  );
+  expect(out.value).toBe(params.expectedValue);
+  expect(out.rootKey).toBe(params.expectedRootKey);
+}
+
 describe("formatPluginSourceForTable", () => {
   it.each([
     {
@@ -54,16 +74,14 @@ describe("formatPluginSourceForTable", () => {
   ])(
     "shortens $name",
     ({ origin, sourceKey, dirName, fileName, expectedValue, expectedRootKey }) => {
-      const roots = createPluginSourceRoots();
-      const out = formatPluginSourceForTable(
-        {
-          origin,
-          source: path.join(roots[sourceKey], dirName, fileName),
-        },
-        roots,
-      );
-      expect(out.value).toBe(expectedValue);
-      expect(out.rootKey).toBe(expectedRootKey);
+      expectFormattedSource({
+        origin,
+        sourceKey,
+        dirName,
+        fileName,
+        expectedValue,
+        expectedRootKey,
+      });
     },
   );
 

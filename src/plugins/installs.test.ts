@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 
+function expectRecordedInstall(pluginId: string, next: ReturnType<typeof recordPluginInstall>) {
+  expect(next.plugins?.installs?.[pluginId]).toMatchObject({
+    source: "npm",
+    spec: `${pluginId}@latest`,
+  });
+  expect(typeof next.plugins?.installs?.[pluginId]?.installedAt).toBe("string");
+}
+
 describe("buildNpmResolutionInstallFields", () => {
   it.each([
     {
@@ -42,10 +50,6 @@ describe("buildNpmResolutionInstallFields", () => {
 describe("recordPluginInstall", () => {
   it("stores install metadata for the plugin id", () => {
     const next = recordPluginInstall({}, { pluginId: "demo", source: "npm", spec: "demo@latest" });
-    expect(next.plugins?.installs?.demo).toMatchObject({
-      source: "npm",
-      spec: "demo@latest",
-    });
-    expect(typeof next.plugins?.installs?.demo?.installedAt).toBe("string");
+    expectRecordedInstall("demo", next);
   });
 });

@@ -36,6 +36,26 @@ function expectCatalogPrimaryModel(cfg: OpenClawConfig) {
   });
 }
 
+function createDemoProviderParams(params?: {
+  providerId?: string;
+  baseUrl?: string;
+  aliases?: Array<string | { modelRef: string; alias: string }>;
+  models?: ModelDefinitionConfig[];
+}) {
+  const providerId = params?.providerId ?? "demo";
+  const baseUrl = params?.baseUrl ?? "https://demo.test/v1";
+  const models = params?.models ?? [createModel("demo-default", "Demo Default")];
+  return {
+    providerId,
+    api: "openai-completions" as const,
+    baseUrl,
+    aliases: params?.aliases ?? [
+      { modelRef: `${providerId}/${models[0]?.id ?? "demo-default"}`, alias: "Demo" },
+    ],
+    models,
+  };
+}
+
 describe("provider onboarding preset appliers", () => {
   it.each([
     {
@@ -52,15 +72,18 @@ describe("provider onboarding preset appliers", () => {
     },
   ] as const)("$name", ({ kind }) => {
     if (kind === "default-model") {
+      const params = createDemoProviderParams();
       const appliers = createDefaultModelPresetAppliers({
         primaryModelRef: "demo/demo-default",
         resolveParams: () => ({
-          providerId: "demo",
-          api: "openai-completions" as const,
-          baseUrl: "https://demo.test/v1",
-          defaultModel: createModel("demo-default", "Demo Default"),
-          defaultModelId: "demo-default",
-          aliases: [{ modelRef: "demo/demo-default", alias: "Demo" }],
+          providerId: params.providerId,
+          api: params.api,
+          baseUrl: params.baseUrl,
+          defaultModel: params.models[0],
+          defaultModelId: params.models[0]?.id ?? "demo-default",
+          aliases: params.aliases.filter(
+            (alias): alias is { modelRef: string; alias: string } => typeof alias !== "string",
+          ),
         }),
       });
 
@@ -78,14 +101,20 @@ describe("provider onboarding preset appliers", () => {
     }
 
     if (kind === "default-models") {
+      const params = createDemoProviderParams({
+        models: [createModel("a", "Model A"), createModel("b", "Model B")],
+        aliases: [{ modelRef: "demo/a", alias: "Demo A" }],
+      });
       const appliers = createDefaultModelsPresetAppliers<[string]>({
         primaryModelRef: "demo/a",
         resolveParams: (_cfg, baseUrl) => ({
-          providerId: "demo",
-          api: "openai-completions" as const,
+          providerId: params.providerId,
+          api: params.api,
           baseUrl,
-          defaultModels: [createModel("a", "Model A"), createModel("b", "Model B")],
-          aliases: [{ modelRef: "demo/a", alias: "Demo A" }],
+          defaultModels: params.models,
+          aliases: params.aliases.filter(
+            (alias): alias is { modelRef: string; alias: string } => typeof alias !== "string",
+          ),
         }),
       });
 
@@ -103,17 +132,20 @@ describe("provider onboarding preset appliers", () => {
       return;
     }
 
+    const params = createDemoProviderParams({
+      providerId: "catalog",
+      baseUrl: "https://catalog.test/v1",
+      models: [createModel("default", "Catalog Default"), createModel("backup", "Catalog Backup")],
+      aliases: ["catalog/default", { modelRef: "catalog/default", alias: "Catalog Default" }],
+    });
     const appliers = createModelCatalogPresetAppliers({
       primaryModelRef: "catalog/default",
       resolveParams: () => ({
-        providerId: "catalog",
-        api: "openai-completions" as const,
-        baseUrl: "https://catalog.test/v1",
-        catalogModels: [
-          createModel("default", "Catalog Default"),
-          createModel("backup", "Catalog Backup"),
-        ],
-        aliases: ["catalog/default", { modelRef: "catalog/default", alias: "Catalog Default" }],
+        providerId: params.providerId,
+        api: params.api,
+        baseUrl: params.baseUrl,
+        catalogModels: params.models,
+        aliases: params.aliases,
       }),
     });
 

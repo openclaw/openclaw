@@ -19,6 +19,13 @@ function createRegistryWithChannel(pluginId = "demo-channel") {
   return { registry, plugin };
 }
 
+function createChannelRegistryPair(pluginId = "demo-channel") {
+  return {
+    first: createRegistryWithChannel(pluginId),
+    second: createRegistryWithChannel(pluginId),
+  };
+}
+
 describe("channel registry pinning", () => {
   afterEach(() => {
     resetPluginRuntimeStateForTest();
@@ -44,13 +51,14 @@ describe("channel registry pinning", () => {
   });
 
   it("re-pin invalidates cached channel lookups", () => {
-    const { registry: setup, plugin: setupPlugin } = createRegistryWithChannel();
+    const { first, second } = createChannelRegistryPair();
+    const { registry: setup, plugin: setupPlugin } = first;
     setActivePluginRegistry(setup);
     pinActivePluginChannelRegistry(setup);
 
     expect(getChannelPlugin("demo-channel")).toBe(setupPlugin);
 
-    const { registry: full, plugin: fullPlugin } = createRegistryWithChannel();
+    const { registry: full, plugin: fullPlugin } = second;
     setActivePluginRegistry(full);
 
     expect(getChannelPlugin("demo-channel")).toBe(setupPlugin);

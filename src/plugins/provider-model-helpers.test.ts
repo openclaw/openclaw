@@ -17,6 +17,19 @@ function createContext(models: ProviderRuntimeModel[]): ProviderResolveDynamicMo
   };
 }
 
+function createTemplateModel(
+  id: string,
+  overrides: Partial<ProviderRuntimeModel> = {},
+): ProviderRuntimeModel {
+  return {
+    id,
+    name: id,
+    provider: "test-provider",
+    api: "openai-completions",
+    ...overrides,
+  } as ProviderRuntimeModel;
+}
+
 describe("cloneFirstTemplateModel", () => {
   it.each([
     {
@@ -25,14 +38,7 @@ describe("cloneFirstTemplateModel", () => {
         providerId: "test-provider",
         modelId: " next-model ",
         templateIds: ["missing", "template-a", "template-b"],
-        ctx: createContext([
-          {
-            id: "template-a",
-            name: "Template A",
-            provider: "test-provider",
-            api: "openai-completions",
-          } as ProviderRuntimeModel,
-        ]),
+        ctx: createContext([createTemplateModel("template-a", { name: "Template A" })]),
         patch: { reasoning: true },
       },
       expected: {

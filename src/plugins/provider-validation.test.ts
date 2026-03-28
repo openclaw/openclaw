@@ -30,6 +30,20 @@ function expectDiagnosticMessages(
   );
 }
 
+function normalizeProviderFixture(provider: ProviderPlugin) {
+  const { diagnostics, pushDiagnostic } = collectDiagnostics();
+  const normalizedProvider = normalizeRegisteredProvider({
+    pluginId: "demo-plugin",
+    source: "/tmp/demo/index.ts",
+    provider,
+    pushDiagnostic,
+  });
+  return {
+    diagnostics,
+    provider: normalizedProvider,
+  };
+}
+
 describe("normalizeRegisteredProvider", () => {
   it.each([
     {
@@ -150,13 +164,7 @@ describe("normalizeRegisteredProvider", () => {
   ] as const)(
     "$name",
     ({ provider: inputProvider, expectedProvider, expectedDiagnostics, assert }) => {
-      const { diagnostics, pushDiagnostic } = collectDiagnostics();
-      const provider = normalizeRegisteredProvider({
-        pluginId: "demo-plugin",
-        source: "/tmp/demo/index.ts",
-        provider: inputProvider,
-        pushDiagnostic,
-      });
+      const { diagnostics, provider } = normalizeProviderFixture(inputProvider);
 
       if (assert) {
         assert(provider, diagnostics);
@@ -169,12 +177,8 @@ describe("normalizeRegisteredProvider", () => {
   );
 
   it("prefers catalog when a provider registers both catalog and discovery", () => {
-    const { diagnostics, pushDiagnostic } = collectDiagnostics();
-
-    const provider = normalizeRegisteredProvider({
-      pluginId: "demo-plugin",
-      source: "/tmp/demo/index.ts",
-      provider: makeProvider({
+    const { diagnostics, provider } = normalizeProviderFixture(
+      makeProvider({
         catalog: {
           run: async () => null,
         },
@@ -187,8 +191,7 @@ describe("normalizeRegisteredProvider", () => {
           }),
         },
       }),
-      pushDiagnostic,
-    });
+    );
 
     expect(provider?.catalog).toBeDefined();
     expect(provider?.discovery).toBeUndefined();
