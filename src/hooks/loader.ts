@@ -65,8 +65,8 @@ export async function loadInternalHooks(
     bundledHooksDir?: string;
   },
 ): Promise<number> {
-  // Check if hooks are enabled
-  if (!cfg.hooks?.internal?.enabled) {
+  // Internal hooks are enabled by default; only skip when explicitly disabled
+  if (cfg.hooks?.internal?.enabled === false) {
     return 0;
   }
 
