@@ -321,17 +321,27 @@ export async function expectFeishuReplyPipelineDedupedAcrossReplay(params: {
   event: unknown;
   dispatchReplyFromConfigMock: ReturnType<typeof vi.fn>;
   createFeishuReplyDispatcherMock: ReturnType<typeof vi.fn>;
+  waitTimeoutMs?: number;
 }) {
+  const waitTimeoutMs = params.waitTimeoutMs;
   await replayFeishuLifecycleEvent({
     handler: params.handler,
     event: params.event,
-    waitForFirst: () => {
-      expect(params.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
-    },
-    waitForSecond: () => {
-      expect(params.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
-      expect(params.createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
-    },
+    waitForFirst: () =>
+      vi.waitFor(
+        () => {
+          expect(params.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+        },
+        waitTimeoutMs == null ? undefined : { timeout: waitTimeoutMs },
+      ),
+    waitForSecond: () =>
+      vi.waitFor(
+        () => {
+          expect(params.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+          expect(params.createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
+        },
+        waitTimeoutMs == null ? undefined : { timeout: waitTimeoutMs },
+      ),
   });
 }
 
