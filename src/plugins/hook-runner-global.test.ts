@@ -12,11 +12,15 @@ afterEach(async () => {
 });
 
 describe("hook-runner-global", () => {
-  it("preserves the initialized runner across module reloads", async () => {
+  async function createInitializedModule() {
     const modA = await importHookRunnerGlobalModule();
     const registry = createMockPluginRegistry([{ hookName: "message_received", handler: vi.fn() }]);
-
     modA.initializeGlobalHookRunner(registry);
+    return { modA, registry };
+  }
+
+  it("preserves the initialized runner across module reloads", async () => {
+    const { modA, registry } = await createInitializedModule();
     expect(modA.getGlobalHookRunner()?.hasHooks("message_received")).toBe(true);
 
     vi.resetModules();
@@ -28,10 +32,7 @@ describe("hook-runner-global", () => {
   });
 
   it("clears the shared state across module reloads", async () => {
-    const modA = await importHookRunnerGlobalModule();
-    const registry = createMockPluginRegistry([{ hookName: "message_received", handler: vi.fn() }]);
-
-    modA.initializeGlobalHookRunner(registry);
+    await createInitializedModule();
 
     vi.resetModules();
 
