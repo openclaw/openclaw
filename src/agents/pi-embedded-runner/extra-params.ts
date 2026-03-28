@@ -17,6 +17,7 @@ import {
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
+  createOpenAICompatContentNormalizationWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIStringContentWrapper,
 } from "./openai-stream-wrappers.js";
@@ -412,6 +413,12 @@ function applyPostPluginStreamWrappers(
   // visible reply path because it does not emit native Anthropic thinking
   // blocks. Disable thinking unless an earlier wrapper already set it.
   ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn);
+
+  // Normalize text-only content arrays to plain strings in outbound
+  // openai-completions payloads. Many third-party OpenAI-compatible
+  // providers (NVIDIA, vLLM, Ollama, LiteLLM) reject the Anthropic-style
+  // [{type:"text", text:"..."}] format that pi-ai emits for user messages.
+  ctx.agent.streamFn = createOpenAICompatContentNormalizationWrapper(ctx.agent.streamFn);
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [ctx.resolvedExtraParams, ctx.override],

@@ -435,3 +435,93 @@ export function createOpenAIAttributionHeadersWrapper(
     });
   };
 }
+
+/**
+ * Flatten text-only content arrays in user messages to plain strings.
+ *
+ * pi-ai's `convertMessages` emits user messages whose content is an array of
+ * `{type:"text", text:"..."}` objects when the internal representation uses
+ * Anthropic-style content blocks.  Native OpenAI endpoints tolerate this, but
+ * many third-party OpenAI-compatible providers (NVIDIA NIM, Ollama, vLLM,
+ * LiteLLM, etc.) reject it with HTTP 400 because they only accept the
+ * standard `"content": "string"` format for text-only messages.
+ *
+ * This wrapper normalizes the outbound payload via `onPayload` so every
+ * message (user, system, developer, assistant) whose content is an array of
+ * exclusively plain `{type:"text", text:"..."}` blocks (no extra properties
+ * like `cache_control`) becomes a simple concatenated string.  Messages that
+ * contain non-text blocks (e.g. `image_url`) or annotated text blocks are
+ * left untouched.
+ */
+export function createOpenAICompatContentNormalizationWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    // Only apply to openai-completions (the Chat Completions adapter path).
+    // Responses API and Anthropic endpoints use different payload shapes.
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          normalizeOpenAICompatMessageContent(payload as Record<string, unknown>);
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
+
+/**
+ * Return true when a content block is a plain `{type:"text", text:"..."}` with
+ * no extra annotation properties (e.g. `cache_control`).  Blocks that carry
+ * additional metadata must remain as objects so providers that need those
+ * annotations (like OpenRouter Anthropic caching) are not broken.
+ */
+function isPlainTextBlock(block: unknown): block is { type: "text"; text: string } {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const keys = Object.keys(block);
+  if (keys.length !== 2) {
+    return false;
+  }
+  const rec = block as Record<string, unknown>;
+  return rec.type === "text" && typeof rec.text === "string";
+}
+
+/**
+ * Walk the `messages` array in an OpenAI Chat Completions payload and
+ * flatten any text-only content arrays to plain strings.
+ */
+function normalizeOpenAICompatMessageContent(payload: Record<string, unknown>): void {
+  const messages = payload.messages;
+  if (!Array.isArray(messages)) {
+    return;
+  }
+
+  for (const msg of messages as Array<{ role?: string; content?: unknown }>) {
+    const content = msg.content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+
+    // Only flatten when every block is a plain text block with no extra
+    // annotation properties (e.g. cache_control added by OpenRouter).
+    if (content.length === 0) {
+      continue;
+    }
+    if (!content.every(isPlainTextBlock)) {
+      continue;
+    }
+
+    // Concatenate text parts into a single string, matching the standard
+    // OpenAI Chat Completions format.
+    msg.content = (content as Array<{ text: string }>).map((block) => block.text).join("");
+  }
+}
