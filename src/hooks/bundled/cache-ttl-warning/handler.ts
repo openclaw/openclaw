@@ -325,8 +325,9 @@ const handler: HookHandler = async (event) => {
     return;
   }
 
+  const bareConversationIdForLog = conversationId.replace(/^.*:/, "");
   log.info(
-    `cache-ttl-warning: checking shouldWatch key=${channelId}:${conversationId} isGroup=${isGroup} watchConversations=${JSON.stringify(watchConversations)}`,
+    `cache-ttl-warning: checking shouldWatch key=${channelId}:${bareConversationIdForLog} isGroup=${isGroup} watchConversations=${JSON.stringify(watchConversations)}`,
   );
   if (
     !shouldWatch({
@@ -361,11 +362,13 @@ const handler: HookHandler = async (event) => {
   // Capture values for closure
   const capturedChannelId = channelId;
   const capturedTo = to;
+  // Strip provider prefix from originalTo for consistency (e.g. "telegram:7898601152" → "7898601152")
+  const bareOriginalTo = to.replace(/^[^:]+:/, "");
 
   const entry: ConversationTimer = {
     warningTimer: undefined,
     expiredTimer: undefined,
-    originalTo: to,
+    originalTo: bareOriginalTo,
   };
 
   // Set warning timer
