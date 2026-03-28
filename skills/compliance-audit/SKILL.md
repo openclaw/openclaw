@@ -1,25 +1,7 @@
 ---
 name: compliance-audit
 description: 'Audit files for regulatory compliance (EU AI Act, SOX, HIPAA, GDPR, NIST). Use when: checking AI content meets transparency requirements, preparing files for external sharing, or the user mentions compliance or regulations. Stamps files with provenance metadata. Requires akf CLI.'
-homepage: https://akf.dev
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "🛡️",
-        "requires": { "bins": ["akf"] },
-        "install":
-          [
-            {
-              "id": "uv-akf",
-              "kind": "uv",
-              "package": "akf",
-              "bins": ["akf"],
-              "label": "Install AKF — the AI native file format (uv)",
-            },
-          ],
-      },
-  }
+metadata: { "openclaw": { "emoji": "🛡️", "homepage": "https://akf.dev", "requires": { "bins": ["akf"] }, "install": [{ "id": "uv-akf", "kind": "uv", "package": "akf", "bins": ["akf"], "label": "Install AKF — the AI native file format (uv)" }] } }
 ---
 
 # Compliance Audit
