@@ -357,7 +357,7 @@ function isBrowserEnabled(cfg: OpenClawConfig): boolean {
   }
 }
 
-function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
+function listPolicyOpen(cfg: OpenClawConfig, policyKey: "groupPolicy" | "dmPolicy"): string[] {
   const out: string[] = [];
   const channels = cfg.channels as Record<string, unknown> | undefined;
   if (!channels || typeof channels !== "object") {
@@ -368,8 +368,8 @@ function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
       continue;
     }
     const section = value as Record<string, unknown>;
-    if (section.groupPolicy === "open") {
-      out.push(`channels.${channelId}.groupPolicy`);
+    if (section[policyKey] === "open") {
+      out.push(`channels.${channelId}.${policyKey}`);
     }
     const accounts = section.accounts;
     if (accounts && typeof accounts === "object") {
@@ -378,13 +378,21 @@ function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
           continue;
         }
         const acc = accountVal as Record<string, unknown>;
-        if (acc.groupPolicy === "open") {
-          out.push(`channels.${channelId}.accounts.${accountId}.groupPolicy`);
+        if (acc[policyKey] === "open") {
+          out.push(`channels.${channelId}.accounts.${accountId}.${policyKey}`);
         }
       }
     }
   }
   return out;
+}
+
+function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
+  return listPolicyOpen(cfg, "groupPolicy");
+}
+
+function listDmPolicyOpen(cfg: OpenClawConfig): string[] {
+  return listPolicyOpen(cfg, "dmPolicy");
 }
 
 function hasConfiguredGroupTargets(section: Record<string, unknown>): boolean {
@@ -1290,37 +1298,79 @@ export function collectSmallModelRiskFindings(params: {
 export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const openGroups = listGroupPolicyOpen(cfg);
-  if (openGroups.length === 0) {
+  const openDms = listDmPolicyOpen(cfg);
+  const allOpenPaths = [...openGroups, ...openDms];
+  if (allOpenPaths.length === 0) {
     return findings;
   }
 
   const elevatedEnabled = cfg.tools?.elevated?.enabled !== false;
   if (elevatedEnabled) {
     findings.push({
-      checkId: "security.exposure.open_groups_with_elevated",
+      checkId: "security.exposure.open_channels_with_elevated",
       severity: "critical",
-      title: "Open groupPolicy with elevated tools enabled",
+      title: "Open groupPolicy/dmPolicy with elevated tools enabled",
       detail:
-        `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
-        "With tools.elevated enabled, a prompt injection in those rooms can become a high-impact incident.",
-      remediation: `Set groupPolicy="allowlist" and keep elevated allowlists extremely tight.`,
+        `Found open policy at:\n${allOpenPaths.map((p) => `- ${p}`).join("\n")}\n` +
+        "With tools.elevated enabled, a prompt injection from these channels can become a high-impact incident.",
+      remediation: `Set groupPolicy/dmPolicy to "allowlist" or "pairing" and keep elevated allowlists extremely tight.`,
     });
+
+    if (openGroups.length > 0) {
+      findings.push({
+        checkId: "security.exposure.open_groups_with_elevated",
+        severity: "critical",
+        title: "Open groupPolicy with elevated tools enabled",
+        detail:
+          `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
+          "With tools.elevated enabled, a prompt injection in those rooms can become a high-impact incident.",
+        remediation: `Set groupPolicy="allowlist" and keep elevated allowlists extremely tight.`,
+      });
+    }
+
+    if (openDms.length > 0) {
+      findings.push({
+        checkId: "security.exposure.open_dms_with_elevated",
+        severity: "critical",
+        title: "Open dmPolicy with elevated tools enabled",
+        detail:
+          `Found dmPolicy="open" at:\n${openDms.map((p) => `- ${p}`).join("\n")}\n` +
+          "With tools.elevated enabled, an untrusted DM sender can trigger elevated tool execution.",
+        remediation: `Set dmPolicy="pairing" (recommended) or "allowlist" and keep elevated allowlists extremely tight.`,
+      });
+    }
   }
 
   const { riskyContexts, hasRuntimeRisk } = collectRiskyToolExposureContexts(cfg);
 
   if (riskyContexts.length > 0) {
-    findings.push({
-      checkId: "security.exposure.open_groups_with_runtime_or_fs",
-      severity: hasRuntimeRisk ? "critical" : "warn",
-      title: "Open groupPolicy with runtime/filesystem tools exposed",
-      detail:
-        `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
-        `Risky tool exposure contexts:\n${riskyContexts.map((line) => `- ${line}`).join("\n")}\n` +
-        "Prompt injection in open groups can trigger command/file actions in these contexts.",
-      remediation:
-        'For open groups, prefer tools.profile="messaging" (or deny group:runtime/group:fs), set tools.fs.workspaceOnly=true, and use agents.defaults.sandbox.mode="all" for exposed agents.',
-    });
+    if (openGroups.length > 0) {
+      findings.push({
+        checkId: "security.exposure.open_groups_with_runtime_or_fs",
+        severity: hasRuntimeRisk ? "critical" : "warn",
+        title: "Open groupPolicy with runtime/filesystem tools exposed",
+        detail:
+          `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
+          `Risky tool exposure contexts:\n${riskyContexts.map((line) => `- ${line}`).join("\n")}\n` +
+          "Prompt injection in open groups can trigger command/file actions in these contexts.",
+        remediation:
+          'For open groups, prefer tools.profile="messaging" (or deny group:runtime/group:fs), set tools.fs.workspaceOnly=true, and use agents.defaults.sandbox.mode="all" for exposed agents.',
+      });
+    }
+
+    if (openDms.length > 0) {
+      findings.push({
+        checkId: "security.exposure.open_dms_with_runtime_or_fs",
+        severity: hasRuntimeRisk ? "critical" : "warn",
+        title: "Open dmPolicy with runtime/filesystem tools exposed",
+        detail:
+          `Found dmPolicy="open" at:\n${openDms.map((p) => `- ${p}`).join("\n")}\n` +
+          `Risky tool exposure contexts:\n${riskyContexts.map((line) => `- ${line}`).join("\n")}\n` +
+          "An untrusted DM sender can trigger command/file actions in these contexts.",
+        remediation:
+          'For open DMs, prefer tools.profile="messaging" (or deny group:runtime/group:fs), set tools.fs.workspaceOnly=true, and use agents.defaults.sandbox.mode="all" for exposed agents.',
+      });
+    }
   }
 
   return findings;
@@ -1354,6 +1404,22 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
     remediation:
       'If users may be mutually untrusted, split trust boundaries (separate gateways + credentials, ideally separate OS users/hosts). If you intentionally run shared-user access, set agents.defaults.sandbox.mode="all", keep tools.fs.workspaceOnly=true, deny runtime/fs/web tools unless required, and keep personal/private identities + credentials off that runtime.',
   });
+
+  const dmScope = cfg.session?.dmScope ?? "main";
+  if (dmScope === "main") {
+    findings.push({
+      checkId: "security.trust_model.dm_scope_main_multi_user",
+      severity: "critical",
+      title: 'session.dmScope="main" leaks context across DM senders',
+      detail:
+        'Multi-user heuristics detected and session.dmScope is "main" (or unset, defaulting to "main"). ' +
+        "All DM senders share the same main session, which means conversation context, tool outputs, " +
+        "and potentially sensitive data from one user's DM is visible to subsequent DM senders.",
+      remediation:
+        'Set session.dmScope="per-channel-peer" (recommended) or "per-account-channel-peer" to isolate DM sessions per sender. ' +
+        'Run: openclaw config set session.dmScope "per-channel-peer"',
+    });
+  }
 
   return findings;
 }
