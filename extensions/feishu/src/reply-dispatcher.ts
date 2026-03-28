@@ -22,6 +22,7 @@ import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } fr
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
+import type { FeishuStatusLanguage } from "./types.js";
 
 /** Detect if text contains markdown elements that benefit from card rendering */
 function shouldUseCard(text: string): boolean {
@@ -122,6 +123,29 @@ function isLikelyCodexScratchpadText(text: string, provider?: string): boolean {
       cleaned,
     )
   );
+}
+
+function resolveStatusCopy(language: FeishuStatusLanguage) {
+  if (language === "en") {
+    return {
+      locale: "en-GB",
+      statusLabel: "Status",
+      activityLabel: "Last activity",
+      processing: "In progress",
+      finalizing: "Finalizing",
+      completed: "Completed",
+      completionPingPrefix: "Completed:",
+    } as const;
+  }
+  return {
+    locale: "zh-CN",
+    statusLabel: "状态",
+    activityLabel: "最后活动",
+    processing: "处理中",
+    finalizing: "整理结果",
+    completed: "已完成",
+    completionPingPrefix: "已完成：",
+  } as const;
 }
 
 export type CreateFeishuReplyDispatcherParams = {
@@ -251,13 +275,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let streamingStartedAt = 0;
   let lastActivityAt = 0;
-  let lastKnownStatus = "处理中";
+  const statusLanguage = account.config?.statusLanguage ?? "zh-CN";
+  const statusCopy = resolveStatusCopy(statusLanguage);
+  let lastKnownStatus = statusCopy.processing;
   const STREAMING_NOTE_HEARTBEAT_MS = 15_000;
   type StreamTextUpdateMode = "snapshot" | "delta";
 
   const formatActivityTime = (timestamp: number): string =>
     timestamp > 0
-      ? new Date(timestamp).toLocaleTimeString("zh-CN", {
+      ? new Date(timestamp).toLocaleTimeString(statusCopy.locale, {
           hour12: false,
           hour: "2-digit",
           minute: "2-digit",
@@ -267,9 +293,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
   const buildStreamingNote = (status = lastKnownStatus): string => {
     const base = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-    const parts = [base, `状态: ${status}`];
+    const parts = [base, `${statusCopy.statusLabel}: ${status}`];
     if (lastActivityAt > 0) {
-      parts.push(`最后活动: ${formatActivityTime(lastActivityAt)}`);
+      parts.push(`${statusCopy.activityLabel}: ${formatActivityTime(lastActivityAt)}`);
     }
     return parts.join(" | ");
   };
@@ -286,7 +312,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     });
   };
 
-  const markStreamingActivity = (status = "处理中") => {
+  const markStreamingActivity = (status = statusCopy.processing) => {
     lastActivityAt = Date.now();
     refreshStreamingNote(status);
   };
@@ -356,7 +382,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (options?.dedupeWithLastPartial) {
       lastPartial = nextText;
     }
-    markStreamingActivity("处理中");
+    markStreamingActivity(statusCopy.processing);
     const mode = options?.mode ?? "snapshot";
     streamText =
       mode === "delta" ? `${streamText}${nextText}` : mergeStreamingText(streamText, nextText);
@@ -366,7 +392,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const queueReasoningUpdate = (nextThinking: string) => {
     if (!nextThinking) return;
     reasoningText = nextThinking;
-    markStreamingActivity("处理中");
+    markStreamingActivity(statusCopy.processing);
     flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
   };
 
@@ -376,7 +402,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     streamingStartedAt = Date.now();
     lastActivityAt = streamingStartedAt;
-    lastKnownStatus = "处理中";
+    lastKnownStatus = statusCopy.processing;
     streamingStartPromise = (async () => {
       const creds =
         account.appId && account.appSecret
@@ -397,7 +423,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           replyInThread: effectiveReplyInThread,
           rootId,
           header: cardHeader,
-          note: buildStreamingNote("处理中"),
+          note: buildStreamingNote(statusCopy.processing),
         });
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
@@ -419,9 +445,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
-      lastKnownStatus = "已完成";
+      lastKnownStatus = statusCopy.completed;
       lastActivityAt = Date.now();
-      const finalNote = buildStreamingNote("已完成");
+      const finalNote = buildStreamingNote(statusCopy.completed);
       await streaming.close(text, { note: finalNote });
     }
     streaming = null;
@@ -431,7 +457,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     reasoningText = "";
     streamingStartedAt = 0;
     lastActivityAt = 0;
-    lastKnownStatus = "处理中";
+    lastKnownStatus = statusCopy.processing;
   };
 
   const sendChunkedTextReply = async (params: {
@@ -530,7 +556,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               queueStreamingUpdate(text, { mode: "delta" });
             }
             if (info?.kind === "final") {
-              markStreamingActivity("整理结果");
+              markStreamingActivity(statusCopy.finalizing);
               streamText = mergeStreamingText(streamText, text);
               await closeStreaming();
               deliveredFinalTexts.add(text);
@@ -538,7 +564,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 await sendMessageFeishu({
                   cfg,
                   to: chatId,
-                  text: `已完成：${text.replace(/\n/g, " ").trim().slice(0, 100)}`,
+                  text: `${statusCopy.completionPingPrefix} ${text.replace(/\n/g, " ").trim().slice(0, 100)}`,
                   replyToMessageId: sendReplyToMessageId,
                   replyInThread: effectiveReplyInThread,
                   accountId,

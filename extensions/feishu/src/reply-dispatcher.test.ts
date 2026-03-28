@@ -638,6 +638,40 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("supports optional english streaming status note", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+        statusLanguage: "en",
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledWith(
+      "oc_chat",
+      "chat_id",
+      expect.objectContaining({
+        note: expect.stringContaining("Agent: agent | Status: In progress"),
+      }),
+    );
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(
+      "```ts\nconst x = 1\n```",
+      expect.objectContaining({
+        note: expect.stringContaining("Agent: agent | Status: Completed"),
+      }),
+    );
+  });
+
   it("filters codex scratchpad-like english text from feishu replies", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
