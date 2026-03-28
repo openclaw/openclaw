@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, it, vi } from "vitest";
 import { createTelegramTypingLease } from "./runtime-telegram-typing.js";
 import {
+  createPulseWithBackgroundFailure,
   expectBackgroundTypingPulseFailuresAreSwallowed,
   expectIndependentTypingLeases,
+  expectTypingPulseCount,
 } from "./typing-lease.test-support.js";
 
 const TELEGRAM_TYPING_INTERVAL_MS = 2_000;
@@ -23,13 +25,6 @@ function buildTelegramTypingParams(
   };
 }
 
-function expectTelegramPulseCount(
-  pulse: ReturnType<typeof vi.fn<() => Promise<unknown>>>,
-  expected: number,
-) {
-  expect(pulse).toHaveBeenCalledTimes(expected);
-}
-
 describe("createTelegramTypingLease", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -43,17 +38,15 @@ describe("createTelegramTypingLease", () => {
   });
 
   it("swallows background pulse failures", async () => {
-    const pulse = vi
-      .fn<
+    const pulse =
+      createPulseWithBackgroundFailure<
         (params: {
           to: string;
           accountId?: string;
           cfg?: unknown;
           messageThreadId?: number;
         }) => Promise<unknown>
-      >()
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("boom"));
+      >();
 
     await expectBackgroundTypingPulseFailuresAreSwallowed({
       createLease: createTelegramTypingLease,
@@ -72,11 +65,11 @@ describe("createTelegramTypingLease", () => {
       pulse,
     });
 
-    expectTelegramPulseCount(pulse, 1);
+    expectTypingPulseCount(pulse, 1);
     await vi.advanceTimersByTimeAsync(TELEGRAM_TYPING_DEFAULT_INTERVAL_MS - 1);
-    expectTelegramPulseCount(pulse, 1);
+    expectTypingPulseCount(pulse, 1);
     await vi.advanceTimersByTimeAsync(1);
-    expectTelegramPulseCount(pulse, 2);
+    expectTypingPulseCount(pulse, 2);
 
     lease.stop();
   });
