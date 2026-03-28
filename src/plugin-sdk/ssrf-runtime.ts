@@ -4,6 +4,7 @@
 export {
   closeDispatcher,
   createPinnedDispatcher,
+  isBlockedHostnameOrIp,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   type SsrFPolicy,
