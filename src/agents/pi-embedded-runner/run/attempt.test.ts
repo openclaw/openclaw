@@ -27,6 +27,7 @@ import {
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
+  resolveEmbeddedAgentStreamFn,
 } from "./attempt.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 
@@ -1807,6 +1808,50 @@ describe("shouldInjectOllamaCompatNumCtx", () => {
         providerId: "ollama",
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveEmbeddedAgentStreamFn", () => {
+  it("keeps the session-managed HTTP stream when no override applies", () => {
+    const currentStreamFn = vi.fn();
+
+    const resolved = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: { provider: "xai" } as never,
+    });
+
+    expect(resolved).toBe(currentStreamFn);
+  });
+
+  it("keeps the session-managed HTTP stream when websocket auth is unavailable", () => {
+    const currentStreamFn = vi.fn();
+
+    const resolved = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      shouldUseWebSocketTransport: true,
+      wsApiKey: undefined,
+      sessionId: "session-1",
+      model: { provider: "xai" } as never,
+    });
+
+    expect(resolved).toBe(currentStreamFn);
+  });
+
+  it("prefers a provider-owned stream override when present", () => {
+    const currentStreamFn = vi.fn();
+    const providerStreamFn = vi.fn();
+
+    const resolved = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      providerStreamFn: providerStreamFn as never,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: { provider: "xai" } as never,
+    });
+
+    expect(resolved).toBe(providerStreamFn);
   });
 });
 
