@@ -174,6 +174,7 @@ describe("sendMessageMatrix media", () => {
 
   it("encrypts thumbnail via thumbnail_file when room is encrypted", async () => {
     const { client, sendMessage, uploadContent } = makeClient();
+    const isRoomEncrypted = vi.fn().mockResolvedValue(true);
     const encryptMedia = vi.fn().mockResolvedValue({
       buffer: Buffer.from("encrypted-thumb"),
       file: {
@@ -184,7 +185,7 @@ describe("sendMessageMatrix media", () => {
       },
     });
     (client as { crypto?: object }).crypto = {
-      isRoomEncrypted: vi.fn().mockResolvedValue(true),
+      isRoomEncrypted,
       encryptMedia,
     };
     // Return image metadata so thumbnail generation is triggered (image > 800px)
@@ -203,6 +204,7 @@ describe("sendMessageMatrix media", () => {
     });
 
     // encryptMedia called twice: once for main media, once for thumbnail
+    expect(isRoomEncrypted).toHaveBeenCalledTimes(1);
     expect(encryptMedia).toHaveBeenCalledTimes(2);
 
     const content = sendMessage.mock.calls[0]?.[1] as {
