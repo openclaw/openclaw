@@ -49,15 +49,13 @@ describe("buildPairingReply", () => {
     },
   ] as const;
 
-  for (const testCase of cases) {
-    it(`formats pairing reply for ${testCase.channel}`, () => {
-      const text = buildPairingReply(testCase);
-      expectPairingReplyText(text, testCase);
-      // CLI commands should respect OPENCLAW_PROFILE when set (most tests run with isolated profile)
-      const commandRe = new RegExp(
-        `(?:openclaw|openclaw) --profile isolated pairing approve ${testCase.channel} ${testCase.code}`,
-      );
-      expect(text).toMatch(commandRe);
-    });
-  }
+  it.each(cases)("formats pairing reply for $channel", (testCase) => {
+    const text = buildPairingReply(testCase);
+    expectPairingReplyText(text, testCase);
+    // CLI commands should respect OPENCLAW_PROFILE when set (most tests run with isolated profile)
+    const commandRe = new RegExp(
+      `(?:openclaw|openclaw) --profile isolated pairing approve ${testCase.channel} ${testCase.code}`,
+    );
+    expect(text).toMatch(commandRe);
+  });
 });
