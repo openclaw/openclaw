@@ -2,9 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadOpenClawPluginsMock = vi.fn();
 const loadPluginManifestRegistryMock = vi.fn();
+const applyPluginAutoEnableMock = vi.fn();
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
+}));
+
+vi.mock("../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnableMock(...args),
 }));
 
 vi.mock("./manifest-registry.js", () => ({
@@ -93,6 +98,11 @@ describe("resolvePluginProviders", () => {
       providers: [{ pluginId: "google", provider: { id: "demo-provider" } }],
     });
     loadPluginManifestRegistryMock.mockReset();
+    applyPluginAutoEnableMock.mockReset();
+    applyPluginAutoEnableMock.mockImplementation((params: { config: unknown }) => ({
+      config: params.config,
+      changes: [],
+    }));
     loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
         { id: "google", providers: ["google"], origin: "bundled" },
@@ -228,6 +238,34 @@ describe("resolvePluginProviders", () => {
       onlyPluginIds: ["google", "kilocode", "moonshot"],
     });
   });
+
+  it("loads provider plugins from the auto-enabled config snapshot", () => {
+    const rawConfig = {
+      plugins: {},
+    };
+    const autoEnabledConfig = {
+      ...rawConfig,
+      plugins: {
+        entries: {
+          google: { enabled: true },
+        },
+      },
+    };
+    applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+
+    resolvePluginProviders({ config: rawConfig });
+
+    expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
+      config: rawConfig,
+      env: process.env,
+    });
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: autoEnabledConfig,
+      }),
+    );
+  });
+
   it("maps provider ids to owning plugin ids via manifests", () => {
     loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
