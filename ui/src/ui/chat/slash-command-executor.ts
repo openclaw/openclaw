@@ -136,12 +136,13 @@ async function executeModel(
   args: string,
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
-  const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
+  const modelCatalog = context.chatModelCatalog ?? context.modelCatalog ?? [];
+  const hasModelCatalog = modelCatalog.length > 0;
   if (!args) {
     try {
       const [sessions, models] = await Promise.all([
         client.request<SessionsListResult>("sessions.list", {}),
-        modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
+        hasModelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
       ]);
       const session = resolveCurrentSession(sessions, sessionKey);
       const model = session?.model || sessions?.defaults?.model || "default";
@@ -164,7 +165,9 @@ async function executeModel(
   try {
     const modelArg = args.trim();
     const resolvedModelCatalog =
-      modelCatalog ??
+      hasModelCatalog
+        ? modelCatalog
+        :
       (modelArg.includes("/") ? [] : await loadModelCatalog(client, { allowFailure: true }));
     const requestedValue =
       resolveChatModelOverride(createChatModelOverride(modelArg), resolvedModelCatalog).value ||
