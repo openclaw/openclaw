@@ -167,15 +167,15 @@ function createContext(overrides?: {
 describe("registerSlackInteractionEvents", () => {
   beforeAll(async () => {
     vi.resetModules();
-    const infraRuntime = await import("openclaw/plugin-sdk/infra-runtime");
+    const channelRuntime = await import("openclaw/plugin-sdk/channel-runtime");
     const pluginRuntime = await import("openclaw/plugin-sdk/plugin-runtime");
     const conversationBinding = await import("../../../../../src/plugins/conversation-binding.js");
     enqueueSystemEventSpy = vi
-      .spyOn(infraRuntime, "enqueueSystemEvent")
-      .mockImplementation(((...args: Parameters<typeof infraRuntime.enqueueSystemEvent>) =>
+      .spyOn(channelRuntime, "enqueueSystemEvent")
+      .mockImplementation(((...args: Parameters<typeof channelRuntime.enqueueSystemEvent>) =>
         (enqueueSystemEventMock as (...innerArgs: unknown[]) => boolean)(
           ...args,
-        )) as typeof infraRuntime.enqueueSystemEvent);
+        )) as typeof channelRuntime.enqueueSystemEvent);
     dispatchPluginInteractiveHandlerSpy = vi
       .spyOn(pluginRuntime, "dispatchPluginInteractiveHandler")
       .mockImplementation(((
