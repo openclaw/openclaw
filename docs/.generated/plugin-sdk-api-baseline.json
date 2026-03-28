@@ -127,7 +127,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 578,
+            "line": 590,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1202,6 +1202,15 @@
           }
         },
         {
+          "declaration": "export type ChannelCommandConversationContext = ChannelCommandConversationContext;",
+          "exportName": "ChannelCommandConversationContext",
+          "kind": "type",
+          "source": {
+            "line": 578,
+            "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
           "declaration": "export type ChannelGroupContext = ChannelGroupContext;",
           "exportName": "ChannelGroupContext",
           "kind": "type",
@@ -1784,6 +1793,15 @@
           }
         },
         {
+          "declaration": "export type ChannelCommandConversationContext = ChannelCommandConversationContext;",
+          "exportName": "ChannelCommandConversationContext",
+          "kind": "type",
+          "source": {
+            "line": 578,
+            "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
           "declaration": "export type ChannelConfigAdapter = ChannelConfigAdapter<ResolvedAccount>;",
           "exportName": "ChannelConfigAdapter",
           "kind": "type",
@@ -1815,7 +1833,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 578,
+            "line": 590,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2184,7 +2202,7 @@
           "exportName": "ChannelSecurityAdapter",
           "kind": "type",
           "source": {
-            "line": 591,
+            "line": 606,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
