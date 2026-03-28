@@ -294,6 +294,13 @@ export async function monitorWebChannel(
         if (!active.lastInboundAt) {
           return;
         }
+        // Only treat message silence as a stuck connection after this specific
+        // socket has successfully handled at least one inbound message.
+        // Otherwise, an idle-but-healthy session can inherit an old lastInboundAt
+        // timestamp and get forced into pointless reconnect loops every minute.
+        if (active.handledMessages === 0) {
+          return;
+        }
         const timeSinceLastMessage = Date.now() - active.lastInboundAt;
         if (timeSinceLastMessage <= MESSAGE_TIMEOUT_MS) {
           return;

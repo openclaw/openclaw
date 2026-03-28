@@ -109,7 +109,7 @@ These were cherry-picked from upstream branches before they landed in main. Now 
 
 | Date       | Upstream Commits | Key Changes                                                                                                                                                  |
 | ---------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 2026-03-27 | 411              | Provider runtime → extensions, 503 model fallback, TTS provider registry refactor, video gen infra, skill source rename, zod validation |
+| 2026-03-27 | 411              | Provider runtime → extensions, 503 model fallback, TTS provider registry refactor, video gen infra, skill source rename, zod validation                      |
 | 2026-03-11 | 908              | Strip leaked control tokens, telegram chunking, cron stagger on restart, bootstrap file protection, duplicate cooldown probe fix, Alibaba Bailian onboarding |
 | 2026-02-24 | 845              | Auto-reply multilingual stop, allowFrom breaking change, reasoning payload suppression, configurable subagent timeout                                        |
 | 2026-02-22 | 320              | routingPrefer, redactSensitiveText preserved                                                                                                                 |

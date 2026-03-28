@@ -1373,6 +1373,48 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           type: "string",
                         },
                       },
+                      routing: {
+                        type: "object",
+                        properties: {
+                          enabled: {
+                            type: "boolean",
+                          },
+                          rules: {
+                            type: "array",
+                            items: {
+                              type: "object",
+                              properties: {
+                                when: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                      const: "simple",
+                                    },
+                                    {
+                                      type: "string",
+                                      const: "tool_heavy",
+                                    },
+                                    {
+                                      type: "string",
+                                      const: "reasoning",
+                                    },
+                                    {
+                                      type: "string",
+                                      const: "code",
+                                    },
+                                  ],
+                                },
+                                prefer: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["when", "prefer"],
+                              additionalProperties: false,
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -1394,6 +1436,48 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         items: {
                           type: "string",
                         },
+                      },
+                      routing: {
+                        type: "object",
+                        properties: {
+                          enabled: {
+                            type: "boolean",
+                          },
+                          rules: {
+                            type: "array",
+                            items: {
+                              type: "object",
+                              properties: {
+                                when: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                      const: "simple",
+                                    },
+                                    {
+                                      type: "string",
+                                      const: "tool_heavy",
+                                    },
+                                    {
+                                      type: "string",
+                                      const: "reasoning",
+                                    },
+                                    {
+                                      type: "string",
+                                      const: "code",
+                                    },
+                                  ],
+                                },
+                                prefer: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["when", "prefer"],
+                              additionalProperties: false,
+                            },
+                          },
+                        },
+                        additionalProperties: false,
                       },
                     },
                     additionalProperties: false,
@@ -1417,6 +1501,48 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           type: "string",
                         },
                       },
+                      routing: {
+                        type: "object",
+                        properties: {
+                          enabled: {
+                            type: "boolean",
+                          },
+                          rules: {
+                            type: "array",
+                            items: {
+                              type: "object",
+                              properties: {
+                                when: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                      const: "simple",
+                                    },
+                                    {
+                                      type: "string",
+                                      const: "tool_heavy",
+                                    },
+                                    {
+                                      type: "string",
+                                      const: "reasoning",
+                                    },
+                                    {
+                                      type: "string",
+                                      const: "code",
+                                    },
+                                  ],
+                                },
+                                prefer: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["when", "prefer"],
+                              additionalProperties: false,
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -1438,6 +1564,48 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         items: {
                           type: "string",
                         },
+                      },
+                      routing: {
+                        type: "object",
+                        properties: {
+                          enabled: {
+                            type: "boolean",
+                          },
+                          rules: {
+                            type: "array",
+                            items: {
+                              type: "object",
+                              properties: {
+                                when: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                      const: "simple",
+                                    },
+                                    {
+                                      type: "string",
+                                      const: "tool_heavy",
+                                    },
+                                    {
+                                      type: "string",
+                                      const: "reasoning",
+                                    },
+                                    {
+                                      type: "string",
+                                      const: "code",
+                                    },
+                                  ],
+                                },
+                                prefer: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["when", "prefer"],
+                              additionalProperties: false,
+                            },
+                          },
+                        },
+                        additionalProperties: false,
                       },
                     },
                     additionalProperties: false,
@@ -2277,6 +2445,39 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     },
                     additionalProperties: false,
                   },
+                  toolOverrides: {
+                    type: "object",
+                    propertyNames: {
+                      type: "string",
+                    },
+                    additionalProperties: {
+                      type: "object",
+                      properties: {
+                        softTrim: {
+                          type: "object",
+                          properties: {
+                            maxChars: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            headChars: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            tailChars: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                  },
                 },
                 additionalProperties: false,
               },
@@ -2766,6 +2967,48 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                             items: {
                               type: "string",
                             },
+                          },
+                          routing: {
+                            type: "object",
+                            properties: {
+                              enabled: {
+                                type: "boolean",
+                              },
+                              rules: {
+                                type: "array",
+                                items: {
+                                  type: "object",
+                                  properties: {
+                                    when: {
+                                      anyOf: [
+                                        {
+                                          type: "string",
+                                          const: "simple",
+                                        },
+                                        {
+                                          type: "string",
+                                          const: "tool_heavy",
+                                        },
+                                        {
+                                          type: "string",
+                                          const: "reasoning",
+                                        },
+                                        {
+                                          type: "string",
+                                          const: "code",
+                                        },
+                                      ],
+                                    },
+                                    prefer: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["when", "prefer"],
+                                  additionalProperties: false,
+                                },
+                              },
+                            },
+                            additionalProperties: false,
                           },
                         },
                         additionalProperties: false,
@@ -3352,6 +3595,48 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           items: {
                             type: "string",
                           },
+                        },
+                        routing: {
+                          type: "object",
+                          properties: {
+                            enabled: {
+                              type: "boolean",
+                            },
+                            rules: {
+                              type: "array",
+                              items: {
+                                type: "object",
+                                properties: {
+                                  when: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                        const: "simple",
+                                      },
+                                      {
+                                        type: "string",
+                                        const: "tool_heavy",
+                                      },
+                                      {
+                                        type: "string",
+                                        const: "reasoning",
+                                      },
+                                      {
+                                        type: "string",
+                                        const: "code",
+                                      },
+                                    ],
+                                  },
+                                  prefer: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["when", "prefer"],
+                                additionalProperties: false,
+                              },
+                            },
+                          },
+                          additionalProperties: false,
                         },
                       },
                       additionalProperties: false,
