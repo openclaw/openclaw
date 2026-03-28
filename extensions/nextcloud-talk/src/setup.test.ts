@@ -22,6 +22,11 @@ vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
   getBundledChannelConfigSchemaMap: () => new Map(),
 }));
 
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
+}));
+
 const hoisted = vi.hoisted(() => ({
   monitorNextcloudTalkProvider: vi.fn(),
   loadConfig: vi.fn(),
