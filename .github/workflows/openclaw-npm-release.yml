@@ -52,19 +52,6 @@ jobs:
           install-bun: "false"
           use-sticky-disk: "false"
 
-      - name: Validate release tag and package metadata
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_MAIN_REF: origin/main
-        run: |
-          set -euo pipefail
-          RELEASE_SHA=$(git rev-parse HEAD)
-          export RELEASE_SHA RELEASE_TAG RELEASE_MAIN_REF
-          # Fetch the full main ref so merge-base ancestry checks keep working
-          # for older tagged commits that are still contained in main.
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          pnpm release:openclaw:npm:check
-
       - name: Ensure version is not already published
         env:
           PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
@@ -88,6 +75,22 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Build Control UI
+        run: pnpm ui:build
+
+      - name: Validate release tag and package metadata
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_MAIN_REF: origin/main
+        run: |
+          set -euo pipefail
+          RELEASE_SHA=$(git rev-parse HEAD)
+          export RELEASE_SHA RELEASE_TAG RELEASE_MAIN_REF
+          # Fetch the full main ref so merge-base ancestry checks keep working
+          # for older tagged commits that are still contained in main.
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          pnpm release:openclaw:npm:check
 
       - name: Verify release contents
         run: pnpm release:check
@@ -142,6 +145,24 @@ jobs:
           install-bun: "false"
           use-sticky-disk: "false"
 
+      - name: Ensure version is not already published
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+
+          if npm view "openclaw@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            echo "openclaw@${PACKAGE_VERSION} is already published on npm."
+            exit 1
+          fi
+
+          echo "Publishing openclaw@${PACKAGE_VERSION}"
+
+      - name: Build
+        run: pnpm build
+
+      - name: Build Control UI
+        run: pnpm ui:build
+
       - name: Validate release tag and package metadata
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -154,18 +175,6 @@ jobs:
           # for older tagged commits that are still contained in main.
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           pnpm release:openclaw:npm:check
-
-      - name: Ensure version is not already published
-        run: |
-          set -euo pipefail
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-
-          if npm view "openclaw@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
-            echo "openclaw@${PACKAGE_VERSION} is already published on npm."
-            exit 1
-          fi
-
-          echo "Publishing openclaw@${PACKAGE_VERSION}"
 
       - name: Publish
         run: bash scripts/openclaw-npm-publish.sh --publish
