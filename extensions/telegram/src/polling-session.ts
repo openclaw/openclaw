@@ -1,6 +1,9 @@
 import { type RunOptions, run } from "@grammyjs/runner";
-import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/infra-runtime";
-import { formatDurationPrecise } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  computeBackoff,
+  formatDurationPrecise,
+  sleepWithAbort,
+} from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
