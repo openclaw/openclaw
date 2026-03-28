@@ -523,7 +523,7 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.unstubAllEnvs();
-  resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.26");
+  resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.27");
 });
 
 describe("installPluginFromArchive", () => {
