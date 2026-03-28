@@ -97,6 +97,7 @@
   "feishu-setup",
   "group-access",
   "google",
+  "global-singleton",
   "huggingface",
   "directory-runtime",
   "googlechat",

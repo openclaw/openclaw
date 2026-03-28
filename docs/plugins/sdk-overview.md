@@ -74,6 +74,7 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
     | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
     | `plugin-sdk/provider-stream` | Stream wrapper types |
     | `plugin-sdk/provider-onboard` | Onboarding config patch helpers |
+    | `plugin-sdk/global-singleton` | Process-local singleton/map/cache helpers |
   </Accordion>
 
   <Accordion title="Auth and security subpaths">
