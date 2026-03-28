@@ -70,6 +70,18 @@ function setBundledLookupFixture() {
   });
 }
 
+function createResolvedBundledSource(params: {
+  pluginId: string;
+  localPath: string;
+  npmSpec?: string;
+}) {
+  return {
+    pluginId: params.pluginId,
+    localPath: params.localPath,
+    npmSpec: params.npmSpec ?? `@openclaw/${params.pluginId}`,
+  };
+}
+
 function expectBundledSourceLookup(
   lookup: Parameters<typeof findBundledPluginSource>[0]["lookup"],
   expected:
@@ -86,6 +98,19 @@ function expectBundledSourceLookup(
   }
   expect(resolved?.pluginId).toBe(expected.pluginId);
   expect(resolved?.localPath).toBe(expected.localPath);
+}
+
+function expectBundledSourceLookupCase(params: {
+  lookup: Parameters<typeof findBundledPluginSource>[0]["lookup"];
+  expected:
+    | {
+        pluginId: string;
+        localPath: string;
+      }
+    | undefined;
+}) {
+  setBundledLookupFixture();
+  expectBundledSourceLookup(params.lookup, params.expected);
 }
 
 describe("bundled plugin sources", () => {
@@ -122,11 +147,12 @@ describe("bundled plugin sources", () => {
     const map = resolveBundledPluginSources({});
 
     expect(Array.from(map.keys())).toEqual(["feishu", "msteams"]);
-    expect(map.get("feishu")).toEqual({
-      pluginId: "feishu",
-      localPath: "/app/extensions/feishu",
-      npmSpec: "@openclaw/feishu",
-    });
+    expect(map.get("feishu")).toEqual(
+      createResolvedBundledSource({
+        pluginId: "feishu",
+        localPath: "/app/extensions/feishu",
+      }),
+    );
   });
 
   it.each([
@@ -151,8 +177,7 @@ describe("bundled plugin sources", () => {
       undefined,
     ],
   ] as const)("%s", (_name, lookup, expected) => {
-    setBundledLookupFixture();
-    expectBundledSourceLookup(lookup, expected);
+    expectBundledSourceLookupCase({ lookup, expected });
   });
 
   it("forwards an explicit env to bundled discovery helpers", () => {
@@ -184,11 +209,10 @@ describe("bundled plugin sources", () => {
     const bundled = new Map([
       [
         "feishu",
-        {
+        createResolvedBundledSource({
           pluginId: "feishu",
           localPath: "/app/extensions/feishu",
-          npmSpec: "@openclaw/feishu",
-        },
+        }),
       ],
     ]);
 
@@ -197,11 +221,12 @@ describe("bundled plugin sources", () => {
         bundled,
         lookup: { kind: "pluginId", value: "feishu" },
       }),
-    ).toEqual({
-      pluginId: "feishu",
-      localPath: "/app/extensions/feishu",
-      npmSpec: "@openclaw/feishu",
-    });
+    ).toEqual(
+      createResolvedBundledSource({
+        pluginId: "feishu",
+        localPath: "/app/extensions/feishu",
+      }),
+    );
     expect(
       findBundledPluginSourceInMap({
         bundled,

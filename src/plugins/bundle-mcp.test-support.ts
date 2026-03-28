@@ -26,17 +26,52 @@ export function createBundleMcpTempHarness() {
   };
 }
 
-export async function createBundleProbePlugin(homeDir: string) {
-  const pluginRoot = path.join(homeDir, ".openclaw", "extensions", "bundle-probe");
-  const serverPath = path.join(pluginRoot, "servers", "probe.mjs");
+export function resolveBundlePluginRoot(homeDir: string, pluginId: string) {
+  return path.join(homeDir, ".openclaw", "extensions", pluginId);
+}
+
+export async function writeClaudeBundleManifest(params: {
+  homeDir: string;
+  pluginId: string;
+  manifest: Record<string, unknown>;
+}) {
+  const pluginRoot = resolveBundlePluginRoot(params.homeDir, params.pluginId);
   await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
-  await fs.mkdir(path.dirname(serverPath), { recursive: true });
-  await fs.writeFile(serverPath, "export {};\n", "utf-8");
   await fs.writeFile(
     path.join(pluginRoot, ".claude-plugin", "plugin.json"),
-    `${JSON.stringify({ name: "bundle-probe" }, null, 2)}\n`,
+    `${JSON.stringify(params.manifest, null, 2)}\n`,
     "utf-8",
   );
+  return pluginRoot;
+}
+
+export async function writeBundleTextFiles(
+  rootDir: string,
+  files: Readonly<Record<string, string>>,
+) {
+  await Promise.all(
+    Object.entries(files).map(async ([relativePath, contents]) => {
+      const filePath = path.join(rootDir, relativePath);
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, contents, "utf-8");
+    }),
+  );
+}
+
+export function createEnabledPluginEntries(pluginIds: readonly string[]) {
+  return Object.fromEntries(pluginIds.map((pluginId) => [pluginId, { enabled: true }]));
+}
+
+export async function createBundleProbePlugin(homeDir: string) {
+  const pluginRoot = resolveBundlePluginRoot(homeDir, "bundle-probe");
+  const serverPath = path.join(pluginRoot, "servers", "probe.mjs");
+  await fs.mkdir(path.dirname(serverPath), { recursive: true });
+  await fs.writeFile(serverPath, "export {};\n", "utf-8");
+  await writeClaudeBundleManifest({
+    homeDir,
+    pluginId: "bundle-probe",
+    manifest: { name: "bundle-probe" },
+  });
   await fs.writeFile(
     path.join(pluginRoot, ".mcp.json"),
     `${JSON.stringify(

@@ -49,6 +49,23 @@ function createMemoryStateSnapshot() {
   };
 }
 
+function registerMemoryState(params: {
+  promptSection?: string[];
+  relativePath?: string;
+  runtime?: ReturnType<typeof createMemoryRuntime>;
+}) {
+  if (params.promptSection) {
+    registerMemoryPromptSection(() => params.promptSection ?? []);
+  }
+  if (params.relativePath) {
+    const relativePath = params.relativePath;
+    registerMemoryFlushPlanResolver(() => createMemoryFlushPlan(relativePath));
+  }
+  if (params.runtime) {
+    registerMemoryRuntime(params.runtime);
+  }
+}
+
 describe("memory plugin state", () => {
   afterEach(() => {
     clearMemoryPluginState();
@@ -114,10 +131,12 @@ describe("memory plugin state", () => {
   });
 
   it("restoreMemoryPluginState swaps both prompt and flush state", () => {
-    registerMemoryPromptSection(() => ["first"]);
-    registerMemoryFlushPlanResolver(() => createMemoryFlushPlan("memory/first.md"));
     const runtime = createMemoryRuntime();
-    registerMemoryRuntime(runtime);
+    registerMemoryState({
+      promptSection: ["first"],
+      relativePath: "memory/first.md",
+      runtime,
+    });
     const snapshot = createMemoryStateSnapshot();
 
     _resetMemoryPluginState();
@@ -130,9 +149,11 @@ describe("memory plugin state", () => {
   });
 
   it("clearMemoryPluginState resets both registries", () => {
-    registerMemoryPromptSection(() => ["stale section"]);
-    registerMemoryFlushPlanResolver(() => createMemoryFlushPlan("memory/stale.md"));
-    registerMemoryRuntime(createMemoryRuntime());
+    registerMemoryState({
+      promptSection: ["stale section"],
+      relativePath: "memory/stale.md",
+      runtime: createMemoryRuntime(),
+    });
 
     clearMemoryPluginState();
 

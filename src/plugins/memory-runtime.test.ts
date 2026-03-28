@@ -49,12 +49,51 @@ function expectMemoryRuntimeLoaded(autoEnabledConfig: unknown) {
   });
 }
 
+function expectMemoryAutoEnableApplied(rawConfig: unknown, autoEnabledConfig: unknown) {
+  expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
+    config: rawConfig,
+    env: process.env,
+  });
+  expectMemoryRuntimeLoaded(autoEnabledConfig);
+}
+
 function setAutoEnabledMemoryRuntime() {
   const { rawConfig, autoEnabledConfig } = createMemoryAutoEnableFixture();
   const runtime = createMemoryRuntimeFixture();
   applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
   getMemoryRuntimeMock.mockReturnValueOnce(undefined).mockReturnValue(runtime);
   return { rawConfig, autoEnabledConfig, runtime };
+}
+
+function expectNoMemoryRuntimeBootstrap() {
+  expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
+  expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+}
+
+async function expectAutoEnabledMemoryRuntimeCase(params: {
+  run: (rawConfig: unknown) => Promise<unknown>;
+  expectedResult: unknown;
+}) {
+  const { rawConfig, autoEnabledConfig } = setAutoEnabledMemoryRuntime();
+  const result = await params.run(rawConfig);
+
+  if (params.expectedResult !== undefined) {
+    expect(result).toEqual(params.expectedResult);
+  }
+  expectMemoryAutoEnableApplied(rawConfig, autoEnabledConfig);
+}
+
+async function expectCloseMemoryRuntimeCase(params: {
+  config: unknown;
+  setup: () => { closeAllMemorySearchManagers: ReturnType<typeof vi.fn> } | undefined;
+}) {
+  const runtime = params.setup();
+  await closeActiveMemorySearchManagers(params.config as never);
+
+  if (runtime) {
+    expect(runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
+  }
+  expectNoMemoryRuntimeBootstrap();
 }
 
 describe("memory runtime auto-enable loading", () => {
@@ -94,42 +133,33 @@ describe("memory runtime auto-enable loading", () => {
       expectedResult: { backend: "builtin" },
     },
   ] as const)("$name", async ({ run, expectedResult }) => {
-    const { rawConfig, autoEnabledConfig } = setAutoEnabledMemoryRuntime();
-
-    const result = await run(rawConfig);
-
-    if (expectedResult !== undefined) {
-      expect(result).toEqual(expectedResult);
-    }
-    expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
-      config: rawConfig,
-      env: process.env,
-    });
-    expectMemoryRuntimeLoaded(autoEnabledConfig);
+    await expectAutoEnabledMemoryRuntimeCase({ run, expectedResult });
   });
 
-  it("does not bootstrap the memory runtime just to close managers", async () => {
-    const rawConfig = {
-      plugins: {},
-      channels: { memory: { enabled: true } },
-    };
-    getMemoryRuntimeMock.mockReturnValue(undefined);
-
-    await closeActiveMemorySearchManagers(rawConfig as never);
-
-    expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
-    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
-  });
-
-  it("closes an already-registered memory runtime without reloading plugins", async () => {
-    const runtime = {
-      closeAllMemorySearchManagers: vi.fn(async () => {}),
-    };
-    getMemoryRuntimeMock.mockReturnValue(runtime);
-
-    await closeActiveMemorySearchManagers({} as never);
-
-    expect(runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
-    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  it.each([
+    {
+      name: "does not bootstrap the memory runtime just to close managers",
+      config: {
+        plugins: {},
+        channels: { memory: { enabled: true } },
+      },
+      setup: () => {
+        getMemoryRuntimeMock.mockReturnValue(undefined);
+        return undefined;
+      },
+    },
+    {
+      name: "closes an already-registered memory runtime without reloading plugins",
+      config: {},
+      setup: () => {
+        const runtime = {
+          closeAllMemorySearchManagers: vi.fn(async () => {}),
+        };
+        getMemoryRuntimeMock.mockReturnValue(runtime);
+        return runtime;
+      },
+    },
+  ] as const)("$name", async ({ config, setup }) => {
+    await expectCloseMemoryRuntimeCase({ config, setup });
   });
 });

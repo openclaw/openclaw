@@ -36,18 +36,22 @@ function writeBundleManifest(
   relativePath: string,
   manifest: Record<string, unknown>,
 ) {
-  mkdirSafe(path.dirname(path.join(rootDir, relativePath)));
-  fs.writeFileSync(path.join(rootDir, relativePath), JSON.stringify(manifest), "utf-8");
+  writeBundleFixtureFile(rootDir, relativePath, manifest);
 }
 
-function writeJsonFile(rootDir: string, relativePath: string, value: unknown) {
+function writeBundleFixtureFile(rootDir: string, relativePath: string, value: unknown) {
   mkdirSafe(path.dirname(path.join(rootDir, relativePath)));
-  fs.writeFileSync(path.join(rootDir, relativePath), JSON.stringify(value), "utf-8");
+  fs.writeFileSync(
+    path.join(rootDir, relativePath),
+    typeof value === "string" ? value : JSON.stringify(value),
+    "utf-8",
+  );
 }
 
-function writeTextFile(rootDir: string, relativePath: string, value: string) {
-  mkdirSafe(path.dirname(path.join(rootDir, relativePath)));
-  fs.writeFileSync(path.join(rootDir, relativePath), value, "utf-8");
+function writeBundleFixtureFiles(rootDir: string, files: Readonly<Record<string, unknown>>) {
+  Object.entries(files).forEach(([relativePath, value]) => {
+    writeBundleFixtureFile(rootDir, relativePath, value);
+  });
 }
 
 function setupBundleFixture(params: {
@@ -61,12 +65,8 @@ function setupBundleFixture(params: {
   for (const relativeDir of params.dirs ?? []) {
     mkdirSafe(path.join(params.rootDir, relativeDir));
   }
-  for (const [relativePath, value] of Object.entries(params.jsonFiles ?? {})) {
-    writeJsonFile(params.rootDir, relativePath, value);
-  }
-  for (const [relativePath, value] of Object.entries(params.textFiles ?? {})) {
-    writeTextFile(params.rootDir, relativePath, value);
-  }
+  writeBundleFixtureFiles(params.rootDir, params.jsonFiles ?? {});
+  writeBundleFixtureFiles(params.rootDir, params.textFiles ?? {});
   if (params.manifestRelativePath && params.manifest) {
     writeBundleManifest(params.rootDir, params.manifestRelativePath, params.manifest);
   }
@@ -107,6 +107,25 @@ function setupClaudeHookFixture(
     manifestRelativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
     manifest: { name: "No Hooks" },
   });
+}
+
+function expectBundleManifest(params: {
+  rootDir: string;
+  bundleFormat: "codex" | "claude" | "cursor";
+  expected: Record<string, unknown>;
+}) {
+  expect(detectBundleManifestFormat(params.rootDir)).toBe(params.bundleFormat);
+  expect(expectLoadedManifest(params.rootDir, params.bundleFormat)).toMatchObject(params.expected);
+}
+
+function expectClaudeHookResolution(params: {
+  rootDir: string;
+  expectedHooks: readonly string[];
+  hasHooksCapability: boolean;
+}) {
+  const manifest = expectLoadedManifest(params.rootDir, "claude");
+  expect(manifest.hooks).toEqual(params.expectedHooks);
+  expect(manifest.capabilities.includes("hooks")).toBe(params.hasHooksCapability);
 }
 
 afterEach(() => {
@@ -266,10 +285,11 @@ describe("bundle manifest parsing", () => {
     const rootDir = makeTempDir();
     setup(rootDir);
 
-    expect(detectBundleManifestFormat(rootDir)).toBe(bundleFormat);
-    expect(expectLoadedManifest(rootDir, bundleFormat)).toMatchObject(
-      typeof expected === "function" ? expected(rootDir) : expected,
-    );
+    expectBundleManifest({
+      rootDir,
+      bundleFormat,
+      expected: typeof expected === "function" ? expected(rootDir) : expected,
+    });
   });
 
   it.each([
@@ -294,9 +314,11 @@ describe("bundle manifest parsing", () => {
   ] as const)("$name", ({ setupKind, expectedHooks, hasHooksCapability }) => {
     const rootDir = makeTempDir();
     setupClaudeHookFixture(rootDir, setupKind);
-    const manifest = expectLoadedManifest(rootDir, "claude");
-    expect(manifest.hooks).toEqual(expectedHooks);
-    expect(manifest.capabilities.includes("hooks")).toBe(hasHooksCapability);
+    expectClaudeHookResolution({
+      rootDir,
+      expectedHooks,
+      hasHooksCapability,
+    });
   });
 
   it("does not misclassify native index plugins as manifestless Claude bundles", () => {

@@ -65,6 +65,19 @@ async function writeGeneratedMetadataModule(params: {
   });
 }
 
+async function expectGeneratedMetadataModuleState(params: {
+  repoRoot: string;
+  check?: boolean;
+  expected: { changed?: boolean; wrote?: boolean };
+}) {
+  const result = await writeGeneratedMetadataModule({
+    repoRoot: params.repoRoot,
+    ...(params.check ? { check: true } : {}),
+  });
+  expect(result).toEqual(expect.objectContaining(params.expected));
+  return result;
+}
+
 describe("bundled plugin metadata", () => {
   it(
     "matches the generated metadata snapshot",
@@ -127,12 +140,16 @@ describe("bundled plugin metadata", () => {
       configSchema: { type: "object" },
     });
 
-    const initial = await writeGeneratedMetadataModule({ repoRoot: tempRoot });
-    expect(initial.wrote).toBe(true);
+    await expectGeneratedMetadataModuleState({
+      repoRoot: tempRoot,
+      expected: { wrote: true },
+    });
 
-    const current = await writeGeneratedMetadataModule({ repoRoot: tempRoot, check: true });
-    expect(current.changed).toBe(false);
-    expect(current.wrote).toBe(false);
+    await expectGeneratedMetadataModuleState({
+      repoRoot: tempRoot,
+      check: true,
+      expected: { changed: false, wrote: false },
+    });
 
     fs.writeFileSync(
       path.join(tempRoot, "src/plugins/bundled-plugin-metadata.generated.ts"),
@@ -140,9 +157,11 @@ describe("bundled plugin metadata", () => {
       "utf8",
     );
 
-    const stale = await writeGeneratedMetadataModule({ repoRoot: tempRoot, check: true });
-    expect(stale.changed).toBe(true);
-    expect(stale.wrote).toBe(false);
+    await expectGeneratedMetadataModuleState({
+      repoRoot: tempRoot,
+      check: true,
+      expected: { changed: true, wrote: false },
+    });
   });
 
   it("merges generated channel schema metadata with manifest-owned channel config fields", async () => {
