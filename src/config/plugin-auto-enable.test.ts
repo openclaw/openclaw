@@ -1,44 +1,27 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import {
   clearPluginManifestRegistryCache,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
-import { validateConfigObject } from "./config.js";
+import {
+  cleanupTrackedTempDirs,
+  makeTrackedTempDir,
+  mkdirSafeDir,
+} from "../plugins/test-helpers/fs-fixtures.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+import { validateConfigObject } from "./validation.js";
 
 const tempDirs: string[] = [];
-const previousUmask = process.umask(0o022);
-
-function chmodSafeDir(dir: string) {
-  if (process.platform === "win32") {
-    return;
-  }
-  fs.chmodSync(dir, 0o755);
-}
-
-function mkdtempSafe(prefix: string) {
-  const dir = fs.mkdtempSync(prefix);
-  chmodSafeDir(dir);
-  return dir;
-}
-
-function mkdirSafe(dir: string) {
-  fs.mkdirSync(dir, { recursive: true });
-  chmodSafeDir(dir);
-}
 
 function makeTempDir() {
-  const dir = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-auto-enable-"));
-  tempDirs.push(dir);
-  return dir;
+  return makeTrackedTempDir("openclaw-plugin-auto-enable", tempDirs);
 }
 
 function writePluginManifestFixture(params: { rootDir: string; id: string; channels: string[] }) {
-  mkdirSafe(params.rootDir);
+  mkdirSafeDir(params.rootDir);
   fs.writeFileSync(
     path.join(params.rootDir, "openclaw.plugin.json"),
     JSON.stringify(
@@ -56,13 +39,24 @@ function writePluginManifestFixture(params: { rootDir: string; id: string; chann
 }
 
 /** Helper to build a minimal PluginManifestRegistry for testing. */
-function makeRegistry(plugins: Array<{ id: string; channels: string[] }>): PluginManifestRegistry {
+function makeRegistry(
+  plugins: Array<{
+    id: string;
+    channels: string[];
+    autoEnableWhenConfiguredProviders?: string[];
+    channelConfigs?: Record<string, { schema: Record<string, unknown>; preferOver?: string[] }>;
+  }>,
+): PluginManifestRegistry {
   return {
     plugins: plugins.map((p) => ({
       id: p.id,
       channels: p.channels,
+      autoEnableWhenConfiguredProviders: p.autoEnableWhenConfiguredProviders,
+      channelConfigs: p.channelConfigs,
       providers: [],
+      cliBackends: [],
       skills: [],
+      hooks: [],
       origin: "config" as const,
       rootDir: `/fake/${p.id}`,
       source: `/fake/${p.id}/index.js`,
@@ -121,22 +115,16 @@ function applyWithBluebubblesImessageConfig(extra?: {
 afterEach(() => {
   clearPluginDiscoveryCache();
   clearPluginManifestRegistryCache();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-afterAll(() => {
-  process.umask(previousUmask);
+  cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("applyPluginAutoEnable", () => {
-  it("auto-enables built-in channels and appends to existing allowlist", () => {
+  it("auto-enables built-in channels without appending to plugins.allow", () => {
     const result = applyWithSlackConfig({ plugins: { allow: ["telegram"] } });
 
     expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.slack).toBeUndefined();
-    expect(result.config.plugins?.allow).toEqual(["telegram", "slack"]);
+    expect(result.config.plugins?.allow).toEqual(["telegram"]);
     expect(result.changes.join("\n")).toContain("Slack configured, enabled automatically.");
   });
 
@@ -183,6 +171,52 @@ describe("applyPluginAutoEnable", () => {
     expect(validated.ok).toBe(true);
   });
 
+  it("does not append built-in WhatsApp to plugins.allow during auto-enable", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15555550123"],
+          },
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.channels?.whatsapp?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    const validated = validateConfigObject(result.config);
+    expect(validated.ok).toBe(true);
+  });
+
+  it("does not re-emit built-in auto-enable changes when rerun with plugins.allow set", () => {
+    const first = applyPluginAutoEnable({
+      config: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15555550123"],
+          },
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: {},
+    });
+
+    const second = applyPluginAutoEnable({
+      config: first.config,
+      env: {},
+    });
+
+    expect(first.changes).toHaveLength(1);
+    expect(second.changes).toEqual([]);
+    expect(second.config).toEqual(first.config);
+  });
+
   it("respects explicit disable", () => {
     const result = applyPluginAutoEnable({
       config: {
@@ -206,6 +240,19 @@ describe("applyPluginAutoEnable", () => {
 
     expect(result.config.channels?.slack?.enabled).toBe(false);
     expect(result.config.plugins?.entries?.slack).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
+  it("does not auto-enable plugin channels when only enabled=false is set", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { matrix: { enabled: false } },
+      },
+      env: {},
+      manifestRegistry: makeRegistry([{ id: "matrix", channels: ["matrix"] }]),
+    });
+
+    expect(result.config.plugins?.entries?.matrix).toBeUndefined();
     expect(result.changes).toEqual([]);
   });
 
@@ -239,7 +286,6 @@ describe("applyPluginAutoEnable", () => {
         ...process.env,
         OPENCLAW_HOME: undefined,
         OPENCLAW_STATE_DIR: stateDir,
-        CLAWDBOT_STATE_DIR: undefined,
         OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
       },
     });
@@ -251,7 +297,7 @@ describe("applyPluginAutoEnable", () => {
   it("uses env-scoped catalog metadata for preferOver auto-enable decisions", () => {
     const stateDir = makeTempDir();
     const catalogPath = path.join(stateDir, "plugins", "catalog.json");
-    mkdirSafe(path.dirname(catalogPath));
+    mkdirSafeDir(path.dirname(catalogPath));
     fs.writeFileSync(
       catalogPath,
       JSON.stringify({
@@ -280,14 +326,13 @@ describe("applyPluginAutoEnable", () => {
     const result = applyPluginAutoEnable({
       config: {
         channels: {
-          "env-primary": { enabled: true },
-          "env-secondary": { enabled: true },
+          "env-primary": { token: "primary" },
+          "env-secondary": { token: "secondary" },
         },
       },
       env: {
         ...process.env,
         OPENCLAW_STATE_DIR: stateDir,
-        CLAWDBOT_STATE_DIR: undefined,
       },
       manifestRegistry: makeRegistry([]),
     });
@@ -311,7 +356,70 @@ describe("applyPluginAutoEnable", () => {
       env: {},
     });
 
-    expect(result.config.plugins?.entries?.["google-gemini-cli-auth"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+  });
+
+  it("auto-enables minimax when minimax-portal profiles exist", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "minimax-portal:default": {
+              provider: "minimax-portal",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.["minimax-portal-auth"]).toBeUndefined();
+  });
+
+  it("does not auto-enable unrelated provider plugins just because auth profiles exist", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "openai:default": {
+              provider: "openai",
+              mode: "api_key",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.openai).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
+  it("uses manifest-owned provider auto-enable metadata for third-party plugins", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "acme-oauth:default": {
+              provider: "acme-oauth",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+      env: {},
+      manifestRegistry: makeRegistry([
+        {
+          id: "acme",
+          channels: [],
+          autoEnableWhenConfiguredProviders: ["acme-oauth"],
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.acme?.enabled).toBe(true);
   });
 
   it("auto-enables acpx plugin when ACP is configured", () => {
@@ -399,6 +507,38 @@ describe("applyPluginAutoEnable", () => {
   });
 
   describe("preferOver channel prioritization", () => {
+    it("uses manifest channel config preferOver metadata for plugin channels", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: {
+            primary: { someKey: "value" },
+            secondary: { someKey: "value" },
+          },
+        },
+        env: {},
+        manifestRegistry: makeRegistry([
+          {
+            id: "primary",
+            channels: ["primary"],
+            channelConfigs: {
+              primary: {
+                schema: { type: "object" },
+                preferOver: ["secondary"],
+              },
+            },
+          },
+          { id: "secondary", channels: ["secondary"] },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.primary?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.secondary?.enabled).toBeUndefined();
+      expect(result.changes.join("\n")).toContain("primary configured, enabled automatically.");
+      expect(result.changes.join("\n")).not.toContain(
+        "secondary configured, enabled automatically.",
+      );
+    });
+
     it("prefers bluebubbles: skips imessage auto-configure when both are configured", () => {
       const result = applyWithBluebubblesImessageConfig();
 
@@ -465,7 +605,6 @@ describe("applyPluginAutoEnable", () => {
           ...process.env,
           OPENCLAW_HOME: undefined,
           OPENCLAW_STATE_DIR: stateDir,
-          CLAWDBOT_STATE_DIR: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
         },
       });

@@ -3,6 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
+export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+
 function sanitizePrefix(prefix: string): string {
   const normalized = prefix.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
   return normalized || "tmp";
@@ -40,6 +42,7 @@ function isNodeErrorWithCode(err: unknown, code: string): boolean {
   );
 }
 
+/** Build a unique temp file path with sanitized prefix/extension parts. */
 export function buildRandomTempFilePath(params: {
   prefix: string;
   extension?: string;
@@ -58,6 +61,7 @@ export function buildRandomTempFilePath(params: {
   return path.join(resolveTempRoot(params.tmpDir), `${prefix}-${now}-${uuid}${extension}`);
 }
 
+/** Create a temporary download directory, run the callback, then clean it up best-effort. */
 export async function withTempDownloadPath<T>(
   params: {
     prefix: string;

@@ -1,33 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import { pt_BR } from "../locales/pt-BR.ts";
 import { zh_CN } from "../locales/zh-CN.ts";
 import { zh_TW } from "../locales/zh-TW.ts";
 
 type TranslateModule = typeof import("../lib/translate.ts");
-
-function createStorageMock(): Storage {
-  const store = new Map<string, string>();
-  return {
-    get length() {
-      return store.size;
-    },
-    clear() {
-      store.clear();
-    },
-    getItem(key: string) {
-      return store.get(key) ?? null;
-    },
-    key(index: number) {
-      return Array.from(store.keys())[index] ?? null;
-    },
-    removeItem(key: string) {
-      store.delete(key);
-    },
-    setItem(key: string, value: string) {
-      store.set(key, String(value));
-    },
-  };
-}
 
 describe("i18n", () => {
   let translate: TranslateModule;
@@ -90,6 +67,22 @@ describe("i18n", () => {
     });
     expect(fresh.i18n.getLocale()).toBe("zh-CN");
     expect(fresh.t("common.health")).toBe("健康状况");
+  });
+
+  it("skips node localStorage accessors that warn without a storage file", async () => {
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
+    const warningSpy = vi.spyOn(process, "emitWarning");
+
+    const fresh = await import("../lib/translate.ts");
+
+    expect(fresh.i18n.getLocale()).toBe("en");
+    expect(warningSpy).not.toHaveBeenCalledWith(
+      "`--localstorage-file` was provided without a valid path",
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it("keeps the version label available in shipped locales", () => {

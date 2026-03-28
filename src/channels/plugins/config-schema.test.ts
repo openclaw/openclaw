@@ -33,4 +33,16 @@ describe("buildChannelConfigSchema", () => {
       properties: { enabled: { type: "boolean" } },
     });
   });
+
+  it("passes through ui hints and exposes a runtime parser", () => {
+    const result = buildChannelConfigSchema(z.object({ enabled: z.boolean().default(true) }), {
+      uiHints: { enabled: { label: "Enabled" } },
+    });
+
+    expect(result.uiHints).toEqual({ enabled: { label: "Enabled" } });
+    expect(result.runtime?.safeParse({})).toEqual({
+      success: true,
+      data: { enabled: true },
+    });
+  });
 });

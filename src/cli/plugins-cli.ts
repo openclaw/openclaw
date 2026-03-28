@@ -1,34 +1,40 @@
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { resolveArchiveKind } from "../infra/archive.js";
-import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
-import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
-import { recordPluginInstall } from "../plugins/installs.js";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
+import { listMarketplacePlugins } from "../plugins/marketplace.js";
 import type { PluginRecord } from "../plugins/registry.js";
-import { applyExclusiveSlotSelection } from "../plugins/slots.js";
-import { resolvePluginSourceRoots, formatPluginSourceForTable } from "../plugins/source-display.js";
-import { buildPluginStatusReport } from "../plugins/status.js";
-import { resolveUninstallDirectoryTarget, uninstallPlugin } from "../plugins/uninstall.js";
-import { updateNpmInstalledPlugins } from "../plugins/update.js";
+import { formatPluginSourceForTable, resolvePluginSourceRoots } from "../plugins/source-display.js";
+import {
+  buildAllPluginInspectReports,
+  buildPluginCompatibilityNotices,
+  buildPluginInspectReport,
+  buildPluginStatusReport,
+  formatPluginCompatibilityNotice,
+} from "../plugins/status.js";
+import {
+  resolveUninstallChannelConfigKeys,
+  resolveUninstallDirectoryTarget,
+  uninstallPlugin,
+} from "../plugins/uninstall.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
-import { resolveUserPath, shortenHomeInString, shortenHomePath } from "../utils.js";
-import { looksLikeLocalInstallSpec } from "./install-spec.js";
-import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
+import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import {
-  resolveBundledInstallPlanBeforeNpm,
-  resolveBundledInstallPlanForNpmFailure,
-} from "./plugin-install-plan.js";
+  applySlotSelectionForPlugin,
+  createPluginInstallLogger,
+  logSlotWarnings,
+} from "./plugins-command-helpers.js";
 import { setPluginEnabledInConfig } from "./plugins-config.js";
+import { runPluginInstallCommand } from "./plugins-install-command.js";
+import { runPluginUpdateCommand } from "./plugins-update-command.js";
 import { promptYesNo } from "./prompt.js";
 
 export type PluginsListOptions = {
@@ -37,13 +43,18 @@ export type PluginsListOptions = {
   verbose?: boolean;
 };
 
-export type PluginInfoOptions = {
+export type PluginInspectOptions = {
   json?: boolean;
+  all?: boolean;
 };
 
 export type PluginUpdateOptions = {
   all?: boolean;
   dryRun?: boolean;
+};
+
+export type PluginMarketplaceListOptions = {
+  json?: boolean;
 };
 
 export type PluginUninstallOptions = {
@@ -53,32 +64,42 @@ export type PluginUninstallOptions = {
   dryRun?: boolean;
 };
 
-function resolveFileNpmSpecToLocalPath(
-  raw: string,
-): { ok: true; path: string } | { ok: false; error: string } | null {
-  const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith("file:")) {
-    return null;
+function resolvePluginUninstallId(params: {
+  rawId: string;
+  config: OpenClawConfig;
+  plugins: PluginRecord[];
+}): { pluginId: string; plugin?: PluginRecord } {
+  const rawId = params.rawId.trim();
+  const plugin = params.plugins.find((entry) => entry.id === rawId || entry.name === rawId);
+  if (plugin) {
+    return { pluginId: plugin.id, plugin };
   }
-  const rest = trimmed.slice("file:".length);
-  if (!rest) {
-    return { ok: false, error: "unsupported file: spec: missing path" };
+
+  for (const [pluginId, install] of Object.entries(params.config.plugins?.installs ?? {})) {
+    if (
+      install.spec === rawId ||
+      install.resolvedSpec === rawId ||
+      install.resolvedName === rawId ||
+      install.marketplacePlugin === rawId
+    ) {
+      return { pluginId };
+    }
   }
-  if (rest.startsWith("///")) {
-    // file:///abs/path -> /abs/path
-    return { ok: true, path: rest.slice(2) };
+
+  const requestedClawHub = parseClawHubPluginSpec(rawId);
+  if (requestedClawHub) {
+    for (const [pluginId, install] of Object.entries(params.config.plugins?.installs ?? {})) {
+      const installedClawHubName =
+        install.clawhubPackage ??
+        parseClawHubPluginSpec(install.spec ?? "")?.name ??
+        parseClawHubPluginSpec(install.resolvedSpec ?? "")?.name;
+      if (installedClawHubName === requestedClawHub.name) {
+        return { pluginId };
+      }
+    }
   }
-  if (rest.startsWith("//localhost/")) {
-    // file://localhost/abs/path -> /abs/path
-    return { ok: true, path: rest.slice("//localhost".length) };
-  }
-  if (rest.startsWith("//")) {
-    return {
-      ok: false,
-      error: 'unsupported file: URL host (expected "file:<path>" or "file:///abs/path")',
-    };
-  }
-  return { ok: true, path: rest };
+
+  return { pluginId: rawId };
 }
 
 function formatPluginLine(plugin: PluginRecord, verbose = false): string {
@@ -97,16 +118,21 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
           : plugin.description,
       )
     : theme.muted("(no description)");
+  const format = plugin.format ?? "openclaw";
 
   if (!verbose) {
-    return `${name}${idSuffix} ${status} - ${desc}`;
+    return `${name}${idSuffix} ${status} ${theme.muted(`[${format}]`)} - ${desc}`;
   }
 
   const parts = [
     `${name}${idSuffix} ${status}`,
+    `  format: ${format}`,
     `  source: ${theme.muted(shortenHomeInString(plugin.source))}`,
     `  origin: ${plugin.origin}`,
   ];
+  if (plugin.bundleFormat) {
+    parts.push(`  bundle format: ${plugin.bundleFormat}`);
+  }
   if (plugin.version) {
     parts.push(`  version: ${plugin.version}`);
   }
@@ -119,248 +145,67 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
   return parts.join("\n");
 }
 
-function applySlotSelectionForPlugin(
-  config: OpenClawConfig,
-  pluginId: string,
-): { config: OpenClawConfig; warnings: string[] } {
-  const report = buildPluginStatusReport({ config });
-  const plugin = report.plugins.find((entry) => entry.id === pluginId);
-  if (!plugin) {
-    return { config, warnings: [] };
+function formatInspectSection(title: string, lines: string[]): string[] {
+  if (lines.length === 0) {
+    return [];
   }
-  const result = applyExclusiveSlotSelection({
-    config,
-    selectedId: plugin.id,
-    selectedKind: plugin.kind,
-    registry: report,
-  });
-  return { config: result.config, warnings: result.warnings };
+  return ["", theme.muted(`${title}:`), ...lines];
 }
 
-function createPluginInstallLogger(): { info: (msg: string) => void; warn: (msg: string) => void } {
-  return {
-    info: (msg) => defaultRuntime.log(msg),
-    warn: (msg) => defaultRuntime.log(theme.warn(msg)),
-  };
+function formatCapabilityKinds(
+  capabilities: Array<{
+    kind: string;
+  }>,
+): string {
+  if (capabilities.length === 0) {
+    return "-";
+  }
+  return capabilities.map((entry) => entry.kind).join(", ");
 }
 
-function logSlotWarnings(warnings: string[]) {
-  if (warnings.length === 0) {
-    return;
+function formatHookSummary(params: {
+  usesLegacyBeforeAgentStart: boolean;
+  typedHookCount: number;
+  customHookCount: number;
+}): string {
+  const parts: string[] = [];
+  if (params.usesLegacyBeforeAgentStart) {
+    parts.push("before_agent_start");
   }
-  for (const warning of warnings) {
-    defaultRuntime.log(theme.warn(warning));
+  const nonLegacyTypedHookCount =
+    params.typedHookCount - (params.usesLegacyBeforeAgentStart ? 1 : 0);
+  if (nonLegacyTypedHookCount > 0) {
+    parts.push(`${nonLegacyTypedHookCount} typed`);
   }
+  if (params.customHookCount > 0) {
+    parts.push(`${params.customHookCount} custom`);
+  }
+  return parts.length > 0 ? parts.join(", ") : "-";
 }
 
-async function installBundledPluginSource(params: {
-  config: OpenClawConfig;
-  rawSpec: string;
-  bundledSource: BundledPluginSource;
-  warning: string;
-}) {
-  const existing = params.config.plugins?.load?.paths ?? [];
-  const mergedPaths = Array.from(new Set([...existing, params.bundledSource.localPath]));
-  let next: OpenClawConfig = {
-    ...params.config,
-    plugins: {
-      ...params.config.plugins,
-      load: {
-        ...params.config.plugins?.load,
-        paths: mergedPaths,
-      },
-      entries: {
-        ...params.config.plugins?.entries,
-        [params.bundledSource.pluginId]: {
-          ...(params.config.plugins?.entries?.[params.bundledSource.pluginId] as
-            | object
-            | undefined),
-          enabled: true,
-        },
-      },
-    },
-  };
-  next = recordPluginInstall(next, {
-    pluginId: params.bundledSource.pluginId,
-    source: "path",
-    spec: params.rawSpec,
-    sourcePath: params.bundledSource.localPath,
-    installPath: params.bundledSource.localPath,
-  });
-  const slotResult = applySlotSelectionForPlugin(next, params.bundledSource.pluginId);
-  next = slotResult.config;
-  await writeConfigFile(next);
-  logSlotWarnings(slotResult.warnings);
-  defaultRuntime.log(theme.warn(params.warning));
-  defaultRuntime.log(`Installed plugin: ${params.bundledSource.pluginId}`);
-  defaultRuntime.log(`Restart the gateway to load plugins.`);
+function formatInstallLines(install: PluginInstallRecord | undefined): string[] {
+  if (!install) {
+    return [];
+  }
+  const lines = [`Source: ${install.source}`];
+  if (install.spec) {
+    lines.push(`Spec: ${install.spec}`);
+  }
+  if (install.sourcePath) {
+    lines.push(`Source path: ${shortenHomePath(install.sourcePath)}`);
+  }
+  if (install.installPath) {
+    lines.push(`Install path: ${shortenHomePath(install.installPath)}`);
+  }
+  if (install.version) {
+    lines.push(`Recorded version: ${install.version}`);
+  }
+  if (install.installedAt) {
+    lines.push(`Installed at: ${install.installedAt}`);
+  }
+  return lines;
 }
 
-async function runPluginInstallCommand(params: {
-  raw: string;
-  opts: { link?: boolean; pin?: boolean };
-}) {
-  const { raw, opts } = params;
-  const fileSpec = resolveFileNpmSpecToLocalPath(raw);
-  if (fileSpec && !fileSpec.ok) {
-    defaultRuntime.error(fileSpec.error);
-    process.exit(1);
-  }
-  const normalized = fileSpec && fileSpec.ok ? fileSpec.path : raw;
-  const resolved = resolveUserPath(normalized);
-  const cfg = loadConfig();
-
-  if (fs.existsSync(resolved)) {
-    if (opts.link) {
-      const existing = cfg.plugins?.load?.paths ?? [];
-      const merged = Array.from(new Set([...existing, resolved]));
-      const probe = await installPluginFromPath({ path: resolved, dryRun: true });
-      if (!probe.ok) {
-        defaultRuntime.error(probe.error);
-        process.exit(1);
-      }
-
-      let next: OpenClawConfig = enablePluginInConfig(
-        {
-          ...cfg,
-          plugins: {
-            ...cfg.plugins,
-            load: {
-              ...cfg.plugins?.load,
-              paths: merged,
-            },
-          },
-        },
-        probe.pluginId,
-      ).config;
-      next = recordPluginInstall(next, {
-        pluginId: probe.pluginId,
-        source: "path",
-        sourcePath: resolved,
-        installPath: resolved,
-        version: probe.version,
-      });
-      const slotResult = applySlotSelectionForPlugin(next, probe.pluginId);
-      next = slotResult.config;
-      await writeConfigFile(next);
-      logSlotWarnings(slotResult.warnings);
-      defaultRuntime.log(`Linked plugin path: ${shortenHomePath(resolved)}`);
-      defaultRuntime.log(`Restart the gateway to load plugins.`);
-      return;
-    }
-
-    const result = await installPluginFromPath({
-      path: resolved,
-      logger: createPluginInstallLogger(),
-    });
-    if (!result.ok) {
-      defaultRuntime.error(result.error);
-      process.exit(1);
-    }
-    // Plugin CLI registrars may have warmed the manifest registry cache before install;
-    // force a rescan so config validation sees the freshly installed plugin.
-    clearPluginManifestRegistryCache();
-
-    let next = enablePluginInConfig(cfg, result.pluginId).config;
-    const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
-    next = recordPluginInstall(next, {
-      pluginId: result.pluginId,
-      source,
-      sourcePath: resolved,
-      installPath: result.targetDir,
-      version: result.version,
-    });
-    const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
-    next = slotResult.config;
-    await writeConfigFile(next);
-    logSlotWarnings(slotResult.warnings);
-    defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
-    defaultRuntime.log(`Restart the gateway to load plugins.`);
-    return;
-  }
-
-  if (opts.link) {
-    defaultRuntime.error("`--link` requires a local path.");
-    process.exit(1);
-  }
-
-  if (
-    looksLikeLocalInstallSpec(raw, [
-      ".ts",
-      ".js",
-      ".mjs",
-      ".cjs",
-      ".tgz",
-      ".tar.gz",
-      ".tar",
-      ".zip",
-    ])
-  ) {
-    defaultRuntime.error(`Path not found: ${resolved}`);
-    process.exit(1);
-  }
-
-  const bundledPreNpmPlan = resolveBundledInstallPlanBeforeNpm({
-    rawSpec: raw,
-    findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
-  });
-  if (bundledPreNpmPlan) {
-    await installBundledPluginSource({
-      config: cfg,
-      rawSpec: raw,
-      bundledSource: bundledPreNpmPlan.bundledSource,
-      warning: bundledPreNpmPlan.warning,
-    });
-    return;
-  }
-
-  const result = await installPluginFromNpmSpec({
-    spec: raw,
-    logger: createPluginInstallLogger(),
-  });
-  if (!result.ok) {
-    const bundledFallbackPlan = resolveBundledInstallPlanForNpmFailure({
-      rawSpec: raw,
-      code: result.code,
-      findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
-    });
-    if (!bundledFallbackPlan) {
-      defaultRuntime.error(result.error);
-      process.exit(1);
-    }
-
-    await installBundledPluginSource({
-      config: cfg,
-      rawSpec: raw,
-      bundledSource: bundledFallbackPlan.bundledSource,
-      warning: bundledFallbackPlan.warning,
-    });
-    return;
-  }
-  // Ensure config validation sees newly installed plugin(s) even if the cache was warmed at startup.
-  clearPluginManifestRegistryCache();
-
-  let next = enablePluginInConfig(cfg, result.pluginId).config;
-  const installRecord = resolvePinnedNpmInstallRecordForCli(
-    raw,
-    Boolean(opts.pin),
-    result.targetDir,
-    result.version,
-    result.npmResolution,
-    defaultRuntime.log,
-    theme.warn,
-  );
-  next = recordPluginInstall(next, {
-    pluginId: result.pluginId,
-    ...installRecord,
-  });
-  const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
-  next = slotResult.config;
-  await writeConfigFile(next);
-  logSlotWarnings(slotResult.warnings);
-  defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
-  defaultRuntime.log(`Restart the gateway to load plugins.`);
-}
 export function registerPluginsCli(program: Command) {
   const plugins = program
     .command("plugins")
@@ -389,7 +234,7 @@ export function registerPluginsCli(program: Command) {
           plugins: list,
           diagnostics: report.diagnostics,
         };
-        defaultRuntime.log(JSON.stringify(payload, null, 2));
+        defaultRuntime.writeJson(payload);
         return;
       }
 
@@ -419,6 +264,7 @@ export function registerPluginsCli(program: Command) {
           return {
             Name: plugin.name || plugin.id,
             ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
+            Format: plugin.format ?? "openclaw",
             Status:
               plugin.status === "loaded"
                 ? theme.success("loaded")
@@ -451,6 +297,7 @@ export function registerPluginsCli(program: Command) {
             columns: [
               { key: "Name", header: "Name", minWidth: 14, flex: true },
               { key: "ID", header: "ID", minWidth: 10, flex: true },
+              { key: "Format", header: "Format", minWidth: 9 },
               { key: "Status", header: "Status", minWidth: 10 },
               { key: "Source", header: "Source", minWidth: 26, flex: true },
               { key: "Version", header: "Version", minWidth: 8 },
@@ -470,79 +317,222 @@ export function registerPluginsCli(program: Command) {
     });
 
   plugins
-    .command("info")
-    .description("Show plugin details")
-    .argument("<id>", "Plugin id")
+    .command("inspect")
+    .alias("info")
+    .description("Inspect plugin details")
+    .argument("[id]", "Plugin id")
+    .option("--all", "Inspect all plugins")
     .option("--json", "Print JSON")
-    .action((id: string, opts: PluginInfoOptions) => {
-      const report = buildPluginStatusReport();
-      const plugin = report.plugins.find((p) => p.id === id || p.name === id);
-      if (!plugin) {
-        defaultRuntime.error(`Plugin not found: ${id}`);
-        process.exit(1);
-      }
+    .action((id: string | undefined, opts: PluginInspectOptions) => {
       const cfg = loadConfig();
-      const install = cfg.plugins?.installs?.[plugin.id];
+      const report = buildPluginStatusReport({ config: cfg });
+      if (opts.all) {
+        if (id) {
+          defaultRuntime.error("Pass either a plugin id or --all, not both.");
+          return defaultRuntime.exit(1);
+        }
+        const inspectAll = buildAllPluginInspectReports({
+          config: cfg,
+          report,
+        });
+        const inspectAllWithInstall = inspectAll.map((inspect) => ({
+          ...inspect,
+          install: cfg.plugins?.installs?.[inspect.plugin.id],
+        }));
+
+        if (opts.json) {
+          defaultRuntime.writeJson(inspectAllWithInstall);
+          return;
+        }
+
+        const tableWidth = getTerminalTableWidth();
+        const rows = inspectAll.map((inspect) => ({
+          Name: inspect.plugin.name || inspect.plugin.id,
+          ID:
+            inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id
+              ? inspect.plugin.id
+              : "",
+          Status:
+            inspect.plugin.status === "loaded"
+              ? theme.success("loaded")
+              : inspect.plugin.status === "disabled"
+                ? theme.warn("disabled")
+                : theme.error("error"),
+          Shape: inspect.shape,
+          Capabilities: formatCapabilityKinds(inspect.capabilities),
+          Compatibility:
+            inspect.compatibility.length > 0
+              ? inspect.compatibility
+                  .map((entry) => (entry.severity === "warn" ? `warn:${entry.code}` : entry.code))
+                  .join(", ")
+              : "none",
+          Bundle:
+            inspect.bundleCapabilities.length > 0 ? inspect.bundleCapabilities.join(", ") : "-",
+          Hooks: formatHookSummary({
+            usesLegacyBeforeAgentStart: inspect.usesLegacyBeforeAgentStart,
+            typedHookCount: inspect.typedHooks.length,
+            customHookCount: inspect.customHooks.length,
+          }),
+        }));
+        defaultRuntime.log(
+          renderTable({
+            width: tableWidth,
+            columns: [
+              { key: "Name", header: "Name", minWidth: 14, flex: true },
+              { key: "ID", header: "ID", minWidth: 10, flex: true },
+              { key: "Status", header: "Status", minWidth: 10 },
+              { key: "Shape", header: "Shape", minWidth: 18 },
+              { key: "Capabilities", header: "Capabilities", minWidth: 28, flex: true },
+              { key: "Compatibility", header: "Compatibility", minWidth: 24, flex: true },
+              { key: "Bundle", header: "Bundle", minWidth: 14, flex: true },
+              { key: "Hooks", header: "Hooks", minWidth: 20, flex: true },
+            ],
+            rows,
+          }).trimEnd(),
+        );
+        return;
+      }
+
+      if (!id) {
+        defaultRuntime.error("Provide a plugin id or use --all.");
+        return defaultRuntime.exit(1);
+      }
+
+      const inspect = buildPluginInspectReport({
+        id,
+        config: cfg,
+        report,
+      });
+      if (!inspect) {
+        defaultRuntime.error(`Plugin not found: ${id}`);
+        return defaultRuntime.exit(1);
+      }
+      const install = cfg.plugins?.installs?.[inspect.plugin.id];
 
       if (opts.json) {
-        defaultRuntime.log(JSON.stringify(plugin, null, 2));
+        defaultRuntime.writeJson({
+          ...inspect,
+          install,
+        });
         return;
       }
 
       const lines: string[] = [];
-      lines.push(theme.heading(plugin.name || plugin.id));
-      if (plugin.name && plugin.name !== plugin.id) {
-        lines.push(theme.muted(`id: ${plugin.id}`));
+      lines.push(theme.heading(inspect.plugin.name || inspect.plugin.id));
+      if (inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id) {
+        lines.push(theme.muted(`id: ${inspect.plugin.id}`));
       }
-      if (plugin.description) {
-        lines.push(plugin.description);
+      if (inspect.plugin.description) {
+        lines.push(inspect.plugin.description);
       }
       lines.push("");
-      lines.push(`${theme.muted("Status:")} ${plugin.status}`);
-      lines.push(`${theme.muted("Source:")} ${shortenHomeInString(plugin.source)}`);
-      lines.push(`${theme.muted("Origin:")} ${plugin.origin}`);
-      if (plugin.version) {
-        lines.push(`${theme.muted("Version:")} ${plugin.version}`);
+      lines.push(`${theme.muted("Status:")} ${inspect.plugin.status}`);
+      lines.push(`${theme.muted("Format:")} ${inspect.plugin.format ?? "openclaw"}`);
+      if (inspect.plugin.bundleFormat) {
+        lines.push(`${theme.muted("Bundle format:")} ${inspect.plugin.bundleFormat}`);
       }
-      if (plugin.toolNames.length > 0) {
-        lines.push(`${theme.muted("Tools:")} ${plugin.toolNames.join(", ")}`);
+      lines.push(`${theme.muted("Source:")} ${shortenHomeInString(inspect.plugin.source)}`);
+      lines.push(`${theme.muted("Origin:")} ${inspect.plugin.origin}`);
+      if (inspect.plugin.version) {
+        lines.push(`${theme.muted("Version:")} ${inspect.plugin.version}`);
       }
-      if (plugin.hookNames.length > 0) {
-        lines.push(`${theme.muted("Hooks:")} ${plugin.hookNames.join(", ")}`);
+      lines.push(`${theme.muted("Shape:")} ${inspect.shape}`);
+      lines.push(`${theme.muted("Capability mode:")} ${inspect.capabilityMode}`);
+      lines.push(
+        `${theme.muted("Legacy before_agent_start:")} ${inspect.usesLegacyBeforeAgentStart ? "yes" : "no"}`,
+      );
+      if (inspect.bundleCapabilities.length > 0) {
+        lines.push(
+          `${theme.muted("Bundle capabilities:")} ${inspect.bundleCapabilities.join(", ")}`,
+        );
       }
-      if (plugin.gatewayMethods.length > 0) {
-        lines.push(`${theme.muted("Gateway methods:")} ${plugin.gatewayMethods.join(", ")}`);
+      lines.push(
+        ...formatInspectSection(
+          "Capabilities",
+          inspect.capabilities.map(
+            (entry) =>
+              `${entry.kind}: ${entry.ids.length > 0 ? entry.ids.join(", ") : "(registered)"}`,
+          ),
+        ),
+      );
+      lines.push(
+        ...formatInspectSection(
+          "Typed hooks",
+          inspect.typedHooks.map((entry) =>
+            entry.priority == null ? entry.name : `${entry.name} (priority ${entry.priority})`,
+          ),
+        ),
+      );
+      lines.push(
+        ...formatInspectSection(
+          "Compatibility warnings",
+          inspect.compatibility.map(formatPluginCompatibilityNotice),
+        ),
+      );
+      lines.push(
+        ...formatInspectSection(
+          "Custom hooks",
+          inspect.customHooks.map((entry) => `${entry.name}: ${entry.events.join(", ")}`),
+        ),
+      );
+      lines.push(
+        ...formatInspectSection(
+          "Tools",
+          inspect.tools.map((entry) => {
+            const names = entry.names.length > 0 ? entry.names.join(", ") : "(anonymous)";
+            return entry.optional ? `${names} [optional]` : names;
+          }),
+        ),
+      );
+      lines.push(...formatInspectSection("Commands", inspect.commands));
+      lines.push(...formatInspectSection("CLI commands", inspect.cliCommands));
+      lines.push(...formatInspectSection("Services", inspect.services));
+      lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods));
+      lines.push(
+        ...formatInspectSection(
+          "MCP servers",
+          inspect.mcpServers.map((entry) =>
+            entry.hasStdioTransport ? entry.name : `${entry.name} (unsupported transport)`,
+          ),
+        ),
+      );
+      lines.push(
+        ...formatInspectSection(
+          "LSP servers",
+          inspect.lspServers.map((entry) =>
+            entry.hasStdioTransport ? entry.name : `${entry.name} (unsupported transport)`,
+          ),
+        ),
+      );
+      if (inspect.httpRouteCount > 0) {
+        lines.push(...formatInspectSection("HTTP routes", [String(inspect.httpRouteCount)]));
       }
-      if (plugin.providerIds.length > 0) {
-        lines.push(`${theme.muted("Providers:")} ${plugin.providerIds.join(", ")}`);
+      const policyLines: string[] = [];
+      if (typeof inspect.policy.allowPromptInjection === "boolean") {
+        policyLines.push(`allowPromptInjection: ${inspect.policy.allowPromptInjection}`);
       }
-      if (plugin.cliCommands.length > 0) {
-        lines.push(`${theme.muted("CLI commands:")} ${plugin.cliCommands.join(", ")}`);
+      if (typeof inspect.policy.allowModelOverride === "boolean") {
+        policyLines.push(`allowModelOverride: ${inspect.policy.allowModelOverride}`);
       }
-      if (plugin.services.length > 0) {
-        lines.push(`${theme.muted("Services:")} ${plugin.services.join(", ")}`);
+      if (inspect.policy.hasAllowedModelsConfig) {
+        policyLines.push(
+          `allowedModels: ${
+            inspect.policy.allowedModels.length > 0
+              ? inspect.policy.allowedModels.join(", ")
+              : "(configured but empty)"
+          }`,
+        );
       }
-      if (plugin.error) {
-        lines.push(`${theme.error("Error:")} ${plugin.error}`);
-      }
-      if (install) {
-        lines.push("");
-        lines.push(`${theme.muted("Install:")} ${install.source}`);
-        if (install.spec) {
-          lines.push(`${theme.muted("Spec:")} ${install.spec}`);
-        }
-        if (install.sourcePath) {
-          lines.push(`${theme.muted("Source path:")} ${shortenHomePath(install.sourcePath)}`);
-        }
-        if (install.installPath) {
-          lines.push(`${theme.muted("Install path:")} ${shortenHomePath(install.installPath)}`);
-        }
-        if (install.version) {
-          lines.push(`${theme.muted("Recorded version:")} ${install.version}`);
-        }
-        if (install.installedAt) {
-          lines.push(`${theme.muted("Installed at:")} ${install.installedAt}`);
-        }
+      lines.push(...formatInspectSection("Policy", policyLines));
+      lines.push(
+        ...formatInspectSection(
+          "Diagnostics",
+          inspect.diagnostics.map((entry) => `${entry.level.toUpperCase()}: ${entry.message}`),
+        ),
+      );
+      lines.push(...formatInspectSection("Install", formatInstallLines(install)));
+      if (inspect.plugin.error) {
+        lines.push("", `${theme.error("Error:")} ${inspect.plugin.error}`);
       }
       defaultRuntime.log(lines.join("\n"));
     });
@@ -599,11 +589,11 @@ export function registerPluginsCli(program: Command) {
         defaultRuntime.log(theme.warn("`--keep-config` is deprecated, use `--keep-files`."));
       }
 
-      // Find plugin by id or name
-      const plugin = report.plugins.find((p) => p.id === id || p.name === id);
-      const pluginId = plugin?.id ?? id;
-
-      // Check if plugin exists in config
+      const { plugin, pluginId } = resolvePluginUninstallId({
+        rawId: id,
+        config: cfg,
+        plugins: report.plugins,
+      });
       const hasEntry = pluginId in (cfg.plugins?.entries ?? {});
       const hasInstall = pluginId in (cfg.plugins?.installs ?? {});
 
@@ -615,13 +605,11 @@ export function registerPluginsCli(program: Command) {
         } else {
           defaultRuntime.error(`Plugin not found: ${id}`);
         }
-        process.exit(1);
+        return defaultRuntime.exit(1);
       }
 
       const install = cfg.plugins?.installs?.[pluginId];
       const isLinked = install?.source === "path";
-
-      // Build preview of what will be removed
       const preview: string[] = [];
       if (hasEntry) {
         preview.push("config entry");
@@ -641,6 +629,15 @@ export function registerPluginsCli(program: Command) {
       }
       if (cfg.plugins?.slots?.memory === pluginId) {
         preview.push(`memory slot (will reset to "memory-core")`);
+      }
+      const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
+      const channels = cfg.channels as Record<string, unknown> | undefined;
+      if (hasInstall && channels) {
+        for (const key of resolveUninstallChannelConfigKeys(pluginId, { channelIds })) {
+          if (Object.hasOwn(channels, key)) {
+            preview.push(`channel config (channels.${key})`);
+          }
+        }
       }
       const deleteTarget = !keepFiles
         ? resolveUninstallDirectoryTarget({
@@ -676,13 +673,14 @@ export function registerPluginsCli(program: Command) {
       const result = await uninstallPlugin({
         config: cfg,
         pluginId,
+        channelIds,
         deleteFiles: !keepFiles,
         extensionsDir,
       });
 
       if (!result.ok) {
         defaultRuntime.error(result.error);
-        process.exit(1);
+        return defaultRuntime.exit(1);
       }
       for (const warning of result.warnings) {
         defaultRuntime.log(theme.warn(warning));
@@ -706,6 +704,9 @@ export function registerPluginsCli(program: Command) {
       if (result.actions.memorySlot) {
         removed.push("memory slot");
       }
+      if (result.actions.channelConfig) {
+        removed.push("channel config");
+      }
       if (result.actions.directory) {
         removed.push("directory");
       }
@@ -718,74 +719,31 @@ export function registerPluginsCli(program: Command) {
 
   plugins
     .command("install")
-    .description("Install a plugin (path, archive, or npm spec)")
-    .argument("<path-or-spec>", "Path (.ts/.js/.zip/.tgz/.tar.gz) or an npm package spec")
+    .description(
+      "Install a plugin or hook pack (path, archive, npm spec, clawhub:package, or marketplace entry)",
+    )
+    .argument(
+      "<path-or-spec-or-plugin>",
+      "Path (.ts/.js/.zip/.tgz/.tar.gz), npm package spec, or marketplace plugin name",
+    )
     .option("-l, --link", "Link a local path instead of copying", false)
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
-    .action(async (raw: string, opts: { link?: boolean; pin?: boolean }) => {
+    .option(
+      "--marketplace <source>",
+      "Install a Claude marketplace plugin from a local repo/path or git/GitHub source",
+    )
+    .action(async (raw: string, opts: { link?: boolean; pin?: boolean; marketplace?: string }) => {
       await runPluginInstallCommand({ raw, opts });
     });
 
   plugins
     .command("update")
-    .description("Update installed plugins (npm installs only)")
-    .argument("[id]", "Plugin id (omit with --all)")
-    .option("--all", "Update all tracked plugins", false)
+    .description("Update installed plugins and tracked hook packs")
+    .argument("[id]", "Plugin or hook-pack id (omit with --all)")
+    .option("--all", "Update all tracked plugins and hook packs", false)
     .option("--dry-run", "Show what would change without writing", false)
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
-      const cfg = loadConfig();
-      const installs = cfg.plugins?.installs ?? {};
-      const targets = opts.all ? Object.keys(installs) : id ? [id] : [];
-
-      if (targets.length === 0) {
-        if (opts.all) {
-          defaultRuntime.log("No npm-installed plugins to update.");
-          return;
-        }
-        defaultRuntime.error("Provide a plugin id or use --all.");
-        process.exit(1);
-      }
-
-      const result = await updateNpmInstalledPlugins({
-        config: cfg,
-        pluginIds: targets,
-        dryRun: opts.dryRun,
-        logger: {
-          info: (msg) => defaultRuntime.log(msg),
-          warn: (msg) => defaultRuntime.log(theme.warn(msg)),
-        },
-        onIntegrityDrift: async (drift) => {
-          const specLabel = drift.resolvedSpec ?? drift.spec;
-          defaultRuntime.log(
-            theme.warn(
-              `Integrity drift detected for "${drift.pluginId}" (${specLabel})` +
-                `\nExpected: ${drift.expectedIntegrity}` +
-                `\nActual:   ${drift.actualIntegrity}`,
-            ),
-          );
-          if (drift.dryRun) {
-            return true;
-          }
-          return await promptYesNo(`Continue updating "${drift.pluginId}" with this artifact?`);
-        },
-      });
-
-      for (const outcome of result.outcomes) {
-        if (outcome.status === "error") {
-          defaultRuntime.log(theme.error(outcome.message));
-          continue;
-        }
-        if (outcome.status === "skipped") {
-          defaultRuntime.log(theme.warn(outcome.message));
-          continue;
-        }
-        defaultRuntime.log(outcome.message);
-      }
-
-      if (!opts.dryRun && result.changed) {
-        await writeConfigFile(result.config);
-        defaultRuntime.log("Restart the gateway to load plugins.");
-      }
+      await runPluginUpdateCommand({ id, opts });
     });
 
   plugins
@@ -795,8 +753,9 @@ export function registerPluginsCli(program: Command) {
       const report = buildPluginStatusReport();
       const errors = report.plugins.filter((p) => p.status === "error");
       const diags = report.diagnostics.filter((d) => d.level === "error");
+      const compatibility = buildPluginCompatibilityNotices({ report });
 
-      if (errors.length === 0 && diags.length === 0) {
+      if (errors.length === 0 && diags.length === 0 && compatibility.length === 0) {
         defaultRuntime.log("No plugin issues detected.");
         return;
       }
@@ -818,9 +777,63 @@ export function registerPluginsCli(program: Command) {
           lines.push(`- ${target}${diag.message}`);
         }
       }
+      if (compatibility.length > 0) {
+        if (lines.length > 0) {
+          lines.push("");
+        }
+        lines.push(theme.warn("Compatibility:"));
+        for (const notice of compatibility) {
+          const marker = notice.severity === "warn" ? theme.warn("warn") : theme.muted("info");
+          lines.push(`- ${formatPluginCompatibilityNotice(notice)} [${marker}]`);
+        }
+      }
       const docs = formatDocsLink("/plugin", "docs.openclaw.ai/plugin");
       lines.push("");
       lines.push(`${theme.muted("Docs:")} ${docs}`);
       defaultRuntime.log(lines.join("\n"));
+    });
+
+  const marketplace = plugins
+    .command("marketplace")
+    .description("Inspect Claude-compatible plugin marketplaces");
+
+  marketplace
+    .command("list")
+    .description("List plugins published by a marketplace source")
+    .argument("<source>", "Local marketplace path/repo or git/GitHub source")
+    .option("--json", "Print JSON")
+    .action(async (source: string, opts: PluginMarketplaceListOptions) => {
+      const result = await listMarketplacePlugins({
+        marketplace: source,
+        logger: createPluginInstallLogger(),
+      });
+      if (!result.ok) {
+        defaultRuntime.error(result.error);
+        return defaultRuntime.exit(1);
+      }
+
+      if (opts.json) {
+        defaultRuntime.writeJson({
+          source: result.sourceLabel,
+          name: result.manifest.name,
+          version: result.manifest.version,
+          plugins: result.manifest.plugins,
+        });
+        return;
+      }
+
+      if (result.manifest.plugins.length === 0) {
+        defaultRuntime.log(`No plugins found in marketplace ${result.sourceLabel}.`);
+        return;
+      }
+
+      defaultRuntime.log(
+        `${theme.heading("Marketplace")} ${theme.muted(result.manifest.name ?? result.sourceLabel)}`,
+      );
+      for (const plugin of result.manifest.plugins) {
+        const suffix = plugin.version ? theme.muted(` v${plugin.version}`) : "";
+        const desc = plugin.description ? ` - ${theme.muted(plugin.description)}` : "";
+        defaultRuntime.log(`${theme.command(plugin.name)}${suffix}${desc}`);
+      }
     });
 }

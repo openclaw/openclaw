@@ -1,3 +1,10 @@
+import {
+  resolvePayloadMediaUrls,
+  sendPayloadMediaSequence,
+  sendPayloadMediaSequenceAndFinalize,
+  sendPayloadMediaSequenceOrFallback,
+  sendTextMediaPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import { chunkText } from "../../../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
@@ -20,75 +27,13 @@ type DirectSendFn<TOpts extends Record<string, unknown>, TResult extends DirectS
   text: string,
   opts: TOpts,
 ) => Promise<TResult>;
-
-type SendPayloadContext = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0];
-type SendPayloadResult = Awaited<ReturnType<NonNullable<ChannelOutboundAdapter["sendPayload"]>>>;
-type SendPayloadAdapter = Pick<
-  ChannelOutboundAdapter,
-  "sendMedia" | "sendText" | "chunker" | "textChunkLimit"
->;
-
-export function resolvePayloadMediaUrls(payload: SendPayloadContext["payload"]): string[] {
-  return payload.mediaUrls?.length ? payload.mediaUrls : payload.mediaUrl ? [payload.mediaUrl] : [];
-}
-
-export async function sendPayloadMediaSequence<TResult>(params: {
-  text: string;
-  mediaUrls: readonly string[];
-  send: (input: {
-    text: string;
-    mediaUrl: string;
-    index: number;
-    isFirst: boolean;
-  }) => Promise<TResult>;
-}): Promise<TResult | undefined> {
-  let lastResult: TResult | undefined;
-  for (let i = 0; i < params.mediaUrls.length; i += 1) {
-    const mediaUrl = params.mediaUrls[i];
-    if (!mediaUrl) {
-      continue;
-    }
-    lastResult = await params.send({
-      text: i === 0 ? params.text : "",
-      mediaUrl,
-      index: i,
-      isFirst: i === 0,
-    });
-  }
-  return lastResult;
-}
-
-export async function sendTextMediaPayload(params: {
-  channel: string;
-  ctx: SendPayloadContext;
-  adapter: SendPayloadAdapter;
-}): Promise<SendPayloadResult> {
-  const text = params.ctx.payload.text ?? "";
-  const urls = resolvePayloadMediaUrls(params.ctx.payload);
-  if (!text && urls.length === 0) {
-    return { channel: params.channel, messageId: "" };
-  }
-  if (urls.length > 0) {
-    const lastResult = await sendPayloadMediaSequence({
-      text,
-      mediaUrls: urls,
-      send: async ({ text, mediaUrl }) =>
-        await params.adapter.sendMedia!({
-          ...params.ctx,
-          text,
-          mediaUrl,
-        }),
-    });
-    return lastResult ?? { channel: params.channel, messageId: "" };
-  }
-  const limit = params.adapter.textChunkLimit;
-  const chunks = limit && params.adapter.chunker ? params.adapter.chunker(text, limit) : [text];
-  let lastResult: Awaited<ReturnType<NonNullable<typeof params.adapter.sendText>>>;
-  for (const chunk of chunks) {
-    lastResult = await params.adapter.sendText!({ ...params.ctx, text: chunk });
-  }
-  return lastResult!;
-}
+export {
+  resolvePayloadMediaUrls,
+  sendPayloadMediaSequence,
+  sendPayloadMediaSequenceAndFinalize,
+  sendPayloadMediaSequenceOrFallback,
+  sendTextMediaPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 
 export function resolveScopedChannelMediaMaxBytes(params: {
   cfg: OpenClawConfig;

@@ -19,7 +19,10 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.webhookPath).toBe("/feishu/events");
     expect(result.dmPolicy).toBe("pairing");
     expect(result.groupPolicy).toBe("allowlist");
-    expect(result.requireMention).toBe(true);
+    // requireMention has no schema-level default now — it is resolved at runtime
+    // through shared channel group-policy resolution, with an open-group override
+    // that defaults to false only when requireMention is otherwise unset.
+    expect(result.requireMention).toBeUndefined();
   });
 
   it("does not force top-level policy defaults into account config", () => {
@@ -214,6 +217,26 @@ describe("FeishuConfigSchema optimization flags", () => {
     });
     expect(result.accounts?.main?.typingIndicator).toBe(false);
     expect(result.accounts?.main?.resolveSenderNames).toBe(false);
+  });
+});
+
+describe("FeishuConfigSchema actions", () => {
+  it("accepts top-level reactions action gate", () => {
+    const result = FeishuConfigSchema.parse({
+      actions: { reactions: false },
+    });
+    expect(result.actions?.reactions).toBe(false);
+  });
+
+  it("accepts account-level reactions action gate", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: {
+          actions: { reactions: false },
+        },
+      },
+    });
+    expect(result.accounts?.main?.actions?.reactions).toBe(false);
   });
 });
 

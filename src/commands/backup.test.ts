@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import {
@@ -20,11 +20,19 @@ vi.mock("./backup-verify.js", () => ({
 
 describe("backup commands", () => {
   let tempHome: TempHomeEnv;
-  let previousCwd: string;
+
+  async function resetTempHome() {
+    await fs.rm(tempHome.home, { recursive: true, force: true });
+    await fs.mkdir(path.join(tempHome.home, ".openclaw"), { recursive: true });
+    delete process.env.OPENCLAW_CONFIG_PATH;
+  }
+
+  beforeAll(async () => {
+    tempHome = await createTempHomeEnv("openclaw-backup-test-");
+  });
 
   beforeEach(async () => {
-    tempHome = await createTempHomeEnv("openclaw-backup-test-");
-    previousCwd = process.cwd();
+    await resetTempHome();
     backupVerifyCommandMock.mockReset();
     backupVerifyCommandMock.mockResolvedValue({
       ok: true,
@@ -38,7 +46,10 @@ describe("backup commands", () => {
   });
 
   afterEach(async () => {
-    process.chdir(previousCwd);
+    vi.restoreAllMocks();
+  });
+
+  afterAll(async () => {
     await tempHome.restore();
   });
 
@@ -269,7 +280,7 @@ describe("backup commands", () => {
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
-    process.chdir(workspaceDir);
+    vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
     const runtime = createRuntime();
 
@@ -296,7 +307,7 @@ describe("backup commands", () => {
       await fs.mkdir(workspaceDir, { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
       await fs.symlink(workspaceDir, workspaceLink);
-      process.chdir(workspaceLink);
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceLink);
 
       const runtime = createRuntime();
 

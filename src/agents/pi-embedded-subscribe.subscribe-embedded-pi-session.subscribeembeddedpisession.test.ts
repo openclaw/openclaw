@@ -106,7 +106,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
   it.each(THINKING_TAG_CASES)(
     "streams <%s> reasoning via onReasoningStream without leaking into final text",
-    ({ open, close }) => {
+    async ({ open, close }) => {
       const onReasoningStream = vi.fn();
       const onBlockReply = vi.fn();
 
@@ -133,7 +133,9 @@ describe("subscribeEmbeddedPiSession", () => {
 
       emit({ type: "message_end", message: assistantMessage });
 
-      expect(onBlockReply).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(onBlockReply).toHaveBeenCalledTimes(1);
+      });
       expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
 
       const streamTexts = onReasoningStream.mock.calls
@@ -149,7 +151,7 @@ describe("subscribeEmbeddedPiSession", () => {
   );
   it.each(THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
-    ({ open, close }) => {
+    async ({ open, close }) => {
       const onBlockReply = vi.fn();
 
       const { emit } = createSubscribedHarness({
@@ -175,10 +177,12 @@ describe("subscribeEmbeddedPiSession", () => {
         assistantMessageEvent: { type: "text_end" },
       });
 
+      await vi.waitFor(() => {
+        expect(onBlockReply.mock.calls.length).toBeGreaterThan(0);
+      });
       const payloadTexts = onBlockReply.mock.calls
         .map((call) => call[0]?.text)
         .filter((value): value is string => typeof value === "string");
-      expect(payloadTexts.length).toBeGreaterThan(0);
       for (const text of payloadTexts) {
         expect(text).not.toContain("Reasoning");
         expect(text).not.toContain(open);

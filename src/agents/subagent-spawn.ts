@@ -3,7 +3,12 @@ import { promises as fs } from "node:fs";
 import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
+import { mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import {
+  pruneLegacyStoreKeys,
+  resolveGatewaySessionStoreTarget,
+} from "../gateway/session-utils.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   isValidAgentId,
@@ -11,6 +16,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
@@ -113,6 +119,37 @@ export function splitModelRef(ref?: string) {
     return { provider, model };
   }
   return { provider: undefined, model: trimmed };
+}
+
+async function persistInitialChildSessionRuntimeModel(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  childSessionKey: string;
+  resolvedModel?: string;
+}): Promise<string | undefined> {
+  const { provider, model } = splitModelRef(params.resolvedModel);
+  if (!model) {
+    return undefined;
+  }
+  try {
+    const target = resolveGatewaySessionStoreTarget({
+      cfg: params.cfg,
+      key: params.childSessionKey,
+    });
+    await updateSessionStore(target.storePath, (store) => {
+      pruneLegacyStoreKeys({
+        store,
+        canonicalKey: target.canonicalKey,
+        candidates: target.storeKeys,
+      });
+      store[target.canonicalKey] = mergeSessionEntry(store[target.canonicalKey], {
+        model,
+        ...(provider ? { modelProvider: provider } : {}),
+      });
+    });
+    return undefined;
+  } catch (err) {
+    return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+  }
 }
 
 function sanitizeMountPathHint(value?: string): string | undefined {
@@ -438,41 +475,49 @@ export async function spawnSubagentDirect(
     }
   };
 
-  const spawnDepthPatchError = await patchChildSession({
+  const initialChildSessionPatch: Record<string, unknown> = {
     spawnDepth: childDepth,
     subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
     subagentControlScope: childCapabilities.controlScope,
-  });
-  if (spawnDepthPatchError) {
+  };
+  if (resolvedModel) {
+    initialChildSessionPatch.model = resolvedModel;
+  }
+  if (thinkingOverride !== undefined) {
+    initialChildSessionPatch.thinkingLevel = thinkingOverride === "off" ? null : thinkingOverride;
+  }
+
+  const initialPatchError = await patchChildSession(initialChildSessionPatch);
+  if (initialPatchError) {
     return {
       status: "error",
-      error: spawnDepthPatchError,
+      error: initialPatchError,
       childSessionKey,
     };
   }
-
   if (resolvedModel) {
-    const modelPatchError = await patchChildSession({ model: resolvedModel });
-    if (modelPatchError) {
+    const runtimeModelPersistError = await persistInitialChildSessionRuntimeModel({
+      cfg,
+      childSessionKey,
+      resolvedModel,
+    });
+    if (runtimeModelPersistError) {
+      try {
+        await callGateway({
+          method: "sessions.delete",
+          params: { key: childSessionKey, emitLifecycleHooks: false },
+          timeoutMs: 10_000,
+        });
+      } catch {
+        // Best-effort cleanup only.
+      }
       return {
         status: "error",
-        error: modelPatchError,
+        error: runtimeModelPersistError,
         childSessionKey,
       };
     }
     modelApplied = true;
-  }
-  if (thinkingOverride !== undefined) {
-    const thinkingPatchError = await patchChildSession({
-      thinkingLevel: thinkingOverride === "off" ? null : thinkingOverride,
-    });
-    if (thinkingPatchError) {
-      return {
-        status: "error",
-        error: thinkingPatchError,
-        childSessionKey,
-      };
-    }
   }
   if (requestThreadBinding) {
     const bindResult = await ensureThreadBindingForSubagentSpawn({
@@ -640,6 +685,7 @@ export async function spawnSubagentDirect(
         // Best-effort cleanup only.
       }
     }
+    let emitLifecycleHooks = false;
     if (threadBindingReady) {
       const hasEndedHook = hookRunner?.hasHooks("subagent_ended") === true;
       let endedHookEmitted = false;
@@ -667,21 +713,22 @@ export async function spawnSubagentDirect(
           // Spawn should still return an actionable error even if cleanup hooks fail.
         }
       }
-      // Always delete the provisional child session after a failed spawn attempt.
-      // If we already emitted subagent_ended above, suppress a duplicate lifecycle hook.
-      try {
-        await callGateway({
-          method: "sessions.delete",
-          params: {
-            key: childSessionKey,
-            deleteTranscript: true,
-            emitLifecycleHooks: !endedHookEmitted,
-          },
-          timeoutMs: 10_000,
-        });
-      } catch {
-        // Best-effort only.
-      }
+      emitLifecycleHooks = !endedHookEmitted;
+    }
+    // Always delete the provisional child session after a failed spawn attempt.
+    // If we already emitted subagent_ended above, suppress a duplicate lifecycle hook.
+    try {
+      await callGateway({
+        method: "sessions.delete",
+        params: {
+          key: childSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks,
+        },
+        timeoutMs: 10_000,
+      });
+    } catch {
+      // Best-effort only.
     }
     const messageText = summarizeError(err);
     return {
@@ -723,7 +770,11 @@ export async function spawnSubagentDirect(
     try {
       await callGateway({
         method: "sessions.delete",
-        params: { key: childSessionKey, deleteTranscript: true, emitLifecycleHooks: false },
+        params: {
+          key: childSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: threadBindingReady,
+        },
         timeoutMs: 10_000,
       });
     } catch {
@@ -764,6 +815,14 @@ export async function spawnSubagentDirect(
       // Spawn should still return accepted if spawn lifecycle hooks fail.
     }
   }
+
+  // Emit lifecycle event so the gateway can broadcast sessions.changed to SSE subscribers.
+  emitSessionLifecycleEvent({
+    sessionKey: childSessionKey,
+    reason: "create",
+    parentSessionKey: requesterInternalKey,
+    label: label || undefined,
+  });
 
   // Check if we're in a cron isolated session - don't add "do not poll" note
   // because cron sessions end immediately after the agent produces a response,

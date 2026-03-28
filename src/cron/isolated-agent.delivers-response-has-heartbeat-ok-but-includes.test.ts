@@ -1,6 +1,7 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import * as modelSelection from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -72,6 +73,7 @@ async function runTelegramAnnounceTurn(params: {
 
 describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
+    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue("off");
     setupIsolatedAgentTurnMocks({ fast: true });
   });
 
@@ -162,6 +164,8 @@ describe("runCronIsolatedAgentTurn", () => {
     await withTempHome(async (home) => {
       const { storePath, deps } = await createTelegramDeliveryFixture(home);
 
+      vi.mocked(runSubagentAnnounceFlow).mockClear();
+      vi.mocked(deps.sendMessageTelegram as (...args: unknown[]) => unknown).mockClear();
       mockEmbeddedAgentPayloads([{ text: "HEARTBEAT_OK 🦞" }]);
 
       const cfg = makeCfg(home, storePath);
@@ -214,6 +218,10 @@ describe("runCronIsolatedAgentTurn", () => {
           heartbeat: { ackMaxChars: 0 },
         },
       };
+
+      vi.mocked(deps.sendMessageTelegram as (...args: unknown[]) => unknown).mockClear();
+      vi.mocked(runSubagentAnnounceFlow).mockClear();
+      vi.mocked(callGateway).mockClear();
 
       const deleteRes = await runCronIsolatedAgentTurn({
         cfg,

@@ -1,12 +1,18 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
 import {
+  resolveLoggerBackedRuntime,
+  safeParseJsonWithSchema,
+} from "openclaw/plugin-sdk/extension-shared";
+import { z } from "zod";
+import {
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+  createAuthRateLimiter,
   type RuntimeEnv,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk/nextcloud-talk";
-import { resolveLoggerBackedRuntime } from "../../shared/runtime.js";
+} from "../runtime-api.js";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
@@ -25,7 +31,30 @@ const DEFAULT_WEBHOOK_HOST = "0.0.0.0";
 const DEFAULT_WEBHOOK_PATH = "/nextcloud-talk-webhook";
 const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+const PREAUTH_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
+const PREAUTH_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 const HEALTH_PATH = "/healthz";
+const WEBHOOK_AUTH_RATE_LIMIT_SCOPE = "nextcloud-talk-webhook-auth";
+const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> = z.object({
+  type: z.enum(["Create", "Update", "Delete"]),
+  actor: z.object({
+    type: z.literal("Person"),
+    id: z.string().min(1),
+    name: z.string(),
+  }),
+  object: z.object({
+    type: z.literal("Note"),
+    id: z.string().min(1),
+    name: z.string(),
+    content: z.string(),
+    mediaType: z.string(),
+  }),
+  target: z.object({
+    type: z.literal("Collection"),
+    id: z.string().min(1),
+    name: z.string(),
+  }),
+});
 const WEBHOOK_ERRORS = {
   missingSignatureHeaders: "Missing signature headers",
   invalidBackend: "Invalid backend",
@@ -51,23 +80,7 @@ function normalizeOrigin(value: string): string | null {
 }
 
 function parseWebhookPayload(body: string): NextcloudTalkWebhookPayload | null {
-  try {
-    const data = JSON.parse(body);
-    if (
-      !data.type ||
-      !data.actor?.type ||
-      !data.actor?.id ||
-      !data.object?.type ||
-      !data.object?.id ||
-      !data.target?.type ||
-      !data.target?.id
-    ) {
-      return null;
-    }
-    return data as NextcloudTalkWebhookPayload;
-  } catch {
-    return null;
-  }
+  return safeParseJsonWithSchema(NextcloudTalkWebhookPayloadSchema, body);
 }
 
 function writeJsonResponse(
@@ -115,6 +128,8 @@ function verifyWebhookSignature(params: {
   body: string;
   secret: string;
   res: ServerResponse;
+  clientIp: string;
+  authRateLimiter: ReturnType<typeof createAuthRateLimiter>;
 }): boolean {
   const isValid = verifyNextcloudTalkSignature({
     signature: params.headers.signature,
@@ -123,9 +138,11 @@ function verifyWebhookSignature(params: {
     secret: params.secret,
   });
   if (!isValid) {
+    params.authRateLimiter.recordFailure(params.clientIp, WEBHOOK_AUTH_RATE_LIMIT_SCOPE);
     writeWebhookError(params.res, 401, WEBHOOK_ERRORS.invalidSignature);
     return false;
   }
+  params.authRateLimiter.reset(params.clientIp, WEBHOOK_AUTH_RATE_LIMIT_SCOPE);
   return true;
 }
 
@@ -171,8 +188,10 @@ export function readNextcloudTalkWebhookBody(
   maxBodyBytes: number,
 ): Promise<string> {
   return readRequestBodyWithLimit(req, {
-    maxBytes: maxBodyBytes,
-    timeoutMs: DEFAULT_WEBHOOK_BODY_TIMEOUT_MS,
+    // This read happens before signature verification, so keep the unauthenticated
+    // body budget bounded even if the operator-configured post-parse limit is larger.
+    maxBytes: Math.min(maxBodyBytes, PREAUTH_WEBHOOK_MAX_BODY_BYTES),
+    timeoutMs: PREAUTH_WEBHOOK_BODY_TIMEOUT_MS,
   });
 }
 
@@ -191,6 +210,13 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   const readBody = opts.readBody ?? readNextcloudTalkWebhookBody;
   const isBackendAllowed = opts.isBackendAllowed;
   const shouldProcessMessage = opts.shouldProcessMessage;
+  const webhookAuthRateLimiter = createAuthRateLimiter({
+    maxAttempts: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
+    windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
+    lockoutMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
+    exemptLoopback: false,
+    pruneIntervalMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
+  });
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     if (req.url === HEALTH_PATH) {
@@ -202,6 +228,13 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
     if (req.url !== path || req.method !== "POST") {
       res.writeHead(404);
       res.end();
+      return;
+    }
+
+    const clientIp = req.socket.remoteAddress ?? "unknown";
+    if (!webhookAuthRateLimiter.check(clientIp, WEBHOOK_AUTH_RATE_LIMIT_SCOPE).allowed) {
+      res.writeHead(429);
+      res.end("Too Many Requests");
       return;
     }
 
@@ -222,6 +255,8 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
         body,
         secret,
         res,
+        clientIp,
+        authRateLimiter: webhookAuthRateLimiter,
       });
       if (!hasValidSignature) {
         return;

@@ -34,7 +34,7 @@ type LifecycleHost = {
   chatLoading: boolean;
   chatMessages: unknown[];
   chatToolMessages: unknown[];
-  chatStream: string;
+  chatStream: string | null;
   logsAutoFollow: boolean;
   logsAtBottom: boolean;
   logsEntries: unknown[];
@@ -99,9 +99,15 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
     const forcedByTab = changed.has("tab");
     const forcedByLoad =
       changed.has("chatLoading") && changed.get("chatLoading") === true && !host.chatLoading;
+    // Detect streaming start: chatStream changed from null/undefined to a string value
+    const previousStream = changed.get("chatStream") as string | null | undefined;
+    const streamJustStarted =
+      changed.has("chatStream") &&
+      (previousStream === null || previousStream === undefined) &&
+      typeof host.chatStream === "string";
     scheduleChatScroll(
       host as unknown as Parameters<typeof scheduleChatScroll>[0],
-      forcedByTab || forcedByLoad || !host.chatHasAutoScrolled,
+      forcedByTab || forcedByLoad || streamJustStarted || !host.chatHasAutoScrolled,
     );
   }
   if (

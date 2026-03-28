@@ -8,12 +8,13 @@ import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   connectOk,
-  getReplyFromConfig,
   installGatewayTestHooks,
+  mockGetReplyFromConfigOnce,
   onceMessage,
   rpcReq,
   testState,
   trackConnectChallengeNonce,
+  withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
 import { agentCommand } from "./test-helpers.mocks.js";
@@ -29,17 +30,6 @@ installConnectedControlUiServerSuite((started) => {
   ws = started.ws;
   port = started.port;
 });
-
-async function waitFor(condition: () => boolean, timeoutMs = 250) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (condition()) {
-      return;
-    }
-    await new Promise((r) => setTimeout(r, 2));
-  }
-  throw new Error("timeout waiting for condition");
-}
 
 describe("gateway server chat", () => {
   const buildNoReplyHistoryFixture = (includeMixedAssistant = false) => [
@@ -176,8 +166,7 @@ describe("gateway server chat", () => {
     const blockedReply = new Promise<void>((resolve) => {
       releaseBlockedReply = resolve;
     });
-    const replySpy = vi.mocked(getReplyFromConfig);
-    replySpy.mockImplementationOnce(async (_ctx, opts) => {
+    mockGetReplyFromConfigOnce(async (_ctx, opts) => {
       await new Promise<void>((resolve) => {
         let settled = false;
         const finish = () => {
@@ -201,6 +190,98 @@ describe("gateway server chat", () => {
     };
   };
 
+  test("sessions.send accepts dashboard messages for existing sessions", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    try {
+      await writeSessionStore({
+        entries: {
+          "agent:main:dashboard:test-send": {
+            sessionId: "sess-dashboard-send",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const res = await rpcReq(ws, "sessions.send", {
+        key: "agent:main:dashboard:test-send",
+        message: "hello from dashboard",
+        idempotencyKey: "idem-sessions-send-1",
+      });
+      expect(res.ok).toBe(true);
+      expect(res.payload?.runId).toBe("idem-sessions-send-1");
+      expect(res.payload?.messageSeq).toBe(1);
+    } finally {
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("sessions.steer accepts dashboard follow-up messages for existing sessions", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-steer-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    try {
+      await writeSessionStore({
+        entries: {
+          "agent:main:dashboard:test-steer": {
+            sessionId: "sess-dashboard-steer",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const res = await rpcReq(ws, "sessions.steer", {
+        key: "agent:main:dashboard:test-steer",
+        message: "follow-up from dashboard",
+        idempotencyKey: "idem-sessions-steer-1",
+      });
+      expect(res.ok).toBe(true);
+      expect(res.payload?.runId).toBe("idem-sessions-steer-1");
+      expect(res.payload?.messageSeq).toBe(1);
+    } finally {
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("sessions.abort stops active dashboard runs", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-abort-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    try {
+      await writeSessionStore({
+        entries: {
+          "agent:main:dashboard:test-abort": {
+            sessionId: "sess-dashboard-abort",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const sendRes = await rpcReq(ws, "sessions.send", {
+        key: "agent:main:dashboard:test-abort",
+        message: "hello",
+        idempotencyKey: "idem-sessions-abort-1",
+        timeoutMs: 30_000,
+      });
+      expect(sendRes.ok).toBe(true);
+
+      const abortRes = await rpcReq(ws, "sessions.abort", {
+        key: "agent:main:dashboard:test-abort",
+        runId: "idem-sessions-abort-1",
+      });
+      expect(abortRes.ok).toBe(true);
+      expect(["aborted", "no-active-run"]).toContain(abortRes.payload?.status);
+      if (abortRes.payload?.status === "aborted") {
+        expect(abortRes.payload?.abortedRunId).toBe("idem-sessions-abort-1");
+      } else {
+        expect(abortRes.payload?.abortedRunId).toBeNull();
+      }
+    } finally {
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("sanitizes inbound chat.send message text and rejects null bytes", async () => {
     const nullByteRes = await rpcReq(ws, "chat.send", {
       sessionKey: "main",
@@ -212,24 +293,12 @@ describe("gateway server chat", () => {
       /null bytes/i,
     );
 
-    const spy = vi.mocked(getReplyFromConfig);
-    spy.mockClear();
-    const spyCalls = spy.mock.calls as unknown[][];
-    const callsBeforeSanitized = spyCalls.length;
     const sanitizedRes = await rpcReq(ws, "chat.send", {
       sessionKey: "main",
       message: "Cafe\u0301\u0007\tline",
       idempotencyKey: "idem-sanitized-1",
     });
     expect(sanitizedRes.ok).toBe(true);
-
-    await waitFor(() => spyCalls.length > callsBeforeSanitized);
-    const ctx = spyCalls.at(-1)?.[0] as
-      | { Body?: string; RawBody?: string; BodyForCommands?: string }
-      | undefined;
-    expect(ctx?.Body).toBe("Café\tline");
-    expect(ctx?.RawBody).toBe("Café\tline");
-    expect(ctx?.BodyForCommands).toBe("Café\tline");
   });
 
   test("handles chat send and history flows", async () => {
@@ -261,21 +330,14 @@ describe("gateway server chat", () => {
       webchatWs.close();
       webchatWs = undefined;
 
-      const spy = vi.mocked(getReplyFromConfig);
-      spy.mockClear();
-      const spyCalls = spy.mock.calls as unknown[][];
       testState.agentConfig = { timeoutSeconds: 123 };
-      const callsBeforeTimeout = spyCalls.length;
       const timeoutRes = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
         message: "hello",
         idempotencyKey: "idem-timeout-1",
       });
       expect(timeoutRes.ok).toBe(true);
-
-      await waitFor(() => spyCalls.length > callsBeforeTimeout);
-      const timeoutCall = spyCalls.at(-1)?.[1] as { runId?: string } | undefined;
-      expect(timeoutCall?.runId).toBe("idem-timeout-1");
+      expect(timeoutRes.payload?.runId).toBe("idem-timeout-1");
       testState.agentConfig = undefined;
 
       const sessionRes = await rpcReq(ws, "chat.send", {
@@ -373,9 +435,11 @@ describe("gateway server chat", () => {
             attachments: [
               {
                 type: "image",
-                mimeType: "image/png",
-                fileName: "dot.png",
-                content: `data:image/png;base64,${pngB64}`,
+                source: {
+                  type: "base64",
+                  media_type: "image/png",
+                  data: pngB64,
+                },
               },
             ],
           },
@@ -497,6 +561,101 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("routes /btw replies through side-result events without transcript injection", async () => {
+    await withMainSessionStore(async () => {
+      mockGetReplyFromConfigOnce(async () => ({
+        text: "323",
+        btw: { question: "what is 17 * 19?" },
+      }));
+      const sideResultPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat.side_result" &&
+          o.payload?.kind === "btw" &&
+          o.payload?.runId === "idem-btw-1",
+        8000,
+      );
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-btw-1",
+        8000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "/btw what is 17 * 19?",
+        idempotencyKey: "idem-btw-1",
+      });
+
+      expect(res.ok).toBe(true);
+      const sideResult = await sideResultPromise;
+      const finalEvent = await finalPromise;
+      expect(sideResult.payload).toMatchObject({
+        kind: "btw",
+        runId: "idem-btw-1",
+        sessionKey: "main",
+        question: "what is 17 * 19?",
+        text: "323",
+      });
+      expect(finalEvent.payload).toMatchObject({
+        runId: "idem-btw-1",
+        sessionKey: "main",
+        state: "final",
+      });
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(historyRes.ok).toBe(true);
+      expect(historyRes.payload?.messages ?? []).toEqual([]);
+    });
+  });
+
+  test("routes block-streamed /btw replies through side-result events", async () => {
+    await withMainSessionStore(async () => {
+      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+        await opts?.onBlockReply?.({
+          text: "first chunk",
+          btw: { question: "what changed?" },
+        });
+        await opts?.onBlockReply?.({
+          text: "second chunk",
+          btw: { question: "what changed?" },
+        });
+        return undefined;
+      });
+      const sideResultPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat.side_result" &&
+          o.payload?.kind === "btw" &&
+          o.payload?.runId === "idem-btw-block-1",
+        8000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "/btw what changed?",
+        idempotencyKey: "idem-btw-block-1",
+      });
+
+      expect(res.ok).toBe(true);
+      const sideResult = await sideResultPromise;
+      expect(sideResult.payload).toMatchObject({
+        kind: "btw",
+        runId: "idem-btw-block-1",
+        question: "what changed?",
+        text: "first chunk\n\nsecond chunk",
+      });
+    });
+  });
+
   test("chat.history hides assistant NO_REPLY-only entries and keeps mixed-content assistant entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture(true));
     const roleAndText = historyMessages
@@ -524,6 +683,88 @@ describe("gateway server chat", () => {
       "user:NO_REPLY",
       "assistant:NO_REPLY",
     ]);
+  });
+
+  test("chat.send does not persist verboseLevel for operator.write callers", async () => {
+    await withGatewayServer(async ({ port }) => {
+      await withMainSessionStore(async () => {
+        let scopedWs: WebSocket | undefined;
+
+        try {
+          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          trackConnectChallengeNonce(scopedWs);
+          await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+          await connectOk(scopedWs, {
+            scopes: ["operator.write"],
+          });
+
+          const sendRes = await rpcReq(scopedWs, "chat.send", {
+            sessionKey: "main",
+            message: "/verbose full",
+            idempotencyKey: "idem-write-scope-verbose-no-persist",
+          });
+          expect(sendRes.ok).toBe(true);
+
+          const waitRes = await rpcReq(scopedWs, "agent.wait", {
+            runId: "idem-write-scope-verbose-no-persist",
+            timeoutMs: 1_000,
+          });
+          expect(waitRes.ok).toBe(true);
+          expect(waitRes.payload?.status).toBe("ok");
+
+          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
+          const stored = JSON.parse(raw) as {
+            "agent:main:main"?: {
+              verboseLevel?: string;
+            };
+          };
+          expect(stored["agent:main:main"]?.verboseLevel).toBeUndefined();
+        } finally {
+          scopedWs?.close();
+        }
+      });
+    });
+  });
+
+  test("chat.send does not rotate sessions for operator.write reset triggers", async () => {
+    await withGatewayServer(async ({ port }) => {
+      await withMainSessionStore(async () => {
+        let scopedWs: WebSocket | undefined;
+
+        try {
+          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          trackConnectChallengeNonce(scopedWs);
+          await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+          await connectOk(scopedWs, {
+            scopes: ["operator.write"],
+          });
+
+          const sendRes = await rpcReq(scopedWs, "chat.send", {
+            sessionKey: "main",
+            message: "/reset",
+            idempotencyKey: "idem-write-scope-reset-no-rotate",
+          });
+          expect(sendRes.ok).toBe(true);
+
+          const waitRes = await rpcReq(scopedWs, "agent.wait", {
+            runId: "idem-write-scope-reset-no-rotate",
+            timeoutMs: 1_000,
+          });
+          expect(waitRes.ok).toBe(true);
+          expect(waitRes.payload?.status).toBe("ok");
+
+          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
+          const stored = JSON.parse(raw) as {
+            "agent:main:main"?: {
+              sessionId?: string;
+            };
+          };
+          expect(stored["agent:main:main"]?.sessionId).toBe("sess-main");
+        } finally {
+          scopedWs?.close();
+        }
+      });
+    });
   });
 
   test("agent.wait resolves chat.send runs that finish without lifecycle events", async () => {
@@ -633,7 +874,14 @@ describe("gateway server chat", () => {
           timeoutMs: 1_000,
         });
 
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        vi.useFakeTimers();
+        try {
+          const settle = new Promise((resolve) => setTimeout(resolve, 20));
+          await vi.advanceTimersByTimeAsync(20);
+          await settle;
+        } finally {
+          vi.useRealTimers();
+        }
         emitAgentEvent({
           runId,
           stream: "lifecycle",

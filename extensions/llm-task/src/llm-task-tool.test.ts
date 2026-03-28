@@ -1,16 +1,56 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("../../../src/agents/pi-embedded-runner.js", () => {
+vi.mock("@sinclair/typebox", () => ({
+  Type: {
+    Object: (schema: unknown) => schema,
+    String: (schema?: unknown) => schema,
+    Optional: (schema: unknown) => schema,
+    Unknown: (schema?: unknown) => schema,
+    Number: (schema?: unknown) => schema,
+  },
+}));
+
+vi.mock("ajv", () => ({
+  default: class MockAjv {
+    compile(schema: unknown) {
+      return (value: unknown) => {
+        if (
+          schema &&
+          typeof schema === "object" &&
+          !Array.isArray(schema) &&
+          (schema as { properties?: Record<string, { type?: string }> }).properties?.foo?.type ===
+            "string"
+        ) {
+          const ok = typeof (value as { foo?: unknown })?.foo === "string";
+          (this as { errors?: Array<{ instancePath: string; message: string }> }).errors = ok
+            ? undefined
+            : [{ instancePath: "/foo", message: "must be string" }];
+          return ok;
+        }
+        (this as { errors?: Array<{ instancePath: string; message: string }> }).errors = undefined;
+        return true;
+      };
+    }
+
+    errors?: Array<{ instancePath: string; message: string }>;
+  },
+}));
+
+vi.mock("../api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api.js")>();
   return {
-    runEmbeddedPiAgent: vi.fn(async () => ({
-      meta: { startedAt: Date.now() },
-      payloads: [{ text: "{}" }],
-    })),
+    ...actual,
+    resolvePreferredOpenClawTmpDir: () => "/tmp",
+    supportsXHighThinking: () => false,
   };
 });
 
-import { runEmbeddedPiAgent } from "../../../src/agents/pi-embedded-runner.js";
 import { createLlmTaskTool } from "./llm-task-tool.js";
+
+const runEmbeddedPiAgent = vi.fn(async () => ({
+  meta: { startedAt: Date.now() },
+  payloads: [{ text: "{}" }],
+}));
 
 // oxlint-disable-next-line typescript/no-explicit-any
 function fakeApi(overrides: any = {}) {
@@ -22,7 +62,12 @@ function fakeApi(overrides: any = {}) {
       agents: { defaults: { workspace: "/tmp", model: { primary: "openai-codex/gpt-5.2" } } },
     },
     pluginConfig: {},
-    runtime: { version: "test" },
+    runtime: {
+      version: "test",
+      agent: {
+        runEmbeddedPiAgent,
+      },
+    },
     logger: { debug() {}, info() {}, warn() {}, error() {} },
     registerTool() {},
     ...overrides,
@@ -138,6 +183,7 @@ describe("llm-task tool (json-only)", () => {
     await expect(tool.execute("id", { prompt: "x", thinking: "banana" })).rejects.toThrow(
       /invalid thinking level/i,
     );
+    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
   });
 
   it("throws on unsupported xhigh thinking level", async () => {

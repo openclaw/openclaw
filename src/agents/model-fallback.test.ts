@@ -197,13 +197,13 @@ describe("runWithModelFallback", () => {
     const result = await runWithModelFallback({
       cfg,
       provider: "openai",
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
       run,
     });
 
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai", "gpt-5.3-codex");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-5.4");
   });
 
   it("falls back on unrecognized errors when candidates remain", async () => {
@@ -677,6 +677,119 @@ describe("runWithModelFallback", () => {
       ["anthropic", "claude-opus-4-5"],
       ["anthropic", "claude-haiku-3-5"],
     ]);
+  });
+
+  it("refreshes cooldown expiry from persisted auth state before fallback summary", async () => {
+    const expiry = Date.now() + 120_000;
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-5",
+            fallbacks: ["openai/gpt-5.2"],
+          },
+        },
+      },
+    });
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "anthropic-key" },
+        "openai:default": { type: "api_key", provider: "openai", key: "openai-key" },
+      },
+    };
+
+    await withTempAuthStore(store, async (tempDir) => {
+      const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
+        if (provider === "anthropic" && model === "claude-opus-4-5") {
+          saveAuthProfileStore(
+            {
+              ...store,
+              usageStats: {
+                "anthropic:default": {
+                  cooldownUntil: expiry,
+                  cooldownReason: "rate_limit",
+                  cooldownModel: "claude-opus-4-5",
+                  failureCounts: { rate_limit: 1 },
+                },
+              },
+            },
+            tempDir,
+          );
+        }
+
+        throw Object.assign(new Error("rate limited"), { status: 429 });
+      });
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-opus-4-5",
+          agentDir: tempDir,
+          run,
+        }),
+      ).rejects.toMatchObject({
+        name: "FallbackSummaryError",
+        soonestCooldownExpiry: expiry,
+      });
+    });
+  });
+
+  it("filters fallback summary cooldown expiry to attempted model scopes", async () => {
+    const now = Date.now();
+    const unrelatedExpiry = now + 15_000;
+    const relevantExpiry = now + 90_000;
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-5",
+            fallbacks: ["openai/gpt-5.2"],
+          },
+        },
+      },
+    });
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "anthropic-key" },
+        "openai:default": { type: "api_key", provider: "openai", key: "openai-key" },
+      },
+      usageStats: {
+        "anthropic:default": {
+          cooldownUntil: unrelatedExpiry,
+          cooldownReason: "rate_limit",
+          cooldownModel: "claude-haiku-3-5",
+          failureCounts: { rate_limit: 1 },
+        },
+        "openai:default": {
+          cooldownUntil: relevantExpiry,
+          cooldownReason: "rate_limit",
+          cooldownModel: "gpt-5.2",
+          failureCounts: { rate_limit: 1 },
+        },
+      },
+    };
+
+    await withTempAuthStore(store, async (tempDir) => {
+      const run = vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error("rate limited"), { status: 429 }));
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-opus-4-5",
+          agentDir: tempDir,
+          run,
+        }),
+      ).rejects.toMatchObject({
+        name: "FallbackSummaryError",
+        soonestCooldownExpiry: relevantExpiry,
+      });
+    });
   });
 
   it("uses fallbacksOverride instead of agents.defaults.model.fallbacks", async () => {

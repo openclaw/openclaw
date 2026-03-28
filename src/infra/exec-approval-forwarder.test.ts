@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { telegramOutbound } from "../channels/plugins/outbound/telegram.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  buildTelegramExecApprovalPendingPayload,
+  shouldSuppressTelegramExecApprovalForwardingFallback,
+} from "../plugin-sdk/telegram.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
 
 const baseRequest = {
@@ -22,10 +26,53 @@ afterEach(() => {
 });
 
 const emptyRegistry = createTestRegistry([]);
+
+function isDiscordExecApprovalClientEnabledForTest(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): boolean {
+  const accountId = params.accountId?.trim();
+  const rootConfig = params.cfg.channels?.discord?.execApprovals;
+  const accountConfig =
+    accountId && accountId !== "default"
+      ? params.cfg.channels?.discordAccounts?.[accountId]?.execApprovals
+      : undefined;
+  const config = accountConfig ?? rootConfig;
+  return Boolean(config?.enabled && (config.approvers?.length ?? 0) > 0);
+}
+
+const telegramApprovalPlugin: Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config" | "execApprovals"
+> = {
+  ...createChannelTestPluginBase({ id: "telegram" }),
+  execApprovals: {
+    shouldSuppressForwardingFallback: (params) =>
+      shouldSuppressTelegramExecApprovalForwardingFallback(params),
+    buildPendingPayload: ({ request, nowMs }) =>
+      buildTelegramExecApprovalPendingPayload({ request, nowMs }),
+  },
+};
+const discordApprovalPlugin: Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config" | "execApprovals"
+> = {
+  ...createChannelTestPluginBase({ id: "discord" }),
+  execApprovals: {
+    shouldSuppressForwardingFallback: ({ cfg, target }) =>
+      target.channel === "discord" &&
+      isDiscordExecApprovalClientEnabledForTest({ cfg, accountId: target.accountId }),
+  },
+};
 const defaultRegistry = createTestRegistry([
   {
     pluginId: "telegram",
-    plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
+    plugin: telegramApprovalPlugin,
+    source: "test",
+  },
+  {
+    pluginId: "discord",
+    plugin: discordApprovalPlugin,
     source: "test",
   },
 ]);
@@ -37,15 +84,19 @@ function getFirstDeliveryText(deliver: ReturnType<typeof vi.fn>): string {
   return firstCall?.payloads?.[0]?.text ?? "";
 }
 
-const TARGETS_CFG = {
-  approvals: {
-    exec: {
-      enabled: true,
-      mode: "targets",
-      targets: [{ channel: "slack", to: "U123" }],
+function makeTargetsCfg(targets: Array<{ channel: string; to: string }>): OpenClawConfig {
+  return {
+    approvals: {
+      exec: {
+        enabled: true,
+        mode: "targets",
+        targets,
+      },
     },
-  },
-} as OpenClawConfig;
+  } as OpenClawConfig;
+}
+
+const TARGETS_CFG = makeTargetsCfg([{ channel: "slack", to: "U123" }]);
 
 function createForwarder(params: {
   cfg: OpenClawConfig;
@@ -135,6 +186,22 @@ async function expectSessionFilterRequestResult(params: {
 
   await expect(forwarder.handleRequested(request)).resolves.toBe(params.expectedAccepted);
   expect(deliver).toHaveBeenCalledTimes(params.expectedDeliveryCount);
+}
+
+async function expectForwardedApprovalText(params: { command?: string; expectedText: string }) {
+  vi.useFakeTimers();
+  const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+  await expect(
+    forwarder.handleRequested({
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        ...(params.command ? { command: params.command } : {}),
+      },
+    }),
+  ).resolves.toBe(true);
+  await Promise.resolve();
+  expect(getFirstDeliveryText(deliver)).toContain(params.expectedText);
 }
 
 describe("exec approval forwarder", () => {
@@ -227,17 +294,9 @@ describe("exec approval forwarder", () => {
 
   it("attaches explicit telegram buttons in forwarded telegram fallback payloads", async () => {
     vi.useFakeTimers();
-    const cfg = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "telegram", to: "123" }],
-        },
-      },
-    } as OpenClawConfig;
-
-    const { deliver, forwarder } = createForwarder({ cfg });
+    const { deliver, forwarder } = createForwarder({
+      cfg: makeTargetsCfg([{ channel: "telegram", to: "123" }]),
+    });
 
     await expect(
       forwarder.handleRequested({
@@ -265,7 +324,7 @@ describe("exec approval forwarder", () => {
                 buttons: [
                   [
                     { text: "Allow Once", callback_data: "/approve req-1 allow-once" },
-                    { text: "Allow Always", callback_data: "/approve req-1 allow-always" },
+                    { text: "Allow Always", callback_data: "/approve req-1 always" },
                   ],
                   [{ text: "Deny", callback_data: "/approve req-1 deny" }],
                 ],
@@ -280,10 +339,8 @@ describe("exec approval forwarder", () => {
   it("formats single-line commands as inline code", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
-
     await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
     await Promise.resolve();
-
     const text = getFirstDeliveryText(deliver);
     expect(text).toContain("🔒 Exec approval required");
     expect(text).toContain("Command: `echo hello`");
@@ -291,40 +348,21 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
   });
 
-  it("renders invisible Unicode format chars as visible escapes", async () => {
-    vi.useFakeTimers();
-    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
-
-    await expect(
-      forwarder.handleRequested({
-        ...baseRequest,
-        request: {
-          ...baseRequest.request,
-          command: "bash safe\u200B.sh",
-        },
-      }),
-    ).resolves.toBe(true);
-    await Promise.resolve();
-
-    expect(getFirstDeliveryText(deliver)).toContain("Command: `bash safe\\u{200B}.sh`");
-  });
-
-  it("formats complex commands as fenced code blocks", async () => {
-    vi.useFakeTimers();
-    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
-
-    await expect(
-      forwarder.handleRequested({
-        ...baseRequest,
-        request: {
-          ...baseRequest.request,
-          command: "echo `uname`\necho done",
-        },
-      }),
-    ).resolves.toBe(true);
-    await Promise.resolve();
-
-    expect(getFirstDeliveryText(deliver)).toContain("```\necho `uname`\necho done\n```");
+  it.each([
+    {
+      command: "bash safe\u200B.sh",
+      expectedText: "Command: `bash safe\\u{200B}.sh`",
+    },
+    {
+      command: "echo `uname`\necho done",
+      expectedText: "```\necho `uname`\necho done\n```",
+    },
+    {
+      command: "echo ```danger```",
+      expectedText: "````\necho ```danger```\n````",
+    },
+  ])("formats forwarded approval text for %j", async ({ command, expectedText }) => {
+    await expectForwardedApprovalText({ command, expectedText });
   });
 
   it("returns false when forwarding is disabled", async () => {
@@ -335,60 +373,43 @@ describe("exec approval forwarder", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
-  it("rejects unsafe nested-repetition regex in sessionFilter", async () => {
-    await expectSessionFilterRequestResult({
+  it.each([
+    {
       sessionFilter: ["(a+)+$"],
       sessionKey: `${"a".repeat(28)}!`,
       expectedAccepted: false,
       expectedDeliveryCount: 0,
-    });
-  });
-
-  it("matches long session keys with tail-bounded regex checks", async () => {
-    await expectSessionFilterRequestResult({
+    },
+    {
       sessionFilter: ["discord:tail$"],
       sessionKey: `${"x".repeat(5000)}discord:tail`,
       expectedAccepted: true,
       expectedDeliveryCount: 1,
-    });
+    },
+  ])("handles sessionFilter case %j", async (params) => {
+    await expectSessionFilterRequestResult(params);
   });
 
-  it("returns false when all targets are skipped", async () => {
-    await expectDiscordSessionTargetRequest({
+  it.each([
+    {
       cfg: makeSessionCfg({ discordExecApprovalsEnabled: true }),
       expectedAccepted: false,
       expectedDeliveryCount: 0,
-    });
-  });
-
-  it("forwards to discord when discord exec approvals handler is disabled", async () => {
-    await expectDiscordSessionTargetRequest({
+    },
+    {
       cfg: makeSessionCfg(),
       expectedAccepted: true,
       expectedDeliveryCount: 1,
-    });
-  });
-
-  it("skips discord forwarding when discord exec approvals handler is enabled", async () => {
-    await expectDiscordSessionTargetRequest({
-      cfg: makeSessionCfg({ discordExecApprovalsEnabled: true }),
-      expectedAccepted: false,
-      expectedDeliveryCount: 0,
-    });
+    },
+  ])("handles discord session target forwarding case %j", async (params) => {
+    await expectDiscordSessionTargetRequest(params);
   });
 
   it("can forward resolved notices without pending cache when request payload is present", async () => {
     vi.useFakeTimers();
-    const cfg = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "telegram", to: "123" }],
-        },
-      },
-    } as OpenClawConfig;
-    const { deliver, forwarder } = createForwarder({ cfg });
+    const { deliver, forwarder } = createForwarder({
+      cfg: makeTargetsCfg([{ channel: "telegram", to: "123" }]),
+    });
 
     await forwarder.handleResolved({
       id: "req-missing",
@@ -403,23 +424,5 @@ describe("exec approval forwarder", () => {
     });
 
     expect(deliver).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses a longer fence when command already contains triple backticks", async () => {
-    vi.useFakeTimers();
-    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
-
-    await expect(
-      forwarder.handleRequested({
-        ...baseRequest,
-        request: {
-          ...baseRequest.request,
-          command: "echo ```danger```",
-        },
-      }),
-    ).resolves.toBe(true);
-    await Promise.resolve();
-
-    expect(getFirstDeliveryText(deliver)).toContain("````\necho ```danger```\n````");
   });
 });

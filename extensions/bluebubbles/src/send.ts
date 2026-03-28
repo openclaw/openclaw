@@ -1,20 +1,24 @@
 import crypto from "node:crypto";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
-import { stripMarkdown } from "openclaw/plugin-sdk/bluebubbles";
-import { resolveBlueBubblesAccount } from "./accounts.js";
+import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import {
   getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
 } from "./probe.js";
+import type { OpenClawConfig } from "./runtime-api.js";
+import { stripMarkdown } from "./runtime-api.js";
 import { warnBlueBubbles } from "./runtime.js";
-import { normalizeSecretInputString } from "./secret-input.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 import {
   blueBubblesFetchWithTimeout,
   buildBlueBubblesApiUrl,
   type BlueBubblesSendTarget,
+  type SsrFPolicy,
 } from "./types.js";
+
+function blueBubblesPolicy(allowPrivateNetwork: boolean | undefined): SsrFPolicy {
+  return allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
+}
 
 export type BlueBubblesSendOpts = {
   serverUrl?: string;
@@ -194,6 +198,7 @@ async function queryChats(params: {
   timeoutMs?: number;
   offset: number;
   limit: number;
+  allowPrivateNetwork?: boolean;
 }): Promise<BlueBubblesChatRecord[]> {
   const url = buildBlueBubblesApiUrl({
     baseUrl: params.baseUrl,
@@ -212,6 +217,7 @@ async function queryChats(params: {
       }),
     },
     params.timeoutMs,
+    blueBubblesPolicy(params.allowPrivateNetwork),
   );
   if (!res.ok) {
     return [];
@@ -226,6 +232,7 @@ export async function resolveChatGuidForTarget(params: {
   password: string;
   timeoutMs?: number;
   target: BlueBubblesSendTarget;
+  allowPrivateNetwork?: boolean;
 }): Promise<string | null> {
   if (params.target.kind === "chat_guid") {
     return params.target.chatGuid;
@@ -246,6 +253,7 @@ export async function resolveChatGuidForTarget(params: {
       timeoutMs: params.timeoutMs,
       offset,
       limit,
+      allowPrivateNetwork: params.allowPrivateNetwork,
     });
     if (chats.length === 0) {
       break;
@@ -312,16 +320,21 @@ export async function resolveChatGuidForTarget(params: {
 }
 
 /**
- * Creates a new chat (DM) and optionally sends an initial message.
+ * Creates a new DM chat for the given address and returns the chat GUID.
  * Requires Private API to be enabled in BlueBubbles.
+ *
+ * If a `message` is provided it is sent as the initial message in the new chat;
+ * otherwise an empty-string message body is used (BlueBubbles still creates the
+ * chat but will not deliver a visible bubble).
  */
-async function createNewChatWithMessage(params: {
+export async function createChatForHandle(params: {
   baseUrl: string;
   password: string;
   address: string;
-  message: string;
+  message?: string;
   timeoutMs?: number;
-}): Promise<BlueBubblesSendResult> {
+  allowPrivateNetwork?: boolean;
+}): Promise<{ chatGuid: string | null; messageId: string }> {
   const url = buildBlueBubblesApiUrl({
     baseUrl: params.baseUrl,
     path: "/api/v1/chat/new",
@@ -329,7 +342,7 @@ async function createNewChatWithMessage(params: {
   });
   const payload = {
     addresses: [params.address],
-    message: params.message,
+    message: params.message ?? "",
     tempGuid: `temp-${crypto.randomUUID()}`,
   };
   const res = await blueBubblesFetchWithTimeout(
@@ -340,10 +353,10 @@ async function createNewChatWithMessage(params: {
       body: JSON.stringify(payload),
     },
     params.timeoutMs,
+    blueBubblesPolicy(params.allowPrivateNetwork),
   );
   if (!res.ok) {
     const errorText = await res.text();
-    // Check for Private API not enabled error
     if (
       res.status === 400 ||
       res.status === 403 ||
@@ -355,7 +368,66 @@ async function createNewChatWithMessage(params: {
     }
     throw new Error(`BlueBubbles create chat failed (${res.status}): ${errorText || "unknown"}`);
   }
-  return parseBlueBubblesMessageResponse(res);
+  const body = await res.text();
+  let messageId = "ok";
+  let chatGuid: string | null = null;
+  if (body) {
+    try {
+      const parsed = JSON.parse(body) as Record<string, unknown>;
+      messageId = extractBlueBubblesMessageId(parsed);
+      // Extract chatGuid from the response data
+      const data = parsed.data as Record<string, unknown> | undefined;
+      if (data) {
+        chatGuid =
+          (typeof data.chatGuid === "string" && data.chatGuid) ||
+          (typeof data.guid === "string" && data.guid) ||
+          null;
+        // Also try nested chats array (some BB versions nest it)
+        if (!chatGuid) {
+          const chats = data.chats ?? data.chat;
+          if (Array.isArray(chats) && chats.length > 0) {
+            const first = chats[0] as Record<string, unknown> | undefined;
+            chatGuid =
+              (typeof first?.guid === "string" && first.guid) ||
+              (typeof first?.chatGuid === "string" && first.chatGuid) ||
+              null;
+          } else if (chats && typeof chats === "object" && !Array.isArray(chats)) {
+            const chatObj = chats as Record<string, unknown>;
+            chatGuid =
+              (typeof chatObj.guid === "string" && chatObj.guid) ||
+              (typeof chatObj.chatGuid === "string" && chatObj.chatGuid) ||
+              null;
+          }
+        }
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+  return { chatGuid, messageId };
+}
+
+/**
+ * Creates a new chat (DM) and sends an initial message.
+ * Requires Private API to be enabled in BlueBubbles.
+ */
+async function createNewChatWithMessage(params: {
+  baseUrl: string;
+  password: string;
+  address: string;
+  message: string;
+  timeoutMs?: number;
+  allowPrivateNetwork?: boolean;
+}): Promise<BlueBubblesSendResult> {
+  const result = await createChatForHandle({
+    baseUrl: params.baseUrl,
+    password: params.password,
+    address: params.address,
+    message: params.message,
+    timeoutMs: params.timeoutMs,
+    allowPrivateNetwork: params.allowPrivateNetwork,
+  });
+  return { messageId: result.messageId };
 }
 
 export async function sendMessageBlueBubbles(
@@ -373,23 +445,13 @@ export async function sendMessageBlueBubbles(
     throw new Error("BlueBubbles send requires text (message was empty after markdown removal)");
   }
 
-  const account = resolveBlueBubblesAccount({
+  const { baseUrl, password, accountId, allowPrivateNetwork } = resolveBlueBubblesServerAccount({
     cfg: opts.cfg ?? {},
     accountId: opts.accountId,
+    serverUrl: opts.serverUrl,
+    password: opts.password,
   });
-  const baseUrl =
-    normalizeSecretInputString(opts.serverUrl) ||
-    normalizeSecretInputString(account.config.serverUrl);
-  const password =
-    normalizeSecretInputString(opts.password) ||
-    normalizeSecretInputString(account.config.password);
-  if (!baseUrl) {
-    throw new Error("BlueBubbles serverUrl is required");
-  }
-  if (!password) {
-    throw new Error("BlueBubbles password is required");
-  }
-  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
+  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
 
   const target = resolveBlueBubblesSendTarget(to);
   const chatGuid = await resolveChatGuidForTarget({
@@ -397,6 +459,7 @@ export async function sendMessageBlueBubbles(
     password,
     timeoutMs: opts.timeoutMs,
     target,
+    allowPrivateNetwork,
   });
   if (!chatGuid) {
     // If target is a phone number/handle and no existing chat found,
@@ -408,6 +471,7 @@ export async function sendMessageBlueBubbles(
         address: target.address,
         message: strippedText,
         timeoutMs: opts.timeoutMs,
+        allowPrivateNetwork,
       });
     }
     throw new Error(
@@ -463,6 +527,7 @@ export async function sendMessageBlueBubbles(
       body: JSON.stringify(payload),
     },
     opts.timeoutMs,
+    blueBubblesPolicy(allowPrivateNetwork),
   );
   if (!res.ok) {
     const errorText = await res.text();

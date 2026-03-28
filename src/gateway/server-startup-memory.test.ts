@@ -5,8 +5,13 @@ const { getMemorySearchManagerMock } = vi.hoisted(() => ({
   getMemorySearchManagerMock: vi.fn(),
 }));
 
-vi.mock("../memory/index.js", () => ({
-  getMemorySearchManager: getMemorySearchManagerMock,
+const { resolveActiveMemoryBackendConfigMock } = vi.hoisted(() => ({
+  resolveActiveMemoryBackendConfigMock: vi.fn(),
+}));
+
+vi.mock("../plugins/memory-runtime.js", () => ({
+  getActiveMemorySearchManager: getMemorySearchManagerMock,
+  resolveActiveMemoryBackendConfig: resolveActiveMemoryBackendConfigMock,
 }));
 
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
@@ -25,6 +30,11 @@ function createGatewayLogMock() {
 describe("startGatewayMemoryBackend", () => {
   beforeEach(() => {
     getMemorySearchManagerMock.mockClear();
+    resolveActiveMemoryBackendConfigMock.mockReset();
+    resolveActiveMemoryBackendConfigMock.mockImplementation(({ cfg }: { cfg: OpenClawConfig }) => ({
+      backend: cfg.memory?.backend === "qmd" ? "qmd" : "builtin",
+      qmd: cfg.memory?.backend === "qmd" ? {} : undefined,
+    }));
   });
 
   it("skips initialization when memory backend is not qmd", async () => {

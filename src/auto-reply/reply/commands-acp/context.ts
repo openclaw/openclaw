@@ -1,113 +1,49 @@
-import {
-  buildTelegramTopicConversationId,
-  normalizeConversationText,
-  parseTelegramChatIdFromTarget,
-} from "../../../acp/conversation-id.js";
-import { DISCORD_THREAD_BINDING_CHANNEL } from "../../../channels/thread-bindings-policy.js";
-import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
+import { normalizeConversationText } from "../../../acp/conversation-id.js";
 import type { HandleCommandsParams } from "../commands-types.js";
-import { parseDiscordParentChannelFromSessionKey } from "../discord-parent-channel.js";
-import { resolveTelegramConversationId } from "../telegram-context.js";
+import {
+  resolveConversationBindingAccountIdFromMessage,
+  resolveConversationBindingChannelFromMessage,
+  resolveConversationBindingContextFromAcpCommand,
+  resolveConversationBindingThreadIdFromMessage,
+} from "../conversation-binding-input.js";
 
 export function resolveAcpCommandChannel(params: HandleCommandsParams): string {
-  const raw =
-    params.ctx.OriginatingChannel ??
-    params.command.channel ??
-    params.ctx.Surface ??
-    params.ctx.Provider;
-  return normalizeConversationText(raw).toLowerCase();
+  const resolved = resolveConversationBindingChannelFromMessage(params.ctx, params.command.channel);
+  return normalizeConversationText(resolved).toLowerCase();
 }
 
 export function resolveAcpCommandAccountId(params: HandleCommandsParams): string {
-  const accountId = normalizeConversationText(params.ctx.AccountId);
-  return accountId || "default";
+  return resolveConversationBindingAccountIdFromMessage(params.ctx);
 }
 
 export function resolveAcpCommandThreadId(params: HandleCommandsParams): string | undefined {
-  const threadId =
-    params.ctx.MessageThreadId != null
-      ? normalizeConversationText(String(params.ctx.MessageThreadId))
-      : "";
-  return threadId || undefined;
+  return resolveConversationBindingThreadIdFromMessage(params.ctx);
+}
+
+function resolveAcpCommandConversationRef(params: HandleCommandsParams): {
+  conversationId: string;
+  parentConversationId?: string;
+} | null {
+  const resolved = resolveConversationBindingContextFromAcpCommand(params);
+  if (!resolved) {
+    return null;
+  }
+  return {
+    conversationId: resolved.conversationId,
+    ...(resolved.parentConversationId && resolved.parentConversationId !== resolved.conversationId
+      ? { parentConversationId: resolved.parentConversationId }
+      : {}),
+  };
 }
 
 export function resolveAcpCommandConversationId(params: HandleCommandsParams): string | undefined {
-  const channel = resolveAcpCommandChannel(params);
-  if (channel === "telegram") {
-    const telegramConversationId = resolveTelegramConversationId({
-      ctx: {
-        MessageThreadId: params.ctx.MessageThreadId,
-        OriginatingTo: params.ctx.OriginatingTo,
-        To: params.ctx.To,
-      },
-      command: {
-        to: params.command.to,
-      },
-    });
-    if (telegramConversationId) {
-      return telegramConversationId;
-    }
-    const threadId = resolveAcpCommandThreadId(params);
-    const parentConversationId = resolveAcpCommandParentConversationId(params);
-    if (threadId && parentConversationId) {
-      return (
-        buildTelegramTopicConversationId({
-          chatId: parentConversationId,
-          topicId: threadId,
-        }) ?? threadId
-      );
-    }
-  }
-  return resolveConversationIdFromTargets({
-    threadId: params.ctx.MessageThreadId,
-    targets: [params.ctx.OriginatingTo, params.command.to, params.ctx.To],
-  });
-}
-
-function parseDiscordParentChannelFromContext(raw: unknown): string | undefined {
-  const parentId = normalizeConversationText(raw);
-  if (!parentId) {
-    return undefined;
-  }
-  return parentId;
+  return resolveAcpCommandConversationRef(params)?.conversationId;
 }
 
 export function resolveAcpCommandParentConversationId(
   params: HandleCommandsParams,
 ): string | undefined {
-  const channel = resolveAcpCommandChannel(params);
-  if (channel === "telegram") {
-    return (
-      parseTelegramChatIdFromTarget(params.ctx.OriginatingTo) ??
-      parseTelegramChatIdFromTarget(params.command.to) ??
-      parseTelegramChatIdFromTarget(params.ctx.To)
-    );
-  }
-  if (channel === DISCORD_THREAD_BINDING_CHANNEL) {
-    const threadId = resolveAcpCommandThreadId(params);
-    if (!threadId) {
-      return undefined;
-    }
-    const fromContext = parseDiscordParentChannelFromContext(params.ctx.ThreadParentId);
-    if (fromContext && fromContext !== threadId) {
-      return fromContext;
-    }
-    const fromParentSession = parseDiscordParentChannelFromSessionKey(params.ctx.ParentSessionKey);
-    if (fromParentSession && fromParentSession !== threadId) {
-      return fromParentSession;
-    }
-    const fromTargets = resolveConversationIdFromTargets({
-      targets: [params.ctx.OriginatingTo, params.command.to, params.ctx.To],
-    });
-    if (fromTargets && fromTargets !== threadId) {
-      return fromTargets;
-    }
-  }
-  return undefined;
-}
-
-export function isAcpCommandDiscordChannel(params: HandleCommandsParams): boolean {
-  return resolveAcpCommandChannel(params) === DISCORD_THREAD_BINDING_CHANNEL;
+  return resolveAcpCommandConversationRef(params)?.parentConversationId;
 }
 
 export function resolveAcpCommandBindingContext(params: HandleCommandsParams): {
@@ -117,12 +53,21 @@ export function resolveAcpCommandBindingContext(params: HandleCommandsParams): {
   conversationId?: string;
   parentConversationId?: string;
 } {
-  const parentConversationId = resolveAcpCommandParentConversationId(params);
+  const conversationRef = resolveAcpCommandConversationRef(params);
+  if (!conversationRef) {
+    return {
+      channel: resolveAcpCommandChannel(params),
+      accountId: resolveAcpCommandAccountId(params),
+      threadId: resolveAcpCommandThreadId(params),
+    };
+  }
   return {
     channel: resolveAcpCommandChannel(params),
     accountId: resolveAcpCommandAccountId(params),
     threadId: resolveAcpCommandThreadId(params),
-    conversationId: resolveAcpCommandConversationId(params),
-    ...(parentConversationId ? { parentConversationId } : {}),
+    conversationId: conversationRef.conversationId,
+    ...(conversationRef.parentConversationId
+      ? { parentConversationId: conversationRef.parentConversationId }
+      : {}),
   };
 }

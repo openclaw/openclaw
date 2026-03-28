@@ -24,6 +24,7 @@ import {
   omitEnvKeysCaseInsensitive,
 } from "../secrets/provider-env-vars.js";
 import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 
 const SAFE_AUTO_APPROVE_TOOL_IDS = new Set(["read", "search", "web_search", "memory_search"]);
 const TRUSTED_SAFE_TOOL_ALIASES = new Set(["search"]);
@@ -104,7 +105,22 @@ function resolveToolNameForPermission(params: RequestPermissionRequest): string 
   const fromMeta = readFirstStringValue(toolMeta, ["toolName", "tool_name", "name"]);
   const fromRawInput = readFirstStringValue(rawInput, ["tool", "toolName", "tool_name", "name"]);
   const fromTitle = parseToolNameFromTitle(toolCall?.title);
-  return normalizeToolName(fromMeta ?? fromRawInput ?? fromTitle ?? "");
+  const metaName = fromMeta ? normalizeToolName(fromMeta) : undefined;
+  const rawInputName = fromRawInput ? normalizeToolName(fromRawInput) : undefined;
+  const titleName = fromTitle;
+  if ((fromMeta && !metaName) || (fromRawInput && !rawInputName)) {
+    return undefined;
+  }
+  if (metaName && titleName && metaName !== titleName) {
+    return undefined;
+  }
+  if (rawInputName && metaName && rawInputName !== metaName) {
+    return undefined;
+  }
+  if (rawInputName && titleName && rawInputName !== titleName) {
+    return undefined;
+  }
+  return metaName ?? titleName ?? rawInputName;
 }
 
 function extractPathFromToolTitle(
@@ -279,7 +295,7 @@ export async function resolvePermissionRequest(
   const prompt = deps.prompt ?? promptUserPermission;
   const cwd = deps.cwd ?? process.cwd();
   const options = params.options ?? [];
-  const toolTitle = params.toolCall?.title ?? "tool";
+  const toolTitle = sanitizeTerminalText(params.toolCall?.title ?? "tool");
   const toolName = resolveToolNameForPermission(params);
   const toolKind = resolveToolKindForPermission(toolName);
 

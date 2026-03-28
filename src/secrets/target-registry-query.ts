@@ -239,6 +239,24 @@ export function resolvePlanTargetAgainstRegistry(candidate: {
   return null;
 }
 
+export function resolveConfigSecretTargetByPath(pathSegments: string[]): ResolvedPlanTarget | null {
+  for (const entry of OPENCLAW_COMPILED_SECRET_TARGETS) {
+    if (!entry.includeInPlan) {
+      continue;
+    }
+    const matched = matchPathTokens(pathSegments, entry.pathTokens);
+    if (!matched) {
+      continue;
+    }
+    const resolved = toResolvedPlanTarget(entry, pathSegments, matched.captures);
+    if (!resolved) {
+      continue;
+    }
+    return resolved;
+  }
+  return null;
+}
+
 export function discoverConfigSecretTargets(
   config: OpenClawConfig,
 ): DiscoveredConfigSecretTarget[] {

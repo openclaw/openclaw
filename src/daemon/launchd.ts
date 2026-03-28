@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   resolveGatewayServiceDescription,
@@ -111,6 +112,44 @@ async function execLaunchctl(
   const file = isWindows ? (process.env.ComSpec ?? "cmd.exe") : "launchctl";
   const fileArgs = isWindows ? ["/d", "/s", "/c", "launchctl", ...args] : args;
   return await execFileUtf8(file, fileArgs, isWindows ? { windowsHide: true } : {});
+}
+
+function parseGatewayPortFromProgramArguments(
+  programArguments: string[] | undefined,
+): number | null {
+  if (!Array.isArray(programArguments) || programArguments.length === 0) {
+    return null;
+  }
+  for (let index = 0; index < programArguments.length; index += 1) {
+    const current = programArguments[index]?.trim();
+    if (!current) {
+      continue;
+    }
+    if (current === "--port") {
+      const next = parseStrictPositiveInteger(programArguments[index + 1] ?? "");
+      if (next !== undefined) {
+        return next;
+      }
+      continue;
+    }
+    if (current.startsWith("--port=")) {
+      const value = parseStrictPositiveInteger(current.slice("--port=".length));
+      if (value !== undefined) {
+        return value;
+      }
+    }
+  }
+  return null;
+}
+
+async function resolveLaunchAgentGatewayPort(env: GatewayServiceEnv): Promise<number | null> {
+  const command = await readLaunchAgentProgramArguments(env).catch(() => null);
+  const fromArgs = parseGatewayPortFromProgramArguments(command?.programArguments);
+  if (fromArgs !== null) {
+    return fromArgs;
+  }
+  const fromEnv = parseStrictPositiveInteger(env.OPENCLAW_GATEWAY_PORT ?? "");
+  return fromEnv ?? null;
 }
 
 function resolveGuiDomain(): string {
@@ -419,14 +458,13 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
   stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
 }
 
-export async function installLaunchAgent({
+async function writeLaunchAgentPlist({
   env,
-  stdout,
   programArguments,
   workingDirectory,
   environment,
   description,
-}: GatewayServiceInstallArgs): Promise<{ plistPath: string }> {
+}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{ plistPath: string; stdoutPath: string }> {
   const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
   await ensureSecureDirectory(logDir);
 
@@ -462,23 +500,50 @@ export async function installLaunchAgent({
   });
   await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
   await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+  return { plistPath, stdoutPath };
+}
 
-  await execLaunchctl(["bootout", domain, plistPath]);
-  await execLaunchctl(["unload", plistPath]);
+export async function stageLaunchAgent({
+  stdout,
+  ...args
+}: GatewayServiceInstallArgs): Promise<{ plistPath: string }> {
+  const { plistPath, stdoutPath } = await writeLaunchAgentPlist(args);
+  writeFormattedLines(
+    stdout,
+    [
+      { label: "Staged LaunchAgent", value: plistPath },
+      { label: "Logs", value: stdoutPath },
+    ],
+    { leadingBlankLine: true },
+  );
+  return { plistPath };
+}
+
+async function activateLaunchAgent(params: { env: GatewayServiceEnv; plistPath: string }) {
+  const domain = resolveGuiDomain();
+  const label = resolveLaunchAgentLabel({ env: params.env });
+
+  await execLaunchctl(["bootout", domain, params.plistPath]);
+  await execLaunchctl(["unload", params.plistPath]);
   // launchd can persist "disabled" state even after bootout + plist removal; clear it before bootstrap.
   await bootstrapLaunchAgentOrThrow({
     domain,
     serviceTarget: `${domain}/${label}`,
-    plistPath,
+    plistPath: params.plistPath,
     actionHint: "openclaw gateway install --force",
   });
+}
+
+export async function installLaunchAgent(
+  args: GatewayServiceInstallArgs,
+): Promise<{ plistPath: string }> {
+  const { plistPath, stdoutPath } = await writeLaunchAgentPlist(args);
+  await activateLaunchAgent({ env: args.env, plistPath });
   // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
   // on slow macOS guests it SIGTERMs the freshly booted gateway and pushes the
-  // real listener startup past onboarding's health deadline.
-
-  // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
+  // real listener startup past setup's health deadline.
   writeFormattedLines(
-    stdout,
+    args.stdout,
     [
       { label: "Installed LaunchAgent", value: plistPath },
       { label: "Logs", value: stdoutPath },
@@ -512,6 +577,11 @@ export async function restartLaunchAgent({
     }
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
     return { outcome: "scheduled" };
+  }
+
+  const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
+  if (cleanupPort !== null) {
+    cleanStaleGatewayProcessesSync(cleanupPort);
   }
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);

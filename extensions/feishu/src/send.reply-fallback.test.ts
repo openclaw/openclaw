@@ -9,6 +9,7 @@ vi.mock("./send-target.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
+  setFeishuRuntime: vi.fn(),
   getFeishuRuntime: () => ({
     channel: {
       text: {
@@ -19,7 +20,13 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-import { sendCardFeishu, sendMessageFeishu } from "./send.js";
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
+}));
+
+let sendCardFeishu: typeof import("./send.js").sendCardFeishu;
+let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 
 describe("Feishu reply fallback for withdrawn/deleted targets", () => {
   const replyMock = vi.fn();
@@ -35,7 +42,9 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     expect(result.messageId).toBe(expectedMessageId);
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ sendCardFeishu, sendMessageFeishu } = await import("./send.js"));
     vi.clearAllMocks();
     resolveFeishuSendTargetMock.mockReturnValue({
       client: {
@@ -169,6 +178,75 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     ).rejects.toThrow("rate limited");
 
     expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("fails thread replies instead of falling back to a top-level send", async () => {
+    replyMock.mockResolvedValue({
+      code: 230011,
+      msg: "The message was withdrawn.",
+    });
+
+    await expect(
+      sendMessageFeishu({
+        cfg: {} as never,
+        to: "chat:oc_group_1",
+        text: "hello",
+        replyToMessageId: "om_parent",
+        replyInThread: true,
+      }),
+    ).rejects.toThrow(
+      "Feishu thread reply failed: reply target is unavailable and cannot safely fall back to a top-level send.",
+    );
+
+    expect(createMock).not.toHaveBeenCalled();
+    expect(replyMock).toHaveBeenCalledWith({
+      path: { message_id: "om_parent" },
+      data: expect.objectContaining({
+        reply_in_thread: true,
+      }),
+    });
+  });
+
+  it("fails thrown withdrawn thread replies instead of falling back to create", async () => {
+    const sdkError = Object.assign(new Error("request failed"), { code: 230011 });
+    replyMock.mockRejectedValue(sdkError);
+
+    await expect(
+      sendMessageFeishu({
+        cfg: {} as never,
+        to: "chat:oc_group_1",
+        text: "hello",
+        replyToMessageId: "om_parent",
+        replyInThread: true,
+      }),
+    ).rejects.toThrow(
+      "Feishu thread reply failed: reply target is unavailable and cannot safely fall back to a top-level send.",
+    );
+
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("still falls back for non-thread replies to withdrawn targets", async () => {
+    replyMock.mockResolvedValue({
+      code: 230011,
+      msg: "The message was withdrawn.",
+    });
+    createMock.mockResolvedValue({
+      code: 0,
+      data: { message_id: "om_non_thread_fallback" },
+    });
+
+    await expectFallbackResult(
+      () =>
+        sendMessageFeishu({
+          cfg: {} as never,
+          to: "user:ou_target",
+          text: "hello",
+          replyToMessageId: "om_parent",
+          replyInThread: false,
+        }),
+      "om_non_thread_fallback",
+    );
   });
 
   it("re-throws non-withdrawn thrown errors for card messages", async () => {

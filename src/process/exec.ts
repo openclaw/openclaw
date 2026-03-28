@@ -246,6 +246,8 @@ export async function runCommandWithTimeout(
     let settled = false;
     let timedOut = false;
     let noOutputTimedOut = false;
+    let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+    let closeFallbackTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
     const shouldTrackOutputTimeout =
       typeof noOutputTimeoutMs === "number" &&
@@ -258,6 +260,14 @@ export async function runCommandWithTimeout(
       }
       clearTimeout(noOutputTimer);
       noOutputTimer = null;
+    };
+
+    const clearCloseFallbackTimer = () => {
+      if (!closeFallbackTimer) {
+        return;
+      }
+      clearTimeout(closeFallbackTimer);
+      closeFallbackTimer = null;
     };
 
     const armNoOutputTimer = () => {
@@ -304,7 +314,21 @@ export async function runCommandWithTimeout(
       settled = true;
       clearTimeout(timer);
       clearNoOutputTimer();
+      clearCloseFallbackTimer();
       reject(err);
+    });
+    child.on("exit", (code, signal) => {
+      childExitState = { code, signal };
+      if (settled || closeFallbackTimer) {
+        return;
+      }
+      closeFallbackTimer = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      }, 250);
     });
     child.on("close", (code, signal) => {
       if (settled) {
@@ -313,19 +337,28 @@ export async function runCommandWithTimeout(
       settled = true;
       clearTimeout(timer);
       clearNoOutputTimer();
+      clearCloseFallbackTimer();
+      const resolvedCode = childExitState?.code ?? code;
+      const resolvedSignal = childExitState?.signal ?? signal;
       const termination = noOutputTimedOut
         ? "no-output-timeout"
         : timedOut
           ? "timeout"
-          : signal != null
+          : resolvedSignal != null
             ? "signal"
             : "exit";
+      const normalizedCode =
+        termination === "timeout" || termination === "no-output-timeout"
+          ? resolvedCode === 0
+            ? 124
+            : resolvedCode
+          : resolvedCode;
       resolve({
         pid: child.pid ?? undefined,
         stdout,
         stderr,
-        code,
-        signal,
+        code: normalizedCode,
+        signal: resolvedSignal,
         killed: child.killed,
         termination,
         noOutputTimedOut,

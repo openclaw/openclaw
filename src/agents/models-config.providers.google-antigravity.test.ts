@@ -2,12 +2,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  normalizeAntigravityModelId,
-  normalizeGoogleModelId,
-  normalizeProviders,
-  type ProviderConfig,
-} from "./models-config.providers.js";
+import { normalizeAntigravityModelId, normalizeGoogleModelId } from "../plugin-sdk/google.js";
+import { normalizeProviders } from "./models-config.providers.normalize.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 function buildModel(id: string): NonNullable<ProviderConfig["models"]>[number] {
   return {

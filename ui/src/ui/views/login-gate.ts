@@ -1,6 +1,5 @@
 import { html } from "lit";
 import { t } from "../../i18n/index.ts";
-import { renderThemeToggle } from "../app-render.helpers.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { icons } from "../icons.ts";
 import { normalizeBasePath } from "../navigation.ts";
@@ -12,7 +11,6 @@ export function renderLoginGate(state: AppViewState) {
 
   return html`
     <div class="login-gate">
-      <div class="login-gate__theme">${renderThemeToggle(state)}</div>
       <div class="login-gate__card">
         <div class="login-gate__header">
           <img class="login-gate__logo" src=${faviconSrc} alt="OpenClaw" />
@@ -97,20 +95,15 @@ export function renderLoginGate(state: AppViewState) {
               </button>
             </div>
           </label>
-          <button
-            class="btn primary login-gate__connect"
-            @click=${() => state.connect()}
-          >
+          <button class="btn primary login-gate__connect" @click=${() => state.connect()}>
             ${t("common.connect")}
           </button>
         </div>
-        ${
-          state.lastError
-            ? html`<div class="callout danger" style="margin-top: 14px;">
-                <div>${state.lastError}</div>
-              </div>`
-            : ""
-        }
+        ${state.lastError
+          ? html`<div class="callout danger" style="margin-top: 14px;">
+              <div>${state.lastError}</div>
+            </div>`
+          : ""}
         <div class="login-gate__help">
           <div class="login-gate__help-title">${t("overview.connection.title")}</div>
           <ol class="login-gate__steps">
@@ -124,7 +117,8 @@ export function renderLoginGate(state: AppViewState) {
               href="https://docs.openclaw.ai/web/dashboard"
               target="_blank"
               rel="noreferrer"
-            >${t("overview.connection.docsLink")}</a>
+              >${t("overview.connection.docsLink")}</a
+            >
           </div>
         </div>
       </div>

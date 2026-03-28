@@ -5,12 +5,11 @@ import {
   mergeWithExistingProviderSecrets,
   type ExistingProviderConfig,
 } from "./models-config.merge.js";
-import {
-  enforceSourceManagedProviderSecrets,
-  normalizeProviders,
-  resolveImplicitProviders,
-  type ProviderConfig,
-} from "./models-config.providers.js";
+import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
+import { normalizeProviders } from "./models-config.providers.normalize.js";
+import { applyNativeStreamingUsageCompat } from "./models-config.providers.policy.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
+import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
@@ -59,13 +58,13 @@ function resolveExplicitBaseUrlProviders(
   );
 }
 
-async function resolveProvidersForMode(params: {
+function resolveProvidersForMode(params: {
   mode: NonNullable<ModelsConfig["mode"]>;
   existingParsed: unknown;
   providers: Record<string, ProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
   explicitBaseUrlProviders: ReadonlySet<string>;
-}): Promise<Record<string, ProviderConfig>> {
+}): Record<string, ProviderConfig> {
   if (params.mode !== "merge") {
     return params.providers;
   }
@@ -112,7 +111,7 @@ export async function planOpenClawModelsJson(params: {
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? providers;
-  const mergedProviders = await resolveProvidersForMode({
+  const mergedProviders = resolveProvidersForMode({
     mode,
     existingParsed: params.existingParsed,
     providers: normalizedProviders,
@@ -126,7 +125,8 @@ export async function planOpenClawModelsJson(params: {
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? mergedProviders;
-  const nextContents = `${JSON.stringify({ providers: secretEnforcedProviders }, null, 2)}\n`;
+  const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
+  const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {
     return { action: "noop" };

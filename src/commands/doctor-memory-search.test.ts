@@ -7,7 +7,7 @@ const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
 const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
-const resolveMemoryBackendConfig = vi.hoisted(() => vi.fn());
+const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
 
 vi.mock("../terminal/note.js", () => ({
   note,
@@ -26,8 +26,8 @@ vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider,
 }));
 
-vi.mock("../memory/backend-config.js", () => ({
-  resolveMemoryBackendConfig,
+vi.mock("../plugins/memory-runtime.js", () => ({
+  resolveActiveMemoryBackendConfig,
 }));
 
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
@@ -56,8 +56,8 @@ describe("noteMemorySearchHealth", () => {
     resolveMemorySearchConfig.mockReset();
     resolveApiKeyForProvider.mockReset();
     resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
-    resolveMemoryBackendConfig.mockReset();
-    resolveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
+    resolveActiveMemoryBackendConfig.mockReset();
+    resolveActiveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
   });
 
   it("does not warn when local provider is set with no explicit modelPath (default model fallback)", async () => {
@@ -116,7 +116,7 @@ describe("noteMemorySearchHealth", () => {
   });
 
   it("does not warn when QMD backend is active", async () => {
-    resolveMemoryBackendConfig.mockReturnValue({
+    resolveActiveMemoryBackendConfig.mockReturnValue({
       backend: "qmd",
       citations: "auto",
     });
@@ -263,6 +263,7 @@ describe("noteMemorySearchHealth", () => {
     // provider: "local". So with no local file and no API keys, warn.
     expect(note).toHaveBeenCalledTimes(1);
     const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("needs at least one embedding provider");
     expect(message).toContain("openclaw configure --section model");
   });
 
@@ -289,6 +290,37 @@ describe("noteMemorySearchHealth", () => {
     const providerCalls = resolveApiKeyForProvider.mock.calls as Array<[{ provider: string }]>;
     const providersChecked = providerCalls.map(([arg]) => arg.provider);
     expect(providersChecked).toEqual(["openai", "google", "voyage", "mistral"]);
+  });
+
+  it("uses runtime-derived env var hints for explicit providers", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "gemini",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("GEMINI_API_KEY");
+    expect(message).toContain('provider is set to "gemini"');
+  });
+
+  it("uses runtime-derived env var hints in auto mode", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("OPENAI_API_KEY");
+    expect(message).toContain("GEMINI_API_KEY");
+    expect(message).toContain("GOOGLE_API_KEY");
+    expect(message).toContain("VOYAGE_API_KEY");
+    expect(message).toContain("MISTRAL_API_KEY");
   });
 });
 
