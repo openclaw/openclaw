@@ -1,13 +1,12 @@
 import { Type } from "@sinclair/typebox";
 import {
-  xSearchTesting as xaiXSearchTesting,
   buildXaiXSearchPayload,
   requestXaiXSearch,
   resolveXaiXSearchInlineCitations,
   resolveXaiXSearchMaxTurns,
   resolveXaiXSearchModel,
   type XaiXSearchOptions,
-} from "../../../extensions/xai/api.js";
+} from "../../../extensions/xai/x-search.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveProviderWebSearchPluginConfig } from "../../plugin-sdk/provider-web-search.js";
 import type { RuntimeWebXSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
@@ -259,9 +258,13 @@ export function createXSearchTool(options?: {
 
 export const __testing = {
   buildXSearchCacheKey,
+  buildXaiXSearchPayload,
   normalizeOptionalIsoDate,
+  requestXaiXSearch,
+  resolveXaiXSearchInlineCitations,
+  resolveXaiXSearchMaxTurns,
+  resolveXaiXSearchModel,
   resolveXSearchApiKey,
   resolveXSearchConfig,
   resolveXSearchEnabled,
-  ...xaiXSearchTesting,
 } as const;
