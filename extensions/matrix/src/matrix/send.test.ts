@@ -277,7 +277,7 @@ describe("sendMessageMatrix media", () => {
     expect(mediaContent["org.matrix.msc3245.voice"]).toBeUndefined();
   });
 
-  it("uploads thumbnail metadata for unencrypted large images", async () => {
+  it("keeps thumbnail_url metadata for unencrypted large images", async () => {
     const { client, sendMessage, uploadContent } = makeClient();
     getImageMetadataMock
       .mockResolvedValueOnce({ width: 1600, height: 1200 })
@@ -293,6 +293,7 @@ describe("sendMessageMatrix media", () => {
     const content = sendMessage.mock.calls[0]?.[1] as {
       info?: {
         thumbnail_url?: string;
+        thumbnail_file?: { url?: string };
         thumbnail_info?: {
           w?: number;
           h?: number;
@@ -302,6 +303,7 @@ describe("sendMessageMatrix media", () => {
       };
     };
     expect(content.info?.thumbnail_url).toBe("mxc://example/file");
+    expect(content.info?.thumbnail_file).toBeUndefined();
     expect(content.info?.thumbnail_info).toMatchObject({
       w: 800,
       h: 600,
