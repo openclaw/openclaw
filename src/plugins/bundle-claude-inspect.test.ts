@@ -14,6 +14,71 @@ import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 describe("Claude bundle plugin inspect integration", () => {
   let rootDir: string;
 
+  function writeFixtureText(relativePath: string, value: string) {
+    fs.mkdirSync(path.dirname(path.join(rootDir, relativePath)), { recursive: true });
+    fs.writeFileSync(path.join(rootDir, relativePath), value, "utf-8");
+  }
+
+  function writeFixtureJson(relativePath: string, value: unknown) {
+    writeFixtureText(relativePath, JSON.stringify(value));
+  }
+
+  function setupClaudeInspectFixture() {
+    for (const relativeDir of [
+      ".claude-plugin",
+      "skill-packs/demo",
+      "extra-commands/cmd",
+      "hooks",
+      "custom-hooks",
+      "agents",
+      "output-styles",
+    ]) {
+      fs.mkdirSync(path.join(rootDir, relativeDir), { recursive: true });
+    }
+
+    writeFixtureJson(".claude-plugin/plugin.json", {
+      name: "Test Claude Plugin",
+      description: "Integration test fixture for Claude bundle inspection",
+      version: "1.0.0",
+      skills: ["skill-packs"],
+      commands: "extra-commands",
+      agents: "agents",
+      hooks: "custom-hooks",
+      mcpServers: ".mcp.json",
+      lspServers: ".lsp.json",
+      outputStyles: "output-styles",
+    });
+    writeFixtureText(
+      "skill-packs/demo/SKILL.md",
+      "---\nname: demo\ndescription: A demo skill\n---\nDo something useful.",
+    );
+    writeFixtureText(
+      "extra-commands/cmd/SKILL.md",
+      "---\nname: cmd\ndescription: A command skill\n---\nRun a command.",
+    );
+    writeFixtureText("hooks/hooks.json", '{"hooks":[]}');
+    writeFixtureJson(".mcp.json", {
+      mcpServers: {
+        "test-stdio-server": {
+          command: "echo",
+          args: ["hello"],
+        },
+        "test-sse-server": {
+          url: "http://localhost:3000/sse",
+        },
+      },
+    });
+    writeFixtureJson("settings.json", { thinkingLevel: "high" });
+    writeFixtureJson(".lsp.json", {
+      lspServers: {
+        "typescript-lsp": {
+          command: "typescript-language-server",
+          args: ["--stdio"],
+        },
+      },
+    });
+  }
+
   function expectLoadedClaudeManifest() {
     const result = loadBundleManifest({ rootDir, bundleFormat: "claude" });
     expect(result.ok).toBe(true);
@@ -38,96 +103,7 @@ describe("Claude bundle plugin inspect integration", () => {
 
   beforeAll(() => {
     rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-bundle-"));
-
-    // .claude-plugin/plugin.json
-    const manifestDir = path.join(rootDir, ".claude-plugin");
-    fs.mkdirSync(manifestDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(manifestDir, "plugin.json"),
-      JSON.stringify({
-        name: "Test Claude Plugin",
-        description: "Integration test fixture for Claude bundle inspection",
-        version: "1.0.0",
-        skills: ["skill-packs"],
-        commands: "extra-commands",
-        agents: "agents",
-        hooks: "custom-hooks",
-        mcpServers: ".mcp.json",
-        lspServers: ".lsp.json",
-        outputStyles: "output-styles",
-      }),
-      "utf-8",
-    );
-
-    // skills/demo/SKILL.md
-    const skillDir = path.join(rootDir, "skill-packs", "demo");
-    fs.mkdirSync(skillDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(skillDir, "SKILL.md"),
-      "---\nname: demo\ndescription: A demo skill\n---\nDo something useful.",
-      "utf-8",
-    );
-
-    // commands/cmd/SKILL.md
-    const cmdDir = path.join(rootDir, "extra-commands", "cmd");
-    fs.mkdirSync(cmdDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(cmdDir, "SKILL.md"),
-      "---\nname: cmd\ndescription: A command skill\n---\nRun a command.",
-      "utf-8",
-    );
-
-    // hooks/hooks.json (default hook path)
-    const hooksDir = path.join(rootDir, "hooks");
-    fs.mkdirSync(hooksDir, { recursive: true });
-    fs.writeFileSync(path.join(hooksDir, "hooks.json"), '{"hooks":[]}', "utf-8");
-
-    // custom-hooks/ (manifest-declared hook path)
-    fs.mkdirSync(path.join(rootDir, "custom-hooks"), { recursive: true });
-
-    // .mcp.json with a stdio MCP server
-    fs.writeFileSync(
-      path.join(rootDir, ".mcp.json"),
-      JSON.stringify({
-        mcpServers: {
-          "test-stdio-server": {
-            command: "echo",
-            args: ["hello"],
-          },
-          "test-sse-server": {
-            url: "http://localhost:3000/sse",
-          },
-        },
-      }),
-      "utf-8",
-    );
-
-    // settings.json
-    fs.writeFileSync(
-      path.join(rootDir, "settings.json"),
-      JSON.stringify({ thinkingLevel: "high" }),
-      "utf-8",
-    );
-
-    // agents/ directory
-    fs.mkdirSync(path.join(rootDir, "agents"), { recursive: true });
-
-    // .lsp.json with a stdio LSP server
-    fs.writeFileSync(
-      path.join(rootDir, ".lsp.json"),
-      JSON.stringify({
-        lspServers: {
-          "typescript-lsp": {
-            command: "typescript-language-server",
-            args: ["--stdio"],
-          },
-        },
-      }),
-      "utf-8",
-    );
-
-    // output-styles/ directory
-    fs.mkdirSync(path.join(rootDir, "output-styles"), { recursive: true });
+    setupClaudeInspectFixture();
   });
 
   afterAll(() => {

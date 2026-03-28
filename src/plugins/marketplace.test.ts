@@ -31,21 +31,36 @@ async function writeMarketplaceManifest(rootDir: string, manifest: unknown): Pro
   return manifestPath;
 }
 
-function mockRemoteMarketplaceClone(manifest: unknown) {
+async function writeRemoteMarketplaceFixture(params: {
+  repoDir: string;
+  manifest: unknown;
+  pluginDir?: string;
+}) {
+  await fs.mkdir(path.join(params.repoDir, ".claude-plugin"), { recursive: true });
+  if (params.pluginDir) {
+    await fs.mkdir(path.join(params.repoDir, params.pluginDir), { recursive: true });
+  }
+  await fs.writeFile(
+    path.join(params.repoDir, ".claude-plugin", "marketplace.json"),
+    JSON.stringify(params.manifest),
+  );
+}
+
+function mockRemoteMarketplaceClone(params: { manifest: unknown; pluginDir?: string }) {
   runCommandWithTimeoutMock.mockImplementationOnce(async (argv: string[]) => {
     const repoDir = argv.at(-1);
     expect(typeof repoDir).toBe("string");
-    await fs.mkdir(path.join(repoDir as string, ".claude-plugin"), { recursive: true });
-    await fs.writeFile(
-      path.join(repoDir as string, ".claude-plugin", "marketplace.json"),
-      JSON.stringify(manifest),
-    );
+    await writeRemoteMarketplaceFixture({
+      repoDir: repoDir as string,
+      manifest: params.manifest,
+      ...(params.pluginDir ? { pluginDir: params.pluginDir } : {}),
+    });
     return { code: 0, stdout: "", stderr: "", killed: false };
   });
 }
 
 async function expectRemoteMarketplaceError(params: { manifest: unknown; expectedError: string }) {
-  mockRemoteMarketplaceClone(params.manifest);
+  mockRemoteMarketplaceClone({ manifest: params.manifest });
 
   const { listMarketplacePlugins } = await import("./marketplace.js");
   const result = await listMarketplacePlugins({ marketplace: "owner/repo" });
@@ -175,25 +190,16 @@ describe("marketplace plugins", () => {
   });
 
   it("installs remote marketplace plugins from relative paths inside the cloned repo", async () => {
-    runCommandWithTimeoutMock.mockImplementationOnce(async (argv: string[]) => {
-      const repoDir = argv.at(-1);
-      expect(typeof repoDir).toBe("string");
-      await fs.mkdir(path.join(repoDir as string, ".claude-plugin"), { recursive: true });
-      await fs.mkdir(path.join(repoDir as string, "plugins", "frontend-design"), {
-        recursive: true,
-      });
-      await fs.writeFile(
-        path.join(repoDir as string, ".claude-plugin", "marketplace.json"),
-        JSON.stringify({
-          plugins: [
-            {
-              name: "frontend-design",
-              source: "./plugins/frontend-design",
-            },
-          ],
-        }),
-      );
-      return { code: 0, stdout: "", stderr: "", killed: false };
+    mockRemoteMarketplaceClone({
+      pluginDir: path.join("plugins", "frontend-design"),
+      manifest: {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "./plugins/frontend-design",
+          },
+        ],
+      },
     });
     installPluginFromPathMock.mockResolvedValue({
       ok: true,

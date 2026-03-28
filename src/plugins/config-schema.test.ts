@@ -7,9 +7,7 @@ function expectSafeParseCases(
   cases: ReadonlyArray<readonly [unknown, unknown]>,
 ) {
   expect(safeParse).toBeDefined();
-  for (const [value, expected] of cases) {
-    expect(safeParse?.(value)).toEqual(expected);
-  }
+  expect(cases.map(([value]) => safeParse?.(value))).toEqual(cases.map(([, expected]) => expected));
 }
 
 describe("buildPluginConfigSchema", () => {
