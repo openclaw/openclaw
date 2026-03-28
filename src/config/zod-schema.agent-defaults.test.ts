@@ -11,4 +11,12 @@ describe("agent defaults schema", () => {
       }),
     ).not.toThrow();
   });
+
+  it("accepts imageTimeoutSeconds as a positive integer", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        imageTimeoutSeconds: 90,
+      }),
+    ).not.toThrow();
+  });
 });

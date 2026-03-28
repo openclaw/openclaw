@@ -674,6 +674,47 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("passes configured image timeout to the provider runtime", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+      let observedTimeoutMs: number | undefined;
+      installImageUnderstandingProviderStubs({
+        id: "minimax",
+        capabilities: ["image"],
+        describeImage: async (params: ImageDescriptionRequest) => {
+          observedTimeoutMs = params.timeoutMs;
+          return { text: "ok", model: "MiniMax-VL-01" };
+        },
+      } satisfies MediaUnderstandingProvider);
+
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "minimax/MiniMax-M2.7" },
+            imageModel: { primary: "minimax/MiniMax-VL-01" },
+            imageTimeoutSeconds: 90,
+          },
+        },
+        plugins: {
+          entries: {
+            minimax: { enabled: true },
+          },
+        },
+      };
+
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+      const result = await tool.execute("t1", {
+        prompt: "Describe the image.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+
+      expect(observedTimeoutMs).toBe(90_000);
+      expect(result.content).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok" })]),
+      );
+    });
+  });
+
   it("sends moonshot image requests with user+image payloads only", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("MOONSHOT_API_KEY", "moonshot-test");
@@ -1286,5 +1327,23 @@ describe("image tool response validation", () => {
       } as never,
     });
     expect(text).toBe("hello");
+  });
+});
+
+describe("image tool timeout config", () => {
+  it("uses the default image timeout when config is unset", () => {
+    expect(__testing.resolveImageToolTimeoutMs(undefined)).toBe(30_000);
+    expect(__testing.resolveImageToolTimeoutMs({ agents: { defaults: {} } })).toBe(30_000);
+  });
+
+  it("converts agents.defaults.imageTimeoutSeconds to milliseconds", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          imageTimeoutSeconds: 90,
+        },
+      },
+    };
+    expect(__testing.resolveImageToolTimeoutMs(cfg)).toBe(90_000);
   });
 });

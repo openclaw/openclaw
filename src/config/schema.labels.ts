@@ -454,6 +454,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.model.fallbacks": "Model Fallbacks",
   "agents.defaults.imageModel.primary": "Image Model",
   "agents.defaults.imageModel.fallbacks": "Image Model Fallbacks",
+  "agents.defaults.imageTimeoutSeconds": "Image Timeout (sec)",
   "agents.defaults.imageGenerationModel.primary": "Image Generation Model",
   "agents.defaults.imageGenerationModel.fallbacks": "Image Generation Model Fallbacks",
   "agents.defaults.pdfModel.primary": "PDF Model",

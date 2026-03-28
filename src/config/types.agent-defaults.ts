@@ -122,6 +122,8 @@ export type AgentDefaultsConfig = {
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageModel?: AgentModelConfig;
+  /** Timeout in seconds for image-tool analysis requests before OpenClaw aborts the provider call (default: 30). */
+  imageTimeoutSeconds?: number;
   /** Optional image-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageGenerationModel?: AgentModelConfig;
   /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
