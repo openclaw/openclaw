@@ -18,7 +18,7 @@ export async function handleGatewayPostJsonEndpoint(
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
-    requiredOperatorMethod?: string;
+    requiredOperatorMethod?: "chat.send" | (string & Record<never, never>);
   },
 ): Promise<false | { body: unknown } | undefined> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
