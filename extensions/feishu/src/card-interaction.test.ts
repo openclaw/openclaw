@@ -126,4 +126,32 @@ describe("feishu card interaction decoder", () => {
 
     expect(result).toEqual({ kind: "invalid", reason: "malformed" });
   });
+
+  it("decodes update action payloads", () => {
+    const result = decodeFeishuCardAction({
+      now: 1_700_000_000_000,
+      event: {
+        operator: { open_id: "u123" },
+        context: { chat_id: "chat1" },
+        action: {
+          value: createFeishuCardInteractionEnvelope({
+            k: "update",
+            a: "feishu.card.update.submit",
+            m: { messageId: "msg_abc123", cardSchema: "2.0" },
+            c: { u: "u123", h: "chat1", t: "group", e: 1_700_000_060_000 },
+          }),
+        },
+      },
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "structured",
+        envelope: expect.objectContaining({
+          k: "update",
+          a: "feishu.card.update.submit",
+        }),
+      }),
+    );
+  });
 });
