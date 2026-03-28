@@ -163,7 +163,6 @@ describe("commands-acp context", () => {
       accountId: "default",
       threadId: undefined,
       conversationId: "123456789",
-      parentConversationId: "123456789",
     });
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
   });
