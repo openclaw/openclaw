@@ -544,7 +544,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
   try {
-    const envProxyConfigured = hasEnvHttpProxyConfigured();
+    // Detect proxy based on the request URL protocol to match EnvHttpProxyAgent semantics.
+    // For http:// URLs, only HTTP_PROXY matters; for https:// URLs, HTTPS_PROXY takes precedence.
+    const parsedUrl = new URL(params.url);
+    const protocol = parsedUrl.protocol.replace(":", "") as "http" | "https";
+    const envProxyConfigured = hasEnvHttpProxyConfigured(protocol);
     const allowRfc2544 = envProxyConfigured || params.allowFakeIp;
     const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
