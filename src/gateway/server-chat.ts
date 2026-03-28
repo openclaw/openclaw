@@ -511,6 +511,7 @@ export function createAgentEventHandler({
       lastChannel: row?.lastChannel,
       lastTo: row?.lastTo,
       lastAccountId: row?.lastAccountId,
+      lastThreadId: row?.lastThreadId,
       totalTokens: row?.totalTokens,
       totalTokensFresh: row?.totalTokensFresh,
       contextTokens: row?.contextTokens,
