@@ -149,11 +149,12 @@ function hasPluginOwnedWebSearchConfig(cfg: OpenClawConfig, pluginId: string): b
 }
 
 function hasPluginOwnedToolConfig(cfg: OpenClawConfig, pluginId: string): boolean {
-  // x_search is now plugin-owned by xAI, but the persisted config shape still
-  // lives under tools.web.x_search for backward compatibility. Treat that as
-  // plugin configuration so tool/runtime loading can activate xAI generically.
   if (pluginId === "xai") {
-    return isRecord(cfg.tools?.web?.x_search as Record<string, unknown> | undefined);
+    const pluginConfig = cfg.plugins?.entries?.xai?.config;
+    return Boolean(
+      isRecord(cfg.tools?.web?.x_search as Record<string, unknown> | undefined) ||
+      (isRecord(pluginConfig) && isRecord(pluginConfig.codeExecution)),
+    );
   }
   return false;
 }

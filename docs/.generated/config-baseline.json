@@ -57289,6 +57289,72 @@
       "hasChildren": true
     },
     {
+      "path": "plugins.entries.xai.config.codeExecution",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xai.config.codeExecution.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable Code Execution",
+      "help": "Enable the code_execution tool for remote xAI sandbox analysis.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.codeExecution.maxTurns",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "Code Execution Max Turns",
+      "help": "Optional max internal tool turns xAI may use for code_execution.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.codeExecution.model",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Code Execution Model",
+      "help": "xAI model override for code_execution.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.codeExecution.timeoutSeconds",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "Code Execution Timeout",
+      "help": "Timeout in seconds for code_execution requests.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.xai.config.webSearch",
       "kind": "plugin",
       "type": "object",
@@ -60290,124 +60356,6 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.code_execution",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "tools.code_execution.apiKey",
-      "kind": "core",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "security",
-        "tools"
-      ],
-      "label": "xAI API Key",
-      "help": "xAI API key for remote code execution (fallback: XAI_API_KEY env var).",
-      "hasChildren": true
-    },
-    {
-      "path": "tools.code_execution.apiKey.id",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.code_execution.apiKey.provider",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.code_execution.apiKey.source",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.code_execution.enabled",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Enable Code Execution Tool",
-      "help": "Enable the code_execution tool (requires XAI_API_KEY or tools.code_execution.apiKey).",
-      "hasChildren": false
-    },
-    {
-      "path": "tools.code_execution.maxTurns",
-      "kind": "core",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "performance",
-        "tools"
-      ],
-      "label": "Code Execution Max Turns",
-      "help": "Optional max internal tool turns xAI may use per code_execution request. Omit to let xAI choose.",
-      "hasChildren": false
-    },
-    {
-      "path": "tools.code_execution.model",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "models",
-        "tools"
-      ],
-      "label": "Code Execution Model",
-      "help": "Model to use for remote code execution (default: \"grok-4-1-fast\").",
-      "hasChildren": false
-    },
-    {
-      "path": "tools.code_execution.timeoutSeconds",
-      "kind": "core",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "performance",
-        "tools"
-      ],
-      "label": "Code Execution Timeout (sec)",
-      "help": "Timeout in seconds for code_execution requests.",
       "hasChildren": false
     },
     {
