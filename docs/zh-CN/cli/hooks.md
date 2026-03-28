@@ -131,7 +131,7 @@ Not ready: 0
 openclaw hooks enable <name>
 ```
 
-通过将特定钩子添加到配置（`~/.openclaw/config.json`）来启用它。
+通过将特定钩子添加到配置（`~/.openclaw/openclaw.json`）来启用它。
 
 **注意：** 由插件管理的钩子在 `openclaw hooks list` 中显示 `plugin:<id>`，
 无法在此处启用/禁用。请改为启用/禁用该插件。
