@@ -279,7 +279,12 @@ export function registerCronEditCommand(cron: Command) {
               if (threadId && !/^\d+$/.test(threadId)) {
                 throw new Error("--thread-id must be a numeric value");
               }
-              if (threadId && typeof opts.channel === "string" && opts.channel.trim() && opts.channel.trim().toLowerCase() !== "telegram") {
+              if (
+                threadId &&
+                typeof opts.channel === "string" &&
+                opts.channel.trim() &&
+                opts.channel.trim().toLowerCase() !== "telegram"
+              ) {
                 throw new Error("--thread-id is only supported for Telegram channels");
               }
               let toRaw = typeof opts.to === "string" ? opts.to.trim() : "";
@@ -292,8 +297,13 @@ export function registerCronEditCommand(cron: Command) {
                 if (!existing) {
                   throw new Error(`Cron job ${id} not found`);
                 }
-                const existingChannel = (existing?.delivery as Record<string, string> | undefined)?.channel ?? "";
-                if (existingChannel && existingChannel.toLowerCase() !== "telegram") {
+                const existingChannel =
+                  (existing?.delivery as Record<string, string> | undefined)?.channel ?? "";
+                if (
+                  typeof opts.channel !== "string" &&
+                  existingChannel &&
+                  existingChannel.toLowerCase() !== "telegram"
+                ) {
                   throw new Error("--thread-id is only supported for Telegram channels");
                 }
                 if (!toRaw) {
@@ -306,7 +316,9 @@ export function registerCronEditCommand(cron: Command) {
               } else if (to) {
                 delivery.to = to;
               } else if (threadId) {
-                throw new Error("--thread-id requires a delivery target (use --to or ensure the job has one)");
+                throw new Error(
+                  "--thread-id requires a delivery target (use --to or ensure the job has one)",
+                );
               } else if (typeof opts.to === "string") {
                 delivery.to = undefined;
               }

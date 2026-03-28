@@ -279,7 +279,8 @@ export function registerCronAddCommand(cron: Command) {
                     if (threadId && !/^\d+$/.test(threadId)) {
                       throw new Error("--thread-id must be a numeric value");
                     }
-                    const channel = typeof opts.channel === "string" ? opts.channel.trim().toLowerCase() : "";
+                    const channel =
+                      typeof opts.channel === "string" ? opts.channel.trim().toLowerCase() : "";
                     if (threadId && channel && channel !== "telegram") {
                       throw new Error("--thread-id is only supported for Telegram channels");
                     }
