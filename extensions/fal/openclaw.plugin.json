@@ -1,5 +1,6 @@
 {
   "id": "fal",
+  "enabledByDefault": true,
   "providers": ["fal"],
   "providerAuthEnvVars": {
     "fal": ["FAL_KEY"]

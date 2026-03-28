@@ -8,10 +8,12 @@ vi.mock("./transport.js", () => ({
   performMatrixRequest: performMatrixRequestMock,
 }));
 
-import { MatrixAuthedHttpClient } from "./http-client.js";
+let MatrixAuthedHttpClient: typeof import("./http-client.js").MatrixAuthedHttpClient;
 
 describe("MatrixAuthedHttpClient", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ MatrixAuthedHttpClient } = await import("./http-client.js"));
     performMatrixRequestMock.mockReset();
   });
 

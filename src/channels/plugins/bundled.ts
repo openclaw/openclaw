@@ -1,49 +1,35 @@
-import { bluebubblesPlugin } from "../../../extensions/bluebubbles/index.js";
-import { discordPlugin, setDiscordRuntime } from "../../../extensions/discord/index.js";
-import { discordSetupPlugin } from "../../../extensions/discord/setup-entry.js";
-import { feishuPlugin } from "../../../extensions/feishu/index.js";
-import { imessagePlugin } from "../../../extensions/imessage/index.js";
-import { imessageSetupPlugin } from "../../../extensions/imessage/setup-entry.js";
-import { ircPlugin } from "../../../extensions/irc/index.js";
-import { linePlugin, setLineRuntime } from "../../../extensions/line/index.js";
-import { lineSetupPlugin } from "../../../extensions/line/setup-entry.js";
-import { mattermostPlugin } from "../../../extensions/mattermost/index.js";
-import { nextcloudTalkPlugin } from "../../../extensions/nextcloud-talk/index.js";
-import { signalPlugin } from "../../../extensions/signal/index.js";
-import { signalSetupPlugin } from "../../../extensions/signal/setup-entry.js";
-import { slackPlugin } from "../../../extensions/slack/index.js";
-import { slackSetupPlugin } from "../../../extensions/slack/setup-entry.js";
-import { synologyChatPlugin } from "../../../extensions/synology-chat/index.js";
-import { telegramPlugin, setTelegramRuntime } from "../../../extensions/telegram/index.js";
-import { telegramSetupPlugin } from "../../../extensions/telegram/setup-entry.js";
-import { zaloPlugin } from "../../../extensions/zalo/index.js";
+import { GENERATED_BUNDLED_CHANNEL_ENTRIES } from "../../generated/bundled-channel-entries.generated.js";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
 
-export const bundledChannelPlugins = [
-  bluebubblesPlugin,
-  discordPlugin,
-  feishuPlugin,
-  imessagePlugin,
-  ircPlugin,
-  linePlugin,
-  mattermostPlugin,
-  nextcloudTalkPlugin,
-  signalPlugin,
-  slackPlugin,
-  synologyChatPlugin,
-  telegramPlugin,
-  zaloPlugin,
-] as ChannelPlugin[];
+type GeneratedBundledChannelEntry = {
+  id: string;
+  entry: {
+    channelPlugin: ChannelPlugin;
+    setChannelRuntime?: (runtime: PluginRuntime) => void;
+  };
+  setupEntry?: {
+    plugin: ChannelPlugin;
+  };
+};
 
-export const bundledChannelSetupPlugins = [
-  telegramSetupPlugin,
-  discordSetupPlugin,
-  ircPlugin,
-  slackSetupPlugin,
-  signalSetupPlugin,
-  imessageSetupPlugin,
-  lineSetupPlugin,
-] as ChannelPlugin[];
+function coerceGeneratedBundledChannelEntries(
+  value: unknown,
+): readonly GeneratedBundledChannelEntry[] {
+  return Array.isArray(value) ? (value as readonly GeneratedBundledChannelEntry[]) : [];
+}
+
+const generatedBundledChannelEntries = coerceGeneratedBundledChannelEntries(
+  GENERATED_BUNDLED_CHANNEL_ENTRIES,
+);
+
+export const bundledChannelPlugins = generatedBundledChannelEntries.map(
+  ({ entry }) => entry.channelPlugin,
+);
+
+export const bundledChannelSetupPlugins = generatedBundledChannelEntries.flatMap(({ setupEntry }) =>
+  setupEntry ? [setupEntry.plugin] : [],
+);
 
 function buildBundledChannelPluginsById(plugins: readonly ChannelPlugin[]) {
   const byId = new Map<ChannelId, ChannelPlugin>();
@@ -58,6 +44,16 @@ function buildBundledChannelPluginsById(plugins: readonly ChannelPlugin[]) {
 
 const bundledChannelPluginsById = buildBundledChannelPluginsById(bundledChannelPlugins);
 
+const bundledChannelRuntimeSettersById = new Map<
+  ChannelId,
+  NonNullable<GeneratedBundledChannelEntry["entry"]["setChannelRuntime"]>
+>();
+for (const { entry } of generatedBundledChannelEntries) {
+  if (entry.setChannelRuntime) {
+    bundledChannelRuntimeSettersById.set(entry.channelPlugin.id, entry.setChannelRuntime);
+  }
+}
+
 export function getBundledChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
   return bundledChannelPluginsById.get(id);
 }
@@ -70,8 +66,10 @@ export function requireBundledChannelPlugin(id: ChannelId): ChannelPlugin {
   return plugin;
 }
 
-export const bundledChannelRuntimeSetters = {
-  setDiscordRuntime,
-  setLineRuntime,
-  setTelegramRuntime,
-};
+export function setBundledChannelRuntime(id: ChannelId, runtime: PluginRuntime): void {
+  const setter = bundledChannelRuntimeSettersById.get(id);
+  if (!setter) {
+    throw new Error(`missing bundled channel runtime setter: ${id}`);
+  }
+  setter(runtime);
+}

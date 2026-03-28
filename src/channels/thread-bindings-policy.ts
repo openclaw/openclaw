@@ -34,6 +34,28 @@ function normalizeChannelId(value: string | undefined | null): string {
     .toLowerCase();
 }
 
+export function supportsAutomaticThreadBindingSpawn(channel: string): boolean {
+  const normalized = normalizeChannelId(channel);
+  return (
+    normalized === DISCORD_THREAD_BINDING_CHANNEL || normalized === MATRIX_THREAD_BINDING_CHANNEL
+  );
+}
+
+export function requiresNativeThreadContextForThreadHere(channel: string): boolean {
+  const normalized = normalizeChannelId(channel);
+  return normalized !== "telegram" && normalized !== "feishu";
+}
+
+export function resolveThreadBindingPlacementForCurrentContext(params: {
+  channel: string;
+  threadId?: string;
+}): "current" | "child" {
+  if (!requiresNativeThreadContextForThreadHere(params.channel)) {
+    return "current";
+  }
+  return params.threadId ? "current" : "child";
+}
+
 function normalizeBoolean(value: unknown): boolean | undefined {
   if (typeof value !== "boolean") {
     return undefined;
@@ -180,9 +202,7 @@ export function resolveThreadBindingSpawnPolicy(params: {
   const spawnFlagKey = resolveSpawnFlagKey(params.kind);
   const spawnEnabledRaw =
     normalizeBoolean(account?.[spawnFlagKey]) ?? normalizeBoolean(root?.[spawnFlagKey]);
-  const spawnEnabled =
-    spawnEnabledRaw ??
-    (channel !== DISCORD_THREAD_BINDING_CHANNEL && channel !== MATRIX_THREAD_BINDING_CHANNEL);
+  const spawnEnabled = spawnEnabledRaw ?? !supportsAutomaticThreadBindingSpawn(channel);
   return {
     channel,
     accountId,

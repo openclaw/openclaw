@@ -105,6 +105,10 @@ export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
   return memoryPluginState.runtime;
 }
 
+export function hasMemoryRuntime(): boolean {
+  return memoryPluginState.runtime !== undefined;
+}
+
 export function restoreMemoryPluginState(state: MemoryPluginState): void {
   memoryPluginState.promptBuilder = state.promptBuilder;
   memoryPluginState.flushPlanResolver = state.flushPlanResolver;

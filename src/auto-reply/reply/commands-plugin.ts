@@ -48,6 +48,7 @@ export const handlePluginCommand: CommandHandler = async (
       typeof params.ctx.MessageThreadId === "number"
         ? params.ctx.MessageThreadId
         : undefined,
+    threadParentId: params.ctx.ThreadParentId?.trim() || undefined,
   });
 
   return {

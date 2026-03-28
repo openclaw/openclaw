@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/diffs",
-  "version": "2026.3.26",
+  "version": "2026.3.27",
   "private": true,
   "description": "OpenClaw diff viewer plugin",
   "type": "module",
@@ -13,6 +13,9 @@
     "playwright-core": "1.58.2"
   },
   "openclaw": {
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
     "extensions": [
       "./index.ts"
     ]

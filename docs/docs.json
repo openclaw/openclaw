@@ -1432,7 +1432,14 @@
                   },
                   {
                     "group": "Utility",
-                    "pages": ["cli/acp", "cli/clawbot", "cli/completion", "cli/dns", "cli/docs"]
+                    "pages": [
+                      "cli/acp",
+                      "cli/clawbot",
+                      "cli/completion",
+                      "cli/dns",
+                      "cli/docs",
+                      "cli/mcp"
+                    ]
                   }
                 ]
               },

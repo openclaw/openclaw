@@ -1,5 +1,6 @@
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
+import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   createAsyncComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -65,7 +66,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
     },
     outbound: {
       ...createWhatsAppOutboundBase({
-        chunker: (text, limit) => getWhatsAppRuntime().channel.text.chunkText(text, limit),
+        chunker: chunkText,
         sendMessageWhatsApp: async (...args) =>
           await getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp(...args),
         sendPollWhatsApp: async (...args) =>

@@ -164,12 +164,11 @@ export default definePluginEntry({
         }
 
         if (action === "set") {
-          // Persistent config writes require operator.admin for gateway clients.
-          // Without this check, a caller with only operator.write could bypass the
-          // admin-only config.patch RPC by reaching writeConfigFile indirectly
-          // through chat.send → /voice set.
+          // Internal gateway callers already expose operator scopes and should
+          // match the admin-only config.patch RPC. External channels rely on
+          // the plugin command's authorized-sender gate instead.
           if (ctx.channel === "webchat" && !ctx.gatewayClientScopes?.includes("operator.admin")) {
-            return { text: `⚠️ ${commandLabel} set requires operator.admin for gateway clients.` };
+            return { text: `⚠️ ${commandLabel} set requires operator.admin.` };
           }
 
           const query = tokens.slice(1).join(" ").trim();

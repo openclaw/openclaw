@@ -1,44 +1,56 @@
-import { BlueBubblesChannelConfigSchema } from "../../extensions/bluebubbles/channel-config-api.js";
-import { DiscordChannelConfigSchema } from "../../extensions/discord/channel-config-api.js";
-import { GoogleChatChannelConfigSchema } from "../../extensions/googlechat/channel-config-api.js";
-import { IMessageChannelConfigSchema } from "../../extensions/imessage/channel-config-api.js";
-import { IrcChannelConfigSchema } from "../../extensions/irc/channel-config-api.js";
-import { MSTeamsChannelConfigSchema } from "../../extensions/msteams/channel-config-api.js";
-import { SignalChannelConfigSchema } from "../../extensions/signal/channel-config-api.js";
-import { SlackChannelConfigSchema } from "../../extensions/slack/channel-config-api.js";
-import { TelegramChannelConfigSchema } from "../../extensions/telegram/channel-config-api.js";
-import { WhatsAppChannelConfigSchema } from "../../extensions/whatsapp/channel-config-api.js";
+import * as bundledChannelModule from "../channels/plugins/bundled.js";
+import { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type {
   ChannelConfigRuntimeSchema,
   ChannelConfigSchema,
 } from "../channels/plugins/types.plugin.js";
+import { BUNDLED_PLUGIN_METADATA } from "../plugins/bundled-plugin-metadata.js";
+import { MSTeamsConfigSchema } from "./zod-schema.providers-core.js";
+import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 type BundledChannelRuntimeMap = ReadonlyMap<string, ChannelConfigRuntimeSchema>;
 type BundledChannelConfigSchemaMap = ReadonlyMap<string, ChannelConfigSchema>;
 
-const bundledChannelSchemaEntries: ReadonlyArray<
-  readonly [string, ChannelConfigSchema | undefined]
-> = [
-  ["bluebubbles", BlueBubblesChannelConfigSchema],
-  ["discord", DiscordChannelConfigSchema],
-  ["googlechat", GoogleChatChannelConfigSchema],
-  ["imessage", IMessageChannelConfigSchema],
-  ["irc", IrcChannelConfigSchema],
-  ["msteams", MSTeamsChannelConfigSchema],
-  ["signal", SignalChannelConfigSchema],
-  ["slack", SlackChannelConfigSchema],
-  ["telegram", TelegramChannelConfigSchema],
-  ["whatsapp", WhatsAppChannelConfigSchema],
-] as const;
-
 const bundledChannelRuntimeMap = new Map<string, ChannelConfigRuntimeSchema>();
 const bundledChannelConfigSchemaMap = new Map<string, ChannelConfigSchema>();
-for (const [channelId, channelSchema] of bundledChannelSchemaEntries) {
+const staticBundledChannelSchemas = new Map<string, ChannelConfigSchema>([
+  ["msteams", buildChannelConfigSchema(MSTeamsConfigSchema)],
+  ["whatsapp", buildChannelConfigSchema(WhatsAppConfigSchema)],
+]);
+const configuredBundledChannelPlugins = Array.isArray(bundledChannelModule.bundledChannelPlugins)
+  ? bundledChannelModule.bundledChannelPlugins
+  : [];
+
+for (const plugin of configuredBundledChannelPlugins) {
+  const channelSchema = plugin.configSchema;
   if (!channelSchema) {
     continue;
   }
-  bundledChannelConfigSchemaMap.set(channelId, channelSchema);
+  bundledChannelConfigSchemaMap.set(plugin.id, channelSchema);
   if (channelSchema.runtime) {
+    bundledChannelRuntimeMap.set(plugin.id, channelSchema.runtime);
+  }
+}
+for (const entry of BUNDLED_PLUGIN_METADATA) {
+  const channelConfigs = entry.manifest.channelConfigs;
+  if (!channelConfigs) {
+    continue;
+  }
+  for (const [channelId, channelConfig] of Object.entries(channelConfigs)) {
+    const channelSchema = channelConfig?.schema as Record<string, unknown> | undefined;
+    if (!channelSchema) {
+      continue;
+    }
+    if (!bundledChannelConfigSchemaMap.has(channelId)) {
+      bundledChannelConfigSchemaMap.set(channelId, { schema: channelSchema });
+    }
+  }
+}
+for (const [channelId, channelSchema] of staticBundledChannelSchemas) {
+  if (!bundledChannelConfigSchemaMap.has(channelId)) {
+    bundledChannelConfigSchemaMap.set(channelId, channelSchema);
+  }
+  if (channelSchema.runtime && !bundledChannelRuntimeMap.has(channelId)) {
     bundledChannelRuntimeMap.set(channelId, channelSchema.runtime);
   }
 }
