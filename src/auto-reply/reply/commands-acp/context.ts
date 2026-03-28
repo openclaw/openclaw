@@ -1,6 +1,5 @@
 import { normalizeConversationText } from "../../../acp/conversation-id.js";
-import { resolveChannelConfiguredBindingProviderByChannel } from "../../../channels/plugins/binding-provider.js";
-import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
+import { resolveConversationBindingContext } from "../../../channels/conversation-binding-context.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 
 export function resolveAcpCommandChannel(params: HandleCommandsParams): string {
@@ -29,40 +28,29 @@ function resolveAcpCommandConversationRef(params: HandleCommandsParams): {
   conversationId: string;
   parentConversationId?: string;
 } | null {
-  const channel = resolveAcpCommandChannel(params);
-  const threadId = resolveAcpCommandThreadId(params);
-  const provider = resolveChannelConfiguredBindingProviderByChannel(channel);
-  const resolvedByProvider = provider?.resolveCommandConversation?.({
+  const resolved = resolveConversationBindingContext({
+    cfg: params.cfg,
+    channel: resolveAcpCommandChannel(params),
     accountId: resolveAcpCommandAccountId(params),
-    threadId,
-    threadParentId: normalizeConversationText(params.ctx.ThreadParentId),
-    senderId: normalizeConversationText(params.command.senderId ?? params.ctx.SenderId),
+    chatType: params.ctx.ChatType,
+    threadId: resolveAcpCommandThreadId(params),
+    threadParentId: params.ctx.ThreadParentId,
+    senderId: params.command.senderId ?? params.ctx.SenderId,
     sessionKey: params.sessionKey,
-    parentSessionKey: normalizeConversationText(params.ctx.ParentSessionKey),
+    parentSessionKey: params.ctx.ParentSessionKey,
     originatingTo: params.ctx.OriginatingTo,
     commandTo: params.command.to,
     fallbackTo: params.ctx.To,
+    from: params.ctx.From,
+    nativeChannelId: params.ctx.NativeChannelId,
   });
-  if (resolvedByProvider?.conversationId) {
-    return resolvedByProvider;
-  }
-  const targets = [params.ctx.OriginatingTo, params.command.to, params.ctx.To];
-  const conversationId = resolveConversationIdFromTargets({
-    threadId,
-    targets,
-  });
-  if (!conversationId) {
+  if (!resolved) {
     return null;
   }
-  const parentConversationId = threadId
-    ? resolveConversationIdFromTargets({
-        targets,
-      })
-    : undefined;
   return {
-    conversationId,
-    ...(parentConversationId && parentConversationId !== conversationId
-      ? { parentConversationId }
+    conversationId: resolved.conversationId,
+    ...(resolved.parentConversationId && resolved.parentConversationId !== resolved.conversationId
+      ? { parentConversationId: resolved.parentConversationId }
       : {}),
   };
 }
