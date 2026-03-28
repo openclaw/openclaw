@@ -54,6 +54,33 @@ function expectPluginLoaderConfig(config: OpenClawConfig) {
   );
 }
 
+function createAutoEnabledCliFixture() {
+  const rawConfig = {
+    plugins: {},
+    channels: { demo: { enabled: true } },
+  } as OpenClawConfig;
+  const autoEnabledConfig = {
+    ...rawConfig,
+    plugins: {
+      entries: {
+        demo: { enabled: true },
+      },
+    },
+  } as OpenClawConfig;
+  return { rawConfig, autoEnabledConfig };
+}
+
+function expectAutoEnabledCliLoad(params: {
+  rawConfig: OpenClawConfig;
+  autoEnabledConfig: OpenClawConfig;
+}) {
+  expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
+    config: params.rawConfig,
+    env: process.env,
+  });
+  expectPluginLoaderConfig(params.autoEnabledConfig);
+}
+
 describe("registerPluginCliCommands", () => {
   beforeEach(() => {
     mocks.memoryRegister.mockClear();
@@ -89,27 +116,12 @@ describe("registerPluginCliCommands", () => {
 
   it("loads plugin CLI commands from the auto-enabled config snapshot", () => {
     const program = createProgram();
-    const rawConfig = {
-      plugins: {},
-      channels: { demo: { enabled: true } },
-    } as OpenClawConfig;
-    const autoEnabledConfig = {
-      ...rawConfig,
-      plugins: {
-        entries: {
-          demo: { enabled: true },
-        },
-      },
-    } as OpenClawConfig;
+    const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
     mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
 
     registerPluginCliCommands(program, rawConfig);
 
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: rawConfig,
-      env: process.env,
-    });
-    expectPluginLoaderConfig(autoEnabledConfig);
+    expectAutoEnabledCliLoad({ rawConfig, autoEnabledConfig });
     expect(mocks.memoryRegister).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
