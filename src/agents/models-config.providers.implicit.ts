@@ -1,10 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  mergeImplicitBedrockProvider,
-  resolveImplicitBedrockProvider,
-} from "../plugin-sdk/amazon-bedrock.js";
-import {
   mergeImplicitAnthropicVertexProvider,
   resolveImplicitAnthropicVertexProvider,
 } from "../plugin-sdk/anthropic-vertex.js";
@@ -33,22 +29,13 @@ const PROVIDER_IMPLICIT_MERGERS: Partial<
     (params: { existing: ProviderConfig | undefined; implicit: ProviderConfig }) => ProviderConfig
   >
 > = {
-  "amazon-bedrock": mergeImplicitBedrockProvider,
   "anthropic-vertex": mergeImplicitAnthropicVertexProvider,
 };
 
 const CORE_IMPLICIT_PROVIDER_RESOLVERS = [
   {
-    id: "amazon-bedrock",
-    resolve: (params: { config?: OpenClawConfig; env: NodeJS.ProcessEnv }) =>
-      resolveImplicitBedrockProvider({
-        config: params.config,
-        env: params.env,
-      }),
-  },
-  {
     id: "anthropic-vertex",
-    resolve: (params: { config?: OpenClawConfig; env: NodeJS.ProcessEnv }) =>
+    resolve: async (params: { config?: OpenClawConfig; env: NodeJS.ProcessEnv }) =>
       resolveImplicitAnthropicVertexProvider({
         env: params.env,
       }),

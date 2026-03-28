@@ -12,6 +12,8 @@ import { createGoogleThinkingPayloadWrapper } from "openclaw/plugin-sdk/provider
 import {
   GOOGLE_GEMINI_DEFAULT_MODEL,
   applyGoogleGeminiModelDefault,
+  normalizeGoogleProviderConfig,
+  resolveGoogleGenerativeAiTransport,
   normalizeGoogleModelId,
 } from "./api.js";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
@@ -209,7 +211,7 @@ export default definePluginEntry({
       id: "google",
       label: "Google AI Studio",
       docsPath: "/providers/models",
-      aliases: ["google-vertex"],
+      hookAliases: ["google-antigravity", "google-vertex"],
       envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
       auth: [
         createProviderApiKeyAuthMethod({
@@ -233,6 +235,10 @@ export default definePluginEntry({
           },
         }),
       ],
+      normalizeTransport: ({ api, baseUrl }) =>
+        resolveGoogleGenerativeAiTransport({ api, baseUrl }),
+      normalizeConfig: ({ provider, providerConfig }) =>
+        normalizeGoogleProviderConfig(provider, providerConfig),
       normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
       resolveDynamicModel: (ctx) =>
         resolveGoogle31ForwardCompatModel({ providerId: "google", ctx }),

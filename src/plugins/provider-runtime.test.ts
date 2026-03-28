@@ -25,9 +25,13 @@ let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js
 let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
 let buildProviderMissingAuthMessageWithPlugin: typeof import("./provider-runtime.js").buildProviderMissingAuthMessageWithPlugin;
 let buildProviderUnknownModelHintWithPlugin: typeof import("./provider-runtime.js").buildProviderUnknownModelHintWithPlugin;
+let applyProviderNativeStreamingUsageCompatWithPlugin: typeof import("./provider-runtime.js").applyProviderNativeStreamingUsageCompatWithPlugin;
 let formatProviderAuthProfileApiKeyWithPlugin: typeof import("./provider-runtime.js").formatProviderAuthProfileApiKeyWithPlugin;
+let normalizeProviderConfigWithPlugin: typeof import("./provider-runtime.js").normalizeProviderConfigWithPlugin;
 let normalizeProviderModelIdWithPlugin: typeof import("./provider-runtime.js").normalizeProviderModelIdWithPlugin;
+let normalizeProviderTransportWithPlugin: typeof import("./provider-runtime.js").normalizeProviderTransportWithPlugin;
 let prepareProviderExtraParams: typeof import("./provider-runtime.js").prepareProviderExtraParams;
+let resolveProviderConfigApiKeyWithPlugin: typeof import("./provider-runtime.js").resolveProviderConfigApiKeyWithPlugin;
 let resolveProviderStreamFn: typeof import("./provider-runtime.js").resolveProviderStreamFn;
 let resolveProviderCacheTtlEligibility: typeof import("./provider-runtime.js").resolveProviderCacheTtlEligibility;
 let resolveProviderBinaryThinking: typeof import("./provider-runtime.js").resolveProviderBinaryThinking;
@@ -206,9 +210,13 @@ describe("provider-runtime", () => {
       buildProviderAuthDoctorHintWithPlugin,
       buildProviderMissingAuthMessageWithPlugin,
       buildProviderUnknownModelHintWithPlugin,
+      applyProviderNativeStreamingUsageCompatWithPlugin,
       formatProviderAuthProfileApiKeyWithPlugin,
+      normalizeProviderConfigWithPlugin,
       normalizeProviderModelIdWithPlugin,
+      normalizeProviderTransportWithPlugin,
       prepareProviderExtraParams,
+      resolveProviderConfigApiKeyWithPlugin,
       resolveProviderStreamFn,
       resolveProviderCacheTtlEligibility,
       resolveProviderBinaryThinking,
@@ -268,7 +276,7 @@ describe("provider-runtime", () => {
       {
         id: "google",
         label: "Google",
-        aliases: ["google-vertex"],
+        hookAliases: ["google-vertex"],
         auth: [],
         normalizeModelId: ({ modelId }) => modelId.replace("flash-lite", "flash-lite-preview"),
       },
@@ -289,6 +297,68 @@ describe("provider-runtime", () => {
       }),
     );
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves config hooks through hook-only aliases without changing provider surfaces", () => {
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "google",
+        label: "Google",
+        hookAliases: ["google-antigravity"],
+        auth: [],
+        normalizeConfig: ({ providerConfig }) => ({
+          ...providerConfig,
+          baseUrl: "https://normalized.example.com/v1",
+        }),
+      },
+    ]);
+
+    expect(
+      normalizeProviderConfigWithPlugin({
+        provider: "google-antigravity",
+        context: {
+          provider: "google-antigravity",
+          providerConfig: {
+            baseUrl: "https://example.com",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      }),
+    ).toMatchObject({
+      baseUrl: "https://normalized.example.com/v1",
+    });
+  });
+
+  it("normalizes transport hooks without needing provider ownership", () => {
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "google",
+        label: "Google",
+        auth: [],
+        normalizeTransport: ({ api, baseUrl }) =>
+          api === "google-generative-ai" && baseUrl === "https://generativelanguage.googleapis.com"
+            ? {
+                api,
+                baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              }
+            : undefined,
+      },
+    ]);
+
+    expect(
+      normalizeProviderTransportWithPlugin({
+        provider: "google-paid",
+        context: {
+          provider: "google-paid",
+          api: "google-generative-ai",
+          baseUrl: "https://generativelanguage.googleapis.com",
+        },
+      }),
+    ).toEqual({
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    });
   });
 
   it("invalidates cached runtime providers when config mutates in place", () => {
@@ -386,9 +456,21 @@ describe("provider-runtime", () => {
           id: DEMO_PROVIDER_ID,
           label: "Demo",
           auth: [],
+          normalizeConfig: ({ providerConfig }) => ({
+            ...providerConfig,
+            baseUrl: "https://normalized.example.com/v1",
+          }),
+          normalizeTransport: ({ api, baseUrl }) => ({
+            api,
+            baseUrl: baseUrl ? `${baseUrl}/normalized` : undefined,
+          }),
           normalizeModelId: ({ modelId }) => modelId.replace("-legacy", ""),
           resolveDynamicModel: () => MODEL,
           prepareDynamicModel,
+          applyNativeStreamingUsageCompat: ({ providerConfig }) => ({
+            ...providerConfig,
+            compat: { supportsUsageInStreaming: true },
+          }),
           capabilities: {
             providerFamily: "openai",
           },
@@ -410,6 +492,7 @@ describe("provider-runtime", () => {
           formatApiKey: (cred) =>
             cred.type === "oauth" ? JSON.stringify({ token: cred.access }) : "",
           refreshOAuth,
+          resolveConfigApiKey: () => "DEMO_PROFILE",
           buildAuthDoctorHint: ({ provider, profileId }) =>
             provider === "demo" ? `Repair ${profileId}` : undefined,
           prepareRuntimeAuth,
@@ -449,6 +532,62 @@ describe("provider-runtime", () => {
         },
       }),
     ).toBe("demo-model");
+
+    expect(
+      normalizeProviderTransportWithPlugin({
+        provider: DEMO_PROVIDER_ID,
+        context: {
+          provider: DEMO_PROVIDER_ID,
+          api: "openai-completions",
+          baseUrl: "https://demo.example.com",
+        },
+      }),
+    ).toEqual({
+      api: "openai-completions",
+      baseUrl: "https://demo.example.com/normalized",
+    });
+
+    expect(
+      normalizeProviderConfigWithPlugin({
+        provider: DEMO_PROVIDER_ID,
+        context: {
+          provider: DEMO_PROVIDER_ID,
+          providerConfig: {
+            baseUrl: "https://demo.example.com",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      }),
+    ).toMatchObject({
+      baseUrl: "https://normalized.example.com/v1",
+    });
+
+    expect(
+      applyProviderNativeStreamingUsageCompatWithPlugin({
+        provider: DEMO_PROVIDER_ID,
+        context: {
+          provider: DEMO_PROVIDER_ID,
+          providerConfig: {
+            baseUrl: "https://demo.example.com",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      }),
+    ).toMatchObject({
+      compat: { supportsUsageInStreaming: true },
+    });
+
+    expect(
+      resolveProviderConfigApiKeyWithPlugin({
+        provider: DEMO_PROVIDER_ID,
+        context: {
+          provider: DEMO_PROVIDER_ID,
+          env: { DEMO_PROFILE: "default" } as NodeJS.ProcessEnv,
+        },
+      }),
+    ).toBe("DEMO_PROFILE");
 
     await prepareProviderDynamicModel({
       provider: DEMO_PROVIDER_ID,
