@@ -70,6 +70,18 @@ function expectBundledCompatLoadPath(params: {
   });
 }
 
+function createCompatChainConfig() {
+  const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
+  const allowlistCompat = { plugins: { allow: ["custom-plugin", "openai"] } };
+  const enablementCompat = {
+    plugins: {
+      allow: ["custom-plugin", "openai"],
+      entries: { openai: { enabled: true } },
+    },
+  };
+  return { cfg, allowlistCompat, enablementCompat };
+}
+
 function setBundledCapabilityFixture(contractKey: string) {
   mocks.loadPluginManifestRegistry.mockReturnValue({
     plugins: [
@@ -137,14 +149,7 @@ describe("resolvePluginCapabilityProviders", () => {
     ["mediaUnderstandingProviders", "mediaUnderstandingProviders"],
     ["imageGenerationProviders", "imageGenerationProviders"],
   ] as const)("applies bundled compat before fallback loading for %s", (key, contractKey) => {
-    const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
-    const allowlistCompat = { plugins: { allow: ["custom-plugin", "openai"] } };
-    const enablementCompat = {
-      plugins: {
-        allow: ["custom-plugin", "openai"],
-        entries: { openai: { enabled: true } },
-      },
-    };
+    const { cfg, allowlistCompat, enablementCompat } = createCompatChainConfig();
     setBundledCapabilityFixture(contractKey);
     mocks.withBundledPluginAllowlistCompat.mockReturnValue(allowlistCompat);
     mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);

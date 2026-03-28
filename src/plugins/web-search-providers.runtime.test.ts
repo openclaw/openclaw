@@ -131,6 +131,51 @@ function expectBundledRuntimeProviderKeys(
   );
 }
 
+function createManifestRegistryFixture() {
+  return {
+    plugins: [
+      {
+        id: "brave",
+        origin: "bundled",
+        rootDir: "/tmp/brave",
+        source: "/tmp/brave/index.js",
+        manifestPath: "/tmp/brave/openclaw.plugin.json",
+        channels: [],
+        providers: [],
+        skills: [],
+        hooks: [],
+        configUiHints: { "webSearch.apiKey": { label: "key" } },
+      },
+      {
+        id: "noise",
+        origin: "bundled",
+        rootDir: "/tmp/noise",
+        source: "/tmp/noise/index.js",
+        manifestPath: "/tmp/noise/openclaw.plugin.json",
+        channels: [],
+        providers: [],
+        skills: [],
+        hooks: [],
+        configUiHints: { unrelated: { label: "nope" } },
+      },
+    ],
+    diagnostics: [],
+  };
+}
+
+function expectLoaderCallCount(count: number) {
+  expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(count);
+}
+
+function expectScopedWebSearchCandidates(pluginIds: readonly string[]) {
+  expect(loadPluginManifestRegistryMock).toHaveBeenCalled();
+  expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      onlyPluginIds: [...pluginIds],
+    }),
+  );
+}
+
 describe("resolvePluginWebSearchProviders", () => {
   beforeAll(async () => {
     ({ createEmptyPluginRegistry } = await import("./registry.js"));
@@ -148,39 +193,13 @@ describe("resolvePluginWebSearchProviders", () => {
     resetWebSearchProviderSnapshotCacheForTests();
     loadPluginManifestRegistryMock = vi
       .spyOn(manifestRegistryModule, "loadPluginManifestRegistry")
-      .mockReturnValue({
-        plugins: [
-          {
-            id: "brave",
-            origin: "bundled",
-            rootDir: "/tmp/brave",
-            source: "/tmp/brave/index.js",
-            manifestPath: "/tmp/brave/openclaw.plugin.json",
-            channels: [],
-            providers: [],
-            skills: [],
-            hooks: [],
-            configUiHints: { "webSearch.apiKey": { label: "key" } },
-          },
-          {
-            id: "noise",
-            origin: "bundled",
-            rootDir: "/tmp/noise",
-            source: "/tmp/noise/index.js",
-            manifestPath: "/tmp/noise/openclaw.plugin.json",
-            channels: [],
-            providers: [],
-            skills: [],
-            hooks: [],
-            configUiHints: { unrelated: { label: "nope" } },
-          },
-        ],
-        diagnostics: [],
-      } as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
-        ...args: unknown[]
-      ) => infer R
-        ? R
-        : never);
+      .mockReturnValue(
+        createManifestRegistryFixture() as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
+          ...args: unknown[]
+        ) => infer R
+          ? R
+          : never,
+      );
     loadOpenClawPluginsMock = vi
       .spyOn(loaderModule, "loadOpenClawPlugins")
       .mockImplementation((params) => {
@@ -201,18 +220,13 @@ describe("resolvePluginWebSearchProviders", () => {
     const providers = resolvePluginWebSearchProviders({});
 
     expectBundledRuntimeProviderKeys(providers);
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
+    expectLoaderCallCount(1);
   });
 
   it("scopes plugin loading to manifest-declared web-search candidates", () => {
     resolvePluginWebSearchProviders({});
 
-    expect(loadPluginManifestRegistryMock).toHaveBeenCalled();
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["brave"],
-      }),
-    );
+    expectScopedWebSearchCandidates(["brave"]);
   });
 
   it("memoizes snapshot provider resolution for the same config and env", () => {
@@ -224,7 +238,7 @@ describe("resolvePluginWebSearchProviders", () => {
     const second = resolvePluginWebSearchProviders(runtimeParams);
 
     expect(second).toBe(first);
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
+    expectLoaderCallCount(1);
   });
 
   it("invalidates the snapshot cache when config or env contents change in place", () => {
@@ -236,7 +250,7 @@ describe("resolvePluginWebSearchProviders", () => {
     env.OPENCLAW_HOME = "/tmp/openclaw-home-b";
     resolvePluginWebSearchProviders(createSnapshotParams({ config, env }));
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
+    expectLoaderCallCount(2);
   });
 
   it.each([
@@ -258,7 +272,7 @@ describe("resolvePluginWebSearchProviders", () => {
     resolvePluginWebSearchProviders(createSnapshotParams({ config, env: createWebSearchEnv(env) }));
     resolvePluginWebSearchProviders(createSnapshotParams({ config, env: createWebSearchEnv(env) }));
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
+    expectLoaderCallCount(2);
   });
 
   it("does not leak host Vitest env into an explicit non-Vitest cache key", () => {
@@ -313,7 +327,7 @@ describe("resolvePluginWebSearchProviders", () => {
 
     resolvePluginWebSearchProviders(createSnapshotParams({ config, env }));
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
+    expectLoaderCallCount(2);
   });
 
   it("prefers the active plugin registry for runtime resolution", () => {

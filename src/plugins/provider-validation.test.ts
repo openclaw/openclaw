@@ -30,6 +30,10 @@ function expectDiagnosticMessages(
   );
 }
 
+function expectDiagnosticText(diagnostics: PluginDiagnostic[], messages: readonly string[]) {
+  expect(diagnostics.map((diag) => diag.message)).toEqual([...messages]);
+}
+
 function normalizeProviderFixture(provider: ProviderPlugin) {
   const { diagnostics, pushDiagnostic } = collectDiagnostics();
   const normalizedProvider = normalizeRegisteredProvider({
@@ -155,7 +159,7 @@ describe("normalizeRegisteredProvider", () => {
         diagnostics: PluginDiagnostic[],
       ) => {
         expect(provider?.wizard).toBeUndefined();
-        expect(diagnostics.map((diag) => diag.message)).toEqual([
+        expectDiagnosticText(diagnostics, [
           'provider "demo" setup metadata ignored because it has no auth methods',
           'provider "demo" model-picker metadata ignored because it has no auth methods',
         ]);
@@ -195,7 +199,7 @@ describe("normalizeRegisteredProvider", () => {
 
     expect(provider?.catalog).toBeDefined();
     expect(provider?.discovery).toBeUndefined();
-    expect(diagnostics.map((diag) => diag.message)).toEqual([
+    expectDiagnosticText(diagnostics, [
       'provider "demo" registered both catalog and discovery; using catalog',
     ]);
   });

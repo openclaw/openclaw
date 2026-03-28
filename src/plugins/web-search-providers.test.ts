@@ -51,6 +51,13 @@ function expectBundledWebSearchProviders(
   );
 }
 
+function expectResolvedPluginIds(
+  providers: ReturnType<typeof resolveBundledPluginWebSearchProviders>,
+  expectedPluginIds: readonly string[],
+) {
+  expect(providers.map((provider) => provider.pluginId)).toEqual(expectedPluginIds);
+}
+
 describe("resolveBundledPluginWebSearchProviders", () => {
   it(
     "returns bundled providers in alphabetical order",
@@ -123,7 +130,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
   ])("$title", ({ params, expectedPluginIds }) => {
     const providers = resolveBundledPluginWebSearchProviders(params);
 
-    expect(providers.map((provider) => provider.pluginId)).toEqual(expectedPluginIds);
+    expectResolvedPluginIds(providers, expectedPluginIds);
   });
 
   it("preserves explicit bundled provider entry state", () => {
