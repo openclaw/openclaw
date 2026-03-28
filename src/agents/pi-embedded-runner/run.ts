@@ -228,6 +228,10 @@ export async function runEmbeddedPiAgent(
       let lastProfileId: string | undefined;
       let runtimeAuthState: RuntimeAuthState | null = null;
       let runtimeAuthRefreshCancelled = false;
+      // Track providers that failed with auth errors this run to prevent the
+      // live session model switch from switching back to a provider that just
+      // returned 401, which creates an infinite retry loop (#56501).
+      const authFailedProviders = new Set<string>();
       const resolveCurrentLiveSelection = () => ({
         provider,
         model: modelId,
@@ -451,10 +455,20 @@ export async function runEmbeddedPiAgent(
           runLoopIterations += 1;
           const nextSelection = resolvePersistedLiveSelection();
           if (hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), nextSelection)) {
-            log.info(
-              `live session model switch detected before attempt for ${params.sessionId}: ${provider}/${modelId} -> ${nextSelection.provider}/${nextSelection.model}`,
-            );
-            throw new LiveSessionModelSwitchError(nextSelection);
+            // Do NOT switch back to a provider that failed with auth error
+            // this run. Otherwise the system oscillates: failed provider ->
+            // fallback -> live switch back to failed -> 401 -> fallback ->
+            // live switch -> ... (#56501).
+            if (authFailedProviders.has(nextSelection.provider)) {
+              log.info(
+                `suppressing live session model switch to ${nextSelection.provider}/${nextSelection.model} — provider has auth failure this run`,
+              );
+            } else {
+              log.info(
+                `live session model switch detected before attempt for ${params.sessionId}: ${provider}/${modelId} -> ${nextSelection.provider}/${nextSelection.model}`,
+              );
+              throw new LiveSessionModelSwitchError(nextSelection);
+            }
           }
           const runtimeAuthRetry = authRetryPending;
           authRetryPending = false;
@@ -1072,6 +1086,9 @@ export async function runEmbeddedPiAgent(
             // Throw FailoverError for prompt-side failover reasons when fallbacks
             // are configured so outer model fallback can continue on overload,
             // rate-limit, auth, or billing failures.
+            if (promptFailoverReason === "auth" || promptFailoverReason === "auth_permanent") {
+              authFailedProviders.add(provider);
+            }
             if (fallbackConfigured && promptFailoverFailure) {
               const status = resolveFailoverStatus(promptFailoverReason ?? "unknown");
               logPromptFailoverDecision("fallback_model", { status });
