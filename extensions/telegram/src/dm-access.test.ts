@@ -77,6 +77,60 @@ describe("enforceTelegramDmAccess", () => {
     expect(allowed).toBe(false);
   });
 
+  it("keeps disabled policy authoritative for bot-originated DMs", async () => {
+    const allowed = await enforceTelegramDmAccess({
+      isGroup: false,
+      dmPolicy: "disabled",
+      msg: createDmMessage({
+        from: {
+          id: 999,
+          is_bot: true,
+          first_name: "OpenClaw",
+          username: "openclaw_bot",
+        },
+      }),
+      chatId: 42,
+      effectiveDmAllow: normalizeAllowFrom([]),
+      accountId: "main",
+      bot: {
+        botInfo: { id: 999 },
+        api: { sendMessage: vi.fn(async () => undefined) },
+      } as never,
+      logger: { info: vi.fn() },
+    });
+
+    expect(allowed).toBe(false);
+  });
+
+  it("allows the bot's own messages under pairing policy", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+
+    const allowed = await enforceTelegramDmAccess({
+      isGroup: false,
+      dmPolicy: "pairing",
+      msg: createDmMessage({
+        from: {
+          id: 999,
+          is_bot: true,
+          first_name: "OpenClaw",
+          username: "openclaw_bot",
+        },
+      }),
+      chatId: 42,
+      effectiveDmAllow: normalizeAllowFrom([]),
+      accountId: "main",
+      bot: {
+        botInfo: { id: 999 },
+        api: { sendMessage },
+      } as never,
+      logger: { info: vi.fn() },
+    });
+
+    expect(allowed).toBe(true);
+    expect(createChannelPairingChallengeIssuerMock).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("allows DMs for allowlisted senders under pairing policy", async () => {
     const allowed = await enforceTelegramDmAccess({
       isGroup: false,
