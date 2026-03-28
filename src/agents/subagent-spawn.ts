@@ -18,7 +18,7 @@ import {
 } from "../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import { resolveAgentConfig, resolveSubagentWorkspaceScope } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
@@ -447,6 +447,10 @@ export async function spawnSubagentDirect(
   const resolvedThinkingDefaultRaw =
     readStringParam(targetAgentConfig?.subagents ?? {}, "thinking") ??
     readStringParam(cfg.agents?.defaults?.subagents ?? {}, "thinking");
+  
+  // Resolve workspace scope for subagent bootstrap context injection
+  const { workspaceScope: resolvedWorkspaceScope, workspaceFiles: resolvedWorkspaceFiles } = 
+    resolveSubagentWorkspaceScope({ cfg, agentId: targetAgentId });
 
   let thinkingOverride: string | undefined;
   const thinkingCandidateRaw = thinkingOverrideRaw || resolvedThinkingDefaultRaw;
@@ -670,6 +674,8 @@ export async function spawnSubagentDirect(
         thinking: thinkingOverride,
         timeout: runTimeoutSeconds,
         label: label || undefined,
+        subagentWorkspaceScope: resolvedWorkspaceScope,
+        subagentWorkspaceFiles: resolvedWorkspaceFiles,
         ...publicSpawnedMetadata,
       },
       timeoutMs: 10_000,
