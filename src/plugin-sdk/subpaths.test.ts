@@ -219,6 +219,14 @@ describe("plugin-sdk subpath exports", () => {
       "createFixedWindowRateLimiter",
       "withResolvedWebhookRequestPipeline",
     ]);
+    expectSourceMentions("irc", [
+      "createChannelReplyPipeline",
+      "chunkTextForOutbound",
+      "createChannelPairingController",
+      "createLoggerBackedRuntime",
+      "ircSetupAdapter",
+      "ircSetupWizard",
+    ]);
     expectSourceMentions("bluebubbles-policy", [
       "isAllowedBlueBubblesSender",
       "resolveBlueBubblesGroupRequireMention",
