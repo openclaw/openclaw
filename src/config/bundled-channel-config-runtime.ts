@@ -1,4 +1,4 @@
-import { bundledChannelPlugins } from "../channels/plugins/bundled.js";
+import * as bundledChannelModule from "../channels/plugins/bundled.js";
 import { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type {
   ChannelConfigRuntimeSchema,
@@ -17,7 +17,11 @@ const staticBundledChannelSchemas = new Map<string, ChannelConfigSchema>([
   ["msteams", buildChannelConfigSchema(MSTeamsConfigSchema)],
   ["whatsapp", buildChannelConfigSchema(WhatsAppConfigSchema)],
 ]);
-for (const plugin of bundledChannelPlugins) {
+const configuredBundledChannelPlugins = Array.isArray(bundledChannelModule.bundledChannelPlugins)
+  ? bundledChannelModule.bundledChannelPlugins
+  : [];
+
+for (const plugin of configuredBundledChannelPlugins) {
   const channelSchema = plugin.configSchema;
   if (!channelSchema) {
     continue;
