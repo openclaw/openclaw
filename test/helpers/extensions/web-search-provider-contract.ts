@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   pluginRegistrationContractRegistry,
-  webSearchProviderContractRegistry,
+  resolveWebSearchProviderContractEntriesForPluginId,
 } from "../../../src/plugins/contracts/registry.js";
 import { installWebSearchProviderContractSuite } from "../../../src/plugins/contracts/suites.js";
 
@@ -10,8 +10,7 @@ export function describeWebSearchProviderContracts(pluginId: string) {
     pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId)
       ?.webSearchProviderIds ?? [];
 
-  const resolveProviders = () =>
-    webSearchProviderContractRegistry.filter((entry) => entry.pluginId === pluginId);
+  const resolveProviders = () => resolveWebSearchProviderContractEntriesForPluginId(pluginId);
 
   describe(`${pluginId} web search provider contract registry load`, () => {
     it("loads bundled web search providers", () => {
