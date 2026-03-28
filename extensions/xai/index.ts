@@ -1,6 +1,6 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { createToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
-import { applyXaiModelCompat, buildXaiProvider } from "./api.js";
+import { applyXaiModelCompat, buildXaiProvider, normalizeXaiModelId } from "./api.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import {
@@ -57,6 +57,7 @@ export default defineSingleProviderPluginEntry({
       return createToolStreamWrapper(streamFn, ctx.extraParams?.tool_stream !== false);
     },
     normalizeResolvedModel: ({ model }) => applyXaiModelCompat(model),
+    normalizeModelId: ({ modelId }) => normalizeXaiModelId(modelId),
     resolveDynamicModel: (ctx) => resolveXaiForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
   },

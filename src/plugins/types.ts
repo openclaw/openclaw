@@ -364,6 +364,17 @@ export type ProviderNormalizeResolvedModelContext = {
 };
 
 /**
+ * Provider-owned model-id normalization before config/runtime lookup.
+ *
+ * Use this for provider-specific alias cleanup that should stay with the
+ * plugin rather than in core string tables.
+ */
+export type ProviderNormalizeModelIdContext = {
+  provider: string;
+  modelId: string;
+};
+
+/**
  * Runtime auth input for providers that need an extra exchange step before
  * inference. The incoming `apiKey` is the raw credential resolved from auth
  * profiles/env/config. The returned value should be the actual token/key to use
@@ -829,6 +840,13 @@ export type ProviderPlugin = {
   normalizeResolvedModel?: (
     ctx: ProviderNormalizeResolvedModelContext,
   ) => ProviderRuntimeModel | null | undefined;
+  /**
+   * Provider-owned model-id normalization.
+   *
+   * Runs before model lookup/canonicalization. Use this for alias cleanup such
+   * as provider-owned preview/legacy model ids.
+   */
+  normalizeModelId?: (ctx: ProviderNormalizeModelIdContext) => string | null | undefined;
   /**
    * Static provider capability overrides consumed by shared transcript/tooling
    * logic.
