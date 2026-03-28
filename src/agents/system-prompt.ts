@@ -246,6 +246,8 @@ export function buildAgentSystemPrompt(params: {
       ? 'List OpenClaw agent ids allowed for sessions_spawn when runtime="subagent" (not ACP harness ids)'
       : "List OpenClaw agent ids allowed for sessions_spawn",
     sessions_list: "List other sessions (incl. sub-agents) with filters/last",
+    sessions_archive:
+      "Archive one session or batch-archive completed sessions by filters (never active, main, or cron sessions)",
     sessions_history: "Fetch history for another session/sub-agent",
     sessions_send: "Send a message to another session/sub-agent",
     sessions_spawn: acpSpawnRuntimeEnabled
@@ -278,6 +280,7 @@ export function buildAgentSystemPrompt(params: {
     "gateway",
     "agents_list",
     "sessions_list",
+    "sessions_archive",
     "sessions_history",
     "sessions_send",
     "subagents",

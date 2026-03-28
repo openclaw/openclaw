@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const statusCommand = vi.fn();
 const healthCommand = vi.fn();
 const sessionsCommand = vi.fn();
+const sessionsArchiveCommand = vi.fn();
 const sessionsCleanupCommand = vi.fn();
 const setVerbose = vi.fn();
 
@@ -23,6 +24,10 @@ vi.mock("../../commands/health.js", () => ({
 
 vi.mock("../../commands/sessions.js", () => ({
   sessionsCommand,
+}));
+
+vi.mock("../../commands/sessions-archive.js", () => ({
+  sessionsArchiveCommand,
 }));
 
 vi.mock("../../commands/sessions-cleanup.js", () => ({
@@ -55,6 +60,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     statusCommand.mockResolvedValue(undefined);
     healthCommand.mockResolvedValue(undefined);
     sessionsCommand.mockResolvedValue(undefined);
+    sessionsArchiveCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
   });
 
@@ -158,6 +164,52 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(sessionsCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         allAgents: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("runs sessions archive subcommand with forwarded options", async () => {
+    await runCli([
+      "sessions",
+      "archive",
+      "agent:lead:subagent:abc",
+      "--store",
+      "/tmp/sessions.json",
+      "--dry-run",
+      "--json",
+    ]);
+
+    expect(sessionsArchiveCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:lead:subagent:abc",
+        store: "/tmp/sessions.json",
+        agent: undefined,
+        allAgents: false,
+        status: undefined,
+        olderThan: undefined,
+        dryRun: true,
+        json: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("rejects invalid archive status without calling archive command", async () => {
+    await runCli(["sessions", "archive", "--status", "failed"]);
+
+    expect(runtime.error).toHaveBeenCalledWith("--status must be one of: done, killed, timeout");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsArchiveCommand).not.toHaveBeenCalled();
+  });
+
+  it("forwards parent-level all-agents to archive subcommand", async () => {
+    await runCli(["sessions", "--all-agents", "archive", "--status", "done"]);
+
+    expect(sessionsArchiveCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allAgents: true,
+        status: "done",
       }),
       runtime,
     );

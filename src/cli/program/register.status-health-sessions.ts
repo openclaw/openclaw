@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { healthCommand } from "../../commands/health.js";
+import { sessionsArchiveCommand } from "../../commands/sessions-archive.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
@@ -154,6 +155,73 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       );
     });
   sessionsCmd.enablePositionalOptions();
+
+  sessionsCmd
+    .command("archive [sessionKey]")
+    .description("Archive targeted sessions from the session store")
+    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option(
+      "--agent <id>",
+      "Agent id to archive from (default: configured/default derived from key)",
+    )
+    .option("--all-agents", "Archive across all configured agents", false)
+    .option("--status <status>", "Archive sessions with status done, killed, or timeout")
+    .option("--older-than <duration>", "Only archive sessions older than a duration (e.g. 24h, 7d)")
+    .option("--dry-run", "Preview archive actions without writing", false)
+    .option("--json", "Output JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw sessions archive agent:lead:subagent:abc", "Archive one specific session."],
+          [
+            "openclaw sessions archive --agent lead --status done",
+            "Archive completed lead sessions.",
+          ],
+          [
+            "openclaw sessions archive --all-agents --status done --older-than 7d --dry-run",
+            "Preview completed sessions older than 7 days across all agents.",
+          ],
+        ])}`,
+    )
+    .action(async (sessionKey, opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            store?: string;
+            agent?: string;
+            allAgents?: boolean;
+            json?: boolean;
+          }
+        | undefined;
+      const rawStatus = String(opts.status ?? "")
+        .trim()
+        .toLowerCase();
+      const status = rawStatus
+        ? ["done", "killed", "timeout"].includes(rawStatus)
+          ? rawStatus
+          : undefined
+        : undefined;
+      if (rawStatus && !status) {
+        defaultRuntime.error("--status must be one of: done, killed, timeout");
+        defaultRuntime.exit(1);
+        return;
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await sessionsArchiveCommand(
+          {
+            sessionKey: typeof sessionKey === "string" ? sessionKey : undefined,
+            store: (opts.store as string | undefined) ?? parentOpts?.store,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
+            status: status as "done" | "killed" | "timeout" | undefined,
+            olderThan: opts.olderThan as string | undefined,
+            dryRun: Boolean(opts.dryRun),
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
 
   sessionsCmd
     .command("cleanup")

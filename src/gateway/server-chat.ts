@@ -737,7 +737,7 @@ export function createAgentEventHandler({
       // messages to messaging surfaces (Telegram, Discord, etc.).
       const recipients = toolEventRecipients.get(evt.runId);
       if (recipients && recipients.size > 0) {
-        broadcastToConnIds("agent", toolPayload, recipients);
+        _broadcastToConnIds("agent", toolPayload, recipients);
       }
       // Session subscribers power operator UIs that attach to an existing
       // in-flight session after the run has already started. Those clients do
@@ -747,7 +747,9 @@ export function createAgentEventHandler({
       if (sessionKey) {
         const sessionSubscribers = sessionEventSubscribers.getAll();
         if (sessionSubscribers.size > 0) {
-          broadcastToConnIds("session.tool", toolPayload, sessionSubscribers, { dropIfSlow: true });
+          _broadcastToConnIds("session.tool", toolPayload, sessionSubscribers, {
+            dropIfSlow: true,
+          });
         }
       }
       // Also broadcast tool events to all connected clients so sub-agent tool
@@ -824,7 +826,7 @@ export function createAgentEventHandler({
       void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
       const sessionEventConnIds = sessionEventSubscribers.getAll();
       if (sessionEventConnIds.size > 0) {
-        broadcastToConnIds(
+        _broadcastToConnIds(
           "sessions.changed",
           {
             sessionKey,

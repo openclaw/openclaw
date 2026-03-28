@@ -87,6 +87,8 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_list", "limit").type).toBe("number");
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("number");
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("number");
+    expect(schemaProp("sessions_archive", "allAgents").type).toBe("boolean");
+    expect(schemaProp("sessions_archive", "olderThan").type).toBe("string");
     expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("number");
     expect(schemaProp("sessions_spawn", "thinking").type).toBe("string");
     expect(schemaProp("sessions_spawn", "runTimeoutSeconds").type).toBe("number");
@@ -828,7 +830,7 @@ describe("sessions tools", () => {
     );
     expect(replySteps).toHaveLength(2);
     expect(sendParams).toMatchObject({
-      to: "channel:target",
+      to: "group:target",
       channel: "discord",
       message: "announce now",
     });

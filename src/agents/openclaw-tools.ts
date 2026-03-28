@@ -18,6 +18,7 @@ import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
+import { createSessionsArchiveTool } from "./tools/sessions-archive-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
@@ -186,6 +187,7 @@ export function createOpenClawTools(
       sandboxed: options?.sandboxed,
       config: options?.config,
     }),
+    createSessionsArchiveTool(),
     createSessionsHistoryTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
