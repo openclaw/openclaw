@@ -6,6 +6,7 @@ const repoRoot = path.resolve(import.meta.dirname, "..");
 
 const allowedNonExtensionTests = new Set<string>([
   "src/plugins/contracts/discovery.contract.test.ts",
+  "src/channels/plugins/contracts/registry-backed.contract.test.ts",
 ]);
 
 function walk(dir: string, entries: string[] = []): string[] {
