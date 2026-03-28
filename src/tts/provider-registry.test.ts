@@ -5,10 +5,14 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 
 const loadOpenClawPluginsMock = vi.fn();
+const getCompatibleActivePluginRegistryMock = vi.fn();
 
 vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins: (...args: Parameters<typeof loadOpenClawPluginsMock>) =>
     loadOpenClawPluginsMock(...args),
+  getCompatibleActivePluginRegistry: (
+    ...args: Parameters<typeof getCompatibleActivePluginRegistryMock>
+  ) => getCompatibleActivePluginRegistryMock(...args),
 }));
 
 let getSpeechProvider: typeof import("./provider-registry.js").getSpeechProvider;
@@ -37,6 +41,8 @@ describe("speech provider registry", () => {
     resetPluginRuntimeStateForTest();
     loadOpenClawPluginsMock.mockReset();
     loadOpenClawPluginsMock.mockReturnValue(createEmptyPluginRegistry());
+    getCompatibleActivePluginRegistryMock.mockReset();
+    getCompatibleActivePluginRegistryMock.mockReturnValue(undefined);
     ({
       getSpeechProvider,
       listSpeechProviders,
@@ -60,7 +66,16 @@ describe("speech provider registry", () => {
         },
       ],
     });
-
+    getCompatibleActivePluginRegistryMock.mockReturnValue({
+      ...createEmptyPluginRegistry(),
+      speechProviders: [
+        {
+          pluginId: "test-demo-speech",
+          source: "test",
+          provider: createSpeechProvider("demo-speech"),
+        },
+      ],
+    });
     const providers = listSpeechProviders();
 
     expect(providers.map((provider) => provider.id)).toEqual(["demo-speech"]);
@@ -103,6 +118,16 @@ describe("speech provider registry", () => {
 
   it("canonicalizes the legacy edge alias to microsoft", () => {
     setActivePluginRegistry({
+      ...createEmptyPluginRegistry(),
+      speechProviders: [
+        {
+          pluginId: "test-microsoft",
+          source: "test",
+          provider: createSpeechProvider("microsoft", ["edge"]),
+        },
+      ],
+    });
+    getCompatibleActivePluginRegistryMock.mockReturnValue({
       ...createEmptyPluginRegistry(),
       speechProviders: [
         {

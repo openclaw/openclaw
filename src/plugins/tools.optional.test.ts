@@ -8,10 +8,13 @@ type MockRegistryToolEntry = {
 };
 
 const loadOpenClawPluginsMock = vi.fn();
+const getCompatibleActivePluginRegistryMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
+  getCompatibleActivePluginRegistry: (params: unknown) =>
+    getCompatibleActivePluginRegistryMock(params),
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -20,7 +23,6 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
-let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 
 function makeTool(name: string) {
   return {
@@ -135,13 +137,14 @@ describe("resolvePluginTools optional tools", () => {
   beforeEach(async () => {
     vi.resetModules();
     loadOpenClawPluginsMock.mockClear();
+    getCompatibleActivePluginRegistryMock.mockReset();
+    getCompatibleActivePluginRegistryMock.mockReturnValue(undefined);
     applyPluginAutoEnableMock.mockReset();
     applyPluginAutoEnableMock.mockImplementation(({ config }: { config: unknown }) => ({
       config,
       changes: [],
     }));
     ({ resetPluginRuntimeStateForTest } = await import("./runtime.js"));
-    ({ setActivePluginRegistry } = await import("./runtime.js"));
     resetPluginRuntimeStateForTest();
     ({ resolvePluginTools } = await import("./tools.js"));
   });
@@ -289,31 +292,6 @@ describe("resolvePluginTools optional tools", () => {
       },
     };
     applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
-    setActivePluginRegistry(
-      {
-        plugins: [],
-        tools: [],
-        hooks: [],
-        typedHooks: [],
-        channels: [],
-        channelSetups: [],
-        providers: [],
-        cliBackends: [],
-        speechProviders: [],
-        mediaUnderstandingProviders: [],
-        imageGenerationProviders: [],
-        webSearchProviders: [],
-        gatewayHandlers: {},
-        gatewayMethodScopes: {},
-        httpRoutes: [],
-        cliRegistrars: [],
-        services: [],
-        commands: [],
-        conversationBindingResolvedHandlers: [],
-        diagnostics: [],
-      } as never,
-      "stale-registry",
-    );
 
     const tools = resolvePluginTools({
       context: {
@@ -325,5 +303,29 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expectLoaderCall({ config: autoEnabledConfig });
+  });
+
+  it("reuses a compatible active registry instead of loading again", () => {
+    const activeRegistry = {
+      tools: [
+        {
+          pluginId: "optional-demo",
+          optional: true,
+          source: "/tmp/optional-demo.js",
+          factory: () => makeTool("optional_tool"),
+        },
+      ],
+      diagnostics: [],
+    };
+    getCompatibleActivePluginRegistryMock.mockReturnValue(activeRegistry);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["optional_tool"],
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 });
