@@ -195,6 +195,30 @@ describe("plugin-sdk subpath exports", () => {
       "resolveServicePrefixedTarget",
       "chunkTextForOutbound",
     ]);
+    expectSourceMentions("imessage-core", [
+      "normalizeIMessageAcpConversationId",
+      "matchIMessageAcpConversation",
+      "resolveIMessageConversationIdFromTarget",
+      "parseChatAllowTargetPrefixes",
+      "parseChatTargetPrefixesOrThrow",
+      "resolveServicePrefixedAllowTarget",
+      "resolveServicePrefixedTarget",
+    ]);
+    expectSourceMentions("bluebubbles", [
+      "normalizeBlueBubblesAcpConversationId",
+      "matchBlueBubblesAcpConversation",
+      "resolveBlueBubblesConversationIdFromTarget",
+      "resolveAckReaction",
+      "resolveChannelMediaMaxBytes",
+      "collectBlueBubblesStatusIssues",
+      "createChannelPairingController",
+      "createChannelReplyPipeline",
+      "resolveRequestUrl",
+      "buildProbeChannelStatusSummary",
+      "extractToolSend",
+      "createFixedWindowRateLimiter",
+      "withResolvedWebhookRequestPipeline",
+    ]);
     for (const subpath of [
       "feishu",
       "googlechat",
