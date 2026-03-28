@@ -10,7 +10,7 @@ import { logWarn } from "../logger.js";
 import { resolveBoundaryPath } from "./boundary-path.js";
 import { sameFileIdentity } from "./file-identity.js";
 import { isPinnedPathHelperSpawnError, runPinnedPathHelper } from "./fs-pinned-path-helper.js";
-import { runPinnedWriteHelper } from "./fs-pinned-write-helper.js";
+import { runPinnedUnlinkHelper, runPinnedWriteHelper } from "./fs-pinned-write-helper.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { assertNoPathAliasEscape, PATH_ALIAS_POLICIES } from "./path-alias-guards.js";
 import {
@@ -828,6 +828,35 @@ export async function writeFileFromPathWithinRoot(params: {
   });
 }
 
+export async function removeFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+}): Promise<void> {
+  if (process.platform === "win32") {
+    await removeFileWithinRootLegacy(params);
+    return;
+  }
+
+  const pinned = await resolvePinnedDeleteTargetWithinRoot(params);
+  await runPinnedUnlinkHelper({
+    rootPath: pinned.rootReal,
+    relativeParentPath: pinned.relativeParentPath,
+    basename: pinned.basename,
+  }).catch((error) => {
+    throw normalizePinnedUnlinkError(error);
+  });
+
+  try {
+    await fs.lstat(pinned.targetPath);
+    throw new SafeOpenError("path-mismatch", "path still exists after unlink");
+  } catch (err) {
+    if (isNotFoundPathError(err)) {
+      return;
+    }
+    throw err;
+  }
+}
+
 async function resolvePinnedWriteTargetWithinRoot(params: {
   rootDir: string;
   relativePath: string;
@@ -982,6 +1011,48 @@ async function resolvePinnedBoundaryPathWithinRoot(params: {
   };
 }
 
+async function resolvePinnedDeleteTargetWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+}): Promise<{
+  rootReal: string;
+  targetPath: string;
+  relativeParentPath: string;
+  basename: string;
+}> {
+  const { rootReal, resolved } = await resolvePathWithinRoot(params);
+  try {
+    await assertNoPathAliasEscape({
+      absolutePath: resolved,
+      rootPath: rootReal,
+      boundaryLabel: "root",
+      policy: PATH_ALIAS_POLICIES.unlinkTarget,
+    });
+  } catch (err) {
+    throw new SafeOpenError("invalid-path", "path alias escape blocked", { cause: err });
+  }
+
+  const relativeResolved = path.relative(rootReal, resolved);
+  if (relativeResolved.startsWith("..") || path.isAbsolute(relativeResolved)) {
+    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+  const relativePosix = relativeResolved
+    ? relativeResolved.split(path.sep).join(path.posix.sep)
+    : "";
+  const basename = path.posix.basename(relativePosix);
+  if (!basename || basename === "." || basename === "/") {
+    throw new SafeOpenError("invalid-path", "invalid target path");
+  }
+
+  return {
+    rootReal,
+    targetPath: resolved,
+    relativeParentPath:
+      path.posix.dirname(relativePosix) === "." ? "" : path.posix.dirname(relativePosix),
+    basename,
+  };
+}
+
 function normalizePinnedWriteError(error: unknown): Error {
   if (error instanceof SafeOpenError) {
     return error;
@@ -1023,6 +1094,18 @@ async function removePathWithinRootLegacy(resolved: { resolved: string }): Promi
 
 async function mkdirPathWithinRootLegacy(resolved: { resolved: string }): Promise<void> {
   await fs.mkdir(resolved.resolved, { recursive: true });
+}
+
+function normalizePinnedUnlinkError(error: unknown): Error {
+  if (error instanceof SafeOpenError) {
+    return error;
+  }
+  if (error instanceof Error && /no such file or directory|enoent/i.test(error.message)) {
+    return new SafeOpenError("not-found", "file not found", { cause: error });
+  }
+  return new SafeOpenError("invalid-path", "path is not a regular file under root", {
+    cause: error instanceof Error ? error : undefined,
+  });
 }
 
 async function writeFileWithinRootLegacy(params: {
@@ -1145,5 +1228,20 @@ async function copyFileWithinRootLegacy(
     if (target && !targetClosedByUs) {
       await target.handle.close().catch(() => {});
     }
+  }
+}
+
+async function removeFileWithinRootLegacy(params: {
+  rootDir: string;
+  relativePath: string;
+}): Promise<void> {
+  const target = await resolvePinnedDeleteTargetWithinRoot(params);
+  try {
+    await fs.rm(target.targetPath);
+  } catch (err) {
+    if (isNotFoundPathError(err)) {
+      throw new SafeOpenError("not-found", "file not found");
+    }
+    throw err;
   }
 }

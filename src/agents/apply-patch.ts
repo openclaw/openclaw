@@ -5,13 +5,16 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "typebox";
 import { openBoundaryFile, type BoundaryFileOpenResult } from "../infra/boundary-file-read.js";
 import {
+  readFileWithinRoot,
   mkdirPathWithinRoot,
+  removeFileWithinRoot,
   removePathWithinRoot,
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
+import { resolveRootScopedPath, type FsRootResolved } from "./pi-tools.fs-roots.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
@@ -77,6 +80,8 @@ type ApplyPatchOptions = {
   sandbox?: SandboxApplyPatchConfig;
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
+  /** Optional multi-root FS policy for host-mode operations. */
+  roots?: FsRootResolved[];
   signal?: AbortSignal;
   /** Optional validator for multi-root FS policy. Called with each resolved path. */
   rootsValidator?: (resolvedPath: string, options?: { isUnlink?: boolean }) => Promise<void>;
@@ -93,12 +98,14 @@ export function createApplyPatchTool(
     cwd?: string;
     sandbox?: SandboxApplyPatchConfig;
     workspaceOnly?: boolean;
+    roots?: FsRootResolved[];
     rootsValidator?: (resolvedPath: string, options?: { isUnlink?: boolean }) => Promise<void>;
   } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
   const workspaceOnly = options.workspaceOnly !== false;
+  const roots = options.roots;
   const rootsValidator = options.rootsValidator;
 
   return {
@@ -123,6 +130,7 @@ export function createApplyPatchTool(
         cwd,
         sandbox,
         workspaceOnly,
+        roots,
         signal,
         rootsValidator,
       });
@@ -250,6 +258,41 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
       writeFile: (filePath, content) => bridge.writeFile({ filePath, cwd: root, data: content }),
       remove: (filePath) => bridge.remove({ filePath, cwd: root, force: false }),
       mkdirp: (dir) => bridge.mkdirp({ filePath: dir, cwd: root }),
+    };
+  }
+  if (options.roots) {
+    const roots = options.roots;
+    return {
+      readFile: async (filePath) => {
+        const target = resolveRootScopedPath(filePath, "read", roots);
+        const safeRead = await readFileWithinRoot({
+          rootDir: target.rootDir,
+          relativePath: target.relativePath,
+          rejectHardlinks: true,
+        });
+        return safeRead.buffer.toString("utf8");
+      },
+      writeFile: async (filePath, content) => {
+        const target = resolveRootScopedPath(filePath, "write", roots);
+        await writeFileWithinRoot({
+          rootDir: target.rootDir,
+          relativePath: target.relativePath,
+          data: content,
+          encoding: "utf8",
+          mkdir: true,
+        });
+      },
+      remove: async (filePath) => {
+        const target = resolveRootScopedPath(filePath, "write", roots);
+        await removeFileWithinRoot({
+          rootDir: target.rootDir,
+          relativePath: target.relativePath,
+        });
+      },
+      // Root-scoped writes create parents internally after re-resolving the
+      // target under the matched root, so a separate pathname-based mkdirp
+      // would only reopen the race the roots guard is meant to close.
+      mkdirp: async () => {},
     };
   }
   const workspaceOnly = options.workspaceOnly !== false;

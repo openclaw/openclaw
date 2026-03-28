@@ -510,7 +510,10 @@ export function createOpenClawCodingTools(options?: {
         // When roots are active, create the tool WITHOUT workspaceOnly — the
         // multi-root guard handles containment. The internal workspaceOnly guard
         // would reject writes to allowed roots outside the workspace.
-        const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly: false });
+        const wrapped = createHostWorkspaceWriteTool(workspaceRoot, {
+          workspaceOnly: false,
+          roots: resolvedRoots,
+        });
         return [wrapToolMultiRootGuard(wrapped, workspaceRoot, resolvedRoots)];
       }
       const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
@@ -521,7 +524,10 @@ export function createOpenClawCodingTools(options?: {
         return [];
       }
       if (resolvedRoots) {
-        const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly: false });
+        const wrapped = createHostWorkspaceEditTool(workspaceRoot, {
+          workspaceOnly: false,
+          roots: resolvedRoots,
+        });
         return [wrapToolMultiRootGuard(wrapped, workspaceRoot, resolvedRoots)];
       }
       const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
@@ -596,6 +602,7 @@ export function createOpenClawCodingTools(options?: {
               ? { root: sandboxRoot, bridge: sandboxFsBridge! }
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
+          roots: resolvedRoots && !sandboxRoot ? resolvedRoots : undefined,
           rootsValidator: patchRootsValidator,
         });
   const tools: AnyAgentTool[] = [

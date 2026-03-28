@@ -21,6 +21,7 @@ import {
   readPathWithinRoot,
   readLocalFileSafely,
   removePathWithinRoot,
+  removeFileWithinRoot,
   writeFileWithinRoot,
   writeFileFromPathWithinRoot,
 } from "./fs-safe.js";
@@ -61,6 +62,30 @@ async function expectSymlinkWriteRaceRejectsOutside(params: {
     slotPath: params.slotPath,
     outsideDir: params.outsideDir,
     runWrite: async () => await params.runWrite(relativePath),
+  });
+}
+
+async function expectSymlinkDeleteRaceRejectsOutside(params: {
+  root: string;
+  slotPath: string;
+  outsideDir: string;
+}): Promise<void> {
+  const relativePath = path.join("slot", "target.txt");
+  await withRealpathSymlinkRebindRace({
+    shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot", "target.txt")),
+    symlinkPath: params.slotPath,
+    symlinkTarget: params.outsideDir,
+    timing: "before-realpath",
+    run: async () => {
+      await expect(
+        removeFileWithinRoot({
+          rootDir: params.root,
+          relativePath,
+        }),
+      ).rejects.toMatchObject({
+        code: expect.stringMatching(/outside-workspace|invalid-path/),
+      });
+    },
   });
 }
 
@@ -529,6 +554,50 @@ describe("fs-safe", () => {
     ).rejects.toMatchObject({ code: "outside-workspace" });
   });
 
+  it("removes a file within root safely", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const targetPath = path.join(root, "nested", "delete-me.txt");
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, "bye");
+
+    await removeFileWithinRoot({
+      rootDir: root,
+      relativePath: "nested/delete-me.txt",
+    });
+
+    await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects delete traversal outside root", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    await expect(
+      removeFileWithinRoot({
+        rootDir: root,
+        relativePath: "../escape.txt",
+      }),
+    ).rejects.toMatchObject({ code: "outside-workspace" });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "removes a symlink within root without touching its outside target",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+      const outsideTarget = path.join(outside, "keep.txt");
+      const linkPath = path.join(root, "link.txt");
+      await fs.writeFile(outsideTarget, "keep");
+      await fs.symlink(outsideTarget, linkPath);
+
+      await removeFileWithinRoot({
+        rootDir: root,
+        relativePath: "link.txt",
+      });
+
+      await expect(fs.lstat(linkPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("keep");
+    },
+  );
+
   it.runIf(process.platform !== "win32")("rejects writing through hardlink aliases", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const hardlinkPath = path.join(root, "alias.txt");
@@ -689,6 +758,23 @@ describe("fs-safe", () => {
 
     await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("X".repeat(4096));
   });
+
+  it.runIf(process.platform !== "win32")(
+    "does not delete out-of-root file when symlink retarget races unlink",
+    async () => {
+      const { root, outside, slot, outsideTarget } = await setupSymlinkWriteRaceFixture({
+        seedInsideTarget: true,
+      });
+
+      await expectSymlinkDeleteRaceRejectsOutside({
+        root,
+        slotPath: slot,
+        outsideDir: outside,
+      });
+
+      await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("X".repeat(4096));
+    },
+  );
 
   it("returns not-found for missing files", async () => {
     const dir = await tempDirs.make("openclaw-fs-safe-");
