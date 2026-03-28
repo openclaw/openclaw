@@ -64,7 +64,11 @@ import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.j
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  releasePinnedPluginChannelRegistry,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { makePrompter, makeRuntime } from "../setup/__tests__/test-utils.js";
@@ -444,6 +448,40 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.not.objectContaining({
         onlyPluginIds: expect.anything(),
+      }),
+    );
+  });
+
+  it("scopes channel reloads when the global registry is populated but the pinned channel registry is empty", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {};
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.plugins.push(
+      createPluginRecord({
+        id: "loaded-tools",
+        name: "loaded-tools",
+        source: "/tmp/loaded-tools.cjs",
+        origin: "bundled",
+      }),
+    );
+    setActivePluginRegistry(activeRegistry);
+    const pinnedChannelRegistry = createEmptyPluginRegistry();
+    pinActivePluginChannelRegistry(pinnedChannelRegistry);
+
+    try {
+      reloadChannelSetupPluginRegistryForChannel({
+        cfg,
+        runtime,
+        channel: "telegram",
+        workspaceDir: "/tmp/openclaw-workspace",
+      });
+    } finally {
+      releasePinnedPluginChannelRegistry(pinnedChannelRegistry);
+    }
+
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["telegram"],
       }),
     );
   });
