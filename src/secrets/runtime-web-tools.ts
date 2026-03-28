@@ -1,15 +1,14 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
-import {
-  listBundledWebSearchPluginIds,
-  resolveBundledWebSearchPluginId,
-} from "../plugins/bundled-web-search.js";
+import { listBundledWebSearchPluginIds } from "../plugins/bundled-web-search-ids.js";
+import { resolveBundledWebSearchPluginId } from "../plugins/bundled-web-search-provider-ids.js";
 import type {
   PluginWebSearchProviderEntry,
   WebSearchCredentialResolutionSource,
 } from "../plugins/types.js";
 import { resolveBundledPluginWebSearchProviders } from "../plugins/web-search-providers.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
+import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
 import { resolveSecretRefValues } from "./resolve.js";
@@ -268,6 +267,9 @@ function keyPathForProvider(provider: PluginWebSearchProviderEntry): string {
 }
 
 function inactivePathsForProvider(provider: PluginWebSearchProviderEntry): string[] {
+  if (provider.requiresCredential === false) {
+    return [];
+  }
   return provider.inactiveSecretPaths?.length
     ? provider.inactiveSecretPaths
     : [provider.credentialPath];
@@ -296,33 +298,36 @@ export async function resolveRuntimeWebTools(params: {
   const rawProvider =
     typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
   const configuredBundledPluginId = resolveBundledWebSearchPluginId(rawProvider);
-  const providers = search
-    ? configuredBundledPluginId
-      ? resolveBundledPluginWebSearchProviders({
-          config: params.sourceConfig,
-          env: { ...process.env, ...params.context.env },
-          bundledAllowlistCompat: true,
-          onlyPluginIds: [configuredBundledPluginId],
-        })
-      : !hasCustomWebSearchPluginRisk(params.sourceConfig)
-        ? resolveBundledPluginWebSearchProviders({
-            config: params.sourceConfig,
-            env: { ...process.env, ...params.context.env },
-            bundledAllowlistCompat: true,
-          })
-        : resolvePluginWebSearchProviders({
-            config: params.sourceConfig,
-            env: { ...process.env, ...params.context.env },
-            bundledAllowlistCompat: true,
-          })
-    : [];
 
   const searchMetadata: RuntimeWebSearchMetadata = {
     providerSource: "none",
     diagnostics: [],
   };
 
-  const searchEnabled = search?.enabled !== false;
+  const searchConfigured = Boolean(search);
+  const searchEnabled = searchConfigured && search?.enabled !== false;
+  const providers = sortWebSearchProvidersForAutoDetect(
+    searchConfigured
+      ? configuredBundledPluginId
+        ? resolveBundledPluginWebSearchProviders({
+            config: params.sourceConfig,
+            env: { ...process.env, ...params.context.env },
+            bundledAllowlistCompat: true,
+            onlyPluginIds: [configuredBundledPluginId],
+          })
+        : !hasCustomWebSearchPluginRisk(params.sourceConfig)
+          ? resolveBundledPluginWebSearchProviders({
+              config: params.sourceConfig,
+              env: { ...process.env, ...params.context.env },
+              bundledAllowlistCompat: true,
+            })
+          : resolvePluginWebSearchProviders({
+              config: params.sourceConfig,
+              env: { ...process.env, ...params.context.env },
+              bundledAllowlistCompat: true,
+            })
+      : [],
+  );
   const configuredProvider = normalizeProvider(rawProvider, providers);
 
   if (rawProvider && !configuredProvider) {
@@ -345,7 +350,7 @@ export async function resolveRuntimeWebTools(params: {
     searchMetadata.providerSource = "configured";
   }
 
-  if (searchEnabled && search) {
+  if (searchEnabled) {
     const candidates = configuredProvider
       ? providers.filter((provider) => provider.id === configuredProvider)
       : providers;
@@ -357,8 +362,19 @@ export async function resolveRuntimeWebTools(params: {
 
     let selectedProvider: WebSearchProvider | undefined;
     let selectedResolution: SecretResolutionResult | undefined;
+    let keylessFallbackProvider: PluginWebSearchProviderEntry | undefined;
 
     for (const provider of candidates) {
+      if (provider.requiresCredential === false) {
+        if (!keylessFallbackProvider) {
+          keylessFallbackProvider = provider;
+        }
+        if (configuredProvider) {
+          selectedProvider = provider.id;
+          break;
+        }
+        continue;
+      }
       const path = keyPathForProvider(provider);
       const value =
         provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
@@ -422,6 +438,15 @@ export async function resolveRuntimeWebTools(params: {
       }
     }
 
+    if (!selectedProvider && keylessFallbackProvider) {
+      selectedProvider = keylessFallbackProvider.id;
+      selectedResolution = {
+        source: "missing",
+        secretRefConfigured: false,
+        fallbackUsedAfterRefFailure: false,
+      };
+    }
+
     const failUnresolvedSearchNoFallback = (unresolved: { path: string; reason: string }) => {
       const diagnostic: RuntimeWebDiagnostic = {
         code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
@@ -449,9 +474,14 @@ export async function resolveRuntimeWebTools(params: {
       }
 
       if (selectedProvider) {
+        const selectedProviderEntry = providers.find((entry) => entry.id === selectedProvider);
+        const selectedDetails =
+          selectedProviderEntry?.requiresCredential === false
+            ? `tools.web.search auto-detected keyless provider "${selectedProvider}" as the default fallback.`
+            : `tools.web.search auto-detected provider "${selectedProvider}" from available credentials.`;
         const diagnostic: RuntimeWebDiagnostic = {
           code: "WEB_SEARCH_AUTODETECT_SELECTED",
-          message: `tools.web.search auto-detected provider "${selectedProvider}" from available credentials.`,
+          message: selectedDetails,
           path: "tools.web.search.provider",
         };
         diagnostics.push(diagnostic);
@@ -486,7 +516,7 @@ export async function resolveRuntimeWebTools(params: {
     }
   }
 
-  if (searchEnabled && search && !configuredProvider && searchMetadata.selectedProvider) {
+  if (searchEnabled && !configuredProvider && searchMetadata.selectedProvider) {
     for (const provider of providers) {
       if (provider.id === searchMetadata.selectedProvider) {
         continue;

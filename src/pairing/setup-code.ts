@@ -9,6 +9,11 @@ import {
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
+import {
+  pickMatchingExternalInterfaceAddress,
+  safeNetworkInterfaces,
+} from "../infra/network-interfaces.js";
+import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 import { isCarrierGradeNatIpv4Address, isRfc1918Ipv4Address } from "../shared/net/ip.js";
 import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
@@ -118,27 +123,12 @@ function pickIPv4Matching(
   networkInterfaces: () => ReturnType<typeof os.networkInterfaces>,
   matches: (address: string) => boolean,
 ): string | null {
-  const nets = networkInterfaces();
-  for (const entries of Object.values(nets)) {
-    if (!entries) {
-      continue;
-    }
-    for (const entry of entries) {
-      const family = entry?.family;
-      const isIpv4 = family === "IPv4";
-      if (!entry || entry.internal || !isIpv4) {
-        continue;
-      }
-      const address = entry.address?.trim() ?? "";
-      if (!address) {
-        continue;
-      }
-      if (matches(address)) {
-        return address;
-      }
-    }
-  }
-  return null;
+  return (
+    pickMatchingExternalInterfaceAddress(safeNetworkInterfaces(networkInterfaces), {
+      family: "IPv4",
+      matches,
+    }) ?? null
+  );
 }
 
 function pickLanIPv4(
@@ -154,13 +144,11 @@ function pickTailnetIPv4(
 }
 
 function resolveGatewayTokenFromEnv(env: NodeJS.ProcessEnv): string | undefined {
-  return env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim() || undefined;
+  return env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
 }
 
 function resolveGatewayPasswordFromEnv(env: NodeJS.ProcessEnv): string | undefined {
-  return (
-    env.OPENCLAW_GATEWAY_PASSWORD?.trim() || env.CLAWDBOT_GATEWAY_PASSWORD?.trim() || undefined
-  );
+  return env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined;
 }
 
 function resolvePairingSetupAuthLabel(
@@ -219,9 +207,7 @@ async function resolveGatewayTokenSecretRef(
     return cfg;
   }
   if (mode !== "token") {
-    const hasPasswordEnvCandidate = Boolean(
-      env.OPENCLAW_GATEWAY_PASSWORD?.trim() || env.CLAWDBOT_GATEWAY_PASSWORD?.trim(),
-    );
+    const hasPasswordEnvCandidate = Boolean(env.OPENCLAW_GATEWAY_PASSWORD?.trim());
     if (hasPasswordEnvCandidate) {
       return cfg;
     }
@@ -399,6 +385,7 @@ export async function resolvePairingSetupFromConfig(
       bootstrapToken: (
         await issueDeviceBootstrapToken({
           baseDir: options.pairingBaseDir,
+          profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
         })
       ).token,
     },

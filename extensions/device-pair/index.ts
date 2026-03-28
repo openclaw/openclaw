@@ -7,12 +7,14 @@ import {
   definePluginEntry,
   issueDeviceBootstrapToken,
   listDevicePairing,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
   renderQrPngBase64,
   revokeDeviceBootstrapToken,
   resolveGatewayBindUrl,
+  resolveGatewayPort,
   resolvePreferredOpenClawTmpDir,
-  resolveTailnetHostWithRunner,
   runPluginCommandWithTimeout,
+  resolveTailnetHostWithRunner,
   type OpenClawPluginApi,
 } from "./api.js";
 import {
@@ -41,8 +43,6 @@ function formatDurationMinutes(expiresAtMs: number): string {
   const minutes = Math.max(1, Math.ceil(msRemaining / 60_000));
   return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
-
-const DEFAULT_GATEWAY_PORT = 18789;
 
 type DevicePairPluginConfig = {
   publicUrl?: string;
@@ -174,28 +174,6 @@ function parseNormalizedGatewayUrl(raw: string): string | null {
   }
 }
 
-function parsePositiveInteger(raw: string | undefined): number | null {
-  if (!raw) {
-    return null;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-function resolveGatewayPort(cfg: OpenClawPluginApi["config"]): number {
-  const envPort =
-    parsePositiveInteger(process.env.OPENCLAW_GATEWAY_PORT?.trim()) ??
-    parsePositiveInteger(process.env.CLAWDBOT_GATEWAY_PORT?.trim());
-  if (envPort) {
-    return envPort;
-  }
-  const configPort = cfg.gateway?.port;
-  if (typeof configPort === "number" && Number.isFinite(configPort) && configPort > 0) {
-    return configPort;
-  }
-  return DEFAULT_GATEWAY_PORT;
-}
-
 function resolveScheme(
   cfg: OpenClawPluginApi["config"],
   opts?: { forceSecure?: boolean },
@@ -290,17 +268,10 @@ async function resolveTailnetHost(): Promise<string | null> {
 function resolveAuthLabel(cfg: OpenClawPluginApi["config"]): ResolveAuthLabelResult {
   const mode = cfg.gateway?.auth?.mode;
   const token =
-    pickFirstDefined([
-      process.env.OPENCLAW_GATEWAY_TOKEN,
-      process.env.CLAWDBOT_GATEWAY_TOKEN,
-      cfg.gateway?.auth?.token,
-    ]) ?? undefined;
+    pickFirstDefined([process.env.OPENCLAW_GATEWAY_TOKEN, cfg.gateway?.auth?.token]) ?? undefined;
   const password =
-    pickFirstDefined([
-      process.env.OPENCLAW_GATEWAY_PASSWORD,
-      process.env.CLAWDBOT_GATEWAY_PASSWORD,
-      cfg.gateway?.auth?.password,
-    ]) ?? undefined;
+    pickFirstDefined([process.env.OPENCLAW_GATEWAY_PASSWORD, cfg.gateway?.auth?.password]) ??
+    undefined;
 
   if (mode === "token" || mode === "password") {
     return resolveRequiredAuthLabel(mode, { token, password });
@@ -524,7 +495,9 @@ function resolveQrReplyTarget(ctx: QrCommandContext): string {
 }
 
 async function issueSetupPayload(url: string): Promise<SetupPayload> {
-  const issuedBootstrap = await issueDeviceBootstrapToken();
+  const issuedBootstrap = await issueDeviceBootstrapToken({
+    profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  });
   return {
     url,
     bootstrapToken: issuedBootstrap.token,
@@ -577,6 +550,9 @@ export default definePluginEntry({
         const args = ctx.args?.trim() ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
         const action = tokens[0]?.toLowerCase() ?? "";
+        const gatewayClientScopes = Array.isArray(ctx.gatewayClientScopes)
+          ? ctx.gatewayClientScopes
+          : null;
         api.logger.info?.(
           `device-pair: /pair invoked channel=${ctx.channel} sender=${ctx.senderId ?? "unknown"} action=${
             action || "new"
@@ -598,6 +574,15 @@ export default definePluginEntry({
         }
 
         if (action === "approve") {
+          if (
+            gatewayClientScopes &&
+            !gatewayClientScopes.includes("operator.pairing") &&
+            !gatewayClientScopes.includes("operator.admin")
+          ) {
+            return {
+              text: "⚠️ This command requires operator.pairing for internal gateway callers.",
+            };
+          }
           const requested = tokens[1]?.trim();
           const list = await listDevicePairing();
           if (list.pending.length === 0) {
@@ -626,9 +611,16 @@ export default definePluginEntry({
           if (!pending) {
             return { text: "Pairing request not found." };
           }
-          const approved = await approveDevicePairing(pending.requestId);
+          const approved = gatewayClientScopes
+            ? await approveDevicePairing(pending.requestId, {
+                callerScopes: gatewayClientScopes,
+              })
+            : await approveDevicePairing(pending.requestId);
           if (!approved) {
             return { text: "Pairing request not found." };
+          }
+          if (approved.status === "forbidden") {
+            return { text: `⚠️ Cannot approve a request requiring ${approved.missingScope}.` };
           }
           const label = approved.device.displayName?.trim() || approved.device.deviceId;
           const platform = approved.device.platform?.trim();

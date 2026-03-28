@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expectPairingReplyText } from "../../../test/helpers/pairing-reply.js";
 import {
   defaultSlackTestConfig,
   getSlackTestState,
@@ -12,15 +13,20 @@ import {
   stopSlackMonitor,
 } from "./monitor.test-helpers.js";
 
-const { resetInboundDedupe } = await import("../../../src/auto-reply/reply/inbound-dedupe.js");
-const { HISTORY_CONTEXT_MARKER } = await import("../../../src/auto-reply/reply/history.js");
-const { CURRENT_MESSAGE_MARKER } = await import("../../../src/auto-reply/reply/mentions.js");
-const { monitorSlackProvider } = await import("./monitor.js");
+let resetInboundDedupe: typeof import("../../../src/auto-reply/reply/inbound-dedupe.js").resetInboundDedupe;
+let HISTORY_CONTEXT_MARKER: typeof import("../../../src/auto-reply/reply/history.js").HISTORY_CONTEXT_MARKER;
+let CURRENT_MESSAGE_MARKER: typeof import("../../../src/auto-reply/reply/mentions.js").CURRENT_MESSAGE_MARKER;
+let monitorSlackProvider: typeof import("./monitor.js").monitorSlackProvider;
 
 const slackTestState = getSlackTestState();
 const { sendMock, replyMock, reactMock, upsertPairingRequestMock } = slackTestState;
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
+  ({ resetInboundDedupe } = await import("../../../src/auto-reply/reply/inbound-dedupe.js"));
+  ({ HISTORY_CONTEXT_MARKER } = await import("../../../src/auto-reply/reply/history.js"));
+  ({ CURRENT_MESSAGE_MARKER } = await import("../../../src/auto-reply/reply/mentions.js"));
+  ({ monitorSlackProvider } = await import("./monitor.js"));
   resetInboundDedupe();
   resetSlackTestState(defaultSlackTestConfig());
 });
@@ -557,8 +563,11 @@ describe("monitorSlackProvider tool results", () => {
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock.mock.calls[0]?.[1]).toContain("Your Slack user id: U1");
-    expect(sendMock.mock.calls[0]?.[1]).toContain("Pairing code: PAIRCODE");
+    expectPairingReplyText(String(sendMock.mock.calls[0]?.[1] ?? ""), {
+      channel: "slack",
+      idLine: "Your Slack user id: U1",
+      code: "PAIRCODE",
+    });
   });
 
   it("does not resend pairing code when a request is already pending", async () => {

@@ -4,6 +4,7 @@ import {
   ensureConfiguredAcpBindingReady,
   formatAllowlistMatchMeta,
   getAgentScopedMediaLocalRoots,
+  getSessionBindingService,
   logInboundDrop,
   logTypingFailure,
   resolveControlCommandGate,
@@ -36,6 +37,7 @@ import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions } from "./mentions.js";
 import { handleInboundMatrixReaction } from "./reaction-events.js";
 import { deliverMatrixReplies } from "./replies.js";
+import { createMatrixReplyContextResolver } from "./reply-context.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 import { createMatrixThreadContextResolver } from "./thread-context.js";
@@ -177,6 +179,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   } | null = null;
   const pairingReplySentAtMsBySender = new Map<string, number>();
   const resolveThreadContext = createMatrixThreadContextResolver({
+    client,
+    getMemberDisplayName,
+    logVerboseMessage,
+  });
+  const resolveReplyContext = createMatrixReplyContextResolver({
     client,
     getMemberDisplayName,
     logVerboseMessage,
@@ -529,7 +536,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       const _messageId = event.event_id ?? "";
       const _threadRootId = resolveMatrixThreadRootId({ event, content });
-      const { route: _route, configuredBinding: _configuredBinding } = resolveMatrixInboundRoute({
+      const {
+        route: _route,
+        configuredBinding: _configuredBinding,
+        runtimeBindingId: _runtimeBindingId,
+      } = resolveMatrixInboundRoute({
         cfg,
         accountId,
         roomId,
@@ -541,9 +552,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         resolveAgentRoute: core.channel.routing.resolveAgentRoute,
       });
       const agentMentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, _route.agentId);
+      const selfDisplayName = content.formatted_body
+        ? await getMemberDisplayName(roomId, selfUserId).catch(() => undefined)
+        : undefined;
       const { wasMentioned, hasExplicitMention } = resolveMentions({
         content,
         userId: selfUserId,
+        displayName: selfDisplayName,
         text: mentionPrecheckText,
         mentionRegexes: agentMentionRegexes,
       });
@@ -638,6 +653,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           ? content.file
           : undefined;
       const finalMediaUrl = finalContentUrl ?? finalContentFile?.url;
+      const contentBody = typeof content.body === "string" ? content.body.trim() : "";
+      const contentFilename = typeof content.filename === "string" ? content.filename.trim() : "";
+      const originalFilename = contentFilename || contentBody || undefined;
       const contentInfo =
         "info" in content && content.info && typeof content.info === "object"
           ? (content.info as { mimetype?: string; size?: number })
@@ -653,6 +671,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             sizeBytes: contentSize,
             maxBytes: mediaMaxBytes,
             file: finalContentFile,
+            originalFilename,
           });
         } catch (err) {
           mediaDownloadFailed = true;
@@ -670,8 +689,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
       }
 
-      const rawBody =
-        locationPayload?.text ?? (typeof content.body === "string" ? content.body.trim() : "");
+      const rawBody = locationPayload?.text ?? contentBody;
       const bodyText = resolveMatrixInboundBodyText({
         rawBody,
         filename: typeof content.filename === "string" ? content.filename : undefined,
@@ -699,6 +717,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         ? await resolveThreadContext({ roomId, threadRootId: _threadRootId })
         : undefined;
 
+      // Resolve the body and sender of the replied-to message so the agent
+      // can see what is being replied to, not just the event ID.
+      // Note: resolve even when threadTarget is set (e.g. threadReplies: "always")
+      // because the user may still be quoting a specific message within the thread.
+      const replyContext =
+        replyToEventId && replyToEventId === _threadRootId && threadContext?.summary
+          ? {
+              replyToBody: threadContext.summary,
+              replyToSender: threadContext.senderLabel,
+            }
+          : replyToEventId
+            ? await resolveReplyContext({ roomId, eventId: replyToEventId })
+            : undefined;
+
       if (_configuredBinding) {
         const ensured = await ensureConfiguredAcpBindingReady({
           cfg,
@@ -713,6 +745,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
           return;
         }
+      }
+      if (_runtimeBindingId) {
+        getSessionBindingService().touch(_runtimeBindingId, eventTs ?? undefined);
       }
       const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
       const textWithId = `${bodyText}\n[matrix event id: ${_messageId} room: ${roomId}]`;
@@ -755,6 +790,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         WasMentioned: isRoom ? wasMentioned : undefined,
         MessageSid: _messageId,
         ReplyToId: threadTarget ? undefined : (replyToEventId ?? undefined),
+        ReplyToBody: replyContext?.replyToBody,
+        ReplyToSender: replyContext?.replyToSender,
         MessageThreadId: threadTarget,
         ThreadStarterBody: threadContext?.threadStarterBody,
         Timestamp: eventTs ?? undefined,

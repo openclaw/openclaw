@@ -20,7 +20,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
         senderIsOwner: true,
         senderId: "user-123",
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",
@@ -39,7 +39,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       agentDir: "/tmp/agent",
       senderId: "user-123",
       provider: "openai-codex",
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
     });
   });
 

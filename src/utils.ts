@@ -9,6 +9,7 @@ import {
   resolveRequiredHomeDir,
 } from "./infra/home-dir.js";
 import { isPlainObject } from "./infra/plain-object.js";
+import { formatTerminalLink } from "./terminal/terminal-link.js";
 
 export async function ensureDir(dir: string) {
   await fs.promises.mkdir(dir, { recursive: true });
@@ -55,7 +56,7 @@ export function safeParseJson<T>(raw: string): T | null {
   }
 }
 
-export { isPlainObject };
+export { formatTerminalLink, isPlainObject };
 
 /**
  * Type guard for Record<string, unknown> (less strict than isPlainObject).
@@ -286,7 +287,7 @@ export function resolveConfigDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  const override = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
+  const override = env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
@@ -353,22 +354,6 @@ export function displayPath(input: string): string {
 
 export function displayString(input: string): string {
   return shortenHomeInString(input);
-}
-
-export function formatTerminalLink(
-  label: string,
-  url: string,
-  opts?: { fallback?: string; force?: boolean },
-): string {
-  const esc = "\u001b";
-  const safeLabel = label.replaceAll(esc, "");
-  const safeUrl = url.replaceAll(esc, "");
-  const allow =
-    opts?.force === true ? true : opts?.force === false ? false : Boolean(process.stdout.isTTY);
-  if (!allow) {
-    return opts?.fallback ?? `${safeLabel} (${safeUrl})`;
-  }
-  return `\u001b]8;;${safeUrl}\u0007${safeLabel}\u001b]8;;\u0007`;
 }
 
 // Configuration root; can be overridden via OPENCLAW_STATE_DIR.

@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime.js";
 
 const loadAndMaybeMigrateDoctorConfigMock = vi.hoisted(() => vi.fn());
@@ -11,6 +11,8 @@ vi.mock("../../commands/doctor-config-preflight.js", () => ({
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
 }));
+
+const mockedModuleIds = ["../../commands/doctor-config-preflight.js", "../../config/config.js"];
 
 function makeSnapshot() {
   return {
@@ -48,6 +50,7 @@ describe("ensureConfigReady", () => {
     runtime: RuntimeEnv;
     commandPath?: string[];
     suppressDoctorStdout?: boolean;
+    allowInvalid?: boolean;
   }) => Promise<void>;
   let resetConfigGuardStateForTests: () => void;
 
@@ -79,6 +82,13 @@ describe("ensureConfigReady", () => {
     } = await import("./config-guard.js"));
   });
 
+  afterAll(() => {
+    for (const id of mockedModuleIds) {
+      vi.doUnmock(id);
+    }
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     resetConfigGuardStateForTests();
@@ -93,6 +103,11 @@ describe("ensureConfigReady", () => {
     {
       name: "skips doctor flow for read-only fast path commands",
       commandPath: ["status"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for update status",
+      commandPath: ["update", "status"],
       expectedDoctorCalls: 0,
     },
     {
@@ -130,13 +145,23 @@ describe("ensureConfigReady", () => {
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
   });
 
+  it("allows an explicit invalid-config override", async () => {
+    setInvalidSnapshot();
+    const runtime = makeRuntime();
+    await ensureConfigReady({
+      runtime: runtime as never,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("runs doctor migration flow only once per module instance", async () => {
     const runtimeA = makeRuntime();
     const runtimeB = makeRuntime();
 
     await ensureConfigReady({ runtime: runtimeA as never, commandPath: ["message"] });
     await ensureConfigReady({ runtime: runtimeB as never, commandPath: ["message"] });
-
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(1);
   });
 

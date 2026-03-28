@@ -1,26 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { __testing as braveTesting } from "../../../extensions/brave/src/brave-web-search-provider.js";
-import { __testing as moonshotTesting } from "../../../extensions/moonshot/src/kimi-web-search-provider.js";
-import { __testing as perplexityTesting } from "../../../extensions/perplexity/web-search-provider.js";
-import { __testing as xaiTesting } from "../../../extensions/xai/src/grok-web-search-provider.js";
 import {
   buildUnsupportedSearchFilterResponse,
-  mergeScopedSearchConfig,
-} from "../../plugin-sdk/provider-web-search.js";
-import { withEnv } from "../../test-utils/env.js";
-const {
-  inferPerplexityBaseUrlFromApiKey,
-  resolvePerplexityBaseUrl,
-  resolvePerplexityModel,
-  resolvePerplexityTransport,
-  isDirectPerplexityBaseUrl,
-  resolvePerplexityRequestModel,
-  resolvePerplexityApiKey,
-  normalizeToIsoDate,
   isoToPerplexityDate,
-} = perplexityTesting;
-const {
-  normalizeBraveLanguageParams,
+  normalizeToIsoDate,
   normalizeFreshness,
   resolveBraveMode,
   mapBraveLlmContextResults,
@@ -145,6 +127,8 @@ describe("web_search brave language param normalization", () => {
     });
   });
 });
+} from "./web-search-provider-common.js";
+import { mergeScopedSearchConfig } from "./web-search-provider-config.js";
 
 describe("web_search freshness normalization", () => {
   it("accepts Brave shortcut values and maps for Perplexity", () => {

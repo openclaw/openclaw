@@ -4,14 +4,15 @@ import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
+import { createBrowserTool } from "../plugin-sdk/browser.js";
+import { XAI_UNSUPPORTED_SCHEMA_KEYWORDS } from "../plugin-sdk/provider-tools.js";
+import { applyXaiModelCompat } from "../plugin-sdk/xai.js";
 import "./test-helpers/fast-coding-tools.js";
-import { applyXaiModelCompat } from "./model-compat.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { findUnsupportedSchemaKeywords } from "./pi-embedded-runner/google.js";
 import { __testing, createOpenClawCodingTools } from "./pi-tools.js";
 import { createOpenClawReadTool, createSandboxedReadTool } from "./pi-tools.read.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
-import { createBrowserTool } from "./tools/browser-tool.js";
 
 const defaultTools = createOpenClawCodingTools();
 
@@ -163,9 +164,8 @@ describe("createOpenClawCodingTools", () => {
     expect(browser.description).toMatch(/profile="user"/i);
   });
   it("keeps browser tool schema properties after normalization", () => {
-    const browser = defaultTools.find((tool) => tool.name === "browser");
-    expect(browser).toBeDefined();
-    const parameters = browser?.parameters as {
+    const browser = createBrowserTool();
+    const parameters = browser.parameters as {
       anyOf?: unknown[];
       properties?: Record<string, unknown>;
       required?: string[];
@@ -192,10 +192,8 @@ describe("createOpenClawCodingTools", () => {
     expect(parameters.required ?? []).not.toContain("raw");
   });
   it("flattens anyOf-of-literals to enum for provider compatibility", () => {
-    const browser = defaultTools.find((tool) => tool.name === "browser");
-    expect(browser).toBeDefined();
-
-    const parameters = browser?.parameters as {
+    const browser = createBrowserTool();
+    const parameters = browser.parameters as {
       properties?: Record<string, unknown>;
     };
     const action = parameters.properties?.action as
@@ -329,8 +327,7 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("sessions_history")).toBe(false);
     expect(names.has("sessions_send")).toBe(false);
     expect(names.has("sessions_spawn")).toBe(false);
-    // Explicit subagent orchestration tool remains available (list/steer/kill with safeguards).
-    expect(names.has("subagents")).toBe(true);
+    expect(names.has("subagents")).toBe(false);
 
     expect(names.has("read")).toBe(true);
     expect(names.has("exec")).toBe(true);
@@ -377,7 +374,7 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("sessions_spawn")).toBe(false);
     expect(names.has("sessions_list")).toBe(false);
     expect(names.has("sessions_history")).toBe(false);
-    expect(names.has("subagents")).toBe(true);
+    expect(names.has("subagents")).toBe(false);
   });
   it("supports allow-only sub-agent tool policy", () => {
     const tools = createOpenClawCodingTools({
@@ -464,7 +461,12 @@ describe("createOpenClawCodingTools", () => {
     expect(xaiTools.some((tool) => tool.name === "web_search")).toBe(false);
     for (const tool of xaiTools) {
       const violations = findUnsupportedSchemaKeywords(tool.parameters, `${tool.name}.parameters`);
-      expect(violations).toEqual([]);
+      expect(
+        violations.filter((violation) => {
+          const keyword = violation.split(".").at(-1) ?? "";
+          return XAI_UNSUPPORTED_SCHEMA_KEYWORDS.has(keyword);
+        }),
+      ).toEqual([]);
     }
   });
   it("applies sandbox path guards to file_path alias", async () => {

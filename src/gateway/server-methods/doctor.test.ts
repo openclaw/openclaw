@@ -13,8 +13,8 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId,
 }));
 
-vi.mock("../../memory/index.js", () => ({
-  getMemorySearchManager,
+vi.mock("../../plugins/memory-runtime.js", () => ({
+  getActiveMemorySearchManager: getMemorySearchManager,
 }));
 
 import { doctorHandlers } from "./doctor.js";

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ContextEngine } from "./types.js";
 
 /**
@@ -317,16 +318,15 @@ type ContextEngineRegistryState = {
 
 // Keep context-engine registrations process-global so duplicated dist chunks
 // still share one registry map at runtime.
+const contextEngineRegistryState = resolveGlobalSingleton<ContextEngineRegistryState>(
+  CONTEXT_ENGINE_REGISTRY_STATE,
+  () => ({
+    engines: new Map(),
+  }),
+);
+
 function getContextEngineRegistryState(): ContextEngineRegistryState {
-  const globalState = globalThis as typeof globalThis & {
-    [CONTEXT_ENGINE_REGISTRY_STATE]?: ContextEngineRegistryState;
-  };
-  if (!globalState[CONTEXT_ENGINE_REGISTRY_STATE]) {
-    globalState[CONTEXT_ENGINE_REGISTRY_STATE] = {
-      engines: new Map(),
-    };
-  }
-  return globalState[CONTEXT_ENGINE_REGISTRY_STATE];
+  return contextEngineRegistryState;
 }
 
 function requireContextEngineOwner(owner: string): string {

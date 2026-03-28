@@ -57,8 +57,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         let allowedSchemesJSON = (
             try? String(
                 data: JSONSerialization.data(withJSONObject: CanvasScheme.allSchemes),
-                encoding: .utf8)
-        ) ?? "[]"
+                encoding: .utf8)) ?? "[]"
         let bridgeScript = """
         (() => {
           try {

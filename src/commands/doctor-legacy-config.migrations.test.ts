@@ -318,6 +318,10 @@ describe("normalizeCompatibilityConfigValues", () => {
       provider: "default",
       id: "GEMINI_API_KEY",
     });
+    expect(res.config.models?.providers?.google?.baseUrl).toBe(
+      "https://generativelanguage.googleapis.com/v1beta",
+    );
+    expect(res.config.models?.providers?.google?.models).toEqual([]);
     expect(res.config.skills?.entries).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved skills.entries.nano-banana-pro → agents.defaults.imageGenerationModel.primary (google/gemini-3-pro-image-preview).",
@@ -341,6 +345,10 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
 
     expect(res.config.models?.providers?.google?.apiKey).toBe("env-gemini-key");
+    expect(res.config.models?.providers?.google?.baseUrl).toBe(
+      "https://generativelanguage.googleapis.com/v1beta",
+    );
+    expect(res.config.models?.providers?.google?.models).toEqual([]);
     expect(res.changes).toContain(
       "Moved skills.entries.nano-banana-pro.env.GEMINI_API_KEY → models.providers.google.apiKey.",
     );
@@ -515,7 +523,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
 
     expect(res.config.talk).toEqual({
-      provider: "elevenlabs",
       providers: {
         elevenlabs: {
           voiceId: "voice-123",
@@ -537,9 +544,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     });
-    expect(res.changes).toEqual([
-      "Moved legacy talk flat fields → talk.provider/talk.providers.elevenlabs.",
-    ]);
+    expect(res.changes).toEqual(["Moved legacy talk flat fields → talk.providers.elevenlabs."]);
   });
 
   it("normalizes talk provider ids without overriding explicit provider config", () => {
@@ -667,6 +672,54 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Merged tools.media.audio.deepgram → tools.media.audio.providerOptions.deepgram (filled missing canonical fields from legacy).",
       "Moved tools.media.audio.models[0].deepgram → tools.media.audio.models[0].providerOptions.deepgram.",
       "Merged tools.media.models[0].deepgram → tools.media.models[0].providerOptions.deepgram (filled missing canonical fields from legacy).",
+    ]);
+  });
+
+  it("normalizes persisted mistral model maxTokens that matched the old context-sized defaults", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          mistral: {
+            baseUrl: "https://api.mistral.ai/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "mistral-large-latest",
+                name: "Mistral Large",
+                reasoning: false,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 262144,
+                maxTokens: 262144,
+              },
+              {
+                id: "magistral-small",
+                name: "Magistral Small",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 128000,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.mistral?.models).toEqual([
+      expect.objectContaining({
+        id: "mistral-large-latest",
+        maxTokens: 16384,
+      }),
+      expect.objectContaining({
+        id: "magistral-small",
+        maxTokens: 40000,
+      }),
+    ]);
+    expect(res.changes).toEqual([
+      "Normalized models.providers.mistral.models[0].maxTokens (262144 → 16384) to avoid Mistral context-window rejects.",
+      "Normalized models.providers.mistral.models[1].maxTokens (128000 → 40000) to avoid Mistral context-window rejects.",
     ]);
   });
 });

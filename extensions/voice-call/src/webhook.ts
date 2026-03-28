@@ -1,12 +1,17 @@
 import http from "node:http";
 import { URL } from "node:url";
 import {
+  createWebhookInFlightLimiter,
+  WEBHOOK_BODY_READ_DEFAULTS,
+} from "openclaw/plugin-sdk/webhook-ingress";
+import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "../api.js";
 import { normalizeVoiceCallConfig, type VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
+import { getHeader } from "./http-headers.js";
 import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
 import { MediaStreamHandler } from "./media-stream.js";
@@ -16,9 +21,17 @@ import type { TwilioProvider } from "./providers/twilio.js";
 import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 
-const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
+const MAX_WEBHOOK_BODY_BYTES = WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes;
+const WEBHOOK_BODY_TIMEOUT_MS = WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
 const STREAM_DISCONNECT_HANGUP_GRACE_MS = 2000;
 const TRANSCRIPT_LOG_MAX_CHARS = 200;
+
+type WebhookHeaderGateResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: string;
+    };
 
 function sanitizeTranscriptForLog(value: string): string {
   const sanitized = value
@@ -70,6 +83,7 @@ export class VoiceCallWebhookServer {
   private coreConfig: CoreConfig | null;
   private agentRuntime: CoreAgentDeps | null;
   private stopStaleCallReaper: (() => void) | null = null;
+  private readonly webhookInFlightLimiter = createWebhookInFlightLimiter();
 
   /** Media stream handler for bidirectional audio (when streaming enabled) */
   private mediaStreamHandler: MediaStreamHandler | null = null;
@@ -350,6 +364,7 @@ export class VoiceCallWebhookServer {
       clearTimeout(timer);
     }
     this.pendingDisconnectHangups.clear();
+    this.webhookInFlightLimiter.clear();
 
     if (this.stopStaleCallReaper) {
       this.stopStaleCallReaper();
@@ -444,49 +459,100 @@ export class VoiceCallWebhookServer {
       return { statusCode: 405, body: "Method Not Allowed" };
     }
 
-    let body = "";
+    const headerGate = this.verifyPreAuthWebhookHeaders(req.headers);
+    if (!headerGate.ok) {
+      console.warn(`[voice-call] Webhook rejected before body read: ${headerGate.reason}`);
+      return { statusCode: 401, body: "Unauthorized" };
+    }
+
+    const inFlightKey = req.socket.remoteAddress ?? "";
+    if (!this.webhookInFlightLimiter.tryAcquire(inFlightKey)) {
+      console.warn(`[voice-call] Webhook rejected before body read: too many in-flight requests`);
+      return { statusCode: 429, body: "Too Many Requests" };
+    }
+
     try {
-      body = await this.readBody(req, MAX_WEBHOOK_BODY_BYTES);
-    } catch (err) {
-      if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-        return { statusCode: 413, body: "Payload Too Large" };
+      let body = "";
+      try {
+        body = await this.readBody(req, MAX_WEBHOOK_BODY_BYTES, WEBHOOK_BODY_TIMEOUT_MS);
+      } catch (err) {
+        if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
+          return { statusCode: 413, body: "Payload Too Large" };
+        }
+        if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
+          return { statusCode: 408, body: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") };
+        }
+        throw err;
       }
-      if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-        return { statusCode: 408, body: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") };
+
+      const ctx: WebhookContext = {
+        headers: req.headers as Record<string, string | string[] | undefined>,
+        rawBody: body,
+        url: url.toString(),
+        method: "POST",
+        query: Object.fromEntries(url.searchParams),
+        remoteAddress: req.socket.remoteAddress ?? undefined,
+      };
+
+      const verification = this.provider.verifyWebhook(ctx);
+      if (!verification.ok) {
+        console.warn(`[voice-call] Webhook verification failed: ${verification.reason}`);
+        return { statusCode: 401, body: "Unauthorized" };
       }
-      throw err;
+      if (!verification.verifiedRequestKey) {
+        console.warn("[voice-call] Webhook verification succeeded without request identity key");
+        return { statusCode: 401, body: "Unauthorized" };
+      }
+
+      const parsed = this.provider.parseWebhookEvent(ctx, {
+        verifiedRequestKey: verification.verifiedRequestKey,
+      });
+
+      if (verification.isReplay) {
+        console.warn("[voice-call] Replay detected; skipping event side effects");
+      } else {
+        this.processParsedEvents(parsed.events);
+      }
+
+      return normalizeWebhookResponse(parsed);
+    } finally {
+      this.webhookInFlightLimiter.release(inFlightKey);
     }
+  }
 
-    const ctx: WebhookContext = {
-      headers: req.headers as Record<string, string | string[] | undefined>,
-      rawBody: body,
-      url: url.toString(),
-      method: "POST",
-      query: Object.fromEntries(url.searchParams),
-      remoteAddress: req.socket.remoteAddress ?? undefined,
-    };
-
-    const verification = this.provider.verifyWebhook(ctx);
-    if (!verification.ok) {
-      console.warn(`[voice-call] Webhook verification failed: ${verification.reason}`);
-      return { statusCode: 401, body: "Unauthorized" };
+  private verifyPreAuthWebhookHeaders(headers: http.IncomingHttpHeaders): WebhookHeaderGateResult {
+    if (this.config.skipSignatureVerification) {
+      return { ok: true };
     }
-    if (!verification.verifiedRequestKey) {
-      console.warn("[voice-call] Webhook verification succeeded without request identity key");
-      return { statusCode: 401, body: "Unauthorized" };
+    switch (this.provider.name) {
+      case "telnyx": {
+        const signature = getHeader(headers, "telnyx-signature-ed25519");
+        const timestamp = getHeader(headers, "telnyx-timestamp");
+        if (signature && timestamp) {
+          return { ok: true };
+        }
+        return { ok: false, reason: "missing Telnyx signature or timestamp header" };
+      }
+      case "twilio":
+        if (getHeader(headers, "x-twilio-signature")) {
+          return { ok: true };
+        }
+        return { ok: false, reason: "missing X-Twilio-Signature header" };
+      case "plivo": {
+        const hasV3 =
+          Boolean(getHeader(headers, "x-plivo-signature-v3")) &&
+          Boolean(getHeader(headers, "x-plivo-signature-v3-nonce"));
+        const hasV2 =
+          Boolean(getHeader(headers, "x-plivo-signature-v2")) &&
+          Boolean(getHeader(headers, "x-plivo-signature-v2-nonce"));
+        if (hasV3 || hasV2) {
+          return { ok: true };
+        }
+        return { ok: false, reason: "missing Plivo signature headers" };
+      }
+      default:
+        return { ok: true };
     }
-
-    const parsed = this.provider.parseWebhookEvent(ctx, {
-      verifiedRequestKey: verification.verifiedRequestKey,
-    });
-
-    if (verification.isReplay) {
-      console.warn("[voice-call] Replay detected; skipping event side effects");
-    } else {
-      this.processParsedEvents(parsed.events);
-    }
-
-    return normalizeWebhookResponse(parsed);
   }
 
   private processParsedEvents(events: NormalizedEvent[]): void {
@@ -515,7 +581,7 @@ export class VoiceCallWebhookServer {
   private readBody(
     req: http.IncomingMessage,
     maxBytes: number,
-    timeoutMs = 30_000,
+    timeoutMs = WEBHOOK_BODY_TIMEOUT_MS,
   ): Promise<string> {
     return readRequestBodyWithLimit(req, { maxBytes, timeoutMs });
   }

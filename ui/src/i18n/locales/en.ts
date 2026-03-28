@@ -314,12 +314,6 @@ export const en: TranslationMap = {
       limitReached: "Showing first 1,000 sessions. Narrow date range for complete results.",
     },
     details: {
-      emptyTitle: "Select a session",
-      emptySubtitle:
-        "Pick a session to inspect the timeline, conversation, and prompt context for a single run.",
-      emptyTimeline: "Turn-by-turn timeline",
-      emptyConversation: "Conversation logs",
-      emptyContext: "Prompt breakdown",
       noUsageData: "No usage data for this session.",
       duration: "Duration",
       modelMix: "Model Mix",

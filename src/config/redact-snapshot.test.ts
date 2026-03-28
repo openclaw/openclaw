@@ -1,48 +1,14 @@
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
+import { REDACTED_SENTINEL, redactConfigSnapshot } from "./redact-snapshot.js";
 import {
-  REDACTED_SENTINEL,
-  redactConfigSnapshot,
-  restoreRedactedValues as restoreRedactedValues_orig,
-} from "./redact-snapshot.js";
+  makeSnapshot,
+  restoreRedactedValues,
+  type TestSnapshot,
+} from "./redact-snapshot.test-helpers.js";
 import { redactSnapshotTestHints as mainSchemaHints } from "./redact-snapshot.test-hints.js";
 import type { ConfigUiHints } from "./schema.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
-
-type TestSnapshot<TConfig extends Record<string, unknown>> = ConfigFileSnapshot & {
-  parsed: TConfig;
-  resolved: TConfig;
-  config: TConfig;
-};
-
-function makeSnapshot<TConfig extends Record<string, unknown>>(
-  config: TConfig,
-  raw?: string,
-): TestSnapshot<TConfig> {
-  return {
-    path: "/home/user/.openclaw/config.json5",
-    exists: true,
-    raw: raw ?? JSON.stringify(config),
-    parsed: config,
-    resolved: config as ConfigFileSnapshot["resolved"],
-    valid: true,
-    config: config as ConfigFileSnapshot["config"],
-    hash: "abc123",
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  } as unknown as TestSnapshot<TConfig>;
-}
-
-function restoreRedactedValues<TOriginal>(
-  incoming: unknown,
-  original: TOriginal,
-  hints?: ConfigUiHints,
-): TOriginal {
-  var result = restoreRedactedValues_orig(incoming, original, hints);
-  expect(result.ok).toBe(true);
-  return result.result as TOriginal;
-}
 
 function expectNestedLevelPairValue(
   source: Record<string, Record<string, Record<string, unknown>>>,
@@ -84,7 +50,10 @@ describe("redactConfigSnapshot", () => {
           signingSecret: "slack-signing-secret-value-1234",
           token: "secret-slack-token-value-here",
         },
-        feishu: { appSecret: "feishu-app-secret-value-here-1234" },
+        feishu: {
+          appSecret: "feishu-app-secret-value-here-1234",
+          encryptKey: "feishu-encrypt-key-value-here-1234",
+        },
       },
       models: {
         providers: {
@@ -104,6 +73,7 @@ describe("redactConfigSnapshot", () => {
     expect(cfg.channels.slack.signingSecret).toBe(REDACTED_SENTINEL);
     expect(cfg.channels.slack.token).toBe(REDACTED_SENTINEL);
     expect(cfg.channels.feishu.appSecret).toBe(REDACTED_SENTINEL);
+    expect(cfg.channels.feishu.encryptKey).toBe(REDACTED_SENTINEL);
     expect(cfg.models.providers.openai.apiKey).toBe(REDACTED_SENTINEL);
     expect(cfg.models.providers.openai.baseUrl).toBe("https://api.openai.com");
     expect(cfg.shortSecret.token).toBe(REDACTED_SENTINEL);
@@ -432,45 +402,41 @@ describe("redactConfigSnapshot", () => {
     expect(env.vars.OPENAI_API_KEY).toBe(REDACTED_SENTINEL);
   });
 
-  it("respects token-name redaction boundaries", () => {
-    const cases = [
-      {
-        name: "does not redact numeric tokens field",
-        snapshot: makeSnapshot({ memory: { tokens: 8192 } }),
-        assert: (config: Record<string, unknown>) => {
-          expect((config.memory as Record<string, unknown>).tokens).toBe(8192);
-        },
+  it.each([
+    {
+      name: "does not redact numeric tokens field",
+      snapshot: makeSnapshot({ memory: { tokens: 8192 } }),
+      assert: (config: Record<string, unknown>) => {
+        expect((config.memory as Record<string, unknown>).tokens).toBe(8192);
       },
-      {
-        name: "does not redact softThresholdTokens",
-        snapshot: makeSnapshot({ compaction: { softThresholdTokens: 50000 } }),
-        assert: (config: Record<string, unknown>) => {
-          expect((config.compaction as Record<string, unknown>).softThresholdTokens).toBe(50000);
-        },
+    },
+    {
+      name: "does not redact softThresholdTokens",
+      snapshot: makeSnapshot({ compaction: { softThresholdTokens: 50000 } }),
+      assert: (config: Record<string, unknown>) => {
+        expect((config.compaction as Record<string, unknown>).softThresholdTokens).toBe(50000);
       },
-      {
-        name: "does not redact string tokens field",
-        snapshot: makeSnapshot({ memory: { tokens: "should-not-be-redacted" } }),
-        assert: (config: Record<string, unknown>) => {
-          expect((config.memory as Record<string, unknown>).tokens).toBe("should-not-be-redacted");
-        },
+    },
+    {
+      name: "does not redact string tokens field",
+      snapshot: makeSnapshot({ memory: { tokens: "should-not-be-redacted" } }),
+      assert: (config: Record<string, unknown>) => {
+        expect((config.memory as Record<string, unknown>).tokens).toBe("should-not-be-redacted");
       },
-      {
-        name: "still redacts singular token field",
-        snapshot: makeSnapshot({
-          channels: { slack: { token: "secret-slack-token-value-here" } },
-        }),
-        assert: (config: Record<string, unknown>) => {
-          const channels = config.channels as Record<string, Record<string, string>>;
-          expect(channels.slack.token).toBe(REDACTED_SENTINEL);
-        },
+    },
+    {
+      name: "still redacts singular token field",
+      snapshot: makeSnapshot({
+        channels: { slack: { token: "secret-slack-token-value-here" } },
+      }),
+      assert: (config: Record<string, unknown>) => {
+        const channels = config.channels as Record<string, Record<string, string>>;
+        expect(channels.slack.token).toBe(REDACTED_SENTINEL);
       },
-    ] as const;
-
-    for (const testCase of cases) {
-      const result = redactConfigSnapshot(testCase.snapshot);
-      testCase.assert(result.config as Record<string, unknown>);
-    }
+    },
+  ] as const)("respects token-name redaction boundaries: $name", ({ snapshot, assert }) => {
+    const result = redactConfigSnapshot(snapshot);
+    assert(result.config as Record<string, unknown>);
   });
 
   it("uses uiHints to determine sensitivity", () => {
@@ -764,14 +730,10 @@ describe("redactConfigSnapshot", () => {
       },
     ];
 
-    for (const testCase of cases) {
-      const redacted = redactConfigSnapshot(testCase.snapshot, testCase.hints);
-      const restored = restoreRedactedValues(
-        redacted.config,
-        testCase.snapshot.config,
-        testCase.hints,
-      );
-      testCase.assert({
+    for (const { snapshot, hints, assert } of cases) {
+      const redacted = redactConfigSnapshot(snapshot, hints);
+      const restored = restoreRedactedValues(redacted.config, snapshot.config, hints);
+      assert({
         redacted: redacted.config as Record<string, unknown>,
         restored: restored as Record<string, unknown>,
       });

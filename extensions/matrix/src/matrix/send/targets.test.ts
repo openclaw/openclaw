@@ -51,6 +51,30 @@ describe("resolveMatrixRoomId", () => {
     );
   });
 
+  it("prefers joined rooms marked direct in member state over plain strict rooms", async () => {
+    const userId = "@fallback:example.org";
+    const client = {
+      getAccountData: vi.fn().mockRejectedValue(new Error("nope")),
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+      getJoinedRooms: vi.fn().mockResolvedValue(["!fallback:example.org", "!explicit:example.org"]),
+      getJoinedRoomMembers: vi.fn().mockResolvedValue(["@bot:example.org", userId]),
+      getRoomStateEvent: vi
+        .fn()
+        .mockImplementation(async (roomId: string, _eventType: string, stateKey: string) => ({
+          is_direct: roomId === "!explicit:example.org" && stateKey === userId,
+        })),
+      setAccountData: vi.fn().mockResolvedValue(undefined),
+    } as unknown as MatrixClient;
+
+    const resolved = await resolveMatrixRoomId(client, userId);
+
+    expect(resolved).toBe("!explicit:example.org");
+    expect(client.setAccountData).toHaveBeenCalledWith(
+      EventType.Direct,
+      expect.objectContaining({ [userId]: ["!explicit:example.org"] }),
+    );
+  });
+
   it("continues when a room member lookup fails", async () => {
     const userId = "@continue:example.org";
     const roomId = "!good:example.org";

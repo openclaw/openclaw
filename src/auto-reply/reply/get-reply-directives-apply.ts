@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -11,6 +12,7 @@ import type { createModelSelectionState } from "./model-selection.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
+type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
 let commandsStatusPromise: Promise<typeof import("./commands-status.runtime.js")> | null = null;
 let directiveLevelsPromise: Promise<typeof import("./directive-handling.levels.js")> | null = null;
@@ -69,6 +71,7 @@ export async function applyInlineDirectiveOverrides(params: {
   agentId: string;
   agentDir: string;
   agentCfg: AgentDefaults;
+  agentEntry?: AgentEntry;
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
@@ -102,6 +105,7 @@ export async function applyInlineDirectiveOverrides(params: {
     agentId,
     agentDir,
     agentCfg,
+    agentEntry,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -156,8 +160,39 @@ export async function applyInlineDirectiveOverrides(params: {
 
   let directiveAck: ReplyPayload | undefined;
 
+  if (modelState.resetModelOverride) {
+    enqueueSystemEvent(
+      `Model override not allowed for this agent; reverted to ${initialModelLabel}.`,
+      {
+        sessionKey,
+        contextKey: `model:reset:${initialModelLabel}`,
+      },
+    );
+  }
+
   if (!command.isAuthorizedSender) {
     directives = clearInlineDirectives(directives.cleaned);
+  }
+
+  const hasAnyDirective =
+    directives.hasThinkDirective ||
+    directives.hasFastDirective ||
+    directives.hasVerboseDirective ||
+    directives.hasReasoningDirective ||
+    directives.hasElevatedDirective ||
+    directives.hasExecDirective ||
+    directives.hasModelDirective ||
+    directives.hasQueueDirective ||
+    directives.hasStatusDirective;
+
+  if (!hasAnyDirective && !modelState.resetModelOverride) {
+    return {
+      kind: "continue",
+      directives,
+      provider,
+      model,
+      contextTokens,
+    };
   }
 
   if (
@@ -184,6 +219,7 @@ export async function applyInlineDirectiveOverrides(params: {
       await loadDirectiveLevels()
     ).resolveCurrentDirectiveLevels({
       sessionEntry,
+      agentEntry,
       agentCfg,
       resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
     });
@@ -197,7 +233,9 @@ export async function applyInlineDirectiveOverrides(params: {
       currentVerboseLevel,
       currentReasoningLevel,
       currentElevatedLevel,
+      messageProvider: ctx.Provider,
       surface: ctx.Surface,
+      gatewayClientScopes: ctx.GatewayClientScopes,
     });
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
@@ -231,17 +269,6 @@ export async function applyInlineDirectiveOverrides(params: {
     }
     return { kind: "reply", reply: statusReply ?? directiveReply };
   }
-
-  const hasAnyDirective =
-    directives.hasThinkDirective ||
-    directives.hasFastDirective ||
-    directives.hasVerboseDirective ||
-    directives.hasReasoningDirective ||
-    directives.hasElevatedDirective ||
-    directives.hasExecDirective ||
-    directives.hasModelDirective ||
-    directives.hasQueueDirective ||
-    directives.hasStatusDirective;
 
   if (hasAnyDirective && command.isAuthorizedSender) {
     const fastLane = await (
@@ -302,6 +329,9 @@ export async function applyInlineDirectiveOverrides(params: {
     initialModelLabel,
     formatModelSwitchEvent,
     agentCfg,
+    messageProvider: ctx.Provider,
+    surface: ctx.Surface,
+    gatewayClientScopes: ctx.GatewayClientScopes,
   });
   provider = persisted.provider;
   model = persisted.model;

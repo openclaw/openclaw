@@ -37,6 +37,7 @@ export const handlePluginCommand: CommandHandler = async (
     channel: command.channel,
     channelId: command.channelId,
     isAuthorizedSender: command.isAuthorizedSender,
+    gatewayClientScopes: params.ctx.GatewayClientScopes,
     commandBody: command.commandBodyNormalized,
     config: cfg,
     from: command.from,
@@ -47,6 +48,7 @@ export const handlePluginCommand: CommandHandler = async (
       typeof params.ctx.MessageThreadId === "number"
         ? params.ctx.MessageThreadId
         : undefined,
+    threadParentId: params.ctx.ThreadParentId?.trim() || undefined,
   });
 
   return {

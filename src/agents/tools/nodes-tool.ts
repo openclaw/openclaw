@@ -17,6 +17,8 @@ import {
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { OperatorScope } from "../../gateway/method-scopes.js";
+import { NODE_SYSTEM_RUN_COMMANDS } from "../../infra/node-commands.js";
 import { parsePreparedSystemRunPayload } from "../../infra/system-run-approval-context.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
@@ -71,6 +73,33 @@ const NODE_READ_ACTION_COMMANDS = {
   device_health: "device.health",
 } as const;
 type GatewayCallOptions = ReturnType<typeof readGatewayCallOptions>;
+
+function resolveApproveScopes(commands: unknown): OperatorScope[] {
+  const normalized = Array.isArray(commands)
+    ? commands.filter((value): value is string => typeof value === "string")
+    : [];
+  if (
+    normalized.some((command) => NODE_SYSTEM_RUN_COMMANDS.some((allowed) => allowed === command))
+  ) {
+    return ["operator.admin"];
+  }
+  if (normalized.length > 0) {
+    return ["operator.write"];
+  }
+  return ["operator.write"];
+}
+
+async function resolveNodePairApproveScopes(
+  gatewayOpts: GatewayCallOptions,
+  requestId: string,
+): Promise<OperatorScope[]> {
+  const pairing = await callGatewayTool<{
+    pending?: Array<{ requestId?: string; commands?: unknown }>;
+  }>("node.pair.list", gatewayOpts, {}, { scopes: ["operator.pairing", "operator.write"] });
+  const pending = Array.isArray(pairing?.pending) ? pairing.pending : [];
+  const match = pending.find((entry) => entry?.requestId === requestId);
+  return resolveApproveScopes(match?.commands);
+}
 
 async function invokeNodeCommandPayload(params: {
   gatewayOpts: GatewayCallOptions;
@@ -199,10 +228,16 @@ export function createNodesTool(options?: {
             const requestId = readStringParam(params, "requestId", {
               required: true,
             });
+            const scopes = await resolveNodePairApproveScopes(gatewayOpts, requestId);
             return jsonResult(
-              await callGatewayTool("node.pair.approve", gatewayOpts, {
-                requestId,
-              }),
+              await callGatewayTool(
+                "node.pair.approve",
+                gatewayOpts,
+                {
+                  requestId,
+                },
+                { scopes },
+              ),
             );
           }
           case "reject": {
@@ -310,7 +345,6 @@ export function createNodesTool(options?: {
                 expectedHost: resolvedNode.remoteIp,
                 invalidPayloadMessage: "invalid camera.snap payload",
               });
-              content.push({ type: "text", text: `MEDIA:${filePath}` });
               if (options?.modelHasVision && payload.base64) {
                 content.push({
                   type: "image",
@@ -327,7 +361,17 @@ export function createNodesTool(options?: {
               });
             }
 
-            const result: AgentToolResult<unknown> = { content, details };
+            const result: AgentToolResult<unknown> = {
+              content,
+              details: {
+                snaps: details,
+                media: {
+                  mediaUrls: details
+                    .map((entry) => entry.path)
+                    .filter((path): path is string => typeof path === "string"),
+                },
+              },
+            };
             return await sanitizeToolResultImages(result, "nodes:camera_snap", imageSanitization);
           }
           case "photos_latest": {
@@ -401,7 +445,6 @@ export function createNodesTool(options?: {
                 invalidPayloadMessage: "invalid photos.latest payload",
               });
 
-              content.push({ type: "text", text: `MEDIA:${filePath}` });
               if (options?.modelHasVision && photo.base64) {
                 content.push({
                   type: "image",
@@ -424,7 +467,17 @@ export function createNodesTool(options?: {
               });
             }
 
-            const result: AgentToolResult<unknown> = { content, details };
+            const result: AgentToolResult<unknown> = {
+              content,
+              details: {
+                photos: details,
+                media: {
+                  mediaUrls: details
+                    .map((entry) => entry.path)
+                    .filter((path): path is string => typeof path === "string"),
+                },
+              },
+            };
             return await sanitizeToolResultImages(result, "nodes:photos_latest", imageSanitization);
           }
           case "camera_list":

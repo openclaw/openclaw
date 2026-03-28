@@ -4,13 +4,15 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../pi-embedded-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
+  consumeCompactionSafeguardCancelReason,
   getCompactionSafeguardRuntime,
+  setCompactionSafeguardCancelReason,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
@@ -50,6 +52,14 @@ const {
   MAX_FILE_OPS_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } = __testing;
+
+beforeEach(() => {
+  __testing.setSummarizeInStagesForTest(mockSummarizeInStages);
+});
+
+afterEach(() => {
+  __testing.setSummarizeInStagesForTest();
+});
 
 function stubSessionManager(): ExtensionContext["sessionManager"] {
   const stub: ExtensionContext["sessionManager"] = {
@@ -121,13 +131,22 @@ const createCompactionEvent = (params: { messageText: string; tokensBefore: numb
 
 const createCompactionContext = (params: {
   sessionManager: ExtensionContext["sessionManager"];
-  getApiKeyMock: ReturnType<typeof vi.fn>;
+  getApiKeyAndHeadersMock?: ReturnType<typeof vi.fn>;
+  getApiKeyMock?: ReturnType<typeof vi.fn>;
 }) =>
   ({
     model: undefined,
     sessionManager: params.sessionManager,
     modelRegistry: {
-      getApiKey: params.getApiKeyMock,
+      getApiKeyAndHeaders:
+        params.getApiKeyAndHeadersMock ??
+        vi.fn(async (model) => {
+          const legacyGetApiKey = params.getApiKeyMock as
+            | undefined
+            | ((model: NonNullable<ExtensionContext["model"]>) => Promise<string | undefined>);
+          const apiKey = await legacyGetApiKey?.(model);
+          return apiKey !== undefined ? { ok: true, apiKey } : { ok: false, error: "missing auth" };
+        }),
     },
   }) as unknown as Partial<ExtensionContext>;
 
@@ -137,10 +156,16 @@ async function runCompactionScenario(params: {
   apiKey: string | null;
 }) {
   const compactionHandler = createCompactionHandler();
-  const getApiKeyMock = vi.fn().mockResolvedValue(params.apiKey);
+  const getApiKeyAndHeadersMock = vi
+    .fn()
+    .mockResolvedValue(
+      params.apiKey !== null
+        ? { ok: true, apiKey: params.apiKey }
+        : { ok: false, error: "missing auth" },
+    );
   const mockContext = createCompactionContext({
     sessionManager: params.sessionManager,
-    getApiKeyMock,
+    getApiKeyAndHeadersMock,
   });
   const result = (await compactionHandler(params.event, mockContext)) as {
     cancel?: boolean;
@@ -150,7 +175,7 @@ async function runCompactionScenario(params: {
       tokensBefore: number;
     };
   };
-  return { result, getApiKeyMock };
+  return { result, getApiKeyAndHeadersMock };
 }
 
 function expectCompactionResult(result: {
@@ -529,6 +554,24 @@ describe("compaction-safeguard runtime registry", () => {
       contextWindowTokens: 200000,
       model,
     });
+  });
+
+  it("consumes cancel reasons without dropping other runtime fields", () => {
+    const sm = {};
+    setCompactionSafeguardRuntime(sm, { maxHistoryShare: 0.6 });
+    setCompactionSafeguardCancelReason(sm, "no API key");
+
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBe("no API key");
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBeNull();
+    expect(getCompactionSafeguardRuntime(sm)).toEqual({ maxHistoryShare: 0.6 });
+  });
+
+  it("clears cancel reason when set to undefined", () => {
+    const sm = {};
+    setCompactionSafeguardCancelReason(sm, "temporary reason");
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBe("temporary reason");
+    setCompactionSafeguardCancelReason(sm, undefined);
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBeNull();
   });
 
   it("wires oversized safeguard runtime values when config validation is bypassed", () => {
@@ -1606,7 +1649,7 @@ describe("compaction-safeguard extension model fallback", () => {
       messageText: "test message",
       tokensBefore: 1000,
     });
-    const { result, getApiKeyMock } = await runCompactionScenario({
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
       apiKey: null,
@@ -1615,8 +1658,9 @@ describe("compaction-safeguard extension model fallback", () => {
     expect(result).toEqual({ cancel: true });
 
     // KEY ASSERTION: Prove the fallback path was exercised
-    // The handler should have called getApiKey with runtime.model (via ctx.model ?? runtime?.model)
-    expect(getApiKeyMock).toHaveBeenCalledWith(model);
+    // The handler should have resolved request auth with runtime.model
+    // (via ctx.model ?? runtime?.model).
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
 
     // Verify runtime.model is still available (for completeness)
     const retrieved = getCompactionSafeguardRuntime(sessionManager);
@@ -1632,7 +1676,7 @@ describe("compaction-safeguard extension model fallback", () => {
       messageText: "test",
       tokensBefore: 500,
     });
-    const { result, getApiKeyMock } = await runCompactionScenario({
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
       apiKey: null,
@@ -1640,8 +1684,8 @@ describe("compaction-safeguard extension model fallback", () => {
 
     expect(result).toEqual({ cancel: true });
 
-    // Verify early return: getApiKey should NOT have been called when both models are missing
-    expect(getApiKeyMock).not.toHaveBeenCalled();
+    // Verify early return: request auth should NOT have been resolved when both models are missing.
+    expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
   });
 });
 
@@ -1662,7 +1706,7 @@ describe("compaction-safeguard double-compaction guard", () => {
       customInstructions: "",
       signal: new AbortController().signal,
     };
-    const { result, getApiKeyMock } = await runCompactionScenario({
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
       apiKey: "sk-test", // pragma: allowlist secret
@@ -1676,7 +1720,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(compaction.summary).toContain("## Open TODOs");
     expect(compaction.firstKeptEntryId).toBe("entry-1");
     expect(compaction.tokensBefore).toBe(1500);
-    expect(getApiKeyMock).not.toHaveBeenCalled();
+    expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
   });
 
   it("returns compaction result with structured fallback summary sections", async () => {
@@ -1787,13 +1831,13 @@ describe("compaction-safeguard double-compaction guard", () => {
       messageText: "real message",
       tokensBefore: 1500,
     });
-    const { result, getApiKeyMock } = await runCompactionScenario({
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
       apiKey: null,
     });
     expect(result).toEqual({ cancel: true });
-    expect(getApiKeyMock).toHaveBeenCalled();
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalled();
   });
 
   it("treats tool results as real conversation only when linked to a meaningful user ask", async () => {
@@ -1881,15 +1925,14 @@ async function expectWorkspaceSummaryEmptyForAgentsAlias(
   createAlias: (outsidePath: string, agentsPath: string) => void,
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-  const prevCwd = process.cwd();
+  const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
   try {
     const outside = path.join(root, "outside-secret.txt");
     fs.writeFileSync(outside, "secret");
     createAlias(outside, path.join(root, "AGENTS.md"));
-    process.chdir(root);
     await expect(readWorkspaceContextForSummary()).resolves.toBe("");
   } finally {
-    process.chdir(prevCwd);
+    cwdSpy.mockRestore();
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

@@ -4,7 +4,7 @@ import { writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { AgentRouteBinding } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   applyAgentBindings,
@@ -122,7 +122,7 @@ function emitJsonPayload(params: {
   if (!params.json) {
     return false;
   }
-  params.runtime.log(JSON.stringify(params.payload, null, 2));
+  writeRuntimeJson(params.runtime, params.payload);
   if ((params.conflictCount ?? 0) > 0) {
     params.runtime.exit(1);
   }
@@ -176,16 +176,13 @@ export async function agentsBindingsCommand(
     (binding) => !filterAgentId || normalizeAgentId(binding.agentId) === filterAgentId,
   );
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        filtered.map((binding) => ({
-          agentId: normalizeAgentId(binding.agentId),
-          match: binding.match,
-          description: describeBinding(binding),
-        })),
-        null,
-        2,
-      ),
+    writeRuntimeJson(
+      runtime,
+      filtered.map((binding) => ({
+        agentId: normalizeAgentId(binding.agentId),
+        match: binding.match,
+        description: describeBinding(binding),
+      })),
     );
     return;
   }

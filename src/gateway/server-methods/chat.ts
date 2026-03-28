@@ -37,6 +37,7 @@ import {
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
+import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -120,6 +121,11 @@ type ChatSendDeliveryEntry = {
     accountId?: string;
     threadId?: string | number;
   };
+  origin?: {
+    provider?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
   lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
@@ -132,6 +138,13 @@ type ChatSendOriginatingRoute = {
   accountId?: string;
   messageThreadId?: string | number;
   explicitDeliverRoute: boolean;
+};
+
+type ChatSendExplicitOrigin = {
+  originatingChannel?: string;
+  originatingTo?: string;
+  accountId?: string;
+  messageThreadId?: string;
 };
 
 type SideResultPayload = {
@@ -148,10 +161,22 @@ function resolveChatSendOriginatingRoute(params: {
   client?: { mode?: string | null; id?: string | null } | null;
   deliver?: boolean;
   entry?: ChatSendDeliveryEntry;
+  explicitOrigin?: ChatSendExplicitOrigin;
   hasConnectedClient?: boolean;
   mainKey?: string;
   sessionKey: string;
 }): ChatSendOriginatingRoute {
+  if (params.explicitOrigin?.originatingChannel && params.explicitOrigin.originatingTo) {
+    return {
+      originatingChannel: params.explicitOrigin.originatingChannel,
+      originatingTo: params.explicitOrigin.originatingTo,
+      ...(params.explicitOrigin.accountId ? { accountId: params.explicitOrigin.accountId } : {}),
+      ...(params.explicitOrigin.messageThreadId
+        ? { messageThreadId: params.explicitOrigin.messageThreadId }
+        : {}),
+      explicitDeliverRoute: params.deliver === true,
+    };
+  }
   const shouldDeliverExternally = params.deliver === true;
   if (!shouldDeliverExternally) {
     return {
@@ -161,13 +186,20 @@ function resolveChatSendOriginatingRoute(params: {
   }
 
   const routeChannelCandidate = normalizeMessageChannel(
-    params.entry?.deliveryContext?.channel ?? params.entry?.lastChannel,
+    params.entry?.deliveryContext?.channel ??
+      params.entry?.lastChannel ??
+      params.entry?.origin?.provider,
   );
   const routeToCandidate = params.entry?.deliveryContext?.to ?? params.entry?.lastTo;
   const routeAccountIdCandidate =
-    params.entry?.deliveryContext?.accountId ?? params.entry?.lastAccountId ?? undefined;
+    params.entry?.deliveryContext?.accountId ??
+    params.entry?.lastAccountId ??
+    params.entry?.origin?.accountId ??
+    undefined;
   const routeThreadIdCandidate =
-    params.entry?.deliveryContext?.threadId ?? params.entry?.lastThreadId;
+    params.entry?.deliveryContext?.threadId ??
+    params.entry?.lastThreadId ??
+    params.entry?.origin?.threadId;
   if (params.sessionKey.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {
     return {
       originatingChannel: INTERNAL_MESSAGE_CHANNEL,
@@ -287,6 +319,11 @@ function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]): bool
     info?.displayName === "ACP" &&
     info?.version === "acp"
   );
+}
+
+function canInjectSystemProvenance(client: GatewayRequestHandlerOptions["client"]): boolean {
+  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  return scopes.includes(ADMIN_SCOPE);
 }
 
 async function persistChatSendImages(params: {
@@ -885,6 +922,7 @@ function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
     chatAbortControllers: context.chatAbortControllers,
     chatRunBuffers: context.chatRunBuffers,
     chatDeltaSentAt: context.chatDeltaSentAt,
+    chatDeltaLastBroadcastLen: context.chatDeltaLastBroadcastLen,
     chatAbortedRuns: context.chatAbortedRuns,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
@@ -896,6 +934,43 @@ function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
 function normalizeOptionalText(value?: string | null): string | undefined {
   const trimmed = value?.trim();
   return trimmed || undefined;
+}
+
+function normalizeExplicitChatSendOrigin(
+  params: ChatSendExplicitOrigin,
+): { ok: true; value?: ChatSendExplicitOrigin } | { ok: false; error: string } {
+  const originatingChannel = normalizeOptionalText(params.originatingChannel);
+  const originatingTo = normalizeOptionalText(params.originatingTo);
+  const accountId = normalizeOptionalText(params.accountId);
+  const messageThreadId = normalizeOptionalText(params.messageThreadId);
+  const hasAnyExplicitOriginField = Boolean(
+    originatingChannel || originatingTo || accountId || messageThreadId,
+  );
+  if (!hasAnyExplicitOriginField) {
+    return { ok: true };
+  }
+  const normalizedChannel = normalizeMessageChannel(originatingChannel);
+  if (!normalizedChannel) {
+    return {
+      ok: false,
+      error: "originatingChannel is required when using originating route fields",
+    };
+  }
+  if (!originatingTo) {
+    return {
+      ok: false,
+      error: "originatingTo is required when using originating route fields",
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      originatingChannel: normalizedChannel,
+      originatingTo,
+      ...(accountId ? { accountId } : {}),
+      ...(messageThreadId ? { messageThreadId } : {}),
+    },
+  };
 }
 
 function resolveChatAbortRequester(
@@ -1094,8 +1169,15 @@ export const chatHandlers: GatewayRequestHandlers = {
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
-    const rawMessages =
+    const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+    const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
+    const localMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+    const rawMessages = augmentChatHistoryWithCliSessionImports({
+      entry,
+      provider: resolvedSessionModel.provider,
+      localMessages,
+    });
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
@@ -1120,13 +1202,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
-      const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
       const catalog = await context.loadGatewayModelCatalog();
       thinkingLevel = resolveThinkingDefault({
         cfg,
-        provider,
-        model,
+        provider: resolvedSessionModel.provider,
+        model: resolvedSessionModel.model,
         catalog,
       });
     }
@@ -1238,6 +1318,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       message: string;
       thinking?: string;
       deliver?: boolean;
+      originatingChannel?: string;
+      originatingTo?: string;
+      originatingAccountId?: string;
+      originatingThreadId?: string;
       attachments?: Array<{
         type?: string;
         mimeType?: string;
@@ -1249,13 +1333,28 @@ export const chatHandlers: GatewayRequestHandlers = {
       systemProvenanceReceipt?: string;
       idempotencyKey: string;
     };
-    if ((p.systemInputProvenance || p.systemProvenanceReceipt) && !isAcpBridgeClient(client)) {
+    const explicitOriginResult = normalizeExplicitChatSendOrigin({
+      originatingChannel: p.originatingChannel,
+      originatingTo: p.originatingTo,
+      accountId: p.originatingAccountId,
+      messageThreadId: p.originatingThreadId,
+    });
+    if (!explicitOriginResult.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, explicitOriginResult.error));
+      return;
+    }
+    if (
+      (p.systemInputProvenance || p.systemProvenanceReceipt || explicitOriginResult.value) &&
+      !canInjectSystemProvenance(client)
+    ) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "system provenance fields are reserved for the ACP bridge",
+          p.systemInputProvenance || p.systemProvenanceReceipt
+            ? "system provenance fields require admin scope"
+            : "originating route fields require admin scope",
         ),
       );
       return;
@@ -1403,6 +1502,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         client: clientInfo,
         deliver: p.deliver,
         entry,
+        explicitOrigin: explicitOriginResult.value,
         hasConnectedClient: client?.connect !== undefined,
         mainKey: cfg.session?.mainKey,
         sessionKey,
@@ -1446,36 +1546,39 @@ export const chatHandlers: GatewayRequestHandlers = {
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
-      let userTranscriptUpdateEmitted = false;
+      let userTranscriptUpdatePromise: Promise<void> | null = null;
       const emitUserTranscriptUpdate = async () => {
-        if (userTranscriptUpdateEmitted) {
+        if (userTranscriptUpdatePromise) {
+          await userTranscriptUpdatePromise;
           return;
         }
-        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
-        const resolvedSessionId = latestEntry?.sessionId ?? entry?.sessionId;
-        if (!resolvedSessionId) {
-          return;
-        }
-        const transcriptPath = resolveTranscriptPath({
-          sessionId: resolvedSessionId,
-          storePath: latestStorePath,
-          sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
-          agentId,
-        });
-        if (!transcriptPath) {
-          return;
-        }
-        userTranscriptUpdateEmitted = true;
-        const persistedImages = await persistedImagesPromise;
-        emitSessionTranscriptUpdate({
-          sessionFile: transcriptPath,
-          sessionKey,
-          message: buildChatSendTranscriptMessage({
-            message: parsedMessage,
-            savedImages: persistedImages,
-            timestamp: now,
-          }),
-        });
+        userTranscriptUpdatePromise = (async () => {
+          const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+          const resolvedSessionId = latestEntry?.sessionId ?? entry?.sessionId;
+          if (!resolvedSessionId) {
+            return;
+          }
+          const transcriptPath = resolveTranscriptPath({
+            sessionId: resolvedSessionId,
+            storePath: latestStorePath,
+            sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
+            agentId,
+          });
+          if (!transcriptPath) {
+            return;
+          }
+          const persistedImages = await persistedImagesPromise;
+          emitSessionTranscriptUpdate({
+            sessionFile: transcriptPath,
+            sessionKey,
+            message: buildChatSendTranscriptMessage({
+              message: parsedMessage,
+              savedImages: persistedImages,
+              timestamp: now,
+            }),
+          });
+        })();
+        await userTranscriptUpdatePromise;
       };
       let transcriptMediaRewriteDone = false;
       const rewriteUserTranscriptMedia = async () => {
@@ -1515,6 +1618,15 @@ export const chatHandlers: GatewayRequestHandlers = {
           }
           deliveredReplies.push({ payload, kind: info.kind });
         },
+      });
+
+      // Surface accepted inbound turns immediately so transcript subscribers
+      // (gateway watchers, MCP bridges, external channel backends) do not wait
+      // on model startup, completion, or failure paths before seeing the user turn.
+      void emitUserTranscriptUpdate().catch((transcriptErr) => {
+        context.logGateway.warn(
+          `webchat eager user transcript update failed: ${formatForLog(transcriptErr)}`,
+        );
       });
 
       let agentRunStarted = false;
@@ -1567,7 +1679,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 payload: {
                   kind: "btw",
                   runId: clientRunId,
-                  sessionKey: rawSessionKey,
+                  sessionKey,
                   question: btwReplies[0].btw.question.trim(),
                   text: btwText,
                   isError: btwReplies.some((payload) => payload.isError),
@@ -1577,7 +1689,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               broadcastChatFinal({
                 context,
                 runId: clientRunId,
-                sessionKey: rawSessionKey,
+                sessionKey,
               });
             } else {
               const combinedReply = deliveredReplies
@@ -1621,7 +1733,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               broadcastChatFinal({
                 context,
                 runId: clientRunId,
-                sessionKey: rawSessionKey,
+                sessionKey,
                 message,
               });
             }
@@ -1639,6 +1751,16 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .catch((err) => {
+          void rewriteUserTranscriptMedia().catch((rewriteErr) => {
+            context.logGateway.warn(
+              `webchat transcript media rewrite failed after error: ${formatForLog(rewriteErr)}`,
+            );
+          });
+          void emitUserTranscriptUpdate().catch((transcriptErr) => {
+            context.logGateway.warn(
+              `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
+            );
+          });
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
@@ -1657,7 +1779,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           broadcastChatError({
             context,
             runId: clientRunId,
-            sessionKey: rawSessionKey,
+            sessionKey,
             errorMessage: String(err),
           });
         })
@@ -1707,7 +1829,7 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // Load session to find transcript file
     const rawSessionKey = p.sessionKey;
-    const { cfg, storePath, entry } = loadSessionEntry(rawSessionKey);
+    const { cfg, storePath, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
     const sessionId = entry?.sessionId;
     if (!sessionId || !storePath) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
@@ -1720,7 +1842,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,
-      agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),
+      agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
       createIfMissing: true,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {
@@ -1738,7 +1860,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     // Broadcast to webchat for immediate UI update
     const chatPayload = {
       runId: `inject-${appended.messageId}`,
-      sessionKey: rawSessionKey,
+      sessionKey,
       seq: 0,
       state: "final" as const,
       message: stripInlineDirectiveTagsFromMessageForDisplay(
@@ -1746,7 +1868,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       ),
     };
     context.broadcast("chat", chatPayload);
-    context.nodeSendToSession(rawSessionKey, "chat", chatPayload);
+    context.nodeSendToSession(sessionKey, "chat", chatPayload);
 
     respond(true, { ok: true, messageId: appended.messageId });
   },

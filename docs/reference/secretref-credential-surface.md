@@ -29,8 +29,7 @@ Scope intent:
 - `agents.list[].memorySearch.remote.apiKey`
 - `talk.apiKey`
 - `talk.providers.*.apiKey`
-- `messages.tts.elevenlabs.apiKey`
-- `messages.tts.openai.apiKey`
+- `messages.tts.providers.*.apiKey`
 - `tools.web.fetch.firecrawl.apiKey`
 - `plugins.entries.brave.config.webSearch.apiKey`
 - `plugins.entries.google.config.webSearch.apiKey`
@@ -63,12 +62,10 @@ Scope intent:
 - `channels.slack.accounts.*.signingSecret`
 - `channels.discord.token`
 - `channels.discord.pluralkit.token`
-- `channels.discord.voice.tts.elevenlabs.apiKey`
-- `channels.discord.voice.tts.openai.apiKey`
+- `channels.discord.voice.tts.providers.*.apiKey`
 - `channels.discord.accounts.*.token`
 - `channels.discord.accounts.*.pluralkit.token`
-- `channels.discord.accounts.*.voice.tts.elevenlabs.apiKey`
-- `channels.discord.accounts.*.voice.tts.openai.apiKey`
+- `channels.discord.accounts.*.voice.tts.providers.*.apiKey`
 - `channels.irc.password`
 - `channels.irc.nickserv.password`
 - `channels.irc.accounts.*.password`
@@ -84,7 +81,9 @@ Scope intent:
 - `channels.msteams.appPassword`
 - `channels.mattermost.botToken`
 - `channels.mattermost.accounts.*.botToken`
+- `channels.matrix.accessToken`
 - `channels.matrix.password`
+- `channels.matrix.accounts.*.accessToken`
 - `channels.matrix.accounts.*.password`
 - `channels.nextcloud-talk.botSecret`
 - `channels.nextcloud-talk.apiPassword`
@@ -124,8 +123,6 @@ Out-of-scope credentials include:
 [//]: # "secretref-unsupported-list-start"
 
 - `commands.ownerDisplaySecret`
-- `channels.matrix.accessToken`
-- `channels.matrix.accounts.*.accessToken`
 - `hooks.token`
 - `hooks.gmail.pushToken`
 - `hooks.mappings[].sessionKey`

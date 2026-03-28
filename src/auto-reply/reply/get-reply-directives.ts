@@ -1,3 +1,4 @@
+import { listAgentEntries } from "../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
@@ -5,6 +6,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
@@ -36,10 +38,6 @@ function loadCommandsRegistry() {
 function loadSkillCommands() {
   skillCommandsPromise ??= import("../skill-commands.runtime.js");
   return skillCommandsPromise;
-}
-
-function shouldLogDirectiveTiming(): boolean {
-  return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 }
 
 export type ReplyDirectiveContinuation = {
@@ -130,17 +128,6 @@ export async function resolveReplyDirectives(params: {
   opts?: GetReplyOptions;
   skillFilter?: string[];
 }): Promise<ReplyDirectiveResult> {
-  const directiveTimingEnabled = shouldLogDirectiveTiming();
-  const directiveStartMs = directiveTimingEnabled ? Date.now() : 0;
-  const logDirectiveStage = (stage: string, extra?: string) => {
-    if (!directiveTimingEnabled) {
-      return;
-    }
-    const suffix = extra ? ` ${extra}` : "";
-    console.log(
-      `[directive-resolve] session=${params.sessionKey} stage=${stage} elapsedMs=${Date.now() - directiveStartMs}${suffix}`,
-    );
-  };
   const {
     ctx,
     cfg,
@@ -167,6 +154,9 @@ export async function resolveReplyDirectives(params: {
     opts,
     skillFilter,
   } = params;
+  const agentEntry = listAgentEntries(cfg).find(
+    (entry) => normalizeAgentId(entry.id) === normalizeAgentId(agentId),
+  );
   let provider = initialProvider;
   let model = initialModel;
 
@@ -227,7 +217,6 @@ export async function resolveReplyDirectives(params: {
           skillFilter,
         })
       : [];
-  logDirectiveStage("skill-commands-loaded", `count=${skillCommands.length}`);
   for (const command of skillCommands) {
     reservedCommands.add(command.name.toLowerCase());
   }
@@ -351,7 +340,6 @@ export async function resolveReplyDirectives(params: {
     ctx,
     provider: messageProviderKey,
   });
-  logDirectiveStage("elevated-permissions");
   const elevatedEnabled = elevated.enabled;
   const elevatedAllowed = elevated.allowed;
   const elevatedFailures = elevated.failures;
@@ -373,7 +361,7 @@ export async function resolveReplyDirectives(params: {
     };
   }
 
-  const requireMention = resolveGroupRequireMention({
+  const requireMention = await resolveGroupRequireMention({
     cfg,
     ctx: sessionCtx,
     groupResolution,
@@ -387,6 +375,7 @@ export async function resolveReplyDirectives(params: {
       cfg,
       provider,
       model,
+      agentId,
       sessionEntry,
     }).enabled;
 
@@ -397,6 +386,7 @@ export async function resolveReplyDirectives(params: {
   let resolvedReasoningLevel: ReasoningLevel =
     directives.reasoningLevel ??
     (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
+    (agentEntry?.reasoningDefault as ReasoningLevel | undefined) ??
     "off";
   const resolvedElevatedLevel = elevatedAllowed
     ? (directives.elevatedLevel ??
@@ -419,7 +409,6 @@ export async function resolveReplyDirectives(params: {
   const blockReplyChunking = blockStreamingEnabled
     ? resolveBlockStreamingChunking(cfg, sessionCtx.Provider, sessionCtx.AccountId)
     : undefined;
-  logDirectiveStage("block-streaming-resolved", `enabled=${blockStreamingEnabled}`);
 
   const modelState = await createModelSelectionState({
     cfg,
@@ -437,33 +426,31 @@ export async function resolveReplyDirectives(params: {
     hasModelDirective: directives.hasModelDirective,
     hasResolvedHeartbeatModelOverride,
   });
-  logDirectiveStage(
-    "model-selection-state",
-    `needsCatalog=${modelState.needsModelCatalog} provider=${modelState.provider} model=${modelState.model}`,
-  );
   provider = modelState.provider;
   model = modelState.model;
   const resolvedThinkLevelWithDefault =
     resolvedThinkLevel ??
     (await modelState.resolveDefaultThinkingLevel()) ??
     (agentCfg?.thinkingDefault as ThinkLevel | undefined);
-  logDirectiveStage("thinking-default-resolved", `think=${resolvedThinkLevelWithDefault ?? "off"}`);
 
-  // When neither directive nor session set reasoning, default to model capability
-  // (e.g. OpenRouter with reasoning: true). Skip auto-enabling when thinking is
-  // active, including model-inferred defaults, or internal thinking blocks can
-  // be emitted as visible "Reasoning:" messages.
+  // When neither directive nor session nor agent set reasoning, default to model capability
+  // (e.g. OpenRouter with reasoning: true). Skip model default when thinking is active
+  // to avoid redundant Reasoning: output alongside internal thinking blocks.
+  const hasAgentReasoningDefault =
+    agentEntry?.reasoningDefault !== undefined && agentEntry?.reasoningDefault !== null;
   const reasoningExplicitlySet =
     directives.reasoningLevel !== undefined ||
-    (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null);
+    (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null) ||
+    hasAgentReasoningDefault;
   const thinkingActive = resolvedThinkLevelWithDefault !== "off";
   if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {
     resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
   }
-  logDirectiveStage("reasoning-default-resolved", `reasoning=${resolvedReasoningLevel}`);
 
   let contextTokens = resolveContextTokens({
+    cfg,
     agentCfg,
+    provider,
     model,
   });
 
@@ -483,6 +470,7 @@ export async function resolveReplyDirectives(params: {
     agentId,
     agentDir,
     agentCfg,
+    agentEntry,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -510,7 +498,6 @@ export async function resolveReplyDirectives(params: {
     effectiveModelDirective,
     typing,
   });
-  logDirectiveStage("inline-overrides-applied", `kind=${applyResult.kind}`);
   if (applyResult.kind === "reply") {
     return { kind: "reply", reply: applyResult.reply };
   }

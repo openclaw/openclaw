@@ -1,17 +1,17 @@
-import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
-import {
-  createPairingPrefixStripper,
-  createTextPairingAdapter,
-} from "openclaw/plugin-sdk/channel-pairing";
-import { createAllowlistProviderRestrictSendersWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
+import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import {
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
 } from "openclaw/plugin-sdk/channel-send-result";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import {
-  buildComputedAccountStatusSnapshot,
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
+import {
   buildTokenChannelStatusSummary,
   clearAccountEntryFields,
   DEFAULT_ACCOUNT_ID,
@@ -25,81 +25,279 @@ import {
 } from "../api.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
+import { probeLineBot } from "./probe.js";
 import { getLineRuntime } from "./runtime.js";
 import { lineSetupAdapter } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 
-const resolveLineDmPolicy = createScopedDmSecurityResolver<ResolvedLineAccount>({
+const lineSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedLineAccount>({
   channelKey: "line",
-  resolvePolicy: (account) => account.config.dmPolicy,
-  resolveAllowFrom: (account) => account.config.allowFrom,
+  resolveDmPolicy: (account) => account.config.dmPolicy,
+  resolveDmAllowFrom: (account) => account.config.allowFrom,
+  resolveGroupPolicy: (account) => account.config.groupPolicy,
+  surface: "LINE groups",
+  openScope: "any member in groups",
+  groupPolicyPath: "channels.line.groupPolicy",
+  groupAllowFromPath: "channels.line.groupAllowFrom",
+  mentionGated: false,
   policyPathSuffix: "dmPolicy",
   approveHint: "openclaw pairing approve line <code>",
-  normalizeEntry: (raw) => raw.replace(/^line:(?:user:)?/i, ""),
+  normalizeDmEntry: (raw) => raw.replace(/^line:(?:user:)?/i, ""),
 });
 
-const collectLineSecurityWarnings =
-  createAllowlistProviderRestrictSendersWarningCollector<ResolvedLineAccount>({
-    providerConfigPresent: (cfg) => cfg.channels?.line !== undefined,
-    resolveGroupPolicy: (account) => account.config.groupPolicy,
-    surface: "LINE groups",
-    openScope: "any member in groups",
-    groupPolicyPath: "channels.line.groupPolicy",
-    groupAllowFromPath: "channels.line.groupAllowFrom",
-    mentionGated: false,
-  });
-
-export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
-  id: "line",
-  ...lineChannelPluginCommon,
-  pairing: createTextPairingAdapter({
-    idLabel: "lineUserId",
-    message: "OpenClaw: your access has been approved.",
-    // LINE IDs are case-sensitive; only strip prefix variants (line: / line:user:).
-    normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
-    notify: async ({ cfg, id, message }) => {
-      const line = getLineRuntime().channel.line;
-      const account = line.resolveLineAccount({ cfg });
-      if (!account.channelAccessToken) {
-        throw new Error("LINE channel access token not configured");
-      }
-      await line.pushMessageLine(id, message, {
-        channelAccessToken: account.channelAccessToken,
-      });
+export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelPlugin({
+  base: {
+    id: "line",
+    ...lineChannelPluginCommon,
+    setupWizard: lineSetupWizard,
+    groups: {
+      resolveRequireMention: resolveLineGroupRequireMention,
     },
-  }),
-  setupWizard: lineSetupWizard,
-  security: {
-    resolveDmPolicy: resolveLineDmPolicy,
-    collectWarnings: collectLineSecurityWarnings,
-  },
-  groups: {
-    resolveRequireMention: resolveLineGroupRequireMention,
-  },
-  messaging: {
-    normalizeTarget: (target) => {
-      const trimmed = target.trim();
-      if (!trimmed) {
-        return undefined;
-      }
-      return trimmed.replace(/^line:(group|room|user):/i, "").replace(/^line:/i, "");
-    },
-    targetResolver: {
-      looksLikeId: (id) => {
-        const trimmed = id?.trim();
+    messaging: {
+      normalizeTarget: (target) => {
+        const trimmed = target.trim();
         if (!trimmed) {
-          return false;
+          return undefined;
         }
-        // LINE user IDs are typically U followed by 32 hex characters
-        // Group IDs are C followed by 32 hex characters
-        // Room IDs are R followed by 32 hex characters
-        return /^[UCR][a-f0-9]{32}$/i.test(trimmed) || /^line:/i.test(trimmed);
+        return trimmed.replace(/^line:(group|room|user):/i, "").replace(/^line:/i, "");
       },
-      hint: "<userId|groupId|roomId>",
+      targetResolver: {
+        looksLikeId: (id) => {
+          const trimmed = id?.trim();
+          if (!trimmed) {
+            return false;
+          }
+          // LINE user IDs are typically U followed by 32 hex characters
+          // Group IDs are C followed by 32 hex characters
+          // Room IDs are R followed by 32 hex characters
+          return /^[UCR][a-f0-9]{32}$/i.test(trimmed) || /^line:/i.test(trimmed);
+        },
+        hint: "<userId|groupId|roomId>",
+      },
+    },
+    directory: createEmptyChannelDirectoryAdapter(),
+    setup: lineSetupAdapter,
+    status: createComputedAccountStatusAdapter<ResolvedLineAccount>({
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+      collectStatusIssues: (accounts) => {
+        const issues: ChannelStatusIssue[] = [];
+        for (const account of accounts) {
+          const accountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
+          if (!account.channelAccessToken?.trim()) {
+            issues.push({
+              channel: "line",
+              accountId,
+              kind: "config",
+              message: "LINE channel access token not configured",
+            });
+          }
+          if (!account.channelSecret?.trim()) {
+            issues.push({
+              channel: "line",
+              accountId,
+              kind: "config",
+              message: "LINE channel secret not configured",
+            });
+          }
+        }
+        return issues;
+      },
+      buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
+      probeAccount: async ({ account, timeoutMs }) =>
+        await probeLineBot(account.channelAccessToken, timeoutMs),
+      resolveAccountSnapshot: ({ account }) => {
+        const configured = Boolean(
+          account.channelAccessToken?.trim() && account.channelSecret?.trim(),
+        );
+        return {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured,
+          extra: {
+            tokenSource: account.tokenSource,
+            mode: "webhook",
+          },
+        };
+      },
+    }),
+    gateway: {
+      startAccount: async (ctx) => {
+        const account = ctx.account;
+        const token = account.channelAccessToken.trim();
+        const secret = account.channelSecret.trim();
+        if (!token) {
+          throw new Error(
+            `LINE webhook mode requires a non-empty channel access token for account "${account.accountId}".`,
+          );
+        }
+        if (!secret) {
+          throw new Error(
+            `LINE webhook mode requires a non-empty channel secret for account "${account.accountId}".`,
+          );
+        }
+
+        let lineBotLabel = "";
+        try {
+          const probe = await getLineRuntime().channel.line.probeLineBot(token, 2500);
+          const displayName = probe.ok ? probe.bot?.displayName?.trim() : null;
+          if (displayName) {
+            lineBotLabel = ` (${displayName})`;
+          }
+        } catch (err) {
+          if (getLineRuntime().logging.shouldLogVerbose()) {
+            ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+          }
+        }
+
+        ctx.log?.info(`[${account.accountId}] starting LINE provider${lineBotLabel}`);
+
+        return await getLineRuntime().channel.line.monitorLineProvider({
+          channelAccessToken: token,
+          channelSecret: secret,
+          accountId: account.accountId,
+          config: ctx.cfg,
+          runtime: ctx.runtime,
+          abortSignal: ctx.abortSignal,
+          webhookPath: account.config.webhookPath,
+        });
+      },
+      logoutAccount: async ({ accountId, cfg }) => {
+        const envToken = process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() ?? "";
+        const nextCfg = { ...cfg } as OpenClawConfig;
+        const lineConfig = (cfg.channels?.line ?? {}) as LineConfig;
+        const nextLine = { ...lineConfig };
+        let cleared = false;
+        let changed = false;
+
+        if (accountId === DEFAULT_ACCOUNT_ID) {
+          if (
+            nextLine.channelAccessToken ||
+            nextLine.channelSecret ||
+            nextLine.tokenFile ||
+            nextLine.secretFile
+          ) {
+            delete nextLine.channelAccessToken;
+            delete nextLine.channelSecret;
+            delete nextLine.tokenFile;
+            delete nextLine.secretFile;
+            cleared = true;
+            changed = true;
+          }
+        }
+
+        const accountCleanup = clearAccountEntryFields({
+          accounts: nextLine.accounts,
+          accountId,
+          fields: ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"],
+          markClearedOnFieldPresence: true,
+        });
+        if (accountCleanup.changed) {
+          changed = true;
+          if (accountCleanup.cleared) {
+            cleared = true;
+          }
+          if (accountCleanup.nextAccounts) {
+            nextLine.accounts = accountCleanup.nextAccounts;
+          } else {
+            delete nextLine.accounts;
+          }
+        }
+
+        if (changed) {
+          if (Object.keys(nextLine).length > 0) {
+            nextCfg.channels = { ...nextCfg.channels, line: nextLine };
+          } else {
+            const nextChannels = { ...nextCfg.channels };
+            delete (nextChannels as Record<string, unknown>).line;
+            if (Object.keys(nextChannels).length > 0) {
+              nextCfg.channels = nextChannels;
+            } else {
+              delete nextCfg.channels;
+            }
+          }
+          await getLineRuntime().config.writeConfigFile(nextCfg);
+        }
+
+        const resolved = getLineRuntime().channel.line.resolveLineAccount({
+          cfg: changed ? nextCfg : cfg,
+          accountId,
+        });
+        const loggedOut = resolved.tokenSource === "none";
+
+        return { cleared, envToken: Boolean(envToken), loggedOut };
+      },
+    },
+    agentPrompt: {
+      messageToolHints: () => [
+        "",
+        "### LINE Rich Messages",
+        "LINE supports rich visual messages. Use these directives in your reply when appropriate:",
+        "",
+        "**Quick Replies** (bottom button suggestions):",
+        "  [[quick_replies: Option 1, Option 2, Option 3]]",
+        "",
+        "**Location** (map pin):",
+        "  [[location: Place Name | Address | latitude | longitude]]",
+        "",
+        "**Confirm Dialog** (yes/no prompt):",
+        "  [[confirm: Question text? | Yes Label | No Label]]",
+        "",
+        "**Button Menu** (title + text + buttons):",
+        "  [[buttons: Title | Description | Btn1:action1, Btn2:https://url.com]]",
+        "",
+        "**Media Player Card** (music status):",
+        "  [[media_player: Song Title | Artist Name | Source | https://albumart.url | playing]]",
+        "  - Status: 'playing' or 'paused' (optional)",
+        "",
+        "**Event Card** (calendar events, meetings):",
+        "  [[event: Event Title | Date | Time | Location | Description]]",
+        "  - Time, Location, Description are optional",
+        "",
+        "**Agenda Card** (multiple events/schedule):",
+        "  [[agenda: Schedule Title | Event1:9:00 AM, Event2:12:00 PM, Event3:3:00 PM]]",
+        "",
+        "**Device Control Card** (smart devices, TVs, etc.):",
+        "  [[device: Device Name | Device Type | Status | Control1:data1, Control2:data2]]",
+        "",
+        "**Apple TV Remote** (full D-pad + transport):",
+        "  [[appletv_remote: Apple TV | Playing]]",
+        "",
+        "**Auto-converted**: Markdown tables become Flex cards, code blocks become styled cards.",
+        "",
+        "When to use rich messages:",
+        "- Use [[quick_replies:...]] when offering 2-4 clear options",
+        "- Use [[confirm:...]] for yes/no decisions",
+        "- Use [[buttons:...]] for menus with actions/links",
+        "- Use [[location:...]] when sharing a place",
+        "- Use [[media_player:...]] when showing what's playing",
+        "- Use [[event:...]] for calendar event details",
+        "- Use [[agenda:...]] for a day's schedule or event list",
+        "- Use [[device:...]] for smart device status/controls",
+        "- Tables/code in your response auto-convert to visual cards",
+      ],
     },
   },
-  directory: createEmptyChannelDirectoryAdapter(),
-  setup: lineSetupAdapter,
+  pairing: {
+    text: {
+      idLabel: "lineUserId",
+      message: "OpenClaw: your access has been approved.",
+      // LINE IDs are case-sensitive; only strip prefix variants (line: / line:user:).
+      normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
+      notify: async ({ cfg, id, message }) => {
+        const line = getLineRuntime().channel.line;
+        const account = line.resolveLineAccount({ cfg });
+        if (!account.channelAccessToken) {
+          throw new Error("LINE channel access token not configured");
+        }
+        await line.pushMessageLine(id, message, {
+          accountId: account.accountId,
+          channelAccessToken: account.channelAccessToken,
+        });
+      },
+    },
+  },
+  security: lineSecurityAdapter,
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getLineRuntime().channel.text.chunkMarkdownText(text, limit),
@@ -323,215 +521,4 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         }),
     }),
   },
-  status: {
-    defaultRuntime: {
-      accountId: DEFAULT_ACCOUNT_ID,
-      running: false,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null,
-    },
-    collectStatusIssues: (accounts) => {
-      const issues: ChannelStatusIssue[] = [];
-      for (const account of accounts) {
-        const accountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
-        if (!account.channelAccessToken?.trim()) {
-          issues.push({
-            channel: "line",
-            accountId,
-            kind: "config",
-            message: "LINE channel access token not configured",
-          });
-        }
-        if (!account.channelSecret?.trim()) {
-          issues.push({
-            channel: "line",
-            accountId,
-            kind: "config",
-            message: "LINE channel secret not configured",
-          });
-        }
-      }
-      return issues;
-    },
-    buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
-    probeAccount: async ({ account, timeoutMs }) =>
-      getLineRuntime().channel.line.probeLineBot(account.channelAccessToken, timeoutMs),
-    buildAccountSnapshot: ({ account, runtime, probe }) => {
-      const configured = Boolean(
-        account.channelAccessToken?.trim() && account.channelSecret?.trim(),
-      );
-      const base = buildComputedAccountStatusSnapshot({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured,
-        runtime,
-        probe,
-      });
-      return {
-        ...base,
-        tokenSource: account.tokenSource,
-        mode: "webhook",
-      };
-    },
-  },
-  gateway: {
-    startAccount: async (ctx) => {
-      const account = ctx.account;
-      const token = account.channelAccessToken.trim();
-      const secret = account.channelSecret.trim();
-      if (!token) {
-        throw new Error(
-          `LINE webhook mode requires a non-empty channel access token for account "${account.accountId}".`,
-        );
-      }
-      if (!secret) {
-        throw new Error(
-          `LINE webhook mode requires a non-empty channel secret for account "${account.accountId}".`,
-        );
-      }
-
-      let lineBotLabel = "";
-      try {
-        const probe = await getLineRuntime().channel.line.probeLineBot(token, 2500);
-        const displayName = probe.ok ? probe.bot?.displayName?.trim() : null;
-        if (displayName) {
-          lineBotLabel = ` (${displayName})`;
-        }
-      } catch (err) {
-        if (getLineRuntime().logging.shouldLogVerbose()) {
-          ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
-        }
-      }
-
-      ctx.log?.info(`[${account.accountId}] starting LINE provider${lineBotLabel}`);
-
-      const monitor = await getLineRuntime().channel.line.monitorLineProvider({
-        channelAccessToken: token,
-        channelSecret: secret,
-        accountId: account.accountId,
-        config: ctx.cfg,
-        runtime: ctx.runtime,
-        abortSignal: ctx.abortSignal,
-        webhookPath: account.config.webhookPath,
-      });
-
-      return monitor;
-    },
-    logoutAccount: async ({ accountId, cfg }) => {
-      const envToken = process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() ?? "";
-      const nextCfg = { ...cfg } as OpenClawConfig;
-      const lineConfig = (cfg.channels?.line ?? {}) as LineConfig;
-      const nextLine = { ...lineConfig };
-      let cleared = false;
-      let changed = false;
-
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        if (
-          nextLine.channelAccessToken ||
-          nextLine.channelSecret ||
-          nextLine.tokenFile ||
-          nextLine.secretFile
-        ) {
-          delete nextLine.channelAccessToken;
-          delete nextLine.channelSecret;
-          delete nextLine.tokenFile;
-          delete nextLine.secretFile;
-          cleared = true;
-          changed = true;
-        }
-      }
-
-      const accountCleanup = clearAccountEntryFields({
-        accounts: nextLine.accounts,
-        accountId,
-        fields: ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"],
-        markClearedOnFieldPresence: true,
-      });
-      if (accountCleanup.changed) {
-        changed = true;
-        if (accountCleanup.cleared) {
-          cleared = true;
-        }
-        if (accountCleanup.nextAccounts) {
-          nextLine.accounts = accountCleanup.nextAccounts;
-        } else {
-          delete nextLine.accounts;
-        }
-      }
-
-      if (changed) {
-        if (Object.keys(nextLine).length > 0) {
-          nextCfg.channels = { ...nextCfg.channels, line: nextLine };
-        } else {
-          const nextChannels = { ...nextCfg.channels };
-          delete (nextChannels as Record<string, unknown>).line;
-          if (Object.keys(nextChannels).length > 0) {
-            nextCfg.channels = nextChannels;
-          } else {
-            delete nextCfg.channels;
-          }
-        }
-        await getLineRuntime().config.writeConfigFile(nextCfg);
-      }
-
-      const resolved = getLineRuntime().channel.line.resolveLineAccount({
-        cfg: changed ? nextCfg : cfg,
-        accountId,
-      });
-      const loggedOut = resolved.tokenSource === "none";
-
-      return { cleared, envToken: Boolean(envToken), loggedOut };
-    },
-  },
-  agentPrompt: {
-    messageToolHints: () => [
-      "",
-      "### LINE Rich Messages",
-      "LINE supports rich visual messages. Use these directives in your reply when appropriate:",
-      "",
-      "**Quick Replies** (bottom button suggestions):",
-      "  [[quick_replies: Option 1, Option 2, Option 3]]",
-      "",
-      "**Location** (map pin):",
-      "  [[location: Place Name | Address | latitude | longitude]]",
-      "",
-      "**Confirm Dialog** (yes/no prompt):",
-      "  [[confirm: Question text? | Yes Label | No Label]]",
-      "",
-      "**Button Menu** (title + text + buttons):",
-      "  [[buttons: Title | Description | Btn1:action1, Btn2:https://url.com]]",
-      "",
-      "**Media Player Card** (music status):",
-      "  [[media_player: Song Title | Artist Name | Source | https://albumart.url | playing]]",
-      "  - Status: 'playing' or 'paused' (optional)",
-      "",
-      "**Event Card** (calendar events, meetings):",
-      "  [[event: Event Title | Date | Time | Location | Description]]",
-      "  - Time, Location, Description are optional",
-      "",
-      "**Agenda Card** (multiple events/schedule):",
-      "  [[agenda: Schedule Title | Event1:9:00 AM, Event2:12:00 PM, Event3:3:00 PM]]",
-      "",
-      "**Device Control Card** (smart devices, TVs, etc.):",
-      "  [[device: Device Name | Device Type | Status | Control1:data1, Control2:data2]]",
-      "",
-      "**Apple TV Remote** (full D-pad + transport):",
-      "  [[appletv_remote: Apple TV | Playing]]",
-      "",
-      "**Auto-converted**: Markdown tables become Flex cards, code blocks become styled cards.",
-      "",
-      "When to use rich messages:",
-      "- Use [[quick_replies:...]] when offering 2-4 clear options",
-      "- Use [[confirm:...]] for yes/no decisions",
-      "- Use [[buttons:...]] for menus with actions/links",
-      "- Use [[location:...]] when sharing a place",
-      "- Use [[media_player:...]] when showing what's playing",
-      "- Use [[event:...]] for calendar event details",
-      "- Use [[agenda:...]] for a day's schedule or event list",
-      "- Use [[device:...]] for smart device status/controls",
-      "- Tables/code in your response auto-convert to visual cards",
-    ],
-  },
-};
+});

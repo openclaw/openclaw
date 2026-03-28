@@ -1,6 +1,5 @@
 import {
   type Component,
-  getEditorKeybindings,
   Input,
   isKeyRelease,
   matchesKey,
@@ -362,8 +361,7 @@ export class SearchableSelectList implements Component {
       return;
     }
 
-    const kb = getEditorKeybindings();
-    if (kb.matches(keyData, "selectCancel")) {
+    if (matchesKey(keyData, "escape") || keyData === "\u0003") {
       if (this.onCancel) {
         this.onCancel();
       }

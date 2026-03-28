@@ -1,14 +1,12 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { telegramMessagingForTest } from "../infra/outbound/targets.test-helpers.js";
 
-// Mock session store so we can control what entries exist.
 const mockStore: Record<string, Record<string, unknown>> = {};
-type DeliveryTargetModule = typeof import("./isolated-agent/delivery-target.js");
 
-let resolveDeliveryTarget: DeliveryTargetModule["resolveDeliveryTarget"];
-
-beforeAll(async () => {
+let resolveDeliveryTarget: typeof import("./isolated-agent/delivery-target.js").resolveDeliveryTarget;
+beforeEach(async () => {
+  vi.resetModules();
   vi.doMock("../config/sessions.js", () => ({
     loadSessionStore: vi.fn((storePath: string) => mockStore[storePath] ?? {}),
     resolveAgentMainSessionKey: vi.fn(
@@ -23,16 +21,7 @@ beforeAll(async () => {
     getChannelPlugin: vi.fn(() => ({
       meta: { label: "Telegram" },
       config: {},
-      messaging: {
-        parseExplicitTarget: ({ raw }: { raw: string }) => {
-          const target = parseTelegramTarget(raw);
-          return {
-            to: target.chatId,
-            threadId: target.messageThreadId,
-            chatType: target.chatType === "unknown" ? undefined : target.chatType,
-          };
-        },
-      },
+      messaging: telegramMessagingForTest,
       outbound: {
         resolveTarget: ({ to }: { to?: string }) =>
           to ? { ok: true, to } : { ok: false, error: new Error("missing") },
@@ -41,13 +30,15 @@ beforeAll(async () => {
     normalizeChannelId: vi.fn((id: string) => id),
   }));
   ({ resolveDeliveryTarget } = await import("./isolated-agent/delivery-target.js"));
-});
-
-beforeEach(() => {
   vi.clearAllMocks();
   for (const key of Object.keys(mockStore)) {
     delete mockStore[key];
   }
+});
+
+afterAll(() => {
+  vi.restoreAllMocks();
+  vi.resetModules();
 });
 
 describe("resolveDeliveryTarget thread session lookup", () => {

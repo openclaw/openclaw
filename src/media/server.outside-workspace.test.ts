@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   readFileWithinRoot: vi.fn(),
@@ -28,17 +29,36 @@ vi.mock("./store.js", async (importOriginal) => {
   };
 });
 
-const { SafeOpenError } = await import("../infra/fs-safe.js");
-const { startMediaServer } = await import("./server.js");
+let SafeOpenError: typeof import("../infra/fs-safe.js").SafeOpenError;
+let startMediaServer: typeof import("./server.js").startMediaServer;
+let realFetch: typeof import("undici").fetch;
+
+async function expectOutsideWorkspaceServerResponse(url: string) {
+  const response = await realFetch(url);
+  expect(response.status).toBe(400);
+  expect(await response.text()).toBe("file is outside workspace root");
+}
 
 describe("media server outside-workspace mapping", () => {
   let server: Awaited<ReturnType<typeof startMediaServer>>;
   let port = 0;
 
   beforeAll(async () => {
+    vi.useRealTimers();
+    vi.doUnmock("undici");
+    vi.resetModules();
+    const require = createRequire(import.meta.url);
+    ({ SafeOpenError } = await import("../infra/fs-safe.js"));
+    ({ startMediaServer } = await import("./server.js"));
+    ({ fetch: realFetch } = require("undici") as typeof import("undici"));
     mediaDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-outside-workspace-"));
     server = await startMediaServer(0, 1_000);
     port = (server.address() as AddressInfo).port;
+  });
+
+  beforeEach(() => {
+    mocks.readFileWithinRoot.mockReset();
+    mocks.cleanOldMedia.mockClear();
   });
 
   afterAll(async () => {
@@ -52,8 +72,6 @@ describe("media server outside-workspace mapping", () => {
       new SafeOpenError("outside-workspace", "file is outside workspace root"),
     );
 
-    const response = await fetch(`http://127.0.0.1:${port}/media/ok-id`);
-    expect(response.status).toBe(400);
-    expect(await response.text()).toBe("file is outside workspace root");
+    await expectOutsideWorkspaceServerResponse(`http://127.0.0.1:${port}/media/ok-id`);
   });
 });

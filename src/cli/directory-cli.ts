@@ -3,6 +3,7 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { danger } from "../globals.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
 import { defaultRuntime } from "../runtime.js";
@@ -97,7 +98,11 @@ export function registerDirectoryCli(program: Command) {
       .option("--json", "Output JSON", false);
 
   const resolve = async (opts: { channel?: string; account?: string }) => {
-    let cfg = loadConfig();
+    const autoEnabled = applyPluginAutoEnable({
+      config: loadConfig(),
+      env: process.env,
+    });
+    let cfg = autoEnabled.config;
     const explicitChannel = opts.channel?.trim();
     const resolvedExplicit = explicitChannel
       ? await resolveInstallableChannelPlugin({
@@ -110,6 +115,8 @@ export function registerDirectoryCli(program: Command) {
       : null;
     if (resolvedExplicit?.configChanged) {
       cfg = resolvedExplicit.cfg;
+      await writeConfigFile(cfg);
+    } else if (autoEnabled.changes.length > 0) {
       await writeConfigFile(cfg);
     }
     const selection = explicitChannel
@@ -160,7 +167,7 @@ export function registerDirectoryCli(program: Command) {
       runtime: defaultRuntime,
     });
     if (params.opts.json) {
-      defaultRuntime.log(JSON.stringify(result, null, 2));
+      defaultRuntime.writeJson(result);
       return;
     }
     printDirectoryList({ title: params.title, emptyMessage: params.emptyMessage, entries: result });
@@ -179,7 +186,7 @@ export function registerDirectoryCli(program: Command) {
         }
         const result = await fn({ cfg, accountId, runtime: defaultRuntime });
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
           return;
         }
         if (!result) {
@@ -272,7 +279,7 @@ export function registerDirectoryCli(program: Command) {
           runtime: defaultRuntime,
         });
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
           return;
         }
         printDirectoryList({

@@ -6,9 +6,14 @@ import {
   buildEnforcedShellCommand,
   evaluateShellAllowlist,
   recordAllowlistUse,
+  resolveApprovalAuditCandidatePath,
   requiresExecApproval,
   resolveAllowAlwaysPatterns,
 } from "../infra/exec-approvals.js";
+import {
+  describeInterpreterInlineEval,
+  detectInterpreterInlineEvalArgv,
+} from "../infra/exec-inline-eval.js";
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { logInfo } from "../logger.js";
@@ -48,6 +53,7 @@ export type ProcessGatewayAllowlistParams = {
   ask: ExecAsk;
   safeBins: Set<string>;
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
+  strictInlineEval?: boolean;
   agentId?: string;
   sessionKey?: string;
   turnSourceChannel?: string;
@@ -91,6 +97,21 @@ export async function processGatewayAllowlist(
   const analysisOk = allowlistEval.analysisOk;
   const allowlistSatisfied =
     hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
+  const inlineEvalHit =
+    params.strictInlineEval === true
+      ? (allowlistEval.segments
+          .map((segment) =>
+            detectInterpreterInlineEvalArgv(segment.resolution?.effectiveArgv ?? segment.argv),
+          )
+          .find((entry) => entry !== null) ?? null)
+      : null;
+  if (inlineEvalHit) {
+    params.warnings.push(
+      `Warning: strict inline-eval mode requires explicit approval for ${describeInterpreterInlineEval(
+        inlineEvalHit,
+      )}.`,
+    );
+  }
   let enforcedCommand: string | undefined;
   if (hostSecurity === "allowlist" && analysisOk && allowlistSatisfied) {
     const enforced = buildEnforcedShellCommand({
@@ -126,6 +147,7 @@ export async function processGatewayAllowlist(
   );
   const requiresHeredocApproval =
     hostSecurity === "allowlist" && analysisOk && allowlistSatisfied && hasHeredocSegment;
+  const requiresInlineEvalApproval = inlineEvalHit !== null;
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -134,6 +156,7 @@ export async function processGatewayAllowlist(
       allowlistSatisfied,
     }) ||
     requiresHeredocApproval ||
+    requiresInlineEvalApproval ||
     obfuscation.detected;
   if (requiresHeredocApproval) {
     params.warnings.push(
@@ -162,7 +185,10 @@ export async function processGatewayAllowlist(
           agentId: params.agentId,
           sessionKey: params.sessionKey,
         }),
-        resolvedPath: allowlistEval.segments[0]?.resolution?.resolvedPath,
+        resolvedPath: resolveApprovalAuditCandidatePath(
+          allowlistEval.segments[0]?.resolution ?? null,
+          params.workdir,
+        ),
         ...buildExecApprovalTurnSourceContext(params),
       });
     const {
@@ -178,7 +204,10 @@ export async function processGatewayAllowlist(
       ...requestArgs,
       register: registerGatewayApproval,
     });
-    const resolvedPath = allowlistEval.segments[0]?.resolution?.resolvedPath;
+    const resolvedPath = resolveApprovalAuditCandidatePath(
+      allowlistEval.segments[0]?.resolution ?? null,
+      params.workdir,
+    );
     const effectiveTimeout =
       typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
     const followupTarget = buildExecApprovalFollowupTarget({
@@ -226,7 +255,7 @@ export async function processGatewayAllowlist(
         approvedByAsk = true;
       } else if (decision === "allow-always") {
         approvedByAsk = true;
-        if (hostSecurity === "allowlist") {
+        if (hostSecurity === "allowlist" && !requiresInlineEvalApproval) {
           const patterns = resolveAllowAlwaysPatterns({
             segments: allowlistEval.segments,
             cwd: params.workdir,
@@ -315,7 +344,12 @@ export async function processGatewayAllowlist(
     throw new Error("exec denied: allowlist miss");
   }
 
-  recordMatchedAllowlistUse(allowlistEval.segments[0]?.resolution?.resolvedPath);
+  recordMatchedAllowlistUse(
+    resolveApprovalAuditCandidatePath(
+      allowlistEval.segments[0]?.resolution ?? null,
+      params.workdir,
+    ),
+  );
 
   return { execCommandOverride: enforcedCommand };
 }

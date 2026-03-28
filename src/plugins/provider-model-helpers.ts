@@ -1,5 +1,13 @@
-import { normalizeModelCompat } from "../agents/model-compat.js";
+import { normalizeModelCompat } from "./provider-model-compat.js";
 import type { ProviderResolveDynamicModelContext, ProviderRuntimeModel } from "./types.js";
+
+export function matchesExactOrPrefix(id: string, values: readonly string[]): boolean {
+  const normalizedId = id.trim().toLowerCase();
+  return values.some((value) => {
+    const normalizedValue = value.trim().toLowerCase();
+    return normalizedId === normalizedValue || normalizedId.startsWith(normalizedValue);
+  });
+}
 
 export function cloneFirstTemplateModel(params: {
   providerId: string;
