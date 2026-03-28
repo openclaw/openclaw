@@ -70,7 +70,7 @@ describe("xai web search config resolution", () => {
 
     expect(resolveXaiWebSearchCredential(searchConfig)).toBe("plugin-key");
     expect(resolveXaiInlineCitations(searchConfig)).toBe(true);
-    expect(resolveXaiWebSearchModel(searchConfig)).toBe("grok-4-fast");
+    expect(resolveXaiWebSearchModel(searchConfig)).toBe("grok-4-fast-reasoning");
   });
 
   it("treats unresolved non-env SecretRefs as missing credentials instead of throwing", async () => {
@@ -114,7 +114,7 @@ describe("xai web search config resolution", () => {
 
   it("uses config model when provided", () => {
     expect(resolveXaiWebSearchModel({ grok: { model: "grok-4-fast-reasoning" } })).toBe(
-      "grok-4-fast",
+      "grok-4-fast-reasoning",
     );
   });
 

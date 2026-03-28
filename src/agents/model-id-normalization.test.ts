@@ -11,9 +11,7 @@ describe("normalizeXaiModelId", () => {
     );
   });
 
-  it("maps older fast and 4.20 ids to the current Pi-backed ids", () => {
-    expect(normalizeXaiModelId("grok-4-fast-reasoning")).toBe("grok-4-fast");
-    expect(normalizeXaiModelId("grok-4-1-fast-reasoning")).toBe("grok-4-1-fast");
+  it("maps older 4.20 ids to the current Pi-backed ids", () => {
     expect(normalizeXaiModelId("grok-4.20-reasoning")).toBe("grok-4.20-beta-latest-reasoning");
     expect(normalizeXaiModelId("grok-4.20-non-reasoning")).toBe(
       "grok-4.20-beta-latest-non-reasoning",
@@ -21,6 +19,8 @@ describe("normalizeXaiModelId", () => {
   });
 
   it("leaves current xai model ids unchanged", () => {
+    expect(normalizeXaiModelId("grok-4-fast-reasoning")).toBe("grok-4-fast-reasoning");
+    expect(normalizeXaiModelId("grok-4-1-fast-reasoning")).toBe("grok-4-1-fast-reasoning");
     expect(normalizeXaiModelId("grok-4.20-beta-latest-reasoning")).toBe(
       "grok-4.20-beta-latest-reasoning",
     );
