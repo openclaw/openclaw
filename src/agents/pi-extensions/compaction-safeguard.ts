@@ -631,13 +631,43 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    let requestAuth: ResolvedRequestAuth;
+    let apiKey: string | undefined;
+    let headers: Record<string, string> | undefined;
     try {
       const modelRegistry = ctx.modelRegistry as ModelRegistryWithRequestAuthLookup;
-      if (typeof modelRegistry.getApiKeyAndHeaders !== "function") {
-        throw new Error("model registry auth lookup unavailable");
+      if (typeof modelRegistry.getApiKeyAndHeaders === "function") {
+        const requestAuth = await modelRegistry.getApiKeyAndHeaders(model);
+        if (!requestAuth.ok) {
+          log.warn(
+            `Compaction safeguard: request credential resolution failed for ${model.provider}/${model.id}: ${requestAuth.error}`,
+          );
+          setCompactionSafeguardCancelReason(
+            ctx.sessionManager,
+            `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${requestAuth.error}`,
+          );
+          return { cancel: true };
+        }
+        apiKey = requestAuth.apiKey;
+        headers = requestAuth.headers;
+        if (!apiKey && !headers) {
+          log.warn(
+            "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
+          );
+          setCompactionSafeguardCancelReason(
+            ctx.sessionManager,
+            `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}.`,
+          );
+          return { cancel: true };
+        }
+      } else {
+        // getApiKeyAndHeaders is not implemented on this model registry (e.g. API-key-based
+        // providers that don't expose an auth-lookup interface). Proceed without preflight —
+        // the underlying summarization call will fail with a clear error if credentials are
+        // truly missing.
+        log.debug(
+          `Compaction safeguard: model registry does not support auth preflight for ${model.provider}/${model.id}; proceeding without credential check.`,
+        );
       }
-      requestAuth = await modelRegistry.getApiKeyAndHeaders(model);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       log.warn(
@@ -646,28 +676,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       setCompactionSafeguardCancelReason(
         ctx.sessionManager,
         `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${error}`,
-      );
-      return { cancel: true };
-    }
-    if (!requestAuth.ok) {
-      log.warn(
-        `Compaction safeguard: request credential resolution failed for ${model.provider}/${model.id}: ${requestAuth.error}`,
-      );
-      setCompactionSafeguardCancelReason(
-        ctx.sessionManager,
-        `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${requestAuth.error}`,
-      );
-      return { cancel: true };
-    }
-    const apiKey = requestAuth.apiKey;
-    const headers = requestAuth.headers;
-    if (!apiKey && !headers) {
-      log.warn(
-        "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
-      );
-      setCompactionSafeguardCancelReason(
-        ctx.sessionManager,
-        `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}.`,
       );
       return { cancel: true };
     }

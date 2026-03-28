@@ -1687,6 +1687,58 @@ describe("compaction-safeguard extension model fallback", () => {
     // Verify early return: request auth should NOT have been resolved when both models are missing.
     expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
   });
+
+  it("proceeds with compaction when model registry does not implement getApiKeyAndHeaders", async () => {
+    // Regression test: model registries that do not expose getApiKeyAndHeaders (e.g. API-key-based
+    // providers like Anthropic that resolve credentials outside the registry) previously caused
+    // compaction to always cancel with "model registry auth lookup unavailable".
+    // The fix: treat a missing getApiKeyAndHeaders as "auth not verifiable via preflight — proceed
+    // and let the underlying summarization call surface any real credential errors".
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+    const mockSummarize = vi.fn().mockResolvedValue("compacted summary");
+    __testing.setSummarizeInStagesForTest(mockSummarize);
+
+    // Build a context WITHOUT getApiKeyAndHeaders on the model registry
+    const mockContextWithoutAuthLookup = {
+      model: undefined,
+      sessionManager,
+      modelRegistry: {
+        // intentionally omit getApiKeyAndHeaders to simulate registries that don't implement it
+      },
+    } as unknown as Partial<ExtensionContext>;
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "real user message", timestamp: Date.now() },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1000,
+        isSplitTurn: false,
+        previousSummary: undefined,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 1000 },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(mockEvent, mockContextWithoutAuthLookup)) as {
+      cancel?: boolean;
+      compaction?: { summary: string; firstKeptEntryId: string; tokensBefore: number };
+    };
+
+    // Should NOT cancel — missing getApiKeyAndHeaders is not a hard error
+    expect(result.cancel).not.toBe(true);
+    expect(result.compaction).toBeDefined();
+
+    __testing.setSummarizeInStagesForTest(undefined);
+  });
 });
 
 describe("compaction-safeguard double-compaction guard", () => {
