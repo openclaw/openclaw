@@ -7791,7 +7791,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
-    publicSurfaceArtifacts: ["api.js", "onboard.js", "provider-catalog.js"],
+    publicSurfaceArtifacts: ["api.js", "models.js", "onboard.js", "provider-catalog.js"],
     packageName: "@openclaw/kimi-provider",
     packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Kimi provider plugin",
