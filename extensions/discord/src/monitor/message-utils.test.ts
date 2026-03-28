@@ -652,6 +652,42 @@ describe("resolveDiscordMessageText", () => {
     expect(text).toBe("hello from content");
   });
 
+  it("uses components v2 text when content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        components: [
+          {
+            components: [
+              { content: "## Approval needed" },
+              { content: "Run this command" },
+            ],
+          },
+        ],
+      }) as Message,
+    );
+
+    expect(text).toBe("## Approval needed\nRun this command");
+  });
+
+  it("uses forwarded snapshot components v2 text when snapshot content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asForwardedSnapshotMessage({
+        content: "",
+        embeds: [],
+        components: [
+          {
+            components: [{ content: "Forwarded approval details" }],
+          },
+        ],
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toContain("[Forwarded message from @Bob]");
+    expect(text).toContain("Forwarded approval details");
+  });
+
   it("joins forwarded snapshot embed title and description when content is empty", () => {
     const text = resolveDiscordMessageText(
       asForwardedSnapshotMessage({

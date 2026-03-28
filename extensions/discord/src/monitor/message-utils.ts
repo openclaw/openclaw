@@ -86,6 +86,7 @@ type DiscordSnapshotMessage = {
   attachments?: APIAttachment[] | null;
   stickers?: APIStickerItem[] | null;
   sticker_items?: APIStickerItem[] | null;
+  components?: unknown;
   author?: DiscordSnapshotAuthor | null;
 };
 
@@ -509,8 +510,10 @@ export function resolveDiscordMessageText(
     (message.embeds?.[0] as { title?: string | null; description?: string | null } | undefined) ??
       null,
   );
+  const componentText = resolveDiscordMessageComponentText(message);
   const rawText =
     message.content?.trim() ||
+    componentText ||
     buildDiscordMediaPlaceholder({
       attachments: message.attachments ?? undefined,
       stickers: resolveDiscordMessageStickers(message),
@@ -592,12 +595,65 @@ function resolveDiscordMessageSnapshots(message: Message): DiscordMessageSnapsho
 
 function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): string {
   const content = snapshot.content?.trim() ?? "";
+  const componentText = resolveDiscordComponentText(snapshot.components);
   const attachmentText = buildDiscordMediaPlaceholder({
     attachments: snapshot.attachments ?? undefined,
     stickers: resolveDiscordSnapshotStickers(snapshot),
   });
   const embedText = resolveDiscordEmbedText(snapshot.embeds?.[0]);
-  return content || attachmentText || embedText || "";
+  return content || componentText || attachmentText || embedText || "";
+}
+
+function resolveDiscordMessageComponentText(message: Message): string {
+  const rawData = (message as { rawData?: { components?: unknown } }).rawData;
+  const directComponents = (message as { components?: unknown }).components;
+  return resolveDiscordComponentText(rawData?.components ?? directComponents);
+}
+
+function resolveDiscordComponentText(value: unknown): string {
+  const fragments: string[] = [];
+  const visit = (node: unknown) => {
+    if (!node) {
+      return;
+    }
+    if (typeof node === "string") {
+      const trimmed = node.trim();
+      if (trimmed) {
+        fragments.push(trimmed);
+      }
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const entry of node) {
+        visit(entry);
+      }
+      return;
+    }
+    if (typeof node !== "object") {
+      return;
+    }
+    const record = node as Record<string, unknown>;
+    if (typeof record.content === "string") {
+      visit(record.content);
+    }
+    if (typeof record.text === "string") {
+      visit(record.text);
+    }
+    if (Array.isArray(record.texts)) {
+      visit(record.texts);
+    }
+    if (Array.isArray(record.components)) {
+      visit(record.components);
+    }
+    if (Array.isArray(record.items)) {
+      visit(record.items);
+    }
+    if (record.accessory && typeof record.accessory === "object") {
+      visit(record.accessory);
+    }
+  };
+  visit(value);
+  return fragments.join("\n").trim();
 }
 
 function formatDiscordSnapshotAuthor(
