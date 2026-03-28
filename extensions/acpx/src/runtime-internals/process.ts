@@ -188,6 +188,18 @@ function createAbortError(): Error {
   return error;
 }
 
+async function collectStreamOutput(stream: NodeJS.ReadableStream): Promise<string> {
+  let output = "";
+  try {
+    for await (const chunk of stream) {
+      output += String(chunk);
+    }
+  } catch {
+    // Return whatever was captured before the stream failed.
+  }
+  return output;
+}
+
 export function spawnWithResolvedCommand(
   params: {
     command: string;
@@ -280,14 +292,8 @@ export async function spawnAndCollect(
   const child = spawnWithResolvedCommand(params, options);
   child.stdin.end();
 
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += String(chunk);
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += String(chunk);
-  });
+  const stdoutPromise = collectStreamOutput(child.stdout);
+  const stderrPromise = collectStreamOutput(child.stderr);
 
   let abortKillTimer: NodeJS.Timeout | undefined;
   let aborted = false;
@@ -314,6 +320,7 @@ export async function spawnAndCollect(
 
   try {
     const exit = await waitForExit(child);
+    const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
     return {
       stdout,
       stderr,
