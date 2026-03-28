@@ -29,7 +29,7 @@ export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): 
 
 /**
  * Build the lightweight execution context forwarded to plugin tool `execute`
- * calls as the third argument.  This contains only identity/session fields —
+ * calls as the fifth argument.  This contains only identity/session fields —
  * never config or secrets.
  */
 function buildExecuteContext(ctx: OpenClawPluginToolContext): OpenClawPluginToolExecuteContext {
