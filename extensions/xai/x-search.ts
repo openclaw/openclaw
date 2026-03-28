@@ -199,7 +199,7 @@ export function createXSearchTool(options?: {
     label: "X Search",
     name: "x_search",
     description:
-      "Search X (formerly Twitter) using xAI. Returns AI-synthesized answers with citations from real-time X post search.",
+      "Search X (formerly Twitter) using xAI, including targeted post or thread lookups. For per-post stats like reposts, replies, bookmarks, or views, prefer the exact post URL or status ID.",
     parameters: Type.Object({
       query: Type.String({ description: "X search query string." }),
       allowed_x_handles: Type.Optional(

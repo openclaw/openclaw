@@ -361,17 +361,6 @@ export const ToolsWebXSearchSchema = z
   .strict()
   .optional();
 
-export const ToolCodeExecutionSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    apiKey: SecretInputSchema.optional().register(sensitive),
-    model: z.string().optional(),
-    maxTurns: z.number().int().optional(),
-    timeoutSeconds: z.number().int().positive().optional(),
-  })
-  .strict()
-  .optional();
-
 export const ToolsWebSchema = z
   .object({
     search: ToolsWebSearchSchema,
@@ -865,7 +854,6 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
-    code_execution: ToolCodeExecutionSchema,
     exec: ToolExecSchema,
     fs: ToolFsSchema,
     subagents: z
