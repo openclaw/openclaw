@@ -5,7 +5,7 @@ import {
   hasEnvHttpProxyConfigured,
   resolveFetch,
   type PinnedDispatcherPolicy,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import {

@@ -428,6 +428,10 @@
       "types": "./dist/plugin-sdk/feishu-setup.d.ts",
       "default": "./dist/plugin-sdk/feishu-setup.js"
     },
+    "./plugin-sdk/fetch-runtime": {
+      "types": "./dist/plugin-sdk/fetch-runtime.d.ts",
+      "default": "./dist/plugin-sdk/fetch-runtime.js"
+    },
     "./plugin-sdk/group-access": {
       "types": "./dist/plugin-sdk/group-access.d.ts",
       "default": "./dist/plugin-sdk/group-access.js"
