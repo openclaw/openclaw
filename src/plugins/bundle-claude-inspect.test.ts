@@ -101,6 +101,24 @@ describe("Claude bundle plugin inspect integration", () => {
     expect(diagnostics).toEqual([]);
   }
 
+  function expectBundleRuntimeSupport(params: {
+    actual: {
+      supportedServerNames: string[];
+      unsupportedServerNames: string[];
+      diagnostics: unknown[];
+    } & Record<string, unknown>;
+    supportedServerNames: readonly string[];
+    unsupportedServerNames: readonly string[];
+    hasSupportedKey: "hasSupportedStdioServer" | "hasStdioServer";
+  }) {
+    expect(params.actual[params.hasSupportedKey]).toBe(true);
+    expect(params.actual.supportedServerNames).toEqual(
+      expect.arrayContaining([...params.supportedServerNames]),
+    );
+    expect(params.actual.unsupportedServerNames).toEqual([...params.unsupportedServerNames]);
+    expectNoDiagnostics(params.actual.diagnostics);
+  }
+
   beforeAll(() => {
     rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-bundle-"));
     setupClaudeInspectFixture();
@@ -159,10 +177,12 @@ describe("Claude bundle plugin inspect integration", () => {
       bundleFormat: "claude",
     });
 
-    expect(mcp.hasSupportedStdioServer).toBe(true);
-    expect(mcp.supportedServerNames).toContain("test-stdio-server");
-    expect(mcp.unsupportedServerNames).toContain("test-sse-server");
-    expectNoDiagnostics(mcp.diagnostics);
+    expectBundleRuntimeSupport({
+      actual: mcp,
+      supportedServerNames: ["test-stdio-server"],
+      unsupportedServerNames: ["test-sse-server"],
+      hasSupportedKey: "hasSupportedStdioServer",
+    });
   });
 
   it("inspects LSP runtime support with stdio server", () => {
@@ -172,9 +192,11 @@ describe("Claude bundle plugin inspect integration", () => {
       bundleFormat: "claude",
     });
 
-    expect(lsp.hasStdioServer).toBe(true);
-    expect(lsp.supportedServerNames).toContain("typescript-lsp");
-    expect(lsp.unsupportedServerNames).toEqual([]);
-    expectNoDiagnostics(lsp.diagnostics);
+    expectBundleRuntimeSupport({
+      actual: lsp,
+      supportedServerNames: ["typescript-lsp"],
+      unsupportedServerNames: [],
+      hasSupportedKey: "hasStdioServer",
+    });
   });
 });
