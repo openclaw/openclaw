@@ -8,7 +8,7 @@ import {
 } from "../../shared/config-eval.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveSkillKey } from "./frontmatter.js";
-import type { SkillEligibilityContext, SkillEntry } from "./types.js";
+import { getSkillSource, type SkillEligibilityContext, type SkillEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,
@@ -50,7 +50,7 @@ function normalizeAllowlist(input: unknown): string[] | undefined {
 const BUNDLED_SOURCES = new Set(["openclaw-bundled"]);
 
 function isBundledSkill(entry: SkillEntry): boolean {
-  return BUNDLED_SOURCES.has(entry.skill.sourceInfo?.source ?? "");
+  return BUNDLED_SOURCES.has(getSkillSource(entry.skill) ?? "");
 }
 
 export function resolveBundledAllowlist(config?: OpenClawConfig): string[] | undefined {

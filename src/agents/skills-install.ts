@@ -15,6 +15,7 @@ import {
   type SkillInstallSpec,
   type SkillsInstallPreferences,
 } from "./skills.js";
+import { getSkillSource } from "./skills/types.js";
 
 export type SkillInstallRequest = {
   workspaceDir: string;
@@ -440,7 +441,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
 
   const spec = findInstallSpec(entry, params.installId);
   const warnings = await collectSkillInstallScanWarnings(entry);
-  const skillSource = entry.skill.sourceInfo?.source?.trim() || "unknown";
+  const skillSource = getSkillSource(entry.skill) ?? "unknown";
 
   // Warn when install is triggered from a non-bundled source.
   // Workspace/project/personal agent skills can contain attacker-controlled metadata.

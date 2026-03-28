@@ -1,5 +1,10 @@
 import type { Skill } from "@mariozechner/pi-coding-agent";
 
+export type SkillSourceCompat = Skill & {
+  source?: string;
+  sourceInfo?: { source?: string };
+};
+
 export type SkillInstallSpec = {
   id?: string;
   kind: "brew" | "node" | "go" | "uv" | "download";
@@ -91,3 +96,13 @@ export type SkillSnapshot = {
   resolvedSkills?: Skill[];
   version?: number;
 };
+
+export function getSkillSource(skill: SkillSourceCompat): string | undefined {
+  const directSource = typeof skill.source === "string" ? skill.source.trim() : "";
+  if (directSource) {
+    return directSource;
+  }
+  const legacySource =
+    typeof skill.sourceInfo?.source === "string" ? skill.sourceInfo.source.trim() : "";
+  return legacySource || undefined;
+}

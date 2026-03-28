@@ -17,6 +17,7 @@ import {
   type SkillsInstallPreferences,
 } from "./skills.js";
 import { resolveBundledSkillsContext } from "./skills/bundled-context.js";
+import { getSkillSource } from "./skills/types.js";
 
 export type SkillStatusConfigCheck = RequirementConfigCheck;
 
@@ -186,7 +187,7 @@ function buildSkillStatus(
       (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
     );
   const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
-  const skillSource = entry.skill.sourceInfo?.source?.trim() || "unknown";
+  const skillSource = getSkillSource(entry.skill) ?? "unknown";
   const bundled =
     skillSource === "openclaw-bundled" ||
     (skillSource === "unknown" && bundledNames?.has(entry.skill.name) === true);

@@ -21,8 +21,10 @@ export type {
   SkillEntry,
   SkillInstallSpec,
   SkillSnapshot,
+  SkillSourceCompat,
   SkillsInstallPreferences,
 } from "./skills/types.js";
+export { getSkillSource } from "./skills/types.js";
 export {
   buildWorkspaceSkillSnapshot,
   buildWorkspaceSkillsPrompt,
