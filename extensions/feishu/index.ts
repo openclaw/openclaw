@@ -7,6 +7,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contra
 type FeishuSubagentHooksModule = typeof import("./api.js");
 
 let feishuSubagentHooksPromise: Promise<FeishuSubagentHooksModule> | null = null;
+let feishuToolsRegistered = false;
 
 function loadFeishuSubagentHooksModule() {
   feishuSubagentHooksPromise ??= import("./api.js");
@@ -79,6 +80,11 @@ export default defineBundledChannelEntry({
     exportName: "setFeishuRuntime",
   },
   registerFull(api) {
+    // Prevent duplicate tool registration on cache miss
+    if (feishuToolsRegistered) {
+      return;
+    }
+    feishuToolsRegistered = true;
     api.on("subagent_spawning", async (event, ctx) => {
       const { handleFeishuSubagentSpawning } = await loadFeishuSubagentHooksModule();
       return await handleFeishuSubagentSpawning(event, ctx);
