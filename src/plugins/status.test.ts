@@ -110,6 +110,23 @@ function expectAutoEnabledStatusLoad(params: { rawConfig: unknown; autoEnabledCo
   });
 }
 
+function createAutoEnabledStatusConfig(
+  entries: Record<string, unknown>,
+  rawConfigOverrides?: Record<string, unknown>,
+) {
+  const rawConfig = {
+    plugins: {},
+    ...rawConfigOverrides,
+  };
+  const autoEnabledConfig = {
+    ...rawConfig,
+    plugins: {
+      entries,
+    },
+  };
+  return { rawConfig, autoEnabledConfig };
+}
+
 function expectNoCompatibilityWarnings() {
   expect(buildPluginCompatibilityNotices()).toEqual([]);
   expect(buildPluginCompatibilityWarnings()).toEqual([]);
@@ -206,18 +223,12 @@ describe("buildPluginStatusReport", () => {
   });
 
   it("loads plugin status from the auto-enabled config snapshot", () => {
-    const rawConfig = {
-      plugins: {},
-      channels: { demo: { enabled: true } },
-    };
-    const autoEnabledConfig = {
-      ...rawConfig,
-      plugins: {
-        entries: {
-          demo: { enabled: true },
-        },
+    const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
+      {
+        demo: { enabled: true },
       },
-    };
+      { channels: { demo: { enabled: true } } },
+    );
     applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
 
     buildPluginStatusReport({ config: rawConfig });
@@ -229,25 +240,19 @@ describe("buildPluginStatusReport", () => {
   });
 
   it("uses the auto-enabled config snapshot for inspect policy summaries", () => {
-    const rawConfig = {
-      plugins: {},
-      channels: { demo: { enabled: true } },
-    };
-    const autoEnabledConfig = {
-      ...rawConfig,
-      plugins: {
-        entries: {
-          demo: {
-            enabled: true,
-            subagent: {
-              allowModelOverride: true,
-              allowedModels: ["openai/gpt-5.4"],
-              hasAllowedModelsConfig: true,
-            },
+    const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
+      {
+        demo: {
+          enabled: true,
+          subagent: {
+            allowModelOverride: true,
+            allowedModels: ["openai/gpt-5.4"],
+            hasAllowedModelsConfig: true,
           },
         },
       },
-    };
+      { channels: { demo: { enabled: true } } },
+    );
     applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
     setSinglePluginLoadResult(
       createPluginRecord({
