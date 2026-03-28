@@ -359,7 +359,6 @@ export function triggerOpenClawRestart(): RestartAttempt {
     const handoff = scheduleDetachedLaunchdRestartHandoff({
       env: process.env,
       mode: "kickstart",
-      waitForPid: process.pid,
     });
     tried.push("scheduleDetachedLaunchdRestartHandoff(mode=kickstart)");
     if (handoff.ok) {
