@@ -9,7 +9,7 @@ import {
 } from "../plugin-sdk/moonshot.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
-import { applyNativeStreamingUsageCompat } from "./models-config.providers.js";
+import { applyNativeStreamingUsageCompat } from "./models-config.providers.policy.js";
 
 describe("moonshot implicit provider (#33637)", () => {
   it("uses explicit CN baseUrl when provided", async () => {

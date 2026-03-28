@@ -5,7 +5,7 @@ import {
   mergeWithExistingProviderSecrets,
   type ExistingProviderConfig,
 } from "./models-config.merge.js";
-import type { ProviderConfig } from "./models-config.providers.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 describe("models-config merge helpers", () => {
   const preservedApiKey = "AGENT_KEY"; // pragma: allowlist secret
