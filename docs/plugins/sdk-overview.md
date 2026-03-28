@@ -85,6 +85,7 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
     | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
     | `plugin-sdk/secret-input` | Secret input parsing helpers |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers |
+    | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers |
   </Accordion>
 
   <Accordion title="Runtime and storage subpaths">
