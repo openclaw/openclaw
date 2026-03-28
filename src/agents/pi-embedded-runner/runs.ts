@@ -33,8 +33,11 @@ export type EmbeddedRunModelSwitchRequest = {
 /**
  * Use global singleton state so busy/streaming checks stay consistent even
  * when the bundler emits multiple copies of this module into separate chunks.
+ *
+ * Safety caps prevent unbounded growth if runs are not properly cleared.
  */
 const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");
+const MAX_EMBEDDED_RUN_ENTRIES = 5_000;
 
 const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRuns: new Map<string, EmbeddedPiQueueHandle>(),
@@ -42,6 +45,18 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   waiters: new Map<string, Set<EmbeddedRunWaiter>>(),
   modelSwitchRequests: new Map<string, EmbeddedRunModelSwitchRequest>(),
 }));
+
+/** Evict the oldest entry from a Map when it exceeds the cap. */
+function capMap<K, V>(map: Map<K, V>, max: number): void {
+  while (map.size > max) {
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) {
+      map.delete(oldest);
+    } else {
+      break;
+    }
+  }
+}
 const ACTIVE_EMBEDDED_RUNS = embeddedRunState.activeRuns;
 const ACTIVE_EMBEDDED_RUN_SNAPSHOTS = embeddedRunState.snapshots;
 const EMBEDDED_RUN_WAITERS = embeddedRunState.waiters;
@@ -174,6 +189,7 @@ export function requestEmbeddedRunModelSwitch(
     authProfileId: request.authProfileId?.trim() || undefined,
     authProfileIdSource: request.authProfileId?.trim() ? request.authProfileIdSource : undefined,
   });
+  capMap(EMBEDDED_RUN_MODEL_SWITCH_REQUESTS, MAX_EMBEDDED_RUN_ENTRIES);
   diag.debug(
     `model switch requested: sessionId=${normalizedSessionId} provider=${provider} model=${model}`,
   );
@@ -278,6 +294,7 @@ export function setActiveEmbeddedRun(
 ) {
   const wasActive = ACTIVE_EMBEDDED_RUNS.has(sessionId);
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
+  capMap(ACTIVE_EMBEDDED_RUNS, MAX_EMBEDDED_RUN_ENTRIES);
   logSessionStateChange({
     sessionId,
     sessionKey,
@@ -297,6 +314,7 @@ export function updateActiveEmbeddedRunSnapshot(
     return;
   }
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS.set(sessionId, snapshot);
+  capMap(ACTIVE_EMBEDDED_RUN_SNAPSHOTS, MAX_EMBEDDED_RUN_ENTRIES);
 }
 
 export function clearActiveEmbeddedRun(

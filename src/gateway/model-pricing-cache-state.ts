@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
+import { LruMap } from "../shared/lru-map.js";
 
 export type CachedModelPricing = {
   input: number;
@@ -7,7 +8,9 @@ export type CachedModelPricing = {
   cacheWrite: number;
 };
 
-let cachedPricing = new Map<string, CachedModelPricing>();
+const MAX_PRICING_ENTRIES = 500;
+
+let cachedPricing: Map<string, CachedModelPricing> = new LruMap<string, CachedModelPricing>(MAX_PRICING_ENTRIES);
 let cachedAt = 0;
 
 function modelPricingCacheKey(provider: string, model: string): string {
@@ -25,12 +28,16 @@ export function replaceGatewayModelPricingCache(
   nextPricing: Map<string, CachedModelPricing>,
   nextCachedAt = Date.now(),
 ): void {
-  cachedPricing = nextPricing;
+  const lru = new LruMap<string, CachedModelPricing>(MAX_PRICING_ENTRIES);
+  for (const [key, value] of nextPricing) {
+    lru.set(key, value);
+  }
+  cachedPricing = lru;
   cachedAt = nextCachedAt;
 }
 
 export function clearGatewayModelPricingCacheState(): void {
-  cachedPricing = new Map();
+  cachedPricing = new LruMap<string, CachedModelPricing>(MAX_PRICING_ENTRIES);
   cachedAt = 0;
 }
 
