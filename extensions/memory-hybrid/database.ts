@@ -3,7 +3,8 @@ import type * as LanceDB from "@lancedb/lancedb";
 import type { MemoryCategory } from "./config.js";
 import type { GraphDB } from "./graph.js";
 import type { MemoryEntry } from "./recall.js";
-import { tracer } from "./tracer.js";
+import { MemoryTracer, type Logger } from "./tracer.js";
+import { withRetry } from "./utils.js";
 
 // ============================================================================
 // LanceDB Lazy Loader
@@ -61,7 +62,18 @@ export class MemoryDB {
   constructor(
     private readonly dbPath: string,
     private readonly vectorDim: number,
+    private readonly tracer: MemoryTracer,
+    private readonly logger: Logger,
   ) {}
+
+  /** Close the database connection and release resources */
+  async close(): Promise<void> {
+    if (this.db) {
+      this.db = null;
+      this.table = null;
+      this.initPromise = null;
+    }
+  }
 
   private async ensureInitialized(): Promise<void> {
     if (this.table) return;
@@ -134,7 +146,7 @@ export class MemoryDB {
     this.availableColumns = new Set(Object.keys(probeRows[0]));
     const missing = MemoryDB.ALL_COLUMNS.filter((c) => !this.availableColumns.has(c));
     if (missing.length > 0) {
-      console.warn(
+      this.logger.warn(
         `[memory-hybrid] DB schema is missing columns: ${missing.join(", ")}. ` +
           `Queries will skip these fields. Delete the lancedb folder to recreate with full schema.`,
       );
@@ -218,12 +230,19 @@ export class MemoryDB {
     return validRows.length;
   }
 
+  /** Validate category string to prevent query injection (alphanumeric + underscore only) */
+  private static readonly SAFE_CATEGORY = /^[a-z_]+$/;
+
   /** Dream Mode Phase 2: Fetch specific categories for profiling */
   async getMemoriesByCategory(categories: string[], limit: number = 50): Promise<MemoryEntry[]> {
     await this.ensureInitialized();
     if (categories.length === 0) return [];
 
-    const cats = categories.map((c) => `'${c}'`).join(", ");
+    // Sanitize category values to prevent query injection
+    const safeCategories = categories.filter((c) => MemoryDB.SAFE_CATEGORY.test(c));
+    if (safeCategories.length === 0) return [];
+
+    const cats = safeCategories.map((c) => `'${c}'`).join(", ");
     const rows = await this.table!.query().where(`category IN (${cats})`).limit(limit).toArray();
     return rows as unknown as MemoryEntry[];
   }
@@ -398,9 +417,9 @@ export class MemoryDB {
   }
 
   /** List all memories (for consolidation). */
-  async listAll(): Promise<MemoryEntry[]> {
+  async listAll(limit = 1000): Promise<MemoryEntry[]> {
     await this.ensureInitialized();
-    const rows = await this.table!.query().toArray();
+    const rows = await this.table!.query().limit(limit).toArray();
     return rows.map((row) => {
       const id = row.id as string;
       return {
@@ -492,8 +511,12 @@ export class MemoryDB {
 
         const updatedRow = {
           ...row,
+          id: randomUUID(), // New ID to avoid delete collision
           recallCount: (row.recallCount ?? 0) + delta,
         };
+
+        // Track original ID for deletion
+        (updatedRow as Record<string, unknown>).__originalId = id;
 
         delete (updatedRow as Record<string, unknown>)._distance;
         delete (updatedRow as Record<string, unknown>)["vector.isValid"];
@@ -504,42 +527,27 @@ export class MemoryDB {
 
       if (updatedRows.length === 0) return 0;
 
-      // ATOMICITY: LanceDB doesn't have native multi-row ACID transactions in the simple API.
-      // We use a safe "Delete-then-Add" within the same await chain, but we ensure
-      // that if Add fails, we have the data in updatedRows to retry or log.
-      const idList = successfullyFlushedIds.map((id) => `'${id}'`).join(", ");
+      // Store-Before-Delete: add new rows first (with new UUIDs), then delete old ones.
+      // If crash occurs after add but before delete, we get duplicates (harmless — next flush dedupes).
+      // This is MUCH safer than Delete-Before-Store which risks total data loss.
+      const cleanRows = updatedRows.map((row) => {
+        const clean = { ...row };
+        delete clean.__originalId;
+        return clean;
+      });
 
+      // Step 1: Add updated rows with new IDs
+      await this.safeAdd(cleanRows);
+
+      // Step 2: Delete old rows (safe — new data already persisted)
+      const idList = successfullyFlushedIds.map((id) => `'${id}'`).join(", ");
       try {
-        // We delete first to facilitate "update" (LanceDB pattern for this version)
         await this.table!.delete(`id IN (${idList})`);
-        try {
-          await this.safeAdd(updatedRows);
-        } catch (addErr) {
-          // CRITICAL: We deleted rows but couldn't re-add them.
-          // Emergency recovery: retry the add ONE more time before giving up.
-          console.error(
-            `[memory-hybrid] CRITICAL: safeAdd failed after delete for ${idList}. Retrying...`,
-          );
-          try {
-            await this.safeAdd(updatedRows);
-          } catch (retryErr) {
-            // Total failure. DO NOT clear recallCountDeltas — preserve them
-            // so the next flush cycle can attempt recovery.
-            // The rows are lost from DB but deltas remain in memory.
-            tracer.trace(
-              "flush_recall_critical",
-              { ids: successfullyFlushedIds, error: String(retryErr) },
-              `CRITICAL DATA LOSS: memories deleted but could not be re-added.`,
-            );
-            throw new Error(
-              `CRITICAL DATA LOSS: memories deleted but could not be re-added: ${idList}. ` +
-                `Deltas preserved in memory for recovery. Error: ${String(retryErr)}`,
-            );
-          }
-        }
-      } catch (dbErr) {
-        // If it was the delete that failed, we haven't lost anything yet.
-        throw dbErr;
+      } catch (deleteErr) {
+        // New rows are safe. Old duplicates will be cleaned up on next flush/compact.
+        this.logger.warn(
+          `[memory-hybrid] flushRecallCounts: delete old rows failed (duplicates may exist): ${String(deleteErr)}`,
+        );
       }
 
       for (const [id, countAtStart] of entriesToFlush) {
@@ -554,7 +562,7 @@ export class MemoryDB {
         }
       }
 
-      tracer.trace(
+      this.tracer.trace(
         "flush_recall_counts",
         { count: updatedRows.length },
         `Persisted recall counts for ${updatedRows.length} memories.`,
@@ -563,10 +571,12 @@ export class MemoryDB {
       return updatedRows.length;
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      console.warn(`[memory-hybrid] flushRecallCounts batch failed:`, msg);
+      this.logger.warn(`[memory-hybrid] flushRecallCounts batch failed: ${msg}`);
 
-      // If it's a critical data loss risk, bubble it up
-      if (msg.includes("CRITICAL")) throw error;
+      // If it's a critical data loss risk, bubble it up (Disk Full or explicit CRITICAL)
+      if (msg.includes("CRITICAL") || msg.includes("Disk Full")) {
+        throw new Error(`[memory-hybrid] CRITICAL DATA LOSS RISK: ${msg}`);
+      }
 
       return 0;
     }
@@ -585,8 +595,13 @@ export class MemoryDB {
     const toDelete = candidates.filter((row) => !this.recallCountDeltas.has(row.id as string));
 
     if (toDelete.length > 0) {
-      for (const row of toDelete) {
-        await this.table!.delete(`id = '${row.id}'`);
+      // Batch delete for efficiency (replaces N+1 individual deletes)
+      const validIds = toDelete
+        .filter((row) => typeof row.id === "string" && UUID_REGEX.test(row.id as string))
+        .map((row) => `'${row.id}'`)
+        .join(", ");
+      if (validIds) {
+        await this.table!.delete(`id IN (${validIds})`);
       }
     }
 
