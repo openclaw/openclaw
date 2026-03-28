@@ -100,6 +100,7 @@ export async function postTrustedWebToolsJson<T>(
     body: Record<string, unknown>;
     errorLabel: string;
     maxErrorBytes?: number;
+    extraHeaders?: Record<string, string>;
   },
   parseResponse: (response: Response) => Promise<T>,
 ): Promise<T> {
@@ -110,6 +111,7 @@ export async function postTrustedWebToolsJson<T>(
       init: {
         method: "POST",
         headers: {
+          ...params.extraHeaders,
           Accept: "application/json",
           Authorization: `Bearer ${params.apiKey}`,
           "Content-Type": "application/json",
