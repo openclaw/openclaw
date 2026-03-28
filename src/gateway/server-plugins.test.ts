@@ -571,9 +571,41 @@ describe("loadGatewayPlugins", () => {
   test("primes configured bindings during gateway startup", async () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     const cfg = {};
+    const autoEnabledConfig = { channels: { slack: { enabled: true } }, autoEnabled: true };
+    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
     loadGatewayStartupPluginsForTest({ cfg });
 
-    expect(primeConfiguredBindingRegistry).toHaveBeenCalledWith({ cfg });
+    expect(primeConfiguredBindingRegistry).toHaveBeenCalledWith({ cfg: autoEnabledConfig });
+  });
+
+  test("uses the auto-enabled config snapshot for gateway bootstrap policies", async () => {
+    const serverPlugins = serverPluginsModule;
+    const autoEnabledConfig = {
+      plugins: {
+        entries: {
+          demo: {
+            subagent: { allowModelOverride: true, allowedModels: ["openai/gpt-5.4"] },
+          },
+        },
+      },
+    };
+    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    const runtime = await createSubagentRuntime(serverPlugins, {});
+    serverPlugins.setFallbackGatewayContext(createTestContext("auto-enabled-bootstrap-policy"));
+
+    await gatewayRequestScopeModule.withPluginRuntimePluginIdScope("demo", () =>
+      runtime.run({
+        sessionKey: "s-auto-enabled-bootstrap-policy",
+        message: "use trusted override",
+        model: "openai/gpt-5.4",
+        deliver: false,
+      }),
+    );
+
+    expect(getLastDispatchedParams()).toMatchObject({
+      sessionKey: "s-auto-enabled-bootstrap-policy",
+      model: "openai/gpt-5.4",
+    });
   });
 
   test("can suppress duplicate diagnostics when reloading full runtime plugins", async () => {
