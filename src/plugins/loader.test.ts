@@ -3645,6 +3645,75 @@ describe("resolveRuntimePluginRegistry", () => {
 
     expect(resolveRuntimePluginRegistry()).toBe(registry);
   });
+
+  it("falls back to the active registry when the caller is not gateway-scoped and cache keys differ", () => {
+    const registry = createEmptyPluginRegistry();
+    // Simulate gateway startup: load with onlyPluginIds + coreGatewayHandlers
+    const gatewayOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["telegram", "demo"],
+      coreGatewayHandlers: {
+        "sessions.get": () => undefined,
+      },
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    };
+    const { cacheKey: gatewayKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
+    setActivePluginRegistry(registry, gatewayKey);
+
+    // Sub-agent tool resolution: same config/workspace but no gateway-specific fields.
+    // Cache key will differ, but the active registry should still be returned.
+    const toolOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    };
+    expect(resolveRuntimePluginRegistry(toolOptions)).toBe(registry);
+  });
+
+  it("does not fall back to the active registry when the caller uses gateway-scoped options", () => {
+    const registry = createEmptyPluginRegistry();
+    const gatewayOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["telegram"],
+      coreGatewayHandlers: {
+        "sessions.get": () => undefined,
+      },
+    };
+    const { cacheKey: gatewayKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
+    setActivePluginRegistry(registry, gatewayKey);
+
+    // A different gateway-scoped load should NOT fall back to the active registry.
+    const differentGatewayOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["discord"],
+    };
+    // This will attempt loadOpenClawPlugins which will fail since plugins
+    // are disabled in test env, but we verify it does NOT return the gateway registry.
+    expect(resolveRuntimePluginRegistry(differentGatewayOptions)).not.toBe(registry);
+  });
 });
 
 describe("clearPluginLoaderCache", () => {
