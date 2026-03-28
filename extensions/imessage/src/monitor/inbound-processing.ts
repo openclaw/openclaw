@@ -166,6 +166,7 @@ export function resolveIMessageInboundDecision(params: {
   // When true, the selfChatCache.has() check below must be skipped — we just
   // called remember() and would immediately match our own entry.
   let skipSelfChatHasCheck = false;
+  const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
 
   if (params.message.is_from_me) {
     // Always cache in selfChatCache so the upcoming is_from_me=false reflection
@@ -176,7 +177,6 @@ export function resolveIMessageInboundDecision(params: {
       // In self-chat, is_from_me=true could be a real user message OR an agent
       // reply echo. Use the echo cache with skipIdShortCircuit=true to check
       // whether this text matches a recently-sent agent reply.
-      const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
       const echoScope = buildIMessageEchoScope({
         accountId: params.accountId,
         isGroup,
@@ -295,7 +295,6 @@ export function resolveIMessageInboundDecision(params: {
 
   // Echo detection: check if the received message matches a recently sent message.
   // Scope by conversation so same text in different chats is not conflated.
-  const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
   if (params.echoCache && (messageText || inboundMessageId)) {
     const echoScope = buildIMessageEchoScope({
       accountId: params.accountId,
