@@ -8,14 +8,6 @@ import {
   waitForFinalTranscript,
 } from "./timers.js";
 
-const { persistCallRecordMock } = vi.hoisted(() => ({
-  persistCallRecordMock: vi.fn(),
-}));
-
-vi.mock("./store.js", () => ({
-  persistCallRecord: persistCallRecordMock,
-}));
-
 describe("voice-call manager timers", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -26,13 +18,12 @@ describe("voice-call manager timers", () => {
     vi.useRealTimers();
   });
 
-  it("starts and clears max duration timers, persisting timed out active calls", async () => {
+  it("starts and clears max duration timers, delegating timeout handling", async () => {
     const call = { id: "call-1", state: "active" };
     const ctx = {
       activeCalls: new Map([["call-1", call]]),
       maxDurationTimers: new Map(),
       config: { maxDurationSeconds: 5 },
-      storePath: "/tmp/voice-call.json",
     };
     const onTimeout = vi.fn(async () => {});
 
@@ -46,8 +37,7 @@ describe("voice-call manager timers", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(call).toEqual({ id: "call-1", state: "active", endReason: "timeout" });
-    expect(persistCallRecordMock).toHaveBeenCalledWith("/tmp/voice-call.json", call);
+    expect(call).toEqual({ id: "call-1", state: "active" });
     expect(onTimeout).toHaveBeenCalledWith("call-1");
     expect(ctx.maxDurationTimers.has("call-1")).toBe(false);
 
@@ -65,7 +55,6 @@ describe("voice-call manager timers", () => {
       activeCalls: new Map([["call-1", { id: "call-1", state: "completed" }]]),
       maxDurationTimers: new Map(),
       config: { maxDurationSeconds: 5 },
-      storePath: "/tmp/voice-call.json",
     };
     const onTimeout = vi.fn(async () => {});
 
@@ -77,7 +66,6 @@ describe("voice-call manager timers", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(persistCallRecordMock).not.toHaveBeenCalled();
     expect(onTimeout).not.toHaveBeenCalled();
   });
 
