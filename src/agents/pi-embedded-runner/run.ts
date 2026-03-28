@@ -256,7 +256,7 @@ export async function runEmbeddedPiAgent(
         });
       const hasMeaningfulLiveSelectionChange = (
         nextSelection: ReturnType<typeof resolveLiveSessionModelSelection>,
-      ) => {
+      ): nextSelection is NonNullable<ReturnType<typeof resolveLiveSessionModelSelection>> => {
         if (!hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), nextSelection)) {
           return false;
         }
