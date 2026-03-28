@@ -6,6 +6,7 @@ import {
 } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
 import { loadConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { setVerbose } from "../globals.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -130,7 +131,10 @@ export async function runChannelLogin(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const loadedCfg = loadConfig();
+  const loadedCfg = applyPluginAutoEnable({
+    config: loadConfig(),
+    env: process.env,
+  }).config;
   const { cfg, configChanged, channelInput, plugin } = await resolveChannelPluginForMode(
     opts,
     "login",
@@ -160,7 +164,10 @@ export async function runChannelLogout(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const loadedCfg = loadConfig();
+  const loadedCfg = applyPluginAutoEnable({
+    config: loadConfig(),
+    env: process.env,
+  }).config;
   const { cfg, configChanged, channelInput, plugin } = await resolveChannelPluginForMode(
     opts,
     "logout",
