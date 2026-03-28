@@ -83,24 +83,26 @@ const unsupportedLegacyIpv4Cases = [
 
 const nonIpHostnameCases = ["example.com", "abc.123.example", "1password.com", "0x.example.com"];
 
+function expectIpPrivacyCases(cases: string[], expected: boolean) {
+  for (const address of cases) {
+    expect(isPrivateIpAddress(address)).toBe(expected);
+  }
+}
+
 describe("ssrf ip classification", () => {
   it("classifies blocked ip literals as private", () => {
-    const blockedCases = [...privateIpCases, ...malformedIpv6Cases, ...unsupportedLegacyIpv4Cases];
-    for (const address of blockedCases) {
-      expect(isPrivateIpAddress(address)).toBe(true);
-    }
+    expectIpPrivacyCases(
+      [...privateIpCases, ...malformedIpv6Cases, ...unsupportedLegacyIpv4Cases],
+      true,
+    );
   });
 
   it("classifies public ip literals as non-private", () => {
-    for (const address of publicIpCases) {
-      expect(isPrivateIpAddress(address)).toBe(false);
-    }
+    expectIpPrivacyCases(publicIpCases, false);
   });
 
   it("does not treat hostnames as ip literals", () => {
-    for (const hostname of nonIpHostnameCases) {
-      expect(isPrivateIpAddress(hostname)).toBe(false);
-    }
+    expectIpPrivacyCases(nonIpHostnameCases, false);
   });
 });
 
@@ -127,12 +129,13 @@ describe("isBlockedHostnameOrIp", () => {
     expect(isBlockedHostnameOrIp(value)).toBe(expected);
   });
 
-  it("supports opt-in policy to allow RFC2544 benchmark range", () => {
-    const policy = { allowRfc2544BenchmarkRange: true };
-    expect(isBlockedHostnameOrIp("198.18.0.1")).toBe(true);
-    expect(isBlockedHostnameOrIp("198.18.0.1", policy)).toBe(false);
-    expect(isBlockedHostnameOrIp("::ffff:198.18.0.1", policy)).toBe(false);
-    expect(isBlockedHostnameOrIp("198.51.100.1", policy)).toBe(true);
+  it.each([
+    ["198.18.0.1", undefined, true],
+    ["198.18.0.1", { allowRfc2544BenchmarkRange: true }, false],
+    ["::ffff:198.18.0.1", { allowRfc2544BenchmarkRange: true }, false],
+    ["198.51.100.1", { allowRfc2544BenchmarkRange: true }, true],
+  ] as const)("applies RFC2544 benchmark policy for %s", (value, policy, expected) => {
+    expect(isBlockedHostnameOrIp(value, policy)).toBe(expected);
   });
 
   it.each(["0177.0.0.1", "8.8.2056", "127.1", "2130706433"])(
@@ -142,8 +145,7 @@ describe("isBlockedHostnameOrIp", () => {
     },
   );
 
-  it("does not block ordinary hostnames", () => {
-    expect(isBlockedHostnameOrIp("example.com")).toBe(false);
-    expect(isBlockedHostnameOrIp("api.example.net")).toBe(false);
+  it.each(["example.com", "api.example.net"])("does not block ordinary hostname %s", (value) => {
+    expect(isBlockedHostnameOrIp(value)).toBe(false);
   });
 });

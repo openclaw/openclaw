@@ -148,6 +148,10 @@
       "types": "./dist/plugin-sdk/thread-bindings-runtime.d.ts",
       "default": "./dist/plugin-sdk/thread-bindings-runtime.js"
     },
+    "./plugin-sdk/together": {
+      "types": "./dist/plugin-sdk/together.d.ts",
+      "default": "./dist/plugin-sdk/together.js"
+    },
     "./plugin-sdk/text-runtime": {
       "types": "./dist/plugin-sdk/text-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-runtime.js"
@@ -220,9 +224,17 @@
       "types": "./dist/plugin-sdk/temp-path.d.ts",
       "default": "./dist/plugin-sdk/temp-path.js"
     },
+    "./plugin-sdk/logging-core": {
+      "types": "./dist/plugin-sdk/logging-core.d.ts",
+      "default": "./dist/plugin-sdk/logging-core.js"
+    },
     "./plugin-sdk/account-helpers": {
       "types": "./dist/plugin-sdk/account-helpers.d.ts",
       "default": "./dist/plugin-sdk/account-helpers.js"
+    },
+    "./plugin-sdk/account-core": {
+      "types": "./dist/plugin-sdk/account-core.d.ts",
+      "default": "./dist/plugin-sdk/account-core.js"
     },
     "./plugin-sdk/account-id": {
       "types": "./dist/plugin-sdk/account-id.d.ts",
@@ -235,6 +247,10 @@
     "./plugin-sdk/agent-config-primitives": {
       "types": "./dist/plugin-sdk/agent-config-primitives.d.ts",
       "default": "./dist/plugin-sdk/agent-config-primitives.js"
+    },
+    "./plugin-sdk/amazon-bedrock": {
+      "types": "./dist/plugin-sdk/amazon-bedrock.d.ts",
+      "default": "./dist/plugin-sdk/amazon-bedrock.js"
     },
     "./plugin-sdk/allow-from": {
       "types": "./dist/plugin-sdk/allow-from.d.ts",
@@ -344,6 +360,10 @@
       "types": "./dist/plugin-sdk/channel-config-helpers.d.ts",
       "default": "./dist/plugin-sdk/channel-config-helpers.js"
     },
+    "./plugin-sdk/channel-config-writes": {
+      "types": "./dist/plugin-sdk/channel-config-writes.d.ts",
+      "default": "./dist/plugin-sdk/channel-config-writes.js"
+    },
     "./plugin-sdk/channel-config-primitives": {
       "types": "./dist/plugin-sdk/channel-config-primitives.d.ts",
       "default": "./dist/plugin-sdk/channel-config-primitives.js"
@@ -407,6 +427,14 @@
     "./plugin-sdk/google": {
       "types": "./dist/plugin-sdk/google.d.ts",
       "default": "./dist/plugin-sdk/google.js"
+    },
+    "./plugin-sdk/global-singleton": {
+      "types": "./dist/plugin-sdk/global-singleton.d.ts",
+      "default": "./dist/plugin-sdk/global-singleton.js"
+    },
+    "./plugin-sdk/huggingface": {
+      "types": "./dist/plugin-sdk/huggingface.d.ts",
+      "default": "./dist/plugin-sdk/huggingface.js"
     },
     "./plugin-sdk/directory-runtime": {
       "types": "./dist/plugin-sdk/directory-runtime.d.ts",
@@ -604,6 +632,10 @@
       "types": "./dist/plugin-sdk/moonshot.d.ts",
       "default": "./dist/plugin-sdk/moonshot.js"
     },
+    "./plugin-sdk/mistral": {
+      "types": "./dist/plugin-sdk/mistral.d.ts",
+      "default": "./dist/plugin-sdk/mistral.js"
+    },
     "./plugin-sdk/msteams": {
       "types": "./dist/plugin-sdk/msteams.d.ts",
       "default": "./dist/plugin-sdk/msteams.js"
@@ -648,6 +680,10 @@
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
     },
+    "./plugin-sdk/provider-auth-runtime": {
+      "types": "./dist/plugin-sdk/provider-auth-runtime.d.ts",
+      "default": "./dist/plugin-sdk/provider-auth-runtime.js"
+    },
     "./plugin-sdk/provider-auth-api-key": {
       "types": "./dist/plugin-sdk/provider-auth-api-key.d.ts",
       "default": "./dist/plugin-sdk/provider-auth-api-key.js"
@@ -663,6 +699,10 @@
     "./plugin-sdk/plugin-entry": {
       "types": "./dist/plugin-sdk/plugin-entry.d.ts",
       "default": "./dist/plugin-sdk/plugin-entry.js"
+    },
+    "./plugin-sdk/provider-catalog-shared": {
+      "types": "./dist/plugin-sdk/provider-catalog-shared.d.ts",
+      "default": "./dist/plugin-sdk/provider-catalog-shared.js"
     },
     "./plugin-sdk/provider-catalog": {
       "types": "./dist/plugin-sdk/provider-catalog.d.ts",
@@ -683,6 +723,10 @@
     "./plugin-sdk/provider-google": {
       "types": "./dist/plugin-sdk/provider-google.d.ts",
       "default": "./dist/plugin-sdk/provider-google.js"
+    },
+    "./plugin-sdk/provider-model-shared": {
+      "types": "./dist/plugin-sdk/provider-model-shared.d.ts",
+      "default": "./dist/plugin-sdk/provider-model-shared.js"
     },
     "./plugin-sdk/provider-models": {
       "types": "./dist/plugin-sdk/provider-models.d.ts",
@@ -859,6 +903,10 @@
     "./plugin-sdk/volcengine": {
       "types": "./dist/plugin-sdk/volcengine.d.ts",
       "default": "./dist/plugin-sdk/volcengine.js"
+    },
+    "./plugin-sdk/whatsapp-auth-presence": {
+      "types": "./dist/plugin-sdk/whatsapp-auth-presence.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-auth-presence.js"
     },
     "./plugin-sdk/whatsapp-core": {
       "types": "./dist/plugin-sdk/whatsapp-core.d.ts",
@@ -1092,10 +1140,10 @@
     "@homebridge/ciao": "^1.3.5",
     "@line/bot-sdk": "^10.6.0",
     "@lydell/node-pty": "1.2.0-beta.3",
-    "@mariozechner/pi-agent-core": "0.63.0",
-    "@mariozechner/pi-ai": "0.63.0",
-    "@mariozechner/pi-coding-agent": "0.63.0",
-    "@mariozechner/pi-tui": "0.63.0",
+    "@mariozechner/pi-agent-core": "0.63.1",
+    "@mariozechner/pi-ai": "0.63.1",
+    "@mariozechner/pi-coding-agent": "0.63.1",
+    "@mariozechner/pi-tui": "0.63.1",
     "@modelcontextprotocol/sdk": "1.28.0",
     "@mozilla/readability": "^0.6.0",
     "@sinclair/typebox": "0.34.48",
@@ -1182,6 +1230,7 @@
       "file-type": "22.0.0",
       "form-data": "2.5.4",
       "minimatch": "10.2.4",
+      "path-to-regexp": "8.4.0",
       "qs": "6.14.2",
       "node-domexception": "npm:@nolyfill/domexception@^1.0.28",
       "@sinclair/typebox": "0.34.48",

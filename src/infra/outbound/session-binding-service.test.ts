@@ -33,7 +33,7 @@ function createRecord(input: SessionBindingBindInput): SessionBindingRecord {
     targetSessionKey: input.targetSessionKey,
     targetKind: input.targetKind,
     conversation: {
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "default",
       conversationId,
       parentConversationId: input.conversation.parentConversationId?.trim() || undefined,
@@ -51,7 +51,7 @@ describe("session binding service", () => {
   it("normalizes conversation refs and infers current placement", async () => {
     const bind = vi.fn(async (input: SessionBindingBindInput) => createRecord(input));
     registerSessionBindingAdapter({
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "default",
       bind,
       listBySession: () => [],
@@ -62,19 +62,19 @@ describe("session binding service", () => {
       targetSessionKey: "agent:main:subagent:child-1",
       targetKind: "subagent",
       conversation: {
-        channel: "Discord",
+        channel: "Demo-Binding",
         accountId: "DEFAULT",
         conversationId: " thread-1 ",
       },
     });
 
-    expect(result.conversation.channel).toBe("discord");
+    expect(result.conversation.channel).toBe("demo-binding");
     expect(result.conversation.accountId).toBe("default");
     expect(bind).toHaveBeenCalledWith(
       expect.objectContaining({
         placement: "current",
         conversation: expect.objectContaining({
-          channel: "discord",
+          channel: "demo-binding",
           accountId: "default",
           conversationId: "thread-1",
         }),
@@ -84,7 +84,7 @@ describe("session binding service", () => {
 
   it("supports explicit child placement when adapter advertises it", async () => {
     registerSessionBindingAdapter({
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "default",
       capabilities: { placements: ["child"] },
       bind: async (input) => createRecord(input),
@@ -96,7 +96,7 @@ describe("session binding service", () => {
       targetSessionKey: "agent:codex:acp:1",
       targetKind: "session",
       conversation: {
-        channel: "discord",
+        channel: "demo-binding",
         accountId: "default",
         conversationId: "thread-1",
       },
@@ -112,7 +112,7 @@ describe("session binding service", () => {
         targetSessionKey: "agent:main:subagent:child-1",
         targetKind: "subagent",
         conversation: {
-          channel: "discord",
+          channel: "demo-binding",
           accountId: "default",
           conversationId: "thread-1",
         },
@@ -124,7 +124,7 @@ describe("session binding service", () => {
 
   it("returns structured errors for unsupported placement", async () => {
     registerSessionBindingAdapter({
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "default",
       capabilities: { placements: ["current"] },
       bind: async (input) => createRecord(input),
@@ -137,7 +137,7 @@ describe("session binding service", () => {
         targetSessionKey: "agent:codex:acp:1",
         targetKind: "session",
         conversation: {
-          channel: "discord",
+          channel: "demo-binding",
           accountId: "default",
           conversationId: "thread-1",
         },
@@ -156,7 +156,7 @@ describe("session binding service", () => {
 
   it("returns structured errors when adapter bind fails", async () => {
     registerSessionBindingAdapter({
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "default",
       bind: async () => null,
       listBySession: () => [],
@@ -168,7 +168,7 @@ describe("session binding service", () => {
         targetSessionKey: "agent:main:subagent:child-1",
         targetKind: "subagent",
         conversation: {
-          channel: "discord",
+          channel: "demo-binding",
           accountId: "default",
           conversationId: "thread-1",
         },
@@ -180,7 +180,7 @@ describe("session binding service", () => {
 
   it("reports adapter capabilities for command preflight messaging", () => {
     registerSessionBindingAdapter({
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "default",
       capabilities: {
         placements: ["current", "child"],
@@ -192,11 +192,11 @@ describe("session binding service", () => {
     });
 
     const known = getSessionBindingService().getCapabilities({
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "default",
     });
     const unknown = getSessionBindingService().getCapabilities({
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "other",
     });
 
@@ -220,7 +220,7 @@ describe("session binding service", () => {
       targetSessionKey: "agent:main",
       targetKind: "session" as const,
       conversation: {
-        channel: "discord",
+        channel: "demo-binding",
         accountId: "default",
         conversationId: "thread-1",
       },
@@ -228,14 +228,14 @@ describe("session binding service", () => {
       boundAt: 1,
     };
     const firstAdapter: SessionBindingAdapter = {
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "default",
       listBySession: (targetSessionKey) =>
         targetSessionKey === "agent:main" ? [firstBinding] : [],
       resolveByConversation: () => null,
     };
     const secondAdapter: SessionBindingAdapter = {
-      channel: "Discord",
+      channel: "Demo-Binding",
       accountId: "DEFAULT",
       listBySession: () => [],
       resolveByConversation: () => null,
@@ -247,7 +247,7 @@ describe("session binding service", () => {
     expect(getSessionBindingService().listBySession("agent:main")).toEqual([firstBinding]);
 
     unregisterSessionBindingAdapter({
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "default",
       adapter: secondAdapter,
     });
@@ -255,7 +255,7 @@ describe("session binding service", () => {
     expect(getSessionBindingService().listBySession("agent:main")).toEqual([firstBinding]);
 
     unregisterSessionBindingAdapter({
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "default",
       adapter: firstAdapter,
     });
@@ -269,14 +269,14 @@ describe("session binding service", () => {
     const firstBind = vi.fn(async (input: SessionBindingBindInput) => createRecord(input));
     const secondBind = vi.fn(async (input: SessionBindingBindInput) => createRecord(input));
     const firstAdapter: SessionBindingAdapter = {
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "default",
       bind: firstBind,
       listBySession: () => [],
       resolveByConversation: () => null,
     };
     const secondAdapter: SessionBindingAdapter = {
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "default",
       bind: secondBind,
       listBySession: () => [],
@@ -287,21 +287,21 @@ describe("session binding service", () => {
     first.registerSessionBindingAdapter(firstAdapter);
     second.registerSessionBindingAdapter(secondAdapter);
 
-    expect(second.__testing.getRegisteredAdapterKeys()).toEqual(["discord:default"]);
+    expect(second.__testing.getRegisteredAdapterKeys()).toEqual(["demo-binding:default"]);
 
     await expect(
       second.getSessionBindingService().bind({
         targetSessionKey: "agent:main:subagent:child-1",
         targetKind: "subagent",
         conversation: {
-          channel: "discord",
+          channel: "demo-binding",
           accountId: "default",
           conversationId: "thread-1",
         },
       }),
     ).resolves.toMatchObject({
       conversation: expect.objectContaining({
-        channel: "discord",
+        channel: "demo-binding",
         accountId: "default",
         conversationId: "thread-1",
       }),
@@ -310,7 +310,7 @@ describe("session binding service", () => {
     expect(secondBind).not.toHaveBeenCalled();
 
     first.unregisterSessionBindingAdapter({
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "default",
       adapter: firstAdapter,
     });
@@ -320,14 +320,14 @@ describe("session binding service", () => {
         targetSessionKey: "agent:main:subagent:child-2",
         targetKind: "subagent",
         conversation: {
-          channel: "discord",
+          channel: "demo-binding",
           accountId: "default",
           conversationId: "thread-2",
         },
       }),
     ).resolves.toMatchObject({
       conversation: expect.objectContaining({
-        channel: "discord",
+        channel: "demo-binding",
         accountId: "default",
         conversationId: "thread-2",
       }),
@@ -336,7 +336,7 @@ describe("session binding service", () => {
     expect(secondBind).toHaveBeenCalledTimes(1);
 
     second.unregisterSessionBindingAdapter({
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "default",
       adapter: secondAdapter,
     });
@@ -346,7 +346,7 @@ describe("session binding service", () => {
         targetSessionKey: "agent:main:subagent:child-3",
         targetKind: "subagent",
         conversation: {
-          channel: "discord",
+          channel: "demo-binding",
           accountId: "default",
           conversationId: "thread-3",
         },

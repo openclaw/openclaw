@@ -34,12 +34,17 @@ function createRateLimitError(
   body: { message: string; retry_after: number; global: boolean },
   request?: Request,
 ): RateLimitError {
+  const compatRequest =
+    request ??
+    new Request("https://discord.com/api/v10/channels/voice/messages", {
+      method: "POST",
+    });
   const RateLimitErrorCtor = RateLimitError as unknown as new (
     response: Response,
     body: { message: string; retry_after: number; global: boolean },
     request?: Request,
   ) => RateLimitError;
-  return new RateLimitErrorCtor(response, body, request);
+  return new RateLimitErrorCtor(response, body, compatRequest);
 }
 
 export type VoiceMessageMetadata = {
@@ -296,15 +301,11 @@ export async function sendDiscordVoiceMessage(
           retry_after?: number;
           global?: boolean;
         };
-        throw createRateLimitError(
-          res,
-          {
-            message: retryData.message ?? "You are being rate limited.",
-            retry_after: retryData.retry_after ?? 1,
-            global: retryData.global ?? false,
-          },
-          uploadUrlRequest,
-        );
+        throw createRateLimitError(res, {
+          message: retryData.message ?? "You are being rate limited.",
+          retry_after: retryData.retry_after ?? 1,
+          global: retryData.global ?? false,
+        });
       }
       const errorBody = (await res.json().catch(() => null)) as {
         code?: number;

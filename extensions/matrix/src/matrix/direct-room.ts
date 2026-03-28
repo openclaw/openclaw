@@ -45,6 +45,23 @@ export async function readJoinedMatrixMembers(
   }
 }
 
+export async function hasDirectMatrixMemberFlag(
+  client: MatrixClient,
+  roomId: string,
+  userId?: string | null,
+): Promise<boolean> {
+  const normalizedUserId = trimMaybeString(userId);
+  if (!normalizedUserId) {
+    return false;
+  }
+  try {
+    const state = await client.getRoomStateEvent(roomId, "m.room.member", normalizedUserId);
+    return state?.is_direct === true;
+  } catch {
+    return false;
+  }
+}
+
 export async function isStrictDirectRoom(params: {
   client: MatrixClient;
   roomId: string;

@@ -8,7 +8,7 @@ import {
   type SsrFPolicy,
   ssrfPolicyFromAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/infra-runtime";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";

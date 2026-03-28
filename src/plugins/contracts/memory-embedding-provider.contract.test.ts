@@ -83,14 +83,14 @@ describe("memory embedding provider registration", () => {
       }),
       register(api) {
         api.registerMemoryEmbeddingProvider({
-          id: "openai",
+          id: "demo-embedding",
           create: async () => ({ provider: null }),
         });
       },
     });
 
-    expect(getRegisteredMemoryEmbeddingProvider("openai")).toEqual({
-      adapter: expect.objectContaining({ id: "openai" }),
+    expect(getRegisteredMemoryEmbeddingProvider("demo-embedding")).toEqual({
+      adapter: expect.objectContaining({ id: "demo-embedding" }),
       ownerPluginId: "memory-core",
     });
   });
