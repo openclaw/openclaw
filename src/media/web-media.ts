@@ -34,8 +34,8 @@ type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
   ssrfPolicy?: SsrFPolicy;
-  /** Allowed root directories for local path reads. "any" is deprecated; prefer sandboxValidated + readFile. */
-  localRoots?: readonly string[] | "any";
+  /** Allowed root directories for local path reads. */
+  localRoots?: readonly string[];
   /** Caller already validated the local path (sandbox/other guards); requires readFile override. */
   sandboxValidated?: boolean;
   readFile?: (filePath: string) => Promise<Buffer>;
@@ -43,7 +43,7 @@ type WebMediaOptions = {
 
 function resolveWebMediaOptions(params: {
   maxBytesOrOptions?: number | WebMediaOptions;
-  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" };
+  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] };
   optimizeImages: boolean;
 }): WebMediaOptions {
   if (typeof params.maxBytesOrOptions === "number" || params.maxBytesOrOptions === undefined) {
@@ -274,15 +274,15 @@ async function loadWebMediaInternal(
     });
   }
 
-  if ((sandboxValidated || localRoots === "any") && !readFileOverride) {
+  if (sandboxValidated && !readFileOverride) {
     throw new LocalMediaAccessError(
       "unsafe-bypass",
-      "Refusing localRoots bypass without readFile override. Use sandboxValidated with readFile, or pass explicit localRoots.",
+      "Refusing sandboxValidated bypass without readFile override. Use sandboxValidated with readFile, or pass explicit localRoots.",
     );
   }
 
   // Guard local reads against allowed directory roots to prevent file exfiltration.
-  if (!(sandboxValidated || localRoots === "any")) {
+  if (!sandboxValidated) {
     await assertLocalMediaAllowed(mediaUrl, localRoots);
   }
 
@@ -336,7 +336,7 @@ async function loadWebMediaInternal(
 export async function loadWebMedia(
   mediaUrl: string,
   maxBytesOrOptions?: number | WebMediaOptions,
-  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
+  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] },
 ): Promise<WebMediaResult> {
   return await loadWebMediaInternal(
     mediaUrl,
@@ -347,7 +347,7 @@ export async function loadWebMedia(
 export async function loadWebMediaRaw(
   mediaUrl: string,
   maxBytesOrOptions?: number | WebMediaOptions,
-  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
+  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] },
 ): Promise<WebMediaResult> {
   return await loadWebMediaInternal(
     mediaUrl,

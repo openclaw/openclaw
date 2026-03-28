@@ -46,8 +46,9 @@ export function createSafeStreamWriter(options: SafeStreamWriterOptions = {}): S
       return handleError(err, process.stderr);
     }
     try {
-      stream.write(text);
-      return !closed;
+      // Return false when stream signals backpressure so callers can throttle
+      const ok = stream.write(text);
+      return !closed && ok;
     } catch (err) {
       return handleError(err, stream);
     }

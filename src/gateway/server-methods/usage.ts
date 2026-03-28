@@ -22,6 +22,7 @@ import {
 } from "../../infra/session-cost-usage.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
+import { LruMap } from "../../shared/lru-map.js";
 import {
   buildUsageAggregateTail,
   mergeUsageDailyLatency,
@@ -59,7 +60,8 @@ type CostUsageCacheEntry = {
   inFlight?: Promise<CostUsageSummary>;
 };
 
-const costUsageCache = new Map<string, CostUsageCacheEntry>();
+const MAX_COST_USAGE_CACHE_ENTRIES = 100;
+const costUsageCache = new LruMap<string, CostUsageCacheEntry>(MAX_COST_USAGE_CACHE_ENTRIES);
 
 function resolveSessionUsageFileOrRespond(
   key: string,

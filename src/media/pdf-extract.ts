@@ -55,18 +55,17 @@ export async function extractPdfContent(params: {
     ? pageNumbers.filter((p) => p >= 1 && p <= pdf.numPages).slice(0, maxPages)
     : Array.from({ length: Math.min(pdf.numPages, maxPages) }, (_, i) => i + 1);
 
-  const textParts: string[] = [];
-  for (const pageNum of effectivePages) {
-    const page = await pdf.getPage(pageNum);
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item) => ("str" in item ? String(item.str) : ""))
-      .filter(Boolean)
-      .join(" ");
-    if (pageText) {
-      textParts.push(pageText);
-    }
-  }
+  const textResults = await Promise.all(
+    effectivePages.map(async (pageNum) => {
+      const page = await pdf.getPage(pageNum);
+      const textContent = await page.getTextContent();
+      return textContent.items
+        .map((item) => ("str" in item ? String(item.str) : ""))
+        .filter(Boolean)
+        .join(" ");
+    }),
+  );
+  const textParts = textResults.filter(Boolean);
 
   const text = textParts.join("\n\n");
   if (text.trim().length >= minTextChars) {

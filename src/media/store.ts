@@ -199,50 +199,54 @@ async function downloadToFile(
     resolvePinnedHostnameImpl(parsedUrl.hostname)
       .then((pinned) => {
         const req = requestImpl(parsedUrl, { headers, lookup: pinned.lookup }, (res) => {
-          // Follow redirects
-          if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
-            const location = res.headers.location;
-            if (!location || maxRedirects <= 0) {
-              reject(new Error(`Redirect loop or missing Location header`));
+          try {
+            // Follow redirects
+            if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
+              const location = res.headers.location;
+              if (!location || maxRedirects <= 0) {
+                reject(new Error(`Redirect loop or missing Location header`));
+                return;
+              }
+              const redirectUrl = new URL(location, url).href;
+              resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
               return;
             }
-            const redirectUrl = new URL(location, url).href;
-            resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
-            return;
-          }
-          if (!res.statusCode || res.statusCode >= 400) {
-            reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading media`));
-            return;
-          }
-          let total = 0;
-          const sniffChunks: Buffer[] = [];
-          let sniffLen = 0;
-          const out = createWriteStream(dest, { mode: MEDIA_FILE_MODE });
-          res.on("data", (chunk) => {
-            total += chunk.length;
-            if (sniffLen < 16384) {
-              sniffChunks.push(chunk);
-              sniffLen += chunk.length;
+            if (!res.statusCode || res.statusCode >= 400) {
+              reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading media`));
+              return;
             }
-            if (total > MAX_BYTES) {
-              req.destroy(new Error("Media exceeds 5MB limit"));
-            }
-          });
-          pipeline(res, out)
-            .then(() => {
-              const sniffBuffer = Buffer.concat(sniffChunks, Math.min(sniffLen, 16384));
-              const rawHeader = res.headers["content-type"];
-              const headerMime = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
-              resolve({
-                headerMime,
-                sniffBuffer,
-                size: total,
-              });
-            })
-            .catch(async (err) => {
-              await fs.rm(dest, { force: true }).catch(() => {});
-              reject(err);
+            let total = 0;
+            const sniffChunks: Buffer[] = [];
+            let sniffLen = 0;
+            const out = createWriteStream(dest, { mode: MEDIA_FILE_MODE });
+            res.on("data", (chunk) => {
+              total += chunk.length;
+              if (sniffLen < 16384) {
+                sniffChunks.push(chunk);
+                sniffLen += chunk.length;
+              }
+              if (total > MAX_BYTES) {
+                req.destroy(new Error("Media exceeds 5MB limit"));
+              }
             });
+            pipeline(res, out)
+              .then(() => {
+                const sniffBuffer = Buffer.concat(sniffChunks, Math.min(sniffLen, 16384));
+                const rawHeader = res.headers["content-type"];
+                const headerMime = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+                resolve({
+                  headerMime,
+                  sniffBuffer,
+                  size: total,
+                });
+              })
+              .catch(async (err) => {
+                await fs.rm(dest, { force: true }).catch(() => {});
+                reject(err);
+              });
+          } catch (err) {
+            reject(err instanceof Error ? err : new Error(String(err)));
+          }
         });
         req.on("error", reject);
         req.end();

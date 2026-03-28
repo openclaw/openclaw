@@ -294,6 +294,28 @@ async function scanUsageFile(params: {
   });
 }
 
+// Short-lived cache for directory listings to avoid repeated readdirSync on hot paths
+const dirListingCache = new Map<string, { entries: fs.Dirent[]; expiresAt: number }>();
+const DIR_LISTING_CACHE_TTL_MS = 5_000;
+
+function cachedReaddirSync(dir: string): fs.Dirent[] {
+  const now = Date.now();
+  const cached = dirListingCache.get(dir);
+  if (cached && cached.expiresAt > now) {
+    return cached.entries;
+  }
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  dirListingCache.set(dir, { entries, expiresAt: now + DIR_LISTING_CACHE_TTL_MS });
+  // Bound cache size
+  if (dirListingCache.size > 50) {
+    const oldest = dirListingCache.keys().next().value;
+    if (oldest !== undefined) {
+      dirListingCache.delete(oldest);
+    }
+  }
+  return entries;
+}
+
 export function resolveExistingUsageSessionFile(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
@@ -322,7 +344,7 @@ export function resolveExistingUsageSessionFile(params: {
       ? path.dirname(candidate)
       : resolveSessionTranscriptsDirForAgent(params.agentId);
     const baseFileName = `${sessionId}.jsonl`;
-    const entries = fs.readdirSync(sessionsDir, { withFileTypes: true }).filter((entry) => {
+    const entries = cachedReaddirSync(sessionsDir).filter((entry) => {
       return (
         entry.isFile() &&
         (entry.name === baseFileName ||

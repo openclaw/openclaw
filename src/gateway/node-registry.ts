@@ -35,6 +35,8 @@ export type NodeInvokeResult = {
   error?: { code?: string; message?: string } | null;
 };
 
+const MAX_PENDING_INVOKES = 10_000;
+
 export class NodeRegistry {
   private nodesById = new Map<string, NodeSession>();
   private nodesByConn = new Map<string, string>();
@@ -134,6 +136,19 @@ export class NodeRegistry {
         ok: false,
         error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
       };
+    }
+    // Safety cap: reject oldest pending invokes if the map grows too large (disconnect races)
+    while (this.pendingInvokes.size >= MAX_PENDING_INVOKES) {
+      const oldestKey = this.pendingInvokes.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      const oldest = this.pendingInvokes.get(oldestKey);
+      if (oldest) {
+        clearTimeout(oldest.timer);
+        oldest.reject(new Error(`pending invoke evicted (${oldest.command})`));
+        this.pendingInvokes.delete(oldestKey);
+      }
     }
     const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 30_000;
     return await new Promise<NodeInvokeResult>((resolve, reject) => {

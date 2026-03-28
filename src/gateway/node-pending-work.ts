@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { LruMap } from "../shared/lru-map.js";
 
 export const NODE_PENDING_WORK_TYPES = ["status.request", "location.request"] as const;
 export type NodePendingWorkType = (typeof NODE_PENDING_WORK_TYPES)[number];
@@ -43,7 +44,8 @@ const PRIORITY_RANK: Record<NodePendingWorkPriority, number> = {
   default: 1,
 };
 
-const stateByNodeId = new Map<string, NodePendingWorkState>();
+const MAX_NODE_PENDING_WORK_ENTRIES = 10_000;
+const stateByNodeId = new LruMap<string, NodePendingWorkState>(MAX_NODE_PENDING_WORK_ENTRIES);
 
 function getOrCreateState(nodeId: string): NodePendingWorkState {
   let state = stateByNodeId.get(nodeId);
@@ -108,7 +110,13 @@ export function enqueueNodePendingWork(params: {
   const nowMs = Date.now();
   const state = getOrCreateState(nodeId);
   pruneExpired(state, nowMs);
-  const existing = [...state.itemsById.values()].find((item) => item.type === params.type);
+  let existing: NodePendingWorkItem | undefined;
+  for (const item of state.itemsById.values()) {
+    if (item.type === params.type) {
+      existing = item;
+      break;
+    }
+  }
   if (existing) {
     return { revision: state.revision, item: existing, deduped: true };
   }
@@ -182,6 +190,14 @@ export function acknowledgeNodePendingWork(params: { nodeId: string; itemIds: st
     state.revision += 1;
   }
   return { revision: state.revision, removedItemIds };
+}
+
+/** Remove all pending work state for a disconnected node. */
+export function clearNodePendingWork(nodeId: string): void {
+  const normalizedNodeId = nodeId.trim();
+  if (normalizedNodeId) {
+    stateByNodeId.delete(normalizedNodeId);
+  }
 }
 
 export function resetNodePendingWorkForTests() {
