@@ -45,30 +45,68 @@ function writeJsonFile(rootDir: string, relativePath: string, value: unknown) {
   fs.writeFileSync(path.join(rootDir, relativePath), JSON.stringify(value), "utf-8");
 }
 
+function writeTextFile(rootDir: string, relativePath: string, value: string) {
+  mkdirSafe(path.dirname(path.join(rootDir, relativePath)));
+  fs.writeFileSync(path.join(rootDir, relativePath), value, "utf-8");
+}
+
+function setupBundleFixture(params: {
+  rootDir: string;
+  dirs?: readonly string[];
+  jsonFiles?: Readonly<Record<string, unknown>>;
+  textFiles?: Readonly<Record<string, string>>;
+  manifestRelativePath?: string;
+  manifest?: Record<string, unknown>;
+}) {
+  for (const relativeDir of params.dirs ?? []) {
+    mkdirSafe(path.join(params.rootDir, relativeDir));
+  }
+  for (const [relativePath, value] of Object.entries(params.jsonFiles ?? {})) {
+    writeJsonFile(params.rootDir, relativePath, value);
+  }
+  for (const [relativePath, value] of Object.entries(params.textFiles ?? {})) {
+    writeTextFile(params.rootDir, relativePath, value);
+  }
+  if (params.manifestRelativePath && params.manifest) {
+    writeBundleManifest(params.rootDir, params.manifestRelativePath, params.manifest);
+  }
+}
+
 function setupClaudeHookFixture(
   rootDir: string,
   kind: "default-hooks" | "custom-hooks" | "no-hooks",
 ) {
-  mkdirSafe(path.join(rootDir, ".claude-plugin"));
   if (kind === "default-hooks") {
-    mkdirSafe(path.join(rootDir, "hooks"));
-    writeJsonFile(rootDir, "hooks/hooks.json", { hooks: [] });
-    writeBundleManifest(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH, {
-      name: "Hook Plugin",
-      description: "Claude hooks fixture",
+    setupBundleFixture({
+      rootDir,
+      dirs: [".claude-plugin", "hooks"],
+      jsonFiles: { "hooks/hooks.json": { hooks: [] } },
+      manifestRelativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
+      manifest: {
+        name: "Hook Plugin",
+        description: "Claude hooks fixture",
+      },
     });
     return;
   }
   if (kind === "custom-hooks") {
-    mkdirSafe(path.join(rootDir, "custom-hooks"));
-    writeBundleManifest(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH, {
-      name: "Custom Hook Plugin",
-      hooks: "custom-hooks",
+    setupBundleFixture({
+      rootDir,
+      dirs: [".claude-plugin", "custom-hooks"],
+      manifestRelativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
+      manifest: {
+        name: "Custom Hook Plugin",
+        hooks: "custom-hooks",
+      },
     });
     return;
   }
-  mkdirSafe(path.join(rootDir, "skills"));
-  writeBundleManifest(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH, { name: "No Hooks" });
+  setupBundleFixture({
+    rootDir,
+    dirs: [".claude-plugin", "skills"],
+    manifestRelativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
+    manifest: { name: "No Hooks" },
+  });
 }
 
 afterEach(() => {
@@ -81,23 +119,25 @@ describe("bundle manifest parsing", () => {
       name: "detects and loads Codex bundle manifests",
       bundleFormat: "codex" as const,
       setup: (rootDir: string) => {
-        mkdirSafe(path.join(rootDir, ".codex-plugin"));
-        mkdirSafe(path.join(rootDir, "skills"));
-        mkdirSafe(path.join(rootDir, "hooks"));
-        writeBundleManifest(rootDir, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH, {
-          name: "Sample Bundle",
-          description: "Codex fixture",
-          skills: "skills",
-          hooks: "hooks",
-          mcpServers: {
-            sample: {
-              command: "node",
-              args: ["server.js"],
+        setupBundleFixture({
+          rootDir,
+          dirs: [".codex-plugin", "skills", "hooks"],
+          manifestRelativePath: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
+          manifest: {
+            name: "Sample Bundle",
+            description: "Codex fixture",
+            skills: "skills",
+            hooks: "hooks",
+            mcpServers: {
+              sample: {
+                command: "node",
+                args: ["server.js"],
+              },
             },
-          },
-          apps: {
-            sample: {
-              title: "Sample App",
+            apps: {
+              sample: {
+                title: "Sample App",
+              },
             },
           },
         });
@@ -116,35 +156,35 @@ describe("bundle manifest parsing", () => {
       name: "detects and loads Claude bundle manifests from the component layout",
       bundleFormat: "claude" as const,
       setup: (rootDir: string) => {
-        for (const relativeDir of [
-          ".claude-plugin",
-          "skill-packs/starter",
-          "commands-pack",
-          "agents-pack",
-          "hooks-pack",
-          "mcp",
-          "lsp",
-          "styles",
-          "hooks",
-        ]) {
-          mkdirSafe(path.join(rootDir, relativeDir));
-        }
-        fs.writeFileSync(path.join(rootDir, "hooks", "hooks.json"), '{"hooks":[]}', "utf-8");
-        fs.writeFileSync(
-          path.join(rootDir, "settings.json"),
-          '{"hideThinkingBlock":true}',
-          "utf-8",
-        );
-        writeBundleManifest(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH, {
-          name: "Claude Sample",
-          description: "Claude fixture",
-          skills: ["skill-packs/starter"],
-          commands: "commands-pack",
-          agents: "agents-pack",
-          hooks: "hooks-pack",
-          mcpServers: "mcp",
-          lspServers: "lsp",
-          outputStyles: "styles",
+        setupBundleFixture({
+          rootDir,
+          dirs: [
+            ".claude-plugin",
+            "skill-packs/starter",
+            "commands-pack",
+            "agents-pack",
+            "hooks-pack",
+            "mcp",
+            "lsp",
+            "styles",
+            "hooks",
+          ],
+          textFiles: {
+            "hooks/hooks.json": '{"hooks":[]}',
+            "settings.json": '{"hideThinkingBlock":true}',
+          },
+          manifestRelativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
+          manifest: {
+            name: "Claude Sample",
+            description: "Claude fixture",
+            skills: ["skill-packs/starter"],
+            commands: "commands-pack",
+            agents: "agents-pack",
+            hooks: "hooks-pack",
+            mcpServers: "mcp",
+            lspServers: "lsp",
+            outputStyles: "styles",
+          },
         });
       },
       expected: {
@@ -171,22 +211,20 @@ describe("bundle manifest parsing", () => {
       name: "detects and loads Cursor bundle manifests",
       bundleFormat: "cursor" as const,
       setup: (rootDir: string) => {
-        for (const relativeDir of [
-          ".cursor-plugin",
-          "skills",
-          ".cursor/commands",
-          ".cursor/rules",
-          ".cursor/agents",
-        ]) {
-          mkdirSafe(path.join(rootDir, relativeDir));
-        }
-        fs.writeFileSync(path.join(rootDir, ".cursor", "hooks.json"), '{"hooks":[]}', "utf-8");
-        writeBundleManifest(rootDir, CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH, {
-          name: "Cursor Sample",
-          description: "Cursor fixture",
-          mcpServers: "./.mcp.json",
+        setupBundleFixture({
+          rootDir,
+          dirs: [".cursor-plugin", "skills", ".cursor/commands", ".cursor/rules", ".cursor/agents"],
+          textFiles: {
+            ".cursor/hooks.json": '{"hooks":[]}',
+            ".mcp.json": '{"servers":{}}',
+          },
+          manifestRelativePath: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
+          manifest: {
+            name: "Cursor Sample",
+            description: "Cursor fixture",
+            mcpServers: "./.mcp.json",
+          },
         });
-        fs.writeFileSync(path.join(rootDir, ".mcp.json"), '{"servers":{}}', "utf-8");
       },
       expected: {
         id: "cursor-sample",
@@ -209,13 +247,13 @@ describe("bundle manifest parsing", () => {
       name: "detects manifestless Claude bundles from the default layout",
       bundleFormat: "claude" as const,
       setup: (rootDir: string) => {
-        mkdirSafe(path.join(rootDir, "commands"));
-        mkdirSafe(path.join(rootDir, "skills"));
-        fs.writeFileSync(
-          path.join(rootDir, "settings.json"),
-          '{"hideThinkingBlock":true}',
-          "utf-8",
-        );
+        setupBundleFixture({
+          rootDir,
+          dirs: ["commands", "skills"],
+          textFiles: {
+            "settings.json": '{"hideThinkingBlock":true}',
+          },
+        });
       },
       expected: (rootDir: string) => ({
         id: path.basename(rootDir).toLowerCase(),
@@ -263,8 +301,11 @@ describe("bundle manifest parsing", () => {
 
   it("does not misclassify native index plugins as manifestless Claude bundles", () => {
     const rootDir = makeTempDir();
-    mkdirSafe(path.join(rootDir, "commands"));
-    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {}", "utf-8");
+    setupBundleFixture({
+      rootDir,
+      dirs: ["commands"],
+      textFiles: { "index.ts": "export default {}" },
+    });
 
     expect(detectBundleManifestFormat(rootDir)).toBeNull();
   });
