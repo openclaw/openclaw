@@ -12,14 +12,13 @@ describe("buildWorkspaceSkillStatus", () => {
     const mismatchedOs = process.platform === "darwin" ? "linux" : "darwin";
 
     const entry: SkillEntry = {
-      skill: {
+      skill: createFixtureSkill({
         name: "os-scoped",
         description: "test",
-        source: "test",
         filePath: "/tmp/os-scoped",
         baseDir: "/tmp",
-        disableModelInvocation: false,
-      },
+        source: "test",
+      }),
       frontmatter: {},
       metadata: {
         os: [mismatchedOs],
@@ -41,3 +40,26 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(report.skills[0]?.install).toEqual([]);
   });
 });
+
+function createFixtureSkill(params: {
+  name: string;
+  description: string;
+  filePath: string;
+  baseDir: string;
+  source: string;
+}): SkillEntry["skill"] {
+  return {
+    name: params.name,
+    description: params.description,
+    filePath: params.filePath,
+    baseDir: params.baseDir,
+    sourceInfo: {
+      path: params.filePath,
+      source: params.source,
+      scope: "project",
+      origin: "top-level",
+      baseDir: params.baseDir,
+    },
+    disableModelInvocation: false,
+  };
+}

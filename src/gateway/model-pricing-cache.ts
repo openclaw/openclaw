@@ -7,9 +7,10 @@ import {
   resolveModelRefFromString,
   type ModelRef,
 } from "../agents/model-selection.js";
-import { normalizeGoogleModelId, normalizeXaiModelId } from "../agents/models-config.providers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeGoogleModelId } from "../plugin-sdk/google.js";
+import { normalizeXaiModelId } from "../plugin-sdk/xai.js";
 
 export type CachedModelPricing = {
   input: number;
@@ -40,8 +41,6 @@ const PROVIDER_ALIAS_TO_OPENROUTER: Record<string, string> = {
   moonshot: "moonshotai",
   moonshotai: "moonshotai",
   "openai-codex": "openai",
-  qwen: "qwen",
-  "qwen-portal": "qwen",
   xai: "x-ai",
   zai: "z-ai",
 };

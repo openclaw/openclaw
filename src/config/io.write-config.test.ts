@@ -24,7 +24,21 @@ describe("config io write", () => {
   });
 
   afterAll(async () => {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        await fs.rm(fixtureRoot, { recursive: true, force: true });
+        return;
+      } catch (error) {
+        const code =
+          error && typeof error === "object" && "code" in error
+            ? String((error as { code?: unknown }).code)
+            : "";
+        if ((code !== "ENOTEMPTY" && code !== "EBUSY") || attempt === 4) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+      }
+    }
   });
 
   async function writeConfigAndCreateIo(params: {

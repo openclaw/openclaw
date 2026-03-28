@@ -1,4 +1,9 @@
 import { html, nothing } from "lit";
+import {
+  isToolCallContentType,
+  isToolResultContentType,
+  resolveToolBlockArgs,
+} from "../../../../src/chat/tool-content.js";
 import { icons } from "../icons.ts";
 import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import type { ToolCard } from "../types/chat-types.ts";
@@ -13,22 +18,20 @@ export function extractToolCards(message: unknown): ToolCard[] {
   const cards: ToolCard[] = [];
 
   for (const item of content) {
-    const kind = (typeof item.type === "string" ? item.type : "").toLowerCase();
     const isToolCall =
-      ["toolcall", "tool_call", "tooluse", "tool_use"].includes(kind) ||
-      (typeof item.name === "string" && item.arguments != null);
+      isToolCallContentType(item.type) ||
+      (typeof item.name === "string" && resolveToolBlockArgs(item) != null);
     if (isToolCall) {
       cards.push({
         kind: "call",
         name: (item.name as string) ?? "tool",
-        args: coerceArgs(item.arguments ?? item.args),
+        args: coerceArgs(resolveToolBlockArgs(item)),
       });
     }
   }
 
   for (const item of content) {
-    const kind = (typeof item.type === "string" ? item.type : "").toLowerCase();
-    if (kind !== "toolresult" && kind !== "tool_result") {
+    if (!isToolResultContentType(item.type)) {
       continue;
     }
     const text = extractToolText(item);
@@ -78,43 +81,35 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
       @click=${handleClick}
       role=${canClick ? "button" : nothing}
       tabindex=${canClick ? "0" : nothing}
-      @keydown=${
-        canClick
-          ? (e: KeyboardEvent) => {
-              if (e.key !== "Enter" && e.key !== " ") {
-                return;
-              }
-              e.preventDefault();
-              handleClick?.();
+      @keydown=${canClick
+        ? (e: KeyboardEvent) => {
+            if (e.key !== "Enter" && e.key !== " ") {
+              return;
             }
-          : nothing
-      }
+            e.preventDefault();
+            handleClick?.();
+          }
+        : nothing}
     >
       <div class="chat-tool-card__header">
         <div class="chat-tool-card__title">
           <span class="chat-tool-card__icon">${icons[display.icon]}</span>
           <span>${display.label}</span>
         </div>
-        ${
-          canClick
-            ? html`<span class="chat-tool-card__action">${hasText ? "View" : ""} ${icons.check}</span>`
-            : nothing
-        }
-        ${isEmpty && !canClick ? html`<span class="chat-tool-card__status">${icons.check}</span>` : nothing}
+        ${canClick
+          ? html`<span class="chat-tool-card__action"
+              >${hasText ? "View" : ""} ${icons.check}</span
+            >`
+          : nothing}
+        ${isEmpty && !canClick
+          ? html`<span class="chat-tool-card__status">${icons.check}</span>`
+          : nothing}
       </div>
       ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
-      ${
-        isEmpty
-          ? html`
-              <div class="chat-tool-card__status-text muted">Completed</div>
-            `
-          : nothing
-      }
-      ${
-        showCollapsed
-          ? html`<div class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</div>`
-          : nothing
-      }
+      ${isEmpty ? html` <div class="chat-tool-card__status-text muted">Completed</div> ` : nothing}
+      ${showCollapsed
+        ? html`<div class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</div>`
+        : nothing}
       ${showInline ? html`<div class="chat-tool-card__inline mono">${card.text}</div>` : nothing}
     </div>
   `;

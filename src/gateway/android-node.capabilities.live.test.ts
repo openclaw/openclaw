@@ -281,7 +281,7 @@ async function connectGatewayClient(params: {
       url: params.url,
       token: params.token,
       password: params.password,
-      connectDelayMs: 0,
+      connectChallengeTimeoutMs: 0,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
       clientDisplayName: "android-live-test",
       clientVersion: "dev",

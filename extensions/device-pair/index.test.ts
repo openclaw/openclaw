@@ -8,6 +8,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
 import type { OpenClawPluginApi } from "./api.js";
+import type { PendingPairingRequest } from "./notify.ts";
 
 const pluginApiMocks = vi.hoisted(() => ({
   clearDeviceBootstrapTokens: vi.fn(async () => ({ removed: 2 })),
@@ -17,6 +18,7 @@ const pluginApiMocks = vi.hoisted(() => ({
   })),
   revokeDeviceBootstrapToken: vi.fn(async () => ({ removed: true })),
   renderQrPngBase64: vi.fn(async () => "ZmFrZXBuZw=="),
+  resolveGatewayPort: vi.fn(() => 18789),
   resolvePreferredOpenClawTmpDir: vi.fn(() => path.join(os.tmpdir(), "openclaw-device-pair-tests")),
 }));
 
@@ -35,6 +37,7 @@ vi.mock("./api.js", () => {
     revokeDeviceBootstrapToken: pluginApiMocks.revokeDeviceBootstrapToken,
     resolvePreferredOpenClawTmpDir: pluginApiMocks.resolvePreferredOpenClawTmpDir,
     resolveGatewayBindUrl: vi.fn(),
+    resolveGatewayPort: pluginApiMocks.resolveGatewayPort,
     resolveTailnetHostWithRunner: vi.fn(),
     runPluginCommandWithTimeout: vi.fn(),
   };
@@ -383,6 +386,49 @@ describe("device-pair /pair qr", () => {
   });
 });
 
+describe("device-pair notify pending formatting", () => {
+  it("includes role and scopes for pending requests", async () => {
+    const { formatPendingRequests } =
+      await vi.importActual<typeof import("./notify.ts")>("./notify.ts");
+    const pending: PendingPairingRequest[] = [
+      {
+        requestId: "req-1",
+        deviceId: "device-1",
+        displayName: "dev one",
+        platform: "ios",
+        role: "operator",
+        scopes: ["operator.admin", "operator.read"],
+        remoteIp: "198.51.100.2",
+      },
+    ];
+
+    const text = formatPendingRequests(pending);
+    expect(text).toContain("Pending device pairing requests:");
+    expect(text).toContain("name=dev one");
+    expect(text).toContain("platform=ios");
+    expect(text).toContain("role=operator");
+    expect(text).toContain("scopes=operator.admin, operator.read");
+    expect(text).toContain("ip=198.51.100.2");
+  });
+
+  it("falls back to roles list and no scopes when role/scopes are absent", async () => {
+    const { formatPendingRequests } =
+      await vi.importActual<typeof import("./notify.ts")>("./notify.ts");
+    const pending: PendingPairingRequest[] = [
+      {
+        requestId: "req-2",
+        deviceId: "device-2",
+        roles: ["node", "operator"],
+        scopes: [],
+      },
+    ];
+
+    const text = formatPendingRequests(pending);
+    expect(text).toContain("role=node, operator");
+    expect(text).toContain("scopes=none");
+  });
+});
+
 describe("device-pair /pair approve", () => {
   it("rejects internal gateway callers without operator.pairing", async () => {
     vi.mocked(listDevicePairing).mockResolvedValueOnce({
@@ -464,7 +510,96 @@ describe("device-pair /pair approve", () => {
       }),
     );
 
+    expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1", {
+      callerScopes: ["operator.write", "operator.pairing"],
+    });
+    expect(result).toEqual({ text: "✅ Paired Victim Phone (ios)." });
+  });
+
+  it("does not force an empty caller scope context for external approvals", async () => {
+    vi.mocked(listDevicePairing).mockResolvedValueOnce({
+      pending: [
+        {
+          requestId: "req-1",
+          deviceId: "victim-phone",
+          publicKey: "victim-public-key",
+          displayName: "Victim Phone",
+          platform: "ios",
+          ts: Date.now(),
+        },
+      ],
+      paired: [],
+    });
+    vi.mocked(approveDevicePairing).mockResolvedValueOnce({
+      status: "approved",
+      requestId: "req-1",
+      device: {
+        deviceId: "victim-phone",
+        publicKey: "victim-public-key",
+        displayName: "Victim Phone",
+        platform: "ios",
+        role: "operator",
+        roles: ["operator"],
+        scopes: ["operator.pairing"],
+        approvedScopes: ["operator.pairing"],
+        tokens: {
+          operator: {
+            token: "token-1",
+            role: "operator",
+            scopes: ["operator.pairing"],
+            createdAtMs: Date.now(),
+          },
+        },
+        createdAtMs: Date.now(),
+        approvedAtMs: Date.now(),
+      },
+    });
+
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "telegram",
+        args: "approve latest",
+        commandBody: "/pair approve latest",
+        gatewayClientScopes: undefined,
+      }),
+    );
+
     expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1");
     expect(result).toEqual({ text: "✅ Paired Victim Phone (ios)." });
+  });
+
+  it("rejects approvals above the caller scopes", async () => {
+    vi.mocked(listDevicePairing).mockResolvedValueOnce({
+      pending: [
+        {
+          requestId: "req-1",
+          deviceId: "victim-phone",
+          publicKey: "victim-public-key",
+          displayName: "Victim Phone",
+          platform: "ios",
+          ts: Date.now(),
+        },
+      ],
+      paired: [],
+    });
+    vi.mocked(approveDevicePairing).mockResolvedValueOnce({
+      status: "forbidden",
+      missingScope: "operator.admin",
+    });
+
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "approve latest",
+        commandBody: "/pair approve latest",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
+
+    expect(result).toEqual({
+      text: "⚠️ Cannot approve a request requiring operator.admin.",
+    });
   });
 });

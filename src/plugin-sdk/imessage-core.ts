@@ -13,9 +13,14 @@ export {
 } from "./channel-config-helpers.js";
 export { IMessageConfigSchema } from "../config/zod-schema.providers-core.js";
 export {
+  matchIMessageAcpConversation,
+  normalizeIMessageAcpConversationId,
+  resolveIMessageConversationIdFromTarget,
+} from "../../extensions/imessage/api.js";
+export {
   parseChatAllowTargetPrefixes,
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedAllowTarget,
   resolveServicePrefixedTarget,
-} from "../../extensions/imessage/api.js";
-export type { ParsedChatTarget } from "../../extensions/imessage/api.js";
+  type ParsedChatTarget,
+} from "./imessage-targets.js";

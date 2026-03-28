@@ -15,7 +15,6 @@ import { writeJsonAtomic } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { resolveGlobalSingleton } from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;
@@ -77,16 +76,20 @@ type TelegramThreadBindingsState = {
  * binding lookups, and binding mutations all observe the same live registry.
  */
 const TELEGRAM_THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.telegramThreadBindingsState");
-const threadBindingsState = resolveGlobalSingleton<TelegramThreadBindingsState>(
-  TELEGRAM_THREAD_BINDINGS_STATE_KEY,
-  () => ({
-    managersByAccountId: new Map<string, TelegramThreadBindingManager>(),
-    bindingsByAccountConversation: new Map<string, TelegramThreadBindingRecord>(),
-    persistQueueByAccountId: new Map<string, Promise<void>>(),
-  }),
-);
+let threadBindingsState: TelegramThreadBindingsState | undefined;
 
 function getThreadBindingsState(): TelegramThreadBindingsState {
+  if (!threadBindingsState) {
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    threadBindingsState = (globalStore[TELEGRAM_THREAD_BINDINGS_STATE_KEY] as
+      | TelegramThreadBindingsState
+      | undefined) ?? {
+      managersByAccountId: new Map<string, TelegramThreadBindingManager>(),
+      bindingsByAccountConversation: new Map<string, TelegramThreadBindingRecord>(),
+      persistQueueByAccountId: new Map<string, Promise<void>>(),
+    };
+    globalStore[TELEGRAM_THREAD_BINDINGS_STATE_KEY] = threadBindingsState;
+  }
   return threadBindingsState;
 }
 
@@ -805,14 +808,16 @@ export function setTelegramThreadBindingMaxAgeBySessionKey(params: {
   });
 }
 
+export async function resetTelegramThreadBindingsForTests() {
+  for (const manager of getThreadBindingsState().managersByAccountId.values()) {
+    manager.stop();
+  }
+  await Promise.allSettled(getThreadBindingsState().persistQueueByAccountId.values());
+  getThreadBindingsState().persistQueueByAccountId.clear();
+  getThreadBindingsState().managersByAccountId.clear();
+  getThreadBindingsState().bindingsByAccountConversation.clear();
+}
+
 export const __testing = {
-  async resetTelegramThreadBindingsForTests() {
-    for (const manager of getThreadBindingsState().managersByAccountId.values()) {
-      manager.stop();
-    }
-    await Promise.allSettled(getThreadBindingsState().persistQueueByAccountId.values());
-    getThreadBindingsState().persistQueueByAccountId.clear();
-    getThreadBindingsState().managersByAccountId.clear();
-    getThreadBindingsState().bindingsByAccountConversation.clear();
-  },
+  resetTelegramThreadBindingsForTests,
 };

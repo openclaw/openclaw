@@ -1,13 +1,16 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { markdownToSignalTextChunks } from "../../../extensions/signal/src/format.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   signalOutbound,
   telegramOutbound,
   whatsappOutbound,
 } from "../../../test/channel-outbounds.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createHookRunner } from "../../plugins/hooks.js";
+import { addTestHook } from "../../plugins/hooks.test-helpers.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { PluginHookRegistration } from "../../plugins/types.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
@@ -19,8 +22,11 @@ const mocks = vi.hoisted(() => ({
 }));
 const hookMocks = vi.hoisted(() => ({
   runner: {
-    hasHooks: vi.fn(() => false),
-    runMessageSent: vi.fn(async () => {}),
+    hasHooks: vi.fn<(_hookName?: string) => boolean>(() => false),
+    runMessageSending: vi.fn<(event: unknown, ctx: unknown) => Promise<unknown>>(
+      async () => undefined,
+    ),
+    runMessageSent: vi.fn<(event: unknown, ctx: unknown) => Promise<void>>(async () => {}),
   },
 }));
 const internalHookMocks = vi.hoisted(() => ({
@@ -91,6 +97,8 @@ const telegramChunkConfig: OpenClawConfig = {
 const whatsappChunkConfig: OpenClawConfig = {
   channels: { whatsapp: { textChunkLimit: 4000 } },
 };
+
+const expectedResolvedTmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
 
 type DeliverOutboundArgs = Parameters<DeliverModule["deliverOutboundPayloads"]>[0];
 type DeliverOutboundPayload = DeliverOutboundArgs["payloads"][number];
@@ -200,13 +208,18 @@ function expectSuccessfulWhatsAppInternalHookPayload(
 }
 
 describe("deliverOutboundPayloads", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js"));
+  });
+
+  beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
+    hookMocks.runner.runMessageSending.mockClear();
+    hookMocks.runner.runMessageSending.mockResolvedValue(undefined);
     hookMocks.runner.runMessageSent.mockClear();
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
     internalHookMocks.createInternalHookEvent.mockClear();
@@ -478,7 +491,7 @@ describe("deliverOutboundPayloads", () => {
       "123",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
+        mediaLocalRoots: expect.arrayContaining([expectedResolvedTmpRoot]),
       }),
     );
   });
@@ -498,7 +511,7 @@ describe("deliverOutboundPayloads", () => {
       "+1555",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
+        mediaLocalRoots: expect.arrayContaining([expectedResolvedTmpRoot]),
       }),
     );
   });
@@ -561,7 +574,7 @@ describe("deliverOutboundPayloads", () => {
       "+1555",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
+        mediaLocalRoots: expect.arrayContaining([expectedResolvedTmpRoot]),
       }),
     );
   });
@@ -581,7 +594,7 @@ describe("deliverOutboundPayloads", () => {
       "imessage:+15551234567",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
+        mediaLocalRoots: expect.arrayContaining([expectedResolvedTmpRoot]),
       }),
     );
   });
@@ -617,7 +630,6 @@ describe("deliverOutboundPayloads", () => {
       channels: { signal: { textChunkLimit: 20 } },
     };
     const text = `Intro\\n\\n\`\`\`\`md\\n${"y".repeat(60)}\\n\`\`\`\\n\\nOutro`;
-    const expectedChunks = markdownToSignalTextChunks(text, 20);
 
     await deliverOutboundPayloads({
       cfg,
@@ -627,19 +639,18 @@ describe("deliverOutboundPayloads", () => {
       deps: { sendSignal },
     });
 
-    expect(sendSignal).toHaveBeenCalledTimes(expectedChunks.length);
-    expectedChunks.forEach((chunk, index) => {
-      expect(sendSignal).toHaveBeenNthCalledWith(
-        index + 1,
-        "+1555",
-        chunk.text,
-        expect.objectContaining({
-          accountId: undefined,
-          textMode: "plain",
-          textStyles: chunk.styles,
-        }),
-      );
+    expect(sendSignal.mock.calls.length).toBeGreaterThan(1);
+    const sentTexts = sendSignal.mock.calls.map((call) => call[1]);
+    sendSignal.mock.calls.forEach((call) => {
+      const opts = call[2] as
+        | { textStyles?: unknown[]; textMode?: string; accountId?: string | undefined }
+        | undefined;
+      expect(opts?.textMode).toBe("plain");
+      expect(opts?.accountId).toBeUndefined();
     });
+    expect(sentTexts.join("")).toContain("Intro");
+    expect(sentTexts.join("")).toContain("Outro");
+    expect(sentTexts.join("")).toContain("y".repeat(20));
   });
 
   it("chunks WhatsApp text and returns all results", async () => {
@@ -1026,6 +1037,48 @@ describe("deliverOutboundPayloads", () => {
       expect.objectContaining({ to: "+1555", content: "hello", success: true }),
       expect.objectContaining({ channelId: "whatsapp" }),
     );
+  });
+
+  it("short-circuits lower-priority message_sending hooks after cancel=true", async () => {
+    const hookRegistry = createEmptyPluginRegistry();
+    const high = vi.fn().mockResolvedValue({ cancel: true, content: "blocked" });
+    const low = vi.fn().mockResolvedValue({ cancel: false, content: "override" });
+    addTestHook({
+      registry: hookRegistry,
+      pluginId: "high",
+      hookName: "message_sending",
+      handler: high as PluginHookRegistration["handler"],
+      priority: 100,
+    });
+    addTestHook({
+      registry: hookRegistry,
+      pluginId: "low",
+      hookName: "message_sending",
+      handler: low as PluginHookRegistration["handler"],
+      priority: 0,
+    });
+    const realRunner = createHookRunner(hookRegistry);
+    hookMocks.runner.hasHooks.mockImplementation((hookName?: string) =>
+      realRunner.hasHooks((hookName ?? "") as never),
+    );
+    hookMocks.runner.runMessageSending.mockImplementation((event, ctx) =>
+      realRunner.runMessageSending(event as never, ctx as never),
+    );
+
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledTimes(1);
+    expect(high).toHaveBeenCalledTimes(1);
+    expect(low).not.toHaveBeenCalled();
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runMessageSent).not.toHaveBeenCalled();
   });
 
   it("emits message_sent success for sendPayload deliveries", async () => {

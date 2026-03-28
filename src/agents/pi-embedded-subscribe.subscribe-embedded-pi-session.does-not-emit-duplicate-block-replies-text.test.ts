@@ -9,13 +9,14 @@ import {
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 describe("subscribeEmbeddedPiSession", () => {
-  it("does not emit duplicate block replies when text_end repeats", () => {
+  it("does not emit duplicate block replies when text_end repeats", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 
     emitAssistantTextDelta({ emit, delta: "Hello block" });
     emitAssistantTextEnd({ emit });
     emitAssistantTextEnd({ emit });
+    await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(subscription.assistantTexts).toEqual(["Hello block"]);

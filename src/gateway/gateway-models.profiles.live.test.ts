@@ -21,7 +21,6 @@ import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import { isHighSignalLiveModelRef } from "../agents/live-model-filter.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
-import { normalizeGoogleModelId } from "../agents/model-id-normalization.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
@@ -29,6 +28,7 @@ import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discover
 import { clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import type { ModelsConfig, OpenClawConfig, ModelProviderConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { normalizeGoogleModelId } from "../plugin-sdk/google.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -285,10 +285,17 @@ function shouldStripAssistantScaffoldingForLiveModel(modelKey?: string): boolean
     return true;
   }
   const [provider, ...rest] = modelKey.split("/");
+  const modelId = rest.join("/");
+  if (provider === "minimax" || provider === "minimax-portal") {
+    // MiniMax transcript persistence can mirror our <final> wrapper style even
+    // though user-visible surfaces already strip it. Keep the live reader
+    // aligned with the runtime-facing sanitizers for the whole provider family.
+    return true;
+  }
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  const normalizedKey = `${provider}/${normalizeGoogleModelId(modelId)}`;
   return GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -331,6 +338,24 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
         "google/gemini-2.5-flash",
       ),
     ).toBe("<think>hidden</think>Visible");
+  });
+
+  it("strips scaffolding for MiniMax transcript wrappers", () => {
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<final>Visible</final>",
+        "minimax/MiniMax-M2.5-highspeed",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<final>Visible</final>",
+        "minimax-portal/MiniMax-M2.7-highspeed",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "minimax/MiniMax-M2.7"),
+    ).toBe("Visible");
   });
 });
 

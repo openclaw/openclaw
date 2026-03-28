@@ -65,7 +65,7 @@ describe("renderQrPngBase64", () => {
   });
 
   it("avoids dynamic require of qrcode-terminal vendor modules", async () => {
-    const sourcePath = resolve(process.cwd(), "extensions/whatsapp/src/qr-image.ts");
+    const sourcePath = resolve(process.cwd(), "src/media/qr-image.ts");
     const source = await readFile(sourcePath, "utf-8");
     expect(source).not.toContain("createRequire(");
     expect(source).not.toContain('require("qrcode-terminal/vendor/QRCode")');

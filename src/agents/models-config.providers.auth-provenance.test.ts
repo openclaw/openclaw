@@ -4,11 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import {
-  MINIMAX_OAUTH_MARKER,
-  NON_ENV_SECRETREF_MARKER,
-  QWEN_OAUTH_MARKER,
-} from "./model-auth-markers.js";
+import { MINIMAX_OAUTH_MARKER, NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
+import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 
 describe("models-config provider auth provenance", () => {
@@ -84,7 +81,7 @@ describe("models-config provider auth provenance", () => {
     expect(providers?.together?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
   });
 
-  it("keeps oauth compatibility markers for minimax-portal and qwen-portal", async () => {
+  it("keeps oauth compatibility markers for minimax-portal", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     await writeFile(
       join(agentDir, "auth-profiles.json"),
@@ -99,13 +96,6 @@ describe("models-config provider auth provenance", () => {
               refresh: "refresh-token",
               expires: Date.now() + 60_000,
             },
-            "qwen-portal:default": {
-              type: "oauth",
-              provider: "qwen-portal",
-              access: "access-token",
-              refresh: "refresh-token",
-              expires: Date.now() + 60_000,
-            },
           },
         },
         null,
@@ -116,6 +106,33 @@ describe("models-config provider auth provenance", () => {
 
     const providers = await resolveImplicitProvidersForTest({ agentDir, env: {} });
     expect(providers?.["minimax-portal"]?.apiKey).toBe(MINIMAX_OAUTH_MARKER);
-    expect(providers?.["qwen-portal"]?.apiKey).toBe(QWEN_OAUTH_MARKER);
+  });
+
+  it("prefers profile auth over env auth in provider summaries to match runtime resolution", async () => {
+    const auth = createProviderAuthResolver(
+      {
+        OPENAI_API_KEY: "env-openai-key",
+      } as NodeJS.ProcessEnv,
+      {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_PROFILE_KEY" },
+          },
+        },
+      },
+    );
+
+    expect(
+      auth("openai"),
+    ).toEqual({
+      apiKey: "OPENAI_PROFILE_KEY",
+      discoveryApiKey: undefined,
+      mode: "api_key",
+      source: "profile",
+      profileId: "openai:default",
+    });
   });
 });

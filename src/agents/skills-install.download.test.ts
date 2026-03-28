@@ -54,16 +54,39 @@ const TAR_GZ_TRAVERSAL_BUFFER = Buffer.from(
 
 function buildEntry(name: string): SkillEntry {
   const skillDir = path.join(workspaceDir, "skills", name);
+  const filePath = path.join(skillDir, "SKILL.md");
   return {
-    skill: {
+    skill: createFixtureSkill({
       name,
       description: `${name} test skill`,
-      source: "openclaw-workspace",
-      filePath: path.join(skillDir, "SKILL.md"),
+      filePath,
       baseDir: skillDir,
-      disableModelInvocation: false,
-    },
+      source: "openclaw-workspace",
+    }),
     frontmatter: {},
+  };
+}
+
+function createFixtureSkill(params: {
+  name: string;
+  description: string;
+  filePath: string;
+  baseDir: string;
+  source: string;
+}): SkillEntry["skill"] {
+  return {
+    name: params.name,
+    description: params.description,
+    filePath: params.filePath,
+    baseDir: params.baseDir,
+    sourceInfo: {
+      path: params.filePath,
+      source: params.source,
+      scope: "project",
+      origin: "top-level",
+      baseDir: params.baseDir,
+    },
+    disableModelInvocation: false,
   };
 }
 

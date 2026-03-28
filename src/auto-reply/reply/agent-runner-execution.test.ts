@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun } from "./queue.js";
@@ -15,6 +16,10 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
+  isFallbackSummaryError: (err: unknown) =>
+    err instanceof Error &&
+    err.name === "FallbackSummaryError" &&
+    Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
 vi.mock("../../agents/model-selection.js", () => ({
@@ -39,6 +44,7 @@ vi.mock("../../agents/pi-embedded-helpers.js", () => ({
   isContextOverflowError: () => false,
   isBillingErrorMessage: () => false,
   isLikelyContextOverflowError: () => false,
+  isRateLimitErrorMessage: () => false,
   isTransientHttpError: () => false,
   sanitizeUserFacingText: (text?: string) => text ?? "",
 }));
@@ -79,10 +85,13 @@ vi.mock("../heartbeat.js", () => ({
 }));
 
 vi.mock("./agent-runner-utils.js", () => ({
-  buildEmbeddedRunExecutionParams: () => ({
+  buildEmbeddedRunExecutionParams: (params: { provider: string; model: string }) => ({
     embeddedContext: {},
     senderContext: {},
-    runBaseParams: {},
+    runBaseParams: {
+      provider: params.provider,
+      model: params.model,
+    },
   }),
   resolveModelFallbackOptions: vi.fn(() => ({})),
 }));
@@ -214,5 +223,119 @@ describe("runAgentTurnWithFallback", () => {
       mediaUrls: ["/tmp/generated.png"],
     });
     expect(onToolResult.mock.calls[0]?.[0]?.text).toBeUndefined();
+  });
+
+  it("does not show a rate-limit countdown for mixed-cause fallback exhaustion", async () => {
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "All models failed (2): anthropic/claude: 429 (rate_limit) | openai/gpt-5.2: 402 (billing)",
+        ),
+        {
+          name: "FallbackSummaryError",
+          attempts: [
+            { provider: "anthropic", model: "claude", error: "429", reason: "rate_limit" },
+            { provider: "openai", model: "gpt-5.2", error: "402", reason: "billing" },
+          ],
+          soonestCooldownExpiry: Date.now() + 60_000,
+        },
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("Agent failed before reply");
+      expect(result.payload.text).not.toContain("Rate-limited");
+    }
+  });
+
+  it("restarts the active prompt when a live model switch is requested", async () => {
+    let fallbackInvocation = 0;
+    state.runWithModelFallbackMock.mockImplementation(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        result: await params.run(
+          fallbackInvocation === 0 ? "anthropic" : "openai",
+          fallbackInvocation === 0 ? "claude" : "gpt-5.4",
+        ),
+        provider: fallbackInvocation === 0 ? "anthropic" : "openai",
+        model: fallbackInvocation++ === 0 ? "claude" : "gpt-5.4",
+        attempts: [],
+      }),
+    );
+    state.runEmbeddedPiAgentMock
+      .mockImplementationOnce(async () => {
+        throw new LiveSessionModelSwitchError({
+          provider: "openai",
+          model: "gpt-5.4",
+        });
+      })
+      .mockImplementationOnce(async () => {
+        return {
+          payloads: [{ text: "switched" }],
+          meta: {
+            agentMeta: {
+              sessionId: "session",
+              provider: "openai",
+              model: "gpt-5.4",
+            },
+          },
+        };
+      });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    expect(followupRun.run.provider).toBe("openai");
+    expect(followupRun.run.model).toBe("gpt-5.4");
   });
 });

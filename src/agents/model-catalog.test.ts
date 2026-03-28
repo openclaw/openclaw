@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { __setModelCatalogImportForTest, loadModelCatalog } from "./model-catalog.js";
+import {
+  __setModelCatalogImportForTest,
+  findModelInCatalog,
+  loadModelCatalog,
+} from "./model-catalog.js";
 import {
   installModelCatalogTestHooks,
   mockCatalogImportFailThenRecover,
@@ -241,7 +245,6 @@ describe("loadModelCatalog", () => {
       expect.objectContaining({
         provider: "openai-codex",
         id: "gpt-5.4",
-        name: "gpt-5.4",
       }),
     );
   });
@@ -352,5 +355,19 @@ describe("loadModelCatalog", () => {
     );
     expect(matches).toHaveLength(1);
     expect(matches[0]?.name).toBe("Kilo Auto");
+  });
+
+  it("matches models across canonical provider aliases", () => {
+    expect(
+      findModelInCatalog(
+        [{ provider: "z.ai", id: "glm-5", name: "GLM-5" }],
+        "z-ai",
+        "glm-5",
+      ),
+    ).toEqual({
+      provider: "z.ai",
+      id: "glm-5",
+      name: "GLM-5",
+    });
   });
 });

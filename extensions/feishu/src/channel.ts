@@ -26,6 +26,7 @@ import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "../runtime-api.
 import {
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
+  chunkTextForOutbound,
   createActionGate,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
@@ -33,12 +34,14 @@ import {
 } from "../runtime-api.js";
 import type { ChannelMessageActionName } from "../runtime-api.js";
 import {
+  inspectFeishuCredentials,
   resolveFeishuAccount,
-  resolveFeishuCredentials,
+  resolveFeishuRuntimeAccount,
   listFeishuAccountIds,
   listEnabledFeishuAccounts,
   resolveDefaultFeishuAccountId,
 } from "./accounts.js";
+import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
 import { createFeishuClient } from "./client.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import { parseFeishuConversationId } from "./conversation-id.js";
@@ -57,6 +60,34 @@ function readFeishuMediaParam(params: Record<string, unknown>): string | undefin
     return undefined;
   }
   return media.trim() ? media : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function hasLegacyFeishuCardCommandValue(actionValue: unknown): boolean {
+  return (
+    isRecord(actionValue) &&
+    actionValue.oc !== FEISHU_CARD_INTERACTION_VERSION &&
+    (Boolean(typeof actionValue.command === "string" && actionValue.command.trim()) ||
+      Boolean(typeof actionValue.text === "string" && actionValue.text.trim()))
+  );
+}
+
+function containsLegacyFeishuCardCommandValue(node: unknown): boolean {
+  if (Array.isArray(node)) {
+    return node.some((item) => containsLegacyFeishuCardCommandValue(item));
+  }
+  if (!isRecord(node)) {
+    return false;
+  }
+
+  if (node.tag === "button" && hasLegacyFeishuCardCommandValue(node.value)) {
+    return true;
+  }
+
+  return Object.values(node).some((value) => containsLegacyFeishuCardCommandValue(value));
 }
 
 const meta: ChannelMeta = {
@@ -100,7 +131,7 @@ function describeFeishuMessageTool({
 >[0]): ChannelMessageToolDiscovery {
   const enabled =
     cfg.channels?.feishu?.enabled !== false &&
-    Boolean(resolveFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined));
+    Boolean(inspectFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined));
   if (listEnabledFeishuAccounts(cfg).length === 0) {
     return {
       actions: [],
@@ -525,6 +556,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const sendMedia = maybeSendMedia;
             let result;
             if (card) {
+              if (containsLegacyFeishuCardCommandValue(card)) {
+                throw new Error(
+                  "Feishu card buttons that trigger text or commands must use structured interaction envelopes.",
+                );
+              }
               result = await runtime.sendCardFeishu({
                 cfg: ctx.cfg,
                 to,
@@ -977,7 +1013,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       gateway: {
         startAccount: async (ctx) => {
           const { monitorFeishuProvider } = await import("./monitor.js");
-          const account = resolveFeishuAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
+          const account = resolveFeishuRuntimeAccount(
+            { cfg: ctx.cfg, accountId: ctx.accountId },
+            { requireEventSecrets: true },
+          );
           const port = account.config?.webhookPort ?? null;
           ctx.setStatus({ accountId: ctx.accountId, port });
           ctx.log?.info(
@@ -1015,7 +1054,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
     },
     outbound: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       ...createRuntimeOutboundDelegates({

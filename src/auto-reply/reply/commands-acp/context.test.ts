@@ -1,12 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  __testing as feishuThreadBindingTesting,
-  createFeishuThreadBindingManager,
-} from "../../../../extensions/feishu/src/thread-bindings.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   __testing as sessionBindingTesting,
   getSessionBindingService,
+  registerSessionBindingAdapter,
+  type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import { buildCommandTestParams } from "../commands-spawn.test-harness.js";
 import {
@@ -20,9 +18,39 @@ const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
 
+function registerFeishuBindingAdapterForTest(accountId: string) {
+  const bindings: SessionBindingRecord[] = [];
+  registerSessionBindingAdapter({
+    channel: "feishu",
+    accountId,
+    capabilities: { placements: ["current"] },
+    bind: async (input) => {
+      const record: SessionBindingRecord = {
+        bindingId: `${input.conversation.channel}:${input.conversation.accountId}:${input.conversation.conversationId}`,
+        targetSessionKey: input.targetSessionKey,
+        targetKind: input.targetKind,
+        conversation: input.conversation,
+        status: "active",
+        boundAt: Date.now(),
+        ...(input.metadata ? { metadata: input.metadata } : {}),
+      };
+      bindings.push(record);
+      return record;
+    },
+    listBySession: (targetSessionKey) =>
+      bindings.filter((binding) => binding.targetSessionKey === targetSessionKey),
+    resolveByConversation: (ref) =>
+      bindings.find(
+        (binding) =>
+          binding.conversation.channel === ref.channel &&
+          binding.conversation.accountId === ref.accountId &&
+          binding.conversation.conversationId === ref.conversationId,
+      ) ?? null,
+  });
+}
+
 describe("commands-acp context", () => {
   beforeEach(() => {
-    feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
   });
 
@@ -162,6 +190,80 @@ describe("commands-acp context", () => {
     expect(resolveAcpCommandParentConversationId(params)).toBe("!room:example.org");
   });
 
+  it("resolves BlueBubbles DM conversation ids from current targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "bluebubbles",
+      Surface: "bluebubbles",
+      OriginatingChannel: "bluebubbles",
+      OriginatingTo: "bluebubbles:+15555550123",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "bluebubbles",
+      accountId: "default",
+      threadId: undefined,
+      conversationId: "+15555550123",
+      parentConversationId: undefined,
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("+15555550123");
+  });
+
+  it("resolves BlueBubbles group conversation ids from explicit chat targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "bluebubbles",
+      Surface: "bluebubbles",
+      OriginatingChannel: "bluebubbles",
+      OriginatingTo: "bluebubbles:chat_guid:iMessage;+;chat123",
+      AccountId: "work",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "bluebubbles",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "iMessage;+;chat123",
+      parentConversationId: undefined,
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("iMessage;+;chat123");
+  });
+
+  it("resolves iMessage DM conversation ids from current targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "imessage",
+      Surface: "imessage",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:+15555550123",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "imessage",
+      accountId: "default",
+      threadId: undefined,
+      conversationId: "+15555550123",
+      parentConversationId: undefined,
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("+15555550123");
+  });
+
+  it("resolves iMessage group conversation ids from chat_id targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "imessage",
+      Surface: "imessage",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "chat_id:12345",
+      AccountId: "work",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "imessage",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "12345",
+      parentConversationId: undefined,
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("12345");
+  });
+
   it("builds Feishu topic conversation ids from chat target + root message id", () => {
     const params = buildCommandTestParams("/acp status", baseCfg, {
       Provider: "feishu",
@@ -233,7 +335,7 @@ describe("commands-acp context", () => {
   });
 
   it("preserves sender-scoped Feishu topic ids after ACP takeover from the live binding record", async () => {
-    createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "work" });
+    registerFeishuBindingAdapterForTest("work");
     await getSessionBindingService().bind({
       targetSessionKey: "agent:codex:acp:binding:feishu:work:abc123",
       targetKind: "session",

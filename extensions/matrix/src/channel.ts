@@ -16,8 +16,8 @@ import { createScopedAccountReplyToModeResolver } from "openclaw/plugin-sdk/conv
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   createChannelDirectoryAdapter,
+  createResolvedDirectoryEntriesLister,
   createRuntimeDirectoryLiveAdapter,
-  listResolvedDirectoryEntriesFromSources,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { buildTrafficStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
@@ -49,6 +49,7 @@ import {
 import {
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
+  chunkTextForOutbound,
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
@@ -77,6 +78,46 @@ const meta = {
   order: 70,
   quickstartAllowFrom: true,
 };
+
+const listMatrixDirectoryPeersFromConfig =
+  createResolvedDirectoryEntriesLister<ResolvedMatrixAccount>({
+    kind: "user",
+    resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
+    resolveSources: (account) => [
+      account.config.dm?.allowFrom ?? [],
+      account.config.groupAllowFrom ?? [],
+      ...Object.values(account.config.groups ?? account.config.rooms ?? {}).map(
+        (room) => room.users ?? [],
+      ),
+    ],
+    normalizeId: (entry) => {
+      const raw = entry.replace(/^matrix:/i, "").trim();
+      if (!raw || raw === "*") {
+        return null;
+      }
+      const lowered = raw.toLowerCase();
+      const cleaned = lowered.startsWith("user:") ? raw.slice("user:".length).trim() : raw;
+      return cleaned.startsWith("@") ? `user:${cleaned}` : cleaned;
+    },
+  });
+
+const listMatrixDirectoryGroupsFromConfig =
+  createResolvedDirectoryEntriesLister<ResolvedMatrixAccount>({
+    kind: "group",
+    resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
+    resolveSources: (account) => [Object.keys(account.config.groups ?? account.config.rooms ?? {})],
+    normalizeId: (entry) => {
+      const raw = entry.replace(/^matrix:/i, "").trim();
+      if (!raw || raw === "*") {
+        return null;
+      }
+      const lowered = raw.toLowerCase();
+      if (lowered.startsWith("room:") || lowered.startsWith("channel:")) {
+        return raw;
+      }
+      return raw.startsWith("!") ? `room:${raw}` : raw;
+    },
+  });
 
 const matrixConfigAdapter = createScopedChannelConfigAdapter<
   ResolvedMatrixAccount,
@@ -246,53 +287,14 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       },
       directory: createChannelDirectoryAdapter({
         listPeers: async (params) => {
-          const entries = listResolvedDirectoryEntriesFromSources<ResolvedMatrixAccount>({
-            ...params,
-            kind: "user",
-            resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
-            resolveSources: (account) => [
-              account.config.dm?.allowFrom ?? [],
-              account.config.groupAllowFrom ?? [],
-              ...Object.values(account.config.groups ?? account.config.rooms ?? {}).map(
-                (room) => room.users ?? [],
-              ),
-            ],
-            normalizeId: (entry) => {
-              const raw = entry.replace(/^matrix:/i, "").trim();
-              if (!raw || raw === "*") {
-                return null;
-              }
-              const lowered = raw.toLowerCase();
-              const cleaned = lowered.startsWith("user:") ? raw.slice("user:".length).trim() : raw;
-              return cleaned.startsWith("@") ? `user:${cleaned}` : cleaned;
-            },
-          });
+          const entries = await listMatrixDirectoryPeersFromConfig(params);
           return entries.map((entry) => {
             const raw = entry.id.startsWith("user:") ? entry.id.slice("user:".length) : entry.id;
             const incomplete = !raw.startsWith("@") || !raw.includes(":");
             return incomplete ? { ...entry, name: "incomplete id; expected @user:server" } : entry;
           });
         },
-        listGroups: async (params) =>
-          listResolvedDirectoryEntriesFromSources<ResolvedMatrixAccount>({
-            ...params,
-            kind: "group",
-            resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
-            resolveSources: (account) => [
-              Object.keys(account.config.groups ?? account.config.rooms ?? {}),
-            ],
-            normalizeId: (entry) => {
-              const raw = entry.replace(/^matrix:/i, "").trim();
-              if (!raw || raw === "*") {
-                return null;
-              }
-              const lowered = raw.toLowerCase();
-              if (lowered.startsWith("room:") || lowered.startsWith("channel:")) {
-                return raw;
-              }
-              return raw.startsWith("!") ? `room:${raw}` : raw;
-            },
-          }),
+        listGroups: async (params) => await listMatrixDirectoryGroupsFromConfig(params),
         ...createRuntimeDirectoryLiveAdapter({
           getRuntime: loadMatrixChannelRuntime,
           listPeersLive: (runtime) => runtime.listMatrixDirectoryPeersLive,
@@ -453,7 +455,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
     },
     outbound: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getMatrixRuntime().channel.text.chunkMarkdownText!(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       ...createRuntimeOutboundDelegates({

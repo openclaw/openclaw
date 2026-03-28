@@ -1,89 +1,22 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createDiscordOutboundHoisted,
+  expectDiscordThreadBotSend,
+  installDiscordOutboundModuleSpies,
+  mockDiscordBoundThreadManager,
+  resetDiscordOutboundMocks,
+} from "./outbound-adapter.test-harness.js";
 
-const hoisted = vi.hoisted(() => {
-  const sendMessageDiscordMock = vi.fn();
-  const sendDiscordComponentMessageMock = vi.fn();
-  const sendPollDiscordMock = vi.fn();
-  const sendWebhookMessageDiscordMock = vi.fn();
-  const getThreadBindingManagerMock = vi.fn();
-  return {
-    sendMessageDiscordMock,
-    sendDiscordComponentMessageMock,
-    sendPollDiscordMock,
-    sendWebhookMessageDiscordMock,
-    getThreadBindingManagerMock,
-  };
-});
-
-vi.mock("./send.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./send.js")>();
-  return {
-    ...actual,
-    sendMessageDiscord: (...args: unknown[]) => hoisted.sendMessageDiscordMock(...args),
-    sendDiscordComponentMessage: (...args: unknown[]) =>
-      hoisted.sendDiscordComponentMessageMock(...args),
-    sendPollDiscord: (...args: unknown[]) => hoisted.sendPollDiscordMock(...args),
-    sendWebhookMessageDiscord: (...args: unknown[]) =>
-      hoisted.sendWebhookMessageDiscordMock(...args),
-  };
-});
-
-vi.mock("./monitor/thread-bindings.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./monitor/thread-bindings.js")>();
-  return {
-    ...actual,
-    getThreadBindingManager: (...args: unknown[]) => hoisted.getThreadBindingManagerMock(...args),
-  };
-});
+const hoisted = createDiscordOutboundHoisted();
+await installDiscordOutboundModuleSpies(hoisted);
 
 let normalizeDiscordOutboundTarget: typeof import("./normalize.js").normalizeDiscordOutboundTarget;
 let discordOutbound: typeof import("./outbound-adapter.js").discordOutbound;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({ normalizeDiscordOutboundTarget } = await import("./normalize.js"));
   ({ discordOutbound } = await import("./outbound-adapter.js"));
 });
-
-const DEFAULT_DISCORD_SEND_RESULT = {
-  channel: "discord",
-  messageId: "msg-1",
-  channelId: "ch-1",
-} as const;
-
-function expectThreadBotSend(params: {
-  text: string;
-  result: unknown;
-  options?: Record<string, unknown>;
-}) {
-  expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
-    "channel:thread-1",
-    params.text,
-    expect.objectContaining({
-      accountId: "default",
-      ...params.options,
-    }),
-  );
-  expect(params.result).toEqual(DEFAULT_DISCORD_SEND_RESULT);
-}
-
-function mockBoundThreadManager() {
-  hoisted.getThreadBindingManagerMock.mockReturnValue({
-    getByThreadId: () => ({
-      accountId: "default",
-      channelId: "parent-1",
-      threadId: "thread-1",
-      targetKind: "subagent",
-      targetSessionKey: "agent:main:subagent:child",
-      agentId: "main",
-      label: "codex-thread",
-      webhookId: "wh-1",
-      webhookToken: "tok-1",
-      boundBy: "system",
-      boundAt: Date.now(),
-    }),
-  });
-}
 
 describe("normalizeDiscordOutboundTarget", () => {
   it("normalizes bare numeric IDs to channel: prefix", () => {
@@ -120,23 +53,7 @@ describe("normalizeDiscordOutboundTarget", () => {
 
 describe("discordOutbound", () => {
   beforeEach(() => {
-    hoisted.sendMessageDiscordMock.mockClear().mockResolvedValue({
-      messageId: "msg-1",
-      channelId: "ch-1",
-    });
-    hoisted.sendDiscordComponentMessageMock.mockClear().mockResolvedValue({
-      messageId: "component-1",
-      channelId: "ch-1",
-    });
-    hoisted.sendPollDiscordMock.mockClear().mockResolvedValue({
-      messageId: "poll-1",
-      channelId: "ch-1",
-    });
-    hoisted.sendWebhookMessageDiscordMock.mockClear().mockResolvedValue({
-      messageId: "msg-webhook-1",
-      channelId: "thread-1",
-    });
-    hoisted.getThreadBindingManagerMock.mockClear().mockReturnValue(null);
+    resetDiscordOutboundMocks(hoisted);
   });
 
   it("routes text sends to thread target when threadId is provided", async () => {
@@ -148,14 +65,15 @@ describe("discordOutbound", () => {
       threadId: "thread-1",
     });
 
-    expectThreadBotSend({
+    expectDiscordThreadBotSend({
+      hoisted,
       text: "hello",
       result,
     });
   });
 
   it("uses webhook persona delivery for bound thread text replies", async () => {
-    mockBoundThreadManager();
+    mockDiscordBoundThreadManager(hoisted);
     const cfg = {
       channels: {
         discord: {
@@ -202,7 +120,7 @@ describe("discordOutbound", () => {
   });
 
   it("falls back to bot send for silent delivery on bound threads", async () => {
-    mockBoundThreadManager();
+    mockDiscordBoundThreadManager(hoisted);
 
     const result = await discordOutbound.sendText?.({
       cfg: {},
@@ -214,7 +132,8 @@ describe("discordOutbound", () => {
     });
 
     expect(hoisted.sendWebhookMessageDiscordMock).not.toHaveBeenCalled();
-    expectThreadBotSend({
+    expectDiscordThreadBotSend({
+      hoisted,
       text: "silent update",
       result,
       options: { silent: true },
@@ -222,7 +141,7 @@ describe("discordOutbound", () => {
   });
 
   it("falls back to bot send when webhook send fails", async () => {
-    mockBoundThreadManager();
+    mockDiscordBoundThreadManager(hoisted);
     hoisted.sendWebhookMessageDiscordMock.mockRejectedValueOnce(new Error("rate limited"));
 
     const result = await discordOutbound.sendText?.({
@@ -234,7 +153,8 @@ describe("discordOutbound", () => {
     });
 
     expect(hoisted.sendWebhookMessageDiscordMock).toHaveBeenCalledTimes(1);
-    expectThreadBotSend({
+    expectDiscordThreadBotSend({
+      hoisted,
       text: "fallback",
       result,
     });

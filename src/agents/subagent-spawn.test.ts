@@ -1,5 +1,11 @@
 import os from "node:os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createSubagentSpawnTestConfig,
+  expectPersistedRuntimeModel,
+  installSessionStoreCaptureMock,
+  loadSubagentSpawnModuleForTest,
+} from "./subagent-spawn.test-helpers.js";
 import { installAcceptedSubagentGatewayMock } from "./test-helpers/subagent-gateway.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -11,93 +17,11 @@ const hoisted = vi.hoisted(() => ({
   configOverride: {} as Record<string, unknown>,
 }));
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
-}));
-
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => hoisted.configOverride,
-  };
-});
-
-vi.mock("../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions.js")>();
-  return {
-    ...actual,
-    updateSessionStore: (...args: unknown[]) => hoisted.updateSessionStoreMock(...args),
-  };
-});
-
-vi.mock("../gateway/session-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../gateway/session-utils.js")>();
-  return {
-    ...actual,
-    resolveGatewaySessionStoreTarget: (params: { key: string }) => ({
-      agentId: "main",
-      storePath: "/tmp/subagent-spawn-session-store.json",
-      canonicalKey: params.key,
-      storeKeys: [params.key],
-    }),
-    pruneLegacyStoreKeys: (...args: unknown[]) => hoisted.pruneLegacyStoreKeysMock(...args),
-  };
-});
-
-vi.mock("./subagent-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-registry.js")>();
-  return {
-    ...actual,
-    countActiveRunsForSession: () => 0,
-    registerSubagentRun: (args: unknown) => hoisted.registerSubagentRunMock(args),
-  };
-});
-
-vi.mock("../sessions/session-lifecycle-events.js", () => ({
-  emitSessionLifecycleEvent: (args: unknown) => hoisted.emitSessionLifecycleEventMock(args),
-}));
-
-vi.mock("./subagent-announce.js", () => ({
-  buildSubagentSystemPrompt: () => "system-prompt",
-}));
-
-vi.mock("./subagent-depth.js", () => ({
-  getSubagentDepthFromSessionStore: () => 0,
-}));
-
-vi.mock("./model-selection.js", () => ({
-  resolveSubagentSpawnModelSelection: () => "openai-codex/gpt-5.4",
-}));
-
-vi.mock("./sandbox/runtime-status.js", () => ({
-  resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
-}));
-
-vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => ({ hasHooks: () => false }),
-}));
-
-vi.mock("../utils/delivery-context.js", () => ({
-  normalizeDeliveryContext: (value: unknown) => value,
-}));
-
-vi.mock("./tools/sessions-helpers.js", () => ({
-  resolveMainSessionAlias: () => ({ mainKey: "main", alias: "main" }),
-  resolveInternalSessionKey: ({ key }: { key?: string }) => key ?? "agent:main:main",
-  resolveDisplaySessionKey: ({ key }: { key?: string }) => key ?? "agent:main:main",
-}));
-
-vi.mock("./agent-scope.js", () => ({
-  resolveAgentConfig: () => undefined,
-}));
+let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
+let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 
 function createConfigOverride(overrides?: Record<string, unknown>) {
-  return {
-    session: {
-      mainKey: "main",
-      scope: "per-sender",
-    },
+  return createSubagentSpawnTestConfig(os.tmpdir(), {
     agents: {
       defaults: {
         workspace: os.tmpdir(),
@@ -110,12 +34,24 @@ function createConfigOverride(overrides?: Record<string, unknown>) {
       ],
     },
     ...overrides,
-  };
+  });
 }
 
 describe("spawnSubagentDirect seam flow", () => {
-  beforeEach(() => {
-    vi.resetModules();
+  beforeEach(async () => {
+    ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
+      callGatewayMock: hoisted.callGatewayMock,
+      loadConfig: () => hoisted.configOverride,
+      updateSessionStoreMock: hoisted.updateSessionStoreMock,
+      pruneLegacyStoreKeysMock: hoisted.pruneLegacyStoreKeysMock,
+      registerSubagentRunMock: hoisted.registerSubagentRunMock,
+      emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
+      resolveAgentConfig: () => undefined,
+      resolveSubagentSpawnModelSelection: () => "openai-codex/gpt-5.4",
+      resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
+      sessionStorePath: "/tmp/subagent-spawn-session-store.json",
+    }));
+    resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
     hoisted.updateSessionStoreMock.mockReset();
     hoisted.pruneLegacyStoreKeysMock.mockReset();
@@ -137,7 +73,6 @@ describe("spawnSubagentDirect seam flow", () => {
   });
 
   it("accepts a spawned run across session patching, runtime-model persistence, registry registration, and lifecycle emission", async () => {
-    const { spawnSubagentDirect } = await import("./subagent-spawn.js");
     const operations: string[] = [];
     let persistedStore: Record<string, Record<string, unknown>> | undefined;
 
@@ -151,18 +86,12 @@ describe("spawnSubagentDirect seam flow", () => {
       }
       return {};
     });
-    hoisted.updateSessionStoreMock.mockImplementation(
-      async (
-        _storePath: string,
-        mutator: (store: Record<string, Record<string, unknown>>) => unknown,
-      ) => {
-        operations.push("store:update");
-        const store: Record<string, Record<string, unknown>> = {};
-        await mutator(store);
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      operations,
+      onStore: (store) => {
         persistedStore = store;
-        return store;
       },
-    );
+    });
 
     const result = await spawnSubagentDirect(
       {
@@ -216,10 +145,10 @@ describe("spawnSubagentDirect seam flow", () => {
       label: undefined,
     });
 
-    const [persistedKey, persistedEntry] = Object.entries(persistedStore ?? {})[0] ?? [];
-    expect(persistedKey).toBe(childSessionKey);
-    expect(persistedEntry).toMatchObject({
-      modelProvider: "openai-codex",
+    expectPersistedRuntimeModel({
+      persistedStore,
+      sessionKey: childSessionKey,
+      provider: "openai-codex",
       model: "gpt-5.4",
     });
     expect(operations.indexOf("gateway:sessions.patch")).toBeGreaterThan(-1);

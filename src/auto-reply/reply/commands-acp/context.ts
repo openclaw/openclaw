@@ -6,6 +6,13 @@ import {
 import { DISCORD_THREAD_BINDING_CHANNEL } from "../../../channels/thread-bindings-policy.js";
 import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { resolveBlueBubblesConversationIdFromTarget } from "../../../plugin-sdk/bluebubbles.js";
+import {
+  buildFeishuConversationId,
+  parseFeishuDirectConversationId,
+  parseFeishuTargetId,
+} from "../../../plugin-sdk/feishu.js";
+import { resolveIMessageConversationIdFromTarget } from "../../../plugin-sdk/imessage-core.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import { parseDiscordParentChannelFromSessionKey } from "../discord-parent-channel.js";
@@ -14,80 +21,6 @@ import {
   resolveMatrixParentConversationId,
 } from "../matrix-context.js";
 import { resolveTelegramConversationId } from "../telegram-context.js";
-
-type FeishuGroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
-
-function buildFeishuConversationId(params: {
-  chatId: string;
-  scope: FeishuGroupSessionScope;
-  senderOpenId?: string;
-  topicId?: string;
-}): string {
-  const chatId = normalizeConversationText(params.chatId) ?? "unknown";
-  const senderOpenId = normalizeConversationText(params.senderOpenId);
-  const topicId = normalizeConversationText(params.topicId);
-
-  switch (params.scope) {
-    case "group_sender":
-      return senderOpenId ? `${chatId}:sender:${senderOpenId}` : chatId;
-    case "group_topic":
-      return topicId ? `${chatId}:topic:${topicId}` : chatId;
-    case "group_topic_sender":
-      if (topicId && senderOpenId) {
-        return `${chatId}:topic:${topicId}:sender:${senderOpenId}`;
-      }
-      if (topicId) {
-        return `${chatId}:topic:${topicId}`;
-      }
-      return senderOpenId ? `${chatId}:sender:${senderOpenId}` : chatId;
-    case "group":
-    default:
-      return chatId;
-  }
-}
-
-function parseFeishuTargetId(raw: unknown): string | undefined {
-  const target = normalizeConversationText(raw);
-  if (!target) {
-    return undefined;
-  }
-  const withoutProvider = target.replace(/^(feishu|lark):/i, "").trim();
-  if (!withoutProvider) {
-    return undefined;
-  }
-  const lowered = withoutProvider.toLowerCase();
-  for (const prefix of ["chat:", "group:", "channel:", "user:", "dm:", "open_id:"]) {
-    if (lowered.startsWith(prefix)) {
-      return normalizeConversationText(withoutProvider.slice(prefix.length));
-    }
-  }
-  return withoutProvider;
-}
-
-function parseFeishuDirectConversationId(raw: unknown): string | undefined {
-  const target = normalizeConversationText(raw);
-  if (!target) {
-    return undefined;
-  }
-  const withoutProvider = target.replace(/^(feishu|lark):/i, "").trim();
-  if (!withoutProvider) {
-    return undefined;
-  }
-  const lowered = withoutProvider.toLowerCase();
-  for (const prefix of ["user:", "dm:", "open_id:"]) {
-    if (lowered.startsWith(prefix)) {
-      return normalizeConversationText(withoutProvider.slice(prefix.length));
-    }
-  }
-  const id = parseFeishuTargetId(target);
-  if (!id) {
-    return undefined;
-  }
-  if (id.startsWith("ou_") || id.startsWith("on_")) {
-    return id;
-  }
-  return undefined;
-}
 
 function resolveFeishuSenderScopedConversationId(params: {
   accountId: string;
@@ -227,6 +160,20 @@ export function resolveAcpCommandConversationId(params: HandleCommandsParams): s
       parseFeishuDirectConversationId(params.ctx.OriginatingTo) ??
       parseFeishuDirectConversationId(params.command.to) ??
       parseFeishuDirectConversationId(params.ctx.To)
+    );
+  }
+  if (channel === "bluebubbles") {
+    return (
+      resolveBlueBubblesConversationIdFromTarget(params.ctx.OriginatingTo ?? "") ??
+      resolveBlueBubblesConversationIdFromTarget(params.command.to ?? "") ??
+      resolveBlueBubblesConversationIdFromTarget(params.ctx.To ?? "")
+    );
+  }
+  if (channel === "imessage") {
+    return (
+      resolveIMessageConversationIdFromTarget(params.ctx.OriginatingTo ?? "") ??
+      resolveIMessageConversationIdFromTarget(params.command.to ?? "") ??
+      resolveIMessageConversationIdFromTarget(params.ctx.To ?? "")
     );
   }
   return resolveConversationIdFromTargets({

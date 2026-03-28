@@ -2,7 +2,9 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
+import { resolveGoogleGenerativeAiTransport } from "../../plugin-sdk/google.js";
 import {
+  buildProviderUnknownModelHintWithPlugin,
   clearProviderRuntimeHookCache,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
@@ -34,6 +36,9 @@ type InlineProviderConfig = {
 };
 
 type ProviderRuntimeHooks = {
+  buildProviderUnknownModelHintWithPlugin: (
+    params: Parameters<typeof buildProviderUnknownModelHintWithPlugin>[0],
+  ) => string | undefined;
   prepareProviderDynamicModel: (
     params: Parameters<typeof prepareProviderDynamicModel>[0],
   ) => Promise<void>;
@@ -44,6 +49,7 @@ type ProviderRuntimeHooks = {
 };
 
 const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
+  buildProviderUnknownModelHintWithPlugin,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
   normalizeProviderResolvedModelWithPlugin,
@@ -175,10 +181,14 @@ function applyConfiguredProviderOverrides(params: {
       ? resolvedInput.filter((item) => item === "text" || item === "image")
       : (["text"] as Array<"text" | "image">);
 
-  return {
-    ...discoveredModel,
+  const resolvedTransport = resolveGoogleGenerativeAiTransport({
     api: configuredModel?.api ?? providerConfig.api ?? discoveredModel.api,
     baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
+  });
+  return {
+    ...discoveredModel,
+    api: resolvedTransport.api,
+    baseUrl: resolvedTransport.baseUrl ?? discoveredModel.baseUrl,
     reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
     input: normalizedInput,
     cost: configuredModel?.cost ?? discoveredModel.cost,
@@ -207,24 +217,30 @@ export function buildInlineProviderModels(
     const providerHeaders = sanitizeModelHeaders(entry?.headers, {
       stripSecretRefMarkers: true,
     });
-    return (entry?.models ?? []).map((model) => ({
-      ...model,
-      provider: trimmed,
-      baseUrl: entry?.baseUrl,
-      api: model.api ?? entry?.api,
-      headers: (() => {
-        const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
-          stripSecretRefMarkers: true,
-        });
-        if (!providerHeaders && !modelHeaders) {
-          return undefined;
-        }
-        return {
-          ...providerHeaders,
-          ...modelHeaders,
-        };
-      })(),
-    }));
+    return (entry?.models ?? []).map((model) => {
+      const transport = resolveGoogleGenerativeAiTransport({
+        api: model.api ?? entry?.api,
+        baseUrl: entry?.baseUrl,
+      });
+      return {
+        ...model,
+        provider: trimmed,
+        baseUrl: transport.baseUrl,
+        api: transport.api,
+        headers: (() => {
+          const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
+            stripSecretRefMarkers: true,
+          });
+          if (!providerHeaders && !modelHeaders) {
+            return undefined;
+          }
+          return {
+            ...providerHeaders,
+            ...modelHeaders,
+          };
+        })(),
+      };
+    });
   });
 }
 
@@ -358,6 +374,10 @@ function resolveConfiguredFallbackModel(params: {
   if (!providerConfig && !modelId.startsWith("mock-")) {
     return undefined;
   }
+  const fallbackTransport = resolveGoogleGenerativeAiTransport({
+    api: providerConfig?.api ?? "openai-responses",
+    baseUrl: providerConfig?.baseUrl,
+  });
   return normalizeResolvedModel({
     provider,
     cfg,
@@ -365,9 +385,9 @@ function resolveConfiguredFallbackModel(params: {
     model: {
       id: modelId,
       name: modelId,
-      api: providerConfig?.api ?? "openai-responses",
+      api: fallbackTransport.api,
       provider,
-      baseUrl: providerConfig?.baseUrl,
+      baseUrl: fallbackTransport.baseUrl,
       reasoning: configuredModel?.reasoning ?? false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -442,7 +462,13 @@ export function resolveModel(
   }
 
   return {
-    error: buildUnknownModelError(provider, modelId),
+    error: buildUnknownModelError({
+      provider,
+      modelId,
+      cfg,
+      agentDir: resolvedAgentDir,
+      runtimeHooks: options?.runtimeHooks,
+    }),
     authStorage,
     modelRegistry,
   };
@@ -478,7 +504,13 @@ export async function resolveModelAsync(
   });
   if (explicitModel?.kind === "suppressed") {
     return {
-      error: buildUnknownModelError(provider, modelId),
+      error: buildUnknownModelError({
+        provider,
+        modelId,
+        cfg,
+        agentDir: resolvedAgentDir,
+        runtimeHooks: options?.runtimeHooks,
+      }),
       authStorage,
       modelRegistry,
     };
@@ -523,7 +555,13 @@ export async function resolveModelAsync(
   }
 
   return {
-    error: buildUnknownModelError(provider, modelId),
+    error: buildUnknownModelError({
+      provider,
+      modelId,
+      cfg,
+      agentDir: resolvedAgentDir,
+      runtimeHooks: options?.runtimeHooks,
+    }),
     authStorage,
     modelRegistry,
   };
@@ -532,31 +570,40 @@ export async function resolveModelAsync(
 /**
  * Build a more helpful error when the model is not found.
  *
- * Local providers (ollama, vllm) need a dummy API key to be registered.
- * Users often configure `agents.defaults.model.primary: "ollama/…"` but
- * forget to set `OLLAMA_API_KEY`, resulting in a confusing "Unknown model"
- * error.  This detects known providers that require opt-in auth and adds
- * a hint.
+ * Some provider plugins only become available after setup/auth has registered
+ * them. When users point `agents.defaults.model.primary` at one of those
+ * providers before setup, the raw `Unknown model` error is too vague. Provider
+ * plugins can append a targeted recovery hint here.
  *
  * See: https://github.com/openclaw/openclaw/issues/17328
  */
-const LOCAL_PROVIDER_HINTS: Record<string, string> = {
-  ollama:
-    "Ollama requires authentication to be registered as a provider. " +
-    'Set OLLAMA_API_KEY="ollama-local" (any value works) or run "openclaw configure". ' +
-    "See: https://docs.openclaw.ai/providers/ollama",
-  vllm:
-    "vLLM requires authentication to be registered as a provider. " +
-    'Set VLLM_API_KEY (any value works) or run "openclaw configure". ' +
-    "See: https://docs.openclaw.ai/providers/vllm",
-};
-
-function buildUnknownModelError(provider: string, modelId: string): string {
-  const suppressed = buildSuppressedBuiltInModelError({ provider, id: modelId });
+function buildUnknownModelError(params: {
+  provider: string;
+  modelId: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  runtimeHooks?: ProviderRuntimeHooks;
+}): string {
+  const suppressed = buildSuppressedBuiltInModelError({
+    provider: params.provider,
+    id: params.modelId,
+  });
   if (suppressed) {
     return suppressed;
   }
-  const base = `Unknown model: ${provider}/${modelId}`;
-  const hint = LOCAL_PROVIDER_HINTS[provider.toLowerCase()];
+  const base = `Unknown model: ${params.provider}/${params.modelId}`;
+  const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
+  const hint = runtimeHooks.buildProviderUnknownModelHintWithPlugin({
+    provider: params.provider,
+    config: params.cfg,
+    env: process.env,
+    context: {
+      config: params.cfg,
+      agentDir: params.agentDir,
+      env: process.env,
+      provider: params.provider,
+      modelId: params.modelId,
+    },
+  });
   return hint ? `${base}. ${hint}` : base;
 }

@@ -106,11 +106,6 @@ vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal
   return patched;
 });
 
-// Prevent transitive import chain from reaching discord/monitor which needs https-proxy-agent.
-vi.mock("../../../extensions/discord/src/monitor/gateway-plugin.js", () => ({
-  createDiscordGatewayPlugin: () => ({}),
-}));
-
 const { handleAcpCommand } = await import("./commands-acp.js");
 const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
 const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
@@ -121,7 +116,7 @@ type FakeBinding = {
   targetSessionKey: string;
   targetKind: "subagent" | "session";
   conversation: {
-    channel: "discord" | "matrix" | "telegram" | "feishu";
+    channel: "discord" | "matrix" | "telegram" | "feishu" | "bluebubbles" | "imessage";
     accountId: string;
     conversationId: string;
     parentConversationId?: string;
@@ -246,7 +241,7 @@ function createSessionBindingCapabilities() {
 type AcpBindInput = {
   targetSessionKey: string;
   conversation: {
-    channel?: "discord" | "matrix" | "telegram" | "feishu";
+    channel?: "discord" | "matrix" | "telegram" | "feishu" | "bluebubbles" | "imessage";
     accountId: string;
     conversationId: string;
     parentConversationId?: string;
@@ -284,11 +279,23 @@ function createAcpThreadBinding(input: AcpBindInput): FakeBinding {
               accountId: input.conversation.accountId,
               conversationId: nextConversationId,
             }
-          : {
-              channel: "telegram" as const,
-              accountId: input.conversation.accountId,
-              conversationId: nextConversationId,
-            };
+          : channel === "bluebubbles"
+            ? {
+                channel: "bluebubbles" as const,
+                accountId: input.conversation.accountId,
+                conversationId: nextConversationId,
+              }
+            : channel === "imessage"
+              ? {
+                  channel: "imessage" as const,
+                  accountId: input.conversation.accountId,
+                  conversationId: nextConversationId,
+                }
+              : {
+                  channel: "telegram" as const,
+                  accountId: input.conversation.accountId,
+                  conversationId: nextConversationId,
+                };
   return createSessionBinding({
     targetSessionKey: input.targetSessionKey,
     conversation,
@@ -412,6 +419,38 @@ function createFeishuDmParams(commandBody: string, cfg: OpenClawConfig = baseCfg
 
 async function runFeishuDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
   return handleAcpCommand(createFeishuDmParams(commandBody, cfg), true);
+}
+
+function createBlueBubblesDmParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  const params = buildCommandTestParams(commandBody, cfg, {
+    Provider: "bluebubbles",
+    Surface: "bluebubbles",
+    OriginatingChannel: "bluebubbles",
+    OriginatingTo: "bluebubbles:+15555550123",
+    AccountId: "default",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
+async function runBlueBubblesDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(createBlueBubblesDmParams(commandBody, cfg), true);
+}
+
+function createIMessageDmParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  const params = buildCommandTestParams(commandBody, cfg, {
+    Provider: "imessage",
+    Surface: "imessage",
+    OriginatingChannel: "imessage",
+    OriginatingTo: "imessage:+15555550123",
+    AccountId: "default",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
+async function runIMessageDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(createIMessageDmParams(commandBody, cfg), true);
 }
 
 async function runInternalAcpCommand(params: {
@@ -747,6 +786,66 @@ describe("/acp command", () => {
     );
   });
 
+  it("binds the current Discord channel with --bind here without creating a child thread", async () => {
+    const cfg = {
+      ...baseCfg,
+      channels: {
+        discord: {
+          threadBindings: {
+            enabled: true,
+            spawnAcpSessions: false,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await runDiscordAcpCommand("/acp spawn codex --bind here", cfg);
+
+    expect(result?.reply?.text).toContain("Bound this channel to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "discord",
+          accountId: "default",
+          conversationId: "parent-1",
+        }),
+      }),
+    );
+  });
+
+  it("binds BlueBubbles DMs with --bind here", async () => {
+    const result = await runBlueBubblesDmAcpCommand("/acp spawn codex --bind here");
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "bluebubbles",
+          accountId: "default",
+          conversationId: "+15555550123",
+        }),
+      }),
+    );
+  });
+
+  it("binds iMessage DMs with --bind here", async () => {
+    const result = await runIMessageDmAcpCommand("/acp spawn codex --bind here");
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "imessage",
+          accountId: "default",
+          conversationId: "+15555550123",
+        }),
+      }),
+    );
+  });
+
   it("binds Telegram topic ACP spawns to full conversation ids", async () => {
     const result = await runTelegramAcpCommand("/acp spawn codex --thread here");
 
@@ -862,6 +961,14 @@ describe("/acp command", () => {
 
     expect(result?.reply?.text).toContain("ACP target harness id is required");
     expect(hoisted.ensureSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects mixing --thread and --bind on the same /acp spawn", async () => {
+    const result = await runDiscordAcpCommand("/acp spawn codex --thread here --bind here");
+
+    expect(result?.reply?.text).toContain("Use either --thread or --bind");
+    expect(hoisted.ensureSessionMock).not.toHaveBeenCalled();
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
 
   it("rejects thread-bound ACP spawn when spawnAcpSessions is disabled", async () => {

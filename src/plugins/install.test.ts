@@ -27,6 +27,24 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
+const resolveCompatibilityHostVersionMock = vi.fn();
+
+vi.mock("./install.runtime.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./install.runtime.js")>("./install.runtime.js");
+  return {
+    ...actual,
+    resolveCompatibilityHostVersion: (...args: unknown[]) =>
+      resolveCompatibilityHostVersionMock(...args),
+    scanBundleInstallSource: (
+      ...args: Parameters<typeof installSecurityScan.scanBundleInstallSource>
+    ) => installSecurityScan.scanBundleInstallSource(...args),
+    scanPackageInstallSource: (
+      ...args: Parameters<typeof installSecurityScan.scanPackageInstallSource>
+    ) => installSecurityScan.scanPackageInstallSource(...args),
+  };
+});
+
 let suiteTempRoot = "";
 let suiteFixtureRoot = "";
 let tempDirCounter = 0;
@@ -505,6 +523,7 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.unstubAllEnvs();
+  resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.27");
 });
 
 describe("installPluginFromArchive", () => {
@@ -721,13 +740,14 @@ describe("installPluginFromDir", () => {
     result: Awaited<ReturnType<typeof installPluginFromDir>>,
     extensionsDir: string,
     pluginId: string,
+    name?: string,
   ) {
-    expect(result.ok).toBe(true);
+    expect(result.ok, name).toBe(true);
     if (!result.ok) {
       return;
     }
-    expect(result.pluginId).toBe(pluginId);
-    expect(result.targetDir).toBe(resolvePluginInstallDir(pluginId, extensionsDir));
+    expect(result.pluginId, name).toBe(pluginId);
+    expect(result.targetDir, name).toBe(resolvePluginInstallDir(pluginId, extensionsDir));
   }
 
   it("uses --ignore-scripts for dependency install", async () => {
@@ -781,7 +801,7 @@ describe("installPluginFromDir", () => {
   });
 
   it("rejects plugins whose minHostVersion is newer than the current host", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.3.21");
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.3.21");
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
     const packageJsonPath = path.join(pluginDir, "package.json");
     const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
@@ -840,7 +860,7 @@ describe("installPluginFromDir", () => {
   });
 
   it("reports unknown host versions distinctly for minHostVersion-gated plugins", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "unknown");
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("unknown");
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
     const packageJsonPath = path.join(pluginDir, "package.json");
     const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
@@ -891,54 +911,59 @@ describe("installPluginFromDir", () => {
     ).toBe(true);
   });
 
-  it("keeps scoped install ids aligned across manifest and package-name cases", async () => {
-    const scenarios = [
-      {
-        setup: () => setupManifestInstallFixture({ manifestId: "@team/memory-cognee" }),
-        expectedPluginId: "@team/memory-cognee",
-        install: (pluginDir: string, extensionsDir: string) =>
-          installPluginFromDir({
-            dirPath: pluginDir,
-            extensionsDir,
-            expectedPluginId: "@team/memory-cognee",
-            logger: { info: () => {}, warn: () => {} },
-          }),
-      },
-      {
-        setup: () => setupInstallPluginFromDirFixture(),
-        expectedPluginId: "@openclaw/test-plugin",
-        install: (pluginDir: string, extensionsDir: string) =>
-          installPluginFromDir({
-            dirPath: pluginDir,
-            extensionsDir,
-          }),
-      },
-      {
-        setup: () => setupInstallPluginFromDirFixture(),
-        expectedPluginId: "@openclaw/test-plugin",
-        install: (pluginDir: string, extensionsDir: string) =>
-          installPluginFromDir({
-            dirPath: pluginDir,
-            extensionsDir,
-            expectedPluginId: "test-plugin",
-          }),
-      },
-    ] as const;
-
-    for (const scenario of scenarios) {
+  it.each([
+    {
+      name: "manifest id wins for scoped plugin ids",
+      setup: () => setupManifestInstallFixture({ manifestId: "@team/memory-cognee" }),
+      expectedPluginId: "@team/memory-cognee",
+      install: (pluginDir: string, extensionsDir: string) =>
+        installPluginFromDir({
+          dirPath: pluginDir,
+          extensionsDir,
+          expectedPluginId: "@team/memory-cognee",
+          logger: { info: () => {}, warn: () => {} },
+        }),
+    },
+    {
+      name: "package name keeps scoped plugin id by default",
+      setup: () => setupInstallPluginFromDirFixture(),
+      expectedPluginId: "@openclaw/test-plugin",
+      install: (pluginDir: string, extensionsDir: string) =>
+        installPluginFromDir({
+          dirPath: pluginDir,
+          extensionsDir,
+        }),
+    },
+    {
+      name: "unscoped expectedPluginId resolves to scoped install id",
+      setup: () => setupInstallPluginFromDirFixture(),
+      expectedPluginId: "@openclaw/test-plugin",
+      install: (pluginDir: string, extensionsDir: string) =>
+        installPluginFromDir({
+          dirPath: pluginDir,
+          extensionsDir,
+          expectedPluginId: "test-plugin",
+        }),
+    },
+  ] as const)(
+    "keeps scoped install ids aligned across manifest and package-name cases: $name",
+    async (scenario) => {
       const { pluginDir, extensionsDir } = scenario.setup();
       const res = await scenario.install(pluginDir, extensionsDir);
-      expectInstalledWithPluginId(res, extensionsDir, scenario.expectedPluginId);
-    }
-  });
+      expectInstalledWithPluginId(res, extensionsDir, scenario.expectedPluginId, scenario.name);
+    },
+  );
 
-  it("keeps scoped install-dir validation aligned", () => {
-    for (const invalidId of ["@", "@/name", "team/name"]) {
-      expect(() => resolvePluginInstallDir(invalidId)).toThrow(
+  it.each(["@", "@/name", "team/name"] as const)(
+    "keeps scoped install-dir validation aligned: %s",
+    (invalidId) => {
+      expect(() => resolvePluginInstallDir(invalidId), invalidId).toThrow(
         "invalid plugin name: scoped ids must use @scope/name format",
       );
-    }
+    },
+  );
 
+  it("keeps scoped install-dir validation aligned for real scoped ids", () => {
     const extensionsDir = path.join(makeTempDir(), "extensions");
     const scopedTarget = resolvePluginInstallDir("@scope/name", extensionsDir);
     const hashedFlatId = safePathSegmentHashed("@scope/name");

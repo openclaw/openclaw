@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
-import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
-import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "../../browser/control-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import {
+  DEFAULT_BROWSER_EVALUATE_ENABLED,
+  ensureBrowserControlAuth,
+  resolveBrowserControlAuth,
+} from "../../plugin-sdk/browser-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { syncSkillsToWorkspace } from "../skills.js";

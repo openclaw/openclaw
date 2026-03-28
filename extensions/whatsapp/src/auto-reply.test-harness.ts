@@ -227,6 +227,45 @@ export function createWebInboundDeliverySpies(): AnyExport {
   };
 }
 
+export function createWebAutoReplyRuntime() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  };
+}
+
+export function startWebAutoReplyMonitor(params: {
+  monitorWebChannelFn: (...args: unknown[]) => Promise<unknown>;
+  listenerFactory: unknown;
+  sleep: ReturnType<typeof vi.fn>;
+  signal?: AbortSignal;
+  heartbeatSeconds?: number;
+  messageTimeoutMs?: number;
+  watchdogCheckMs?: number;
+  reconnect?: { initialMs: number; maxMs: number; maxAttempts: number; factor: number };
+}) {
+  const runtime = createWebAutoReplyRuntime();
+  const controller = new AbortController();
+  const run = params.monitorWebChannelFn(
+    false,
+    params.listenerFactory as never,
+    true,
+    async () => ({ text: "ok" }),
+    runtime as never,
+    params.signal ?? controller.signal,
+    {
+      heartbeatSeconds: params.heartbeatSeconds ?? 1,
+      messageTimeoutMs: params.messageTimeoutMs,
+      watchdogCheckMs: params.watchdogCheckMs,
+      reconnect: params.reconnect ?? { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+      sleep: params.sleep,
+    },
+  );
+
+  return { runtime, controller, run };
+}
+
 export async function sendWebGroupInboundMessage(params: {
   onMessage: (msg: WebInboundMessage) => Promise<void>;
   body: string;
@@ -270,6 +309,7 @@ export async function sendWebDirectInboundMessage(params: {
   to: string;
   spies: ReturnType<typeof createWebInboundDeliverySpies>;
   accountId?: string;
+  timestamp?: number;
 }) {
   const accountId = params.accountId ?? "default";
   await params.onMessage({
@@ -279,7 +319,7 @@ export async function sendWebDirectInboundMessage(params: {
     conversationId: params.from,
     to: params.to,
     body: params.body,
-    timestamp: Date.now(),
+    timestamp: params.timestamp ?? Date.now(),
     chatType: "direct",
     chatId: `direct:${params.from}`,
     sendComposing: params.spies.sendComposing,

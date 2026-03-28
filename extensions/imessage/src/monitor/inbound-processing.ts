@@ -27,6 +27,7 @@ import {
 } from "openclaw/plugin-sdk/security-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
+import { resolveIMessageConversationRoute } from "../conversation-route.js";
 import {
   formatIMessageChatTarget,
   isAllowedIMessageSender,
@@ -212,14 +213,13 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "group id not in allowlist" };
   }
 
-  const route = resolveAgentRoute({
+  const route = resolveIMessageConversationRoute({
     cfg: params.cfg,
-    channel: "imessage",
     accountId: params.accountId,
-    peer: {
-      kind: isGroup ? "group" : "direct",
-      id: isGroup ? String(chatId ?? "unknown") : senderNormalized,
-    },
+    isGroup,
+    peerId: isGroup ? String(chatId ?? "unknown") : senderNormalized,
+    sender,
+    chatId,
   });
   const mentionRegexes = buildMentionRegexes(params.cfg, route.agentId);
   const messageText = params.messageText.trim();

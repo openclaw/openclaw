@@ -39,6 +39,7 @@ import {
   resolveAcpCommandAccountId,
   resolveAcpCommandBindingContext,
   resolveAcpCommandConversationId,
+  resolveAcpCommandThreadId,
 } from "./context.js";
 import {
   ACP_STEER_OUTPUT_LIMIT,
@@ -47,10 +48,171 @@ import {
   parseSteerInput,
   resolveCommandRequestId,
   stopWithText,
+  type AcpSpawnBindMode,
   type AcpSpawnThreadMode,
   withAcpCommandErrorBoundary,
 } from "./shared.js";
 import { resolveAcpTargetSessionKey } from "./targets.js";
+
+function resolveAcpBindingLabelNoun(params: {
+  channel: string;
+  threadId?: string;
+  bindMode: "thread" | "current";
+}): string {
+  if (params.bindMode === "current") {
+    if (params.channel === "discord" && !params.threadId) {
+      return "channel";
+    }
+    if (
+      params.channel === "telegram" ||
+      params.channel === "bluebubbles" ||
+      params.channel === "imessage"
+    ) {
+      return "conversation";
+    }
+  }
+  return params.channel === "telegram" ? "conversation" : "thread";
+}
+
+async function bindSpawnedAcpSessionToCurrentConversation(params: {
+  commandParams: HandleCommandsParams;
+  sessionKey: string;
+  agentId: string;
+  label?: string;
+  bindMode: AcpSpawnBindMode;
+  sessionMeta?: SessionAcpMeta;
+}): Promise<{ ok: true; binding: SessionBindingRecord } | { ok: false; error: string }> {
+  if (params.bindMode === "off") {
+    return {
+      ok: false,
+      error: "internal: conversation binding is disabled for this spawn",
+    };
+  }
+
+  const bindingContext = resolveAcpCommandBindingContext(params.commandParams);
+  const channel = bindingContext.channel;
+  if (!channel) {
+    return {
+      ok: false,
+      error: "ACP current-conversation binding requires a channel context.",
+    };
+  }
+
+  const accountId = resolveAcpCommandAccountId(params.commandParams);
+  const bindingPolicy = resolveThreadBindingSpawnPolicy({
+    cfg: params.commandParams.cfg,
+    channel,
+    accountId,
+    kind: "acp",
+  });
+  if (!bindingPolicy.enabled) {
+    return {
+      ok: false,
+      error: formatThreadBindingDisabledError({
+        channel: bindingPolicy.channel,
+        accountId: bindingPolicy.accountId,
+        kind: "acp",
+      }),
+    };
+  }
+
+  const bindingService = getSessionBindingService();
+  const capabilities = bindingService.getCapabilities({
+    channel: bindingPolicy.channel,
+    accountId: bindingPolicy.accountId,
+  });
+  if (!capabilities.adapterAvailable || !capabilities.bindSupported) {
+    return {
+      ok: false,
+      error: `Conversation bindings are unavailable for ${channel}.`,
+    };
+  }
+  if (!capabilities.placements.includes("current")) {
+    return {
+      ok: false,
+      error: `Conversation bindings do not support current placement for ${channel}.`,
+    };
+  }
+
+  const currentConversationId = bindingContext.conversationId?.trim() || "";
+  if (!currentConversationId) {
+    return {
+      ok: false,
+      error: `--bind here requires running /acp spawn inside an active ${channel} conversation.`,
+    };
+  }
+
+  const senderId = params.commandParams.command.senderId?.trim() || "";
+  const parentConversationId = bindingContext.parentConversationId?.trim() || undefined;
+  const conversationRef = {
+    channel: bindingPolicy.channel,
+    accountId: bindingPolicy.accountId,
+    conversationId: currentConversationId,
+    ...(parentConversationId && parentConversationId !== currentConversationId
+      ? { parentConversationId }
+      : {}),
+  };
+  const existingBinding = bindingService.resolveByConversation(conversationRef);
+  const boundBy =
+    typeof existingBinding?.metadata?.boundBy === "string"
+      ? existingBinding.metadata.boundBy.trim()
+      : "";
+  if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
+    return {
+      ok: false,
+      error: `Only ${boundBy} can rebind this ${channel === "discord" && !bindingContext.threadId ? "channel" : "conversation"}.`,
+    };
+  }
+
+  const label = params.label || params.agentId;
+  try {
+    const binding = await bindingService.bind({
+      targetSessionKey: params.sessionKey,
+      targetKind: "session",
+      conversation: conversationRef,
+      placement: "current",
+      metadata: {
+        threadName: resolveThreadBindingThreadName({
+          agentId: params.agentId,
+          label,
+        }),
+        agentId: params.agentId,
+        label,
+        boundBy: senderId || "unknown",
+        introText: resolveThreadBindingIntroText({
+          agentId: params.agentId,
+          label,
+          idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
+            cfg: params.commandParams.cfg,
+            channel: bindingPolicy.channel,
+            accountId: bindingPolicy.accountId,
+          }),
+          maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
+            cfg: params.commandParams.cfg,
+            channel: bindingPolicy.channel,
+            accountId: bindingPolicy.accountId,
+          }),
+          sessionCwd: resolveAcpSessionCwd(params.sessionMeta),
+          sessionDetails: resolveAcpThreadSessionDetailLines({
+            sessionKey: params.sessionKey,
+            meta: params.sessionMeta,
+          }),
+        }),
+      },
+    });
+    return {
+      ok: true,
+      binding,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      error:
+        message || `Failed to bind the current ${channel} conversation to the new ACP session.`,
+    };
+  }
+}
 
 async function bindSpawnedAcpSessionToThread(params: {
   commandParams: HandleCommandsParams;
@@ -308,7 +470,26 @@ export async function handleAcpSpawnAction(
   }
 
   let binding: SessionBindingRecord | null = null;
-  if (spawn.thread !== "off") {
+  if (spawn.bind !== "off") {
+    const bound = await bindSpawnedAcpSessionToCurrentConversation({
+      commandParams: params,
+      sessionKey,
+      agentId: spawn.agentId,
+      label: spawn.label,
+      bindMode: spawn.bind,
+      sessionMeta: initializedMeta,
+    });
+    if (!bound.ok) {
+      await cleanupFailedSpawn({
+        cfg: params.cfg,
+        sessionKey,
+        shouldDeleteSession: true,
+        initializedRuntime,
+      });
+      return stopWithText(`⚠️ ${bound.error}`);
+    }
+    binding = bound.binding;
+  } else if (spawn.thread !== "off") {
     const bound = await bindSpawnedAcpSessionToThread({
       commandParams: params,
       sessionKey,
@@ -355,14 +536,20 @@ export async function handleAcpSpawnAction(
   if (binding) {
     const currentConversationId = resolveAcpCommandConversationId(params)?.trim() || "";
     const boundConversationId = binding.conversation.conversationId.trim();
-    const placementLabel = binding.conversation.channel === "telegram" ? "conversation" : "thread";
+    const placementLabel = resolveAcpBindingLabelNoun({
+      channel: binding.conversation.channel,
+      threadId: resolveAcpCommandThreadId(params),
+      bindMode: spawn.bind !== "off" ? "current" : "thread",
+    });
     if (currentConversationId && boundConversationId === currentConversationId) {
       parts.push(`Bound this ${placementLabel} to ${sessionKey}.`);
     } else {
       parts.push(`Created ${placementLabel} ${boundConversationId} and bound it to ${sessionKey}.`);
     }
   } else {
-    parts.push("Session is unbound (use /focus <session-key> to bind this thread/conversation).");
+    parts.push(
+      "Session is unbound (use /acp spawn ... --bind here to bind this conversation, or /focus <session-key> where supported).",
+    );
   }
 
   const dispatchNote = resolveAcpDispatchPolicyMessage(params.cfg);

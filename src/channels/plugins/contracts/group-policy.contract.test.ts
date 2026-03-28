@@ -1,16 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { __testing as discordTesting } from "../../../../extensions/discord/src/monitor/provider.js";
-import { __testing as imessageTesting } from "../../../../extensions/imessage/src/monitor/monitor-provider.js";
-import { __testing as slackTesting } from "../../../../extensions/slack/src/monitor/provider.js";
-import { resolveTelegramRuntimeGroupPolicy } from "../../../../extensions/telegram/src/group-access.js";
-import { __testing as whatsappTesting } from "../../../../extensions/whatsapp/src/inbound/access-control.js";
-import { __testing as zaloTesting } from "../../../../extensions/zalo/src/monitor.js";
+import { resolveDiscordRuntimeGroupPolicy } from "../../../plugin-sdk/discord-surface.js";
+import { resolveIMessageRuntimeGroupPolicy } from "../../../plugin-sdk/imessage-policy.js";
+import { resolveSlackRuntimeGroupPolicy } from "../../../plugin-sdk/slack-surface.js";
+import { resolveTelegramRuntimeGroupPolicy } from "../../../plugin-sdk/telegram-runtime-surface.js";
+import { whatsappAccessControlTesting } from "../../../plugin-sdk/whatsapp-surface.js";
+import {
+  evaluateZaloGroupAccess,
+  resolveZaloRuntimeGroupPolicy,
+} from "../../../plugin-sdk/zalo.js";
 import { installChannelRuntimeGroupPolicyFallbackSuite } from "./suites.js";
 
 describe("channel runtime group policy contract", () => {
   describe("slack", () => {
     installChannelRuntimeGroupPolicyFallbackSuite({
-      resolve: slackTesting.resolveSlackRuntimeGroupPolicy,
+      resolve: resolveSlackRuntimeGroupPolicy,
       configuredLabel: "keeps open default when channels.slack is configured",
       defaultGroupPolicyUnderTest: "open",
       missingConfigLabel: "fails closed when channels.slack is missing and no defaults are set",
@@ -30,7 +33,7 @@ describe("channel runtime group policy contract", () => {
 
   describe("whatsapp", () => {
     installChannelRuntimeGroupPolicyFallbackSuite({
-      resolve: whatsappTesting.resolveWhatsAppRuntimeGroupPolicy,
+      resolve: whatsappAccessControlTesting.resolveWhatsAppRuntimeGroupPolicy,
       configuredLabel: "keeps open fallback when channels.whatsapp is configured",
       defaultGroupPolicyUnderTest: "disabled",
       missingConfigLabel: "fails closed when channels.whatsapp is missing and no defaults are set",
@@ -40,7 +43,7 @@ describe("channel runtime group policy contract", () => {
 
   describe("imessage", () => {
     installChannelRuntimeGroupPolicyFallbackSuite({
-      resolve: imessageTesting.resolveIMessageRuntimeGroupPolicy,
+      resolve: resolveIMessageRuntimeGroupPolicy,
       configuredLabel: "keeps open fallback when channels.imessage is configured",
       defaultGroupPolicyUnderTest: "disabled",
       missingConfigLabel: "fails closed when channels.imessage is missing and no defaults are set",
@@ -50,7 +53,7 @@ describe("channel runtime group policy contract", () => {
 
   describe("discord", () => {
     installChannelRuntimeGroupPolicyFallbackSuite({
-      resolve: discordTesting.resolveDiscordRuntimeGroupPolicy,
+      resolve: resolveDiscordRuntimeGroupPolicy,
       configuredLabel: "keeps open default when channels.discord is configured",
       defaultGroupPolicyUnderTest: "open",
       missingConfigLabel: "fails closed when channels.discord is missing and no defaults are set",
@@ -58,7 +61,7 @@ describe("channel runtime group policy contract", () => {
     });
 
     it("respects explicit provider policy", () => {
-      const resolved = discordTesting.resolveDiscordRuntimeGroupPolicy({
+      const resolved = resolveDiscordRuntimeGroupPolicy({
         providerConfigPresent: false,
         groupPolicy: "disabled",
       });
@@ -69,7 +72,7 @@ describe("channel runtime group policy contract", () => {
 
   describe("zalo", () => {
     installChannelRuntimeGroupPolicyFallbackSuite({
-      resolve: zaloTesting.resolveZaloRuntimeGroupPolicy,
+      resolve: resolveZaloRuntimeGroupPolicy,
       configuredLabel: "keeps open fallback when channels.zalo is configured",
       defaultGroupPolicyUnderTest: "open",
       missingConfigLabel: "fails closed when channels.zalo is missing and no defaults are set",
@@ -77,7 +80,7 @@ describe("channel runtime group policy contract", () => {
     });
 
     it("keeps provider-owned group access evaluation", () => {
-      const decision = zaloTesting.evaluateZaloGroupAccess({
+      const decision = evaluateZaloGroupAccess({
         providerConfigPresent: true,
         configuredGroupPolicy: "allowlist",
         defaultGroupPolicy: "open",

@@ -243,12 +243,63 @@ describe("registerPluginCommand", () => {
     });
   });
 
+  it("resolves Discord thread command bindings with parent channel context intact", () => {
+    expect(
+      __testing.resolveBindingConversationFromCommand({
+        channel: "discord",
+        from: "discord:channel:1480554272859881494",
+        accountId: "default",
+        messageThreadId: "thread-42",
+        threadParentId: "channel-parent-7",
+      }),
+    ).toEqual({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "channel:1480554272859881494",
+      parentConversationId: "channel-parent-7",
+      threadId: "thread-42",
+    });
+  });
+
   it("resolves Telegram topic command bindings without a Telegram registry entry", () => {
     expect(
       __testing.resolveBindingConversationFromCommand({
         channel: "telegram",
         from: "telegram:group:-100123",
         to: "telegram:group:-100123:topic:77",
+        accountId: "default",
+      }),
+    ).toEqual({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-100123",
+      threadId: 77,
+    });
+  });
+
+  it("resolves Telegram native slash command bindings using the From peer", () => {
+    expect(
+      __testing.resolveBindingConversationFromCommand({
+        channel: "telegram",
+        from: "telegram:group:-100123:topic:77",
+        to: "slash:12345",
+        accountId: "default",
+        messageThreadId: 77,
+      }),
+    ).toEqual({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-100123",
+      threadId: 77,
+    });
+  });
+
+  it("falls back to the parsed From threadId for Telegram slash commands when messageThreadId is missing", () => {
+    expect(
+      __testing.resolveBindingConversationFromCommand({
+        channel: "telegram",
+        from: "telegram:group:-100123:topic:77",
+        to: "slash:12345",
         accountId: "default",
       }),
     ).toEqual({

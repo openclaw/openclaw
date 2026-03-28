@@ -1,39 +1,15 @@
 import fs from "node:fs/promises";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import anthropicPlugin from "../../extensions/anthropic/index.js";
-import chutesPlugin from "../../extensions/chutes/index.js";
-import cloudflareAiGatewayPlugin from "../../extensions/cloudflare-ai-gateway/index.js";
-import googlePlugin from "../../extensions/google/index.js";
-import huggingfacePlugin from "../../extensions/huggingface/index.js";
-import kimiCodingPlugin from "../../extensions/kimi-coding/index.js";
-import minimaxPlugin from "../../extensions/minimax/index.js";
-import mistralPlugin from "../../extensions/mistral/index.js";
-import moonshotPlugin from "../../extensions/moonshot/index.js";
-import ollamaPlugin from "../../extensions/ollama/index.js";
-import openAIPlugin from "../../extensions/openai/index.js";
-import opencodeGoPlugin from "../../extensions/opencode-go/index.js";
-import opencodePlugin from "../../extensions/opencode/index.js";
-import openrouterPlugin from "../../extensions/openrouter/index.js";
-import qianfanPlugin from "../../extensions/qianfan/index.js";
-import qwenPortalAuthPlugin from "../../extensions/qwen-portal-auth/index.js";
-import syntheticPlugin from "../../extensions/synthetic/index.js";
-import togetherPlugin from "../../extensions/together/index.js";
-import venicePlugin from "../../extensions/venice/index.js";
-import vercelAiGatewayPlugin from "../../extensions/vercel-ai-gateway/index.js";
-import xaiPlugin from "../../extensions/xai/index.js";
-import xiaomiPlugin from "../../extensions/xiaomi/index.js";
-import { setDetectZaiEndpointForTesting } from "../../extensions/zai/detect.js";
-import zaiPlugin from "../../extensions/zai/index.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import {
-  MINIMAX_CN_API_BASE_URL,
-  ZAI_CODING_CN_BASE_URL,
-  ZAI_CODING_GLOBAL_BASE_URL,
-} from "../plugins/provider-model-definitions.js";
-import type { ProviderPlugin } from "../plugins/types.js";
-import { registerProviderPlugins } from "../test-utils/plugin-registration.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
+import { MINIMAX_CN_API_BASE_URL } from "../plugin-sdk/minimax.js";
+import { ZAI_CODING_CN_BASE_URL, ZAI_CODING_GLOBAL_BASE_URL } from "../plugin-sdk/zai.js";
+import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
+import { providerApiKeyAuthRuntime } from "../plugins/provider-api-key-auth.runtime.js";
+import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
@@ -49,10 +25,6 @@ import {
 } from "./test-wizard-helpers.js";
 
 type DetectZaiEndpoint = typeof import("./zai-endpoint-detect.js").detectZaiEndpoint;
-
-vi.mock("../../extensions/github-copilot/login.js", () => ({
-  githubCopilotLoginCommand: vi.fn(async () => {}),
-}));
 
 const loginOpenAICodexOAuth = vi.hoisted(() =>
   vi.fn<() => Promise<OAuthCredentials | null>>(async () => null),
@@ -87,32 +59,512 @@ type StoredAuthProfile = {
   metadata?: Record<string, string>;
 };
 
+function normalizeText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function providerConfigPatch(
+  providerId: string,
+  patch: Record<string, unknown>,
+): Partial<OpenClawConfig> {
+  const providers: Record<string, ModelProviderConfig> = {
+    [providerId]: patch as ModelProviderConfig,
+  };
+  return {
+    models: {
+      providers,
+    },
+  };
+}
+
+function createApiKeyProvider(params: {
+  providerId: string;
+  label: string;
+  choiceId: string;
+  optionKey: string;
+  flagName: `--${string}`;
+  envVar: string;
+  promptMessage: string;
+  defaultModel?: string;
+  profileId?: string;
+  profileIds?: string[];
+  expectedProviders?: string[];
+  noteMessage?: string;
+  noteTitle?: string;
+  applyConfig?: Partial<OpenClawConfig>;
+}): ProviderPlugin {
+  return {
+    id: params.providerId,
+    label: params.label,
+    auth: [
+      createProviderApiKeyAuthMethod({
+        providerId: params.providerId,
+        methodId: "api-key",
+        label: params.label,
+        optionKey: params.optionKey,
+        flagName: params.flagName,
+        envVar: params.envVar,
+        promptMessage: params.promptMessage,
+        ...(params.profileId ? { profileId: params.profileId } : {}),
+        ...(params.profileIds ? { profileIds: params.profileIds } : {}),
+        ...(params.defaultModel ? { defaultModel: params.defaultModel } : {}),
+        ...(params.expectedProviders ? { expectedProviders: params.expectedProviders } : {}),
+        ...(params.noteMessage ? { noteMessage: params.noteMessage } : {}),
+        ...(params.noteTitle ? { noteTitle: params.noteTitle } : {}),
+        ...(params.applyConfig ? { applyConfig: () => params.applyConfig as OpenClawConfig } : {}),
+        wizard: {
+          choiceId: params.choiceId,
+          choiceLabel: params.label,
+          groupId: params.providerId,
+          groupLabel: params.label,
+        },
+      }),
+    ],
+  };
+}
+
+function createFixedChoiceProvider(params: {
+  providerId: string;
+  label: string;
+  choiceId: string;
+  method: ProviderAuthMethod;
+}): ProviderPlugin {
+  return {
+    id: params.providerId,
+    label: params.label,
+    auth: [
+      {
+        ...params.method,
+        wizard: {
+          choiceId: params.choiceId,
+          choiceLabel: params.label,
+          groupId: params.providerId,
+          groupLabel: params.label,
+        },
+      },
+    ],
+  };
+}
+
 function createDefaultProviderPlugins() {
-  return registerProviderPlugins(
-    anthropicPlugin,
-    chutesPlugin,
-    cloudflareAiGatewayPlugin,
-    googlePlugin,
-    huggingfacePlugin,
-    kimiCodingPlugin,
-    minimaxPlugin,
-    mistralPlugin,
-    moonshotPlugin,
-    ollamaPlugin,
-    openAIPlugin,
-    opencodeGoPlugin,
-    opencodePlugin,
-    openrouterPlugin,
-    qianfanPlugin,
-    qwenPortalAuthPlugin,
-    syntheticPlugin,
-    togetherPlugin,
-    venicePlugin,
-    vercelAiGatewayPlugin,
-    xaiPlugin,
-    xiaomiPlugin,
-    zaiPlugin,
-  );
+  const buildApiKeyCredential = providerApiKeyAuthRuntime.buildApiKeyCredential;
+  const ensureApiKeyFromOptionEnvOrPrompt =
+    providerApiKeyAuthRuntime.ensureApiKeyFromOptionEnvOrPrompt;
+  const normalizeApiKeyInput = providerApiKeyAuthRuntime.normalizeApiKeyInput;
+  const validateApiKeyInput = providerApiKeyAuthRuntime.validateApiKeyInput;
+
+  const createZaiMethod = (choiceId: "zai-api-key" | "zai-coding-global"): ProviderAuthMethod => ({
+    id: choiceId === "zai-api-key" ? "api-key" : "coding-global",
+    label: "Z.AI API key",
+    kind: "api_key",
+    wizard: {
+      choiceId,
+      choiceLabel: "Z.AI API key",
+      groupId: "zai",
+      groupLabel: "Z.AI",
+    },
+    run: async (ctx) => {
+      const token = normalizeText(await ctx.prompter.text({ message: "Enter Z.AI API key" }));
+      const detectResult = await detectZaiEndpoint(
+        choiceId === "zai-coding-global"
+          ? { apiKey: token, endpoint: "coding-global" }
+          : { apiKey: token },
+      );
+      let baseUrl = detectResult?.baseUrl;
+      let modelId = detectResult?.modelId;
+      if (!baseUrl || !modelId) {
+        if (choiceId === "zai-coding-global") {
+          baseUrl = ZAI_CODING_GLOBAL_BASE_URL;
+          modelId = "glm-5";
+        } else {
+          const endpoint = await ctx.prompter.select({
+            message: "Select Z.AI endpoint",
+            initialValue: "global",
+            options: [
+              { label: "Global", value: "global" },
+              { label: "Coding CN", value: "coding-cn" },
+            ],
+          });
+          baseUrl = endpoint === "coding-cn" ? ZAI_CODING_CN_BASE_URL : ZAI_CODING_GLOBAL_BASE_URL;
+          modelId = "glm-5";
+        }
+      }
+      return {
+        profiles: [
+          {
+            profileId: "zai:default",
+            credential: buildApiKeyCredential("zai", token),
+          },
+        ],
+        configPatch: providerConfigPatch("zai", { baseUrl }) as OpenClawConfig,
+        defaultModel: `zai/${modelId}`,
+      };
+    },
+  });
+
+  const cloudflareAiGatewayMethod: ProviderAuthMethod = {
+    id: "api-key",
+    label: "Cloudflare AI Gateway API key",
+    kind: "api_key",
+    wizard: {
+      choiceId: "cloudflare-ai-gateway-api-key",
+      choiceLabel: "Cloudflare AI Gateway API key",
+      groupId: "cloudflare-ai-gateway",
+      groupLabel: "Cloudflare AI Gateway",
+    },
+    run: async (ctx) => {
+      const opts = (ctx.opts ?? {}) as Record<string, unknown>;
+      const accountId =
+        normalizeText(opts.cloudflareAiGatewayAccountId) ||
+        normalizeText(await ctx.prompter.text({ message: "Enter Cloudflare account ID" }));
+      const gatewayId =
+        normalizeText(opts.cloudflareAiGatewayGatewayId) ||
+        normalizeText(await ctx.prompter.text({ message: "Enter Cloudflare gateway ID" }));
+      let capturedSecretInput = "";
+      let capturedMode: "plaintext" | "ref" | undefined;
+      await ensureApiKeyFromOptionEnvOrPrompt({
+        token:
+          normalizeText(opts.cloudflareAiGatewayApiKey) ||
+          normalizeText(ctx.opts?.token) ||
+          undefined,
+        tokenProvider: "cloudflare-ai-gateway",
+        secretInputMode:
+          ctx.allowSecretRefPrompt === false
+            ? (ctx.secretInputMode ?? "plaintext")
+            : ctx.secretInputMode,
+        config: ctx.config,
+        expectedProviders: ["cloudflare-ai-gateway"],
+        provider: "cloudflare-ai-gateway",
+        envLabel: "CLOUDFLARE_AI_GATEWAY_API_KEY",
+        promptMessage: "Enter Cloudflare AI Gateway API key",
+        normalize: normalizeApiKeyInput,
+        validate: validateApiKeyInput,
+        prompter: ctx.prompter,
+        setCredential: async (apiKey, mode) => {
+          capturedSecretInput = typeof apiKey === "string" ? apiKey : "";
+          capturedMode = mode;
+        },
+      });
+      return {
+        profiles: [
+          {
+            profileId: "cloudflare-ai-gateway:default",
+            credential: buildApiKeyCredential(
+              "cloudflare-ai-gateway",
+              capturedSecretInput,
+              { accountId, gatewayId },
+              capturedMode ? { secretInputMode: capturedMode } : undefined,
+            ),
+          },
+        ],
+        defaultModel: "cloudflare-ai-gateway/claude-sonnet-4-5",
+      };
+    },
+  };
+
+  const chutesOAuthMethod: ProviderAuthMethod = {
+    id: "oauth",
+    label: "Chutes OAuth",
+    kind: "device_code",
+    wizard: {
+      choiceId: "chutes",
+      choiceLabel: "Chutes",
+      groupId: "chutes",
+      groupLabel: "Chutes",
+    },
+    run: async (ctx) => {
+      const state = "state-test";
+      ctx.runtime.log(`Open this URL: https://api.chutes.ai/idp/authorize?state=${state}`);
+      const redirect = String(
+        await ctx.prompter.text({ message: "Paste the redirect URL or code" }),
+      );
+      const params = new URLSearchParams(redirect.startsWith("?") ? redirect.slice(1) : redirect);
+      const code = params.get("code") ?? redirect;
+      const tokenResponse = await fetch("https://api.chutes.ai/idp/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, client_id: process.env.CHUTES_CLIENT_ID }),
+      });
+      const tokenJson = (await tokenResponse.json()) as {
+        access_token: string;
+        refresh_token: string;
+        expires_in: number;
+      };
+      const userResponse = await fetch("https://api.chutes.ai/idp/userinfo", {
+        headers: { Authorization: `Bearer ${tokenJson.access_token}` },
+      });
+      const userJson = (await userResponse.json()) as { username: string };
+      return {
+        profiles: [
+          {
+            profileId: `chutes:${userJson.username}`,
+            credential: {
+              type: "oauth",
+              provider: "chutes",
+              access: tokenJson.access_token,
+              refresh: tokenJson.refresh_token,
+              expires: Date.now() + tokenJson.expires_in * 1000,
+              email: userJson.username,
+            },
+          },
+        ],
+      };
+    },
+  };
+
+  return [
+    createApiKeyProvider({
+      providerId: "anthropic",
+      label: "Anthropic API key",
+      choiceId: "apiKey",
+      optionKey: "anthropicApiKey",
+      flagName: "--anthropic-api-key",
+      envVar: "ANTHROPIC_API_KEY",
+      promptMessage: "Enter Anthropic API key",
+    }),
+    createApiKeyProvider({
+      providerId: "google",
+      label: "Gemini API key",
+      choiceId: "gemini-api-key",
+      optionKey: "geminiApiKey",
+      flagName: "--gemini-api-key",
+      envVar: "GEMINI_API_KEY",
+      promptMessage: "Enter Gemini API key",
+      defaultModel: GOOGLE_GEMINI_DEFAULT_MODEL,
+    }),
+    createApiKeyProvider({
+      providerId: "huggingface",
+      label: "Hugging Face API key",
+      choiceId: "huggingface-api-key",
+      optionKey: "huggingfaceApiKey",
+      flagName: "--huggingface-api-key",
+      envVar: "HUGGINGFACE_HUB_TOKEN",
+      promptMessage: "Enter Hugging Face API key",
+      defaultModel: "huggingface/Qwen/Qwen3-Coder-480B-A35B-Instruct",
+    }),
+    createApiKeyProvider({
+      providerId: "litellm",
+      label: "LiteLLM API key",
+      choiceId: "litellm-api-key",
+      optionKey: "litellmApiKey",
+      flagName: "--litellm-api-key",
+      envVar: "LITELLM_API_KEY",
+      promptMessage: "Enter LiteLLM API key",
+      defaultModel: "litellm/anthropic/claude-opus-4.6",
+    }),
+    createApiKeyProvider({
+      providerId: "minimax",
+      label: "MiniMax API key (Global)",
+      choiceId: "minimax-global-api",
+      optionKey: "minimaxApiKey",
+      flagName: "--minimax-api-key",
+      envVar: "MINIMAX_API_KEY",
+      promptMessage: "Enter MiniMax API key",
+      profileId: "minimax:global",
+      defaultModel: "minimax/MiniMax-M2.7",
+    }),
+    createApiKeyProvider({
+      providerId: "minimax",
+      label: "MiniMax API key (CN)",
+      choiceId: "minimax-cn-api",
+      optionKey: "minimaxApiKey",
+      flagName: "--minimax-api-key",
+      envVar: "MINIMAX_API_KEY",
+      promptMessage: "Enter MiniMax CN API key",
+      profileId: "minimax:cn",
+      defaultModel: "minimax/MiniMax-M2.7",
+      applyConfig: providerConfigPatch("minimax", { baseUrl: MINIMAX_CN_API_BASE_URL }),
+      expectedProviders: ["minimax", "minimax-cn"],
+    }),
+    createApiKeyProvider({
+      providerId: "mistral",
+      label: "Mistral API key",
+      choiceId: "mistral-api-key",
+      optionKey: "mistralApiKey",
+      flagName: "--mistral-api-key",
+      envVar: "MISTRAL_API_KEY",
+      promptMessage: "Enter Mistral API key",
+      defaultModel: "mistral/mistral-large-latest",
+    }),
+    createApiKeyProvider({
+      providerId: "moonshot",
+      label: "Moonshot API key",
+      choiceId: "moonshot-api-key",
+      optionKey: "moonshotApiKey",
+      flagName: "--moonshot-api-key",
+      envVar: "MOONSHOT_API_KEY",
+      promptMessage: "Enter Moonshot API key",
+      defaultModel: "moonshot/moonshot-v1-128k",
+    }),
+    createFixedChoiceProvider({
+      providerId: "ollama",
+      label: "Ollama",
+      choiceId: "ollama",
+      method: {
+        id: "local",
+        label: "Ollama",
+        kind: "custom",
+        run: async () => ({ profiles: [] }),
+      },
+    }),
+    createApiKeyProvider({
+      providerId: "openai",
+      label: "OpenAI API key",
+      choiceId: "openai-api-key",
+      optionKey: "openaiApiKey",
+      flagName: "--openai-api-key",
+      envVar: "OPENAI_API_KEY",
+      promptMessage: "Enter OpenAI API key",
+      defaultModel: "openai/gpt-5.4",
+    }),
+    createApiKeyProvider({
+      providerId: "opencode",
+      label: "OpenCode Zen",
+      choiceId: "opencode-zen",
+      optionKey: "opencodeZenApiKey",
+      flagName: "--opencode-zen-api-key",
+      envVar: "OPENCODE_API_KEY",
+      promptMessage: "Enter OpenCode API key",
+      profileIds: ["opencode:default", "opencode-go:default"],
+      defaultModel: "opencode/claude-opus-4-6",
+      expectedProviders: ["opencode", "opencode-go"],
+      noteMessage: "OpenCode uses one API key across the Zen and Go catalogs.",
+      noteTitle: "OpenCode",
+    }),
+    createApiKeyProvider({
+      providerId: "opencode-go",
+      label: "OpenCode Go",
+      choiceId: "opencode-go",
+      optionKey: "opencodeGoApiKey",
+      flagName: "--opencode-go-api-key",
+      envVar: "OPENCODE_API_KEY",
+      promptMessage: "Enter OpenCode API key",
+      profileIds: ["opencode-go:default", "opencode:default"],
+      defaultModel: "opencode-go/kimi-k2.5",
+      expectedProviders: ["opencode", "opencode-go"],
+      noteMessage: "OpenCode uses one API key across the Zen and Go catalogs.",
+      noteTitle: "OpenCode",
+    }),
+    createApiKeyProvider({
+      providerId: "openrouter",
+      label: "OpenRouter API key",
+      choiceId: "openrouter-api-key",
+      optionKey: "openrouterApiKey",
+      flagName: "--openrouter-api-key",
+      envVar: "OPENROUTER_API_KEY",
+      promptMessage: "Enter OpenRouter API key",
+      defaultModel: "openrouter/auto",
+    }),
+    createApiKeyProvider({
+      providerId: "qianfan",
+      label: "Qianfan API key",
+      choiceId: "qianfan-api-key",
+      optionKey: "qianfanApiKey",
+      flagName: "--qianfan-api-key",
+      envVar: "QIANFAN_API_KEY",
+      promptMessage: "Enter Qianfan API key",
+      defaultModel: "qianfan/ernie-4.5-8k",
+    }),
+    createApiKeyProvider({
+      providerId: "synthetic",
+      label: "Synthetic API key",
+      choiceId: "synthetic-api-key",
+      optionKey: "syntheticApiKey",
+      flagName: "--synthetic-api-key",
+      envVar: "SYNTHETIC_API_KEY",
+      promptMessage: "Enter Synthetic API key",
+      defaultModel: "synthetic/Synthetic-1",
+    }),
+    createApiKeyProvider({
+      providerId: "together",
+      label: "Together API key",
+      choiceId: "together-api-key",
+      optionKey: "togetherApiKey",
+      flagName: "--together-api-key",
+      envVar: "TOGETHER_API_KEY",
+      promptMessage: "Enter Together API key",
+      defaultModel: "together/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
+    }),
+    createApiKeyProvider({
+      providerId: "venice",
+      label: "Venice AI",
+      choiceId: "venice-api-key",
+      optionKey: "veniceApiKey",
+      flagName: "--venice-api-key",
+      envVar: "VENICE_API_KEY",
+      promptMessage: "Enter Venice AI API key",
+      defaultModel: "venice/venice-uncensored",
+      noteMessage: "Venice is a privacy-focused inference service.",
+      noteTitle: "Venice AI",
+    }),
+    createApiKeyProvider({
+      providerId: "vercel-ai-gateway",
+      label: "AI Gateway API key",
+      choiceId: "ai-gateway-api-key",
+      optionKey: "aiGatewayApiKey",
+      flagName: "--ai-gateway-api-key",
+      envVar: "AI_GATEWAY_API_KEY",
+      promptMessage: "Enter AI Gateway API key",
+      defaultModel: "vercel-ai-gateway/anthropic/claude-opus-4.6",
+    }),
+    createApiKeyProvider({
+      providerId: "xai",
+      label: "xAI API key",
+      choiceId: "xai-api-key",
+      optionKey: "xaiApiKey",
+      flagName: "--xai-api-key",
+      envVar: "XAI_API_KEY",
+      promptMessage: "Enter xAI API key",
+      defaultModel: "xai/grok-4",
+    }),
+    createApiKeyProvider({
+      providerId: "xiaomi",
+      label: "Xiaomi API key",
+      choiceId: "xiaomi-api-key",
+      optionKey: "xiaomiApiKey",
+      flagName: "--xiaomi-api-key",
+      envVar: "XIAOMI_API_KEY",
+      promptMessage: "Enter Xiaomi API key",
+      defaultModel: "xiaomi/mimo-v2-flash",
+    }),
+    {
+      id: "zai",
+      label: "Z.AI",
+      auth: [createZaiMethod("zai-api-key"), createZaiMethod("zai-coding-global")],
+    },
+    {
+      id: "cloudflare-ai-gateway",
+      label: "Cloudflare AI Gateway",
+      auth: [cloudflareAiGatewayMethod],
+    },
+    {
+      id: "chutes",
+      label: "Chutes",
+      auth: [chutesOAuthMethod],
+    },
+    createApiKeyProvider({
+      providerId: "kimi",
+      label: "Kimi Code API key",
+      choiceId: "kimi-code-api-key",
+      optionKey: "kimiApiKey",
+      flagName: "--kimi-api-key",
+      envVar: "KIMI_API_KEY",
+      promptMessage: "Enter Kimi Code API key",
+      defaultModel: "kimi/kimi-k2.5",
+      expectedProviders: ["kimi", "kimi-code", "kimi-coding"],
+    }),
+    createFixedChoiceProvider({
+      providerId: "github-copilot",
+      label: "GitHub Copilot",
+      choiceId: "github-copilot",
+      method: {
+        id: "device",
+        label: "GitHub device login",
+        kind: "device_code",
+        run: async () => ({ profiles: [] }),
+      },
+    }),
+  ];
 }
 
 describe("applyAuthChoice", () => {
@@ -190,14 +642,12 @@ describe("applyAuthChoice", () => {
     resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
     detectZaiEndpoint.mockReset();
     detectZaiEndpoint.mockResolvedValue(null);
-    setDetectZaiEndpointForTesting(detectZaiEndpoint);
     loginOpenAICodexOAuth.mockReset();
     loginOpenAICodexOAuth.mockResolvedValue(null);
     await lifecycle.cleanup();
     activeStateDir = null;
   });
 
-  setDetectZaiEndpointForTesting(detectZaiEndpoint);
   resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
 
   it("does not throw when openai-codex oauth fails", async () => {
@@ -944,6 +1394,42 @@ describe("applyAuthChoice", () => {
     });
   });
 
+  it("uses explicit env for plugin auth resolution instead of host env", async () => {
+    await setupTempState();
+    process.env.OPENAI_API_KEY = "sk-openai-host"; // pragma: allowlist secret
+    const env = { OPENAI_API_KEY: "sk-openai-explicit" } as NodeJS.ProcessEnv; // pragma: allowlist secret
+    const text = vi.fn().mockResolvedValue("should-not-be-used");
+    const confirm = vi.fn(async () => true);
+    const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
+
+    const result = await applyAuthChoice({
+      authChoice: "openai-api-key",
+      config: {},
+      env,
+      prompter,
+      runtime,
+      setDefaultModel: false,
+    });
+
+    expect(resolvePluginProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        env,
+      }),
+    );
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("OPENAI_API_KEY"),
+      }),
+    );
+    expect(text).not.toHaveBeenCalled();
+    expect(result.config.auth?.profiles?.["openai:default"]).toMatchObject({
+      provider: "openai",
+      mode: "api_key",
+    });
+    expect((await readAuthProfile("openai:default"))?.key).toBe("sk-openai-explicit");
+  });
+
   it("keeps existing default model for explicit provider keys when setDefaultModel=false", async () => {
     const scenarios: Array<{
       authChoice: "xai-api-key" | "opencode-zen" | "opencode-go";
@@ -1395,7 +1881,7 @@ describe("applyAuthChoice", () => {
 
   it("writes portal OAuth credentials for plugin providers", async () => {
     const scenarios: Array<{
-      authChoice: "qwen-portal" | "minimax-global-oauth";
+      authChoice: "minimax-global-oauth";
       label: string;
       authId: string;
       authLabel: string;
@@ -1407,18 +1893,6 @@ describe("applyAuthChoice", () => {
       apiKey: string;
       selectValue?: string;
     }> = [
-      {
-        authChoice: "qwen-portal",
-        label: "Qwen",
-        authId: "device",
-        authLabel: "Qwen OAuth",
-        providerId: "qwen-portal",
-        profileId: "qwen-portal:default",
-        baseUrl: "https://portal.qwen.ai/v1",
-        api: "openai-completions",
-        defaultModel: "qwen-portal/coder-model",
-        apiKey: "qwen-oauth", // pragma: allowlist secret
-      },
       {
         authChoice: "minimax-global-oauth",
         label: "MiniMax",
@@ -1516,7 +1990,6 @@ describe("resolvePreferredProviderForAuthChoice", () => {
   it("maps known and unknown auth choices", async () => {
     const scenarios = [
       { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
-      { authChoice: "qwen-portal" as const, expectedProvider: "qwen-portal" },
       { authChoice: "mistral-api-key" as const, expectedProvider: "mistral" },
       { authChoice: "ollama" as const, expectedProvider: "ollama" },
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },

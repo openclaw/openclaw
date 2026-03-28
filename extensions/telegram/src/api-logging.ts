@@ -1,5 +1,4 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
@@ -38,7 +37,7 @@ export async function withTelegramApiErrorLogging<T>({
     if (!shouldLog || shouldLog(err)) {
       const errText = formatErrorMessage(err);
       const log = resolveTelegramApiLogger(runtime, logger);
-      log(danger(`telegram ${operation} failed: ${errText}`));
+      log(`telegram ${operation} failed: ${errText}`);
     }
     throw err;
   }

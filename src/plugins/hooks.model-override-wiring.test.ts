@@ -65,39 +65,78 @@ describe("model override pipeline wiring", () => {
     registry = createEmptyPluginRegistry();
   });
 
+  function addLegacyBeforeAgentStartHook(
+    result: PluginHookBeforeModelResolveResult | PluginHookBeforePromptBuildResult,
+  ) {
+    addTestHook({
+      registry,
+      pluginId: "legacy-hook",
+      hookName: "before_agent_start",
+      handler: (() => result) as PluginHookRegistration["handler"],
+    });
+  }
+
+  async function runPromptBuildWithMessages(messages: unknown[]) {
+    const runner = createHookRunner(registry);
+    return await runner.runBeforePromptBuild({ prompt: "test", messages }, stubCtx);
+  }
+
   describe("before_model_resolve (run.ts pattern)", () => {
-    it("hook receives prompt-only event and returns provider/model override", async () => {
+    it.each([
+      {
+        name: "hook receives prompt-only event and returns provider/model override",
+        event: { prompt: "PII text" },
+        expected: {
+          modelOverride: "demo-local-model",
+          providerOverride: "demo-local-provider",
+        },
+      },
+      {
+        name: "one broken before_model_resolve plugin does not block other overrides",
+        event: { prompt: "PII data" },
+        withBrokenHook: true,
+        catchErrors: true,
+        expected: {
+          modelOverride: "demo-local-model",
+          providerOverride: "demo-local-provider",
+        },
+      },
+    ] as const)("$name", async ({ event, expected, withBrokenHook, catchErrors }) => {
       const handlerSpy = vi.fn(
         (_event: PluginHookBeforeModelResolveEvent) =>
           ({
-            modelOverride: "llama3.3:8b",
-            providerOverride: "ollama",
+            modelOverride: "demo-local-model",
+            providerOverride: "demo-local-provider",
           }) as PluginHookBeforeModelResolveResult,
       );
 
+      if (withBrokenHook) {
+        addBeforeModelResolveHook(
+          registry,
+          "broken-plugin",
+          () => {
+            throw new Error("plugin crashed");
+          },
+          10,
+        );
+      }
       addBeforeModelResolveHook(registry, "router-plugin", handlerSpy);
-      const runner = createHookRunner(registry);
-      const result = await runner.runBeforeModelResolve({ prompt: "PII text" }, stubCtx);
+      const runner = createHookRunner(registry, catchErrors ? { catchErrors: true } : undefined);
+      const result = await runner.runBeforeModelResolve(event, stubCtx);
 
       expect(handlerSpy).toHaveBeenCalledTimes(1);
-      expect(handlerSpy).toHaveBeenCalledWith({ prompt: "PII text" }, stubCtx);
-      expect(result?.modelOverride).toBe("llama3.3:8b");
-      expect(result?.providerOverride).toBe("ollama");
+      expect(handlerSpy).toHaveBeenCalledWith(event, stubCtx);
+      expect(result).toEqual(expect.objectContaining(expected));
     });
 
     it("new hook overrides beat legacy before_agent_start fallback", async () => {
       addBeforeModelResolveHook(registry, "new-hook", () => ({
-        modelOverride: "llama3.3:8b",
-        providerOverride: "ollama",
+        modelOverride: "demo-local-model",
+        providerOverride: "demo-local-provider",
       }));
-      addTestHook({
-        registry,
-        pluginId: "legacy-hook",
-        hookName: "before_agent_start",
-        handler: (() => ({
-          modelOverride: "gpt-5.4",
-          providerOverride: "openai",
-        })) as PluginHookRegistration["handler"],
+      addLegacyBeforeAgentStartHook({
+        modelOverride: "demo-legacy-model",
+        providerOverride: "demo-legacy-provider",
       });
 
       const runner = createHookRunner(registry);
@@ -108,89 +147,59 @@ describe("model override pipeline wiring", () => {
         modelOverride: explicit?.modelOverride ?? legacy?.modelOverride,
       };
 
-      expect(merged.providerOverride).toBe("ollama");
-      expect(merged.modelOverride).toBe("llama3.3:8b");
+      expect(merged.providerOverride).toBe("demo-local-provider");
+      expect(merged.modelOverride).toBe("demo-local-model");
     });
   });
 
   describe("before_prompt_build (attempt.ts pattern)", () => {
-    it("hook receives prompt and messages and can prepend context", async () => {
+    it.each([
+      {
+        name: "hook receives prompt and messages and can prepend context",
+        messages: [{}, {}] as unknown[],
+        expectedPrependContext: "Saw 2 messages",
+      },
+      {
+        name: "legacy before_agent_start context can still be merged as fallback",
+        messages: [{ role: "user", content: "x" }] as unknown[],
+        legacyPrependContext: "legacy context",
+        expectedPrependContext: "new context\n\nlegacy context",
+      },
+    ] as const)("$name", async ({ messages, legacyPrependContext, expectedPrependContext }) => {
       const handlerSpy = vi.fn(
         (event: PluginHookBeforePromptBuildEvent) =>
           ({
-            prependContext: `Saw ${event.messages.length} messages`,
+            prependContext: legacyPrependContext
+              ? "new context"
+              : `Saw ${event.messages.length} messages`,
           }) as PluginHookBeforePromptBuildResult,
       );
 
       addBeforePromptBuildHook(registry, "context-plugin", handlerSpy);
-      const runner = createHookRunner(registry);
-      const result = await runner.runBeforePromptBuild(
-        { prompt: "test", messages: [{}, {}] as unknown[] },
-        stubCtx,
-      );
+      if (legacyPrependContext) {
+        addLegacyBeforeAgentStartHook({
+          prependContext: legacyPrependContext,
+        });
+      }
+      const result = await runPromptBuildWithMessages(messages);
 
       expect(handlerSpy).toHaveBeenCalledTimes(1);
-      expect(result?.prependContext).toBe("Saw 2 messages");
-    });
-
-    it("legacy before_agent_start context can still be merged as fallback", async () => {
-      addBeforePromptBuildHook(registry, "new-hook", () => ({
-        prependContext: "new context",
-      }));
-      addTestHook({
-        registry,
-        pluginId: "legacy-hook",
-        hookName: "before_agent_start",
-        handler: (() => ({
-          prependContext: "legacy context",
-        })) as PluginHookRegistration["handler"],
-      });
+      if (!legacyPrependContext) {
+        expect(result?.prependContext).toBe(expectedPrependContext);
+        return;
+      }
 
       const runner = createHookRunner(registry);
-      const promptBuild = await runner.runBeforePromptBuild(
-        { prompt: "test", messages: [{ role: "user", content: "x" }] as unknown[] },
-        stubCtx,
-      );
-      const legacy = await runner.runBeforeAgentStart(
-        { prompt: "test", messages: [{ role: "user", content: "x" }] as unknown[] },
-        stubCtx,
-      );
+      const legacy = await runner.runBeforeAgentStart({ prompt: "test", messages }, stubCtx);
       const prependContext = joinPresentTextSegments([
-        promptBuild?.prependContext,
+        result?.prependContext,
         legacy?.prependContext,
       ]);
-
-      expect(prependContext).toBe("new context\n\nlegacy context");
+      expect(prependContext).toBe(expectedPrependContext);
     });
   });
 
   describe("graceful degradation + hook detection", () => {
-    it("one broken before_model_resolve plugin does not block other overrides", async () => {
-      addBeforeModelResolveHook(
-        registry,
-        "broken-plugin",
-        () => {
-          throw new Error("plugin crashed");
-        },
-        10,
-      );
-      addBeforeModelResolveHook(
-        registry,
-        "router-plugin",
-        () => ({
-          modelOverride: "llama3.3:8b",
-          providerOverride: "ollama",
-        }),
-        1,
-      );
-
-      const runner = createHookRunner(registry, { catchErrors: true });
-      const result = await runner.runBeforeModelResolve({ prompt: "PII data" }, stubCtx);
-
-      expect(result?.modelOverride).toBe("llama3.3:8b");
-      expect(result?.providerOverride).toBe("ollama");
-    });
-
     it("hasHooks reports new and legacy hooks independently", () => {
       const runner1 = createHookRunner(registry);
       expect(runner1.hasHooks("before_model_resolve")).toBe(false);

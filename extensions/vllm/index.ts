@@ -1,14 +1,15 @@
 import {
-  VLLM_DEFAULT_API_KEY_ENV_VAR,
-  VLLM_DEFAULT_BASE_URL,
-  VLLM_MODEL_PLACEHOLDER,
-  VLLM_PROVIDER_LABEL,
-} from "openclaw/plugin-sdk/agent-runtime";
-import {
   definePluginEntry,
   type OpenClawPluginApi,
   type ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  VLLM_DEFAULT_API_KEY_ENV_VAR,
+  VLLM_DEFAULT_BASE_URL,
+  VLLM_MODEL_PLACEHOLDER,
+  VLLM_PROVIDER_LABEL,
+  buildVllmProvider,
+} from "./api.js";
 
 const PROVIDER_ID = "vllm";
 
@@ -64,7 +65,7 @@ export default definePluginEntry({
           return await providerSetup.discoverOpenAICompatibleSelfHostedProvider({
             ctx,
             providerId: PROVIDER_ID,
-            buildProvider: providerSetup.buildVllmProvider,
+            buildProvider: buildVllmProvider,
           });
         },
       },
@@ -84,6 +85,10 @@ export default definePluginEntry({
           methodId: "custom",
         },
       },
+      buildUnknownModelHint: () =>
+        "vLLM requires authentication to be registered as a provider. " +
+        'Set VLLM_API_KEY (any value works) or run "openclaw configure". ' +
+        "See: https://docs.openclaw.ai/providers/vllm",
     });
   },
 });
