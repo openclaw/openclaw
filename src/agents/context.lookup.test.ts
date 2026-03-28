@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type DiscoveredModel = { id: string; contextWindow: number };
+let ensureOpenClawModelsJsonMock: ReturnType<typeof vi.fn>;
 
 function mockContextDeps(params: {
   loadConfig: () => unknown;
@@ -9,8 +10,9 @@ function mockContextDeps(params: {
   vi.doMock("../config/config.js", () => ({
     loadConfig: params.loadConfig,
   }));
+  ensureOpenClawModelsJsonMock = vi.fn(async () => {});
   vi.doMock("./models-config.js", () => ({
-    ensureOpenClawModelsJson: vi.fn(async () => {}),
+    ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
   }));
   vi.doMock("./agent-paths.js", () => ({
     resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
@@ -76,15 +78,16 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(321_000);
   });
 
-  it("does not skip eager warmup when --profile is followed by -- terminator", async () => {
+  it("skips eager warmup for gateway relay CLI commands", async () => {
     const loadConfigMock = vi.fn(() => ({ models: {} }));
     mockContextModuleDeps(loadConfigMock);
 
     const argvSnapshot = process.argv;
-    process.argv = ["node", "openclaw", "--profile", "--", "config", "validate"];
+    process.argv = ["node", "openclaw", "gateway", "call", "health", "--json"];
     try {
       await import("./context.js");
-      expect(loadConfigMock).toHaveBeenCalledTimes(1);
+      expect(loadConfigMock).not.toHaveBeenCalled();
+      expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     } finally {
       process.argv = argvSnapshot;
     }

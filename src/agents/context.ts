@@ -83,6 +83,14 @@ let loadPromise: Promise<void> | null = null;
 let configuredConfig: OpenClawConfig | undefined;
 let configLoadFailures = 0;
 let nextConfigLoadAttemptAtMs = 0;
+const EAGER_CONTEXT_WINDOW_WARMUP_SKIP_COMMANDS = new Set([
+  "agent",
+  "agents",
+  "gateway",
+  "health",
+  "sessions",
+  "status",
+]);
 
 function getCommandPathFromArgv(argv: string[]): string[] {
   const args = argv.slice(2);
@@ -108,9 +116,19 @@ function getCommandPathFromArgv(argv: string[]): string[] {
   return tokens;
 }
 
+function isOpenClawCliArgv(argv: string[] = process.argv): boolean {
+  return /(?:^|[\\/])openclaw(?:\.mjs)?$/.test(argv[1] ?? "");
+}
+
 function shouldSkipEagerContextWindowWarmup(argv: string[] = process.argv): boolean {
+  if (!isOpenClawCliArgv(argv)) {
+    return false;
+  }
   const [primary, secondary] = getCommandPathFromArgv(argv);
-  return primary === "config" && secondary === "validate";
+  if (primary === "config" && secondary === "validate") {
+    return true;
+  }
+  return EAGER_CONTEXT_WINDOW_WARMUP_SKIP_COMMANDS.has(primary ?? "");
 }
 
 function primeConfiguredContextWindows(): OpenClawConfig | undefined {
@@ -194,8 +212,8 @@ export function lookupContextTokens(modelId?: string): number | undefined {
 }
 
 if (!shouldSkipEagerContextWindowWarmup()) {
-  // Keep prior behavior where model limits begin loading during startup.
-  // This avoids a cold-start miss on the first context token lookup.
+  // Keep model metadata warming by default, but avoid heavy provider/plugin
+  // discovery on latency-sensitive CLI relay/diagnostic commands.
   void ensureContextWindowCacheLoaded();
 }
 
