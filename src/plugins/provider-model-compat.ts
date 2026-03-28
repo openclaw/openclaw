@@ -52,6 +52,18 @@ export function resolveToolCallArgumentsEncoding(
   return extractModelCompat(modelOrCompat)?.toolCallArgumentsEncoding;
 }
 
+export function resolveUnsupportedToolSchemaKeywords(
+  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
+): ReadonlySet<string> {
+  const keywords = extractModelCompat(modelOrCompat)?.unsupportedToolSchemaKeywords ?? [];
+  return new Set(
+    keywords
+      .filter((keyword): keyword is string => typeof keyword === "string")
+      .map((keyword) => keyword.trim())
+      .filter(Boolean),
+  );
+}
+
 function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-completions"> {
   return model.api === "openai-completions";
 }

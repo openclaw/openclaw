@@ -1,7 +1,6 @@
 import type { ModelCompatConfig } from "../config/types.models.js";
-import { stripXaiUnsupportedKeywords } from "../plugin-sdk/provider-tools.js";
-import { XAI_TOOL_SCHEMA_PROFILE } from "../plugin-sdk/xai.js";
-import { hasToolSchemaProfile } from "../plugins/provider-model-compat.js";
+import { stripUnsupportedSchemaKeywords } from "../plugin-sdk/provider-tools.js";
+import { resolveUnsupportedToolSchemaKeywords } from "../plugins/provider-model-compat.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -98,14 +97,14 @@ export function normalizeToolParameters(
     options?.modelProvider?.toLowerCase().includes("google") ||
     options?.modelProvider?.toLowerCase().includes("gemini");
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
-  const hasXaiSchemaProfile = hasToolSchemaProfile(options?.modelCompat, XAI_TOOL_SCHEMA_PROFILE);
+  const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
 
   function applyProviderCleaning(s: unknown): unknown {
     if (isGeminiProvider && !isAnthropicProvider) {
       return cleanSchemaForGemini(s);
     }
-    if (hasXaiSchemaProfile) {
-      return stripXaiUnsupportedKeywords(s);
+    if (unsupportedToolSchemaKeywords.size > 0) {
+      return stripUnsupportedSchemaKeywords(s, unsupportedToolSchemaKeywords);
     }
     return s;
   }

@@ -20,6 +20,7 @@ export {
   hasToolSchemaProfile,
   hasNativeWebSearchTool,
   normalizeModelCompat,
+  resolveUnsupportedToolSchemaKeywords,
   resolveToolCallArgumentsEncoding,
 } from "../plugins/provider-model-compat.js";
 export { normalizeProviderId } from "../agents/provider-id.js";
