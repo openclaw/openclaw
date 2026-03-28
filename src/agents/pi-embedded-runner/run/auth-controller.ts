@@ -1,6 +1,5 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
-import { formatApiKeyPreview } from "../../../plugins/provider-auth-input.js";
 import { prepareProviderRuntimeAuth } from "../../../plugins/provider-runtime.js";
 import {
   type AuthProfileStore,
@@ -16,6 +15,7 @@ import {
   type FailoverReason,
 } from "../../pi-embedded-helpers.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
+import { shouldTraceProviderAuth, summarizeProviderAuthKey } from "../../xai-auth-trace.js";
 import { describeUnknownError } from "../utils.js";
 import {
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
@@ -36,15 +36,6 @@ type LogLike = {
   info(message: string): void;
   warn(message: string): void;
 };
-
-function shouldTraceProviderAuth(provider: string): boolean {
-  return provider.trim().toLowerCase() === "xai";
-}
-
-function summarizeProviderAuthKey(apiKey: string | undefined): string {
-  const trimmed = apiKey?.trim() ?? "";
-  return trimmed ? formatApiKeyPreview(trimmed) : "missing";
-}
 
 export function createEmbeddedRunAuthController(params: {
   config: RunEmbeddedPiAgentParams["config"];

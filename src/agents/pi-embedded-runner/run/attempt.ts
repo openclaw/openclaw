@@ -97,6 +97,7 @@ import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
+import { shouldTraceProviderAuth, summarizeProviderAuthKey } from "../../xai-auth-trace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
@@ -213,18 +214,6 @@ export {
 } from "./attempt.tool-call-normalization.js";
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
-
-function shouldTraceProviderAuth(provider: string): boolean {
-  return provider.trim().toLowerCase() === "xai";
-}
-
-function summarizeProviderAuthKey(apiKey: string | undefined): string {
-  const trimmed = apiKey?.trim() ?? "";
-  if (!trimmed) {
-    return "missing";
-  }
-  return `${trimmed.slice(0, 4)}…${trimmed.slice(-4)}`;
-}
 
 export function resolveEmbeddedAgentStreamFn(params: {
   currentStreamFn: StreamFn | undefined;

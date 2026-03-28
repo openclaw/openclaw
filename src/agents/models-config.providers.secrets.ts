@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { formatApiKeyPreview } from "../plugins/provider-auth-input.js";
+import { resolveProviderWebSearchPluginConfig } from "../plugin-sdk/provider-web-search.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { listProfilesForProvider } from "./auth-profiles/profiles.js";
@@ -14,6 +14,7 @@ import {
   resolveNonEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
+import { shouldTraceProviderAuth, summarizeProviderAuthKey } from "./xai-auth-trace.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -48,21 +49,6 @@ export type ProviderAuthResolver = (
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 const log = createSubsystemLogger("agents/model-providers");
-
-function shouldTraceProviderAuth(provider: string): boolean {
-  return provider.trim().toLowerCase() === "xai";
-}
-
-function summarizeProviderAuthKey(apiKey: string | undefined): string {
-  const trimmed = apiKey?.trim() ?? "";
-  if (!trimmed) {
-    return "missing";
-  }
-  if (isNonSecretApiKeyMarker(trimmed)) {
-    return `marker:${trimmed}`;
-  }
-  return formatApiKeyPreview(trimmed);
-}
 
 export function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();
@@ -438,15 +424,19 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
       source: "config";
     }
   | undefined {
-  const synthetic = resolveProviderSyntheticAuthWithPlugin({
-    provider: params.provider,
-    config: params.config,
-    context: {
-      config: params.config,
+  // Providers own any provider-specific fallback auth logic via
+  // resolveSyntheticAuth(...). Discovery/bootstrap callers may consume
+  // non-secret markers from source config, but must never persist plaintext.
+  const synthetic =
+    resolveProviderSyntheticAuthWithPlugin({
       provider: params.provider,
-      providerConfig: params.config?.models?.providers?.[params.provider],
-    },
-  });
+      config: params.config,
+      context: {
+        config: params.config,
+        provider: params.provider,
+        providerConfig: params.config?.models?.providers?.[params.provider],
+      },
+    }) ?? resolveXaiConfigFallbackAuth(params);
   const apiKey = synthetic?.apiKey?.trim();
   if (!apiKey) {
     if (shouldTraceProviderAuth(params.provider)) {
@@ -472,4 +462,69 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
         mode: "api_key",
         source: "config",
       };
+}
+
+function resolveXaiConfigFallbackAuth(params: { provider: string; config?: OpenClawConfig }):
+  | {
+      apiKey: string;
+      source: string;
+      mode: "api-key";
+    }
+  | undefined {
+  if (params.provider.trim().toLowerCase() !== "xai") {
+    return undefined;
+  }
+  const xaiPluginEntry = params.config?.plugins?.entries?.xai;
+  if (xaiPluginEntry?.enabled === false) {
+    return undefined;
+  }
+  const pluginApiKey = normalizeOptionalSecretInput(
+    resolveProviderWebSearchPluginConfig(
+      params.config as Record<string, unknown> | undefined,
+      "xai",
+    )?.apiKey,
+  );
+  if (pluginApiKey) {
+    return {
+      apiKey: pluginApiKey,
+      source: "plugins.entries.xai.config.webSearch.apiKey",
+      mode: "api-key",
+    };
+  }
+  const pluginApiKeyRef = coerceSecretRef(
+    resolveProviderWebSearchPluginConfig(
+      params.config as Record<string, unknown> | undefined,
+      "xai",
+    )?.apiKey,
+  );
+  if (pluginApiKeyRef) {
+    return {
+      apiKey:
+        pluginApiKeyRef.source === "env"
+          ? pluginApiKeyRef.id.trim()
+          : resolveNonEnvSecretRefApiKeyMarker(pluginApiKeyRef.source),
+      source: "plugins.entries.xai.config.webSearch.apiKey",
+      mode: "api-key",
+    };
+  }
+  const grokApiKey = normalizeOptionalSecretInput(params.config?.tools?.web?.search?.grok?.apiKey);
+  if (grokApiKey) {
+    return {
+      apiKey: grokApiKey,
+      source: "tools.web.search.grok.apiKey",
+      mode: "api-key",
+    };
+  }
+  const grokApiKeyRef = coerceSecretRef(params.config?.tools?.web?.search?.grok?.apiKey);
+  if (!grokApiKeyRef) {
+    return undefined;
+  }
+  return {
+    apiKey:
+      grokApiKeyRef.source === "env"
+        ? grokApiKeyRef.id.trim()
+        : resolveNonEnvSecretRefApiKeyMarker(grokApiKeyRef.source),
+    source: "tools.web.search.grok.apiKey",
+    mode: "api-key",
+  };
 }
