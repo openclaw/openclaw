@@ -103,7 +103,7 @@ Auto-publish articles to Zhihu with trending topics fetch, AI writing, and image
 <Card title="PR Review → Telegram Feedback" icon="code-pull-request" href="https://x.com/i/status/2010878524543131691">
   **@bangnokia** • `review` `github` `telegram`
 
-OpenCode finishes the change → opens a PR → OpenClaw reviews the diff and replies in Telegram with "minor suggestions" plus a clear merge verdict (including critical fixes to apply first).
+OpenCode finishes the change → opens a PR → OpenClaw reviews the diff and replies in Telegram with “minor suggestions” plus a clear merge verdict (including critical fixes to apply first).
 
   <img src="/assets/showcase/pr-review-telegram.jpg" alt="OpenClaw PR review feedback delivered in Telegram" />
 </Card>
@@ -111,7 +111,7 @@ OpenCode finishes the change → opens a PR → OpenClaw reviews the diff and re
 <Card title="Wine Cellar Skill in Minutes" icon="wine-glass" href="https://x.com/i/status/2010916352454791216">
   **@prades_maxime** • `skills` `local` `csv`
 
-Asked "Robby" (@openclaw) for a local wine cellar skill. It requests a sample CSV export + where to store it, then builds/tests the skill fast (962 bottles in the example).
+Asked “Robby” (@openclaw) for a local wine cellar skill. It requests a sample CSV export + where to store it, then builds/tests the skill fast (962 bottles in the example).
 
   <img src="/assets/showcase/wine-cellar-skill.jpg" alt="OpenClaw building a local wine cellar skill from CSV" />
 </Card>
@@ -428,4 +428,3 @@ Have something to share? We'd love to feature it!
     We'll add standout projects to this page
   </Step>
 </Steps>
-
