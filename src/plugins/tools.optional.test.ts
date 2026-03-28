@@ -117,6 +117,14 @@ function expectLoaderCall(overrides: Record<string, unknown>) {
   expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(expect.objectContaining(overrides));
 }
 
+function expectSingleDiagnosticMessage(
+  diagnostics: Array<{ message: string }>,
+  messageFragment: string,
+) {
+  expect(diagnostics).toHaveLength(1);
+  expect(diagnostics[0]?.message).toContain(messageFragment);
+}
+
 describe("resolvePluginTools optional tools", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -170,8 +178,7 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expect(tools).toHaveLength(0);
-    expect(registry.diagnostics).toHaveLength(1);
-    expect(registry.diagnostics[0]?.message).toContain("plugin id conflicts with core tool name");
+    expectSingleDiagnosticMessage(registry.diagnostics, "plugin id conflicts with core tool name");
   });
 
   it("skips conflicting tool names but keeps other tools", () => {
@@ -179,8 +186,7 @@ describe("resolvePluginTools optional tools", () => {
     const tools = resolveWithConflictingCoreName();
 
     expectResolvedToolNames(tools, ["other_tool"]);
-    expect(registry.diagnostics).toHaveLength(1);
-    expect(registry.diagnostics[0]?.message).toContain("plugin tool name conflict");
+    expectSingleDiagnosticMessage(registry.diagnostics, "plugin tool name conflict");
   });
 
   it("suppresses conflict diagnostics when requested", () => {

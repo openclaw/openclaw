@@ -95,6 +95,13 @@ function expectNoCompatibilityWarnings() {
   expect(buildPluginCompatibilityWarnings()).toEqual([]);
 }
 
+function expectCapabilityKinds(
+  inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>,
+  kinds: readonly string[],
+) {
+  expect(inspect.capabilities.map((entry) => entry.kind)).toEqual(kinds);
+}
+
 describe("buildPluginStatusReport", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -230,7 +237,7 @@ describe("buildPluginStatusReport", () => {
     expect(inspect).not.toBeNull();
     expect(inspect?.shape).toBe("hybrid-capability");
     expect(inspect?.capabilityMode).toBe("hybrid");
-    expect(inspect?.capabilities.map((entry) => entry.kind)).toEqual([
+    expectCapabilityKinds(inspect!, [
       "cli-backend",
       "text-inference",
       "media-understanding",
@@ -279,10 +286,7 @@ describe("buildPluginStatusReport", () => {
     expect(inspect.map((entry) => entry.plugin.id)).toEqual(["lca", "microsoft"]);
     expect(inspect.map((entry) => entry.shape)).toEqual(["hook-only", "hybrid-capability"]);
     expect(inspect[0]?.usesLegacyBeforeAgentStart).toBe(true);
-    expect(inspect[1]?.capabilities.map((entry) => entry.kind)).toEqual([
-      "text-inference",
-      "web-search",
-    ]);
+    expectCapabilityKinds(inspect[1], ["text-inference", "web-search"]);
   });
 
   it("treats a CLI-backend-only plugin as a plain capability", () => {
@@ -298,6 +302,7 @@ describe("buildPluginStatusReport", () => {
 
     expect(inspect?.shape).toBe("plain-capability");
     expect(inspect?.capabilityMode).toBe("plain");
+    expectCapabilityKinds(inspect!, ["cli-backend"]);
     expect(inspect?.capabilities).toEqual([{ kind: "cli-backend", ids: ["claude-cli"] }]);
   });
 
