@@ -69,9 +69,7 @@ export function getCachedGatewayModelPricing(params: {
   if (!shouldNormalizeCachedPricingLookup(provider)) {
     return undefined;
   }
-  const normalized = normalizeModelRef(provider, model, {
-    allowPluginNormalization: false,
-  });
+  const normalized = normalizeModelRef(provider, model);
   const normalizedKey = modelPricingCacheKey(normalized.provider, normalized.model);
   return normalizedKey ? cachedPricing.get(normalizedKey) : undefined;
 }
