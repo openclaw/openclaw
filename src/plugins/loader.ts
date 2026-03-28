@@ -46,6 +46,7 @@ import {
   buildPluginLoaderJitiOptions,
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
+  type PluginSdkResolutionPreference,
   resolveExtensionApiAlias,
   resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
@@ -73,6 +74,7 @@ export type PluginLoadOptions = {
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   runtimeOptions?: CreatePluginRuntimeOptions;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
   cache?: boolean;
   mode?: "full" | "validate";
   onlyPluginIds?: string[];
@@ -195,6 +197,7 @@ function buildCacheKey(params: {
   includeSetupOnlyChannelPlugins?: boolean;
   preferSetupRuntimeForChannelPlugins?: boolean;
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
+  pluginSdkResolution?: PluginSdkResolutionPreference;
 }): string {
   const { roots, loadPaths } = resolvePluginCacheInputs({
     workspaceDir: params.workspaceDir,
@@ -225,7 +228,7 @@ function buildCacheKey(params: {
     ...params.plugins,
     installs,
     loadPaths,
-  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${params.runtimeSubagentMode ?? "default"}`;
+  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${params.runtimeSubagentMode ?? "default"}::${params.pluginSdkResolution ?? "auto"}`;
 }
 
 function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
@@ -714,6 +717,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         : options.runtimeOptions?.subagent
           ? "explicit"
           : "default",
+    pluginSdkResolution: options.pluginSdkResolution,
   });
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
@@ -746,7 +750,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const tryNative = shouldPreferNativeJiti(modulePath);
     // Pass loader's moduleUrl so the openclaw root can always be resolved even when
     // loading external plugins from outside the installation directory (e.g. ~/.openclaw/extensions/).
-    const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
+    const aliasMap = buildPluginLoaderAliasMap(
+      modulePath,
+      process.argv[1],
+      import.meta.url,
+      options.pluginSdkResolution,
+    );
     const cacheKey = JSON.stringify({
       tryNative,
       aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
@@ -775,7 +784,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (createPluginRuntimeFactory) {
       return createPluginRuntimeFactory;
     }
-    const runtimeModulePath = resolvePluginRuntimeModulePath();
+    const runtimeModulePath = resolvePluginRuntimeModulePath({
+      pluginSdkResolution: options.pluginSdkResolution,
+    });
     if (!runtimeModulePath) {
       throw new Error("Unable to resolve plugin runtime module");
     }

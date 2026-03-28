@@ -22,45 +22,68 @@ function createPluginSourceRoots() {
   };
 }
 
+function expectFormattedSource(params: {
+  origin: "bundled" | "workspace" | "global";
+  sourceKey: "stock" | "workspace" | "global";
+  dirName: string;
+  fileName: string;
+  expectedValue: string;
+  expectedRootKey: "stock" | "workspace" | "global";
+}) {
+  const roots = createPluginSourceRoots();
+  const out = formatPluginSourceForTable(
+    {
+      origin: params.origin,
+      source: path.join(roots[params.sourceKey], params.dirName, params.fileName),
+    },
+    roots,
+  );
+  expect(out.value).toBe(params.expectedValue);
+  expect(out.rootKey).toBe(params.expectedRootKey);
+}
+
 describe("formatPluginSourceForTable", () => {
-  it("shortens bundled plugin sources under the stock root", () => {
-    const roots = createPluginSourceRoots();
-    const out = formatPluginSourceForTable(
-      {
-        origin: "bundled",
-        source: path.join(roots.stock, "bluebubbles", "index.ts"),
-      },
-      roots,
-    );
-    expect(out.value).toBe("stock:bluebubbles/index.ts");
-    expect(out.rootKey).toBe("stock");
-  });
-
-  it("shortens workspace plugin sources under the workspace root", () => {
-    const roots = createPluginSourceRoots();
-    const out = formatPluginSourceForTable(
-      {
-        origin: "workspace",
-        source: path.join(roots.workspace, "matrix", "index.ts"),
-      },
-      roots,
-    );
-    expect(out.value).toBe("workspace:matrix/index.ts");
-    expect(out.rootKey).toBe("workspace");
-  });
-
-  it("shortens global plugin sources under the global root", () => {
-    const roots = createPluginSourceRoots();
-    const out = formatPluginSourceForTable(
-      {
-        origin: "global",
-        source: path.join(roots.global, "zalo", "index.js"),
-      },
-      roots,
-    );
-    expect(out.value).toBe("global:zalo/index.js");
-    expect(out.rootKey).toBe("global");
-  });
+  it.each([
+    {
+      name: "bundled plugin sources under the stock root",
+      origin: "bundled" as const,
+      sourceKey: "stock" as const,
+      dirName: "demo-stock",
+      fileName: "index.ts",
+      expectedValue: "stock:demo-stock/index.ts",
+      expectedRootKey: "stock" as const,
+    },
+    {
+      name: "workspace plugin sources under the workspace root",
+      origin: "workspace" as const,
+      sourceKey: "workspace" as const,
+      dirName: "demo-workspace",
+      fileName: "index.ts",
+      expectedValue: "workspace:demo-workspace/index.ts",
+      expectedRootKey: "workspace" as const,
+    },
+    {
+      name: "global plugin sources under the global root",
+      origin: "global" as const,
+      sourceKey: "global" as const,
+      dirName: "demo-global",
+      fileName: "index.js",
+      expectedValue: "global:demo-global/index.js",
+      expectedRootKey: "global" as const,
+    },
+  ])(
+    "shortens $name",
+    ({ origin, sourceKey, dirName, fileName, expectedValue, expectedRootKey }) => {
+      expectFormattedSource({
+        origin,
+        sourceKey,
+        dirName,
+        fileName,
+        expectedValue,
+        expectedRootKey,
+      });
+    },
+  );
 
   it("resolves source roots from an explicit env override", () => {
     const homeDir = path.resolve(path.sep, "tmp", "openclaw-home");

@@ -104,7 +104,7 @@ vi.mock("./slash-commands.js", () => ({
   resolveCommandText: mockState.resolveCommandText,
 }));
 
-import { createSlashCommandHttpHandler } from "./slash-http.js";
+let createSlashCommandHttpHandler: typeof import("./slash-http.js").createSlashCommandHttpHandler;
 
 function createRequest(body = "token=valid-token"): IncomingMessage {
   const req = new PassThrough();
@@ -173,7 +173,8 @@ const accountFixture: ResolvedMattermostAccount = {
 };
 
 describe("slash-http cfg threading", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     mockState.readRequestBodyWithLimit.mockClear();
     mockState.parseSlashCommandPayload.mockClear();
     mockState.resolveCommandText.mockClear();
@@ -184,6 +185,7 @@ describe("slash-http cfg threading", () => {
     mockState.fetchMattermostChannel.mockClear();
     mockState.sendMessageMattermost.mockClear();
     mockState.normalizeMattermostAllowList.mockClear();
+    ({ createSlashCommandHttpHandler } = await import("./slash-http.js"));
   });
 
   it("passes cfg through the no-models slash reply send path", async () => {

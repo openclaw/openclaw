@@ -1,6 +1,36 @@
 import { describe, expect, it } from "vitest";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 
+function expectValidationFailure(
+  params: Parameters<typeof validateJsonSchemaValue>[0],
+): Extract<ReturnType<typeof validateJsonSchemaValue>, { ok: false }> {
+  const result = validateJsonSchemaValue(params);
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    throw new Error("expected validation failure");
+  }
+  return result;
+}
+
+function expectValidationIssue(
+  result: Extract<ReturnType<typeof validateJsonSchemaValue>, { ok: false }>,
+  path: string,
+) {
+  const issue = result.errors.find((entry) => entry.path === path);
+  expect(issue).toBeDefined();
+  return issue;
+}
+
+function expectIssueMessageIncludes(
+  issue: ReturnType<typeof expectValidationIssue>,
+  fragments: readonly string[],
+) {
+  expect(issue?.message).toEqual(expect.stringContaining(fragments[0] ?? ""));
+  fragments.slice(1).forEach((fragment) => {
+    expect(issue?.message).toContain(fragment);
+  });
+}
+
 describe("schema validator", () => {
   it("can apply JSON Schema defaults while validating", () => {
     const res = validateJsonSchemaValue({
@@ -25,190 +55,164 @@ describe("schema validator", () => {
     }
   });
 
-  it("includes allowed values in enum validation errors", () => {
-    const res = validateJsonSchemaValue({
-      cacheKey: "schema-validator.test.enum",
-      schema: {
-        type: "object",
-        properties: {
-          fileFormat: {
-            type: "string",
-            enum: ["markdown", "html", "json"],
-          },
-        },
-        required: ["fileFormat"],
-      },
-      value: { fileFormat: "txt" },
-    });
-
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      const issue = res.errors.find((entry) => entry.path === "fileFormat");
-      expect(issue?.message).toContain("(allowed:");
-      expect(issue?.allowedValues).toEqual(["markdown", "html", "json"]);
-      expect(issue?.allowedValuesHiddenCount).toBe(0);
-    }
-  });
-
-  it("includes allowed value in const validation errors", () => {
-    const res = validateJsonSchemaValue({
-      cacheKey: "schema-validator.test.const",
-      schema: {
-        type: "object",
-        properties: {
-          mode: {
-            const: "strict",
-          },
-        },
-        required: ["mode"],
-      },
-      value: { mode: "relaxed" },
-    });
-
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      const issue = res.errors.find((entry) => entry.path === "mode");
-      expect(issue?.message).toContain("(allowed:");
-      expect(issue?.allowedValues).toEqual(["strict"]);
-      expect(issue?.allowedValuesHiddenCount).toBe(0);
-    }
-  });
-
-  it("truncates long allowed-value hints", () => {
-    const values = [
-      "v1",
-      "v2",
-      "v3",
-      "v4",
-      "v5",
-      "v6",
-      "v7",
-      "v8",
-      "v9",
-      "v10",
-      "v11",
-      "v12",
-      "v13",
-    ];
-    const res = validateJsonSchemaValue({
-      cacheKey: "schema-validator.test.enum.truncate",
-      schema: {
-        type: "object",
-        properties: {
-          mode: {
-            type: "string",
-            enum: values,
-          },
-        },
-        required: ["mode"],
-      },
-      value: { mode: "not-listed" },
-    });
-
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      const issue = res.errors.find((entry) => entry.path === "mode");
-      expect(issue?.message).toContain("(allowed:");
-      expect(issue?.message).toContain("... (+1 more)");
-      expect(issue?.allowedValues).toEqual([
-        "v1",
-        "v2",
-        "v3",
-        "v4",
-        "v5",
-        "v6",
-        "v7",
-        "v8",
-        "v9",
-        "v10",
-        "v11",
-        "v12",
-      ]);
-      expect(issue?.allowedValuesHiddenCount).toBe(1);
-    }
-  });
-
-  it("appends missing required property to the structured path", () => {
-    const res = validateJsonSchemaValue({
-      cacheKey: "schema-validator.test.required.path",
-      schema: {
-        type: "object",
-        properties: {
-          settings: {
-            type: "object",
-            properties: {
-              mode: { type: "string" },
-            },
-            required: ["mode"],
-          },
-        },
-        required: ["settings"],
-      },
-      value: { settings: {} },
-    });
-
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      const issue = res.errors.find((entry) => entry.path === "settings.mode");
-      expect(issue).toBeDefined();
-      expect(issue?.allowedValues).toBeUndefined();
-    }
-  });
-
-  it("appends missing dependency property to the structured path", () => {
-    const res = validateJsonSchemaValue({
-      cacheKey: "schema-validator.test.dependencies.path",
-      schema: {
-        type: "object",
-        properties: {
-          settings: {
-            type: "object",
-            dependencies: {
-              mode: ["format"],
+  it.each([
+    {
+      title: "includes allowed values in enum validation errors",
+      params: {
+        cacheKey: "schema-validator.test.enum",
+        schema: {
+          type: "object",
+          properties: {
+            fileFormat: {
+              type: "string",
+              enum: ["markdown", "html", "json"],
             },
           },
+          required: ["fileFormat"],
         },
+        value: { fileFormat: "txt" },
       },
-      value: { settings: { mode: "strict" } },
-    });
+      path: "fileFormat",
+      messageIncludes: ["(allowed:"],
+      allowedValues: ["markdown", "html", "json"],
+      hiddenCount: 0,
+    },
+    {
+      title: "includes allowed value in const validation errors",
+      params: {
+        cacheKey: "schema-validator.test.const",
+        schema: {
+          type: "object",
+          properties: {
+            mode: {
+              const: "strict",
+            },
+          },
+          required: ["mode"],
+        },
+        value: { mode: "relaxed" },
+      },
+      path: "mode",
+      messageIncludes: ["(allowed:"],
+      allowedValues: ["strict"],
+      hiddenCount: 0,
+    },
+    {
+      title: "truncates long allowed-value hints",
+      params: {
+        cacheKey: "schema-validator.test.enum.truncate",
+        schema: {
+          type: "object",
+          properties: {
+            mode: {
+              type: "string",
+              enum: [
+                "v1",
+                "v2",
+                "v3",
+                "v4",
+                "v5",
+                "v6",
+                "v7",
+                "v8",
+                "v9",
+                "v10",
+                "v11",
+                "v12",
+                "v13",
+              ],
+            },
+          },
+          required: ["mode"],
+        },
+        value: { mode: "not-listed" },
+      },
+      path: "mode",
+      messageIncludes: ["(allowed:", "... (+1 more)"],
+      allowedValues: ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12"],
+      hiddenCount: 1,
+    },
+    {
+      title: "truncates oversized allowed value entries",
+      params: {
+        cacheKey: "schema-validator.test.enum.long-value",
+        schema: {
+          type: "object",
+          properties: {
+            mode: {
+              type: "string",
+              enum: ["a".repeat(300)],
+            },
+          },
+          required: ["mode"],
+        },
+        value: { mode: "not-listed" },
+      },
+      path: "mode",
+      messageIncludes: ["(allowed:", "... (+"],
+    },
+  ])("$title", ({ params, path, messageIncludes, allowedValues, hiddenCount }) => {
+    const result = expectValidationFailure(params);
+    const issue = expectValidationIssue(result, path);
 
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      const issue = res.errors.find((entry) => entry.path === "settings.format");
-      expect(issue).toBeDefined();
-      expect(issue?.allowedValues).toBeUndefined();
+    expectIssueMessageIncludes(issue, messageIncludes);
+    if (allowedValues) {
+      expect(issue?.allowedValues).toEqual(allowedValues);
+      expect(issue?.allowedValuesHiddenCount).toBe(hiddenCount);
     }
   });
 
-  it("truncates oversized allowed value entries", () => {
-    const oversizedAllowed = "a".repeat(300);
-    const res = validateJsonSchemaValue({
-      cacheKey: "schema-validator.test.enum.long-value",
-      schema: {
-        type: "object",
-        properties: {
-          mode: {
-            type: "string",
-            enum: [oversizedAllowed],
+  it.each([
+    {
+      title: "appends missing required property to the structured path",
+      params: {
+        cacheKey: "schema-validator.test.required.path",
+        schema: {
+          type: "object",
+          properties: {
+            settings: {
+              type: "object",
+              properties: {
+                mode: { type: "string" },
+              },
+              required: ["mode"],
+            },
+          },
+          required: ["settings"],
+        },
+        value: { settings: {} },
+      },
+      expectedPath: "settings.mode",
+    },
+    {
+      title: "appends missing dependency property to the structured path",
+      params: {
+        cacheKey: "schema-validator.test.dependencies.path",
+        schema: {
+          type: "object",
+          properties: {
+            settings: {
+              type: "object",
+              dependencies: {
+                mode: ["format"],
+              },
+            },
           },
         },
-        required: ["mode"],
+        value: { settings: { mode: "strict" } },
       },
-      value: { mode: "not-listed" },
-    });
+      expectedPath: "settings.format",
+    },
+  ])("$title", ({ params, expectedPath }) => {
+    const result = expectValidationFailure(params);
+    const issue = expectValidationIssue(result, expectedPath);
 
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      const issue = res.errors.find((entry) => entry.path === "mode");
-      expect(issue).toBeDefined();
-      expect(issue?.message).toContain("(allowed:");
-      expect(issue?.message).toContain("... (+");
-    }
+    expect(issue?.allowedValues).toBeUndefined();
   });
 
   it("sanitizes terminal text while preserving structured fields", () => {
     const maliciousProperty = "evil\nkey\t\x1b[31mred\x1b[0m";
-    const res = validateJsonSchemaValue({
+    const result = expectValidationFailure({
       cacheKey: "schema-validator.test.terminal-sanitize",
       schema: {
         type: "object",
@@ -218,56 +222,71 @@ describe("schema validator", () => {
       value: {},
     });
 
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      const issue = res.errors[0];
-      expect(issue).toBeDefined();
-      expect(issue?.path).toContain("\n");
-      expect(issue?.message).toContain("\n");
-      expect(issue?.text).toContain("\\n");
-      expect(issue?.text).toContain("\\t");
-      expect(issue?.text).not.toContain("\n");
-      expect(issue?.text).not.toContain("\t");
-      expect(issue?.text).not.toContain("\x1b");
-    }
+    const issue = result.errors[0];
+    expect(issue).toBeDefined();
+    expect(issue?.path).toContain("\n");
+    expect(issue?.message).toContain("\n");
+    expect(issue?.text).toContain("\\n");
+    expect(issue?.text).toContain("\\t");
+    expect(issue?.text).not.toContain("\n");
+    expect(issue?.text).not.toContain("\t");
+    expect(issue?.text).not.toContain("\x1b");
   });
 
-  it("supports uri-formatted string schemas", () => {
-    const valid = validateJsonSchemaValue({
-      cacheKey: "schema-validator.test.uri.valid",
-      schema: {
-        type: "object",
-        properties: {
-          apiRoot: {
-            type: "string",
-            format: "uri",
+  it.each([
+    {
+      title: "accepts uri-formatted string schemas for valid urls",
+      params: {
+        cacheKey: "schema-validator.test.uri.valid",
+        schema: {
+          type: "object",
+          properties: {
+            apiRoot: {
+              type: "string",
+              format: "uri",
+            },
           },
+          required: ["apiRoot"],
         },
-        required: ["apiRoot"],
+        value: { apiRoot: "https://api.telegram.org" },
       },
-      value: { apiRoot: "https://api.telegram.org" },
-    });
-    expect(valid.ok).toBe(true);
+      ok: true,
+    },
+    {
+      title: "rejects uri-formatted string schemas for invalid urls",
+      params: {
+        cacheKey: "schema-validator.test.uri.invalid",
+        schema: {
+          type: "object",
+          properties: {
+            apiRoot: {
+              type: "string",
+              format: "uri",
+            },
+          },
+          required: ["apiRoot"],
+        },
+        value: { apiRoot: "not a uri" },
+      },
+      ok: false,
+      expectedPath: "apiRoot",
+      expectedMessage: "must match format",
+    },
+  ])(
+    "supports uri-formatted string schemas: $title",
+    ({ params, ok, expectedPath, expectedMessage }) => {
+      const result = validateJsonSchemaValue(params);
 
-    const invalid = validateJsonSchemaValue({
-      cacheKey: "schema-validator.test.uri.invalid",
-      schema: {
-        type: "object",
-        properties: {
-          apiRoot: {
-            type: "string",
-            format: "uri",
-          },
-        },
-        required: ["apiRoot"],
-      },
-      value: { apiRoot: "not a uri" },
-    });
-    expect(invalid.ok).toBe(false);
-    if (!invalid.ok) {
-      expect(invalid.errors.find((entry) => entry.path === "apiRoot")?.message).toContain(
-        "must match format",
-      );
-    }
-  });
+      if (ok) {
+        expect(result.ok).toBe(true);
+        return;
+      }
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        const issue = expectValidationIssue(result, expectedPath as string);
+        expect(issue?.message).toContain(expectedMessage);
+      }
+    },
+  );
 });

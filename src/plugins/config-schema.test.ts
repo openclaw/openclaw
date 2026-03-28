@@ -2,6 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { buildPluginConfigSchema, emptyPluginConfigSchema } from "./config-schema.js";
 
+function expectSafeParseCases(
+  safeParse: ((value: unknown) => unknown) | undefined,
+  cases: ReadonlyArray<readonly [unknown, unknown]>,
+) {
+  expect(safeParse).toBeDefined();
+  for (const [value, expected] of cases) {
+    expect(safeParse?.(value)).toEqual(expected);
+  }
+}
+
 describe("buildPluginConfigSchema", () => {
   it("builds json schema when toJSONSchema is available", () => {
     const schema = z.strictObject({ enabled: z.boolean().default(true) });
@@ -71,11 +81,13 @@ describe("buildPluginConfigSchema", () => {
 describe("emptyPluginConfigSchema", () => {
   it("accepts undefined and empty objects only", () => {
     const schema = emptyPluginConfigSchema();
-    expect(schema.safeParse?.(undefined)).toEqual({ success: true, data: undefined });
-    expect(schema.safeParse?.({})).toEqual({ success: true, data: {} });
-    expect(schema.safeParse?.({ nope: true })).toEqual({
-      success: false,
-      error: { issues: [{ path: [], message: "config must be empty" }] },
-    });
+    expectSafeParseCases(schema.safeParse, [
+      [undefined, { success: true, data: undefined }],
+      [{}, { success: true, data: {} }],
+      [
+        { nope: true },
+        { success: false, error: { issues: [{ path: [], message: "config must be empty" }] } },
+      ],
+    ] as const);
   });
 });

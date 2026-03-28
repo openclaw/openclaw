@@ -14,6 +14,28 @@ import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 describe("Claude bundle plugin inspect integration", () => {
   let rootDir: string;
 
+  function expectLoadedClaudeManifest() {
+    const result = loadBundleManifest({ rootDir, bundleFormat: "claude" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected Claude bundle manifest to load");
+    }
+    return result.manifest;
+  }
+
+  function expectClaudeManifestField(params: {
+    field: "skills" | "hooks" | "settingsFiles" | "capabilities";
+    includes: readonly string[];
+  }) {
+    const manifest = expectLoadedClaudeManifest();
+    const values = manifest[params.field];
+    expect(values).toEqual(expect.arrayContaining([...params.includes]));
+  }
+
+  function expectNoDiagnostics(diagnostics: unknown[]) {
+    expect(diagnostics).toEqual([]);
+  }
+
   beforeAll(() => {
     rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-bundle-"));
 
@@ -113,71 +135,45 @@ describe("Claude bundle plugin inspect integration", () => {
   });
 
   it("loads the full Claude bundle manifest with all capabilities", () => {
-    const result = loadBundleManifest({ rootDir, bundleFormat: "claude" });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-
-    const m = result.manifest;
+    const m = expectLoadedClaudeManifest();
     expect(m.name).toBe("Test Claude Plugin");
     expect(m.description).toBe("Integration test fixture for Claude bundle inspection");
     expect(m.version).toBe("1.0.0");
     expect(m.bundleFormat).toBe("claude");
   });
 
-  it("resolves skills from skills, commands, and agents paths", () => {
-    const result = loadBundleManifest({ rootDir, bundleFormat: "claude" });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-
-    expect(result.manifest.skills).toContain("skill-packs");
-    expect(result.manifest.skills).toContain("extra-commands");
-    // Agent and output style dirs are merged into skills so their .md files are discoverable
-    expect(result.manifest.skills).toContain("agents");
-    expect(result.manifest.skills).toContain("output-styles");
-  });
-
-  it("resolves hooks from default and declared paths", () => {
-    const result = loadBundleManifest({ rootDir, bundleFormat: "claude" });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-
-    // Default hooks/hooks.json path + declared custom-hooks
-    expect(result.manifest.hooks).toContain("hooks/hooks.json");
-    expect(result.manifest.hooks).toContain("custom-hooks");
-  });
-
-  it("detects settings files", () => {
-    const result = loadBundleManifest({ rootDir, bundleFormat: "claude" });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-
-    expect(result.manifest.settingsFiles).toEqual(["settings.json"]);
-  });
-
-  it("detects all bundle capabilities", () => {
-    const result = loadBundleManifest({ rootDir, bundleFormat: "claude" });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-
-    const caps = result.manifest.capabilities;
-    expect(caps).toContain("skills");
-    expect(caps).toContain("commands");
-    expect(caps).toContain("agents");
-    expect(caps).toContain("hooks");
-    expect(caps).toContain("mcpServers");
-    expect(caps).toContain("lspServers");
-    expect(caps).toContain("outputStyles");
-    expect(caps).toContain("settings");
+  it.each([
+    {
+      name: "resolves skills from skills, commands, and agents paths",
+      field: "skills" as const,
+      includes: ["skill-packs", "extra-commands", "agents", "output-styles"],
+    },
+    {
+      name: "resolves hooks from default and declared paths",
+      field: "hooks" as const,
+      includes: ["hooks/hooks.json", "custom-hooks"],
+    },
+    {
+      name: "detects settings files",
+      field: "settingsFiles" as const,
+      includes: ["settings.json"],
+    },
+    {
+      name: "detects all bundle capabilities",
+      field: "capabilities" as const,
+      includes: [
+        "skills",
+        "commands",
+        "agents",
+        "hooks",
+        "mcpServers",
+        "lspServers",
+        "outputStyles",
+        "settings",
+      ],
+    },
+  ] as const)("$name", ({ field, includes }) => {
+    expectClaudeManifestField({ field, includes });
   });
 
   it("inspects MCP runtime support with supported and unsupported servers", () => {
@@ -190,7 +186,7 @@ describe("Claude bundle plugin inspect integration", () => {
     expect(mcp.hasSupportedStdioServer).toBe(true);
     expect(mcp.supportedServerNames).toContain("test-stdio-server");
     expect(mcp.unsupportedServerNames).toContain("test-sse-server");
-    expect(mcp.diagnostics).toEqual([]);
+    expectNoDiagnostics(mcp.diagnostics);
   });
 
   it("inspects LSP runtime support with stdio server", () => {
@@ -203,6 +199,6 @@ describe("Claude bundle plugin inspect integration", () => {
     expect(lsp.hasStdioServer).toBe(true);
     expect(lsp.supportedServerNames).toContain("typescript-lsp");
     expect(lsp.unsupportedServerNames).toEqual([]);
-    expect(lsp.diagnostics).toEqual([]);
+    expectNoDiagnostics(lsp.diagnostics);
   });
 });

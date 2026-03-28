@@ -15,6 +15,29 @@ function makeRepoRoot(prefix: string): string {
   return repoRoot;
 }
 
+function createDistPluginDir(repoRoot: string, pluginId: string) {
+  const distPluginDir = path.join(repoRoot, "dist", "extensions", pluginId);
+  fs.mkdirSync(distPluginDir, { recursive: true });
+  return distPluginDir;
+}
+
+function expectRuntimePluginWrapperContains(params: {
+  repoRoot: string;
+  pluginId: string;
+  relativePath?: string;
+  expectedImport: string;
+}) {
+  const runtimePath = path.join(
+    params.repoRoot,
+    "dist-runtime",
+    "extensions",
+    params.pluginId,
+    params.relativePath ?? "index.js",
+  );
+  expect(fs.existsSync(runtimePath)).toBe(true);
+  expect(fs.readFileSync(runtimePath, "utf8")).toContain(params.expectedImport);
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0, tempDirs.length)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -24,9 +47,8 @@ afterEach(() => {
 describe("stageBundledPluginRuntime", () => {
   it("stages bundled dist plugins as runtime wrappers and links staged dist node_modules", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-");
-    const distPluginDir = path.join(repoRoot, "dist", "extensions", "diffs");
+    const distPluginDir = createDistPluginDir(repoRoot, "diffs");
     fs.mkdirSync(path.join(repoRoot, "dist"), { recursive: true });
-    fs.mkdirSync(distPluginDir, { recursive: true });
     fs.mkdirSync(path.join(distPluginDir, "node_modules", "@pierre", "diffs"), {
       recursive: true,
     });
@@ -40,10 +62,11 @@ describe("stageBundledPluginRuntime", () => {
     stageBundledPluginRuntime({ repoRoot });
 
     const runtimePluginDir = path.join(repoRoot, "dist-runtime", "extensions", "diffs");
-    expect(fs.existsSync(path.join(runtimePluginDir, "index.js"))).toBe(true);
-    expect(fs.readFileSync(path.join(runtimePluginDir, "index.js"), "utf8")).toContain(
-      "../../../dist/extensions/diffs/index.js",
-    );
+    expectRuntimePluginWrapperContains({
+      repoRoot,
+      pluginId: "diffs",
+      expectedImport: "../../../dist/extensions/diffs/index.js",
+    });
     expect(fs.lstatSync(path.join(runtimePluginDir, "node_modules")).isSymbolicLink()).toBe(true);
     expect(fs.realpathSync(path.join(runtimePluginDir, "node_modules"))).toBe(
       fs.realpathSync(path.join(distPluginDir, "node_modules")),
@@ -53,7 +76,7 @@ describe("stageBundledPluginRuntime", () => {
 
   it("writes wrappers that forward plugin entry imports into canonical dist files", async () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-chunks-");
-    fs.mkdirSync(path.join(repoRoot, "dist", "extensions", "diffs"), { recursive: true });
+    createDistPluginDir(repoRoot, "diffs");
     fs.writeFileSync(
       path.join(repoRoot, "dist", "chunk-abc.js"),
       "export const value = 1;\n",
@@ -68,9 +91,11 @@ describe("stageBundledPluginRuntime", () => {
     stageBundledPluginRuntime({ repoRoot });
 
     const runtimeEntryPath = path.join(repoRoot, "dist-runtime", "extensions", "diffs", "index.js");
-    expect(fs.readFileSync(runtimeEntryPath, "utf8")).toContain(
-      "../../../dist/extensions/diffs/index.js",
-    );
+    expectRuntimePluginWrapperContains({
+      repoRoot,
+      pluginId: "diffs",
+      expectedImport: "../../../dist/extensions/diffs/index.js",
+    });
     expect(fs.existsSync(path.join(repoRoot, "dist-runtime", "chunk-abc.js"))).toBe(false);
 
     const runtimeModule = await import(`${pathToFileURL(runtimeEntryPath).href}?t=${Date.now()}`);
@@ -79,8 +104,7 @@ describe("stageBundledPluginRuntime", () => {
 
   it("stages root runtime sidecars that bundled plugin boundaries resolve directly", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-sidecars-");
-    const distPluginDir = path.join(repoRoot, "dist", "extensions", "whatsapp");
-    fs.mkdirSync(distPluginDir, { recursive: true });
+    const distPluginDir = createDistPluginDir(repoRoot, "whatsapp");
     fs.writeFileSync(path.join(distPluginDir, "index.js"), "export default {};\n", "utf8");
     fs.writeFileSync(
       path.join(distPluginDir, "light-runtime-api.js"),
@@ -95,15 +119,18 @@ describe("stageBundledPluginRuntime", () => {
 
     stageBundledPluginRuntime({ repoRoot });
 
-    const runtimePluginDir = path.join(repoRoot, "dist-runtime", "extensions", "whatsapp");
-    expect(fs.existsSync(path.join(runtimePluginDir, "light-runtime-api.js"))).toBe(true);
-    expect(fs.existsSync(path.join(runtimePluginDir, "runtime-api.js"))).toBe(true);
-    expect(fs.readFileSync(path.join(runtimePluginDir, "light-runtime-api.js"), "utf8")).toContain(
-      "../../../dist/extensions/whatsapp/light-runtime-api.js",
-    );
-    expect(fs.readFileSync(path.join(runtimePluginDir, "runtime-api.js"), "utf8")).toContain(
-      "../../../dist/extensions/whatsapp/runtime-api.js",
-    );
+    expectRuntimePluginWrapperContains({
+      repoRoot,
+      pluginId: "whatsapp",
+      relativePath: "light-runtime-api.js",
+      expectedImport: "../../../dist/extensions/whatsapp/light-runtime-api.js",
+    });
+    expectRuntimePluginWrapperContains({
+      repoRoot,
+      pluginId: "whatsapp",
+      relativePath: "runtime-api.js",
+      expectedImport: "../../../dist/extensions/whatsapp/runtime-api.js",
+    });
   });
 
   it("keeps plugin command registration on the canonical dist graph when loaded from dist-runtime", async () => {

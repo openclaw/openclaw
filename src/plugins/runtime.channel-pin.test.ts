@@ -12,6 +12,28 @@ import {
   setActivePluginRegistry,
 } from "./runtime.js";
 
+function createRegistryWithChannel(pluginId = "demo-channel") {
+  const registry = createEmptyPluginRegistry();
+  const plugin = { id: pluginId, meta: {} } as never;
+  registry.channels = [{ plugin }] as never;
+  return { registry, plugin };
+}
+
+function createChannelRegistryPair(pluginId = "demo-channel") {
+  return {
+    first: createRegistryWithChannel(pluginId),
+    second: createRegistryWithChannel(pluginId),
+  };
+}
+
+function createRegistrySet() {
+  return {
+    startup: createEmptyPluginRegistry(),
+    replacement: createEmptyPluginRegistry(),
+    unrelated: createEmptyPluginRegistry(),
+  };
+}
+
 describe("channel registry pinning", () => {
   afterEach(() => {
     resetPluginRuntimeStateForTest();
@@ -24,8 +46,7 @@ describe("channel registry pinning", () => {
   });
 
   it("preserves pinned channel registry across setActivePluginRegistry calls", () => {
-    const startup = createEmptyPluginRegistry();
-    startup.channels = [{ plugin: { id: "slack" } }] as never;
+    const { registry: startup } = createRegistryWithChannel();
     setActivePluginRegistry(startup);
     pinActivePluginChannelRegistry(startup);
 
@@ -38,20 +59,17 @@ describe("channel registry pinning", () => {
   });
 
   it("re-pin invalidates cached channel lookups", () => {
-    const setup = createEmptyPluginRegistry();
-    const setupPlugin = { id: "slack", meta: {} } as never;
-    setup.channels = [{ plugin: setupPlugin }] as never;
+    const { first, second } = createChannelRegistryPair();
+    const { registry: setup, plugin: setupPlugin } = first;
     setActivePluginRegistry(setup);
     pinActivePluginChannelRegistry(setup);
 
-    expect(getChannelPlugin("slack")).toBe(setupPlugin);
+    expect(getChannelPlugin("demo-channel")).toBe(setupPlugin);
 
-    const full = createEmptyPluginRegistry();
-    const fullPlugin = { id: "slack", meta: {} } as never;
-    full.channels = [{ plugin: fullPlugin }] as never;
+    const { registry: full, plugin: fullPlugin } = second;
     setActivePluginRegistry(full);
 
-    expect(getChannelPlugin("slack")).toBe(setupPlugin);
+    expect(getChannelPlugin("demo-channel")).toBe(setupPlugin);
 
     const activeVersionBeforeRepin = getActivePluginRegistryVersion();
     const channelVersionBeforeRepin = getActivePluginChannelRegistryVersion();
@@ -59,45 +77,48 @@ describe("channel registry pinning", () => {
 
     expect(getActivePluginRegistryVersion()).toBe(activeVersionBeforeRepin);
     expect(getActivePluginChannelRegistryVersion()).toBe(channelVersionBeforeRepin + 1);
-    expect(getChannelPlugin("slack")).toBe(fullPlugin);
+    expect(getChannelPlugin("demo-channel")).toBe(fullPlugin);
   });
 
-  it("updates channel registry on swap when not pinned", () => {
-    const first = createEmptyPluginRegistry();
-    setActivePluginRegistry(first);
-    expect(getActivePluginChannelRegistry()).toBe(first);
-
-    const second = createEmptyPluginRegistry();
-    setActivePluginRegistry(second);
-    expect(getActivePluginChannelRegistry()).toBe(second);
-  });
-
-  it("release restores live-tracking behavior", () => {
-    const startup = createEmptyPluginRegistry();
+  it.each([
+    {
+      name: "updates channel registry on swap when not pinned",
+      pin: false,
+      releasePinnedRegistry: false,
+      expectDuringPin: false,
+      expectAfterSwap: "second",
+    },
+    {
+      name: "release restores live-tracking behavior",
+      pin: true,
+      releasePinnedRegistry: true,
+      expectDuringPin: true,
+      expectAfterSwap: "second",
+    },
+    {
+      name: "release is a no-op when the pinned registry does not match",
+      pin: true,
+      releasePinnedRegistry: false,
+      expectDuringPin: true,
+      expectAfterSwap: "first",
+    },
+  ] as const)("$name", ({ pin, releasePinnedRegistry, expectDuringPin, expectAfterSwap }) => {
+    const { startup, replacement, unrelated } = createRegistrySet();
     setActivePluginRegistry(startup);
-    pinActivePluginChannelRegistry(startup);
+    if (pin) {
+      pinActivePluginChannelRegistry(startup);
+    }
 
-    const replacement = createEmptyPluginRegistry();
     setActivePluginRegistry(replacement);
-    expect(getActivePluginChannelRegistry()).toBe(startup);
+    expect(getActivePluginChannelRegistry()).toBe(expectDuringPin ? startup : replacement);
 
-    releasePinnedPluginChannelRegistry(startup);
-    // After release, the channel registry should follow the active registry.
-    expect(getActivePluginChannelRegistry()).toBe(replacement);
-  });
+    if (pin) {
+      releasePinnedPluginChannelRegistry(releasePinnedRegistry ? startup : unrelated);
+    }
 
-  it("release is a no-op when the pinned registry does not match", () => {
-    const startup = createEmptyPluginRegistry();
-    setActivePluginRegistry(startup);
-    pinActivePluginChannelRegistry(startup);
-
-    const unrelated = createEmptyPluginRegistry();
-    releasePinnedPluginChannelRegistry(unrelated);
-
-    // Pin is still held — unrelated release was ignored.
-    const replacement = createEmptyPluginRegistry();
-    setActivePluginRegistry(replacement);
-    expect(getActivePluginChannelRegistry()).toBe(startup);
+    expect(getActivePluginChannelRegistry()).toBe(
+      expectAfterSwap === "second" ? replacement : startup,
+    );
   });
 
   it("requireActivePluginChannelRegistry creates a registry when none exists", () => {
@@ -108,13 +129,12 @@ describe("channel registry pinning", () => {
   });
 
   it("resetPluginRuntimeStateForTest clears channel pin", () => {
-    const startup = createEmptyPluginRegistry();
+    const { startup, replacement: fresh } = createRegistrySet();
     setActivePluginRegistry(startup);
     pinActivePluginChannelRegistry(startup);
 
     resetPluginRuntimeStateForTest();
 
-    const fresh = createEmptyPluginRegistry();
     setActivePluginRegistry(fresh);
     expect(getActivePluginChannelRegistry()).toBe(fresh);
   });

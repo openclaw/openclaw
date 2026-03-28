@@ -402,45 +402,41 @@ describe("redactConfigSnapshot", () => {
     expect(env.vars.OPENAI_API_KEY).toBe(REDACTED_SENTINEL);
   });
 
-  it("respects token-name redaction boundaries", () => {
-    const cases = [
-      {
-        name: "does not redact numeric tokens field",
-        snapshot: makeSnapshot({ memory: { tokens: 8192 } }),
-        assert: (config: Record<string, unknown>) => {
-          expect((config.memory as Record<string, unknown>).tokens).toBe(8192);
-        },
+  it.each([
+    {
+      name: "does not redact numeric tokens field",
+      snapshot: makeSnapshot({ memory: { tokens: 8192 } }),
+      assert: (config: Record<string, unknown>) => {
+        expect((config.memory as Record<string, unknown>).tokens).toBe(8192);
       },
-      {
-        name: "does not redact softThresholdTokens",
-        snapshot: makeSnapshot({ compaction: { softThresholdTokens: 50000 } }),
-        assert: (config: Record<string, unknown>) => {
-          expect((config.compaction as Record<string, unknown>).softThresholdTokens).toBe(50000);
-        },
+    },
+    {
+      name: "does not redact softThresholdTokens",
+      snapshot: makeSnapshot({ compaction: { softThresholdTokens: 50000 } }),
+      assert: (config: Record<string, unknown>) => {
+        expect((config.compaction as Record<string, unknown>).softThresholdTokens).toBe(50000);
       },
-      {
-        name: "does not redact string tokens field",
-        snapshot: makeSnapshot({ memory: { tokens: "should-not-be-redacted" } }),
-        assert: (config: Record<string, unknown>) => {
-          expect((config.memory as Record<string, unknown>).tokens).toBe("should-not-be-redacted");
-        },
+    },
+    {
+      name: "does not redact string tokens field",
+      snapshot: makeSnapshot({ memory: { tokens: "should-not-be-redacted" } }),
+      assert: (config: Record<string, unknown>) => {
+        expect((config.memory as Record<string, unknown>).tokens).toBe("should-not-be-redacted");
       },
-      {
-        name: "still redacts singular token field",
-        snapshot: makeSnapshot({
-          channels: { slack: { token: "secret-slack-token-value-here" } },
-        }),
-        assert: (config: Record<string, unknown>) => {
-          const channels = config.channels as Record<string, Record<string, string>>;
-          expect(channels.slack.token).toBe(REDACTED_SENTINEL);
-        },
+    },
+    {
+      name: "still redacts singular token field",
+      snapshot: makeSnapshot({
+        channels: { slack: { token: "secret-slack-token-value-here" } },
+      }),
+      assert: (config: Record<string, unknown>) => {
+        const channels = config.channels as Record<string, Record<string, string>>;
+        expect(channels.slack.token).toBe(REDACTED_SENTINEL);
       },
-    ] as const;
-
-    for (const testCase of cases) {
-      const result = redactConfigSnapshot(testCase.snapshot);
-      testCase.assert(result.config as Record<string, unknown>);
-    }
+    },
+  ] as const)("respects token-name redaction boundaries: $name", ({ snapshot, assert }) => {
+    const result = redactConfigSnapshot(snapshot);
+    assert(result.config as Record<string, unknown>);
   });
 
   it("uses uiHints to determine sensitivity", () => {
@@ -734,14 +730,10 @@ describe("redactConfigSnapshot", () => {
       },
     ];
 
-    for (const testCase of cases) {
-      const redacted = redactConfigSnapshot(testCase.snapshot, testCase.hints);
-      const restored = restoreRedactedValues(
-        redacted.config,
-        testCase.snapshot.config,
-        testCase.hints,
-      );
-      testCase.assert({
+    for (const { snapshot, hints, assert } of cases) {
+      const redacted = redactConfigSnapshot(snapshot, hints);
+      const restored = restoreRedactedValues(redacted.config, snapshot.config, hints);
+      assert({
         redacted: redacted.config as Record<string, unknown>,
         restored: restored as Record<string, unknown>,
       });

@@ -1,9 +1,11 @@
-import { beforeEach, describe, vi } from "vitest";
-import { __testing as discordThreadBindingTesting } from "../../../../extensions/discord/src/monitor/thread-bindings.manager.js";
-import { __testing as feishuThreadBindingTesting } from "../../../../extensions/feishu/src/thread-bindings.js";
-import { resetMatrixThreadBindingsForTests } from "../../../../extensions/matrix/api.js";
-import { __testing as telegramThreadBindingTesting } from "../../../../extensions/telegram/src/thread-bindings.js";
+import { beforeEach, describe } from "vitest";
+import { __testing as bluebubblesBindingTesting } from "../../../../extensions/bluebubbles/api.js";
+import { __testing as iMessageBindingTesting } from "../../../../extensions/imessage/api.js";
 import { __testing as sessionBindingTesting } from "../../../infra/outbound/session-binding-service.js";
+import { discordThreadBindingTesting } from "../../../plugin-sdk/discord.js";
+import { feishuThreadBindingTesting } from "../../../plugin-sdk/feishu-conversation.js";
+import { resetMatrixThreadBindingsForTests } from "../../../plugin-sdk/matrix.js";
+import { resetTelegramThreadBindingsForTests } from "../../../plugin-sdk/telegram-runtime-surface.js";
 import {
   actionContractRegistry,
   directoryContractRegistry,
@@ -24,21 +26,6 @@ import {
   installChannelThreadingContractSuite,
   installSessionBindingContractSuite,
 } from "./suites.js";
-
-vi.mock("../../../../extensions/matrix/src/matrix/send.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../../../extensions/matrix/src/matrix/send.js")
-  >("../../../../extensions/matrix/src/matrix/send.js");
-  return {
-    ...actual,
-    sendMessageMatrix: vi.fn(
-      async (_to: string, _message: string, opts?: { threadId?: string }) => ({
-        messageId: opts?.threadId ? "$reply" : "$root",
-        roomId: "!room:example",
-      }),
-    ),
-  };
-});
 
 for (const entry of pluginContractRegistry) {
   describe(`${entry.id} plugin contract`, () => {
@@ -108,11 +95,13 @@ for (const entry of directoryContractRegistry) {
 
 describe("session binding contract registry", () => {
   beforeEach(async () => {
+    bluebubblesBindingTesting.resetBlueBubblesConversationBindingsForTests();
+    iMessageBindingTesting.resetIMessageConversationBindingsForTests();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     discordThreadBindingTesting.resetThreadBindingsForTests();
     feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
     resetMatrixThreadBindingsForTests();
-    await telegramThreadBindingTesting.resetTelegramThreadBindingsForTests();
+    await resetTelegramThreadBindingsForTests();
   });
 
   for (const entry of sessionBindingContractRegistry) {

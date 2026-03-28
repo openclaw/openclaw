@@ -591,6 +591,39 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("pairs a provider when config uses an alias key", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "amazon-bedrock:default": {
+            type: "api_key",
+            provider: "amazon-bedrock",
+            key: "sk-test",
+          },
+        },
+      });
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "aws-bedrock/text-1" } } },
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://example.com",
+              models: [
+                makeModelDefinition("text-1", ["text"]),
+                makeModelDefinition("vision-1", ["text", "image"]),
+              ],
+            },
+          },
+        },
+      };
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "amazon-bedrock/vision-1",
+      });
+      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+    });
+  });
+
   it("prefers explicit agents.defaults.imageModel", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {

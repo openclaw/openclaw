@@ -13,16 +13,16 @@ import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-h
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
 import { markdownToSignalTextChunks } from "./format.js";
 import { signalMessageActions } from "./message-actions.js";
+import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
-import type { SignalProbe } from "./probe.js";
+import { probeSignal, type SignalProbe } from "./probe.js";
 import {
   buildBaseChannelStatusSummary,
+  chunkText,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
-  looksLikeSignalTargetId,
   normalizeE164,
-  normalizeSignalMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   type ChannelPlugin,
@@ -258,7 +258,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           }),
         probeAccount: async ({ account, timeoutMs }) => {
           const baseUrl = account.baseUrl;
-          return await getSignalRuntime().channel.signal.probeSignal(baseUrl, timeoutMs);
+          return await probeSignal(baseUrl, timeoutMs);
         },
         formatCapabilitiesProbe: ({ probe }) =>
           (probe as SignalProbe | undefined)?.version
@@ -307,7 +307,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
     outbound: {
       base: {
         deliveryMode: "direct",
-        chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
+        chunker: chunkText,
         chunkerMode: "text",
         textChunkLimit: 4000,
         sendFormattedText: async ({ cfg, to, text, accountId, deps, abortSignal }) =>

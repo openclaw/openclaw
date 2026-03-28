@@ -50,6 +50,9 @@ vi.mock("../session-utils.js", async (importOriginal) => {
   return {
     ...original,
     loadSessionEntry: (rawKey: string) => ({
+      ...(typeof mockState.sessionEntry.canonicalKey === "string"
+        ? { canonicalKey: mockState.sessionEntry.canonicalKey }
+        : {}),
       cfg: {
         session: {
           mainKey: mockState.mainSessionKey,
@@ -61,7 +64,10 @@ vi.mock("../session-utils.js", async (importOriginal) => {
         sessionFile: mockState.transcriptPath,
         ...mockState.sessionEntry,
       },
-      canonicalKey: rawKey || "main",
+      canonicalKey:
+        typeof mockState.sessionEntry.canonicalKey === "string"
+          ? mockState.sessionEntry.canonicalKey
+          : rawKey || "main",
     }),
   };
 });
@@ -498,6 +504,42 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(extractFirstTextBlock(chatCall?.[1])).toBe("hello");
   });
 
+  it("chat.inject broadcasts and routes on the canonical session key", async () => {
+    createTranscriptFixture("openclaw-chat-inject-canonical-key-");
+    mockState.sessionEntry = {
+      canonicalKey: "agent:main:canon",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await chatHandlers["chat.inject"]({
+      params: {
+        sessionKey: "legacy-key",
+        message: "hello",
+      },
+      respond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }));
+    expect(context.broadcast).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({
+        sessionKey: "agent:main:canon",
+      }),
+    );
+    expect(context.nodeSendToSession).toHaveBeenCalledWith(
+      "agent:main:canon",
+      "chat",
+      expect.objectContaining({
+        sessionKey: "agent:main:canon",
+      }),
+    );
+  });
+
   it("chat.send non-streaming final strips external untrusted wrapper metadata from final payload text", async () => {
     createTranscriptFixture("openclaw-chat-send-untrusted-meta-");
     mockState.finalText = `hello\n\n${UNTRUSTED_CONTEXT_SUFFIX}`;
@@ -510,6 +552,36 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-untrusted-context",
     });
     expect(extractFirstTextBlock(payload)).toBe("hello");
+  });
+
+  it("chat.send non-streaming final broadcasts and routes on the canonical session key", async () => {
+    createTranscriptFixture("openclaw-chat-send-canonical-key-");
+    mockState.sessionEntry = {
+      canonicalKey: "agent:main:canon",
+    };
+    mockState.finalText = "hello";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-canonical-key",
+      sessionKey: "legacy-key",
+    });
+
+    expect(payload).toEqual(
+      expect.objectContaining({
+        sessionKey: "agent:main:canon",
+      }),
+    );
+    expect(context.nodeSendToSession).toHaveBeenCalledWith(
+      "agent:main:canon",
+      "chat",
+      expect.objectContaining({
+        sessionKey: "agent:main:canon",
+      }),
+    );
   });
 
   it("chat.send keeps explicit delivery routes for channel-scoped sessions", async () => {
@@ -890,6 +962,49 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         OriginatingChannel: "whatsapp",
         OriginatingTo: "whatsapp:+8613800138000",
         AccountId: "default",
+      }),
+    );
+  });
+
+  it("chat.send falls back to origin thread metadata for configured main CLI delivery inheritance", async () => {
+    createTranscriptFixture("openclaw-chat-send-config-main-origin-thread-routes-");
+    mockState.mainSessionKey = "work";
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      origin: {
+        provider: "telegram",
+        accountId: "default",
+        threadId: "42",
+      },
+      lastTo: "telegram:6812765697",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-config-main-origin-thread-routes",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.CLI,
+            id: "cli",
+          },
+        },
+      } as unknown,
+      sessionKey: "agent:main:work",
+      deliver: true,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:6812765697",
+        ExplicitDeliverRoute: true,
+        AccountId: "default",
+        MessageThreadId: "42",
       }),
     );
   });

@@ -24,6 +24,13 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
+async function writeMarketplaceManifest(rootDir: string, manifest: unknown): Promise<string> {
+  const manifestPath = path.join(rootDir, ".claude-plugin", "marketplace.json");
+  await fs.mkdir(path.dirname(manifestPath), { recursive: true });
+  await fs.writeFile(manifestPath, JSON.stringify(manifest));
+  return manifestPath;
+}
+
 function mockRemoteMarketplaceClone(manifest: unknown) {
   runCommandWithTimeoutMock.mockImplementationOnce(async (argv: string[]) => {
     const repoDir = argv.at(-1);
@@ -37,6 +44,19 @@ function mockRemoteMarketplaceClone(manifest: unknown) {
   });
 }
 
+async function expectRemoteMarketplaceError(params: { manifest: unknown; expectedError: string }) {
+  mockRemoteMarketplaceClone(params.manifest);
+
+  const { listMarketplacePlugins } = await import("./marketplace.js");
+  const result = await listMarketplacePlugins({ marketplace: "owner/repo" });
+
+  expect(result).toEqual({
+    ok: false,
+    error: params.expectedError,
+  });
+  expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+}
+
 describe("marketplace plugins", () => {
   afterEach(() => {
     installPluginFromPathMock.mockReset();
@@ -46,22 +66,18 @@ describe("marketplace plugins", () => {
 
   it("lists plugins from a local marketplace root", async () => {
     await withTempDir(async (rootDir) => {
-      await fs.mkdir(path.join(rootDir, ".claude-plugin"), { recursive: true });
-      await fs.writeFile(
-        path.join(rootDir, ".claude-plugin", "marketplace.json"),
-        JSON.stringify({
-          name: "Example Marketplace",
-          version: "1.0.0",
-          plugins: [
-            {
-              name: "frontend-design",
-              version: "0.1.0",
-              description: "Design system bundle",
-              source: "./plugins/frontend-design",
-            },
-          ],
-        }),
-      );
+      await writeMarketplaceManifest(rootDir, {
+        name: "Example Marketplace",
+        version: "1.0.0",
+        plugins: [
+          {
+            name: "frontend-design",
+            version: "0.1.0",
+            description: "Design system bundle",
+            source: "./plugins/frontend-design",
+          },
+        ],
+      });
 
       const { listMarketplacePlugins } = await import("./marketplace.js");
       const result = await listMarketplacePlugins({ marketplace: rootDir });
@@ -88,19 +104,15 @@ describe("marketplace plugins", () => {
   it("resolves relative plugin paths against the marketplace root", async () => {
     await withTempDir(async (rootDir) => {
       const pluginDir = path.join(rootDir, "plugins", "frontend-design");
-      await fs.mkdir(path.join(rootDir, ".claude-plugin"), { recursive: true });
       await fs.mkdir(pluginDir, { recursive: true });
-      await fs.writeFile(
-        path.join(rootDir, ".claude-plugin", "marketplace.json"),
-        JSON.stringify({
-          plugins: [
-            {
-              name: "frontend-design",
-              source: "./plugins/frontend-design",
-            },
-          ],
-        }),
-      );
+      const manifestPath = await writeMarketplaceManifest(rootDir, {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "./plugins/frontend-design",
+          },
+        ],
+      });
       installPluginFromPathMock.mockResolvedValue({
         ok: true,
         pluginId: "frontend-design",
@@ -111,7 +123,7 @@ describe("marketplace plugins", () => {
 
       const { installPluginFromMarketplace } = await import("./marketplace.js");
       const result = await installPluginFromMarketplace({
-        marketplace: path.join(rootDir, ".claude-plugin", "marketplace.json"),
+        marketplace: manifestPath,
         plugin: "frontend-design",
       });
 
@@ -221,22 +233,18 @@ describe("marketplace plugins", () => {
         "fetch",
         vi.fn(async () => new Response(null, { status: 200 })),
       );
-      await fs.mkdir(path.join(rootDir, ".claude-plugin"), { recursive: true });
-      await fs.writeFile(
-        path.join(rootDir, ".claude-plugin", "marketplace.json"),
-        JSON.stringify({
-          plugins: [
-            {
-              name: "frontend-design",
-              source: "https://example.com/frontend-design.tgz",
-            },
-          ],
-        }),
-      );
+      const manifestPath = await writeMarketplaceManifest(rootDir, {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "https://example.com/frontend-design.tgz",
+          },
+        ],
+      });
 
       const { installPluginFromMarketplace } = await import("./marketplace.js");
       const result = await installPluginFromMarketplace({
-        marketplace: path.join(rootDir, ".claude-plugin", "marketplace.json"),
+        marketplace: manifestPath,
         plugin: "frontend-design",
       });
 
@@ -248,78 +256,59 @@ describe("marketplace plugins", () => {
     });
   });
 
-  it("rejects remote marketplace git plugin sources before cloning nested remotes", async () => {
-    mockRemoteMarketplaceClone({
-      plugins: [
-        {
-          name: "frontend-design",
-          source: {
-            type: "git",
-            url: "https://evil.example/repo.git",
+  it.each([
+    {
+      name: "rejects remote marketplace git plugin sources before cloning nested remotes",
+      manifest: {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: {
+              type: "git",
+              url: "https://evil.example/repo.git",
+            },
           },
-        },
-      ],
-    });
-
-    const { listMarketplacePlugins } = await import("./marketplace.js");
-    const result = await listMarketplacePlugins({ marketplace: "owner/repo" });
-
-    expect(result).toEqual({
-      ok: false,
-      error:
+        ],
+      },
+      expectedError:
         'invalid marketplace entry "frontend-design" in owner/repo: ' +
         "remote marketplaces may not use git plugin sources",
-    });
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects remote marketplace absolute plugin paths", async () => {
-    mockRemoteMarketplaceClone({
-      plugins: [
-        {
-          name: "frontend-design",
-          source: {
-            type: "path",
-            path: "/tmp/frontend-design",
+    },
+    {
+      name: "rejects remote marketplace absolute plugin paths",
+      manifest: {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: {
+              type: "path",
+              path: "/tmp/frontend-design",
+            },
           },
-        },
-      ],
-    });
-
-    const { listMarketplacePlugins } = await import("./marketplace.js");
-    const result = await listMarketplacePlugins({ marketplace: "owner/repo" });
-
-    expect(result).toEqual({
-      ok: false,
-      error:
+        ],
+      },
+      expectedError:
         'invalid marketplace entry "frontend-design" in owner/repo: ' +
         "remote marketplaces may only use relative plugin paths",
-    });
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects remote marketplace HTTP plugin paths", async () => {
-    mockRemoteMarketplaceClone({
-      plugins: [
-        {
-          name: "frontend-design",
-          source: {
-            type: "path",
-            path: "https://evil.example/plugin.tgz",
+    },
+    {
+      name: "rejects remote marketplace HTTP plugin paths",
+      manifest: {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: {
+              type: "path",
+              path: "https://evil.example/plugin.tgz",
+            },
           },
-        },
-      ],
-    });
-
-    const { listMarketplacePlugins } = await import("./marketplace.js");
-    const result = await listMarketplacePlugins({ marketplace: "owner/repo" });
-
-    expect(result).toEqual({
-      ok: false,
-      error:
+        ],
+      },
+      expectedError:
         'invalid marketplace entry "frontend-design" in owner/repo: ' +
         "remote marketplaces may not use HTTP(S) plugin paths",
-    });
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+    },
+  ] as const)("$name", async ({ manifest, expectedError }) => {
+    await expectRemoteMarketplaceError({ manifest, expectedError });
   });
 });

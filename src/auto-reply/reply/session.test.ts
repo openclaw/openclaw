@@ -1399,10 +1399,101 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         authProfileOverrideSource: overrides.authProfileOverrideSource,
         authProfileOverrideCompactionCount: overrides.authProfileOverrideCompactionCount,
       });
-      expect(result.sessionEntry.cliSessionIds).toBeUndefined();
-      expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
-      expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
+      expect(result.sessionEntry.cliSessionIds).toEqual(overrides.cliSessionIds);
+      expect(result.sessionEntry.cliSessionBindings).toEqual(overrides.cliSessionBindings);
+      expect(result.sessionEntry.claudeCliSessionId).toBe(overrides.claudeCliSessionId);
     }
+  });
+
+  it("preserves spawned session ownership metadata across /new and /reset", async () => {
+    const storePath = await createStorePath("openclaw-reset-spawned-metadata-");
+    const sessionKey = "subagent:owned-child";
+    const existingSessionId = "existing-session-owned-child";
+    const overrides = {
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/child-workspace",
+      parentSessionKey: "agent:main:main",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      displayName: "Ops Child",
+    } as const;
+    const cases = [
+      { name: "new preserves spawned session ownership metadata", body: "/new" },
+      { name: "reset preserves spawned session ownership metadata", body: "/reset" },
+    ] as const;
+
+    for (const testCase of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: { ...overrides },
+      });
+
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "user-owned-child",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession, testCase.name).toBe(true);
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionEntry).toMatchObject(overrides);
+    }
+  });
+
+  it("requires operator.admin when Provider is internal even if Surface carries external metadata", async () => {
+    const storePath = await createStorePath("openclaw-internal-reset-provider-authoritative-");
+    const sessionKey = "agent:main:telegram:dm:provider-authoritative";
+    const existingSessionId = "existing-session-provider-authoritative";
+
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: {},
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset",
+        RawBody: "/reset",
+        CommandBody: "/reset",
+        Provider: "webchat",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        GatewayClientScopes: ["operator.write"],
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
   });
 
   it("archives the old session store entry on /new", async () => {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, FileOperations } from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -69,6 +69,23 @@ type ToolFailure = {
   summary: string;
   meta?: string;
 };
+
+type ModelRegistryWithRequestAuthLookup = {
+  getApiKeyAndHeaders?: (
+    model: NonNullable<ExtensionContext["model"]>,
+  ) => Promise<ResolvedRequestAuth>;
+};
+
+type ResolvedRequestAuth =
+  | {
+      ok: true;
+      apiKey?: string;
+      headers?: Record<string, string>;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
 
 function clampNonNegativeInt(value: unknown, fallback: number): number {
   const normalized = typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -614,30 +631,43 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    const modelHeaders =
-      model.headers && typeof model.headers === "object" && !Array.isArray(model.headers)
-        ? model.headers
-        : undefined;
-    let apiKey = "";
+    let requestAuth: ResolvedRequestAuth;
     try {
-      apiKey = (await ctx.modelRegistry.getApiKey(model)) ?? "";
+      const modelRegistry = ctx.modelRegistry as ModelRegistryWithRequestAuthLookup;
+      if (typeof modelRegistry.getApiKeyAndHeaders !== "function") {
+        throw new Error("model registry auth lookup unavailable");
+      }
+      requestAuth = await modelRegistry.getApiKeyAndHeaders(model);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
-      log.warn(`Compaction safeguard: request auth unavailable; cancelling compaction. ${error}`);
+      log.warn(
+        `Compaction safeguard: request credentials unavailable; cancelling compaction. ${error}`,
+      );
       setCompactionSafeguardCancelReason(
         ctx.sessionManager,
-        `Compaction safeguard could not resolve request auth for ${model.provider}/${model.id}: ${error}`,
+        `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${error}`,
       );
       return { cancel: true };
     }
-    const headers = modelHeaders && Object.keys(modelHeaders).length > 0 ? modelHeaders : undefined;
-    if (!apiKey && !headers) {
+    if (!requestAuth.ok) {
       log.warn(
-        "Compaction safeguard: no request auth available; cancelling compaction to preserve history.",
+        `Compaction safeguard: request credential resolution failed for ${model.provider}/${model.id}: ${requestAuth.error}`,
       );
       setCompactionSafeguardCancelReason(
         ctx.sessionManager,
-        `Compaction safeguard could not resolve request auth for ${model.provider}/${model.id}.`,
+        `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${requestAuth.error}`,
+      );
+      return { cancel: true };
+    }
+    const apiKey = requestAuth.apiKey;
+    const headers = requestAuth.headers;
+    if (!apiKey && !headers) {
+      log.warn(
+        "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
+      );
+      setCompactionSafeguardCancelReason(
+        ctx.sessionManager,
+        `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}.`,
       );
       return { cancel: true };
     }
@@ -703,7 +733,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 droppedSummary = await compactionSafeguardDeps.summarizeInStages({
                   messages: pruned.droppedMessagesList,
                   model,
-                  apiKey,
+                  apiKey: apiKey ?? "",
                   headers,
                   signal,
                   reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
@@ -775,7 +805,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               ? await compactionSafeguardDeps.summarizeInStages({
                   messages: messagesToSummarize,
                   model,
-                  apiKey,
+                  apiKey: apiKey ?? "",
                   headers,
                   signal,
                   reserveTokens,
@@ -792,7 +822,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             const prefixSummary = await compactionSafeguardDeps.summarizeInStages({
               messages: turnPrefixMessages,
               model,
-              apiKey,
+              apiKey: apiKey ?? "",
               headers,
               signal,
               reserveTokens,
