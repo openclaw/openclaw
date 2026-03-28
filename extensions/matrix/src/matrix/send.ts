@@ -1,4 +1,4 @@
-import type { PollInput } from "../runtime-api.js";
+import type { MarkdownTableMode, PollInput } from "../runtime-api.js";
 import { getMatrixRuntime } from "../runtime.js";
 import type { CoreConfig } from "../types.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
@@ -41,6 +41,10 @@ export type MatrixPreparedSingleText = {
   fitsInSingleEvent: boolean;
 };
 
+export type MatrixPreparedChunkedText = MatrixPreparedSingleText & {
+  chunks: string[];
+};
+
 type MatrixClientResolveOpts = {
   client?: MatrixClient;
   cfg?: CoreConfig;
@@ -74,15 +78,18 @@ export function prepareMatrixSingleText(
   opts: {
     cfg?: CoreConfig;
     accountId?: string;
+    tableMode?: MarkdownTableMode;
   } = {},
 ): MatrixPreparedSingleText {
   const trimmedText = text.trim();
   const cfg = opts.cfg ?? getCore().config.loadConfig();
-  const tableMode = getCore().channel.text.resolveMarkdownTableMode({
-    cfg,
-    channel: "matrix",
-    accountId: opts.accountId,
-  });
+  const tableMode =
+    opts.tableMode ??
+    getCore().channel.text.resolveMarkdownTableMode({
+      cfg,
+      channel: "matrix",
+      accountId: opts.accountId,
+    });
   const convertedText = getCore().channel.text.convertMarkdownTables(trimmedText, tableMode);
   const singleEventLimit = Math.min(
     getCore().channel.text.resolveTextChunkLimit(cfg, "matrix", opts.accountId),
@@ -93,6 +100,27 @@ export function prepareMatrixSingleText(
     convertedText,
     singleEventLimit,
     fitsInSingleEvent: convertedText.length <= singleEventLimit,
+  };
+}
+
+export function chunkMatrixText(
+  text: string,
+  opts: {
+    cfg?: CoreConfig;
+    accountId?: string;
+    tableMode?: MarkdownTableMode;
+  } = {},
+): MatrixPreparedChunkedText {
+  const preparedText = prepareMatrixSingleText(text, opts);
+  const cfg = opts.cfg ?? getCore().config.loadConfig();
+  const chunkMode = getCore().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
+  return {
+    ...preparedText,
+    chunks: getCore().channel.text.chunkMarkdownTextWithMode(
+      preparedText.convertedText,
+      preparedText.singleEventLimit,
+      chunkMode,
+    ),
   };
 }
 
@@ -115,16 +143,10 @@ export async function sendMessageMatrix(
     async (client) => {
       const roomId = await resolveMatrixRoomId(client, to);
       const cfg = opts.cfg ?? getCore().config.loadConfig();
-      const { convertedText, singleEventLimit } = prepareMatrixSingleText(trimmedMessage, {
+      const { chunks } = chunkMatrixText(trimmedMessage, {
         cfg,
         accountId: opts.accountId,
       });
-      const chunkMode = getCore().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
-      const chunks = getCore().channel.text.chunkMarkdownTextWithMode(
-        convertedText,
-        singleEventLimit,
-        chunkMode,
-      );
       const threadId = normalizeThreadId(opts.threadId);
       const relation = threadId
         ? buildThreadRelation(threadId, opts.replyToId)
