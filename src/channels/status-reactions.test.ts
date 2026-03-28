@@ -61,11 +61,7 @@ const createSetOnlyController = () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("resolveToolEmoji", () => {
-  const cases: Array<{
-    name: string;
-    tool: string | undefined;
-    expected: string;
-  }> = [
+  it.each([
     { name: "returns coding emoji for exec tool", tool: "exec", expected: DEFAULT_EMOJIS.coding },
     {
       name: "returns coding emoji for process tool",
@@ -91,13 +87,12 @@ describe("resolveToolEmoji", () => {
       tool: "my_exec_wrapper",
       expected: DEFAULT_EMOJIS.coding,
     },
-  ];
-
-  for (const testCase of cases) {
-    it(`should ${testCase.name}`, () => {
-      expect(resolveToolEmoji(testCase.tool, DEFAULT_EMOJIS)).toBe(testCase.expected);
-    });
-  }
+  ] satisfies Array<{ name: string; tool: string | undefined; expected: string }>)(
+    "should $name",
+    ({ tool, expected }) => {
+      expect(resolveToolEmoji(tool, DEFAULT_EMOJIS)).toBe(expected);
+    },
+  );
 });
 
 describe("createStatusReactionController", () => {

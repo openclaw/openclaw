@@ -99,16 +99,12 @@ describe("extensionForMime", () => {
 });
 
 describe("isAudioFileName", () => {
-  it("matches known audio extensions", () => {
-    const cases = [
-      { fileName: "voice.mp3", expected: true },
-      { fileName: "voice.caf", expected: true },
-      { fileName: "voice.bin", expected: false },
-    ] as const;
-
-    for (const testCase of cases) {
-      expect(isAudioFileName(testCase.fileName)).toBe(testCase.expected);
-    }
+  it.each([
+    { fileName: "voice.mp3", expected: true },
+    { fileName: "voice.caf", expected: true },
+    { fileName: "voice.bin", expected: false },
+  ] as const)("matches audio extension for $fileName", ({ fileName, expected }) => {
+    expect(isAudioFileName(fileName)).toBe(expected);
   });
 });
 
