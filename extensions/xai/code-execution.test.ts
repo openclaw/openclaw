@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { withFetchPreconnect } from "../../test/helpers/extensions/fetch-mock.js";
 import { createCodeExecutionTool } from "./code-execution.js";
 
 function installCodeExecutionFetch(payload?: Record<string, unknown>) {
@@ -16,11 +16,13 @@ function installCodeExecutionFetch(payload?: Record<string, unknown>) {
                 content: [
                   {
                     type: "output_text",
-                    text: "The moving average is 42.",
+                    text: "Mean: 42",
+                    annotations: [{ type: "url_citation", url: "https://example.com/data.csv" }],
                   },
                 ],
               },
             ],
+            citations: ["https://example.com/data.csv"],
           },
         ),
     } as Response),
@@ -42,7 +44,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("code_execution tool", () => {
+describe("xai code_execution tool", () => {
   it("enables code_execution when the xAI plugin web search key is configured", () => {
     const tool = createCodeExecutionTool({
       config: {
@@ -67,18 +69,27 @@ describe("code_execution tool", () => {
     const mockFetch = installCodeExecutionFetch();
     const tool = createCodeExecutionTool({
       config: {
-        tools: {
-          code_execution: {
-            apiKey: "xai-config-test", // pragma: allowlist secret
-            model: "grok-4-1-fast",
-            maxTurns: 2,
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-config-test", // pragma: allowlist secret
+                },
+                codeExecution: {
+                  model: "grok-4-1-fast",
+                  maxTurns: 2,
+                  timeoutSeconds: 45,
+                },
+              },
+            },
           },
         },
       },
     });
 
-    const result = await tool?.execute?.("code-exec:1", {
-      task: "Calculate the average of 40, 42, and 44.",
+    const result = await tool?.execute?.("code-execution:1", {
+      task: "Calculate the mean of [40, 42, 44]",
     });
 
     expect(mockFetch).toHaveBeenCalled();
@@ -110,8 +121,8 @@ describe("code_execution tool", () => {
       },
     });
 
-    await tool?.execute?.("code-exec:plugin-key", {
-      task: "Sum 1 + 2 + 3.",
+    await tool?.execute?.("code-execution:plugin-key", {
+      task: "Compute the standard deviation of [1, 2, 3]",
     });
 
     const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
@@ -136,8 +147,8 @@ describe("code_execution tool", () => {
       },
     });
 
-    await tool?.execute?.("code-exec:legacy-key", {
-      task: "Multiply 6 * 7.",
+    await tool?.execute?.("code-execution:legacy-key", {
+      task: "Count rows in a two-column table",
     });
 
     const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;

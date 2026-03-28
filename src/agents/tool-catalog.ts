@@ -84,7 +84,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "code_execution",
     label: "code_execution",
-    description: "Run sandboxed remote analysis with xAI",
+    description: "Run sandboxed remote analysis",
     sectionId: "runtime",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

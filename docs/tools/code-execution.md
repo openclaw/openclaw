@@ -30,7 +30,6 @@ devices. Use [`exec`](/tools/exec) for that.
 
 You need an xAI API key. Any of these work:
 
-- `tools.code_execution.apiKey`
 - `XAI_API_KEY`
 - `plugins.entries.xai.config.webSearch.apiKey`
 
@@ -38,13 +37,21 @@ Example:
 
 ```json5
 {
-  tools: {
-    code_execution: {
-      enabled: true,
-      apiKey: "xai-...",
-      model: "grok-4-1-fast",
-      maxTurns: 2,
-      timeoutSeconds: 30,
+  plugins: {
+    entries: {
+      xai: {
+        config: {
+          webSearch: {
+            apiKey: "xai-...",
+          },
+          codeExecution: {
+            enabled: true,
+            model: "grok-4-1-fast",
+            maxTurns: 2,
+            timeoutSeconds: 30,
+          },
+        },
+      },
     },
   },
 }
