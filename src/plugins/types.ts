@@ -133,11 +133,11 @@ export type OpenClawPluginToolContext = {
 };
 
 /**
- * Execution-time context injected as the third argument to plugin tool
- * `execute(callId, params, context)` calls. Contains identity and session
- * fields that may change between tool invocations (e.g. when tools are shared
- * across sessions). Plugin authors should prefer this over factory-time closure
- * captures for identity-sensitive operations.
+ * Execution-time context injected as the fifth argument to plugin tool
+ * `execute(callId, params, signal, onUpdate, context)` calls. Contains identity
+ * and session fields that may change between tool invocations (e.g. when tools
+ * are shared across sessions). Plugin authors should prefer this over
+ * factory-time closure captures for identity-sensitive operations.
  */
 export type OpenClawPluginToolExecuteContext = {
   agentId?: string;

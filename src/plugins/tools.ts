@@ -44,13 +44,21 @@ function buildExecuteContext(ctx: OpenClawPluginToolContext): OpenClawPluginTool
 }
 
 /**
- * Wrap a plugin tool's `execute` method so the tool-context is forwarded as
- * the third argument: `execute(callId, params, context)`.
+ * Wrap a plugin tool's `execute` method so the tool-context is appended as
+ * the fifth argument: `execute(callId, params, signal, onUpdate, context)`.
  *
- * This is the "Level 1" injection path — plugins that declare a third parameter
+ * This is the "Level 1" injection path — plugins that declare a fifth parameter
  * on their execute function receive identity context (agentId, sessionKey, etc.)
  * automatically, without needing to close over the factory context or rely on
  * environment variables.
+ *
+ * The wrapper preserves the dispatcher-provided `signal` and `onUpdate` arguments
+ * so that plugin tools can still honor abort requests and emit progress updates.
+ *
+ * We use object spread (not Object.create) so that name, description, parameters,
+ * etc. remain own enumerable properties. Downstream code (pi-tools.schema.ts,
+ * pi-tools.before-tool-call.ts, pi-tools.abort.ts) clones tools via { ...tool },
+ * which only copies own properties — inherited prototype fields would be lost.
  */
 function wrapToolWithExecuteContext(
   tool: AnyAgentTool,
@@ -60,21 +68,12 @@ function wrapToolWithExecuteContext(
   if (!original) {
     return tool;
   }
-  // We intentionally pass `execCtx` as the third argument instead of an AbortSignal.
-  // Plugin tools that declare a third parameter receive identity context; plugins
-  // that don't declare it simply ignore the extra argument. The cast is necessary
-  // because the core AgentTool type declares execute's third arg as AbortSignal,
-  // but the plugin dispatch convention extends that slot for context injection.
-  //
-  // We use object spread (not Object.create) so that name, description, parameters,
-  // etc. remain own enumerable properties. Downstream code (pi-tools.schema.ts,
-  // pi-tools.before-tool-call.ts, pi-tools.abort.ts) clones tools via { ...tool },
-  // which only copies own properties — inherited prototype fields would be lost.
   // oxlint-disable-next-line typescript/no-explicit-any
   const originalAsAny = original as (...args: any[]) => unknown;
   return {
     ...tool,
-    execute: (callId: string, params: unknown) => originalAsAny.call(tool, callId, params, execCtx),
+    execute: (callId: string, params: unknown, signal?: AbortSignal, onUpdate?: unknown) =>
+      originalAsAny.call(tool, callId, params, signal, onUpdate, execCtx),
   } as AnyAgentTool;
 }
 

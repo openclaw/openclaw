@@ -208,13 +208,23 @@ describe("execute context injection", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  it("injects agentId into execute context as third argument", async () => {
+  it("injects agentId into execute context as fifth argument", async () => {
     let receivedContext: unknown = undefined;
+    let receivedSignal: unknown = undefined;
+    let receivedOnUpdate: unknown = undefined;
     const tool = {
       name: "ctx_test",
       description: "test tool",
       parameters: { type: "object" as const, properties: {} },
-      async execute(_callId: string, _params: unknown, context?: unknown) {
+      async execute(
+        _callId: string,
+        _params: unknown,
+        signal?: AbortSignal,
+        onUpdate?: unknown,
+        context?: unknown,
+      ) {
+        receivedSignal = signal;
+        receivedOnUpdate = onUpdate;
         receivedContext = context;
         return { content: [{ type: "text" as const, text: "ok" }] };
       },
@@ -241,7 +251,10 @@ describe("execute context injection", () => {
     });
 
     expect(tools).toHaveLength(1);
-    await tools[0].execute("call-1", {});
+
+    const ac = new AbortController();
+    const onUpdate = vi.fn();
+    await tools[0].execute("call-1", {}, ac.signal, onUpdate);
 
     expect(receivedContext).toEqual(
       expect.objectContaining({
@@ -249,6 +262,45 @@ describe("execute context injection", () => {
         sessionKey: "agent:test_agent_42:main",
       }),
     );
+    // signal and onUpdate must be forwarded, not dropped
+    expect(receivedSignal).toBe(ac.signal);
+    expect(receivedOnUpdate).toBe(onUpdate);
+  });
+
+  it("forwards signal and onUpdate to plugin tool", async () => {
+    let receivedSignal: unknown = undefined;
+    let receivedOnUpdate: unknown = undefined;
+    const tool = {
+      name: "signal_test",
+      description: "test tool",
+      parameters: { type: "object" as const, properties: {} },
+      async execute(_callId: string, _params: unknown, signal?: AbortSignal, onUpdate?: unknown) {
+        receivedSignal = signal;
+        receivedOnUpdate = onUpdate;
+        return { content: [{ type: "text" as const, text: "ok" }] };
+      },
+    };
+
+    setRegistry([
+      {
+        pluginId: "signal-test-plugin",
+        optional: false,
+        source: "test",
+        factory: () => tool,
+        names: ["signal_test"],
+      },
+    ]);
+
+    const tools = resolvePluginTools({
+      context: createContext() as never,
+    });
+
+    const ac = new AbortController();
+    const onUpdate = vi.fn();
+    await tools[0].execute("call-1", {}, ac.signal, onUpdate);
+
+    expect(receivedSignal).toBe(ac.signal);
+    expect(receivedOnUpdate).toBe(onUpdate);
   });
 
   it("does not leak config into execute context", async () => {
@@ -257,7 +309,13 @@ describe("execute context injection", () => {
       name: "leak_test",
       description: "test tool",
       parameters: { type: "object" as const, properties: {} },
-      async execute(_callId: string, _params: unknown, context?: unknown) {
+      async execute(
+        _callId: string,
+        _params: unknown,
+        _signal?: AbortSignal,
+        _onUpdate?: unknown,
+        context?: unknown,
+      ) {
         receivedContext = (context ?? {}) as Record<string, unknown>;
         return { content: [{ type: "text" as const, text: "ok" }] };
       },
