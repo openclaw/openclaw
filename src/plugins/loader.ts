@@ -202,6 +202,7 @@ function buildCacheKey(params: {
   preferSetupRuntimeForChannelPlugins?: boolean;
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
   pluginSdkResolution?: PluginSdkResolutionPreference;
+  coreGatewayMethodNames?: string[];
 }): string {
   const { roots, loadPaths } = resolvePluginCacheInputs({
     workspaceDir: params.workspaceDir,
@@ -228,11 +229,12 @@ function buildCacheKey(params: {
   const setupOnlyKey = params.includeSetupOnlyChannelPlugins === true ? "setup-only" : "runtime";
   const startupChannelMode =
     params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
+  const gatewayMethodsKey = JSON.stringify(params.coreGatewayMethodNames ?? []);
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
     ...params.plugins,
     installs,
     loadPaths,
-  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${params.runtimeSubagentMode ?? "default"}::${params.pluginSdkResolution ?? "auto"}`;
+  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${params.runtimeSubagentMode ?? "default"}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}`;
 }
 
 function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
@@ -263,6 +265,7 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
     options.onlyPluginIds?.length ||
     options.runtimeOptions !== undefined ||
     options.pluginSdkResolution !== undefined ||
+    options.coreGatewayHandlers !== undefined ||
     options.includeSetupOnlyChannelPlugins === true ||
     options.preferSetupRuntimeForChannelPlugins === true,
   );
@@ -275,6 +278,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const onlyPluginIds = normalizeScopedPluginIds(options.onlyPluginIds);
   const includeSetupOnlyChannelPlugins = options.includeSetupOnlyChannelPlugins === true;
   const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
+  const coreGatewayMethodNames = Object.keys(options.coreGatewayHandlers ?? {}).toSorted();
   const cacheKey = buildCacheKey({
     workspaceDir: options.workspaceDir,
     plugins: normalized,
@@ -285,6 +289,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     preferSetupRuntimeForChannelPlugins,
     runtimeSubagentMode: resolveRuntimeSubagentMode(options.runtimeOptions),
     pluginSdkResolution: options.pluginSdkResolution,
+    coreGatewayMethodNames,
   });
   return {
     env,

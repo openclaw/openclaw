@@ -3593,6 +3593,35 @@ describe("getCompatibleActivePluginRegistry", () => {
 
     expect(getCompatibleActivePluginRegistry()).toBe(registry);
   });
+
+  it("does not reuse the active registry when core gateway method names differ", () => {
+    const registry = createEmptyPluginRegistry();
+    const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      coreGatewayHandlers: {
+        "sessions.get": () => undefined,
+      },
+    };
+    const { cacheKey } = resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, cacheKey);
+
+    expect(getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
+    expect(
+      getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        coreGatewayHandlers: {
+          "sessions.get": () => undefined,
+          "sessions.list": () => undefined,
+        },
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe("resolveRuntimePluginRegistry", () => {
