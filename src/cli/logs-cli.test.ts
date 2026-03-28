@@ -1,33 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
-import { formatLogTimestamp, registerLogsCli } from "./logs-cli.js";
+import { formatLogTimestamp } from "./logs-cli.js";
 
 const callGatewayFromCli = vi.fn();
-const readConfiguredLogTail = vi.fn();
-const buildGatewayConnectionDetails = vi.fn(
-  (_options?: {
-    configPath?: string;
-    config?: unknown;
-    url?: string;
-    urlSource?: "cli" | "env";
-  }) => ({
-    url: "ws://127.0.0.1:18789",
-    urlSource: "local loopback",
-    message: "",
-  }),
-);
-
-vi.mock("../gateway/call.js", () => ({
-  buildGatewayConnectionDetails: (
-    ...args: Parameters<typeof import("../gateway/call.js").buildGatewayConnectionDetails>
-  ) => buildGatewayConnectionDetails(...args),
-}));
-
-vi.mock("../logging/log-tail.js", () => ({
-  readConfiguredLogTail: (
-    ...args: Parameters<typeof import("../logging/log-tail.js").readConfiguredLogTail>
-  ) => readConfiguredLogTail(...args),
-}));
+const resolveGatewayClientConnection = vi.fn();
+const gatewayClientRequest = vi.fn();
+const gatewayClientStopAndWait = vi.fn();
+let lastGatewayClientOptions: Record<string, unknown> | undefined;
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
@@ -38,6 +17,45 @@ vi.mock("./gateway-rpc.js", async () => {
   };
 });
 
+vi.mock("../gateway/call.js", async () => {
+  const actual = await vi.importActual<typeof import("../gateway/call.js")>("../gateway/call.js");
+  return {
+    ...actual,
+    resolveGatewayClientConnection: (...args: unknown[]) => resolveGatewayClientConnection(...args),
+  };
+});
+
+vi.mock("../gateway/client.js", () => {
+  class MockGatewayClient {
+    constructor(opts: Record<string, unknown>) {
+      lastGatewayClientOptions = opts;
+    }
+
+    start() {
+      void (lastGatewayClientOptions?.onHelloOk as (() => void) | undefined)?.();
+    }
+
+    request(...args: unknown[]) {
+      return gatewayClientRequest(...args);
+    }
+
+    stopAndWait() {
+      return gatewayClientStopAndWait();
+    }
+
+    stop() {}
+  }
+
+  return {
+    GatewayClient: MockGatewayClient,
+  };
+});
+
+let registerLogsCli: typeof import("./logs-cli.js").registerLogsCli;
+
+beforeAll(async () => {
+  ({ registerLogsCli } = await import("./logs-cli.js"));
+});
 async function runLogsCli(argv: string[]) {
   await runRegisteredCli({
     register: registerLogsCli as (program: import("commander").Command) => void,
@@ -48,8 +66,10 @@ async function runLogsCli(argv: string[]) {
 describe("logs cli", () => {
   afterEach(() => {
     callGatewayFromCli.mockClear();
-    readConfiguredLogTail.mockClear();
-    buildGatewayConnectionDetails.mockClear();
+    resolveGatewayClientConnection.mockReset();
+    gatewayClientRequest.mockReset();
+    gatewayClientStopAndWait.mockReset();
+    lastGatewayClientOptions = undefined;
     vi.restoreAllMocks();
   });
 
@@ -131,37 +151,47 @@ describe("logs cli", () => {
     expect(stderrWrites.join("")).toContain("output stdout closed");
   });
 
-  it("falls back to the local log file on loopback pairing-required errors", async () => {
-    callGatewayFromCli.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
-    readConfiguredLogTail.mockResolvedValueOnce({
-      file: "/tmp/openclaw.log",
-      cursor: 5,
-      size: 5,
-      lines: ["local fallback line"],
-      truncated: false,
-      reset: false,
+  it("reuses a connected gateway client while following logs", async () => {
+    resolveGatewayClientConnection.mockResolvedValueOnce({
+      clientOptions: {
+        url: "ws://127.0.0.1:18789",
+      },
+      connectionDetails: {
+        message: "Gateway URL: ws://127.0.0.1:18789",
+      },
     });
+    gatewayClientRequest.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      lines: ["line one"],
+    });
+    gatewayClientStopAndWait.mockResolvedValueOnce(undefined);
 
-    const stdoutWrites: string[] = [];
     const stderrWrites: string[] = [];
-    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
-      stdoutWrites.push(String(chunk));
-      return true;
+    vi.spyOn(process.stdout, "write").mockImplementation(() => {
+      const err = new Error("EPIPE") as NodeJS.ErrnoException;
+      err.code = "EPIPE";
+      throw err;
     });
     vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
       stderrWrites.push(String(chunk));
       return true;
     });
 
-    await runLogsCli(["logs"]);
+    await runLogsCli(["logs", "--follow"]);
 
-    expect(readConfiguredLogTail).toHaveBeenCalledWith({
+    expect(resolveGatewayClientConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "logs.tail",
+      }),
+    );
+    expect(gatewayClientRequest).toHaveBeenCalledWith("logs.tail", {
       cursor: undefined,
       limit: 200,
       maxBytes: 250_000,
     });
-    expect(stdoutWrites.join("")).toContain("local fallback line");
-    expect(stderrWrites.join("")).toContain("reading local log file instead");
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+    expect(gatewayClientStopAndWait).toHaveBeenCalledTimes(1);
+    expect(stderrWrites.join("")).toContain("output stdout closed");
   });
 
   describe("formatLogTimestamp", () => {

@@ -1,9 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
-import { buildGatewayConnectionDetails } from "../gateway/call.js";
-import { isLoopbackHost } from "../gateway/net.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { readConfiguredLogTail } from "../logging/log-tail.js";
+import { resolveGatewayClientConnection } from "../gateway/call.js";
+import { GatewayClient } from "../gateway/client.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { formatTimestamp, isValidTimeZone } from "../logging/timestamps.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -11,6 +9,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import { createSafeStreamWriter } from "../terminal/stream-writer.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -111,6 +110,94 @@ function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boole
   } catch {
     return false;
   }
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+async function fetchLogsWithClient(
+  client: GatewayClient,
+  opts: LogsCliOptions,
+  cursor: number | undefined,
+): Promise<LogsTailPayload> {
+  const limit = parsePositiveInt(opts.limit, 200);
+  const maxBytes = parsePositiveInt(opts.maxBytes, 250_000);
+  const payload = await client.request("logs.tail", { cursor, limit, maxBytes });
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Unexpected logs.tail response");
+  }
+  return payload as LogsTailPayload;
+}
+
+async function createFollowLogsClient(opts: LogsCliOptions): Promise<{
+  client: GatewayClient;
+  waitUntilReady: () => Promise<void>;
+}> {
+  const timeoutMs = parsePositiveInt(opts.timeout, 30_000);
+  const { clientOptions, connectionDetails } = await resolveGatewayClientConnection({
+    url: opts.url,
+    token: opts.token,
+    method: "logs.tail",
+    timeoutMs,
+    clientName: GATEWAY_CLIENT_NAMES.CLI,
+    mode: GATEWAY_CLIENT_MODES.CLI,
+  });
+
+  let connected = false;
+  let ready = createDeferred<void>();
+
+  const resetReady = () => {
+    ready = createDeferred<void>();
+  };
+
+  const client = new GatewayClient({
+    ...clientOptions,
+    onHelloOk: () => {
+      connected = true;
+      ready.resolve();
+    },
+    onConnectError: (err) => {
+      ready.reject(err instanceof Error ? err : new Error(String(err)));
+    },
+    onClose: () => {
+      connected = false;
+      resetReady();
+    },
+  });
+
+  const waitUntilReady = async () => {
+    if (connected) {
+      return;
+    }
+    let timer: NodeJS.Timeout | null = null;
+    try {
+      await Promise.race([
+        ready.promise,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`));
+          }, timeoutMs);
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  };
+
+  client.start();
+  await waitUntilReady();
+
+  return { client, waitUntilReady };
 }
 
 export function formatLogTimestamp(
@@ -272,117 +359,126 @@ export function registerLogsCli(program: Command) {
     const rich = isRich() && opts.color !== false;
     const localTime =
       Boolean(opts.localTime) || (!!process.env.TZ && isValidTimeZone(process.env.TZ));
+    const followClient = opts.follow ? await createFollowLogsClient(opts) : null;
 
-    while (true) {
-      let payload: LogsTailPayload;
-      // Show progress spinner only on first fetch, not during follow polling
-      const showProgress = first && !opts.follow;
-      try {
-        payload = await fetchLogs(opts, cursor, showProgress);
-      } catch (err) {
-        await emitGatewayError(
-          err,
-          opts,
-          jsonMode ? "json" : "text",
-          rich,
-          emitJsonLine,
-          errorLine,
-        );
-        process.exit(1);
-        return;
-      }
-      const lines = Array.isArray(payload.lines) ? payload.lines : [];
-      if (jsonMode) {
-        if (first) {
-          if (
-            !emitJsonLine({
-              type: "meta",
-              file: payload.file,
-              cursor: payload.cursor,
-              size: payload.size,
-            })
-          ) {
-            return;
-          }
-        }
-        for (const line of lines) {
-          const parsed = parseLogLine(line);
-          if (parsed) {
-            if (!emitJsonLine({ type: "log", ...parsed })) {
-              return;
-            }
+    try {
+      while (true) {
+        let payload: LogsTailPayload;
+        // Show progress spinner only on first fetch, not during follow polling
+        const showProgress = first && !opts.follow;
+        try {
+          if (followClient) {
+            await followClient.waitUntilReady();
+            payload = await fetchLogsWithClient(followClient.client, opts, cursor);
           } else {
-            if (!emitJsonLine({ type: "raw", raw: line })) {
+            payload = await fetchLogs(opts, cursor, showProgress);
+          }
+        } catch (err) {
+          await emitGatewayError(
+            err,
+            opts,
+            jsonMode ? "json" : "text",
+            rich,
+            emitJsonLine,
+            errorLine,
+          );
+          process.exit(1);
+          return;
+        }
+        const lines = Array.isArray(payload.lines) ? payload.lines : [];
+        if (jsonMode) {
+          if (first) {
+            if (
+              !emitJsonLine({
+                type: "meta",
+                file: payload.file,
+                cursor: payload.cursor,
+                size: payload.size,
+              })
+            ) {
+              return;
+            }
+          }
+          for (const line of lines) {
+            const parsed = parseLogLine(line);
+            if (parsed) {
+              if (!emitJsonLine({ type: "log", ...parsed })) {
+                return;
+              }
+            } else {
+              if (!emitJsonLine({ type: "raw", raw: line })) {
+                return;
+              }
+            }
+          }
+          if (payload.truncated) {
+            if (
+              !emitJsonLine({
+                type: "notice",
+                message: "Log tail truncated (increase --max-bytes).",
+              })
+            ) {
+              return;
+            }
+          }
+          if (payload.reset) {
+            if (
+              !emitJsonLine({
+                type: "notice",
+                message: "Log cursor reset (file rotated).",
+              })
+            ) {
+              return;
+            }
+          }
+        } else {
+          if (first && payload.file) {
+            const prefix = pretty ? colorize(rich, theme.muted, "Log file:") : "Log file:";
+            if (!logLine(`${prefix} ${payload.file}`)) {
+              return;
+            }
+          }
+          for (const line of lines) {
+            if (
+              !logLine(
+                formatLogLine(line, {
+                  pretty,
+                  rich,
+                  localTime,
+                }),
+              )
+            ) {
+              return;
+            }
+          }
+          if (payload.truncated) {
+            if (!errorLine("Log tail truncated (increase --max-bytes).")) {
+              return;
+            }
+          }
+          if (payload.reset) {
+            if (!errorLine("Log cursor reset (file rotated).")) {
               return;
             }
           }
         }
-        if (payload.truncated) {
-          if (
-            !emitJsonLine({
-              type: "notice",
-              message: "Log tail truncated (increase --max-bytes).",
-            })
-          ) {
-            return;
-          }
-        }
-        if (payload.reset) {
-          if (
-            !emitJsonLine({
-              type: "notice",
-              message: "Log cursor reset (file rotated).",
-            })
-          ) {
-            return;
-          }
-        }
-      } else {
-        if (first && payload.file && payload.localFallback === true) {
-          if (!errorLine(colorize(rich, theme.warn, LOCAL_FALLBACK_NOTICE))) {
-            return;
-          }
-        }
-        if (first && payload.file) {
-          const prefix = pretty ? colorize(rich, theme.muted, "Log file:") : "Log file:";
-          if (!logLine(`${prefix} ${payload.file}`)) {
-            return;
-          }
-        }
-        for (const line of lines) {
-          if (
-            !logLine(
-              formatLogLine(line, {
-                pretty,
-                rich,
-                localTime,
-              }),
-            )
-          ) {
-            return;
-          }
-        }
-        if (payload.truncated) {
-          if (!errorLine("Log tail truncated (increase --max-bytes).")) {
-            return;
-          }
-        }
-        if (payload.reset) {
-          if (!errorLine("Log cursor reset (file rotated).")) {
-            return;
-          }
-        }
-      }
-      cursor =
-        typeof payload.cursor === "number" && Number.isFinite(payload.cursor)
-          ? payload.cursor
-          : cursor;
-      first = false;
+        cursor =
+          typeof payload.cursor === "number" && Number.isFinite(payload.cursor)
+            ? payload.cursor
+            : cursor;
+        first = false;
 
-      if (!opts.follow) {
-        return;
+        if (!opts.follow) {
+          return;
+        }
+        await delay(interval);
       }
-      await delay(interval);
+    } finally {
+      if (followClient) {
+        await followClient.client.stopAndWait().catch(() => {
+          followClient.client.stop();
+        });
+      }
     }
   });
 }
