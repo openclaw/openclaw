@@ -34,6 +34,18 @@ function cfg(accounts?: Record<string, unknown> | null, defaultAccount?: string)
   } as unknown as OpenClawConfig;
 }
 
+function expectResolvedAccountIdsCase(params: {
+  resolve: (cfg: OpenClawConfig) => string[];
+  input: OpenClawConfig;
+  expected: string[];
+}) {
+  expect(params.resolve(params.input)).toEqual(params.expected);
+}
+
+function expectResolvedDefaultAccountCase(input: OpenClawConfig, expected: string) {
+  expect(resolveDefaultAccountId(input)).toBe(expected);
+}
+
 describe("createAccountListHelpers", () => {
   describe("listConfiguredAccountIds", () => {
     it.each([
@@ -50,7 +62,11 @@ describe("createAccountListHelpers", () => {
         input: cfg({}),
       },
     ])("$name", ({ input }) => {
-      expect(listConfiguredAccountIds(input)).toEqual([]);
+      expectResolvedAccountIdsCase({
+        resolve: listConfiguredAccountIds,
+        input,
+        expected: [],
+      });
     });
 
     it("filters out empty keys", () => {
@@ -99,7 +115,11 @@ describe("createAccountListHelpers", () => {
         expected: ["a", "m", "z"],
       },
     ])("$name", ({ input, expected }) => {
-      expect(listAccountIds(input)).toEqual(expected);
+      expectResolvedAccountIdsCase({
+        resolve: listAccountIds,
+        input,
+        expected,
+      });
     });
   });
 
@@ -136,7 +156,7 @@ describe("createAccountListHelpers", () => {
         expected: "default",
       },
     ])("$name", ({ input, expected }) => {
-      expect(resolveDefaultAccountId(input)).toBe(expected);
+      expectResolvedDefaultAccountCase(input, expected);
     });
 
     it("can preserve configured defaults that are not present in accounts", () => {
@@ -257,74 +277,66 @@ describe("describeAccountSnapshot", () => {
 });
 
 describe("mergeAccountConfig", () => {
-  it("drops accounts from the base config before merging", () => {
-    const merged = mergeAccountConfig<{
-      enabled?: boolean;
-      name?: string;
-      accounts?: Record<string, { name?: string }>;
-    }>({
-      channelConfig: {
-        enabled: true,
-        accounts: {
-          work: { name: "Work" },
+  it.each([
+    {
+      name: "drops accounts from the base config before merging",
+      input: {
+        channelConfig: {
+          enabled: true,
+          accounts: {
+            work: { name: "Work" },
+          },
+        },
+        accountConfig: {
+          name: "Work",
         },
       },
-      accountConfig: {
-        name: "Work",
-      },
-    });
-
-    expect(merged).toEqual({
-      enabled: true,
-      name: "Work",
-    });
-  });
-
-  it("drops caller-specified keys from the base config before merging", () => {
-    const merged = mergeAccountConfig<{
-      enabled?: boolean;
-      defaultAccount?: string;
-      name?: string;
-    }>({
-      channelConfig: {
+      expected: {
         enabled: true,
-        defaultAccount: "work",
-      },
-      accountConfig: {
         name: "Work",
       },
-      omitKeys: ["defaultAccount"],
-    });
-
-    expect(merged).toEqual({
-      enabled: true,
-      name: "Work",
-    });
-  });
-
-  it("deep-merges selected nested object keys", () => {
-    const merged = mergeAccountConfig<{
-      commands?: { native?: boolean; callbackPath?: string };
-    }>({
-      channelConfig: {
+    },
+    {
+      name: "drops caller-specified keys from the base config before merging",
+      input: {
+        channelConfig: {
+          enabled: true,
+          defaultAccount: "work",
+        },
+        accountConfig: {
+          name: "Work",
+        },
+        omitKeys: ["defaultAccount"],
+      },
+      expected: {
+        enabled: true,
+        name: "Work",
+      },
+    },
+    {
+      name: "deep-merges selected nested object keys",
+      input: {
+        channelConfig: {
+          commands: {
+            native: true,
+          },
+        },
+        accountConfig: {
+          commands: {
+            callbackPath: "/work",
+          },
+        },
+        nestedObjectKeys: ["commands"],
+      },
+      expected: {
         commands: {
           native: true,
-        },
-      },
-      accountConfig: {
-        commands: {
           callbackPath: "/work",
         },
       },
-      nestedObjectKeys: ["commands"],
-    });
-
-    expect(merged).toEqual({
-      commands: {
-        native: true,
-        callbackPath: "/work",
-      },
-    });
+    },
+  ] as const)("$name", ({ input, expected }) => {
+    expect(mergeAccountConfig(input)).toEqual(expected);
   });
 });
 
