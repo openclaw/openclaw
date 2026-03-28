@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   resolveOutboundTarget: vi.fn(),
   deliverOutboundPayloads: vi.fn(),
-  loadOpenClawPlugins: vi.fn(),
+  resolveRuntimePluginRegistry: vi.fn(),
 }));
 
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -38,7 +38,7 @@ describe("sendMessage", () => {
       applyPluginAutoEnable: ({ config }: { config: unknown }) => ({ config, changes: [] }),
     }));
     vi.doMock("../../plugins/loader.js", () => ({
-      loadOpenClawPlugins: mocks.loadOpenClawPlugins,
+      resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
     }));
     vi.doMock("./targets.js", () => ({
       resolveOutboundTarget: mocks.resolveOutboundTarget,
@@ -50,7 +50,7 @@ describe("sendMessage", () => {
     mocks.getChannelPlugin.mockClear();
     mocks.resolveOutboundTarget.mockClear();
     mocks.deliverOutboundPayloads.mockClear();
-    mocks.loadOpenClawPlugins.mockClear();
+    mocks.resolveRuntimePluginRegistry.mockClear();
 
     mocks.getChannelPlugin.mockReturnValue({
       outbound: { deliveryMode: "direct" },
@@ -124,6 +124,6 @@ describe("sendMessage", () => {
       via: "direct",
     });
 
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
   });
 });
