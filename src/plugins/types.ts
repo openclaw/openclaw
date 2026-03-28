@@ -1178,6 +1178,8 @@ export type PluginCommandContext = {
   accountId?: string;
   /** Thread/topic id if available */
   messageThreadId?: string | number;
+  /** Parent conversation id for thread-capable channels */
+  threadParentId?: string;
   requestConversationBinding: (
     params?: PluginConversationBindingRequestParams,
   ) => Promise<PluginConversationBindingRequestResult>;
