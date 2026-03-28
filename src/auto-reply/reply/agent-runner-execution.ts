@@ -183,6 +183,7 @@ export async function runAgentTurnWithFallback(params: {
     params.getActiveSessionEntry()?.systemPromptReport,
   );
 
+  const wallClockStartedAt = Date.now();
   while (true) {
     try {
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
@@ -344,19 +345,45 @@ export async function runAgentTurnWithFallback(params: {
                 });
                 lifecycleTerminalEmitted = true;
 
+                // Emit supplementary usage event with accumulated token/cost data.
+                // Wrapped in its own try/catch so a failure here cannot
+                // propagate to the outer catch and emit a spurious "error" event.
+                const agentMeta = result.meta?.agentMeta;
+                if (agentMeta?.usage) {
+                  try {
+                    emitAgentEvent({
+                      runId,
+                      sessionKey: params.sessionKey,
+                      stream: "lifecycle",
+                      data: {
+                        phase: "usage",
+                        provider: agentMeta.provider,
+                        model: agentMeta.model,
+                        usage: agentMeta.usage,
+                        lastCallUsage: agentMeta.lastCallUsage,
+                        durationMs: Date.now() - wallClockStartedAt,
+                      },
+                    });
+                  } catch {
+                    // Non-fatal: usage reporting should not surface as a run error.
+                  }
+                }
+
                 return result;
               } catch (err) {
-                emitAgentEvent({
-                  runId,
-                  stream: "lifecycle",
-                  data: {
-                    phase: "error",
-                    startedAt,
-                    endedAt: Date.now(),
-                    error: String(err),
-                  },
-                });
-                lifecycleTerminalEmitted = true;
+                if (!lifecycleTerminalEmitted) {
+                  emitAgentEvent({
+                    runId,
+                    stream: "lifecycle",
+                    data: {
+                      phase: "error",
+                      startedAt,
+                      endedAt: Date.now(),
+                      error: String(err),
+                    },
+                  });
+                  lifecycleTerminalEmitted = true;
+                }
                 throw err;
               } finally {
                 // Defensive backstop: never let a CLI run complete without a terminal
@@ -554,6 +581,31 @@ export async function runAgentTurnWithFallback(params: {
               bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                 result.meta?.systemPromptReport,
               );
+              // Emit supplementary usage event with accumulated token/cost data.
+              // The pi-embedded subscribe handler emits lifecycle start/end but does
+              // not have access to agentMeta; emit a separate usage event now that
+              // the run result is available.
+              const agentMeta = result.meta?.agentMeta;
+              if (agentMeta?.usage) {
+                try {
+                  emitAgentEvent({
+                    runId,
+                    sessionKey: params.sessionKey,
+                    stream: "lifecycle",
+                    data: {
+                      phase: "usage",
+                      provider: agentMeta.provider,
+                      model: agentMeta.model,
+                      usage: agentMeta.usage,
+                      lastCallUsage: agentMeta.lastCallUsage,
+                      durationMs: Date.now() - wallClockStartedAt,
+                    },
+                  });
+                } catch {
+                  // Non-fatal: usage reporting should not surface as a run error.
+                }
+              }
+
               const resultCompactionCount = Math.max(
                 0,
                 result.meta?.agentMeta?.compactionCount ?? 0,

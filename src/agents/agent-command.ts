@@ -836,6 +836,30 @@ async function agentCommandInternal(
       throw err;
     }
 
+    // Emit supplementary lifecycle "usage" event with accumulated token/cost
+    // data so external observers (dashboards, recorders) can track per-run
+    // resource consumption without needing RPC access to session transcripts.
+    const agentMeta = result.meta.agentMeta;
+    if (agentMeta?.usage) {
+      try {
+        emitAgentEvent({
+          runId,
+          sessionKey,
+          stream: "lifecycle",
+          data: {
+            phase: "usage",
+            provider: agentMeta.provider,
+            model: agentMeta.model,
+            usage: agentMeta.usage,
+            lastCallUsage: agentMeta.lastCallUsage,
+            durationMs: Date.now() - startedAt,
+          },
+        });
+      } catch {
+        // Non-fatal: usage reporting should not surface as a run error.
+      }
+    }
+
     // Update token+model fields in the session store.
     if (sessionStore && sessionKey) {
       await updateSessionStoreAfterAgentRun({

@@ -207,6 +207,11 @@ export type ChatRunState = {
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
   abortedRuns: Map<string, number>;
+  /** Stashed sourceRunId → ChatRunEntry for runs that have ended, so late usage
+   *  events can still resolve clientRunId after the registry entry is removed. */
+  finishedRunLinks: Map<string, ChatRunEntry>;
+  /** Timers that evict stale finishedRunLinks entries if no usage event arrives. */
+  finishedRunLinkTimers: Map<string, ReturnType<typeof setTimeout>>;
   clear: () => void;
 };
 
@@ -216,6 +221,8 @@ export function createChatRunState(): ChatRunState {
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
+  const finishedRunLinks = new Map<string, ChatRunEntry>();
+  const finishedRunLinkTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   const clear = () => {
     registry.clear();
@@ -223,6 +230,11 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
     abortedRuns.clear();
+    finishedRunLinks.clear();
+    for (const timer of finishedRunLinkTimers.values()) {
+      clearTimeout(timer);
+    }
+    finishedRunLinkTimers.clear();
   };
 
   return {
@@ -231,6 +243,8 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt,
     deltaLastBroadcastLen,
     abortedRuns,
+    finishedRunLinks,
+    finishedRunLinkTimers,
     clear,
   };
 }
@@ -715,7 +729,8 @@ export function createAgentEventHandler({
   };
 
   return (evt: AgentEventPayload) => {
-    const chatLink = chatRunState.registry.peek(evt.runId);
+    const chatLink =
+      chatRunState.registry.peek(evt.runId) ?? chatRunState.finishedRunLinks.get(evt.runId);
     const eventSessionKey =
       typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined;
     const isControlUiVisible = getAgentRunContext(evt.runId)?.isControlUiVisible ?? true;
@@ -817,9 +832,23 @@ export function createAgentEventHandler({
         if (chatLink) {
           const finished = chatRunState.registry.shift(evt.runId);
           if (!finished) {
+            // Duplicate terminal event (e.g. fallback retry reusing the same
+            // runId).  Still clean up sequence/context tracking so stale
+            // entries don't accumulate on long-lived gateways.
+            toolEventRecipients.markFinal(evt.runId);
             clearAgentRunContext(evt.runId);
+            agentRunSeq.delete(evt.runId);
+            agentRunSeq.delete(clientRunId);
             return;
           }
+          // Stash the link so late usage events can still resolve clientRunId.
+          // Auto-evict after 60s to prevent unbounded growth if no usage event arrives.
+          chatRunState.finishedRunLinks.set(evt.runId, finished);
+          const evictTimer = setTimeout(() => {
+            chatRunState.finishedRunLinks.delete(evt.runId);
+            chatRunState.finishedRunLinkTimers.delete(evt.runId);
+          }, 60_000);
+          chatRunState.finishedRunLinkTimers.set(evt.runId, evictTimer);
           emitChatFinal(
             finished.sessionKey,
             finished.clientRunId,
@@ -856,6 +885,20 @@ export function createAgentEventHandler({
       clearAgentRunContext(evt.runId);
       agentRunSeq.delete(evt.runId);
       agentRunSeq.delete(clientRunId);
+    } else if (lifecyclePhase === "usage") {
+      // Usage events may arrive after the terminal end/error event because
+      // agentMeta is only available after runEmbeddedPiAgent returns. The seq
+      // tracking at the top of this handler re-creates agentRunSeq entries;
+      // clean them up immediately to prevent a permanent leak.
+      clearAgentRunContext(evt.runId);
+      agentRunSeq.delete(evt.runId);
+      agentRunSeq.delete(clientRunId);
+      chatRunState.finishedRunLinks.delete(evt.runId);
+      const evictTimer = chatRunState.finishedRunLinkTimers.get(evt.runId);
+      if (evictTimer) {
+        clearTimeout(evictTimer);
+        chatRunState.finishedRunLinkTimers.delete(evt.runId);
+      }
     }
 
     if (
