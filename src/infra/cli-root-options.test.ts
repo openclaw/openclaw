@@ -1,19 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { consumeRootOptionToken, isValueToken } from "./cli-root-options.js";
 
-describe("isValueToken", () => {
-  it.each([
-    { value: "work", expected: true },
-    { value: "-1", expected: true },
-    { value: "-1.5", expected: true },
-    { value: "-0.5", expected: true },
-    { value: "--", expected: false },
-    { value: "--dev", expected: false },
-    { value: "-", expected: false },
-    { value: "", expected: false },
-    { value: undefined, expected: false },
-  ])("classifies %j", ({ value, expected }) => {
+function expectValueTokenCases(
+  cases: ReadonlyArray<{ value: string | undefined; expected: boolean }>,
+): void {
+  for (const { value, expected } of cases) {
     expect(isValueToken(value)).toBe(expected);
+  }
+}
+
+describe("isValueToken", () => {
+  it("classifies value-like and flag-like tokens", () => {
+    expectValueTokenCases([
+      { value: "work", expected: true },
+      { value: "-1", expected: true },
+      { value: "-1.5", expected: true },
+      { value: "-0.5", expected: true },
+      { value: "--", expected: false },
+      { value: "--dev", expected: false },
+      { value: "-", expected: false },
+      { value: "", expected: false },
+      { value: undefined, expected: false },
+    ]);
   });
 });
 

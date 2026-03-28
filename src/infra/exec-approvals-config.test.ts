@@ -58,47 +58,43 @@ describe("exec approvals node host allowlist check", () => {
   // The node host checks: matchAllowlist() || isSafeBinUsage() for each command segment
   // Using hardcoded resolution objects for cross-platform compatibility
 
-  it("matches exact and wildcard allowlist patterns", () => {
-    const cases: Array<{
-      resolution: { rawExecutable: string; resolvedPath: string; executableName: string };
-      entries: ExecAllowlistEntry[];
-      expectedPattern: string | null;
-    }> = [
-      {
-        resolution: {
-          rawExecutable: "python3",
-          resolvedPath: "/usr/bin/python3",
-          executableName: "python3",
-        },
-        entries: [{ pattern: "/usr/bin/python3" }],
-        expectedPattern: "/usr/bin/python3",
+  it.each([
+    {
+      resolution: {
+        rawExecutable: "python3",
+        resolvedPath: "/usr/bin/python3",
+        executableName: "python3",
       },
-      {
-        // Simulates symlink resolution:
-        // /opt/homebrew/bin/python3 -> /opt/homebrew/opt/python@3.14/bin/python3.14
-        resolution: {
-          rawExecutable: "python3",
-          resolvedPath: "/opt/homebrew/opt/python@3.14/bin/python3.14",
-          executableName: "python3.14",
-        },
-        entries: [{ pattern: "/opt/**/python*" }],
-        expectedPattern: "/opt/**/python*",
+      entries: [{ pattern: "/usr/bin/python3" }],
+      expectedPattern: "/usr/bin/python3",
+    },
+    {
+      // Simulates symlink resolution:
+      // /opt/homebrew/bin/python3 -> /opt/homebrew/opt/python@3.14/bin/python3.14
+      resolution: {
+        rawExecutable: "python3",
+        resolvedPath: "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        executableName: "python3.14",
       },
-      {
-        resolution: {
-          rawExecutable: "unknown-tool",
-          resolvedPath: "/usr/local/bin/unknown-tool",
-          executableName: "unknown-tool",
-        },
-        entries: [{ pattern: "/usr/bin/python3" }, { pattern: "/opt/**/node" }],
-        expectedPattern: null,
+      entries: [{ pattern: "/opt/**/python*" }],
+      expectedPattern: "/opt/**/python*",
+    },
+    {
+      resolution: {
+        rawExecutable: "unknown-tool",
+        resolvedPath: "/usr/local/bin/unknown-tool",
+        executableName: "unknown-tool",
       },
-    ];
-    for (const testCase of cases) {
-      const match = matchAllowlist(testCase.entries, testCase.resolution);
-      expect(match?.pattern ?? null).toBe(testCase.expectedPattern);
-    }
-  });
+      entries: [{ pattern: "/usr/bin/python3" }, { pattern: "/opt/**/node" }],
+      expectedPattern: null,
+    },
+  ])(
+    "matches exact and wildcard allowlist patterns for %j",
+    ({ resolution, entries, expectedPattern }) => {
+      const match = matchAllowlist(entries, resolution);
+      expect(match?.pattern ?? null).toBe(expectedPattern);
+    },
+  );
 
   it("does not treat unknown tools as safe bins", () => {
     const resolution = {
@@ -170,9 +166,9 @@ describe("exec approvals default agent migration", () => {
 });
 
 describe("normalizeExecApprovals handles string allowlist entries (#9790)", () => {
-  function getMainAllowlistPatterns(file: ExecApprovalsFile): string[] | undefined {
+  function normalizeMainAllowlist(file: ExecApprovalsFile): ExecAllowlistEntry[] | undefined {
     const normalized = normalizeExecApprovals(file);
-    return normalized.agents?.main?.allowlist?.map((entry) => entry.pattern);
+    return normalized.agents?.main?.allowlist;
   }
 
   function expectNoSpreadStringArtifacts(entries: ExecAllowlistEntry[]) {
@@ -233,51 +229,42 @@ describe("normalizeExecApprovals handles string allowlist entries (#9790)", () =
     expect(entries[1]?.id).toBe("existing-id");
   });
 
-  it("sanitizes mixed and malformed allowlist shapes", () => {
-    const cases: Array<{
-      name: string;
-      allowlist: unknown;
-      expectedPatterns: string[] | undefined;
-    }> = [
-      {
-        name: "mixed entries",
-        allowlist: ["ls", { pattern: "/usr/bin/cat" }, "echo"],
-        expectedPatterns: ["ls", "/usr/bin/cat", "echo"],
+  it.each([
+    {
+      name: "mixed entries",
+      allowlist: ["ls", { pattern: "/usr/bin/cat" }, "echo"],
+      expectedPatterns: ["ls", "/usr/bin/cat", "echo"],
+    },
+    {
+      name: "empty strings dropped",
+      allowlist: ["", "  ", "ls"],
+      expectedPatterns: ["ls"],
+    },
+    {
+      name: "malformed objects dropped",
+      allowlist: [{ pattern: "/usr/bin/ls" }, {}, { pattern: 123 }, { pattern: "   " }, "echo"],
+      expectedPatterns: ["/usr/bin/ls", "echo"],
+    },
+    {
+      name: "non-array dropped",
+      allowlist: "ls",
+      expectedPatterns: undefined,
+    },
+  ] satisfies ReadonlyArray<{
+    name: string;
+    allowlist: unknown;
+    expectedPatterns: string[] | undefined;
+  }>)("$name", ({ allowlist, expectedPatterns }) => {
+    const file = {
+      version: 1,
+      agents: {
+        main: { allowlist } as ExecApprovalsAgent,
       },
-      {
-        name: "empty strings dropped",
-        allowlist: ["", "  ", "ls"],
-        expectedPatterns: ["ls"],
-      },
-      {
-        name: "malformed objects dropped",
-        allowlist: [{ pattern: "/usr/bin/ls" }, {}, { pattern: 123 }, { pattern: "   " }, "echo"],
-        expectedPatterns: ["/usr/bin/ls", "echo"],
-      },
-      {
-        name: "non-array dropped",
-        allowlist: "ls",
-        expectedPatterns: undefined,
-      },
-    ];
-
-    for (const testCase of cases) {
-      const patterns = getMainAllowlistPatterns({
-        version: 1,
-        agents: {
-          main: { allowlist: testCase.allowlist } as ExecApprovalsAgent,
-        },
-      });
-      expect(patterns, testCase.name).toEqual(testCase.expectedPatterns);
-      if (patterns) {
-        const entries = normalizeExecApprovals({
-          version: 1,
-          agents: {
-            main: { allowlist: testCase.allowlist } as ExecApprovalsAgent,
-          },
-        }).agents?.main?.allowlist;
-        expectNoSpreadStringArtifacts(entries ?? []);
-      }
+    } satisfies ExecApprovalsFile;
+    const entries = normalizeMainAllowlist(file);
+    expect(entries?.map((entry) => entry.pattern)).toEqual(expectedPatterns);
+    if (entries) {
+      expectNoSpreadStringArtifacts(entries);
     }
   });
 });

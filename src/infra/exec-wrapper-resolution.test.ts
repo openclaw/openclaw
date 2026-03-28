@@ -17,6 +17,24 @@ function supportsScriptPositionalCommandForTests(): boolean {
   return process.platform === "darwin" || process.platform === "freebsd";
 }
 
+function expectTransparentDispatchWrapperCase(params: {
+  argv: string[];
+  wrapper: string;
+  effectiveArgv: string[];
+}) {
+  expect(isDispatchWrapperExecutable(params.wrapper)).toBe(true);
+  expect(unwrapKnownDispatchWrapperInvocation(params.argv)).toEqual({
+    kind: "unwrapped",
+    wrapper: params.wrapper,
+    argv: params.effectiveArgv,
+  });
+  expect(resolveDispatchWrapperTrustPlan(params.argv)).toEqual({
+    argv: params.effectiveArgv,
+    wrappers: [params.wrapper],
+    policyBlocked: false,
+  });
+}
+
 describe("basenameLower", () => {
   test.each([
     { token: " Bun.CMD ", expected: "bun.cmd" },
@@ -209,17 +227,7 @@ describe("resolveDispatchWrapperTrustPlan", () => {
       effectiveArgv: ["bash", "-lc", "echo hi"],
     },
   ])("keeps transparent wrapper handling in sync for %s", ({ argv, wrapper, effectiveArgv }) => {
-    expect(isDispatchWrapperExecutable(wrapper)).toBe(true);
-    expect(unwrapKnownDispatchWrapperInvocation(argv)).toEqual({
-      kind: "unwrapped",
-      wrapper,
-      argv: effectiveArgv,
-    });
-    expect(resolveDispatchWrapperTrustPlan(argv)).toEqual({
-      argv: effectiveArgv,
-      wrappers: [wrapper],
-      policyBlocked: false,
-    });
+    expectTransparentDispatchWrapperCase({ argv, wrapper, effectiveArgv });
   });
 
   test("unwraps transparent wrapper chains", () => {

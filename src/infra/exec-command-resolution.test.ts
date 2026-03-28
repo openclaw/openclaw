@@ -61,70 +61,99 @@ function createPathExecutableFixture(params?: { executable?: string }): {
   return { exeName, exePath, binDir };
 }
 
-describe("exec-command-resolution", () => {
-  it("resolves PATH, relative, and quoted executables", () => {
-    const cases = [
-      {
-        name: "PATH executable",
-        setup: () => {
-          const fixture = createPathExecutableFixture();
-          return {
-            command: "rg -n foo",
-            cwd: undefined as string | undefined,
-            envPath: makePathEnv(fixture.binDir),
-            expectedPath: fixture.exePath,
-            expectedExecutableName: fixture.exeName,
-          };
-        },
-      },
-      {
-        name: "relative executable",
-        setup: () => {
-          const dir = makeTempDir();
-          const cwd = path.join(dir, "project");
-          const scriptName = process.platform === "win32" ? "run.cmd" : "run.sh";
-          const script = path.join(cwd, "scripts", scriptName);
-          fs.mkdirSync(path.dirname(script), { recursive: true });
-          fs.writeFileSync(script, "");
-          fs.chmodSync(script, 0o755);
-          return {
-            command: `./scripts/${scriptName} --flag`,
-            cwd,
-            envPath: undefined as NodeJS.ProcessEnv | undefined,
-            expectedPath: script,
-            expectedExecutableName: undefined,
-          };
-        },
-      },
-      {
-        name: "quoted executable",
-        setup: () => {
-          const dir = makeTempDir();
-          const cwd = path.join(dir, "project");
-          const scriptName = process.platform === "win32" ? "tool.cmd" : "tool";
-          const script = path.join(cwd, "bin", scriptName);
-          fs.mkdirSync(path.dirname(script), { recursive: true });
-          fs.writeFileSync(script, "");
-          fs.chmodSync(script, 0o755);
-          return {
-            command: `"./bin/${scriptName}" --version`,
-            cwd,
-            envPath: undefined as NodeJS.ProcessEnv | undefined,
-            expectedPath: script,
-            expectedExecutableName: undefined,
-          };
-        },
-      },
-    ] as const;
+function expectResolutionPathCase(params: {
+  name: string;
+  resolution: ReturnType<typeof resolveCommandResolution>;
+  cwd?: string;
+  expectedExecutionPath: string;
+  expectedPolicyPath?: string;
+  expectedExecutableName?: string;
+}): void {
+  expect(
+    resolveExecutionTargetCandidatePath(params.resolution ?? null, params.cwd),
+    `${params.name} execution`,
+  ).toBe(params.expectedExecutionPath);
+  if (params.expectedPolicyPath !== undefined) {
+    expect(
+      resolvePolicyTargetCandidatePath(params.resolution ?? null, params.cwd),
+      `${params.name} policy`,
+    ).toBe(params.expectedPolicyPath);
+  }
+  if (params.expectedExecutableName) {
+    expect(params.resolution?.execution.executableName, params.name).toBe(
+      params.expectedExecutableName,
+    );
+  }
+}
 
-    for (const testCase of cases) {
-      const setup = testCase.setup();
-      const res = resolveCommandResolution(setup.command, setup.cwd, setup.envPath);
-      expect(res?.execution.resolvedPath, testCase.name).toBe(setup.expectedPath);
-      if (setup.expectedExecutableName) {
-        expect(res?.execution.executableName, testCase.name).toBe(setup.expectedExecutableName);
-      }
-    }
+type CommandResolutionFixture = {
+  command: string;
+  cwd?: string;
+  envPath?: NodeJS.ProcessEnv;
+  expectedExecutionPath: string;
+  expectedExecutableName?: string;
+};
+
+describe("exec-command-resolution", () => {
+  it.each([
+    {
+      name: "PATH executable",
+      setup: (): CommandResolutionFixture => {
+        const fixture = createPathExecutableFixture();
+        return {
+          command: "rg -n foo",
+          cwd: undefined,
+          envPath: makePathEnv(fixture.binDir),
+          expectedExecutionPath: fixture.exePath,
+          expectedExecutableName: fixture.exeName,
+        };
+      },
+    },
+    {
+      name: "relative executable",
+      setup: (): CommandResolutionFixture => {
+        const dir = makeTempDir();
+        const cwd = path.join(dir, "project");
+        const scriptName = process.platform === "win32" ? "run.cmd" : "run.sh";
+        const script = path.join(cwd, "scripts", scriptName);
+        fs.mkdirSync(path.dirname(script), { recursive: true });
+        fs.writeFileSync(script, "");
+        fs.chmodSync(script, 0o755);
+        return {
+          command: `./scripts/${scriptName} --flag`,
+          cwd,
+          envPath: undefined,
+          expectedExecutionPath: script,
+        };
+      },
+    },
+    {
+      name: "quoted executable",
+      setup: (): CommandResolutionFixture => {
+        const dir = makeTempDir();
+        const cwd = path.join(dir, "project");
+        const scriptName = process.platform === "win32" ? "tool.cmd" : "tool";
+        const script = path.join(cwd, "bin", scriptName);
+        fs.mkdirSync(path.dirname(script), { recursive: true });
+        fs.writeFileSync(script, "");
+        fs.chmodSync(script, 0o755);
+        return {
+          command: `"./bin/${scriptName}" --version`,
+          cwd,
+          envPath: undefined,
+          expectedExecutionPath: script,
+        };
+      },
+    },
+  ])("resolves $name", ({ setup }) => {
+    const params = setup();
+    expectResolutionPathCase({
+      name: params.command,
+      resolution: resolveCommandResolution(params.command, params.cwd, params.envPath),
+      cwd: params.cwd,
+      expectedExecutionPath: params.expectedExecutionPath,
+      expectedExecutableName: params.expectedExecutableName,
+    });
   });
 
   it("unwraps transparent env and nice wrappers to the effective executable", () => {
@@ -355,14 +384,13 @@ describe("exec-command-resolution", () => {
         argv,
         resolution,
       };
-      expect(
-        resolveExecutionTargetCandidatePath(resolution ?? null, dir),
-        `${testCase.name} execution`,
-      ).toBe(testCase.expectedExecutionPath);
-      expect(
-        resolvePolicyTargetCandidatePath(resolution ?? null, dir),
-        `${testCase.name} policy`,
-      ).toBe(testCase.expectedPolicyPath);
+      expectResolutionPathCase({
+        name: testCase.name,
+        resolution,
+        cwd: dir,
+        expectedExecutionPath: testCase.expectedExecutionPath,
+        expectedPolicyPath: testCase.expectedPolicyPath,
+      });
       expect(resolvePlannedSegmentArgv(segment), `${testCase.name} planned argv`).toEqual(
         testCase.expectedPlannedArgv,
       );
