@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.3.28",
+  "version": "2026.3.28-beta.1",
   "description": "OpenClaw Discord channel plugin",
   "type": "module",
   "dependencies": {
@@ -14,7 +14,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.28"
+    "openclaw": ">=2026.3.28-beta.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
