@@ -26,12 +26,46 @@ export const DEFAULT_MMR_CONFIG: MMRConfig = {
 };
 
 /**
+ * Regex matching CJK-family characters that lack whitespace word boundaries:
+ * - CJK Unified Ideographs (Chinese hanzi, Japanese kanji, Korean hanja)
+ * - CJK Extension A
+ * - Hiragana & Katakana (Japanese)
+ * - Hangul Syllables & Jamo (Korean)
+ */
+const CJK_RE = /[\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff]/;
+
+/**
  * Tokenize text for Jaccard similarity computation.
- * Extracts alphanumeric tokens and normalizes to lowercase.
+ * Extracts alphanumeric tokens, CJK-family characters (unigrams),
+ * and consecutive CJK character pairs (bigrams).
+ *
+ * Bigrams are only created from characters that are adjacent in the
+ * original text, so mixed content like "我喜欢hello你好" will NOT
+ * produce the spurious bigram "欢你".
  */
 export function tokenize(text: string): Set<string> {
-  const tokens = text.toLowerCase().match(/[a-z0-9_]+/g) ?? [];
-  return new Set(tokens);
+  const lower = text.toLowerCase();
+  const ascii = lower.match(/[a-z0-9_]+/g) ?? [];
+
+  // Track CJK characters with their original positions
+  const chars = Array.from(lower);
+  const cjkData: { char: string; index: number }[] = [];
+  for (let i = 0; i < chars.length; i++) {
+    if (CJK_RE.test(chars[i])) {
+      cjkData.push({ char: chars[i], index: i });
+    }
+  }
+
+  // Build bigrams only from originally adjacent CJK characters
+  const bigrams: string[] = [];
+  for (let i = 0; i < cjkData.length - 1; i++) {
+    if (cjkData[i + 1].index === cjkData[i].index + 1) {
+      bigrams.push(cjkData[i].char + cjkData[i + 1].char);
+    }
+  }
+
+  const unigrams = cjkData.map((d) => d.char);
+  return new Set([...ascii, ...bigrams, ...unigrams]);
 }
 
 /**

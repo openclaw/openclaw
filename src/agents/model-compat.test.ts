@@ -9,8 +9,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderModernModelRef: providerRuntimeMocks.resolveProviderModernModelRef,
 }));
 
+import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import { isHighSignalLiveModelRef, isModernModelRef } from "./live-model-filter.js";
-import { normalizeModelCompat } from "./model-compat.js";
 
 const baseModel = (): Model<Api> =>
   ({
@@ -369,6 +369,15 @@ describe("isModernModelRef", () => {
     expect(isModernModelRef({ provider: "opencode-go", id: "kimi-k2.5" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode-go", id: "glm-5" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode-go", id: "minimax-m2.7" })).toBe(true);
+  });
+
+  it("matches plugin-advertised modern models across canonical provider aliases", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
+      provider === "zai" && context.modelId === "glm-5" ? true : undefined,
+    );
+
+    expect(isModernModelRef({ provider: "z.ai", id: "glm-5" })).toBe(true);
+    expect(isModernModelRef({ provider: "z-ai", id: "glm-5" })).toBe(true);
   });
 
   it("excludes provider-declined modern models", () => {

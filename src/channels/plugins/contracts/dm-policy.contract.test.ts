@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { isAllowedBlueBubblesSender } from "../../../../extensions/bluebubbles/api.js";
-import { isMattermostSenderAllowed } from "../../../../extensions/mattermost/api.js";
-import { isSignalSenderAllowed, type SignalSender } from "../../../../extensions/signal/api.js";
+import { isAllowedBlueBubblesSender } from "../../../plugin-sdk/bluebubbles-policy.js";
+import { isMattermostSenderAllowed } from "../../../plugin-sdk/mattermost-policy.js";
+import { isSignalSenderAllowed, type SignalSender } from "../../../plugin-sdk/signal-surface.js";
 import {
   DM_GROUP_ACCESS_REASON,
   resolveDmGroupAccessWithLists,
@@ -19,7 +19,7 @@ const signalSender: SignalSender = {
   e164: "+15550001111",
 };
 
-const cases: ChannelSmokeCase[] = [
+const channelSmokeCases: ChannelSmokeCase[] = [
   {
     name: "bluebubbles",
     storeAllowFrom: ["attacker-user"],
@@ -47,23 +47,41 @@ const cases: ChannelSmokeCase[] = [
   },
 ];
 
+function expandChannelIngressCases(cases: readonly ChannelSmokeCase[]) {
+  return cases.flatMap((testCase) =>
+    (["message", "reaction"] as const).map((ingress) => ({
+      testCase,
+      ingress,
+    })),
+  );
+}
+
 describe("security/dm-policy-shared channel smoke", () => {
-  for (const testCase of cases) {
-    for (const ingress of ["message", "reaction"] as const) {
-      it(`[${testCase.name}] blocks group ${ingress} when sender is only in pairing store`, () => {
-        const access = resolveDmGroupAccessWithLists({
-          isGroup: true,
-          dmPolicy: "pairing",
-          groupPolicy: "allowlist",
-          allowFrom: ["owner-user"],
-          groupAllowFrom: ["group-owner"],
-          storeAllowFrom: testCase.storeAllowFrom,
-          isSenderAllowed: testCase.isSenderAllowed,
-        });
-        expect(access.decision).toBe("block");
-        expect(access.reasonCode).toBe(DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED);
-        expect(access.reason).toBe("groupPolicy=allowlist (not allowlisted)");
-      });
-    }
+  function expectBlockedGroupAccess(params: {
+    storeAllowFrom: string[];
+    isSenderAllowed: (allowFrom: string[]) => boolean;
+  }) {
+    const access = resolveDmGroupAccessWithLists({
+      isGroup: true,
+      dmPolicy: "pairing",
+      groupPolicy: "allowlist",
+      allowFrom: ["owner-user"],
+      groupAllowFrom: ["group-owner"],
+      storeAllowFrom: params.storeAllowFrom,
+      isSenderAllowed: params.isSenderAllowed,
+    });
+    expect(access.decision).toBe("block");
+    expect(access.reasonCode).toBe(DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED);
+    expect(access.reason).toBe("groupPolicy=allowlist (not allowlisted)");
   }
+
+  it.each(expandChannelIngressCases(channelSmokeCases))(
+    "[$testCase.name] blocks group $ingress when sender is only in pairing store",
+    ({ testCase }) => {
+      expectBlockedGroupAccess({
+        storeAllowFrom: testCase.storeAllowFrom,
+        isSenderAllowed: testCase.isSenderAllowed,
+      });
+    },
+  );
 });

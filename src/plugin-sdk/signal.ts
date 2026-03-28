@@ -4,7 +4,7 @@
 export type { ChannelMessageActionAdapter } from "../channels/plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { SignalAccountConfig } from "../config/types.js";
-export type { ResolvedSignalAccount } from "../../extensions/signal/api.js";
+export type { ResolvedSignalAccount } from "./signal-surface.js";
 export type {
   ChannelMessageActionContext,
   ChannelPlugin,
@@ -51,6 +51,7 @@ export { SignalConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { normalizeE164 } from "../utils.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
+export { chunkText } from "../auto-reply/chunk.js";
 export {
   createCliPathTextInput,
   createDelegatedTextInputShouldPrompt,
@@ -75,12 +76,12 @@ export {
   listEnabledSignalAccounts,
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
-} from "../../extensions/signal/api.js";
-export { isSignalSenderAllowed } from "../../extensions/signal/api.js";
-export type { SignalSender } from "../../extensions/signal/api.js";
-export { monitorSignalProvider } from "../../extensions/signal/api.js";
-export { probeSignal } from "../../extensions/signal/api.js";
-export { resolveSignalReactionLevel } from "../../extensions/signal/api.js";
-export { removeReactionSignal, sendReactionSignal } from "../../extensions/signal/api.js";
-export { sendMessageSignal } from "../../extensions/signal/api.js";
-export { signalMessageActions } from "../../extensions/signal/api.js";
+} from "./signal-surface.js";
+export { isSignalSenderAllowed } from "./signal-surface.js";
+export type { SignalSender } from "./signal-surface.js";
+export { monitorSignalProvider } from "./signal-surface.js";
+export { probeSignal } from "./signal-surface.js";
+export { resolveSignalReactionLevel } from "./signal-surface.js";
+export { removeReactionSignal, sendReactionSignal } from "./signal-surface.js";
+export { sendMessageSignal } from "./signal-surface.js";
+export { signalMessageActions } from "./signal-surface.js";

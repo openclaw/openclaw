@@ -5,9 +5,9 @@ import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createBrowserTool } from "../plugin-sdk/browser.js";
-import "./test-helpers/fast-coding-tools.js";
 import { XAI_UNSUPPORTED_SCHEMA_KEYWORDS } from "../plugin-sdk/provider-tools.js";
-import { applyXaiModelCompat } from "./model-compat.js";
+import { applyXaiModelCompat } from "../plugin-sdk/xai.js";
+import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { findUnsupportedSchemaKeywords } from "./pi-embedded-runner/google.js";
 import { __testing, createOpenClawCodingTools } from "./pi-tools.js";
@@ -458,7 +458,7 @@ describe("createOpenClawCodingTools", () => {
       senderIsOwner: true,
     });
 
-    expect(xaiTools.some((tool) => tool.name === "web_search")).toBe(false);
+    expect(xaiTools.some((tool) => tool.name === "web_search")).toBe(true);
     for (const tool of xaiTools) {
       const violations = findUnsupportedSchemaKeywords(tool.parameters, `${tool.name}.parameters`);
       expect(

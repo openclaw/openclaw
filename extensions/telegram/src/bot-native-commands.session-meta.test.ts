@@ -209,6 +209,7 @@ function registerAndResolveCommandHandlerBase(params: {
       byProvider: new Map<string, Set<string>>(),
       providers: [],
       resolvedDefault: { provider: "openai", model: "gpt-4.1" },
+      modelNames: new Map<string, string>(),
     })),
     listSkillCommandsForAgents: vi.fn(() => []),
     wasSentByBot: vi.fn(() => false),
@@ -641,6 +642,41 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       undefined,
     );
   });
+
+  it.each(["new", "reset"] as const)(
+    "preserves the topic-qualified origin target for native /%s in forum topics",
+    async (commandName) => {
+      const { handler } = registerAndResolveCommandHandler({
+        commandName,
+        cfg: {},
+        allowFrom: ["200"],
+        groupAllowFrom: ["200"],
+        useAccessGroups: true,
+      });
+      await handler(createTelegramTopicCommandContext());
+
+      const dispatchCall = (
+        replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+          [
+            {
+              ctx?: {
+                CommandTargetSessionKey?: string;
+                MessageThreadId?: number;
+                OriginatingTo?: string;
+              };
+            },
+          ]
+        >
+      )[0]?.[0];
+      expect(dispatchCall?.ctx).toEqual(
+        expect.objectContaining({
+          CommandTargetSessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+          MessageThreadId: 42,
+          OriginatingTo: "telegram:-1001234567890:topic:42",
+        }),
+      );
+    },
+  );
 
   it("aborts native command dispatch when configured ACP topic binding cannot initialize", async () => {
     const boundSessionKey = "agent:codex:acp:binding:telegram:default:feedface";

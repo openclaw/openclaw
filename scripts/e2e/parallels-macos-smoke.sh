@@ -6,7 +6,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VM_NAME="macOS Tahoe"
 SNAPSHOT_HINT="macOS 26.3.1 latest"
 MODE="both"
-OPENAI_API_KEY_ENV="OPENAI_API_KEY"
+PROVIDER="openai"
+API_KEY_ENV=""
+AUTH_CHOICE=""
+AUTH_KEY_FLAG=""
+MODEL_ID=""
 INSTALL_URL="https://openclaw.ai/install.sh"
 HOST_PORT="18425"
 HOST_PORT_EXPLICIT=0
@@ -111,8 +115,11 @@ Options:
                              fresh   = fresh snapshot -> target package/current main tgz -> onboard smoke
                              upgrade = fresh snapshot -> latest release -> target package/current main tgz -> onboard smoke
                              both    = run both lanes
-  --openai-api-key-env <var> Host env var name for OpenAI API key.
-                             Default: OPENAI_API_KEY
+  --provider <openai|anthropic>
+                             Provider auth/model lane. Default: openai
+  --api-key-env <var>        Host env var name for provider API key.
+                             Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
+  --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
   --install-url <url>        Installer URL for latest release. Default: https://openclaw.ai/install.sh
   --host-port <port>         Host HTTP port for current-main tgz. Default: 18425
   --host-ip <ip>             Override Parallels host IP.
@@ -148,8 +155,12 @@ while [[ $# -gt 0 ]]; do
       MODE="$2"
       shift 2
       ;;
-    --openai-api-key-env)
-      OPENAI_API_KEY_ENV="$2"
+    --provider)
+      PROVIDER="$2"
+      shift 2
+      ;;
+    --api-key-env|--openai-api-key-env)
+      API_KEY_ENV="$2"
       shift 2
       ;;
     --install-url)
@@ -218,8 +229,26 @@ case "$MODE" in
     ;;
 esac
 
-OPENAI_API_KEY_VALUE="${!OPENAI_API_KEY_ENV:-}"
-[[ -n "$OPENAI_API_KEY_VALUE" ]] || die "$OPENAI_API_KEY_ENV is required"
+case "$PROVIDER" in
+  openai)
+    AUTH_CHOICE="openai-api-key"
+    AUTH_KEY_FLAG="openai-api-key"
+    MODEL_ID="openai/gpt-5.4"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
+    ;;
+  anthropic)
+    AUTH_CHOICE="apiKey"
+    AUTH_KEY_FLAG="anthropic-api-key"
+    MODEL_ID="anthropic/claude-sonnet-4-6"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="ANTHROPIC_API_KEY"
+    ;;
+  *)
+    die "invalid --provider: $PROVIDER"
+    ;;
+esac
+
+API_KEY_VALUE="${!API_KEY_ENV:-}"
+[[ -n "$API_KEY_VALUE" ]] || die "$API_KEY_ENV is required"
 
 if [[ -n "$DISCORD_TOKEN_ENV" || -n "$DISCORD_GUILD_ID" || -n "$DISCORD_CHANNEL_ID" ]]; then
   [[ -n "$DISCORD_TOKEN_ENV" ]] || die "--discord-token-env is required when Discord smoke args are set"
@@ -712,11 +741,11 @@ EOF
 
 run_ref_onboard() {
   guest_current_user_cli \
-    /usr/bin/env "OPENAI_API_KEY=$OPENAI_API_KEY_VALUE" \
+    /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" \
     "$GUEST_OPENCLAW_BIN" onboard \
     --non-interactive \
     --mode local \
-    --auth-choice openai-api-key \
+    --auth-choice "$AUTH_CHOICE" \
     --secret-input-mode ref \
     --gateway-port 18789 \
     --gateway-bind loopback \
@@ -739,7 +768,9 @@ show_gateway_status_compat() {
 }
 
 verify_turn() {
+  guest_current_user_cli "$GUEST_OPENCLAW_BIN" models set "$MODEL_ID"
   guest_current_user_cli \
+    /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" \
     "$GUEST_OPENCLAW_BIN" agent \
     --agent main \
     --message "Reply with exact ASCII text OK only." \
@@ -1081,6 +1112,7 @@ import sys
 
 summary = {
     "vm": os.environ["SUMMARY_VM"],
+    "provider": os.environ["SUMMARY_PROVIDER"],
     "snapshotHint": os.environ["SUMMARY_SNAPSHOT_HINT"],
     "snapshotId": os.environ["SUMMARY_SNAPSHOT_ID"],
     "mode": os.environ["SUMMARY_MODE"],
@@ -1245,6 +1277,7 @@ fi
 
 SUMMARY_JSON_PATH="$(
   SUMMARY_VM="$VM_NAME" \
+  SUMMARY_PROVIDER="$PROVIDER" \
   SUMMARY_SNAPSHOT_HINT="$SNAPSHOT_HINT" \
   SUMMARY_SNAPSHOT_ID="$SNAPSHOT_ID" \
   SUMMARY_MODE="$MODE" \

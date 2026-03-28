@@ -20,6 +20,64 @@ const BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS = 300_000;
 
 installGeneratedPluginTempRootCleanup();
 
+function expectTestOnlyArtifactsExcluded(artifacts: readonly string[]) {
+  artifacts.forEach((artifact) => {
+    expect(artifact).not.toMatch(/^test-/);
+    expect(artifact).not.toContain(".test-");
+    expect(artifact).not.toMatch(/\.test\.js$/);
+  });
+}
+
+function expectGeneratedPathResolution(tempRoot: string, expectedRelativePath: string) {
+  expect(
+    resolveBundledPluginGeneratedPath(tempRoot, {
+      source: "plugin/index.ts",
+      built: "plugin/index.js",
+    }),
+  ).toBe(path.join(tempRoot, expectedRelativePath));
+}
+
+function expectArtifactPresence(
+  artifacts: readonly string[] | undefined,
+  params: { contains?: readonly string[]; excludes?: readonly string[] },
+) {
+  if (params.contains) {
+    for (const artifact of params.contains) {
+      expect(artifacts).toContain(artifact);
+    }
+  }
+  if (params.excludes) {
+    for (const artifact of params.excludes) {
+      expect(artifacts).not.toContain(artifact);
+    }
+  }
+}
+
+async function writeGeneratedMetadataModule(params: {
+  repoRoot: string;
+  outputPath?: string;
+  check?: boolean;
+}) {
+  return writeBundledPluginMetadataModule({
+    repoRoot: params.repoRoot,
+    outputPath: params.outputPath ?? "src/plugins/bundled-plugin-metadata.generated.ts",
+    ...(params.check ? { check: true } : {}),
+  });
+}
+
+async function expectGeneratedMetadataModuleState(params: {
+  repoRoot: string;
+  check?: boolean;
+  expected: { changed?: boolean; wrote?: boolean };
+}) {
+  const result = await writeGeneratedMetadataModule({
+    repoRoot: params.repoRoot,
+    ...(params.check ? { check: true } : {}),
+  });
+  expect(result).toEqual(expect.objectContaining(params.expected));
+  return result;
+}
+
 describe("bundled plugin metadata", () => {
   it(
     "matches the generated metadata snapshot",
@@ -35,11 +93,13 @@ describe("bundled plugin metadata", () => {
     const discord = BUNDLED_PLUGIN_METADATA.find((entry) => entry.dirName === "discord");
     expect(discord?.source).toEqual({ source: "./index.ts", built: "index.js" });
     expect(discord?.setupSource).toEqual({ source: "./setup-entry.ts", built: "setup-entry.js" });
-    expect(discord?.publicSurfaceArtifacts).toContain("api.js");
-    expect(discord?.publicSurfaceArtifacts).toContain("runtime-api.js");
-    expect(discord?.publicSurfaceArtifacts).toContain("session-key-api.js");
-    expect(discord?.publicSurfaceArtifacts).not.toContain("test-api.js");
-    expect(discord?.runtimeSidecarArtifacts).toContain("runtime-api.js");
+    expectArtifactPresence(discord?.publicSurfaceArtifacts, {
+      contains: ["api.js", "runtime-api.js", "session-key-api.js"],
+      excludes: ["test-api.js"],
+    });
+    expectArtifactPresence(discord?.runtimeSidecarArtifacts, {
+      contains: ["runtime-api.js"],
+    });
     expect(discord?.manifest.id).toBe("discord");
     expect(discord?.manifest.channelConfigs?.discord).toEqual(
       expect.objectContaining({
@@ -49,13 +109,9 @@ describe("bundled plugin metadata", () => {
   });
 
   it("excludes test-only public surface artifacts", () => {
-    for (const entry of BUNDLED_PLUGIN_METADATA) {
-      for (const artifact of entry.publicSurfaceArtifacts ?? []) {
-        expect(artifact).not.toMatch(/^test-/);
-        expect(artifact).not.toContain(".test-");
-        expect(artifact).not.toMatch(/\.test\.js$/);
-      }
-    }
+    BUNDLED_PLUGIN_METADATA.forEach((entry) =>
+      expectTestOnlyArtifactsExcluded(entry.publicSurfaceArtifacts ?? []),
+    );
   });
 
   it("prefers built generated paths when present and falls back to source paths", () => {
@@ -63,20 +119,10 @@ describe("bundled plugin metadata", () => {
 
     fs.mkdirSync(path.join(tempRoot, "plugin"), { recursive: true });
     fs.writeFileSync(path.join(tempRoot, "plugin", "index.ts"), "export {};\n", "utf8");
-    expect(
-      resolveBundledPluginGeneratedPath(tempRoot, {
-        source: "plugin/index.ts",
-        built: "plugin/index.js",
-      }),
-    ).toBe(path.join(tempRoot, "plugin", "index.ts"));
+    expectGeneratedPathResolution(tempRoot, path.join("plugin", "index.ts"));
 
     fs.writeFileSync(path.join(tempRoot, "plugin", "index.js"), "export {};\n", "utf8");
-    expect(
-      resolveBundledPluginGeneratedPath(tempRoot, {
-        source: "plugin/index.ts",
-        built: "plugin/index.js",
-      }),
-    ).toBe(path.join(tempRoot, "plugin", "index.js"));
+    expectGeneratedPathResolution(tempRoot, path.join("plugin", "index.js"));
   });
 
   it("supports check mode for stale generated artifacts", async () => {
@@ -94,19 +140,16 @@ describe("bundled plugin metadata", () => {
       configSchema: { type: "object" },
     });
 
-    const initial = await writeBundledPluginMetadataModule({
+    await expectGeneratedMetadataModuleState({
       repoRoot: tempRoot,
-      outputPath: "src/plugins/bundled-plugin-metadata.generated.ts",
+      expected: { wrote: true },
     });
-    expect(initial.wrote).toBe(true);
 
-    const current = await writeBundledPluginMetadataModule({
+    await expectGeneratedMetadataModuleState({
       repoRoot: tempRoot,
-      outputPath: "src/plugins/bundled-plugin-metadata.generated.ts",
       check: true,
+      expected: { changed: false, wrote: false },
     });
-    expect(current.changed).toBe(false);
-    expect(current.wrote).toBe(false);
 
     fs.writeFileSync(
       path.join(tempRoot, "src/plugins/bundled-plugin-metadata.generated.ts"),
@@ -114,13 +157,11 @@ describe("bundled plugin metadata", () => {
       "utf8",
     );
 
-    const stale = await writeBundledPluginMetadataModule({
+    await expectGeneratedMetadataModuleState({
       repoRoot: tempRoot,
-      outputPath: "src/plugins/bundled-plugin-metadata.generated.ts",
       check: true,
+      expected: { changed: true, wrote: false },
     });
-    expect(stale.changed).toBe(true);
-    expect(stale.wrote).toBe(false);
   });
 
   it("merges generated channel schema metadata with manifest-owned channel config fields", async () => {

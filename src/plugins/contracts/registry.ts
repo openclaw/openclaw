@@ -7,7 +7,6 @@ import {
   BUNDLED_WEB_SEARCH_PLUGIN_IDS,
 } from "../bundled-capability-metadata.js";
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
-import { resolvePluginProviders } from "../providers.runtime.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -15,6 +14,11 @@ import type {
   SpeechProviderPlugin,
   WebSearchProviderPlugin,
 } from "../types.js";
+import {
+  loadVitestImageGenerationProviderContractRegistry,
+  loadVitestMediaUnderstandingProviderContractRegistry,
+  loadVitestSpeechProviderContractRegistry,
+} from "./speech-vitest-registry.js";
 
 type CapabilityContractEntry<T> = {
   pluginId: string;
@@ -71,7 +75,12 @@ function uniqueStrings(values: readonly string[]): string[] {
 }
 
 let providerContractRegistryCache: ProviderContractEntry[] | null = null;
+let providerContractRegistryByPluginIdCache: Map<string, ProviderContractEntry[]> | null = null;
 let webSearchProviderContractRegistryCache: WebSearchProviderContractEntry[] | null = null;
+let webSearchProviderContractRegistryByPluginIdCache: Map<
+  string,
+  WebSearchProviderContractEntry[]
+> | null = null;
 let speechProviderContractRegistryCache: SpeechProviderContractEntry[] | null = null;
 let mediaUnderstandingProviderContractRegistryCache:
   | MediaUnderstandingProviderContractEntry[]
@@ -79,36 +88,8 @@ let mediaUnderstandingProviderContractRegistryCache:
 let imageGenerationProviderContractRegistryCache: ImageGenerationProviderContractEntry[] | null =
   null;
 const providerContractPluginIdsByProviderId = createProviderContractPluginIdsByProviderId();
-const providerContractEntriesByPluginId = new Map<string, ProviderContractEntry[]>();
 
 export let providerContractLoadError: Error | undefined;
-
-function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContractEntry[] {
-  const cached = providerContractEntriesByPluginId.get(pluginId);
-  if (cached) {
-    return cached;
-  }
-  try {
-    providerContractLoadError = undefined;
-    const entries = resolvePluginProviders({
-      bundledProviderAllowlistCompat: true,
-      bundledProviderVitestCompat: true,
-      onlyPluginIds: [pluginId],
-      pluginSdkResolution: "dist",
-      cache: false,
-      activate: false,
-    }).map((provider) => ({
-      pluginId: provider.pluginId ?? pluginId,
-      provider,
-    }));
-    providerContractEntriesByPluginId.set(pluginId, entries);
-    return entries;
-  } catch (error) {
-    providerContractLoadError = error instanceof Error ? error : new Error(String(error));
-    providerContractEntriesByPluginId.set(pluginId, []);
-    return [];
-  }
-}
 
 function loadProviderContractEntriesForPluginIds(
   pluginIds: readonly string[],
@@ -116,11 +97,52 @@ function loadProviderContractEntriesForPluginIds(
   return pluginIds.flatMap((pluginId) => loadProviderContractEntriesForPluginId(pluginId));
 }
 
+function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContractEntry[] {
+  if (providerContractRegistryCache) {
+    return providerContractRegistryCache.filter((entry) => entry.pluginId === pluginId);
+  }
+
+  const cache =
+    providerContractRegistryByPluginIdCache ?? new Map<string, ProviderContractEntry[]>();
+  providerContractRegistryByPluginIdCache = cache;
+  const cached = cache.get(pluginId);
+  if (cached) {
+    return cached;
+  }
+
+  try {
+    providerContractLoadError = undefined;
+    const entries = loadBundledCapabilityRuntimeRegistry({
+      pluginIds: [pluginId],
+      pluginSdkResolution: "dist",
+    }).providers.map((entry) => ({
+      pluginId: entry.pluginId,
+      provider: entry.provider,
+    }));
+    cache.set(pluginId, entries);
+    return entries;
+  } catch (error) {
+    providerContractLoadError = error instanceof Error ? error : new Error(String(error));
+    cache.set(pluginId, []);
+    return [];
+  }
+}
+
 function loadProviderContractRegistry(): ProviderContractEntry[] {
   if (!providerContractRegistryCache) {
-    providerContractRegistryCache = loadProviderContractEntriesForPluginIds(
-      BUNDLED_PROVIDER_PLUGIN_IDS,
-    );
+    try {
+      providerContractLoadError = undefined;
+      providerContractRegistryCache = loadBundledCapabilityRuntimeRegistry({
+        pluginIds: BUNDLED_PROVIDER_PLUGIN_IDS,
+        pluginSdkResolution: "dist",
+      }).providers.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      }));
+    } catch (error) {
+      providerContractLoadError = error instanceof Error ? error : new Error(String(error));
+      providerContractRegistryCache = [];
+    }
   }
   return providerContractRegistryCache;
 }
@@ -170,48 +192,75 @@ function loadWebSearchProviderContractRegistry(): WebSearchProviderContractEntry
   return webSearchProviderContractRegistryCache;
 }
 
+export function resolveWebSearchProviderContractEntriesForPluginId(
+  pluginId: string,
+): WebSearchProviderContractEntry[] {
+  if (webSearchProviderContractRegistryCache) {
+    return webSearchProviderContractRegistryCache.filter((entry) => entry.pluginId === pluginId);
+  }
+
+  const cache =
+    webSearchProviderContractRegistryByPluginIdCache ??
+    new Map<string, WebSearchProviderContractEntry[]>();
+  webSearchProviderContractRegistryByPluginIdCache = cache;
+  const cached = cache.get(pluginId);
+  if (cached) {
+    return cached;
+  }
+
+  const entries = loadBundledCapabilityRuntimeRegistry({
+    pluginIds: [pluginId],
+    pluginSdkResolution: "dist",
+  }).webSearchProviders.map((entry) => ({
+    pluginId: entry.pluginId,
+    provider: entry.provider,
+    credentialValue: resolveWebSearchCredentialValue(entry.provider),
+  }));
+  cache.set(pluginId, entries);
+  return entries;
+}
+
 function loadSpeechProviderContractRegistry(): SpeechProviderContractEntry[] {
   if (!speechProviderContractRegistryCache) {
-    const registry = loadBundledCapabilityRuntimeRegistry({
-      pluginIds: BUNDLED_SPEECH_PLUGIN_IDS,
-      pluginSdkResolution: "dist",
-    });
-    speechProviderContractRegistryCache = registry.speechProviders.map((entry) => ({
-      pluginId: entry.pluginId,
-      provider: entry.provider,
-    }));
+    speechProviderContractRegistryCache = process.env.VITEST
+      ? loadVitestSpeechProviderContractRegistry()
+      : loadBundledCapabilityRuntimeRegistry({
+          pluginIds: BUNDLED_SPEECH_PLUGIN_IDS,
+          pluginSdkResolution: "dist",
+        }).speechProviders.map((entry) => ({
+          pluginId: entry.pluginId,
+          provider: entry.provider,
+        }));
   }
   return speechProviderContractRegistryCache;
 }
 
 function loadMediaUnderstandingProviderContractRegistry(): MediaUnderstandingProviderContractEntry[] {
   if (!mediaUnderstandingProviderContractRegistryCache) {
-    const registry = loadBundledCapabilityRuntimeRegistry({
-      pluginIds: BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS,
-      pluginSdkResolution: "dist",
-    });
-    mediaUnderstandingProviderContractRegistryCache = registry.mediaUnderstandingProviders.map(
-      (entry) => ({
-        pluginId: entry.pluginId,
-        provider: entry.provider,
-      }),
-    );
+    mediaUnderstandingProviderContractRegistryCache = process.env.VITEST
+      ? loadVitestMediaUnderstandingProviderContractRegistry()
+      : loadBundledCapabilityRuntimeRegistry({
+          pluginIds: BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS,
+          pluginSdkResolution: "dist",
+        }).mediaUnderstandingProviders.map((entry) => ({
+          pluginId: entry.pluginId,
+          provider: entry.provider,
+        }));
   }
   return mediaUnderstandingProviderContractRegistryCache;
 }
 
 function loadImageGenerationProviderContractRegistry(): ImageGenerationProviderContractEntry[] {
   if (!imageGenerationProviderContractRegistryCache) {
-    const registry = loadBundledCapabilityRuntimeRegistry({
-      pluginIds: BUNDLED_IMAGE_GENERATION_PLUGIN_IDS,
-      pluginSdkResolution: "dist",
-    });
-    imageGenerationProviderContractRegistryCache = registry.imageGenerationProviders.map(
-      (entry) => ({
-        pluginId: entry.pluginId,
-        provider: entry.provider,
-      }),
-    );
+    imageGenerationProviderContractRegistryCache = process.env.VITEST
+      ? loadVitestImageGenerationProviderContractRegistry()
+      : loadBundledCapabilityRuntimeRegistry({
+          pluginIds: BUNDLED_IMAGE_GENERATION_PLUGIN_IDS,
+          pluginSdkResolution: "dist",
+        }).imageGenerationProviders.map((entry) => ({
+          pluginId: entry.pluginId,
+          provider: entry.provider,
+        }));
   }
   return imageGenerationProviderContractRegistryCache;
 }

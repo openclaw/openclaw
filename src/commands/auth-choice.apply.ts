@@ -11,6 +11,7 @@ import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
 export type ApplyAuthChoiceParams = {
   authChoice: AuthChoice;
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   agentDir?: string;
@@ -30,13 +31,13 @@ export async function applyAuthChoice(
   const normalizedAuthChoice =
     normalizeLegacyOnboardAuthChoice(params.authChoice, {
       config: params.config,
-      env: process.env,
+      env: params.env,
     }) ?? params.authChoice;
   const normalizedProviderAuthChoice = normalizeApiKeyTokenProviderAuthChoice({
     authChoice: normalizedAuthChoice,
     tokenProvider: params.opts?.tokenProvider,
     config: params.config,
-    env: process.env,
+    env: params.env,
   });
   const normalizedParams =
     normalizedProviderAuthChoice === params.authChoice

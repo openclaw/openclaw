@@ -2,13 +2,8 @@ import { normalizeLegacyOnboardAuthChoice } from "../commands/auth-choice-legacy
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 
-const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<string, string>> = {
-  chutes: "chutes",
-  "custom-api-key": "custom",
-};
-
-function normalizeLegacyAuthChoice(choice: string): string {
-  return normalizeLegacyOnboardAuthChoice(choice, { env: process.env }) ?? choice;
+function normalizeLegacyAuthChoice(choice: string, env?: NodeJS.ProcessEnv): string {
+  return normalizeLegacyOnboardAuthChoice(choice, { env }) ?? choice;
 }
 
 export async function resolvePreferredProviderForAuthChoice(params: {
@@ -17,7 +12,7 @@ export async function resolvePreferredProviderForAuthChoice(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
-  const choice = normalizeLegacyAuthChoice(params.choice) ?? params.choice;
+  const choice = normalizeLegacyAuthChoice(params.choice, params.env) ?? params.choice;
   const manifestResolved = resolveManifestProviderAuthChoice(choice, params);
   if (manifestResolved) {
     return manifestResolved.providerId;
@@ -40,5 +35,8 @@ export async function resolvePreferredProviderForAuthChoice(params: {
     return pluginResolved.provider.id;
   }
 
-  return PREFERRED_PROVIDER_BY_AUTH_CHOICE[choice];
+  if (choice === "custom-api-key") {
+    return "custom";
+  }
+  return undefined;
 }

@@ -120,22 +120,19 @@ export async function promptRemoteGatewayConfig(
           message: `Trust this gateway? Host: ${host}:${port} TLS fingerprint: ${fingerprint ?? "not advertised (connection will not be pinned)"}`,
           initialValue: false,
         });
-        if (!trusted) {
-          throw new Error(
-            `Discovery endpoint ${host}:${port} not trusted. Re-run onboarding or enter the URL manually.`,
+        if (trusted) {
+          discoveryTlsFingerprint = fingerprint;
+          trustedDiscoveryUrl = suggestedUrl;
+          await prompter.note(
+            [
+              "Direct remote access defaults to TLS.",
+              `Using: ${suggestedUrl}`,
+              ...(fingerprint ? [`TLS pin: ${fingerprint}`] : []),
+              "If your gateway is loopback-only, choose SSH tunnel and keep ws://127.0.0.1:18789.",
+            ].join("\n"),
+            "Direct remote",
           );
         }
-        discoveryTlsFingerprint = fingerprint;
-        trustedDiscoveryUrl = suggestedUrl;
-        await prompter.note(
-          [
-            "Direct remote access defaults to TLS.",
-            `Using: ${suggestedUrl}`,
-            ...(fingerprint ? [`TLS pin: ${fingerprint}`] : []),
-            "If your gateway is loopback-only, choose SSH tunnel and keep ws://127.0.0.1:18789.",
-          ].join("\n"),
-          "Direct remote",
-        );
       } else {
         suggestedUrl = DEFAULT_GATEWAY_URL;
         await prompter.note(

@@ -52,6 +52,33 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
+  it("drops JSON NO_REPLY action payloads without media", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        { text: '{"action":"NO_REPLY"}' },
+        { text: "{\n  \"action\": \"NO_REPLY\"\n}" },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("keeps JSON NO_REPLY objects that include extra fields", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        { text: '{"action":"NO_REPLY","note":"example"}' },
+      ]),
+    ).toEqual([
+      {
+        text: '{"action":"NO_REPLY","note":"example"}',
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+    ]);
+  });
+
   it("keeps renderable channel-data payloads and reply-to-current markers", () => {
     expect(
       normalizeReplyPayloadsForDelivery([
@@ -75,12 +102,27 @@ describe("normalizeReplyPayloadsForDelivery", () => {
 });
 
 describe("normalizeOutboundPayloadsForJson", () => {
-  it("normalizes payloads for JSON output", () => {
-    const cases = typedCases<{
+  function cloneReplyPayloads(
+    input: Parameters<typeof normalizeOutboundPayloadsForJson>[0],
+  ): ReplyPayload[] {
+    return input.map((payload) =>
+      "mediaUrls" in payload
+        ? ({
+            ...payload,
+            mediaUrls: payload.mediaUrls ? [...payload.mediaUrls] : undefined,
+          } as ReplyPayload)
+        : ({ ...payload } as ReplyPayload),
+    );
+  }
+
+  it.each(
+    typedCases<{
+      name: string;
       input: Parameters<typeof normalizeOutboundPayloadsForJson>[0];
       expected: ReturnType<typeof normalizeOutboundPayloadsForJson>;
     }>([
       {
+        name: "text + media variants",
         input: [
           { text: "hi" },
           { text: "photo", mediaUrl: "https://x.test/a.jpg", audioAsVoice: true },
@@ -111,6 +153,7 @@ describe("normalizeOutboundPayloadsForJson", () => {
         ],
       },
       {
+        name: "MEDIA directive extraction",
         input: [
           {
             text: "MEDIA:https://x.test/a.png\nMEDIA:https://x.test/b.png",
@@ -126,19 +169,9 @@ describe("normalizeOutboundPayloadsForJson", () => {
           },
         ],
       },
-    ]);
-
-    for (const testCase of cases) {
-      const input: ReplyPayload[] = testCase.input.map((payload) =>
-        "mediaUrls" in payload
-          ? ({
-              ...payload,
-              mediaUrls: payload.mediaUrls ? [...payload.mediaUrls] : undefined,
-            } as ReplyPayload)
-          : ({ ...payload } as ReplyPayload),
-      );
-      expect(normalizeOutboundPayloadsForJson(input)).toEqual(testCase.expected);
-    }
+    ]),
+  )("$name", ({ input, expected }) => {
+    expect(normalizeOutboundPayloadsForJson(cloneReplyPayloads(input))).toEqual(expected);
   });
 
   it("suppresses reasoning payloads", () => {
@@ -183,8 +216,8 @@ describe("normalizeOutboundPayloads", () => {
 });
 
 describe("formatOutboundPayloadLog", () => {
-  it("formats text+media and media-only logs", () => {
-    const cases = typedCases<{
+  it.each(
+    typedCases<{
       name: string;
       input: Parameters<typeof formatOutboundPayloadLog>[0];
       expected: string;
@@ -205,16 +238,13 @@ describe("formatOutboundPayloadLog", () => {
         },
         expected: "MEDIA:https://x.test/a.png",
       },
-    ]);
-
-    for (const testCase of cases) {
-      expect(
-        formatOutboundPayloadLog({
-          ...testCase.input,
-          mediaUrls: [...testCase.input.mediaUrls],
-        }),
-        testCase.name,
-      ).toBe(testCase.expected);
-    }
+    ]),
+  )("$name", ({ input, expected }) => {
+    expect(
+      formatOutboundPayloadLog({
+        ...input,
+        mediaUrls: [...input.mediaUrls],
+      }),
+    ).toBe(expected);
   });
 });
