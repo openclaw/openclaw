@@ -1,3 +1,4 @@
+import { startBrowserControlServerFromConfig } from "../../extensions/browser/src/server.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { GatewayClient } from "../gateway/client.js";
 import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
@@ -167,6 +168,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const resolvedBrowser = resolveBrowserConfig(cfg.browser, cfg);
   const browserProxyEnabled =
     cfg.nodeHost?.browserProxy?.enabled !== false && resolvedBrowser.enabled;
+
+  // Start the browser HTTP control server (port 18791) so that MacNodeBrowserProxy
+  // (macOS app in remote mode) can reach it via direct HTTP on localhost.
+  if (browserProxyEnabled) {
+    await startBrowserControlServerFromConfig();
+  }
   const { token, password } = await resolveNodeHostGatewayCredentials({
     config: cfg,
     env: process.env,

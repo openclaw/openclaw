@@ -8,6 +8,7 @@ import { formatHelpExamples } from "../help-format.js";
 import {
   runNodeDaemonInstall,
   runNodeDaemonRestart,
+  runNodeDaemonStart,
   runNodeDaemonStatus,
   runNodeDaemonStop,
   runNodeDaemonUninstall,
@@ -98,6 +99,14 @@ export function registerNodeCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runNodeDaemonStop(opts);
+    });
+
+  node
+    .command("start")
+    .description("Start the node host service (launchd/systemd/schtasks)")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runNodeDaemonStart(opts);
     });
 
   node
