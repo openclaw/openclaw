@@ -17,6 +17,8 @@ let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
 let runExec: typeof import("./exec.js").runExec;
 
 type MockChild = EventEmitter & {
+  exitCode?: number | null;
+  signalCode?: NodeJS.Signals | null;
   stdout: EventEmitter;
   stderr: EventEmitter;
   stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
@@ -25,10 +27,17 @@ type MockChild = EventEmitter & {
   killed?: boolean;
 };
 
-function createMockChild(params?: { code?: number; signal?: NodeJS.Signals | null }): MockChild {
+function createMockChild(params?: {
+  closeCode?: number | null;
+  closeSignal?: NodeJS.Signals | null;
+  exitCode?: number | null;
+  signal?: NodeJS.Signals | null;
+}): MockChild {
   const child = new EventEmitter() as MockChild;
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
+  child.exitCode = params?.exitCode ?? params?.closeCode ?? 0;
+  child.signalCode = params?.signal ?? null;
   child.stdin = {
     write: vi.fn(),
     end: vi.fn(),
@@ -37,7 +46,7 @@ function createMockChild(params?: { code?: number; signal?: NodeJS.Signals | nul
   child.pid = 1234;
   child.killed = false;
   queueMicrotask(() => {
-    child.emit("close", params?.code ?? 0, params?.signal ?? null);
+    child.emit("close", params?.closeCode ?? 0, params?.closeSignal ?? params?.signal ?? null);
   });
   return child;
 }
@@ -89,6 +98,20 @@ describe("windows command wrapper behavior", () => {
       expect(result.code).toBe(0);
       const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
       expectCmdWrappedInvocation({ captured, expectedComSpec });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("keeps child exitCode when close reports null on Windows npm shims", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const child = createMockChild({ closeCode: null, exitCode: 0 });
+
+    spawnMock.mockImplementation(() => child);
+
+    try {
+      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
     } finally {
       platformSpy.mockRestore();
     }
