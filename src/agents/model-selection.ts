@@ -6,6 +6,8 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeGoogleModelId } from "../plugin-sdk/google.js";
+import { normalizeXaiModelId } from "../plugin-sdk/xai.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
@@ -117,19 +119,24 @@ function normalizeProviderModelId(provider: string, model: string): string {
   if (provider === "anthropic") {
     return normalizeAnthropicModelId(model);
   }
+  if (provider === "google" || provider === "google-vertex") {
+    return normalizeGoogleModelId(model);
+  }
+  if (provider === "openai") {
+    return model;
+  }
+  if (provider === "openrouter") {
+    return model.includes("/") ? model : `openrouter/${model}`;
+  }
+  if (provider === "xai") {
+    return normalizeXaiModelId(model);
+  }
   if (provider === "vercel-ai-gateway" && !model.includes("/")) {
     // Allow Vercel-specific Claude refs without an upstream prefix.
     const normalizedAnthropicModel = normalizeAnthropicModelId(model);
     if (normalizedAnthropicModel.startsWith("claude-")) {
       return `anthropic/${normalizedAnthropicModel}`;
     }
-  }
-  // OpenRouter-native models (e.g. "openrouter/aurora-alpha") need the full
-  // "openrouter/<name>" as the model ID sent to the API. Models from external
-  // providers already contain a slash (e.g. "anthropic/claude-sonnet-4-5") and
-  // are passed through as-is (#12924).
-  if (provider === "openrouter" && !model.includes("/")) {
-    return `openrouter/${model}`;
   }
   return (
     normalizeProviderModelIdWithPlugin({
@@ -201,7 +208,9 @@ export function inferUniqueProviderFromConfiguredModels(params: {
     if (!ref || !ref.includes("/")) {
       continue;
     }
-    const parsed = parseModelRef(ref, DEFAULT_PROVIDER);
+    const parsed = parseModelRef(ref, DEFAULT_PROVIDER, {
+      allowPluginNormalization: false,
+    });
     if (!parsed) {
       continue;
     }
