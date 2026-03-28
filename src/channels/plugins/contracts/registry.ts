@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, vi } from "vitest";
+import { createBlueBubblesConversationBindingManager } from "../../../../extensions/bluebubbles/api.js";
+import { createIMessageConversationBindingManager } from "../../../../extensions/imessage/api.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   getSessionBindingService,
@@ -638,6 +640,64 @@ const sessionBindingContractEntries: Record<
   SessionBindingContractChannelId,
   Omit<SessionBindingContractEntry, "id">
 > = {
+  bluebubbles: {
+    expectedCapabilities: {
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"],
+    },
+    getCapabilities: () => {
+      createBlueBubblesConversationBindingManager({
+        cfg: baseSessionBindingCfg,
+        accountId: "default",
+      });
+      return getSessionBindingService().getCapabilities({
+        channel: "bluebubbles",
+        accountId: "default",
+      });
+    },
+    bindAndResolve: async () => {
+      createBlueBubblesConversationBindingManager({
+        cfg: baseSessionBindingCfg,
+        accountId: "default",
+      });
+      const service = getSessionBindingService();
+      const binding = await service.bind({
+        targetSessionKey: "agent:codex:acp:binding:bluebubbles:default:abc123",
+        targetKind: "session",
+        conversation: {
+          channel: "bluebubbles",
+          accountId: "default",
+          conversationId: "+15555550123",
+        },
+        placement: "current",
+        metadata: {
+          agentId: "codex",
+          label: "codex-main",
+        },
+      });
+      expectResolvedSessionBinding({
+        channel: "bluebubbles",
+        accountId: "default",
+        conversationId: "+15555550123",
+        targetSessionKey: "agent:codex:acp:binding:bluebubbles:default:abc123",
+      });
+      return binding;
+    },
+    unbindAndVerify: unbindAndExpectClearedSessionBinding,
+    cleanup: async () => {
+      createBlueBubblesConversationBindingManager({
+        cfg: baseSessionBindingCfg,
+        accountId: "default",
+      }).stop();
+      expectClearedSessionBinding({
+        channel: "bluebubbles",
+        accountId: "default",
+        conversationId: "+15555550123",
+      });
+    },
+  },
   discord: {
     expectedCapabilities: {
       adapterAvailable: true,
@@ -751,6 +811,64 @@ const sessionBindingContractEntries: Record<
         channel: "feishu",
         accountId: "default",
         conversationId: "oc_group_chat:topic:om_topic_root",
+      });
+    },
+  },
+  imessage: {
+    expectedCapabilities: {
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"],
+    },
+    getCapabilities: () => {
+      createIMessageConversationBindingManager({
+        cfg: baseSessionBindingCfg,
+        accountId: "default",
+      });
+      return getSessionBindingService().getCapabilities({
+        channel: "imessage",
+        accountId: "default",
+      });
+    },
+    bindAndResolve: async () => {
+      createIMessageConversationBindingManager({
+        cfg: baseSessionBindingCfg,
+        accountId: "default",
+      });
+      const service = getSessionBindingService();
+      const binding = await service.bind({
+        targetSessionKey: "agent:codex:acp:binding:imessage:default:abc123",
+        targetKind: "session",
+        conversation: {
+          channel: "imessage",
+          accountId: "default",
+          conversationId: "+15555550123",
+        },
+        placement: "current",
+        metadata: {
+          agentId: "codex",
+          label: "codex-main",
+        },
+      });
+      expectResolvedSessionBinding({
+        channel: "imessage",
+        accountId: "default",
+        conversationId: "+15555550123",
+        targetSessionKey: "agent:codex:acp:binding:imessage:default:abc123",
+      });
+      return binding;
+    },
+    unbindAndVerify: unbindAndExpectClearedSessionBinding,
+    cleanup: async () => {
+      createIMessageConversationBindingManager({
+        cfg: baseSessionBindingCfg,
+        accountId: "default",
+      }).stop();
+      expectClearedSessionBinding({
+        channel: "imessage",
+        accountId: "default",
+        conversationId: "+15555550123",
       });
     },
   },

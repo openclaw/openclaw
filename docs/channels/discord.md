@@ -750,9 +750,13 @@ Default slash command settings:
 
     Notes:
 
+    - `/acp spawn codex --bind here` binds the current Discord channel or thread in place and keeps future messages routed to the same ACP session.
+    - That can still mean "start a fresh Codex ACP session", but it does not create a new Discord thread by itself. The existing channel stays the chat surface.
+    - Codex may still run in its own `cwd` or backend workspace on disk. That workspace is runtime state, not a Discord thread.
     - Thread messages can inherit the parent channel ACP binding.
     - In a bound channel or thread, `/new` and `/reset` reset the same ACP session in place.
     - Temporary thread bindings still work and can override target resolution while active.
+    - `spawnAcpSessions` is only required when OpenClaw needs to create/bind a child thread via `--thread auto|here`. It is not required for `/acp spawn ... --bind here` in the current channel.
 
     See [ACP Agents](/tools/acp-agents) for binding behavior details.
 

@@ -74,6 +74,11 @@ export {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
 } from "../security/dm-policy-shared.js";
+export {
+  matchBlueBubblesAcpConversation,
+  normalizeBlueBubblesAcpConversationId,
+  resolveBlueBubblesConversationIdFromTarget,
+} from "../../extensions/bluebubbles/api.js";
 export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { isAllowedParsedChatSender } from "./allow-from.js";
