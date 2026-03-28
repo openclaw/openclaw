@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
@@ -10,6 +10,7 @@ import {
 } from "../../agents/pi-embedded-runner/runs.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveMainSessionKey,
@@ -220,6 +221,7 @@ function buildDashboardSessionKey(agentId: string): string {
 }
 
 function ensureSessionTranscriptFile(params: {
+  cfg: OpenClawConfig;
   sessionId: string;
   storePath: string;
   sessionFile?: string;
@@ -241,7 +243,7 @@ function ensureSessionTranscriptFile(params: {
         version: CURRENT_SESSION_VERSION,
         id: params.sessionId,
         timestamp: new Date().toISOString(),
-        cwd: process.cwd(),
+        cwd: resolveAgentWorkspaceDir(params.cfg, params.agentId),
       };
       fs.writeFileSync(transcriptPath, `${JSON.stringify(header)}\n`, {
         encoding: "utf-8",
@@ -722,6 +724,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const ensured = ensureSessionTranscriptFile({
+      cfg,
       sessionId: created.entry.sessionId,
       storePath: target.storePath,
       sessionFile: created.entry.sessionFile,
