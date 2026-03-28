@@ -184,7 +184,7 @@ function collectImageModelKeys(
     }
   }
 
-  const addModelKey = (rawModel: string) => {
+  const addModelKey = (rawModel: string, isPrimary: boolean) => {
     const trimmed = rawModel.trim();
     if (!trimmed) {
       return;
@@ -203,11 +203,17 @@ function collectImageModelKeys(
       keys.add(trimmed);
     }
 
-    // Resolve alias and add canonical key using image model's provider context
-    if (aliasIndex && imageModelDefaultProvider) {
+    // Resolve alias and add canonical key.
+    // For primary: use defaultProvider (primary should resolve against agent default)
+    // For fallbacks: use imageModelDefaultProvider if available (fallbacks should resolve
+    // against fallback-derived provider context for cross-provider configs)
+    const providerContext = isPrimary
+      ? defaultProvider
+      : imageModelDefaultProvider || defaultProvider;
+    if (aliasIndex && providerContext) {
       const resolved = resolveModelRefFromString({
         raw: trimmed,
-        defaultProvider: imageModelDefaultProvider,
+        defaultProvider: providerContext,
         aliasIndex,
       });
       if (resolved) {
@@ -217,15 +223,15 @@ function collectImageModelKeys(
   };
 
   if (typeof imageModelConfig === "string") {
-    addModelKey(imageModelConfig);
+    addModelKey(imageModelConfig, true);
   } else {
     if (imageModelPrimary?.trim()) {
-      addModelKey(imageModelPrimary);
+      addModelKey(imageModelPrimary, true);
     }
     if (Array.isArray(imageModelConfig.fallbacks)) {
       for (const fb of imageModelConfig.fallbacks) {
         if (fb?.trim()) {
-          addModelKey(fb);
+          addModelKey(fb, false);
         }
       }
     }
