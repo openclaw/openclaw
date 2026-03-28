@@ -79,10 +79,7 @@ describe("resolveOutboundTarget channel resolution", () => {
 
   it("recovers telegram plugin resolution so announce delivery does not fail with Unsupported channel: telegram", () => {
     const telegramPlugin = createTelegramPlugin();
-    mocks.getChannelPlugin
-      .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce(telegramPlugin)
-      .mockReturnValue(telegramPlugin);
+    mocks.getChannelPlugin.mockReturnValueOnce(undefined).mockReturnValueOnce(telegramPlugin);
 
     const result = resolveTelegramTarget();
 

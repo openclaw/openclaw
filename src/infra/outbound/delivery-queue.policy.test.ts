@@ -32,22 +32,19 @@ describe("delivery-queue policy", () => {
   });
 
   describe("computeBackoffMs", () => {
-    it("returns scheduled backoff values and clamps at max retry", () => {
-      const cases = [
-        { retryCount: 0, expected: 0 },
-        { retryCount: 1, expected: 5_000 },
-        { retryCount: 2, expected: 25_000 },
-        { retryCount: 3, expected: 120_000 },
-        { retryCount: 4, expected: 600_000 },
-        { retryCount: 5, expected: 600_000 },
-      ] as const;
-
-      for (const testCase of cases) {
-        expect(computeBackoffMs(testCase.retryCount), String(testCase.retryCount)).toBe(
-          testCase.expected,
-        );
-      }
-    });
+    it.each([
+      { retryCount: 0, expected: 0 },
+      { retryCount: 1, expected: 5_000 },
+      { retryCount: 2, expected: 25_000 },
+      { retryCount: 3, expected: 120_000 },
+      { retryCount: 4, expected: 600_000 },
+      { retryCount: 5, expected: 600_000 },
+    ] as const)(
+      "returns scheduled backoff for retryCount=$retryCount",
+      ({ retryCount, expected }) => {
+        expect(computeBackoffMs(retryCount)).toBe(expected);
+      },
+    );
   });
 
   describe("isEntryEligibleForRecoveryRetry", () => {
