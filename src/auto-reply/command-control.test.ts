@@ -216,6 +216,28 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.isAuthorizedSender).toBe(true);
   });
 
+  it("preserves external channel command auth in mixed webchat contexts", () => {
+    const cfg = {
+      commands: { allowFrom: { whatsapp: ["+15551234567"] } },
+      channels: { whatsapp: { allowFrom: ["+15551234567"] } },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "webchat",
+        Surface: "whatsapp",
+        OriginatingChannel: "whatsapp",
+        From: "whatsapp:+19995551234",
+        SenderE164: "+19995551234",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBe("whatsapp");
+    expect(auth.isAuthorizedSender).toBe(false);
+  });
+
   it("falls back to channel allowFrom when provider allowlist resolution throws", () => {
     registerAllowFromPlugins(
       createThrowingAllowFromPlugin("telegram", "channels.telegram.botToken: unresolved SecretRef"),

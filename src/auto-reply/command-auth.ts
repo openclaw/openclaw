@@ -34,11 +34,13 @@ function resolveProviderFromContext(
   ctx: MsgContext,
   cfg: OpenClawConfig,
 ): { providerId: ChannelId | undefined; hadResolutionError: boolean } {
-  const explicitMessageChannel =
-    normalizeMessageChannel(ctx.Provider) ??
-    normalizeMessageChannel(ctx.Surface) ??
-    normalizeMessageChannel(ctx.OriginatingChannel);
-  if (explicitMessageChannel === INTERNAL_MESSAGE_CHANNEL) {
+  const explicitMessageChannels = [ctx.Surface, ctx.OriginatingChannel, ctx.Provider]
+    .map((value) => normalizeMessageChannel(value))
+    .filter((value): value is string => Boolean(value));
+  const explicitMessageChannel = explicitMessageChannels.find(
+    (value) => value !== INTERNAL_MESSAGE_CHANNEL,
+  );
+  if (!explicitMessageChannel && explicitMessageChannels.includes(INTERNAL_MESSAGE_CHANNEL)) {
     return { providerId: undefined, hadResolutionError: false };
   }
   const direct =
