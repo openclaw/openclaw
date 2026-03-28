@@ -374,6 +374,7 @@ export async function executeNodeHostCommand(
       sentApproverDms,
       unavailableReason,
       nodeId,
+      turnSourceChannel: params.turnSourceChannel,
     });
   }
 

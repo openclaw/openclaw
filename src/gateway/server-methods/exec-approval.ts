@@ -202,7 +202,7 @@ export function createExecApprovalHandlers(
         }
       }
 
-      if (!hasExecApprovalClients && !forwarded) {
+      if (!twoPhase && !hasExecApprovalClients && !forwarded) {
         manager.expire(record.id, "no-approval-route");
         respond(
           true,
