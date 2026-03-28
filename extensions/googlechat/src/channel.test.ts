@@ -102,6 +102,15 @@ function setupRuntimeMediaMocks(params: { loadFileName: string; loadBytes: strin
 }
 
 describe("googlechatPlugin outbound sendMedia", () => {
+  it("chunks outbound text without requiring Google Chat runtime initialization", () => {
+    const chunker = googlechatPlugin.outbound?.chunker;
+    if (!chunker) {
+      throw new Error("Expected googlechatPlugin.outbound.chunker to be defined");
+    }
+
+    expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+  });
+
   it("loads local media with mediaLocalRoots via runtime media loader", async () => {
     const { loadWebMedia, fetchRemoteMedia } = setupRuntimeMediaMocks({
       loadFileName: "image.png",

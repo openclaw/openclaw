@@ -24,6 +24,7 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import {
   buildChannelConfigSchema,
+  chunkTextForOutbound,
   DEFAULT_ACCOUNT_ID,
   createAccountStatusSink,
   getChatChannelMeta,
@@ -349,7 +350,7 @@ export const googlechatPlugin = createChatChannelPlugin({
   outbound: {
     base: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getGoogleChatRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       resolveTarget: ({ to }) => {
