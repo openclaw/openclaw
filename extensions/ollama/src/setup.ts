@@ -1,5 +1,5 @@
-import { upsertAuthProfileWithLock } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
+import { upsertAuthProfileWithLock } from "openclaw/plugin-sdk/provider-auth";
 import { applyAgentDefaultModelPrimary } from "openclaw/plugin-sdk/provider-onboard";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
