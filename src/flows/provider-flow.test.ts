@@ -36,8 +36,10 @@ describe("provider flow", () => {
         choiceId: "provider-plugin:sglang:custom",
         choiceLabel: "SGLang",
       },
-    ]);
-    resolvePluginProviders.mockReturnValue([{ id: "sglang", docsPath: "/providers/sglang" }]);
+    ] as never);
+    resolvePluginProviders.mockReturnValue([
+      { id: "sglang", docsPath: "/providers/sglang" },
+    ] as never);
 
     const contributions = resolveManifestProviderSetupFlowContributions({
       config: {},
@@ -61,8 +63,8 @@ describe("provider flow", () => {
         value: "provider-plugin:vllm:custom",
         label: "vLLM",
       },
-    ]);
-    resolvePluginProviders.mockReturnValue([{ id: "vllm", docsPath: "/providers/vllm" }]);
+    ] as never);
+    resolvePluginProviders.mockReturnValue([{ id: "vllm", docsPath: "/providers/vllm" }] as never);
 
     const contributions = resolveProviderModelPickerFlowContributions({
       config: {},
