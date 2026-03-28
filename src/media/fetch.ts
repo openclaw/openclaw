@@ -152,10 +152,8 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
                 attemptErrors?: unknown[];
               }
             ).primaryError = attemptErrors[0];
-            (combined as Error & { attemptErrors?: unknown[] }).attemptErrors = [
-              ...attemptErrors,
-              err,
-            ];
+            (combined as Error & { attemptErrors?: unknown[] }).attemptErrors =
+              attemptErrors.concat(err);
             throw combined;
           }
           throw err;
@@ -206,18 +204,19 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       }
     }
 
+    // Always use streaming reader with a cap to avoid unbounded buffering
+    const FALLBACK_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+    const effectiveMaxBytes = maxBytes || FALLBACK_MAX_BYTES;
     let buffer: Buffer;
     try {
-      buffer = maxBytes
-        ? await readResponseWithLimit(res, maxBytes, {
-            onOverflow: ({ maxBytes, res }) =>
-              new MediaFetchError(
-                "max_bytes",
-                `Failed to fetch media from ${redactMediaUrl(res.url || url)}: payload exceeds maxBytes ${maxBytes}`,
-              ),
-            chunkTimeoutMs: readIdleTimeoutMs,
-          })
-        : Buffer.from(await res.arrayBuffer());
+      buffer = await readResponseWithLimit(res, effectiveMaxBytes, {
+        onOverflow: ({ maxBytes: limit, res: r }) =>
+          new MediaFetchError(
+            "max_bytes",
+            `Failed to fetch media from ${redactMediaUrl(r.url || url)}: payload exceeds maxBytes ${limit}`,
+          ),
+        chunkTimeoutMs: readIdleTimeoutMs,
+      });
     } catch (err) {
       if (err instanceof MediaFetchError) {
         throw err;

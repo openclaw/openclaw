@@ -110,7 +110,13 @@ export function enqueueNodePendingWork(params: {
   const nowMs = Date.now();
   const state = getOrCreateState(nodeId);
   pruneExpired(state, nowMs);
-  const existing = [...state.itemsById.values()].find((item) => item.type === params.type);
+  let existing: NodePendingWorkItem | undefined;
+  for (const item of state.itemsById.values()) {
+    if (item.type === params.type) {
+      existing = item;
+      break;
+    }
+  }
   if (existing) {
     return { revision: state.revision, item: existing, deduped: true };
   }

@@ -85,4 +85,8 @@ export class LruMap<K, V> {
   [Symbol.iterator](): MapIterator<[K, V]> {
     return this.map[Symbol.iterator]();
   }
+
+  get [Symbol.toStringTag](): string {
+    return "LruMap";
+  }
 }

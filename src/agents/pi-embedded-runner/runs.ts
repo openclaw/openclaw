@@ -38,12 +38,14 @@ export type EmbeddedRunModelSwitchRequest = {
  */
 const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");
 const MAX_EMBEDDED_RUN_ENTRIES = 5_000;
+const MAX_QUEUED_MESSAGES_PER_SESSION = 100;
 
 const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRuns: new Map<string, EmbeddedPiQueueHandle>(),
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
   waiters: new Map<string, Set<EmbeddedRunWaiter>>(),
   modelSwitchRequests: new Map<string, EmbeddedRunModelSwitchRequest>(),
+  queuedMessageCounts: new Map<string, number>(),
 }));
 
 /** Evict the oldest entry from a Map when it exceeds the cap. */
@@ -76,8 +78,22 @@ export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
     return false;
   }
+  const queuedCounts = embeddedRunState.queuedMessageCounts;
+  const current = queuedCounts.get(sessionId) ?? 0;
+  if (current >= MAX_QUEUED_MESSAGES_PER_SESSION) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=queue_full count=${current}`);
+    return false;
+  }
+  queuedCounts.set(sessionId, current + 1);
   logMessageQueued({ sessionId, source: "pi-embedded-runner" });
-  void handle.queueMessage(text);
+  void handle.queueMessage(text).finally(() => {
+    const count = queuedCounts.get(sessionId);
+    if (count !== undefined && count > 1) {
+      queuedCounts.set(sessionId, count - 1);
+    } else {
+      queuedCounts.delete(sessionId);
+    }
+  });
   return true;
 }
 

@@ -326,20 +326,21 @@ export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolea
         return;
       }
 
-      let hasPending = false;
-      for (const state of queueState.lanes.values()) {
-        for (const taskId of state.activeTaskIds) {
-          if (activeAtStart.has(taskId)) {
-            hasPending = true;
+      // Prune completed tasks from the tracked set to shrink future iterations
+      for (const taskId of activeAtStart) {
+        let stillActive = false;
+        for (const state of queueState.lanes.values()) {
+          if (state.activeTaskIds.has(taskId)) {
+            stillActive = true;
             break;
           }
         }
-        if (hasPending) {
-          break;
+        if (!stillActive) {
+          activeAtStart.delete(taskId);
         }
       }
 
-      if (!hasPending) {
+      if (activeAtStart.size === 0) {
         resolve({ drained: true });
         return;
       }
