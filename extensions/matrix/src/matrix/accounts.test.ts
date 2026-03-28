@@ -92,6 +92,59 @@ describe("resolveMatrixAccount", () => {
     expect(account.configured).toBe(true);
   });
 
+  it("treats accounts.default SecretRef access-token config as configured", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              homeserver: "https://matrix.example.org",
+              accessToken: { source: "file", provider: "matrix-file", id: "value" },
+            },
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          "matrix-file": {
+            source: "file",
+            path: "/tmp/matrix-token",
+          },
+        },
+      },
+    };
+
+    const account = resolveMatrixAccount({ cfg });
+    expect(account.configured).toBe(true);
+  });
+
+  it("treats accounts.default SecretRef password config as configured", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot:example.org",
+              password: { source: "file", provider: "matrix-file", id: "value" },
+            },
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          "matrix-file": {
+            source: "file",
+            path: "/tmp/matrix-password",
+          },
+        },
+      },
+    };
+
+    const account = resolveMatrixAccount({ cfg });
+    expect(account.configured).toBe(true);
+  });
+
   it("requires userId + password when no access token is set", () => {
     const cfg: CoreConfig = {
       channels: {

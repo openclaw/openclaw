@@ -688,13 +688,21 @@ function collectMatrixAssignments(params: {
       normalizeSecretStringValue(
         params.context.env[getMatrixScopedEnvVarNames(accountId).accessToken],
       ).length > 0;
+    const inheritedDefaultAccountAccessTokenConfigured =
+      accountId === "default" && (baseAccessTokenConfigured || envAccessTokenConfigured);
     collectSecretInputAssignment({
       value: account.password,
       path: `channels.matrix.accounts.${accountId}.password`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,
-      active: enabled && !(accountAccessTokenConfigured || scopedEnvAccessTokenConfigured),
+      active:
+        enabled &&
+        !(
+          accountAccessTokenConfigured ||
+          scopedEnvAccessTokenConfigured ||
+          inheritedDefaultAccountAccessTokenConfigured
+        ),
       inactiveReason: "Matrix account is disabled or this account has an accessToken configured.",
       apply: (value) => {
         account.password = value;
