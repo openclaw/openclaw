@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyExclusiveSlotSelection } from "./slots.js";
+import type { PluginKind } from "./types.js";
 
 describe("applyExclusiveSlotSelection", () => {
   const createMemoryConfig = (plugins?: OpenClawConfig["plugins"]): OpenClawConfig => ({
@@ -71,14 +72,20 @@ describe("applyExclusiveSlotSelection", () => {
   function expectUnchangedSelectionCase(params: {
     config: OpenClawConfig;
     selectedId: string;
-    selectedKind?: string;
-    registry?: { plugins: Array<{ id: string; kind: string }> };
+    selectedKind?: PluginKind;
+    registry?: { plugins: ReadonlyArray<{ id: string; kind: PluginKind }> };
   }) {
     const result = applyExclusiveSlotSelection({
       config: params.config,
       selectedId: params.selectedId,
       ...(params.selectedKind ? { selectedKind: params.selectedKind } : {}),
-      ...(params.registry ? { registry: params.registry } : {}),
+      ...(params.registry
+        ? {
+            registry: {
+              plugins: [...params.registry.plugins],
+            },
+          }
+        : {}),
     });
 
     expectUnchangedSelection(result);
