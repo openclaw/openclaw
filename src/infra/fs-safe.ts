@@ -1127,8 +1127,15 @@ function normalizePinnedUnlinkError(error: unknown): Error {
   if (error instanceof SafeOpenError) {
     return error;
   }
-  if (error instanceof Error && /no such file or directory|enoent/i.test(error.message)) {
+  if (
+    error instanceof Error &&
+    !/^Pinned unlink helper failed to start:/i.test(error.message) &&
+    /no such file or directory|enoent/i.test(error.message)
+  ) {
     return new SafeOpenError("not-found", "file not found", { cause: error });
+  }
+  if (error instanceof Error && /^Pinned unlink helper failed to start:/i.test(error.message)) {
+    return new SafeOpenError("invalid-path", error.message, { cause: error });
   }
   return new SafeOpenError("invalid-path", "path is not a regular file under root", {
     cause: error instanceof Error ? error : undefined,

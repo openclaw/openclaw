@@ -194,6 +194,32 @@ function parsePinnedIdentity(stdout: string): FileIdentityStat {
   return { dev, ino };
 }
 
+function trackSpawnLifecycle(child: ReturnType<typeof spawn>): {
+  exitPromise: Promise<[number | null, NodeJS.Signals | null]>;
+  errorPromise: Promise<never>;
+  getSpawnError: () => Error | null;
+} {
+  let spawnError: Error | null = null;
+  const exitPromise = once(child, "close") as Promise<[number | null, NodeJS.Signals | null]>;
+  const errorPromise = new Promise<never>((_, reject) => {
+    child.once("error", (error) => {
+      spawnError = error instanceof Error ? error : new Error(String(error));
+      reject(spawnError);
+    });
+  });
+  return {
+    exitPromise,
+    errorPromise,
+    getSpawnError: () => spawnError,
+  };
+}
+
+function createPinnedUnlinkSpawnError(error: Error): Error {
+  return new Error(`Pinned unlink helper failed to start: ${error.message}`, {
+    cause: error,
+  });
+}
+
 export async function runPinnedWriteHelper(params: {
   rootPath: string;
   relativeParentPath: string;
@@ -229,7 +255,8 @@ export async function runPinnedWriteHelper(params: {
     stderr += chunk;
   });
 
-  const exitPromise = once(child, "close") as Promise<[number | null, NodeJS.Signals | null]>;
+  const { exitPromise, errorPromise, getSpawnError } = trackSpawnLifecycle(child);
+  let inputStarted = false;
   try {
     if (!child.stdin) {
       const identity = await runPinnedWriteFallback(params);
@@ -239,19 +266,24 @@ export async function runPinnedWriteHelper(params: {
 
     if (params.input.kind === "buffer") {
       const input = params.input;
-      await new Promise<void>((resolve, reject) => {
-        child.stdin.once("error", reject);
-        if (typeof input.data === "string") {
-          child.stdin.end(input.data, input.encoding ?? "utf8", () => resolve());
-          return;
-        }
-        child.stdin.end(input.data, () => resolve());
-      });
+      inputStarted = true;
+      await Promise.race([
+        new Promise<void>((resolve, reject) => {
+          child.stdin.once("error", reject);
+          if (typeof input.data === "string") {
+            child.stdin.end(input.data, input.encoding ?? "utf8", () => resolve());
+            return;
+          }
+          child.stdin.end(input.data, () => resolve());
+        }),
+        errorPromise,
+      ]);
     } else {
-      await pipeline(params.input.stream, child.stdin);
+      inputStarted = true;
+      await Promise.race([pipeline(params.input.stream, child.stdin), errorPromise]);
     }
 
-    const [code, signal] = await exitPromise;
+    const [code, signal] = await Promise.race([exitPromise, errorPromise]);
     if (code !== 0) {
       throw new Error(
         stderr.trim() ||
@@ -260,8 +292,17 @@ export async function runPinnedWriteHelper(params: {
     }
     return parsePinnedIdentity(stdout);
   } catch (error) {
-    child.kill("SIGKILL");
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Best-effort cleanup only.
+    }
     await exitPromise.catch(() => {});
+
+    if (getSpawnError() && (params.input.kind === "buffer" || !inputStarted)) {
+      return await runPinnedWriteFallback(params);
+    }
+
     throw error;
   }
 }
@@ -285,12 +326,27 @@ export async function runPinnedUnlinkHelper(params: {
     stderr += chunk;
   });
 
-  const exitPromise = once(child, "close") as Promise<[number | null, NodeJS.Signals | null]>;
-  const [code, signal] = await exitPromise;
-  if (code !== 0) {
-    throw new Error(
-      stderr.trim() || `Pinned unlink helper failed with code ${code ?? "null"} (${signal ?? "?"})`,
-    );
+  const { exitPromise, errorPromise, getSpawnError } = trackSpawnLifecycle(child);
+  try {
+    const [code, signal] = await Promise.race([exitPromise, errorPromise]);
+    if (code !== 0) {
+      throw new Error(
+        stderr.trim() ||
+          `Pinned unlink helper failed with code ${code ?? "null"} (${signal ?? "?"})`,
+      );
+    }
+  } catch (error) {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Best-effort cleanup only.
+    }
+    await exitPromise.catch(() => {});
+    const spawnError = getSpawnError();
+    if (spawnError) {
+      throw createPinnedUnlinkSpawnError(spawnError);
+    }
+    throw error;
   }
 }
 
