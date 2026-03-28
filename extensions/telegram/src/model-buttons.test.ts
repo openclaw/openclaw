@@ -261,6 +261,49 @@ describe("buildModelsKeyboard", () => {
     }
   });
 
+  it("displays model name from modelNames map instead of raw ID", () => {
+    const modelNames = new Map([
+      ["e8ccc8aa-1d76-47a3-acf6-0448a72347d8", "Nexos Gpt 5 2"],
+      ["claude-sonnet-4", "Claude Sonnet 4"],
+    ]);
+    const result = buildModelsKeyboard({
+      provider: "nexos",
+      models: ["e8ccc8aa-1d76-47a3-acf6-0448a72347d8"],
+      currentPage: 1,
+      totalPages: 1,
+      modelNames,
+    });
+    // Model button should show the name, not the UUID
+    expect(result[0]?.[0]?.text).toBe("Nexos Gpt 5 2");
+    // Callback data should still use the model ID
+    expect(result[0]?.[0]?.callback_data).toContain("e8ccc8aa-1d76-47a3-acf6-0448a72347d8");
+  });
+
+  it("falls back to model ID when modelNames has no entry", () => {
+    const modelNames = new Map([["other-model", "Other Model"]]);
+    const result = buildModelsKeyboard({
+      provider: "anthropic",
+      models: ["claude-sonnet-4"],
+      currentPage: 1,
+      totalPages: 1,
+      modelNames,
+    });
+    expect(result[0]?.[0]?.text).toBe("claude-sonnet-4");
+  });
+
+  it("marks current model with check when using modelNames", () => {
+    const modelNames = new Map([["claude-sonnet-4", "Claude Sonnet 4"]]);
+    const result = buildModelsKeyboard({
+      provider: "anthropic",
+      models: ["claude-sonnet-4"],
+      currentModel: "anthropic/claude-sonnet-4",
+      currentPage: 1,
+      totalPages: 1,
+      modelNames,
+    });
+    expect(result[0]?.[0]?.text).toBe("Claude Sonnet 4 ✓");
+  });
+
   it("keeps short display IDs untouched and truncates overly long IDs", () => {
     const cases = [
       {

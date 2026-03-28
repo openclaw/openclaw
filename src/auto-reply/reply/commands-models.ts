@@ -28,6 +28,8 @@ export type ModelsProviderData = {
   byProvider: Map<string, Set<string>>;
   providers: string[];
   resolvedDefault: { provider: string; model: string };
+  /** Map from model ID to human-readable display name (when different from ID). */
+  modelNames: Map<string, string>;
 };
 
 /**
@@ -58,6 +60,7 @@ export async function buildModelsProviderData(
   });
 
   const byProvider = new Map<string, Set<string>>();
+  const modelNames = new Map<string, string>();
   const add = (p: string, m: string) => {
     const key = normalizeProviderId(p);
     const set = byProvider.get(key) ?? new Set<string>();
@@ -105,6 +108,9 @@ export async function buildModelsProviderData(
 
   for (const entry of allowed.allowedCatalog) {
     add(entry.provider, entry.id);
+    if (entry.name && entry.name !== entry.id) {
+      modelNames.set(entry.id, entry.name);
+    }
   }
 
   // Include config-only allowlist keys that aren't in the curated catalog.
@@ -119,7 +125,7 @@ export async function buildModelsProviderData(
 
   const providers = [...byProvider.keys()].toSorted();
 
-  return { byProvider, providers, resolvedDefault };
+  return { byProvider, providers, resolvedDefault, modelNames };
 }
 
 function formatProviderLine(params: { provider: string; count: number }): string {
@@ -234,7 +240,10 @@ export async function resolveModelsCommandReply(params: {
   const argText = body.replace(/^\/models\b/i, "").trim();
   const { provider, page, pageSize, all } = parseModelsArgs(argText);
 
-  const { byProvider, providers } = await buildModelsProviderData(params.cfg, params.agentId);
+  const { byProvider, providers, modelNames } = await buildModelsProviderData(
+    params.cfg,
+    params.agentId,
+  );
   const isTelegram = params.surface === "telegram";
 
   // Provider list (no provider specified)
@@ -310,6 +319,7 @@ export async function resolveModelsCommandReply(params: {
       currentPage: safePage,
       totalPages,
       pageSize: telegramPageSize,
+      modelNames,
     });
 
     const text = formatModelsAvailableHeader({
