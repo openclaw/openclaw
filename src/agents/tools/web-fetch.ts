@@ -554,13 +554,17 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
   try {
+    const useProxy = hasProxyEnvConfigured();
     const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
-      // Only allow RFC 2544 benchmark range (fake-ip proxy range) when a proxy is configured.
-      // This prevents widening SSRF protections for non-proxied environments.
-      policy: hasProxyEnvConfigured() ? { allowRfc2544BenchmarkRange: true } : undefined,
+      // When a proxy is configured (e.g. Clash fake-ip mode), use env proxy so
+      // requests actually route through the proxy instead of direct-connecting to
+      // the fake-ip address (198.18.0.0/15). Also allow the RFC 2544 benchmark range
+      // in the SSRF guard so the resolved fake-ip isn't blocked.
+      useEnvProxy: useProxy,
+      policy: useProxy ? { allowRfc2544BenchmarkRange: true } : undefined,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
