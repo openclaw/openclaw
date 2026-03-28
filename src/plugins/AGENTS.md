@@ -25,3 +25,12 @@ assembly, and contract enforcement.
   external plugins cannot.
 - If a loader or registry change affects plugin authors, update the public SDK,
   docs, and contract tests instead of relying on incidental internals.
+- Do not normalize "plugin-owned" into "core-owned" by scattering direct reads
+  of `plugins.entries.<id>.config` through unrelated core paths. Prefer generic
+  helpers, plugin runtime hooks, manifest metadata, and explicit auto-enable
+  wiring.
+- When plugin-owned tools or provider fallbacks need core participation, keep
+  the contract generic and honor plugin disablement plus SecretRef semantics.
+- Keep contract loading and contract tests on the dedicated bundled registry
+  path. Do not make contract validation depend on activating providers through
+  unrelated production resolution flows.

@@ -31,6 +31,11 @@ third-party plugins see.
 - Do not use relative imports that escape the current extension package root.
 - Keep plugin metadata accurate in `openclaw.plugin.json` and the package
   `openclaw` block so discovery and setup work without executing plugin code.
+- Treat files like `src/**`, `onboard.ts`, and other local helpers as private
+  unless you intentionally promote them through `api.ts` and, if needed, a
+  matching `src/plugin-sdk/<id>.ts` facade.
+- If core or core tests need a bundled plugin helper, export it from `api.ts`
+  first instead of letting them deep-import extension internals.
 
 ## Expanding The Boundary
 

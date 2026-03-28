@@ -28,6 +28,10 @@ can affect bundled plugins and third-party plugins.
   intentionally promoting a supported public contract.
 - Prefer `api.runtime` or a focused SDK facade over telling extensions to reach
   into host internals directly.
+- When core or tests need bundled plugin helpers, expose them through
+  `extensions/<id>/api.ts` and a matching `src/plugin-sdk/<id>.ts` facade
+  instead of importing `extensions/<id>/src/**` or `extensions/<id>/onboard.js`
+  directly.
 
 ## Expanding The Boundary
 
@@ -38,4 +42,7 @@ can affect bundled plugins and third-party plugins.
   - `src/plugin-sdk/entrypoints.ts`
   - `package.json` exports
   - API baseline and export checks
+- If the seam is for bundled-provider onboarding/config helpers, update the
+  generated plugin facades instead of teaching core tests or commands to reach
+  into private extension files.
 - Breaking removals or renames are major-version work, not drive-by cleanup.
