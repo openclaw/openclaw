@@ -1,6 +1,7 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -142,7 +143,11 @@ export function buildPluginStatusReport(params?: {
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
 }): PluginStatusReport {
-  const config = params?.config ?? loadConfig();
+  const rawConfig = params?.config ?? loadConfig();
+  const config = applyPluginAutoEnable({
+    config: rawConfig,
+    env: params?.env ?? process.env,
+  }).config;
   const workspaceDir = params?.workspaceDir
     ? params.workspaceDir
     : (resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)) ??
