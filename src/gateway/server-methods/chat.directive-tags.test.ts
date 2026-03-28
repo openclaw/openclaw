@@ -50,6 +50,9 @@ vi.mock("../session-utils.js", async (importOriginal) => {
   return {
     ...original,
     loadSessionEntry: (rawKey: string) => ({
+      ...(typeof mockState.sessionEntry.canonicalKey === "string"
+        ? { canonicalKey: mockState.sessionEntry.canonicalKey }
+        : {}),
       cfg: {
         session: {
           mainKey: mockState.mainSessionKey,
@@ -61,7 +64,10 @@ vi.mock("../session-utils.js", async (importOriginal) => {
         sessionFile: mockState.transcriptPath,
         ...mockState.sessionEntry,
       },
-      canonicalKey: rawKey || "main",
+      canonicalKey:
+        typeof mockState.sessionEntry.canonicalKey === "string"
+          ? mockState.sessionEntry.canonicalKey
+          : rawKey || "main",
     }),
   };
 });
@@ -496,6 +502,42 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const chatCall = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1);
     expect(chatCall?.[0]).toBe("chat");
     expect(extractFirstTextBlock(chatCall?.[1])).toBe("hello");
+  });
+
+  it("chat.inject broadcasts and routes on the canonical session key", async () => {
+    createTranscriptFixture("openclaw-chat-inject-canonical-key-");
+    mockState.sessionEntry = {
+      canonicalKey: "agent:main:canon",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await chatHandlers["chat.inject"]({
+      params: {
+        sessionKey: "legacy-key",
+        message: "hello",
+      },
+      respond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }));
+    expect(context.broadcast).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({
+        sessionKey: "agent:main:canon",
+      }),
+    );
+    expect(context.nodeSendToSession).toHaveBeenCalledWith(
+      "agent:main:canon",
+      "chat",
+      expect.objectContaining({
+        sessionKey: "agent:main:canon",
+      }),
+    );
   });
 
   it("chat.send non-streaming final strips external untrusted wrapper metadata from final payload text", async () => {
