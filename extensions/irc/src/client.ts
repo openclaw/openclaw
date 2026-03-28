@@ -309,8 +309,9 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
       // CAP negotiation for draft/multiline
       if (line.command === "CAP" && line.params[1] === "LS") {
-        // Accumulate caps from each chunk
-        accumulatedCaps += " " + (line.trailing ?? "").toLowerCase();
+        // Accumulate caps from each chunk - capability can be in trailing OR params[2]
+        const caps = (line.trailing ?? line.params[2] ?? "") as string;
+        accumulatedCaps += " " + caps.toLowerCase();
         // params[2] === "*" means more chunks coming; wait for final chunk
         if (line.params[2] === "*") {
           continue;
