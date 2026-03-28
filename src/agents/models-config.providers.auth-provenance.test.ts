@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { MINIMAX_OAUTH_MARKER, NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
+import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 
 describe("models-config provider auth provenance", () => {
   it("persists env keyRef and tokenRef auth profiles as env var markers", async () => {
@@ -125,9 +125,7 @@ describe("models-config provider auth provenance", () => {
       },
     );
 
-    expect(
-      auth("openai"),
-    ).toEqual({
+    expect(auth("openai")).toEqual({
       apiKey: "OPENAI_PROFILE_KEY",
       discoveryApiKey: undefined,
       mode: "api_key",
