@@ -17,9 +17,11 @@ vi.mock("../../config/config.js", () => ({
 
 describe("ensureSessionTranscriptFile", () => {
   let tmpDir: string;
+  let storePath: string;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-test-"));
+    storePath = path.join(tmpDir, "sessions.json");
   });
 
   afterEach(() => {
@@ -31,7 +33,7 @@ describe("ensureSessionTranscriptFile", () => {
     const result = ensureSessionTranscriptFile({
       cfg: {} as never,
       sessionId,
-      storePath: tmpDir,
+      storePath,
       agentId: "chief",
     });
     expect(result.ok).toBe(true);
@@ -52,7 +54,7 @@ describe("ensureSessionTranscriptFile", () => {
     const first = ensureSessionTranscriptFile({
       cfg: {} as never,
       sessionId,
-      storePath: tmpDir,
+      storePath,
       agentId: "chief",
     });
     expect(first.ok).toBe(true);
@@ -65,7 +67,7 @@ describe("ensureSessionTranscriptFile", () => {
     const second = ensureSessionTranscriptFile({
       cfg: {} as never,
       sessionId,
-      storePath: tmpDir,
+      storePath,
       agentId: "chief",
     });
     expect(second.ok).toBe(true);
