@@ -72,7 +72,7 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-const { registerMatrixCli } = await import("./cli.js");
+let registerMatrixCli: typeof import("./cli.js").registerMatrixCli;
 
 function buildProgram(): Command {
   const program = new Command();
@@ -112,7 +112,9 @@ function mockMatrixVerificationStatus(params: {
 }
 
 describe("matrix CLI verification commands", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ registerMatrixCli } = await import("./cli.js"));
     vi.clearAllMocks();
     process.exitCode = undefined;
     vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => consoleLogMock(...args));

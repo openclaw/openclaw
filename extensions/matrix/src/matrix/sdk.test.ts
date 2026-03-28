@@ -2,7 +2,6 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { encodeRecoveryKey } from "matrix-js-sdk/lib/crypto-api/recovery-key.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 class FakeMatrixEvent extends EventEmitter {
@@ -176,8 +175,8 @@ function createMatrixJsClientStub(): MatrixJsClientStub {
 let matrixJsClient = createMatrixJsClientStub();
 let lastCreateClientOpts: Record<string, unknown> | null = null;
 
-vi.mock("matrix-js-sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("matrix-js-sdk")>();
+vi.mock("matrix-js-sdk/lib/matrix.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("matrix-js-sdk/lib/matrix.js")>();
   return {
     ...actual,
     ClientEvent: { Event: "event", Room: "Room" },
@@ -189,14 +188,17 @@ vi.mock("matrix-js-sdk", async (importOriginal) => {
   };
 });
 
-import { MatrixClient } from "./sdk.js";
+const { encodeRecoveryKey } = await import("matrix-js-sdk/lib/crypto-api/recovery-key.js");
+let MatrixClient: typeof import("./sdk.js").MatrixClient;
 
 describe("MatrixClient request hardening", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     matrixJsClient = createMatrixJsClientStub();
     lastCreateClientOpts = null;
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    ({ MatrixClient } = await import("./sdk.js"));
   });
 
   afterEach(() => {

@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { expectPairingReplyText } from "../../../test/helpers/pairing-reply.js";
 import {
   defaultSlackTestConfig,
@@ -21,14 +21,12 @@ let monitorSlackProvider: typeof import("./monitor.js").monitorSlackProvider;
 const slackTestState = getSlackTestState();
 const { sendMock, replyMock, reactMock, upsertPairingRequestMock } = slackTestState;
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
   ({ resetInboundDedupe } = await import("../../../src/auto-reply/reply/inbound-dedupe.js"));
   ({ HISTORY_CONTEXT_MARKER } = await import("../../../src/auto-reply/reply/history.js"));
   ({ CURRENT_MESSAGE_MARKER } = await import("../../../src/auto-reply/reply/mentions.js"));
   ({ monitorSlackProvider } = await import("./monitor.js"));
-});
-
-beforeEach(() => {
   resetInboundDedupe();
   resetSlackTestState(defaultSlackTestConfig());
 });

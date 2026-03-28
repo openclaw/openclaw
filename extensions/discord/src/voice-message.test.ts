@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const runFfprobeMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<string>>());
 const runFfmpegMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<void>>());
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
   return {
     resolvePreferredOpenClawTmpDir: () => "/tmp",
   };

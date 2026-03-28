@@ -6,19 +6,27 @@ import {
 } from "./secret-input.js";
 
 describe("plugin-sdk secret input helpers", () => {
-  it("accepts undefined for optional secret input", () => {
-    expect(buildOptionalSecretInputSchema().safeParse(undefined).success).toBe(true);
-  });
-
-  it("accepts arrays of secret inputs", () => {
-    const result = buildSecretInputArraySchema().safeParse([
-      "sk-plain",
-      { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-    ]);
-    expect(result.success).toBe(true);
-  });
-
-  it("normalizes plaintext secret strings", () => {
-    expect(normalizeSecretInputString("  sk-test  ")).toBe("sk-test");
+  it.each([
+    {
+      name: "accepts undefined for optional secret input",
+      run: () => buildOptionalSecretInputSchema().safeParse(undefined).success,
+      expected: true,
+    },
+    {
+      name: "accepts arrays of secret inputs",
+      run: () =>
+        buildSecretInputArraySchema().safeParse([
+          "sk-plain",
+          { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        ]).success,
+      expected: true,
+    },
+    {
+      name: "normalizes plaintext secret strings",
+      run: () => normalizeSecretInputString("  sk-test  "),
+      expected: "sk-test",
+    },
+  ])("$name", ({ run, expected }) => {
+    expect(run()).toEqual(expected);
   });
 });

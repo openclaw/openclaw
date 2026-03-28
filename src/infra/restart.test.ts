@@ -16,9 +16,13 @@ vi.mock("./ports-lsof.js", () => ({
   resolveLsofCommandSync: (...args: unknown[]) => resolveLsofCommandSyncMock(...args),
 }));
 
-vi.mock("../config/paths.js", () => ({
-  resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
-}));
+vi.mock("../config/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/paths.js")>();
+  return {
+    ...actual,
+    resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
+  };
+});
 
 let __testing: typeof import("./restart-stale-pids.js").__testing;
 let cleanStaleGatewayProcessesSync: typeof import("./restart-stale-pids.js").cleanStaleGatewayProcessesSync;
@@ -38,9 +42,13 @@ beforeEach(async () => {
   vi.doMock("./ports-lsof.js", () => ({
     resolveLsofCommandSync: (...args: unknown[]) => resolveLsofCommandSyncMock(...args),
   }));
-  vi.doMock("../config/paths.js", () => ({
-    resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
-  }));
+  vi.doMock("../config/paths.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/paths.js")>();
+    return {
+      ...actual,
+      resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
+    };
+  });
   ({ __testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
     await import("./restart-stale-pids.js"));
   spawnSyncMock.mockReset();

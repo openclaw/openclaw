@@ -118,6 +118,26 @@ describe("resolveProviderCapabilities", () => {
     });
   });
 
+  it("preserves built-in fallback capability hints when plugin overrides are partial", () => {
+    resolveProviderCapabilitiesWithPluginMock.mockImplementationOnce(() => ({
+      providerFamily: "anthropic",
+    }));
+
+    expect(resolveProviderCapabilities("anthropic")).toEqual({
+      anthropicToolSchemaMode: "native",
+      anthropicToolChoiceMode: "native",
+      openAiPayloadNormalizationMode: "default",
+      providerFamily: "anthropic",
+      preserveAnthropicThinkingSignatures: true,
+      openAiCompatTurnValidation: true,
+      geminiThoughtSignatureSanitization: false,
+      transcriptToolCallIdMode: "default",
+      transcriptToolCallIdModelHints: [],
+      geminiThoughtSignatureModelHints: [],
+      dropThinkingBlockModelHints: ["claude"],
+    });
+  });
+
   it("normalizes kimi aliases to the same capability set", () => {
     expect(resolveProviderCapabilities("kimi")).toEqual(resolveProviderCapabilities("kimi-code"));
     expect(resolveProviderCapabilities("kimi-code")).toEqual({

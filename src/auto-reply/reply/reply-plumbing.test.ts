@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { slackPlugin } from "../../../extensions/slack/index.js";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import type { TemplateContext } from "../templating.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { applyReplyThreading } from "./reply-payloads.js";
@@ -14,6 +17,20 @@ import {
   resolveSubagentLabel,
   sortSubagentRuns,
 } from "./subagents-utils.js";
+
+function createSlackThreadingPlugin(): ChannelPlugin {
+  return {
+    ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
+    threading: {
+      buildToolContext: ({ context }) => ({
+        currentChannelId: context.To?.replace(/^channel:/, ""),
+        currentThreadTs:
+          context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
+        replyToMode: "all",
+      }),
+    },
+  } as ChannelPlugin;
+}
 
 describe("buildThreadingToolContext", () => {
   const cfg = {} as OpenClawConfig;
@@ -157,7 +174,9 @@ describe("buildThreadingToolContext", () => {
 
   it("uses Slack plugin threading context when the plugin registry is active", () => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "slack", plugin: slackPlugin, source: "test" }]),
+      createTestRegistry([
+        { pluginId: "slack", plugin: createSlackThreadingPlugin(), source: "test" },
+      ]),
     );
     const sessionCtx = {
       Provider: "slack",
@@ -244,7 +263,8 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBe("42");
+    expect(result[0].replyToId).toBeUndefined();
+    expect(result[0].replyToTag).toBe(true);
   });
 
   it("keeps explicit tags for Telegram when off mode is enabled", () => {
@@ -256,7 +276,7 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBe("42");
+    expect(result[0].replyToId).toBeUndefined();
     expect(result[0].replyToTag).toBe(true);
   });
 

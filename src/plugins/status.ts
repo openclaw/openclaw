@@ -1,12 +1,16 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
-import { withBundledPluginAllowlistCompat } from "./bundled-compat.js";
+import {
+  withBundledPluginAllowlistCompat,
+  withBundledPluginEnablementCompat,
+} from "./bundled-compat.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
@@ -119,6 +123,16 @@ function buildCompatibilityNoticesForInspect(
 
 const log = createSubsystemLogger("plugins");
 
+function resolveStatusConfig(
+  config: ReturnType<typeof loadConfig>,
+  env: NodeJS.ProcessEnv | undefined,
+) {
+  return applyPluginAutoEnable({
+    config,
+    env: env ?? process.env,
+  }).config;
+}
+
 function resolveReportedPluginVersion(
   plugin: PluginRegistry["plugins"][number],
   env: NodeJS.ProcessEnv | undefined,
@@ -139,7 +153,8 @@ export function buildPluginStatusReport(params?: {
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
 }): PluginStatusReport {
-  const config = params?.config ?? loadConfig();
+  const rawConfig = params?.config ?? loadConfig();
+  const config = resolveStatusConfig(rawConfig, params?.env);
   const workspaceDir = params?.workspaceDir
     ? params.workspaceDir
     : (resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)) ??
@@ -160,9 +175,13 @@ export function buildPluginStatusReport(params?: {
     config,
     pluginIds: bundledProviderIds,
   });
+  const runtimeCompatConfig = withBundledPluginEnablementCompat({
+    config: effectiveConfig,
+    pluginIds: bundledProviderIds,
+  });
 
   const registry = loadOpenClawPlugins({
-    config: effectiveConfig,
+    config: runtimeCompatConfig,
     workspaceDir,
     env: params?.env,
     logger: createPluginLoaderLogger(log),
@@ -228,7 +247,8 @@ export function buildPluginInspectReport(params: {
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;
 }): PluginInspectReport | null {
-  const config = params.config ?? loadConfig();
+  const rawConfig = params.config ?? loadConfig();
+  const config = resolveStatusConfig(rawConfig, params.env);
   const report =
     params.report ??
     buildPluginStatusReport({
@@ -361,7 +381,8 @@ export function buildAllPluginInspectReports(params?: {
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;
 }): PluginInspectReport[] {
-  const config = params?.config ?? loadConfig();
+  const rawConfig = params?.config ?? loadConfig();
+  const config = resolveStatusConfig(rawConfig, params?.env);
   const report =
     params?.report ??
     buildPluginStatusReport({

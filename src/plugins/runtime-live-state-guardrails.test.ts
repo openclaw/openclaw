@@ -18,17 +18,50 @@ const LIVE_RUNTIME_STATE_GUARDS: Record<
   },
 };
 
-describe("runtime live state guardrails", () => {
-  it("keeps split-runtime state holders on explicit direct globals", () => {
-    for (const [relativePath, guard] of Object.entries(LIVE_RUNTIME_STATE_GUARDS)) {
-      const source = readFileSync(resolve(repoRoot, relativePath), "utf8");
+function guardAssertions() {
+  return Object.entries(LIVE_RUNTIME_STATE_GUARDS).flatMap(([relativePath, guard]) => [
+    ...guard.required.map((needle) => ({
+      relativePath,
+      type: "required" as const,
+      needle,
+      message: `${relativePath} missing ${needle}`,
+    })),
+    ...guard.forbidden.map((needle) => ({
+      relativePath,
+      type: "forbidden" as const,
+      needle,
+      message: `${relativePath} must not contain ${needle}`,
+    })),
+  ]);
+}
 
-      for (const required of guard.required) {
-        expect(source, `${relativePath} missing ${required}`).toContain(required);
-      }
-      for (const forbidden of guard.forbidden) {
-        expect(source, `${relativePath} must not contain ${forbidden}`).not.toContain(forbidden);
-      }
-    }
-  });
+function expectGuardState(params: {
+  source: string;
+  type: "required" | "forbidden";
+  needle: string;
+  message: string;
+}) {
+  if (params.type === "required") {
+    expect(params.source, params.message).toContain(params.needle);
+    return;
+  }
+  expect(params.source, params.message).not.toContain(params.needle);
+}
+
+function readGuardrailSource(relativePath: string) {
+  return readFileSync(resolve(repoRoot, relativePath), "utf8");
+}
+
+describe("runtime live state guardrails", () => {
+  it.each(guardAssertions())(
+    "keeps split-runtime state holders on explicit direct globals: $relativePath $type $needle",
+    ({ relativePath, type, needle, message }) => {
+      expectGuardState({
+        source: readGuardrailSource(relativePath),
+        type,
+        needle,
+        message,
+      });
+    },
+  );
 });

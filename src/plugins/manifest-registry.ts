@@ -45,6 +45,7 @@ export type PluginManifestRecord = {
   description?: string;
   version?: string;
   enabledByDefault?: boolean;
+  autoEnableWhenConfiguredProviders?: string[];
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
@@ -73,7 +74,7 @@ export type PluginManifestRecord = {
     id: string;
     label?: string;
     blurb?: string;
-    preferOver?: string[];
+    preferOver?: readonly string[];
   };
 };
 
@@ -220,6 +221,7 @@ function buildRecord(params: {
       normalizeManifestLabel(params.manifest.description) ?? params.candidate.packageDescription,
     version: normalizeManifestLabel(params.manifest.version) ?? params.candidate.packageVersion,
     enabledByDefault: params.manifest.enabledByDefault === true ? true : undefined,
+    autoEnableWhenConfiguredProviders: params.manifest.autoEnableWhenConfiguredProviders,
     format: params.candidate.format ?? "openclaw",
     bundleFormat: params.candidate.bundleFormat,
     kind: params.manifest.kind,

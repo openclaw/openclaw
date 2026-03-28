@@ -15,10 +15,10 @@ let recordInboundSession: SessionModule["recordInboundSession"];
 
 describe("recordInboundSession", () => {
   const ctx: MsgContext = {
-    Provider: "telegram",
-    From: "telegram:1234",
-    SessionKey: "agent:main:telegram:1234:thread:42",
-    OriginatingTo: "telegram:1234",
+    Provider: "demo-channel",
+    From: "demo-channel:1234",
+    SessionKey: "agent:main:demo-channel:1234:thread:42",
+    OriginatingTo: "demo-channel:1234",
   };
 
   beforeEach(async () => {
@@ -31,12 +31,12 @@ describe("recordInboundSession", () => {
   it("does not pass ctx when updating a different session key", async () => {
     await recordInboundSession({
       storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "agent:main:telegram:1234:thread:42",
+      sessionKey: "agent:main:demo-channel:1234:thread:42",
       ctx,
       updateLastRoute: {
         sessionKey: "agent:main:main",
-        channel: "telegram",
-        to: "telegram:1234",
+        channel: "demo-channel",
+        to: "demo-channel:1234",
       },
       onRecordError: vi.fn(),
     });
@@ -46,8 +46,8 @@ describe("recordInboundSession", () => {
         sessionKey: "agent:main:main",
         ctx: undefined,
         deliveryContext: expect.objectContaining({
-          channel: "telegram",
-          to: "telegram:1234",
+          channel: "demo-channel",
+          to: "demo-channel:1234",
         }),
       }),
     );
@@ -56,23 +56,23 @@ describe("recordInboundSession", () => {
   it("passes ctx when updating the same session key", async () => {
     await recordInboundSession({
       storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "agent:main:telegram:1234:thread:42",
+      sessionKey: "agent:main:demo-channel:1234:thread:42",
       ctx,
       updateLastRoute: {
-        sessionKey: "agent:main:telegram:1234:thread:42",
-        channel: "telegram",
-        to: "telegram:1234",
+        sessionKey: "agent:main:demo-channel:1234:thread:42",
+        channel: "demo-channel",
+        to: "demo-channel:1234",
       },
       onRecordError: vi.fn(),
     });
 
     expect(updateLastRouteMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: "agent:main:telegram:1234:thread:42",
+        sessionKey: "agent:main:demo-channel:1234:thread:42",
         ctx,
         deliveryContext: expect.objectContaining({
-          channel: "telegram",
-          to: "telegram:1234",
+          channel: "demo-channel",
+          to: "demo-channel:1234",
         }),
       }),
     );
@@ -81,24 +81,24 @@ describe("recordInboundSession", () => {
   it("normalizes mixed-case session keys before recording and route updates", async () => {
     await recordInboundSession({
       storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "Agent:Main:Telegram:1234:Thread:42",
+      sessionKey: "Agent:Main:Demo-Channel:1234:Thread:42",
       ctx,
       updateLastRoute: {
-        sessionKey: "agent:main:telegram:1234:thread:42",
-        channel: "telegram",
-        to: "telegram:1234",
+        sessionKey: "agent:main:demo-channel:1234:thread:42",
+        channel: "demo-channel",
+        to: "demo-channel:1234",
       },
       onRecordError: vi.fn(),
     });
 
     expect(recordSessionMetaFromInboundMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: "agent:main:telegram:1234:thread:42",
+        sessionKey: "agent:main:demo-channel:1234:thread:42",
       }),
     );
     expect(updateLastRouteMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: "agent:main:telegram:1234:thread:42",
+        sessionKey: "agent:main:demo-channel:1234:thread:42",
         ctx,
       }),
     );
@@ -109,12 +109,12 @@ describe("recordInboundSession", () => {
 
     await recordInboundSession({
       storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "agent:main:telegram:1234:thread:42",
+      sessionKey: "agent:main:demo-channel:1234:thread:42",
       ctx,
       updateLastRoute: {
         sessionKey: "agent:main:main",
-        channel: "telegram",
-        to: "telegram:1234",
+        channel: "demo-channel",
+        to: "demo-channel:1234",
         mainDmOwnerPin: {
           ownerRecipient: "1234",
           senderRecipient: "9999",

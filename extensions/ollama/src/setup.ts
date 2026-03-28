@@ -1,5 +1,5 @@
-import { upsertAuthProfileWithLock } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
+import { upsertAuthProfileWithLock } from "openclaw/plugin-sdk/provider-auth";
 import { applyAgentDefaultModelPrimary } from "openclaw/plugin-sdk/provider-onboard";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
@@ -14,6 +14,7 @@ import {
 
 const OLLAMA_SUGGESTED_MODELS_LOCAL = [OLLAMA_DEFAULT_MODEL];
 const OLLAMA_SUGGESTED_MODELS_CLOUD = ["kimi-k2.5:cloud", "minimax-m2.5:cloud", "glm-5:cloud"];
+const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 
 type OllamaMode = "remote" | "local";
 type OllamaSetupOptions = {
@@ -264,11 +265,17 @@ async function storeOllamaCredential(agentDir?: string): Promise<void> {
 
 export async function buildOllamaProvider(
   configuredBaseUrl?: string,
-  _opts?: { quiet?: boolean },
+  opts?: { quiet?: boolean },
 ): Promise<ProviderConfig> {
   const apiBase = resolveOllamaApiBase(configuredBaseUrl);
-  const { models } = await fetchOllamaModels(apiBase);
-  const discovered = await enrichOllamaModelsWithContext(apiBase, models.slice(0, 50));
+  const { reachable, models } = await fetchOllamaModels(apiBase);
+  if (!reachable && !opts?.quiet) {
+    console.warn(`Ollama could not be reached at ${apiBase}.`);
+  }
+  const discovered = await enrichOllamaModelsWithContext(
+    apiBase,
+    models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
+  );
   return {
     baseUrl: apiBase,
     api: "ollama",
@@ -308,7 +315,10 @@ export async function promptAndConfigureOllama(params: {
     throw new WizardCancelledError("Ollama not reachable");
   }
 
-  const enrichedModels = await enrichOllamaModelsWithContext(baseUrl, models.slice(0, 50));
+  const enrichedModels = await enrichOllamaModelsWithContext(
+    baseUrl,
+    models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
+  );
   const discoveredModelsByName = new Map(enrichedModels.map((model) => [model.name, model]));
   const modelNames = models.map((model) => model.name);
   const mode = (await params.prompter.select({
@@ -400,7 +410,10 @@ export async function configureOllamaNonInteractive(params: {
 
   await storeOllamaCredential(params.agentDir);
 
-  const enrichedModels = await enrichOllamaModelsWithContext(baseUrl, models.slice(0, 50));
+  const enrichedModels = await enrichOllamaModelsWithContext(
+    baseUrl,
+    models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
+  );
   const discoveredModelsByName = new Map(enrichedModels.map((model) => [model.name, model]));
   const modelNames = models.map((model) => model.name);
   const orderedModelNames = [
