@@ -1,3 +1,7 @@
+import {
+  findPreferredConversationByUserId,
+  parseStoredConversationTimestamp,
+} from "./conversation-store-selection.js";
 import type {
   MSTeamsConversationStore,
   MSTeamsConversationStoreEntry,
@@ -15,17 +19,6 @@ const STORE_FILENAME = "msteams-conversations.json";
 const MAX_CONVERSATIONS = 1000;
 const CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
-function parseTimestamp(value: string | undefined): number | null {
-  if (!value) {
-    return null;
-  }
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-  return parsed;
-}
-
 function pruneToLimit(conversations: Record<string, StoredConversationReference>) {
   const entries = Object.entries(conversations);
   if (entries.length <= MAX_CONVERSATIONS) {
@@ -33,8 +26,8 @@ function pruneToLimit(conversations: Record<string, StoredConversationReference>
   }
 
   entries.sort((a, b) => {
-    const aTs = parseTimestamp(a[1].lastSeenAt) ?? 0;
-    const bTs = parseTimestamp(b[1].lastSeenAt) ?? 0;
+    const aTs = parseStoredConversationTimestamp(a[1].lastSeenAt) ?? 0;
+    const bTs = parseStoredConversationTimestamp(b[1].lastSeenAt) ?? 0;
     return aTs - bTs;
   });
 
@@ -50,7 +43,7 @@ function pruneExpired(
   let removed = false;
   const kept: typeof conversations = {};
   for (const [conversationId, reference] of Object.entries(conversations)) {
-    const lastSeenAt = parseTimestamp(reference.lastSeenAt);
+    const lastSeenAt = parseStoredConversationTimestamp(reference.lastSeenAt);
     // Preserve legacy entries that have no lastSeenAt until they're seen again.
     if (lastSeenAt != null && nowMs - lastSeenAt > ttlMs) {
       removed = true;
@@ -112,38 +105,7 @@ export function createMSTeamsConversationStoreFs(params?: {
   };
 
   const findByUserId = async (id: string): Promise<MSTeamsConversationStoreEntry | null> => {
-    const target = id.trim();
-    if (!target) {
-      return null;
-    }
-
-    const matches: MSTeamsConversationStoreEntry[] = [];
-    for (const entry of await list()) {
-      const { conversationId, reference } = entry;
-      if (reference.user?.aadObjectId === target || reference.user?.id === target) {
-        matches.push({ conversationId, reference });
-      }
-    }
-
-    if (matches.length === 0) {
-      return null;
-    }
-
-    matches.sort((a, b) => {
-      const aType = a.reference.conversation?.conversationType?.toLowerCase() ?? "";
-      const bType = b.reference.conversation?.conversationType?.toLowerCase() ?? "";
-      const aPersonal = aType === "personal" ? 1 : 0;
-      const bPersonal = bType === "personal" ? 1 : 0;
-      if (aPersonal !== bPersonal) {
-        return bPersonal - aPersonal;
-      }
-      return (
-        (parseTimestamp(b.reference.lastSeenAt) ?? 0) -
-        (parseTimestamp(a.reference.lastSeenAt) ?? 0)
-      );
-    });
-
-    return matches[0] ?? null;
+    return findPreferredConversationByUserId(await list(), id);
   };
 
   const upsert = async (
