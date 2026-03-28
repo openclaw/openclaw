@@ -39,6 +39,10 @@ function expectServiceContext(
   expect(ctx.config).toBe(config);
   expect(ctx.workspaceDir).toBe("/tmp/workspace");
   expect(ctx.stateDir).toBe(STATE_DIR);
+  expectServiceLogger(ctx);
+}
+
+function expectServiceLogger(ctx: OpenClawPluginServiceContext) {
   expect(ctx.logger).toBeDefined();
   expect(typeof ctx.logger.info).toBe("function");
   expect(typeof ctx.logger.warn).toBe("function");

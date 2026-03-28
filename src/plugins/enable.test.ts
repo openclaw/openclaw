@@ -15,6 +15,13 @@ function expectEnableResult(
   params.assert(result);
 }
 
+function expectEnabledAllowlist(
+  result: ReturnType<typeof enablePluginInConfig>,
+  expected: string[],
+) {
+  expect(result.config.plugins?.allow).toEqual(expected);
+}
+
 describe("enablePluginInConfig", () => {
   it.each([
     {
@@ -36,7 +43,7 @@ describe("enablePluginInConfig", () => {
       pluginId: "google",
       expectedEnabled: true,
       assert: (result: ReturnType<typeof enablePluginInConfig>) => {
-        expect(result.config.plugins?.allow).toEqual(["memory-core", "google"]);
+        expectEnabledAllowlist(result, ["memory-core", "google"]);
       },
     },
     {
@@ -73,7 +80,7 @@ describe("enablePluginInConfig", () => {
       expectedEnabled: true,
       assert: (result: ReturnType<typeof enablePluginInConfig>) => {
         expect(result.config.channels?.telegram?.enabled).toBe(true);
-        expect(result.config.plugins?.allow).toEqual(["memory-core", "telegram"]);
+        expectEnabledAllowlist(result, ["memory-core", "telegram"]);
       },
     },
     {

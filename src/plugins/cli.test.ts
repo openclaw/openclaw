@@ -46,6 +46,14 @@ function createCliRegistry() {
   };
 }
 
+function expectPluginLoaderConfig(config: OpenClawConfig) {
+  expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+    expect.objectContaining({
+      config,
+    }),
+  );
+}
+
 describe("registerPluginCliCommands", () => {
   beforeEach(() => {
     mocks.memoryRegister.mockClear();
@@ -101,11 +109,7 @@ describe("registerPluginCliCommands", () => {
       config: rawConfig,
       env: process.env,
     });
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: autoEnabledConfig,
-      }),
-    );
+    expectPluginLoaderConfig(autoEnabledConfig);
     expect(mocks.memoryRegister).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,

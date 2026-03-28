@@ -20,6 +20,15 @@ function expectResolvedEnableState(
   expect(resolveEnableState(...params)).toEqual(expected);
 }
 
+function expectMemoryPluginState(
+  config: Parameters<typeof normalizePluginsConfig>[0],
+  expected: ReturnType<typeof resolveEnableState>,
+) {
+  expect(resolveEnableState("memory-core", "bundled", normalizePluginsConfig(config))).toEqual(
+    expected,
+  );
+}
+
 describe("normalizePluginsConfig", () => {
   it.each([
     [{}, "memory-core"],
@@ -177,22 +186,18 @@ describe("resolveEnableState", () => {
   );
 
   it("keeps the selected memory slot plugin enabled even when omitted from plugins.allow", () => {
-    const state = resolveEnableState(
-      "memory-core",
-      "bundled",
-      normalizePluginsConfig({
+    expectMemoryPluginState(
+      {
         allow: ["telegram"],
         slots: { memory: "memory-core" },
-      }),
+      },
+      { enabled: true },
     );
-    expect(state).toEqual({ enabled: true });
   });
 
   it("keeps explicit disable authoritative for the selected memory slot plugin", () => {
-    const state = resolveEnableState(
-      "memory-core",
-      "bundled",
-      normalizePluginsConfig({
+    expectMemoryPluginState(
+      {
         allow: ["telegram"],
         slots: { memory: "memory-core" },
         entries: {
@@ -200,9 +205,9 @@ describe("resolveEnableState", () => {
             enabled: false,
           },
         },
-      }),
+      },
+      { enabled: false, reason: "disabled in config" },
     );
-    expect(state).toEqual({ enabled: false, reason: "disabled in config" });
   });
 
   it.each([

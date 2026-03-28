@@ -18,6 +18,22 @@ function createLazyModuleLifecycle() {
   };
 }
 
+async function expectLifecycleStarted(params: {
+  overrideEnvVar?: string;
+  loadDefaultModule?: () => Promise<Record<string, unknown>>;
+  loadOverrideModule?: (spec: string) => Promise<Record<string, unknown>>;
+  startExportNames: string[];
+  stopExportNames?: string[];
+}) {
+  return startLazyPluginServiceModule({
+    ...(params.overrideEnvVar ? { overrideEnvVar: params.overrideEnvVar } : {}),
+    loadDefaultModule: params.loadDefaultModule ?? (async () => createLazyModuleLifecycle().module),
+    ...(params.loadOverrideModule ? { loadOverrideModule: params.loadOverrideModule } : {}),
+    startExportNames: params.startExportNames,
+    ...(params.stopExportNames ? { stopExportNames: params.stopExportNames } : {}),
+  });
+}
+
 describe("startLazyPluginServiceModule", () => {
   afterEach(() => {
     delete process.env.OPENCLAW_LAZY_SERVICE_SKIP;
@@ -27,7 +43,7 @@ describe("startLazyPluginServiceModule", () => {
   it("starts the default module and returns its stop hook", async () => {
     const lifecycle = createLazyModuleLifecycle();
 
-    const handle = await startLazyPluginServiceModule({
+    const handle = await expectLifecycleStarted({
       loadDefaultModule: async () => lifecycle.module,
       startExportNames: ["startDefault"],
       stopExportNames: ["stopDefault"],
@@ -58,7 +74,7 @@ describe("startLazyPluginServiceModule", () => {
     const start = createAsyncHookMock();
     const loadOverrideModule = vi.fn(async () => ({ startOverride: start }));
 
-    await startLazyPluginServiceModule({
+    await expectLifecycleStarted({
       overrideEnvVar: "OPENCLAW_LAZY_SERVICE_OVERRIDE",
       loadDefaultModule: async () => ({ startDefault: createAsyncHookMock() }),
       loadOverrideModule,

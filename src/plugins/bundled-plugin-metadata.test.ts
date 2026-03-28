@@ -37,6 +37,22 @@ function expectGeneratedPathResolution(tempRoot: string, expectedRelativePath: s
   ).toBe(path.join(tempRoot, expectedRelativePath));
 }
 
+function expectArtifactPresence(
+  artifacts: readonly string[] | undefined,
+  params: { contains?: readonly string[]; excludes?: readonly string[] },
+) {
+  if (params.contains) {
+    for (const artifact of params.contains) {
+      expect(artifacts).toContain(artifact);
+    }
+  }
+  if (params.excludes) {
+    for (const artifact of params.excludes) {
+      expect(artifacts).not.toContain(artifact);
+    }
+  }
+}
+
 async function writeGeneratedMetadataModule(params: {
   repoRoot: string;
   outputPath?: string;
@@ -64,11 +80,13 @@ describe("bundled plugin metadata", () => {
     const discord = BUNDLED_PLUGIN_METADATA.find((entry) => entry.dirName === "discord");
     expect(discord?.source).toEqual({ source: "./index.ts", built: "index.js" });
     expect(discord?.setupSource).toEqual({ source: "./setup-entry.ts", built: "setup-entry.js" });
-    expect(discord?.publicSurfaceArtifacts).toContain("api.js");
-    expect(discord?.publicSurfaceArtifacts).toContain("runtime-api.js");
-    expect(discord?.publicSurfaceArtifacts).toContain("session-key-api.js");
-    expect(discord?.publicSurfaceArtifacts).not.toContain("test-api.js");
-    expect(discord?.runtimeSidecarArtifacts).toContain("runtime-api.js");
+    expectArtifactPresence(discord?.publicSurfaceArtifacts, {
+      contains: ["api.js", "runtime-api.js", "session-key-api.js"],
+      excludes: ["test-api.js"],
+    });
+    expectArtifactPresence(discord?.runtimeSidecarArtifacts, {
+      contains: ["runtime-api.js"],
+    });
     expect(discord?.manifest.id).toBe("discord");
     expect(discord?.manifest.channelConfigs?.discord).toEqual(
       expect.objectContaining({
