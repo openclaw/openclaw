@@ -1,6 +1,18 @@
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SecretRef } from "../../config/types.secrets.js";
+
+export type OAuthProvider = string;
+
+export type OAuthCredentials = {
+  access: string;
+  refresh: string;
+  expires: number;
+  provider?: OAuthProvider;
+  email?: string;
+  enterpriseUrl?: string;
+  projectId?: string;
+  accountId?: string;
+};
 
 export type ApiKeyCredential = {
   type: "api_key";
