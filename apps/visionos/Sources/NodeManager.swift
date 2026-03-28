@@ -72,14 +72,16 @@ final class NodeManager: ObservableObject {
         if let saved = UserDefaults.standard.string(forKey: "gatewayURL"), !saved.isEmpty {
             gatewayURL = saved
         }
-        if let saved = UserDefaults.standard.string(forKey: "gatewayToken"), !saved.isEmpty {
+        // Token is a secret — stored in Keychain, not UserDefaults
+        if let saved = KeychainHelper.read(key: "com.openclaw.node.gateway-token"), !saved.isEmpty {
             gatewayToken = saved
         }
     }
 
     func saveConfig() {
         UserDefaults.standard.set(gatewayURL, forKey: "gatewayURL")
-        UserDefaults.standard.set(gatewayToken, forKey: "gatewayToken")
+        // Token is a secret — store in Keychain, not UserDefaults
+        KeychainHelper.write(key: "com.openclaw.node.gateway-token", value: gatewayToken)
     }
 
     // MARK: - Connect / Disconnect
