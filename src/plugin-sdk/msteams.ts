@@ -44,6 +44,7 @@ export {
 } from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export { resolveOutboundMediaUrls, resolveSendableOutboundReplyParts } from "./reply-payload.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export type {
   BaseProbeResult,
   ChannelDirectoryEntry,
