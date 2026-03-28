@@ -851,6 +851,21 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     return loader;
   };
 
+  // matrix-js-sdk sets globalThis.__js_sdk_entrypoint on first import and throws
+  // on any subsequent import. When the dist bundle already loaded it, jiti-loaded
+  // plugins hit the guard even if they don't use matrix themselves. Wrap the jiti
+  // loader to temporarily clear the flag during module resolution.
+  const loadWithJiti = (modulePath: string) => {
+    const g = globalThis as Record<string, unknown>;
+    const saved = g.__js_sdk_entrypoint;
+    g.__js_sdk_entrypoint = undefined;
+    try {
+      return getJiti(modulePath)(modulePath);
+    } finally {
+      g.__js_sdk_entrypoint = saved;
+    }
+  };
+
   let createPluginRuntimeFactory: ((options?: CreatePluginRuntimeOptions) => PluginRuntime) | null =
     null;
   const resolveCreatePluginRuntime = (): ((
@@ -865,7 +880,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (!runtimeModulePath) {
       throw new Error("Unable to resolve plugin runtime module");
     }
-    const runtimeModule = getJiti(runtimeModulePath)(runtimeModulePath) as {
+    const runtimeModule = loadWithJiti(runtimeModulePath) as {
       createPluginRuntime?: (options?: CreatePluginRuntimeOptions) => PluginRuntime;
     };
     if (typeof runtimeModule.createPluginRuntime !== "function") {
@@ -1198,7 +1213,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = getJiti(safeSource)(safeSource) as OpenClawPluginModule;
+      mod = loadWithJiti(safeSource) as OpenClawPluginModule;
     } catch (err) {
       recordPluginError({
         logger,
