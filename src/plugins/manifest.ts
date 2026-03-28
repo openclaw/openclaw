@@ -273,7 +273,7 @@ function normalizeCapabilities(value: unknown): PluginCapabilities | undefined {
   if (runtime) {
     result.runtime = runtime;
   }
-  return Object.keys(result).length > 0 ? result : undefined;
+  return result;
 }
 
 function normalizeChannelConfigs(

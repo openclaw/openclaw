@@ -826,16 +826,20 @@ export async function collectPluginsTrustFindings(params: {
   }
 
   const legacyModePlugins: string[] = [];
-  for (const pluginDir of pluginDirs) {
-    try {
-      const { loadPluginManifest } = await import("../plugins/manifest.js");
-      const manifestResult = loadPluginManifest(pluginDir, false);
-      if (manifestResult.ok && !manifestResult.manifest.capabilities) {
-        legacyModePlugins.push(manifestResult.manifest.id);
+  try {
+    const { loadPluginManifest } = await import("../plugins/manifest.js");
+    for (const pluginDir of pluginDirs) {
+      try {
+        const manifestResult = loadPluginManifest(pluginDir, false);
+        if (manifestResult.ok && !manifestResult.manifest.capabilities) {
+          legacyModePlugins.push(manifestResult.manifest.id);
+        }
+      } catch {
+        // manifest load failure — other checks cover this
       }
-    } catch {
-      // manifest load failure — other checks cover this
     }
+  } catch {
+    // manifest module unavailable
   }
   if (legacyModePlugins.length > 0) {
     findings.push({
