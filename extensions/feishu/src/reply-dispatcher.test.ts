@@ -4,6 +4,7 @@ type StreamingSessionStub = {
   active: boolean;
   start: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
+  updateNoteContent: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   isActive: ReturnType<typeof vi.fn>;
 };
@@ -48,6 +49,7 @@ vi.mock("./streaming-card.js", async () => {
         this.active = true;
       });
       update = vi.fn(async () => {});
+      updateNoteContent = vi.fn(async () => {});
       close = vi.fn(async () => {
         this.active = false;
       });
@@ -277,7 +279,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         replyInThread: undefined,
         rootId: "om_root_topic",
         header: { title: "agent", template: "blue" },
-        note: "Agent: agent",
+        note: expect.stringContaining("Agent: agent | 状态: 处理中"),
       }),
     );
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
@@ -296,7 +298,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\npartial answer\n```", {
-      note: "Agent: agent",
+      note: expect.stringContaining("Agent: agent | 状态: 已完成"),
     });
   });
 
@@ -310,13 +312,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(2);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n完整回复第一段\n```", {
-      note: "Agent: agent",
+      note: expect.stringContaining("Agent: agent | 状态: 已完成"),
     });
     expect(streamingInstances[1].close).toHaveBeenCalledTimes(1);
     expect(streamingInstances[1].close).toHaveBeenCalledWith(
       "```md\n完整回复第一段 + 第二段\n```",
       {
-        note: "Agent: agent",
+        note: expect.stringContaining("Agent: agent | 状态: 已完成"),
       },
     );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
@@ -333,7 +335,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n同一条回复\n```", {
-      note: "Agent: agent",
+      note: expect.stringContaining("Agent: agent | 状态: 已完成"),
     });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
@@ -399,7 +401,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledWith("hellolo world", {
-      note: "Agent: agent",
+      note: expect.stringContaining("Agent: agent | 状态: 已完成"),
     });
   });
 
@@ -631,9 +633,38 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         replyToMessageId: "om_msg",
         replyInThread: true,
         header: { title: "agent", template: "blue" },
-        note: "Agent: agent",
+        note: expect.stringContaining("Agent: agent | 状态: 处理中"),
       }),
     );
+  });
+
+  it("filters codex scratchpad-like english text from feishu replies", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false,
+      },
+    });
+
+    const { result, options } = createDispatcherHarness();
+    result.replyOptions.onModelSelected?.({
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      thinkLevel: "off",
+    });
+    await options.deliver(
+      {
+        text: "Need maybe use direct curl. Need inspect page meta and create draft.",
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
   it("disables streaming for thread replies and keeps reply metadata", async () => {

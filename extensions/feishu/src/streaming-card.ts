@@ -357,7 +357,7 @@ export class FeishuStreamingSession {
     await this.queue;
   }
 
-  private async updateNoteContent(note: string): Promise<void> {
+  async updateNoteContent(note: string): Promise<void> {
     if (!this.state || !this.state.hasNote) {
       return;
     }

@@ -72,6 +72,58 @@ function resolveCardNote(
   return parts.join(" | ");
 }
 
+function sanitizeReplyText(text: string | undefined): string {
+  if (!text) {
+    return "";
+  }
+  return text
+    .replace(/🧹\s*Compacting context\.\.\.\s*/g, "")
+    .replace(/<\/?final>\s*/gi, "")
+    .trim();
+}
+
+function isLikelyCodexScratchpadText(text: string, provider?: string): boolean {
+  if ((provider ?? "").toLowerCase() !== "openai-codex") {
+    return false;
+  }
+  const cleaned = sanitizeReplyText(text);
+  if (!cleaned || /[\u4e00-\u9fff]/.test(cleaned)) {
+    return false;
+  }
+  if (cleaned.length > 2000 || !/[A-Za-z]/.test(cleaned)) {
+    return false;
+  }
+  if (/^\[\[reply_to_current\]\]/.test(cleaned)) {
+    return false;
+  }
+  if (
+    /^(Need|Need to|Let's|We can|Use |Only |Translation failed|Found |Now |Maybe |Better |Looks translated|Great|Good\b)/i.test(
+      cleaned,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\b(?:tool|script|page|workflow|upload|translate|header|footer|meta|rest|curl|draft|create|update|inspect|verify|extract|body|html|template|slug|publish|wordpress|elementor)\b/i.test(
+      cleaned,
+    ) &&
+    /\b(?:need|maybe|likely|could|should|let's|let us|try|test|inspect|verify|create|update|copy|fetch|extract|build|retry|respond)\b/i.test(
+      cleaned,
+    )
+  ) {
+    return true;
+  }
+  return (
+    cleaned.split(/\s+/).length >= 8 &&
+    /[.?!]/.test(cleaned) &&
+    !/[`[{(<]/.test(cleaned) &&
+    /^[A-Za-z0-9 ,.:;'"\/_-]+$/.test(cleaned) &&
+    /\b(?:need|maybe|likely|could|should|let's|try|inspect|verify|create|update|copy|fetch|extract|build|retry|respond)\b/i.test(
+      cleaned,
+    )
+  );
+}
+
 export type CreateFeishuReplyDispatcherParams = {
   cfg: ClawdbotConfig;
   agentId: string;
@@ -196,7 +248,70 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let streamingStartedAt = 0;
+  let lastActivityAt = 0;
+  let lastKnownStatus = "处理中";
+  const STREAMING_NOTE_HEARTBEAT_MS = 15_000;
   type StreamTextUpdateMode = "snapshot" | "delta";
+
+  const formatActivityTime = (timestamp: number): string =>
+    timestamp > 0
+      ? new Date(timestamp).toLocaleTimeString("zh-CN", {
+          hour12: false,
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        })
+      : "";
+
+  const buildStreamingNote = (status = lastKnownStatus): string => {
+    const base = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+    const parts = [base, `状态: ${status}`];
+    if (lastActivityAt > 0) {
+      parts.push(`最后活动: ${formatActivityTime(lastActivityAt)}`);
+    }
+    return parts.join(" | ");
+  };
+
+  const refreshStreamingNote = (status = lastKnownStatus) => {
+    lastKnownStatus = status;
+    partialUpdateQueue = partialUpdateQueue.then(async () => {
+      if (streamingStartPromise) {
+        await streamingStartPromise;
+      }
+      if (streaming?.isActive()) {
+        await streaming.updateNoteContent(buildStreamingNote(status));
+      }
+    });
+  };
+
+  const markStreamingActivity = (status = "处理中") => {
+    lastActivityAt = Date.now();
+    refreshStreamingNote(status);
+  };
+
+  const stopHeartbeat = () => {
+    if (!heartbeatTimer) {
+      return;
+    }
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  };
+
+  const startHeartbeat = () => {
+    stopHeartbeat();
+    heartbeatTimer = setInterval(() => {
+      if (!streaming?.isActive()) {
+        return;
+      }
+      lastActivityAt = Date.now();
+      refreshStreamingNote(lastKnownStatus);
+    }, STREAMING_NOTE_HEARTBEAT_MS);
+  };
+
+  const shouldSendCompletionPing = () =>
+    streamingStartedAt > 0 && Date.now() - streamingStartedAt >= 15_000;
 
   const formatReasoningPrefix = (thinking: string): string => {
     if (!thinking) return "";
@@ -241,6 +356,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (options?.dedupeWithLastPartial) {
       lastPartial = nextText;
     }
+    markStreamingActivity("处理中");
     const mode = options?.mode ?? "snapshot";
     streamText =
       mode === "delta" ? `${streamText}${nextText}` : mergeStreamingText(streamText, nextText);
@@ -250,6 +366,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const queueReasoningUpdate = (nextThinking: string) => {
     if (!nextThinking) return;
     reasoningText = nextThinking;
+    markStreamingActivity("处理中");
     flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
   };
 
@@ -257,6 +374,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (!streamingEnabled || streamingStartPromise || streaming) {
       return;
     }
+    streamingStartedAt = Date.now();
+    lastActivityAt = streamingStartedAt;
+    lastKnownStatus = "处理中";
     streamingStartPromise = (async () => {
       const creds =
         account.appId && account.appSecret
@@ -277,7 +397,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           replyInThread: effectiveReplyInThread,
           rootId,
           header: cardHeader,
-          note: cardNote,
+          note: buildStreamingNote("处理中"),
         });
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
@@ -285,9 +405,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         streamingStartPromise = null; // allow retry on next deliver
       }
     })();
+    startHeartbeat();
   };
 
   const closeStreaming = async () => {
+    stopHeartbeat();
     if (streamingStartPromise) {
       await streamingStartPromise;
     }
@@ -297,7 +419,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
-      const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+      lastKnownStatus = "已完成";
+      lastActivityAt = Date.now();
+      const finalNote = buildStreamingNote("已完成");
       await streaming.close(text, { note: finalNote });
     }
     streaming = null;
@@ -305,6 +429,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamText = "";
     lastPartial = "";
     reasoningText = "";
+    streamingStartedAt = 0;
+    lastActivityAt = 0;
+    lastKnownStatus = "处理中";
   };
 
   const sendChunkedTextReply = async (params: {
@@ -362,8 +489,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       },
       deliver: async (payload: ReplyPayload, info) => {
         const reply = resolveSendableOutboundReplyParts(payload);
-        const text = reply.text;
-        const hasText = reply.hasText;
+        const text = sanitizeReplyText(reply.text);
+        const hasText =
+          Boolean(text) && !isLikelyCodexScratchpadText(text, prefixContext.prefixContext.provider);
         const hasMedia = reply.hasMedia;
         const skipTextForDuplicateFinal =
           info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
@@ -402,9 +530,20 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               queueStreamingUpdate(text, { mode: "delta" });
             }
             if (info?.kind === "final") {
+              markStreamingActivity("整理结果");
               streamText = mergeStreamingText(streamText, text);
               await closeStreaming();
               deliveredFinalTexts.add(text);
+              if (shouldSendCompletionPing()) {
+                await sendMessageFeishu({
+                  cfg,
+                  to: chatId,
+                  text: `已完成：${text.replace(/\n/g, " ").trim().slice(0, 100)}`,
+                  replyToMessageId: sendReplyToMessageId,
+                  replyInThread: effectiveReplyInThread,
+                  accountId,
+                });
+              }
             }
             // Send media even when streaming handled the text
             if (hasMedia) {
