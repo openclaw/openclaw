@@ -56,6 +56,20 @@ function expectFunctionKeys(value: Record<string, unknown>, keys: readonly strin
   });
 }
 
+function expectRunCommandOutcome(params: {
+  runtime: ReturnType<typeof createPluginRuntime>;
+  expected: "resolve" | "reject";
+  commandResult: ReturnType<typeof createCommandResult>;
+}) {
+  const command = params.runtime.system.runCommandWithTimeout(["echo", "hello"], {
+    timeoutMs: 1000,
+  });
+  if (params.expected === "resolve") {
+    return expect(command).resolves.toEqual(params.commandResult);
+  }
+  return expect(command).rejects.toThrow("boom");
+}
+
 describe("plugin runtime command execution", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -83,12 +97,7 @@ describe("plugin runtime command execution", () => {
     }
 
     const runtime = createPluginRuntime();
-    const command = runtime.system.runCommandWithTimeout(["echo", "hello"], { timeoutMs: 1000 });
-    if (expected === "resolve") {
-      await expect(command).resolves.toEqual(commandResult);
-    } else {
-      await expect(command).rejects.toThrow("boom");
-    }
+    await expectRunCommandOutcome({ runtime, expected, commandResult });
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["echo", "hello"], { timeoutMs: 1000 });
   });
 

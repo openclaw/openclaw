@@ -94,6 +94,32 @@ function createWizardRuntimeParams(params?: {
   };
 }
 
+function expectWizardResolutionCount(params: {
+  provider: ProviderPlugin;
+  config?: object;
+  env?: NodeJS.ProcessEnv;
+  expectedCount: number;
+}) {
+  setResolvedProviders(params.provider);
+  resolveProviderWizardOptions(
+    createWizardRuntimeParams({
+      config: params.config,
+      env: params.env,
+    }),
+  );
+  resolveProviderWizardOptions(
+    createWizardRuntimeParams({
+      config: params.config,
+      env: params.env,
+    }),
+  );
+  expectProviderResolutionCall({
+    config: params.config,
+    env: params.env,
+    count: params.expectedCount,
+  });
+}
+
 function expectProviderResolutionCall(params?: {
   config?: object;
   env?: NodeJS.ProcessEnv;
@@ -110,21 +136,6 @@ function expectProviderResolutionCall(params?: {
 
 function setResolvedProviders(...providers: ProviderPlugin[]) {
   resolvePluginProviders.mockReturnValue(providers);
-}
-
-function resolveWizardOptionsTwice(params: {
-  config?: object;
-  env: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-}) {
-  const runtimeParams = createWizardRuntimeParams(params);
-  resolveProviderWizardOptions(runtimeParams);
-  resolveProviderWizardOptions(runtimeParams);
-}
-
-function expectWizardProviderCacheMiss(params: { config?: object; env: NodeJS.ProcessEnv }) {
-  resolveWizardOptionsTwice(params);
-  expectProviderResolutionCall({ ...params, count: 2 });
 }
 
 function expectSingleWizardChoice(params: {
@@ -363,11 +374,12 @@ describe("provider wizard boundaries", () => {
       }),
     },
   ] as const)("$name", ({ env }) => {
-    const provider = createSglangSetupProvider();
-    const config = createSglangConfig();
-    setResolvedProviders(provider);
-
-    expectWizardProviderCacheMiss({ config, env });
+    expectWizardResolutionCount({
+      provider: createSglangSetupProvider(),
+      config: createSglangConfig(),
+      env,
+      expectedCount: 2,
+    });
   });
 
   it("expires provider-wizard memoization after the shortest plugin cache ttl", () => {

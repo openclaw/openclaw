@@ -202,6 +202,47 @@ function expectSnapshotMemoization(params: {
   expectLoaderCallCount(params.expectedLoaderCalls);
 }
 
+function expectAutoEnabledWebSearchLoad(params: {
+  rawConfig: { plugins?: Record<string, unknown> };
+  expectedAllow: readonly string[];
+}) {
+  expect(applyPluginAutoEnableSpy).toHaveBeenCalledWith({
+    config: params.rawConfig,
+    env: createWebSearchEnv(),
+  });
+  expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      config: expect.objectContaining({
+        plugins: expect.objectContaining({
+          allow: expect.arrayContaining([...params.expectedAllow]),
+        }),
+      }),
+    }),
+  );
+}
+
+function expectSnapshotLoaderCalls(params: {
+  config: { plugins?: Record<string, unknown> };
+  env: NodeJS.ProcessEnv;
+  mutate: () => void;
+  expectedLoaderCalls: number;
+}) {
+  resolvePluginWebSearchProviders(
+    createSnapshotParams({
+      config: params.config,
+      env: params.env,
+    }),
+  );
+  params.mutate();
+  resolvePluginWebSearchProviders(
+    createSnapshotParams({
+      config: params.config,
+      env: params.env,
+    }),
+  );
+  expectLoaderCallCount(params.expectedLoaderCalls);
+}
+
 describe("resolvePluginWebSearchProviders", () => {
   beforeAll(async () => {
     ({ createEmptyPluginRegistry } = await import("./registry.js"));
@@ -272,19 +313,10 @@ describe("resolvePluginWebSearchProviders", () => {
 
     resolvePluginWebSearchProviders(createSnapshotParams({ config: rawConfig }));
 
-    expect(applyPluginAutoEnableSpy).toHaveBeenCalledWith({
-      config: rawConfig,
-      env: createWebSearchEnv(),
+    expectAutoEnabledWebSearchLoad({
+      rawConfig,
+      expectedAllow: ["brave", "perplexity"],
     });
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: expect.arrayContaining(["brave", "perplexity"]),
-          }),
-        }),
-      }),
-    );
   });
 
   it("scopes plugin loading to manifest-declared web-search candidates", () => {
@@ -301,16 +333,29 @@ describe("resolvePluginWebSearchProviders", () => {
     });
   });
 
-  it("invalidates the snapshot cache when config or env contents change in place", () => {
+  it.each([
+    {
+      name: "invalidates the snapshot cache when config contents change in place",
+      mutate: (config: { plugins?: Record<string, unknown> }, _env: NodeJS.ProcessEnv) => {
+        config.plugins = { allow: ["perplexity"] };
+      },
+    },
+    {
+      name: "invalidates the snapshot cache when env contents change in place",
+      mutate: (_config: { plugins?: Record<string, unknown> }, env: NodeJS.ProcessEnv) => {
+        env.OPENCLAW_HOME = "/tmp/openclaw-home-b";
+      },
+    },
+  ] as const)("$name", ({ mutate }) => {
     const config = createBraveAllowConfig();
     const env = createWebSearchEnv({ OPENCLAW_HOME: "/tmp/openclaw-home-a" });
 
-    resolvePluginWebSearchProviders(createSnapshotParams({ config, env }));
-    config.plugins.allow = ["perplexity"];
-    env.OPENCLAW_HOME = "/tmp/openclaw-home-b";
-    resolvePluginWebSearchProviders(createSnapshotParams({ config, env }));
-
-    expectLoaderCallCount(2);
+    expectSnapshotLoaderCalls({
+      config,
+      env,
+      mutate: () => mutate(config, env),
+      expectedLoaderCalls: 2,
+    });
   });
 
   it.each([
@@ -380,13 +425,14 @@ describe("resolvePluginWebSearchProviders", () => {
       OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "1000",
     });
 
-    resolvePluginWebSearchProviders(createSnapshotParams({ config, env }));
-
-    env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS = "5";
-
-    resolvePluginWebSearchProviders(createSnapshotParams({ config, env }));
-
-    expectLoaderCallCount(2);
+    expectSnapshotLoaderCalls({
+      config,
+      env,
+      mutate: () => {
+        env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS = "5";
+      },
+      expectedLoaderCalls: 2,
+    });
   });
 
   it("prefers the active plugin registry for runtime resolution", () => {

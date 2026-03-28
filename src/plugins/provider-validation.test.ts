@@ -67,6 +67,20 @@ function expectNormalizedProviderFixture(params: {
   return result;
 }
 
+function expectProviderNormalizationResult(params: {
+  provider: ProviderPlugin;
+  expectedProvider?: Record<string, unknown>;
+  expectedDiagnostics?: ReadonlyArray<{ level: PluginDiagnostic["level"]; message: string }>;
+  expectedDiagnosticText?: readonly string[];
+  assert?: (
+    provider: ReturnType<typeof normalizeRegisteredProvider>,
+    diagnostics: PluginDiagnostic[],
+  ) => void;
+}) {
+  const { diagnostics, provider } = expectNormalizedProviderFixture(params);
+  params.assert?.(provider, diagnostics);
+}
+
 describe("normalizeRegisteredProvider", () => {
   it.each([
     {
@@ -187,16 +201,12 @@ describe("normalizeRegisteredProvider", () => {
   ] as const)(
     "$name",
     ({ provider: inputProvider, expectedProvider, expectedDiagnostics, assert }) => {
-      const { diagnostics, provider } = expectNormalizedProviderFixture({
+      expectProviderNormalizationResult({
         provider: inputProvider,
         ...(expectedProvider ? { expectedProvider } : {}),
         ...(expectedDiagnostics ? { expectedDiagnostics } : {}),
+        ...(assert ? { assert } : {}),
       });
-
-      if (assert) {
-        assert(provider, diagnostics);
-        return;
-      }
     },
   );
 
