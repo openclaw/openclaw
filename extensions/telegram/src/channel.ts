@@ -730,13 +730,16 @@ export const telegramPlugin = createChatChannelPlugin({
       idLabel: "telegramUserId",
       message: PAIRING_APPROVED_MESSAGE,
       normalizeAllowEntry: createPairingPrefixStripper(/^(telegram|tg):/i),
-      notify: async ({ cfg, id, message }) => {
-        const { token } = getTelegramRuntime().channel.telegram.resolveTelegramToken(cfg);
+      notify: async ({ cfg, id, message, accountId }) => {
+        const { token } = getTelegramRuntime().channel.telegram.resolveTelegramToken(cfg, {
+          accountId,
+        });
         if (!token) {
           throw new Error("telegram token not configured");
         }
         await getTelegramRuntime().channel.telegram.sendMessageTelegram(id, message, {
           token,
+          accountId,
         });
       },
     },
