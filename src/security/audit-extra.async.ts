@@ -1344,7 +1344,7 @@ export async function collectSkillIntegrityFindings(params: {
     try {
       const results = await verifyAllSkillIntegrity({
         workspaceDir,
-        skillRootDir: workspaceDir,
+        skillRootDir: path.join(workspaceDir, "skills"),
       });
       for (const result of results) {
         if (result.status === "missing_hash") {
