@@ -13,6 +13,7 @@ import {
   clearPluginLoaderCache,
   getCompatibleActivePluginRegistry,
   loadOpenClawPlugins,
+  resolveRuntimePluginRegistry,
   resolvePluginLoadCacheContext,
 } from "./loader.js";
 import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
@@ -3591,6 +3592,31 @@ describe("getCompatibleActivePluginRegistry", () => {
     setActivePluginRegistry(registry, "startup-registry");
 
     expect(getCompatibleActivePluginRegistry()).toBe(registry);
+  });
+});
+
+describe("resolveRuntimePluginRegistry", () => {
+  it("reuses the compatible active registry before attempting a fresh load", () => {
+    const registry = createEmptyPluginRegistry();
+    const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+    };
+    const { cacheKey } = resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, cacheKey);
+
+    expect(resolveRuntimePluginRegistry(loadOptions)).toBe(registry);
+  });
+
+  it("falls back to the current active runtime when no explicit load context is provided", () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry, "startup-registry");
+
+    expect(resolveRuntimePluginRegistry()).toBe(registry);
   });
 });
 

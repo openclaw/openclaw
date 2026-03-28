@@ -8,13 +8,11 @@ type MockRegistryToolEntry = {
 };
 
 const loadOpenClawPluginsMock = vi.fn();
-const getCompatibleActivePluginRegistryMock = vi.fn();
+const resolveRuntimePluginRegistryMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 
 vi.mock("./loader.js", () => ({
-  loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
-  getCompatibleActivePluginRegistry: (params: unknown) =>
-    getCompatibleActivePluginRegistryMock(params),
+  resolveRuntimePluginRegistry: (params: unknown) => resolveRuntimePluginRegistryMock(params),
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -137,8 +135,10 @@ describe("resolvePluginTools optional tools", () => {
   beforeEach(async () => {
     vi.resetModules();
     loadOpenClawPluginsMock.mockClear();
-    getCompatibleActivePluginRegistryMock.mockReset();
-    getCompatibleActivePluginRegistryMock.mockReturnValue(undefined);
+    resolveRuntimePluginRegistryMock.mockReset();
+    resolveRuntimePluginRegistryMock.mockImplementation((params) =>
+      loadOpenClawPluginsMock(params),
+    );
     applyPluginAutoEnableMock.mockReset();
     applyPluginAutoEnableMock.mockImplementation(({ config }: { config: unknown }) => ({
       config,
@@ -317,7 +317,7 @@ describe("resolvePluginTools optional tools", () => {
       ],
       diagnostics: [],
     };
-    getCompatibleActivePluginRegistryMock.mockReturnValue(activeRegistry);
+    resolveRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
 
     const tools = resolvePluginTools(
       createResolveToolsParams({

@@ -3,7 +3,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
-import { getCompatibleActivePluginRegistry, loadOpenClawPlugins } from "./loader.js";
+import { resolveRuntimePluginRegistry } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
@@ -79,8 +79,10 @@ export function resolvePluginTools(params: {
     env,
     logger: createPluginLoaderLogger(log),
   };
-  const registry =
-    getCompatibleActivePluginRegistry(loadOptions) ?? loadOpenClawPlugins(loadOptions);
+  const registry = resolveRuntimePluginRegistry(loadOptions);
+  if (!registry) {
+    return [];
+  }
 
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
