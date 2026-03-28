@@ -1116,6 +1116,23 @@ function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyP
   );
 }
 
+function combineNonStreamingReplyParts(parts: string[]): string {
+  let combined = "";
+  for (const part of parts) {
+    if (!part.trim()) {
+      continue;
+    }
+    if (!combined) {
+      combined = part;
+      continue;
+    }
+    const needsSeparator = !combined.endsWith("\n") && !part.startsWith("\n");
+    combined += needsSeparator ? "\n\n" : "";
+    combined += part;
+  }
+  return combined.replace(/^\n+/, "").replace(/\n+$/, "");
+}
+
 function broadcastSideResult(params: {
   context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
   payload: SideResultPayload;
@@ -1692,13 +1709,13 @@ export const chatHandlers: GatewayRequestHandlers = {
                 sessionKey,
               });
             } else {
-              const combinedReply = deliveredReplies
-                .filter((entry) => entry.kind === "final")
-                .map((entry) => entry.payload)
-                .map((part) => part.text?.trim() ?? "")
-                .filter(Boolean)
-                .join("\n\n")
-                .trim();
+              const combinedReply = combineNonStreamingReplyParts(
+                deliveredReplies
+                  .filter((entry) => entry.kind === "final")
+                  .map((entry) =>
+                    typeof entry.payload.text === "string" ? entry.payload.text : "",
+                  ),
+              );
               let message: Record<string, unknown> | undefined;
               if (combinedReply) {
                 const { storePath: latestStorePath, entry: latestEntry } =
