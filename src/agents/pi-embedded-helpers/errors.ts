@@ -13,8 +13,8 @@ export {
   isCloudflareOrHtmlErrorPage,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
 import { stableStringify } from "../stable-stringify.js";
-import { formatEffectiveSandboxToolPolicyBlockedMessage } from "../tool-policy-sandbox.js";
 import {
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
@@ -67,26 +67,35 @@ function extractRequestId(raw: string): string | undefined {
   return match?.[1];
 }
 
+// Strip control characters and escape sequences that could corrupt single-line log output.
+function sanitizeContextValue(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[\x00-\x1f\x7f]|\x1b\][^]*?[\x07\x1b\\]/g, "").trim();
+}
+
 function buildTransientErrorContext(raw: string, opts?: TransientErrorOpts): string {
   const parts: string[] = [];
   if (opts?.provider || opts?.model) {
-    const providerModel = [opts.provider, opts.model].filter(Boolean).join("/");
+    const providerModel = [opts.provider, opts.model]
+      .filter(Boolean)
+      .map((s) => sanitizeContextValue(s!))
+      .join("/");
     if (providerModel) {
       parts.push(providerModel);
     }
   }
   if (opts?.profileId) {
-    parts.push(`profile=${opts.profileId}`);
+    parts.push(`profile=${sanitizeContextValue(opts.profileId)}`);
   }
   if (opts?.trigger) {
-    parts.push(`trigger=${opts.trigger}`);
+    parts.push(`trigger=${sanitizeContextValue(opts.trigger)}`);
   }
   if (opts?.sessionKey) {
-    parts.push(`session=${opts.sessionKey}`);
+    parts.push(`session=${sanitizeContextValue(opts.sessionKey)}`);
   }
   const requestId = extractRequestId(raw);
   if (requestId) {
-    parts.push(`req=${requestId}`);
+    parts.push(`req=${sanitizeContextValue(requestId)}`);
   }
   return parts.length > 0 ? ` [${parts.join(", ")}]` : "";
 }
@@ -97,26 +106,47 @@ function formatRateLimitOrOverloadedErrorCopy(
 ): string | undefined {
   const ctx = buildTransientErrorContext(raw, opts);
   if (isRateLimitErrorMessage(raw)) {
-    return `⚠️ API rate limit reached. Please try again later.${ctx} Tip: add a fallback model or switch to a higher-quota API key.`;
+    return `⚠️ API rate limit reached. Please try again later.${ctx}`;
   }
   if (isOverloadedErrorMessage(raw)) {
-    return `⚠️ The AI service is temporarily overloaded. Please try again in a moment.${ctx} Tip: add a fallback model to avoid waiting (see model fallback config).`;
+    return `⚠️ The AI service is temporarily overloaded. Please try again in a moment.${ctx}`;
   }
   return undefined;
 }
 
-function formatTransportErrorCopy(raw: string): string | undefined {
+function extractRawErrorReason(raw: string): string | undefined {
+  // Pull the most useful short clause from a raw Node/fetch error string.
+  // e.g. "TypeError: fetch failed" → undefined (too generic)
+  // e.g. "FetchError: request to https://api.anthropic.com failed, reason: connect ECONNREFUSED 127.0.0.1:443" → "connect ECONNREFUSED 127.0.0.1:443"
+  const reasonMatch = raw.match(/reason:\s*(.{4,80}?)(?:\s*$|\n)/i);
+  if (reasonMatch?.[1]) {
+    return reasonMatch[1].trim();
+  }
+  // Surface the cause clause from "Error: ... caused by: ..."
+  const causedByMatch = raw.match(/caused by[:\s]+(.{4,80}?)(?:\s*$|\n)/i);
+  if (causedByMatch?.[1]) {
+    return causedByMatch[1].trim();
+  }
+  return undefined;
+}
+
+function formatTransportErrorCopy(raw: string, opts?: TransientErrorOpts): string | undefined {
   if (!raw) {
     return undefined;
   }
   const lower = raw.toLowerCase();
+  const ctx = buildTransientErrorContext(raw, opts);
 
   if (
     /\beconnrefused\b/i.test(raw) ||
     lower.includes("connection refused") ||
     lower.includes("actively refused")
   ) {
-    return "LLM request failed: connection refused by the provider endpoint.";
+    return (
+      `LLM request failed: the provider API refused the connection.${ctx} ` +
+      `This usually means the provider endpoint is down or a local proxy/firewall is blocking it. ` +
+      `Check your internet connection and provider status page, or add a fallback model.`
+    );
   }
 
   if (
@@ -125,7 +155,11 @@ function formatTransportErrorCopy(raw: string): string | undefined {
     lower.includes("connection reset") ||
     lower.includes("connection aborted")
   ) {
-    return "LLM request failed: network connection was interrupted.";
+    return (
+      `LLM request failed: the connection to the provider was dropped mid-request.${ctx} ` +
+      `Often a transient network hiccup — retry usually works. ` +
+      `If it persists, check your network stability or add a fallback model.`
+    );
   }
 
   if (
@@ -134,7 +168,10 @@ function formatTransportErrorCopy(raw: string): string | undefined {
     lower.includes("no such host") ||
     lower.includes("dns")
   ) {
-    return "LLM request failed: DNS lookup for the provider endpoint failed.";
+    return (
+      `LLM request failed: DNS lookup for the provider endpoint failed.${ctx} ` +
+      `The provider hostname could not be resolved — check your internet/DNS, or verify the API base URL in your config.`
+    );
   }
 
   if (
@@ -142,7 +179,10 @@ function formatTransportErrorCopy(raw: string): string | undefined {
     lower.includes("network is unreachable") ||
     lower.includes("host is unreachable")
   ) {
-    return "LLM request failed: the provider endpoint is unreachable from this host.";
+    return (
+      `LLM request failed: the provider endpoint is unreachable.${ctx} ` +
+      `This host may be offline or the route is blocked. Check your network connection.`
+    );
   }
 
   if (
@@ -150,7 +190,13 @@ function formatTransportErrorCopy(raw: string): string | undefined {
     lower.includes("connection error") ||
     lower.includes("network request failed")
   ) {
-    return "LLM request failed: network connection error.";
+    const reason = extractRawErrorReason(raw);
+    const reasonSuffix = reason ? ` (${reason})` : "";
+    return (
+      `LLM request failed: network connection error${reasonSuffix}.${ctx} ` +
+      `Could not reach the provider — check your internet connection or provider status. ` +
+      `Adding a fallback model can help ride out transient outages.`
+    );
   }
 
   return undefined;
@@ -610,7 +656,7 @@ export function formatAssistantErrorText(
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
   if (unknownTool?.[1]) {
-    const rewritten = formatEffectiveSandboxToolPolicyBlockedMessage({
+    const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
       sessionKey: opts?.sessionKey,
       toolName: unknownTool[1],
@@ -670,7 +716,13 @@ export function formatAssistantErrorText(
     return transientCopy;
   }
 
-  const transportCopy = formatTransportErrorCopy(raw);
+  const transportCopy = formatTransportErrorCopy(raw, {
+    provider: opts?.provider,
+    model: opts?.model ?? msg.model,
+    profileId: opts?.profileId,
+    trigger: opts?.trigger,
+    sessionKey: opts?.sessionKey,
+  });
   if (transportCopy) {
     return transportCopy;
   }
@@ -783,34 +835,14 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
   return isBillingErrorMessage(msg.errorMessage ?? "");
 }
 
-// Transient signal patterns for api_error payloads. Only treat an api_error as
-// retryable when the message text itself indicates a transient server issue.
-// Non-transient api_error payloads (context overflow, validation/schema errors)
-// must NOT be classified as timeout.
-const API_ERROR_TRANSIENT_SIGNALS_RE =
-  /internal server error|overload|temporarily unavailable|service unavailable|unknown error|server error|bad gateway|gateway timeout|upstream error|backend error|try again later|temporarily.+unable/i;
-
 function isJsonApiInternalServerError(raw: string): boolean {
   if (!raw) {
     return false;
   }
   const value = raw.toLowerCase();
-  // Providers wrap transient 5xx errors in JSON payloads like:
+  // Anthropic often wraps transient 500s in JSON payloads like:
   // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
-  // Non-standard providers (e.g. MiniMax) may use different message text:
-  // {"type":"api_error","message":"unknown error, 520 (1000)"}
-  if (!value.includes('"type":"api_error"')) {
-    return false;
-  }
-  // Billing and auth errors can also carry "type":"api_error". Exclude them so
-  // the more specific classifiers further down the chain handle them correctly.
-  if (isBillingErrorMessage(raw) || isAuthErrorMessage(raw) || isAuthPermanentErrorMessage(raw)) {
-    return false;
-  }
-  // Only match when the message contains a transient signal. api_error payloads
-  // with non-transient messages (e.g. context overflow, schema validation) should
-  // fall through to more specific classifiers or remain unclassified.
-  return API_ERROR_TRANSIENT_SIGNALS_RE.test(raw);
+  return value.includes('"type":"api_error"') && value.includes("internal server error");
 }
 
 export function parseImageDimensionError(raw: string): {
@@ -963,26 +995,23 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     // Treat remaining transient 5xx provider failures as retryable transport issues.
     return "timeout";
   }
-  // Billing and auth classifiers run before the broad isJsonApiInternalServerError
-  // check so that provider errors like {"type":"api_error","message":"insufficient
-  // balance"} are correctly classified as "billing"/"auth" rather than "timeout".
-  if (isBillingErrorMessage(raw)) {
-    return "billing";
-  }
-  if (isAuthPermanentErrorMessage(raw)) {
-    return "auth_permanent";
-  }
-  if (isAuthErrorMessage(raw)) {
-    return "auth";
-  }
   if (isJsonApiInternalServerError(raw)) {
     return "timeout";
   }
   if (isCloudCodeAssistFormatError(raw)) {
     return "format";
   }
+  if (isBillingErrorMessage(raw)) {
+    return "billing";
+  }
   if (isTimeoutErrorMessage(raw)) {
     return "timeout";
+  }
+  if (isAuthPermanentErrorMessage(raw)) {
+    return "auth_permanent";
+  }
+  if (isAuthErrorMessage(raw)) {
+    return "auth";
   }
   return null;
 }
