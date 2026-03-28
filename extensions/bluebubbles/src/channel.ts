@@ -32,6 +32,7 @@ import { createBlueBubblesConversationBindingManager } from "./conversation-bind
 import {
   matchBlueBubblesAcpConversation,
   normalizeBlueBubblesAcpConversationId,
+  resolveBlueBubblesConversationIdFromTarget,
 } from "./conversation-id.js";
 import {
   resolveBlueBubblesGroupRequireMention,
@@ -108,6 +109,13 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
             bindingConversationId: compiledBinding.conversationId,
             conversationId,
           }),
+        resolveCommandConversation: ({ originatingTo, commandTo, fallbackTo }) => {
+          const conversationId =
+            resolveBlueBubblesConversationIdFromTarget(originatingTo ?? "") ??
+            resolveBlueBubblesConversationIdFromTarget(commandTo ?? "") ??
+            resolveBlueBubblesConversationIdFromTarget(fallbackTo ?? "");
+          return conversationId ? { conversationId } : null;
+        },
       },
       messaging: {
         normalizeTarget: normalizeBlueBubblesMessagingTarget,
