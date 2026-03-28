@@ -10,7 +10,7 @@ import {
   withTempEnv,
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
-import type { ProviderConfig as ModelsProviderConfig } from "./models-config.providers.js";
+import type { ProviderConfig as ModelsProviderConfig } from "./models-config.providers.secrets.js";
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   syncExternalCliCredentials: () => false,
