@@ -338,8 +338,8 @@ export async function runCommandWithTimeout(
       clearTimeout(timer);
       clearNoOutputTimer();
       clearCloseFallbackTimer();
-      const resolvedCode = childExitState?.code ?? code;
-      const resolvedSignal = childExitState?.signal ?? signal;
+      const resolvedCode = childExitState?.code ?? code ?? child.exitCode ?? null;
+      const resolvedSignal = childExitState?.signal ?? signal ?? child.signalCode ?? null;
       const termination = noOutputTimedOut
         ? "no-output-timeout"
         : timedOut
