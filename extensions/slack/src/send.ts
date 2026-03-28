@@ -376,18 +376,18 @@ export async function sendMessageSlack(
       allTables.push(...result.tables);
     }
     if (allTables.length > 0) {
-      tableAttachments = markdownTablesToBlockKitAttachment(allTables);
-      // Slack only allows one table block per message. Render any
-      // additional tables as code blocks in the text stream.
-      // When there's no surrounding text, also include the first
-      // table's code representation so the text field (used for
-      // notifications/accessibility) has complete content.
-      if (allTables.length > 1) {
-        const tablesToRender = chunks.length === 0 ? allTables : allTables.slice(1);
-        const extraTablesText = tablesToRender
+      if (allTables.length === 1) {
+        // Single table: use Block Kit for the prettiest rendering.
+        tableAttachments = markdownTablesToBlockKitAttachment(allTables);
+      } else {
+        // Multiple tables: Slack only allows one table block per
+        // message, and mixing Block Kit (pinned to bottom) with
+        // code blocks (inline) produces confusing ordering.
+        // Render ALL tables as aligned code blocks for consistency.
+        const allTablesText = allTables
           .map((t) => "```\n" + tableFallbackText([t]) + "\n```")
           .join("\n\n");
-        chunks.push(extraTablesText);
+        chunks.push(allTablesText);
       }
     }
   } else {
