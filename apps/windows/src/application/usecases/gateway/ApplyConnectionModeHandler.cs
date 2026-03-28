@@ -55,7 +55,8 @@ internal sealed class ApplyConnectionModeHandler : IRequestHandler<ApplyConnecti
                 // Local gateway — stop remote tunnel, start (or keep) local process, then reconnect
                 await _tunnel.DisconnectAsync(ct);
                 await DisconnectIfNeededAsync("mode_changed_local", ct);
-                if (GatewayAutostartPolicy.ShouldStartGateway(ConnectionMode.Local, settings.IsPaused))
+                // IsPaused is remote-only — a paused remote session must not suppress the local gateway start
+                if (GatewayAutostartPolicy.ShouldStartGateway(ConnectionMode.Local, paused: false))
                 {
                     _processManager.SetActive(true);
                     await _processManager.WaitForGatewayReadyAsync(
@@ -100,21 +101,20 @@ internal sealed class ApplyConnectionModeHandler : IRequestHandler<ApplyConnecti
 
     private static int ResolveRemotePort(AppSettings settings, Dictionary<string, object?> root)
     {
-        // Config file is authoritative; settings.RemoteUrl is the fallback for UI-only setups.
+        // settings.RemoteUrl wins: this is the URL the user just saved in the UI.
+        // Config file is the fallback for setups where the URL lives only in openclaw.json.
         Uri? url = null;
-        if (root.GetValueOrDefault("gateway") is Dictionary<string, object?> gw &&
+        var raw = settings.RemoteUrl?.Trim();
+        if (!string.IsNullOrEmpty(raw))
+            Uri.TryCreate(raw, UriKind.Absolute, out url);
+        if (url is null &&
+            root.GetValueOrDefault("gateway") is Dictionary<string, object?> gw &&
             gw.GetValueOrDefault("remote") is Dictionary<string, object?> rem &&
-            rem.GetValueOrDefault("url") is string rawUrl)
+            rem.GetValueOrDefault("url") is string rawConfig)
         {
-            var trimmed = rawUrl.Trim();
+            var trimmed = rawConfig.Trim();
             if (!string.IsNullOrEmpty(trimmed))
                 Uri.TryCreate(trimmed, UriKind.Absolute, out url);
-        }
-        if (url is null)
-        {
-            var raw = settings.RemoteUrl?.Trim();
-            if (!string.IsNullOrEmpty(raw))
-                Uri.TryCreate(raw, UriKind.Absolute, out url);
         }
         if (url is not null)
         {

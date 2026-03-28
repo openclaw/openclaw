@@ -67,26 +67,16 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
         {
             if (_connection.State == GatewayConnectionState.Connected)
             {
-                var fromGateway = await TryLoadFromGatewayAsync(ct);
-                if (fromGateway is not null)
-                {
-                    // Gateway config schema lacks Windows-only fields — restore from local file.
-                    try
-                    {
-                        var local = await LoadLocalAsync(ct);
-                        if (!string.IsNullOrEmpty(local.RemoteToken))    fromGateway.SetRemoteToken(local.RemoteToken);
-                        if (!string.IsNullOrEmpty(local.RemotePassword)) fromGateway.SetRemotePassword(local.RemotePassword);
-                        // IsPaused is persisted locally so pause survives restart in remote mode.
-                        if (local.IsPaused) fromGateway.SetIsPaused(true);
-                    }
-                    catch { }
-                    _cachedConnectionMode = fromGateway.ConnectionMode;
-                    return fromGateway;
-                }
+                // Refresh hash for config.set conflict detection. The config payload uses
+                // the OpenClaw gateway schema (agents/auth/commands/gateway), not the
+                // AppSettings schema — deserializing it produces all-defaults and would
+                // overwrite the user's remote configuration on the next SaveAsync.
+                // Settings are always loaded from the local file.
+                await TryLoadFromGatewayAsync(ct);
+                var connected = await LoadLocalAsync(ct);
+                _cachedConnectionMode = connected.ConnectionMode;
+                return connected;
             }
-            // Fall back to local file so persisted settings (mode, endpoint, etc.) are
-            // preserved across restarts — returning defaults would wipe them and prevent
-            // the reconnect coordinator from recovering the remote configuration.
             _logger.LogWarning("Remote mode: gateway unavailable on load, falling back to local file");
             return await LoadLocalAsync(ct);
         }
@@ -120,28 +110,19 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
         await SaveLocalAsync(settings, ct);
     }
 
-    private async Task<AppSettings?> TryLoadFromGatewayAsync(CancellationToken ct)
+    private async Task TryLoadFromGatewayAsync(CancellationToken ct)
     {
         try
         {
             var data = await _gateway.ConfigGetAsync(ConfigGetTimeoutMs, ct);
             using var doc = JsonDocument.Parse(data);
-
-            // Cache hash for subsequent save — prevents concurrent-write conflicts on gateway
+            // Cache hash for subsequent config.set — enables conflict detection on save
             if (doc.RootElement.TryGetProperty("hash", out var hashEl))
                 _lastHash = hashEl.GetString();
-
-            if (!doc.RootElement.TryGetProperty("config", out var configEl))
-                return null;
-
-            var configBytes = JsonSerializer.SerializeToUtf8Bytes(configEl);
-            var dto = JsonSerializer.Deserialize<AppSettingsDto>(configBytes, JsonOptions);
-            return dto is null ? null : MapFromDto(dto);
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "config.get from gateway failed");
-            return null;
         }
     }
 
@@ -169,7 +150,7 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
         await _gateway.RequestRawAsync("config.set", parameters, ConfigSetTimeoutMs, ct);
 
         // Reload to refresh the cached hash — failure here is non-critical
-        _ = await TryLoadFromGatewayAsync(ct);
+        await TryLoadFromGatewayAsync(ct);
     }
 
     private async Task<AppSettings> LoadLocalAsync(CancellationToken ct)
