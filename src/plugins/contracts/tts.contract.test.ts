@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { __testing as pluginLoaderTesting } from "../../plugins/loader.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { SpeechProviderPlugin } from "../../plugins/types.js";
@@ -317,7 +318,8 @@ describe("tts", () => {
       { pluginId: "microsoft", provider: buildTestMicrosoftSpeechProvider(), source: "test" },
       { pluginId: "elevenlabs", provider: buildTestElevenLabsSpeechProvider(), source: "test" },
     ];
-    setActivePluginRegistry(registry, "tts-test");
+    const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
+    setActivePluginRegistry(registry, cacheKey);
     vi.clearAllMocks();
     vi.mocked(completeSimple).mockResolvedValue(
       mockAssistantMessage([{ type: "text", text: "Summary" }]),
@@ -627,11 +629,6 @@ describe("tts", () => {
   });
 
   describe("getTtsProvider", () => {
-    const baseCfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-      messages: { tts: {} },
-    };
-
     it.each([
       {
         name: "openai key available",
@@ -665,7 +662,22 @@ describe("tts", () => {
       },
     ] as const)("selects provider based on available API keys: $name", (testCase) => {
       withEnv(testCase.env, () => {
-        const config = resolveTtsConfig(baseCfg);
+        const config = {
+          auto: "off",
+          mode: "final",
+          provider: "openai",
+          providerSource: "default",
+          summaryModel: undefined,
+          modelOverrides: resolveModelOverridePolicy(undefined),
+          providerConfigs: {
+            openai: {},
+            microsoft: {},
+            elevenlabs: {},
+          },
+          prefsPath: undefined,
+          maxTextLength: 4000,
+          timeoutMs: 30_000,
+        } as ReturnType<typeof resolveTtsConfig>;
         const provider = getTtsProvider(config, testCase.prefsPath);
         expect(provider).toBe(testCase.expected);
       });
