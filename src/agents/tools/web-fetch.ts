@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import { hasEnvHttpProxyConfigured } from "../../infra/net/proxy-env.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchFirecrawlMetadata } from "../../secrets/runtime-web-tools.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
@@ -535,10 +536,17 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
   try {
+    const useProxy = hasEnvHttpProxyConfigured();
     const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+      // When a proxy is configured (e.g. Clash fake-ip mode), enable env proxy
+      // routing and allow the RFC 2544 benchmark range (198.18.0.0/15) in the
+      // SSRF guard. Without useEnvProxy, requests stay in STRICT mode and
+      // direct-connect to the fake-ip address instead of going through the proxy.
+      useEnvProxy: useProxy,
+      policy: useProxy ? { allowRfc2544BenchmarkRange: true } : undefined,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
