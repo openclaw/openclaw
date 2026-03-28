@@ -1,6 +1,7 @@
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
+  assertPlaywrightTabTargetAllowed,
   readBody,
   requirePwAi,
   resolveTargetIdFromBody,
@@ -46,6 +47,13 @@ export function registerBrowserAgentActDownloadRoutes(
         if (!pw) {
           return;
         }
+        await assertPlaywrightTabTargetAllowed({
+          ctx,
+          pw,
+          cdpUrl,
+          targetId: tab.targetId,
+          url: tab.url,
+        });
         await ensureOutputRootDir(DEFAULT_DOWNLOAD_DIR);
         let downloadPath: string | undefined;
         if (out.trim()) {
@@ -100,6 +108,13 @@ export function registerBrowserAgentActDownloadRoutes(
         if (!pw) {
           return;
         }
+        await assertPlaywrightTabTargetAllowed({
+          ctx,
+          pw,
+          cdpUrl,
+          targetId: tab.targetId,
+          url: tab.url,
+        });
         await ensureOutputRootDir(DEFAULT_DOWNLOAD_DIR);
         const downloadPath = await resolveWritableOutputPathOrRespond({
           res,

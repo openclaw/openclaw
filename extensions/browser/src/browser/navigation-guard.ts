@@ -30,6 +30,36 @@ export type BrowserNavigationRequestLike = {
   redirectedFrom(): BrowserNavigationRequestLike | null;
 };
 
+export type BrowserNavigationRouteLike = {
+  abort(): Promise<void> | void;
+  continue(): Promise<void> | void;
+};
+
+export type BrowserNavigationInterceptRequestLike = {
+  url(): string;
+  isNavigationRequest?(): boolean;
+  frame?(): {
+    parentFrame?(): unknown;
+  } | null;
+};
+
+export type BrowserNavigationRouteInstallerLike = {
+  route(
+    matcher: string,
+    handler: (
+      route: BrowserNavigationRouteLike,
+      request: BrowserNavigationInterceptRequestLike,
+    ) => Promise<void> | void,
+  ): Promise<void> | void;
+  unroute(
+    matcher: string,
+    handler: (
+      route: BrowserNavigationRouteLike,
+      request: BrowserNavigationInterceptRequestLike,
+    ) => Promise<void> | void,
+  ): Promise<void> | void;
+};
+
 export function withBrowserNavigationPolicy(
   ssrfPolicy?: SsrFPolicy,
 ): BrowserNavigationPolicyOptions {
@@ -130,5 +160,58 @@ export async function assertBrowserNavigationRedirectChainAllowed(
       lookupFn: opts.lookupFn,
       ssrfPolicy: opts.ssrfPolicy,
     });
+  }
+}
+
+function isMainFrameNavigationRequest(request: BrowserNavigationInterceptRequestLike): boolean {
+  if (request.isNavigationRequest?.() !== true) {
+    return false;
+  }
+  const frame = request.frame?.();
+  return frame?.parentFrame?.() == null;
+}
+
+export async function withRequestTimeBrowserNavigationGuard<T>(
+  opts: {
+    page: BrowserNavigationRouteInstallerLike;
+    navigate: () => Promise<T>;
+    lookupFn?: LookupFn;
+  } & BrowserNavigationPolicyOptions,
+): Promise<T> {
+  let blockedError: unknown;
+  const handler = async (
+    route: BrowserNavigationRouteLike,
+    request: BrowserNavigationInterceptRequestLike,
+  ) => {
+    if (!isMainFrameNavigationRequest(request)) {
+      await route.continue();
+      return;
+    }
+    try {
+      await assertBrowserNavigationAllowed({
+        url: request.url(),
+        lookupFn: opts.lookupFn,
+        ssrfPolicy: opts.ssrfPolicy,
+      });
+      await route.continue();
+    } catch (err) {
+      // Record the policy error before awaiting route.abort() so callers still see the
+      // SSRF/URL failure even if navigate() resolves once Playwright aborts the request.
+      blockedError = err;
+      await route.abort();
+    }
+  };
+
+  await opts.page.route("**/*", handler);
+  try {
+    const result = await opts.navigate();
+    if (blockedError) {
+      throw blockedError;
+    }
+    return result;
+  } catch (err) {
+    throw blockedError ?? err;
+  } finally {
+    await opts.page.unroute("**/*", handler);
   }
 }

@@ -74,6 +74,7 @@ vi.mock("../../media/store.js", () => ({
 }));
 
 vi.mock("./agent.shared.js", () => ({
+  assertPlaywrightTabTargetAllowed: vi.fn(async () => {}),
   getPwAiModule: vi.fn(async () => null),
   handleRouteError: vi.fn(),
   readBody: vi.fn((req: BrowserRequest) => req.body ?? {}),

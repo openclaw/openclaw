@@ -10,6 +10,9 @@ const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl")
 
 function installBrowserMocks() {
   const pageOn = vi.fn();
+  const pageRoute = vi.fn(async () => {});
+  const pageUnroute = vi.fn(async () => {});
+  const pageClose = vi.fn(async () => {});
   const pageGoto = vi.fn<
     (...args: unknown[]) => Promise<null | { request: () => Record<string, unknown> }>
   >(async () => null);
@@ -38,6 +41,9 @@ function installBrowserMocks() {
 
   const page = {
     on: pageOn,
+    route: pageRoute,
+    unroute: pageUnroute,
+    close: pageClose,
     context: () => context,
     goto: pageGoto,
     title: pageTitle,
@@ -53,7 +59,7 @@ function installBrowserMocks() {
   connectOverCdpSpy.mockResolvedValue(browser);
   getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
-  return { pageGoto, browserClose };
+  return { pageClose, pageGoto, browserClose };
 }
 
 afterEach(async () => {
@@ -89,7 +95,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
   });
 
   it("blocks private intermediate redirect hops", async () => {
-    const { pageGoto } = installBrowserMocks();
+    const { pageClose, pageGoto } = installBrowserMocks();
     pageGoto.mockResolvedValueOnce({
       request: () => ({
         url: () => "https://93.184.216.34/final",
@@ -109,5 +115,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         url: "https://93.184.216.34/start",
       }),
     ).rejects.toBeInstanceOf(SsrFBlockedError);
+
+    expect(pageClose).toHaveBeenCalledTimes(1);
   });
 });

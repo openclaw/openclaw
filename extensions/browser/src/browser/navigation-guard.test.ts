@@ -6,6 +6,7 @@ import {
   assertBrowserNavigationResultAllowed,
   InvalidBrowserNavigationUrlError,
   requiresInspectableBrowserNavigationRedirects,
+  withRequestTimeBrowserNavigationGuard,
 } from "./navigation-guard.js";
 
 function createLookupFn(address: string): LookupFn {
@@ -202,5 +203,135 @@ describe("browser navigation guard", () => {
     expect(requiresInspectableBrowserNavigationRedirects({ allowPrivateNetwork: true })).toBe(
       false,
     );
+  });
+
+  it("blocks private main-frame redirect requests before continuation", async () => {
+    let handler:
+      | ((
+          route: { abort: () => Promise<void>; continue: () => Promise<void> },
+          request: {
+            url: () => string;
+            isNavigationRequest: () => boolean;
+            frame: () => { parentFrame: () => null };
+          },
+        ) => Promise<void>)
+      | undefined;
+    const routeContinue = vi.fn(async () => {});
+    const routeAbort = vi.fn(async () => {});
+    const page = {
+      route: vi.fn(async (_matcher: string, nextHandler: typeof handler) => {
+        handler = nextHandler;
+      }),
+      unroute: vi.fn(async () => {}),
+    };
+
+    await expect(
+      withRequestTimeBrowserNavigationGuard({
+        page,
+        navigate: async () => {
+          await handler?.(
+            { abort: routeAbort, continue: routeContinue },
+            {
+              url: () => "https://93.184.216.34/start",
+              isNavigationRequest: () => true,
+              frame: () => ({ parentFrame: () => null }),
+            },
+          );
+          await handler?.(
+            { abort: routeAbort, continue: routeContinue },
+            {
+              url: () => "http://127.0.0.1:18080/internal-hop",
+              isNavigationRequest: () => true,
+              frame: () => ({ parentFrame: () => null }),
+            },
+          );
+          return "done";
+        },
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+
+    expect(routeContinue).toHaveBeenCalledTimes(1);
+    expect(routeAbort).toHaveBeenCalledTimes(1);
+    expect(page.unroute).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores non-navigation requests in the request-time guard", async () => {
+    let handler:
+      | ((
+          route: { abort: () => Promise<void>; continue: () => Promise<void> },
+          request: {
+            url: () => string;
+            isNavigationRequest: () => boolean;
+            frame: () => { parentFrame: () => null };
+          },
+        ) => Promise<void>)
+      | undefined;
+    const routeContinue = vi.fn(async () => {});
+    const routeAbort = vi.fn(async () => {});
+    const page = {
+      route: vi.fn(async (_matcher: string, nextHandler: typeof handler) => {
+        handler = nextHandler;
+      }),
+      unroute: vi.fn(async () => {}),
+    };
+
+    const result = await withRequestTimeBrowserNavigationGuard({
+      page,
+      navigate: async () => {
+        await handler?.(
+          { abort: routeAbort, continue: routeContinue },
+          {
+            url: () => "http://127.0.0.1:18080/internal-asset",
+            isNavigationRequest: () => false,
+            frame: () => ({ parentFrame: () => null }),
+          },
+        );
+        return "done";
+      },
+    });
+
+    expect(result).toBe("done");
+    expect(routeContinue).toHaveBeenCalledTimes(1);
+    expect(routeAbort).not.toHaveBeenCalled();
+  });
+
+  it("ignores child-frame navigation requests in the request-time guard", async () => {
+    let handler:
+      | ((
+          route: { abort: () => Promise<void>; continue: () => Promise<void> },
+          request: {
+            url: () => string;
+            isNavigationRequest: () => boolean;
+            frame: () => { parentFrame: () => Record<string, unknown> };
+          },
+        ) => Promise<void>)
+      | undefined;
+    const routeContinue = vi.fn(async () => {});
+    const routeAbort = vi.fn(async () => {});
+    const page = {
+      route: vi.fn(async (_matcher: string, nextHandler: typeof handler) => {
+        handler = nextHandler;
+      }),
+      unroute: vi.fn(async () => {}),
+    };
+
+    const result = await withRequestTimeBrowserNavigationGuard({
+      page,
+      navigate: async () => {
+        await handler?.(
+          { abort: routeAbort, continue: routeContinue },
+          {
+            url: () => "http://127.0.0.1:18080/iframe-hop",
+            isNavigationRequest: () => true,
+            frame: () => ({ parentFrame: () => ({}) }),
+          },
+        );
+        return "done";
+      },
+    });
+
+    expect(result).toBe("done");
+    expect(routeContinue).toHaveBeenCalledTimes(1);
+    expect(routeAbort).not.toHaveBeenCalled();
   });
 });

@@ -4,6 +4,7 @@ import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
+  withRequestTimeBrowserNavigationGuard,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
 import {
@@ -194,15 +195,24 @@ export async function navigateViaPlaywright(opts: {
     url,
     ...withBrowserNavigationPolicy(opts.ssrfPolicy),
   });
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy);
   const timeout = Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000));
   let page = await getPageForTargetId(opts);
   ensurePageState(page);
+  // Keep navigate() closed over the mutable `page` binding so the detached-frame retry
+  // reuses the refreshed page handle for both goto() and route/unroute. This must stay
+  // on `let page`; switching to a separate captured page handle would desync the retry.
   const navigate = async () => await page.goto(url, { timeout });
   let response;
   try {
-    response = await navigate();
+    response = await withRequestTimeBrowserNavigationGuard({
+      page,
+      ...navigationPolicy,
+      navigate,
+    });
   } catch (err) {
     if (!isRetryableNavigateError(err)) {
+      await page.close().catch(() => {});
       throw err;
     }
     // Extension relays can briefly drop CDP during renderer swaps/navigation.
@@ -214,18 +224,32 @@ export async function navigateViaPlaywright(opts: {
     }).catch(() => {});
     page = await getPageForTargetId(opts);
     ensurePageState(page);
-    response = await navigate();
+    try {
+      response = await withRequestTimeBrowserNavigationGuard({
+        page,
+        ...navigationPolicy,
+        navigate,
+      });
+    } catch (err) {
+      await page.close().catch(() => {});
+      throw err;
+    }
   }
-  await assertBrowserNavigationRedirectChainAllowed({
-    request: response?.request(),
-    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
-  });
-  const finalUrl = page.url();
-  await assertBrowserNavigationResultAllowed({
-    url: finalUrl,
-    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
-  });
-  return { url: finalUrl };
+  try {
+    await assertBrowserNavigationRedirectChainAllowed({
+      request: response?.request(),
+      ...navigationPolicy,
+    });
+    const finalUrl = page.url();
+    await assertBrowserNavigationResultAllowed({
+      url: finalUrl,
+      ...navigationPolicy,
+    });
+    return { url: finalUrl };
+  } catch (err) {
+    await page.close().catch(() => {});
+    throw err;
+  }
 }
 
 export async function resizeViewportViaPlaywright(opts: {
