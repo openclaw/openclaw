@@ -45,39 +45,87 @@ function resolveHomeRelativePath(input: string, homeDir: string): string {
   return path.resolve(trimmed);
 }
 
+function applyMissingEnvEntries(entries: Iterable<readonly [string, string]>): number {
+  let applied = 0;
+  for (const [key, value] of entries) {
+    if (!key || (process.env[key] ?? "") !== "") {
+      continue;
+    }
+    process.env[key] = value;
+    applied += 1;
+  }
+  return applied;
+}
+
+function parseProfileEnv(raw: string): Map<string, string> {
+  const parsed = new Map<string, string>();
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    const body = trimmed.startsWith("export ") ? trimmed.slice("export ".length).trim() : trimmed;
+    const eq = body.indexOf("=");
+    if (eq <= 0) {
+      continue;
+    }
+    const key = body.slice(0, eq).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      continue;
+    }
+    let value = body.slice(eq + 1).trim();
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1);
+    }
+    parsed.set(key, value);
+  }
+  return parsed;
+}
+
 function loadProfileEnv(homeDir = os.homedir()): void {
   const profilePath = path.join(homeDir, ".profile");
   if (!fs.existsSync(profilePath)) {
     return;
   }
-  try {
-    const output = execFileSync(
-      "/bin/bash",
-      ["-lc", `set -a; source "${profilePath}" >/dev/null 2>&1; env -0`],
-      { encoding: "utf8" },
-    );
-    const entries = output.split("\0");
-    let applied = 0;
-    for (const entry of entries) {
-      if (!entry) {
-        continue;
-      }
-      const idx = entry.indexOf("=");
-      if (idx <= 0) {
-        continue;
-      }
-      const key = entry.slice(0, idx);
-      if (!key || (process.env[key] ?? "") !== "") {
-        continue;
-      }
-      process.env[key] = entry.slice(idx + 1);
-      applied += 1;
+
+  let applied = 0;
+  if (process.platform !== "win32" && fs.existsSync("/bin/bash")) {
+    try {
+      const output = execFileSync(
+        "/bin/bash",
+        ["-lc", `set -a; source "${profilePath}" >/dev/null 2>&1; env -0`],
+        { encoding: "utf8" },
+      );
+      const entries = output
+        .split("\0")
+        .filter(Boolean)
+        .map((entry) => {
+          const idx = entry.indexOf("=");
+          return idx <= 0 ? null : ([entry.slice(0, idx), entry.slice(idx + 1)] as const);
+        })
+        .filter((entry): entry is readonly [string, string] => entry !== null);
+      applied = applyMissingEnvEntries(entries);
+    } catch {
+      // Fall back to direct .profile parsing when no POSIX shell is available.
     }
-    if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
-      console.log(`[live] loaded ${applied} env vars from ~/.profile`);
+  }
+
+  if (applied === 0) {
+    try {
+      applied = applyMissingEnvEntries(
+        parseProfileEnv(fs.readFileSync(profilePath, "utf8")).entries(),
+      );
+    } catch {
+      // ignore profile load failures
     }
-  } catch {
-    // ignore profile load failures
+  }
+
+  if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
+    console.log(`[live] loaded ${applied} env vars from ~/.profile`);
   }
 }
 
