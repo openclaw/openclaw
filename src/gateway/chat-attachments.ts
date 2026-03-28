@@ -50,7 +50,7 @@ const MIME_TO_EXT: Record<string, string> = {
   "image/tiff": ".tiff",
 };
 
-// Fix #1: Moved outside loop and use a Set for O(1) lookup instead of
+// Moved outside the loop and uses a Set for O(1) lookup instead of
 // rebuilding an array on every attachment iteration.
 const SUPPORTED_OFFLOAD_MIMES = new Set([
   "image/jpeg",
@@ -72,11 +72,26 @@ function isImageMime(mime?: string): boolean {
   return typeof mime === "string" && mime.startsWith("image/");
 }
 
+// Threshold above which we switch from a full O(n) scan to a sampled
+// spot-check. Base64 of a 5 MB image is ~6.7 M chars; running a full regex
+// over the entire string blocks the event loop for a measurable duration per
+// attachment, especially when multiple large files are uploaded at once.
+const BASE64_FULL_SCAN_LIMIT = 4_096;
+
 function isValidBase64(value: string): boolean {
-  // NOTE: This regex is O(n) over the full string length.
-  // For payloads near maxBytes (~5 MB / ~6.7 M chars) this is non-trivial.
-  // A future optimization could do a sampled spot-check for very large inputs.
-  return value.length > 0 && value.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+  if (value.length === 0 || value.length % 4 !== 0) {
+    return false;
+  }
+  // Small strings: full scan is cheap and exact.
+  if (value.length <= BASE64_FULL_SCAN_LIMIT) {
+    return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+  }
+  // Large payloads: sample the head and tail to avoid blocking the event loop.
+  // - Head check catches non-base64 garbage early.
+  // - Tail check validates the padding region (= chars must only appear at end).
+  const head = value.slice(0, BASE64_FULL_SCAN_LIMIT);
+  const tail = value.slice(-BASE64_FULL_SCAN_LIMIT);
+  return /^[A-Za-z0-9+/]+$/.test(head) && /^[A-Za-z0-9+/]+={0,2}$/.test(tail);
 }
 
 function ensureExtension(label: string, mime: string): string {
@@ -87,8 +102,18 @@ function ensureExtension(label: string, mime: string): string {
   return ext ? `${label}${ext}` : label;
 }
 
-// Fix #2: Guard against unexpected shapes from saveMediaBuffer before
-// treating the result as SavedMedia, instead of blindly casting with `as`.
+/**
+ * Type guard for the return value of saveMediaBuffer.
+ *
+ * Also validates that the returned ID:
+ *   - is a non-empty string
+ *   - contains no path separators (/ or \) or null bytes
+ *
+ * This provides defence-in-depth before the ID is embedded in a
+ * media://inbound/<id> URI and later resolved by resolveMediaBufferPath
+ * (which applies its own guards). Catching a bad shape here produces a
+ * cleaner error message than a cryptic failure deeper in the stack.
+ */
 function assertSavedMedia(value: unknown, label: string): SavedMedia {
   if (
     value !== null &&
@@ -96,9 +121,19 @@ function assertSavedMedia(value: unknown, label: string): SavedMedia {
     "id" in value &&
     typeof (value as Record<string, unknown>).id === "string"
   ) {
+    const id = (value as Record<string, unknown>).id as string;
+    if (id.length === 0) {
+      throw new Error(`attachment ${label}: saveMediaBuffer returned an empty media ID`);
+    }
+    if (id.includes("/") || id.includes("\\") || id.includes("\0")) {
+      throw new Error(
+        `attachment ${label}: saveMediaBuffer returned an unsafe media ID ` +
+          `(contains path separator or null byte)`,
+      );
+    }
     return value as SavedMedia;
   }
-  throw new Error(`attachment ${label}: saveMediaBuffer returned unexpected shape`);
+  throw new Error(`attachment ${label}: saveMediaBuffer returned an unexpected shape`);
 }
 
 function normalizeAttachment(
@@ -220,21 +255,27 @@ export async function parseMessageWithAttachments(
       );
     }
 
-    // Fix #3: The third fallback normalizes `mime` so that a raw un-normalized
-    // string (e.g. "IMAGE/JPEG" from the caller) doesn't silently bypass the
-    // SUPPORTED_OFFLOAD_MIMES check below. If normalization still yields
+    // The third fallback normalises `mime` so that a raw un-normalised string
+    // (e.g. "IMAGE/JPEG" from the caller) does not silently bypass the
+    // SUPPORTED_OFFLOAD_MIMES check below. If normalisation still yields
     // nothing, fall back to the raw string as a last resort.
     const finalMime = sniffedMime ?? providedMime ?? normalizeMime(mime) ?? mime;
 
     let isOffloaded = false;
 
-    // Fix #1 (continued): isSupportedForOffload now uses the module-level Set.
     const isSupportedForOffload = SUPPORTED_OFFLOAD_MIMES.has(finalMime);
 
     if (sizeBytes > OFFLOAD_THRESHOLD_BYTES) {
       if (!isSupportedForOffload) {
+        // The attachment is above the offload threshold but its format cannot
+        // be offloaded (no guaranteed extension mapping in store.ts).
+        // Note: sizeBytes is between OFFLOAD_THRESHOLD_BYTES and maxBytes, so
+        // saying "exceeds size limit" would be misleading — the image IS within
+        // the declared limit but cannot safely be offloaded in this format.
         throw new Error(
-          `attachment ${label}: format ${finalMime} exceeds size limit (${sizeBytes} > ${OFFLOAD_THRESHOLD_BYTES} bytes) and is not supported by the model. Please convert to JPG, PNG, WEBP, or GIF.`,
+          `attachment ${label}: format ${finalMime} is too large to pass inline ` +
+            `(${sizeBytes} > ${OFFLOAD_THRESHOLD_BYTES} bytes) and cannot be offloaded. ` +
+            `Please convert to JPEG, PNG, WEBP, or GIF.`,
         );
       }
 
@@ -250,15 +291,14 @@ export async function parseMessageWithAttachments(
           labelWithExt,
         );
 
-        // Fix #2: validate shape before trusting the result.
+        // Validate shape and ID safety before trusting the result.
         const savedMedia = assertSavedMedia(rawResult, label);
 
-        // Fix #4: Use an opaque media URI instead of a physical filesystem
-        // path. This decouples the Gateway from the Agent's filesystem layout
+        // Use an opaque media URI instead of a physical filesystem path.
+        // This decouples the Gateway from the Agent's filesystem layout
         // and is compatible with workspaceOnly sandboxes.
-        // The agent side must resolve media://inbound/<id> via the media store
-        // before passing the image to the model. (Follow-up: implement
-        // resolveMediaUri in the agent runner.)
+        // The agent resolves media://inbound/<id> via resolveMediaBufferPath
+        // in store.ts before passing the image to the model.
         const mediaRef = `media://inbound/${savedMedia.id}`;
 
         updatedMessage += `\n[media attached: ${mediaRef}]`;

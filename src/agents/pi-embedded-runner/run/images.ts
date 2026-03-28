@@ -42,10 +42,28 @@ const PATH_REGEX_SOURCE =
 /**
  * Matches the opaque media URI written by the Gateway's claim-check offload:
  *   media://inbound/<uuid-or-id>
- * The ID segment may contain alphanumerics, hyphens, underscores, and dots
- * (e.g. "1c77ce17-20b9-4546-be64-6e36a9adcb2c.png").
+ *
+ * Uses an exclusion-based character class rather than a whitelist so that
+ * Unicode filenames (e.g. Chinese characters) preserved by sanitizeFilename
+ * in store.ts are matched correctly.
+ *
+ * Explicitly excluded from the ID segment:
+ *   ]      — closes the surrounding [media attached: ...] bracket
+ *   \s     — any whitespace (space, newline, tab) — terminates the token
+ *   /      — forward slash path separator (traversal prevention)
+ *   \      — back slash path separator (traversal prevention)
+ *   \x00   — null byte (path injection prevention)
+ *
+ * resolveMediaBufferPath applies its own guards against these characters, but
+ * excluding them here provides defence-in-depth at the parsing layer.
+ *
+ * Example valid IDs:
+ *   "1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
+ *   "photo---1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
+ *   "图片---1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
  */
-const MEDIA_URI_REGEX = /\bmedia:\/\/inbound\/([^\]\s]+)/;
+// eslint-disable-next-line no-control-regex
+const MEDIA_URI_REGEX = /\bmedia:\/\/inbound\/([^\]\s/\\\x00]+)/;
 
 /**
  * Result of detecting an image reference in text.
@@ -242,9 +260,10 @@ export async function loadImageFromRef(
     }
     const mediaId = uriMatch[1];
     try {
-      // resolveMediaBufferPath must be exported from store.ts.
-      // It accepts the media ID (with optional extension) and returns the
-      // absolute path of the persisted file.
+      // resolveMediaBufferPath accepts the media ID (with optional extension
+      // and original-filename prefix) and returns the absolute path of the
+      // persisted file. It applies its own guards against path traversal,
+      // symlinks, and null bytes.
       const physicalPath = await resolveMediaBufferPath(mediaId, "inbound");
       const media = await loadWebMedia(physicalPath, { maxBytes: options?.maxBytes });
       if (media.kind !== "image") {
