@@ -11,6 +11,8 @@ RAW_SANDBOX_SETTING="${OPENCLAW_SANDBOX:-}"
 SANDBOX_ENABLED=""
 DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
 TIMEZONE="${OPENCLAW_TZ:-}"
+RUNTIME_UID_RAW="${OPENCLAW_UID:-1000}"
+RUNTIME_GID_RAW="${OPENCLAW_GID:-1000}"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -174,6 +176,14 @@ is_valid_timezone() {
   [[ -e "/usr/share/zoneinfo/$value" && ! -d "/usr/share/zoneinfo/$value" ]]
 }
 
+validate_numeric_id() {
+  local label="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    fail "$label must be a numeric UID/GID value."
+  fi
+}
+
 validate_mount_path_value() {
   local label="$1"
   local value="$2"
@@ -228,6 +238,8 @@ OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 
 validate_mount_path_value "OPENCLAW_CONFIG_DIR" "$OPENCLAW_CONFIG_DIR"
 validate_mount_path_value "OPENCLAW_WORKSPACE_DIR" "$OPENCLAW_WORKSPACE_DIR"
+validate_numeric_id "OPENCLAW_UID" "$RUNTIME_UID_RAW"
+validate_numeric_id "OPENCLAW_GID" "$RUNTIME_GID_RAW"
 if [[ -n "$HOME_VOLUME_NAME" ]]; then
   if [[ "$HOME_VOLUME_NAME" == *"/"* ]]; then
     validate_mount_path_value "OPENCLAW_HOME_VOLUME" "$HOME_VOLUME_NAME"
@@ -275,6 +287,8 @@ export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:
 export OPENCLAW_SANDBOX="$SANDBOX_ENABLED"
 export OPENCLAW_DOCKER_SOCKET="$DOCKER_SOCKET_PATH"
 export OPENCLAW_TZ="$TIMEZONE"
+export OPENCLAW_UID="$RUNTIME_UID_RAW"
+export OPENCLAW_GID="$RUNTIME_GID_RAW"
 
 # Detect Docker socket GID for sandbox group_add.
 DOCKER_GID=""
@@ -460,7 +474,9 @@ upsert_env "$ENV_FILE" \
   DOCKER_GID \
   OPENCLAW_INSTALL_DOCKER_CLI \
   OPENCLAW_ALLOW_INSECURE_PRIVATE_WS \
-  OPENCLAW_TZ
+  OPENCLAW_TZ \
+  OPENCLAW_UID \
+  OPENCLAW_GID
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
@@ -479,11 +495,11 @@ else
   fi
 fi
 
-# Ensure bind-mounted data directories are writable by the container's `node`
-# user (uid 1000). Host-created dirs inherit the host user's uid which may
-# differ, causing EACCES when the container tries to mkdir/write.
-# Running a brief root container to chown is the portable Docker idiom --
-# it works regardless of the host uid and doesn't require host-side root.
+# Ensure bind-mounted data directories are writable by the runtime UID/GID.
+# Host-created dirs inherit the host user's ownership which may differ, causing
+# EACCES when the container tries to mkdir/write sensitive state.
+# Running a brief root container to chown is the portable Docker idiom -- it
+# works regardless of the host uid and doesn't require host-side root.
 echo ""
 echo "==> Fixing data-directory permissions"
 # Use -xdev to restrict chown to the config-dir mount only — without it,
@@ -492,14 +508,15 @@ echo "==> Fixing data-directory permissions"
 # After fixing the config dir, only the OpenClaw metadata subdirectory
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
-  'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
-   [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
+  'find /home/node/.openclaw -xdev -exec chown '"$OPENCLAW_UID:$OPENCLAW_GID"' {} +; \
+   [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R '"$OPENCLAW_UID:$OPENCLAW_GID"' /home/node/.openclaw/workspace/.openclaw || true'
 
 echo ""
 echo "==> Onboarding (interactive)"
 echo "Docker setup pins Gateway mode to local."
 echo "Gateway runtime bind comes from OPENCLAW_GATEWAY_BIND (default: lan)."
 echo "Current runtime bind: $OPENCLAW_GATEWAY_BIND"
+echo "Runtime UID:GID: $OPENCLAW_UID:$OPENCLAW_GID"
 echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"
 echo "Tailscale exposure: Off (use host-level tailnet/Tailscale setup separately)."
 echo "Install Gateway daemon: No (managed by Docker Compose)"

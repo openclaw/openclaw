@@ -134,6 +134,8 @@ The setup script accepts these optional environment variables:
 | `OPENCLAW_EXTENSIONS`          | Pre-install extension deps at build time (space-separated names) |
 | `OPENCLAW_EXTRA_MOUNTS`        | Extra host bind mounts (comma-separated `source:target[:opts]`)  |
 | `OPENCLAW_HOME_VOLUME`         | Persist `/home/node` in a named Docker volume                    |
+| `OPENCLAW_UID`                 | Runtime container user UID (default: `1000`)                     |
+| `OPENCLAW_GID`                 | Runtime container group GID (default: `1000`)                   |
 | `OPENCLAW_SANDBOX`             | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)           |
 | `OPENCLAW_DOCKER_SOCKET`       | Override Docker socket path                                      |
 
@@ -175,6 +177,40 @@ Use bind mode values in `gateway.bind` (`lan` / `loopback` / `custom` /
 Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and
 `OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, so those paths
 survive container replacement.
+
+The runtime image defaults to the non-root `node` user (UID/GID `1000:1000`).
+Docker installs can override that runtime user with `OPENCLAW_UID` and
+`OPENCLAW_GID` (for example Unraid's `99:100`). `scripts/docker/setup.sh`
+repairs ownership for the config dir and OpenClaw-managed metadata under
+`workspace/.openclaw`, but it intentionally does **not** recursively `chown`
+your whole workspace mount.
+
+Practical implication:
+
+- OpenClaw config/state under `/home/node/.openclaw` should be auto-fixed by the setup script for the selected runtime UID/GID.
+- Your actual workspace files under `/home/node/.openclaw/workspace` still need host-side permissions that allow the chosen runtime UID/GID to write.
+- Sandbox sessions are different: when `agents.defaults.sandbox.docker.user` is unset, OpenClaw auto-detects the mounted workspace owner and runs the sandbox container as that `UID:GID`.
+
+**Unraid note:** if your appdata/share is owned by `nobody:users` (`99:100`),
+set:
+
+```bash
+export OPENCLAW_UID=99
+export OPENCLAW_GID=100
+./scripts/docker/setup.sh
+```
+
+This keeps the gateway/CLI containers aligned with typical Unraid ownership
+without weakening OpenClaw's internal sensitive-file hardening (`0600`/`0700`
+for config, credentials, sessions, and similar state files).
+
+If you change runtime UID/GID on an existing install, make sure existing state
+files are writable by the new user before restarting. Old files owned by root or
+`1000:1000` can still trigger `EACCES` even after the compose services switch
+users.
+
+Avoid SMB/NFS export modes that map writes to a different anonymous UID/GID than
+the one Docker sees locally.
 
 For full persistence details on VM deployments, see
 [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).
