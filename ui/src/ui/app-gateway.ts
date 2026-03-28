@@ -28,6 +28,7 @@ import {
 } from "./controllers/exec-approval.ts";
 import { loadHealthState } from "./controllers/health.ts";
 import { loadNodes } from "./controllers/nodes.ts";
+import { loadProjects, loadProjectDashboard } from "./controllers/projects.ts";
 import { loadSessions, subscribeSessions } from "./controllers/sessions.ts";
 import {
   resolveGatewayErrorDetailCode,
@@ -374,6 +375,50 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "sessions.changed") {
     void loadSessions(host as unknown as OpenClawApp);
+    return;
+  }
+
+  if (evt.event === "projects.changed") {
+    const projectName = (evt.payload as { project?: string })?.project;
+    if (host.tab === "projects") {
+      void loadProjects(host as unknown as Parameters<typeof loadProjects>[0]);
+      // If viewing the affected project's dashboard, also refetch dashboard data
+      if (projectName && (host as unknown as { projectsName?: string }).projectsName === projectName) {
+        void loadProjectDashboard(
+          host as unknown as Parameters<typeof loadProjectDashboard>[0],
+          projectName,
+        );
+      }
+    }
+    return;
+  }
+
+  if (evt.event === "projects.board.changed") {
+    const projectName = (evt.payload as { project?: string })?.project;
+    if (host.tab === "projects" && projectName) {
+      // Refetch if on list view (for task counts) or if viewing this project's dashboard
+      void loadProjects(host as unknown as Parameters<typeof loadProjects>[0]);
+      if ((host as unknown as { projectsName?: string }).projectsName === projectName) {
+        void loadProjectDashboard(
+          host as unknown as Parameters<typeof loadProjectDashboard>[0],
+          projectName,
+        );
+      }
+    }
+    return;
+  }
+
+  if (evt.event === "projects.queue.changed") {
+    const projectName = (evt.payload as { project?: string })?.project;
+    if (host.tab === "projects" && projectName) {
+      void loadProjects(host as unknown as Parameters<typeof loadProjects>[0]);
+      if ((host as unknown as { projectsName?: string }).projectsName === projectName) {
+        void loadProjectDashboard(
+          host as unknown as Parameters<typeof loadProjectDashboard>[0],
+          projectName,
+        );
+      }
+    }
     return;
   }
 
