@@ -1372,6 +1372,41 @@ describe("subagent announce formatting", () => {
     }
   });
 
+  it("uses hook-provided extension channel targets for completion delivery", async () => {
+    hasSubagentDeliveryTargetHook = true;
+    subagentDeliveryTargetHookMock.mockResolvedValueOnce({
+      origin: {
+        channel: "bluebubbles",
+        accountId: "acct-bb",
+        to: "+1234567890",
+      },
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-hook-bluebubbles",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:12345",
+        accountId: "acct-1",
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.channel).toBe("bluebubbles");
+    expect(call?.params?.to).toBe("+1234567890");
+    expect(call?.params?.accountId).toBe("acct-bb");
+  });
+
   it.each([
     {
       name: "delivery-target hook returns no override",
@@ -1981,6 +2016,33 @@ describe("subagent announce formatting", () => {
     };
     expect(call?.params?.channel).toBe(testCase.expectedChannel);
     expect(call?.params?.accountId).toBe(testCase.expectedAccountId);
+    expect(call?.expectFinal).toBe(true);
+  });
+
+  it("keeps direct announce delivery enabled for extension channels", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-bluebubbles",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "bluebubbles", accountId: "acct-bb", to: "+1234567890" },
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: Record<string, unknown>;
+      expectFinal?: boolean;
+    };
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.channel).toBe("bluebubbles");
+    expect(call?.params?.to).toBe("+1234567890");
+    expect(call?.params?.accountId).toBe("acct-bb");
     expect(call?.expectFinal).toBe(true);
   });
 
