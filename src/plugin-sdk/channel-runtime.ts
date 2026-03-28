@@ -11,6 +11,7 @@ export * from "../channels/plugins/normalize/whatsapp.js";
 export * from "../channels/plugins/outbound/interactive.js";
 export * from "../channels/plugins/whatsapp-heartbeat.js";
 export * from "../polls.js";
+export { enqueueSystemEvent } from "../infra/system-events.js";
 export { recordChannelActivity } from "../infra/channel-activity.js";
 export {
   isWhatsAppGroupJid,
