@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const normalizeProviderModelIdWithPluginMock = vi.fn();
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  normalizeProviderModelIdWithPlugin: (params: unknown) =>
+vi.mock("./provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: (params: unknown) =>
     normalizeProviderModelIdWithPluginMock(params),
 }));
 
