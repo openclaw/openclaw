@@ -101,15 +101,11 @@ async function trySendViaGateway(opts: Record<string, unknown>): Promise<
     : undefined;
   const threadId = typeof opts.threadId === "string" ? opts.threadId : undefined;
   const gifPlayback = typeof opts.gifPlayback === "boolean" ? opts.gifPlayback : undefined;
-  // Forward all remaining send-only CLI options so the gateway path is
-  // feature-equivalent to the local plugin path.
-  const interactive = typeof opts.interactive === "string" ? opts.interactive : undefined;
-  const buttons = typeof opts.buttons === "string" ? opts.buttons : undefined;
-  const components = typeof opts.components === "string" ? opts.components : undefined;
-  const card = typeof opts.card === "string" ? opts.card : undefined;
-  const replyTo = typeof opts.replyTo === "string" ? opts.replyTo : undefined;
-  const forceDocument = typeof opts.forceDocument === "boolean" ? opts.forceDocument : undefined;
-  const silent = typeof opts.silent === "boolean" ? opts.silent : undefined;
+  // Note: send-only CLI options that are NOT in SendParamsSchema
+  // (interactive, buttons, components, card, replyTo, forceDocument, silent)
+  // must NOT be forwarded here — the gateway validates params with
+  // additionalProperties: false and will reject the request if unknown fields
+  // are included. Those options are only meaningful on the local plugin path.
 
   if (!target || (!message && !mediaUrl)) return { ok: false, reason: "unreachable" };
 
@@ -126,13 +122,6 @@ async function trySendViaGateway(opts: Record<string, unknown>): Promise<
         mediaUrl,
         threadId,
         gifPlayback,
-        interactive,
-        buttons,
-        components,
-        card,
-        replyTo,
-        forceDocument,
-        silent,
         idempotencyKey: randomIdempotencyKey(),
       },
       expectFinal: false,
@@ -197,11 +186,17 @@ export function createMessageCliHelpers(
             (typeof result?.channel === "string" && result.channel) ||
             (typeof normalized.channel === "string" && normalized.channel) ||
             "unknown";
+          // Use "plugin" rather than a custom "gateway" literal so the JSON
+          // envelope stays within the established MessageCliJsonEnvelope contract
+          // (handledBy: "plugin" | "core" | "dry-run"). Callers that branch on
+          // this field continue to work correctly when the gateway fast-path is
+          // taken; adding "gateway" to the union would be a separate, additive
+          // change to the envelope schema.
           const envelope = {
             action: "send",
             channel: resolvedChannel,
             dryRun: false,
-            handledBy: "gateway" as const,
+            handledBy: "plugin" as const,
             payload: gatewayResult.result,
           };
           defaultRuntime.log(JSON.stringify(envelope));
