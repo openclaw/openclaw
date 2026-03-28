@@ -477,7 +477,8 @@ export function createAgentEventHandler({
     opts?: { dropIfSlow?: boolean },
   ) => {
     if (sessionKey) {
-      const subscribers = sessionMessageSubscribers.get(sessionKey);
+      const { canonicalKey } = loadSessionEntry(sessionKey);
+      const subscribers = sessionMessageSubscribers.get(canonicalKey);
       if (subscribers.size > 0) {
         broadcastToConnIds(event, payload, subscribers, opts);
         return;
