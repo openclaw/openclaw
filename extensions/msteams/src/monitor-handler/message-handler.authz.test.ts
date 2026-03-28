@@ -196,4 +196,94 @@ describe("msteams monitor handler authz", () => {
       meta: { name: "New User" },
     });
   });
+
+  it("logs an info drop reason when dmPolicy allowlist rejects a sender", async () => {
+    const { deps } = createDeps({
+      channels: {
+        msteams: {
+          dmPolicy: "allowlist",
+          allowFrom: ["trusted-aad"],
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "msg-drop-dm",
+        type: "message",
+        text: "hello",
+        from: {
+          id: "attacker-id",
+          aadObjectId: "attacker-aad",
+          name: "Attacker",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "a:personal-chat",
+          conversationType: "personal",
+        },
+        channelData: {},
+        attachments: [],
+      },
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(deps.log.info).toHaveBeenCalledWith(
+      "dropping dm (not allowlisted)",
+      expect.objectContaining({
+        sender: "attacker-aad",
+        dmPolicy: "allowlist",
+        reason: "dmPolicy=allowlist (not allowlisted)",
+      }),
+    );
+  });
+
+  it("logs an info drop reason when group policy has an empty allowlist", async () => {
+    const { deps } = createDeps({
+      channels: {
+        msteams: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "msg-drop-group",
+        type: "message",
+        text: "hello",
+        from: {
+          id: "attacker-id",
+          aadObjectId: "attacker-aad",
+          name: "Attacker",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "19:group@thread.tacv2",
+          conversationType: "groupChat",
+        },
+        channelData: {},
+        attachments: [],
+      },
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(deps.log.info).toHaveBeenCalledWith(
+      "dropping group message (groupPolicy: allowlist, no allowlist)",
+      expect.objectContaining({
+        conversationId: "19:group@thread.tacv2",
+      }),
+    );
+  });
 });

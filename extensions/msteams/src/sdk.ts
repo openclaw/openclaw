@@ -401,18 +401,43 @@ export async function loadMSTeamsSdkWithAuth(creds: MSTeamsCredentials) {
 }
 
 /**
- * Create a Bot Framework JWT validator using the Teams SDK's built-in
- * JwtValidator pre-configured for Bot Framework signing keys.
+ * Create a Bot Framework JWT validator with strict multi-issuer support.
  *
- * Validates: signature (JWKS), audience (appId), issuer (api.botframework.com),
- * and expiration (5-minute clock tolerance).
+ * During Microsoft's transition, inbound service tokens can be signed by either:
+ * - Legacy Bot Framework issuer/JWKS
+ * - Entra issuer/JWKS
+ *
+ * Security invariants are preserved for both paths:
+ * - signature verification (issuer-specific JWKS)
+ * - audience validation (appId)
+ * - issuer validation (strict allowlist)
+ * - expiration validation (Teams SDK defaults)
  */
 export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials): Promise<{
   validate: (authHeader: string, serviceUrl?: string) => Promise<boolean>;
 }> {
-  const { createServiceTokenValidator } =
+  const { JwtValidator } =
     await import("@microsoft/teams.apps/dist/middleware/auth/jwt-validator.js");
-  const validator = createServiceTokenValidator(creds.appId, creds.tenantId);
+
+  const botFrameworkValidator = new JwtValidator({
+    clientId: creds.appId,
+    tenantId: creds.tenantId,
+    validateIssuer: { allowedIssuer: "https://api.botframework.com" },
+    jwksUriOptions: {
+      type: "uri",
+      uri: "https://login.botframework.com/v1/.well-known/keys",
+    },
+  });
+
+  const entraValidator = new JwtValidator({
+    clientId: creds.appId,
+    tenantId: creds.tenantId,
+    validateIssuer: { allowedTenantIds: [creds.tenantId] },
+    jwksUriOptions: {
+      type: "uri",
+      uri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
+    },
+  });
 
   return {
     async validate(authHeader: string, serviceUrl?: string): Promise<boolean> {
@@ -420,12 +445,19 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
       if (!token) {
         return false;
       }
+
+      const overrides = serviceUrl
+        ? ({ validateServiceUrl: { expectedServiceUrl: serviceUrl } } as const)
+        : undefined;
+
       try {
-        const result = await validator.validateAccessToken(
-          token,
-          serviceUrl ? { validateServiceUrl: { expectedServiceUrl: serviceUrl } } : undefined,
-        );
-        return result != null;
+        const legacyResult = await botFrameworkValidator.validateAccessToken(token, overrides);
+        if (legacyResult != null) {
+          return true;
+        }
+
+        const entraResult = await entraValidator.validateAccessToken(token, overrides);
+        return entraResult != null;
       } catch {
         return false;
       }
