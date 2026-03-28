@@ -25,10 +25,14 @@ describe("min-host-version", () => {
     });
   });
 
-  it("rejects invalid floor syntax", () => {
-    expect(validateMinHostVersion("2026.3.22")).toBe(MIN_HOST_VERSION_FORMAT);
-    expect(validateMinHostVersion(123)).toBe(MIN_HOST_VERSION_FORMAT);
-    expect(validateMinHostVersion(">=2026.3.22 garbage")).toBe(MIN_HOST_VERSION_FORMAT);
+  it.each(["2026.3.22", 123, ">=2026.3.22 garbage"] as const)(
+    "rejects invalid floor syntax: %p",
+    (minHostVersion) => {
+      expect(validateMinHostVersion(minHostVersion)).toBe(MIN_HOST_VERSION_FORMAT);
+    },
+  );
+
+  it("reports invalid floor syntax when checking host compatibility", () => {
     expect(
       checkMinHostVersion({ currentVersion: "2026.3.22", minHostVersion: "2026.3.22" }),
     ).toEqual({
@@ -73,24 +77,16 @@ describe("min-host-version", () => {
     });
   });
 
-  it("accepts equal or newer hosts", () => {
-    expect(
-      checkMinHostVersion({ currentVersion: "2026.3.22", minHostVersion: ">=2026.3.22" }),
-    ).toEqual({
-      ok: true,
-      requirement: {
-        raw: ">=2026.3.22",
-        minimumLabel: "2026.3.22",
-      },
-    });
-    expect(
-      checkMinHostVersion({ currentVersion: "2026.4.0", minHostVersion: ">=2026.3.22" }),
-    ).toEqual({
-      ok: true,
-      requirement: {
-        raw: ">=2026.3.22",
-        minimumLabel: "2026.3.22",
-      },
-    });
-  });
+  it.each(["2026.3.22", "2026.4.0"] as const)(
+    "accepts equal or newer hosts: %s",
+    (currentVersion) => {
+      expect(checkMinHostVersion({ currentVersion, minHostVersion: ">=2026.3.22" })).toEqual({
+        ok: true,
+        requirement: {
+          raw: ">=2026.3.22",
+          minimumLabel: "2026.3.22",
+        },
+      });
+    },
+  );
 });

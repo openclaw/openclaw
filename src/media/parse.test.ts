@@ -8,40 +8,31 @@ describe("splitMediaFromOutput", () => {
     expect(result.text).toBe("Hello world");
   });
 
-  it("accepts supported media path variants", () => {
-    const pathCases = [
-      ["/Users/pete/My File.png", "MEDIA:/Users/pete/My File.png"],
-      ["/Users/pete/My File.png", 'MEDIA:"/Users/pete/My File.png"'],
-      ["./screenshots/image.png", "MEDIA:./screenshots/image.png"],
-      ["media/inbound/image.png", "MEDIA:media/inbound/image.png"],
-      ["./screenshot.png", "  MEDIA:./screenshot.png"],
-      ["C:\\Users\\pete\\Pictures\\snap.png", "MEDIA:C:\\Users\\pete\\Pictures\\snap.png"],
-      [
-        "/tmp/tts-fAJy8C/voice-1770246885083.opus",
-        "MEDIA:/tmp/tts-fAJy8C/voice-1770246885083.opus",
-      ],
-      ["image.png", "MEDIA:image.png"],
-    ] as const;
-    for (const [expectedPath, input] of pathCases) {
-      const result = splitMediaFromOutput(input);
-      expect(result.mediaUrls).toEqual([expectedPath]);
-      expect(result.text).toBe("");
-    }
+  it.each([
+    ["/Users/pete/My File.png", "MEDIA:/Users/pete/My File.png"],
+    ["/Users/pete/My File.png", 'MEDIA:"/Users/pete/My File.png"'],
+    ["./screenshots/image.png", "MEDIA:./screenshots/image.png"],
+    ["media/inbound/image.png", "MEDIA:media/inbound/image.png"],
+    ["./screenshot.png", "  MEDIA:./screenshot.png"],
+    ["C:\\Users\\pete\\Pictures\\snap.png", "MEDIA:C:\\Users\\pete\\Pictures\\snap.png"],
+    ["/tmp/tts-fAJy8C/voice-1770246885083.opus", "MEDIA:/tmp/tts-fAJy8C/voice-1770246885083.opus"],
+    ["image.png", "MEDIA:image.png"],
+  ] as const)("accepts supported media path variant: %s", (expectedPath, input) => {
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toEqual([expectedPath]);
+    expect(result.text).toBe("");
   });
 
-  it("rejects traversal and home-dir paths and strips them from output", () => {
-    const traversalCases = [
-      "MEDIA:../../../etc/passwd",
-      "MEDIA:../../.env",
-      "MEDIA:~/.ssh/id_rsa",
-      "MEDIA:~/Pictures/My File.png",
-      "MEDIA:./foo/../../../etc/shadow",
-    ];
-    for (const input of traversalCases) {
-      const result = splitMediaFromOutput(input);
-      expect(result.mediaUrls, `should reject media: ${input}`).toBeUndefined();
-      expect(result.text, `should strip from text: ${input}`).toBe("");
-    }
+  it.each([
+    "MEDIA:../../../etc/passwd",
+    "MEDIA:../../.env",
+    "MEDIA:~/.ssh/id_rsa",
+    "MEDIA:~/Pictures/My File.png",
+    "MEDIA:./foo/../../../etc/shadow",
+  ] as const)("rejects traversal and home-dir path: %s", (input) => {
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe("");
   });
 
   it("keeps audio_as_voice detection stable across calls", () => {

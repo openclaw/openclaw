@@ -83,6 +83,14 @@ function countDuplicateWarnings(registry: ReturnType<typeof loadPluginManifestRe
   ).length;
 }
 
+function hasPluginIdMismatchWarning(
+  registry: ReturnType<typeof loadPluginManifestRegistry>,
+): boolean {
+  return registry.diagnostics.some((diagnostic) =>
+    diagnostic.message.includes("plugin id mismatch"),
+  );
+}
+
 function prepareLinkedManifestFixture(params: { id: string; mode: "symlink" | "hardlink" }): {
   rootDir: string;
   linked: boolean;
@@ -559,72 +567,28 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
-  it("accepts provider-style id hints without warning", () => {
+  it.each([
+    { name: "provider-style", manifestId: "openai", idHint: "openai-provider" },
+    { name: "plugin-style", manifestId: "brave", idHint: "brave-plugin" },
+    { name: "sandbox-style", manifestId: "openshell", idHint: "openshell-sandbox" },
+    {
+      name: "media-understanding-style",
+      manifestId: "groq",
+      idHint: "groq-media-understanding",
+    },
+  ] as const)("accepts $name id hints without warning", ({ manifestId, idHint }) => {
     const dir = makeTempDir();
-    writeManifest(dir, { id: "openai", configSchema: { type: "object" } });
+    writeManifest(dir, { id: manifestId, configSchema: { type: "object" } });
 
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "openai-provider",
-        rootDir: dir,
-        origin: "bundled",
-      }),
-    ]);
-
-    expect(registry.diagnostics.some((diag) => diag.message.includes("plugin id mismatch"))).toBe(
-      false,
-    );
-  });
-
-  it("accepts plugin-style id hints without warning", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, { id: "brave", configSchema: { type: "object" } });
-
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "brave-plugin",
-        rootDir: dir,
-        origin: "bundled",
-      }),
-    ]);
-
-    expect(registry.diagnostics.some((diag) => diag.message.includes("plugin id mismatch"))).toBe(
-      false,
-    );
-  });
-
-  it("accepts sandbox-style id hints without warning", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, { id: "openshell", configSchema: { type: "object" } });
-
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "openshell-sandbox",
-        rootDir: dir,
-        origin: "bundled",
-      }),
-    ]);
-
-    expect(registry.diagnostics.some((diag) => diag.message.includes("plugin id mismatch"))).toBe(
-      false,
-    );
-  });
-
-  it("accepts media-understanding-style id hints without warning", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, { id: "groq", configSchema: { type: "object" } });
-
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "groq-media-understanding",
-        rootDir: dir,
-        origin: "bundled",
-      }),
-    ]);
-
-    expect(registry.diagnostics.some((diag) => diag.message.includes("plugin id mismatch"))).toBe(
-      false,
-    );
+    expect(
+      hasPluginIdMismatchWarning(
+        loadSingleCandidateRegistry({
+          idHint,
+          rootDir: dir,
+          origin: "bundled",
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("still warns for unrelated id hint mismatches", () => {
