@@ -1,15 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveBedrockConfigApiKey } from "../plugin-sdk/amazon-bedrock.js";
-import { resolveAnthropicVertexConfigApiKey } from "../plugin-sdk/anthropic-vertex.js";
-import {
-  normalizeGoogleProviderConfig,
-  shouldNormalizeGoogleProviderConfig,
-} from "../plugin-sdk/google.js";
-import { applyModelStudioNativeStreamingUsageCompat } from "../plugin-sdk/modelstudio.js";
-import { applyMoonshotNativeStreamingUsageCompat } from "../plugin-sdk/moonshot.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 export * from "./models-config.providers.static.js";
 export { resolveImplicitProviders } from "./models-config.providers.implicit.js";
+import {
+  normalizeProviderSpecificConfig,
+  resolveProviderConfigApiKeyResolver,
+} from "./models-config.providers.policy.js";
 import type { ProviderConfig, SecretDefaults } from "./models-config.providers.secrets.js";
 import {
   normalizeConfiguredProviderApiKey,
@@ -27,49 +23,12 @@ export type {
   SecretDefaults,
 } from "./models-config.providers.secrets.js";
 export { enforceSourceManagedProviderSecrets };
+export { applyNativeStreamingUsageCompat } from "./models-config.providers.policy.js";
 export { resolveOllamaApiBase } from "../plugin-sdk/ollama-surface.js";
 export { normalizeGoogleModelId } from "../plugin-sdk/google.js";
 export { normalizeXaiModelId } from "../plugin-sdk/xai.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
-
-const NATIVE_STREAMING_USAGE_COMPAT: Record<string, (provider: ProviderConfig) => ProviderConfig> =
-  {
-    moonshot: applyMoonshotNativeStreamingUsageCompat,
-    modelstudio: applyModelStudioNativeStreamingUsageCompat,
-  };
-
-const PROVIDER_CONFIG_API_KEY_RESOLVERS: Partial<
-  Record<string, (env: NodeJS.ProcessEnv) => string | undefined>
-> = {
-  "amazon-bedrock": resolveBedrockConfigApiKey,
-  "anthropic-vertex": resolveAnthropicVertexConfigApiKey,
-};
-
-export function applyNativeStreamingUsageCompat(
-  providers: Record<string, ProviderConfig>,
-): Record<string, ProviderConfig> {
-  let changed = false;
-  const nextProviders: Record<string, ProviderConfig> = {};
-
-  for (const [providerKey, provider] of Object.entries(providers)) {
-    const nextProvider = NATIVE_STREAMING_USAGE_COMPAT[providerKey]?.(provider) ?? provider;
-    nextProviders[providerKey] = nextProvider;
-    changed ||= nextProvider !== provider;
-  }
-
-  return changed ? nextProviders : providers;
-}
-
-function normalizeProviderSpecificConfig(
-  providerKey: string,
-  provider: ProviderConfig,
-): ProviderConfig {
-  if (shouldNormalizeGoogleProviderConfig(providerKey, provider)) {
-    return normalizeGoogleProviderConfig(providerKey, provider);
-  }
-  return provider;
-}
 
 export function normalizeProviders(params: {
   providers: ModelsConfig["providers"];
@@ -147,7 +106,7 @@ export function normalizeProviders(params: {
       env,
       profileApiKey,
       secretRefManagedProviders: params.secretRefManagedProviders,
-      providerApiKeyResolver: PROVIDER_CONFIG_API_KEY_RESOLVERS[normalizedKey],
+      providerApiKeyResolver: resolveProviderConfigApiKeyResolver(normalizedKey),
     });
     if (providerWithApiKey !== normalizedProvider) {
       mutated = true;
