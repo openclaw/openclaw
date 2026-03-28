@@ -7,13 +7,16 @@
 
 import OpenAI from "openai";
 import { ApiRateLimiter, TaskPriority } from "./limiter.js";
+import { type Logger } from "./tracer.js";
 import { withRetry } from "./utils.js";
 
 // Dimension map for supported models
 export const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
   "text-embedding-3-large": 3072,
+  "text-embedding-ada-002": 1536,
   "gemini-embedding-001": 3072,
+  "gemini-embedding-002": 3072,
   "text-embedding-004": 768,
   "gemini-embedding-2-preview": 3072,
 };
@@ -47,8 +50,9 @@ export class Embeddings {
   constructor(
     private readonly apiKey: string,
     private readonly model: string,
-    private readonly outputDimensionality?: number,
+    private readonly outputDim?: number,
     private readonly limiter?: ApiRateLimiter,
+    private readonly logger?: Logger,
   ) {
     this.provider = detectProvider(model);
     if (this.provider === "openai") {
@@ -63,7 +67,7 @@ export class Embeddings {
       const val = this.cache.get(cacheKey)!;
       this.cache.delete(cacheKey);
       this.cache.set(cacheKey, val);
-      return val;
+      return [...val]; // Return copy to prevent cache mutation
     }
 
     let vector: number[];
@@ -75,7 +79,7 @@ export class Embeddings {
       }
     } else {
       // Pass dimension if supported (Matryoshka)
-      const dims = this.outputDimensionality ?? EMBEDDING_DIMENSIONS[this.model];
+      const dims = this.outputDim ?? EMBEDDING_DIMENSIONS[this.model];
 
       if (this.limiter) {
         vector = await this.limiter.execute(
@@ -133,7 +137,7 @@ export class Embeddings {
           newVectors = await this.embedOpenAIBatch(neededTexts);
         }
       } else {
-        const dims = this.outputDimensionality ?? EMBEDDING_DIMENSIONS[this.model];
+        const dims = this.outputDim ?? EMBEDDING_DIMENSIONS[this.model];
         if (this.limiter) {
           newVectors = await this.limiter.execute(
             () => this.embedGoogleBatch(neededTexts, dims),
@@ -181,7 +185,7 @@ export class Embeddings {
 
   private async embedGoogle(text: string, dimensions?: number): Promise<number[]> {
     return this.executeWithRetry(async () => {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:embedContent?key=${this.apiKey}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:embedContent`;
 
       const body: Record<string, unknown> = {
         model: `models/${this.model}`,
@@ -195,20 +199,41 @@ export class Embeddings {
 
       const response = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": this.apiKey,
+        },
         body: JSON.stringify(body),
       });
 
       if (!response.ok) {
         const errorBody = await response.text();
-        const sanitizedError = errorBody.replace(this.apiKey, "[REDACTED]");
+        const sanitizedError = errorBody.replaceAll(this.apiKey, "[REDACTED]");
+        if (this.logger)
+          this.logger.error(
+            `[memory-hybrid][embeddings] Google Embedding API error (${response.status}): ${sanitizedError}`,
+          );
         throw new Error(`Google Embedding API error (${response.status}): ${sanitizedError}`);
       }
 
-      const data = (await response.json()) as { embedding?: { values?: number[] } };
+      const data = (await response.json()) as {
+        embedding?: { values?: number[] };
+        error?: { message: string };
+      };
+      if (data.error) {
+        if (this.logger)
+          this.logger.error(
+            `[memory-hybrid][embeddings] Google Embedding API error: ${data.error.message}`,
+          );
+        throw new Error(`Google Embedding API: ${data.error.message}`);
+      }
       const values = data?.embedding?.values;
 
       if (!values || !Array.isArray(values)) {
+        if (this.logger)
+          this.logger.error(
+            `[memory-hybrid][embeddings] Unexpected Google Embedding API response: ${JSON.stringify(data)}`,
+          );
         throw new Error(`Unexpected Google Embedding API response: ${JSON.stringify(data)}`);
       }
       return values;
@@ -217,7 +242,7 @@ export class Embeddings {
 
   private async embedGoogleBatch(texts: string[], dimensions?: number): Promise<number[][]> {
     return this.executeWithRetry(async () => {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:batchEmbedContents?key=${this.apiKey}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:batchEmbedContents`;
 
       const requests = texts.map((text) => {
         const req: Record<string, unknown> = {
@@ -233,17 +258,34 @@ export class Embeddings {
 
       const response = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": this.apiKey,
+        },
         body: JSON.stringify({ requests }),
       });
 
       if (!response.ok) {
         const errorBody = await response.text();
-        const sanitizedError = errorBody.replace(this.apiKey, "[REDACTED]");
+        const sanitizedError = errorBody.replaceAll(this.apiKey, "[REDACTED]");
+        if (this.logger)
+          this.logger.error(
+            `[memory-hybrid][embeddings] Google Batch Embedding API error (${response.status}): ${sanitizedError}`,
+          );
         throw new Error(`Google Batch Embedding API error (${response.status}): ${sanitizedError}`);
       }
 
-      const data = (await response.json()) as { embeddings?: Array<{ values?: number[] }> };
+      const data = (await response.json()) as {
+        embeddings?: Array<{ values?: number[] }>;
+        error?: { message: string };
+      };
+      if (data.error) {
+        if (this.logger)
+          this.logger.error(
+            `[memory-hybrid][embeddings] Google Batch Embedding API error: ${data.error.message}`,
+          );
+        throw new Error(`Google Batch Embedding API: ${data.error.message}`);
+      }
       const embeddings = data?.embeddings;
 
       if (!embeddings || !Array.isArray(embeddings)) {

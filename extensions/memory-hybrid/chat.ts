@@ -11,16 +11,18 @@
 
 import OpenAI from "openai";
 import { ApiRateLimiter, TaskPriority } from "./limiter.js";
-import { tracer } from "./tracer.js";
+import { MemoryTracer, type Logger } from "./tracer.js";
 import { withRetry } from "./utils.js";
 
 export type ChatProvider = "openai" | "google";
 
 // Default chat models per provider (used for graph/capture, NOT for embedding)
 export const DEFAULT_CHAT_MODELS: Record<string, string> = {
-  google: "gemma-3-27b-it",
+  google: "gemini-3.1-flash-lite-preview",
   openai: "gpt-4o-mini",
 };
+
+const FALLBACK_GOOGLE_MODEL = "gemma-3-12b-it";
 
 export class ChatModel {
   private openai?: OpenAI;
@@ -29,6 +31,8 @@ export class ChatModel {
     private readonly apiKey: string,
     private readonly model: string,
     private readonly provider: ChatProvider,
+    private readonly tracer: MemoryTracer,
+    private readonly logger: Logger,
     private readonly limiter?: ApiRateLimiter,
   ) {
     if (this.provider === "openai") {
@@ -85,8 +89,6 @@ export class ChatModel {
     messages: { role: string; content: string }[],
     jsonMode: boolean,
   ): Promise<string> {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
-
     // Separate system messages (Bug #21: use systemInstruction instead of converting to user)
     const systemMessages = messages.filter((m) => m.role === "system");
     const chatMessages = messages.filter((m) => m.role !== "system");
@@ -101,7 +103,10 @@ export class ChatModel {
       jsonMode = false;
     }
 
-    const doRequest = async (withJsonMime: boolean): Promise<string> => {
+    const doRequest = async (withJsonMime: boolean, modelOverride?: string): Promise<string> => {
+      const activeModel = modelOverride ?? this.model;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent`;
+
       const body: Record<string, unknown> = { contents };
 
       // Add system instruction if present (proper Gemini API approach)
@@ -122,7 +127,10 @@ export class ChatModel {
 
       const response = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": this.apiKey,
+        },
         body: JSON.stringify(body),
       });
 
@@ -130,26 +138,24 @@ export class ChatModel {
         const errorBody = await response.text();
 
         // Sanitize API key from error messages
-        const sanitizedError = errorBody.replace(this.apiKey, "[REDACTED]");
+        const sanitizedError = errorBody.replaceAll(this.apiKey, "[REDACTED]");
 
-        tracer.trace(
+        this.tracer.trace(
           "llm_api_error",
-          { status: response.status, error: sanitizedError, model: this.model },
+          { status: response.status, error: sanitizedError, model: activeModel },
           "Google API returned an error",
         );
 
         // If JSON mode is not supported by this model, retry without it
         if (withJsonMime && errorBody.includes("JSON mode is not enabled")) {
-          console.warn(
-            `[memory-hybrid][chat] Model ${this.model} doesn't support JSON mode, falling back to plain text`,
+          this.logger.warn(
+            `[memory-hybrid][chat] Model ${activeModel} doesn't support JSON mode, falling back to plain text`,
           );
-          return doRequest(false);
+          return doRequest(false, modelOverride);
         }
 
         if (response.status === 429 || errorBody.includes("Quota exceeded")) {
-          console.error(
-            "\n\n🚨 [MEMORY-HYBRID] ФОРС-МАЖОР: ЛІМІТ ГОЛОГРАФІЧНОЇ ПАМ'ЯТІ (API QUOTA EXCEEDED)! 🚨\n\n",
-          );
+          this.logger.error("[MEMORY-HYBRID] API QUOTA EXCEEDED (429)! Memory functions limited.");
         }
 
         throw new Error(`Google Chat API error (${response.status}): ${sanitizedError}`);
@@ -162,7 +168,20 @@ export class ChatModel {
       return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
     };
 
-    return doRequest(jsonMode);
+    try {
+      return await doRequest(jsonMode);
+    } catch (err) {
+      // Fallback logic for Google: if gemini fails, try gemma (thread-safe via parameter, no instance mutation)
+      if (this.model !== FALLBACK_GOOGLE_MODEL && !this.model.includes("gemma")) {
+        this.tracer.trace(
+          "llm_fallback",
+          { originalModel: this.model, fallbackModel: FALLBACK_GOOGLE_MODEL, error: String(err) },
+          `Primary model failed, falling back to ${FALLBACK_GOOGLE_MODEL}`,
+        );
+        return doRequest(false, FALLBACK_GOOGLE_MODEL);
+      }
+      throw err;
+    }
   }
 
   /**
