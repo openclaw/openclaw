@@ -3171,7 +3171,7 @@
           "exportName": "buildChannelOutboundSessionRoute",
           "kind": "function",
           "source": {
-            "line": 183,
+            "line": 184,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3216,7 +3216,7 @@
           "exportName": "createChannelPluginBase",
           "kind": "function",
           "source": {
-            "line": 529,
+            "line": 530,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3225,7 +3225,7 @@
           "exportName": "createChatChannelPlugin",
           "kind": "function",
           "source": {
-            "line": 506,
+            "line": 507,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3252,7 +3252,7 @@
           "exportName": "defineChannelPluginEntry",
           "kind": "function",
           "source": {
-            "line": 276,
+            "line": 277,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3270,7 +3270,7 @@
           "exportName": "defineSetupPluginEntry",
           "kind": "function",
           "source": {
-            "line": 313,
+            "line": 314,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3317,6 +3317,24 @@
           "source": {
             "line": 17,
             "path": "src/channels/plugins/helpers.ts"
+          }
+        },
+        {
+          "declaration": "export function generateSecureToken(bytes?: number): string;",
+          "exportName": "generateSecureToken",
+          "kind": "function",
+          "source": {
+            "line": 7,
+            "path": "src/infra/secure-random.ts"
+          }
+        },
+        {
+          "declaration": "export function generateSecureUuid(): string;",
+          "exportName": "generateSecureUuid",
+          "kind": "function",
+          "source": {
+            "line": 3,
+            "path": "src/infra/secure-random.ts"
           }
         },
         {
@@ -3477,7 +3495,7 @@
           "exportName": "stripChannelTargetPrefix",
           "kind": "function",
           "source": {
-            "line": 163,
+            "line": 164,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3486,7 +3504,7 @@
           "exportName": "stripTargetKindPrefix",
           "kind": "function",
           "source": {
-            "line": 175,
+            "line": 176,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3567,7 +3585,7 @@
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
-            "line": 158,
+            "line": 159,
             "path": "src/plugin-sdk/core.ts"
           }
         },
