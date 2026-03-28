@@ -301,7 +301,7 @@ export function createGatewayAgentAbort(): PluginRuntime["agent"]["abort"] {
       return { aborted: false };
     }
     const active = ctx.chatAbortControllers.get(params.runId);
-    if (!active) {
+    if (!active || active.kind !== "agent") {
       return { aborted: false };
     }
     return abortChatRunById(ctx, {

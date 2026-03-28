@@ -695,6 +695,7 @@ describe("loadGatewayPlugins", () => {
     const controller = new AbortController();
     const abortControllers = new Map();
     abortControllers.set("run-42", {
+      kind: "agent",
       controller,
       sessionKey: "sess-1",
       sessionId: "sid-1",
@@ -751,5 +752,48 @@ describe("loadGatewayPlugins", () => {
     const result = await runtime.agent.abort({ runId: "run-gone" });
 
     expect(result).toEqual({ aborted: false });
+  });
+
+  test("runtime.agent.abort does not abort chat-owned run ids", async () => {
+    const serverPlugins = serverPluginsModule;
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    serverPlugins.loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+    runtimeModule.setGatewayAgentAbort(serverPlugins.createGatewayAgentAbort());
+
+    const controller = new AbortController();
+    const abortControllers = new Map();
+    abortControllers.set("run-chat", {
+      kind: "chat",
+      controller,
+      sessionKey: "sess-chat",
+      sessionId: "sid-chat",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    });
+    serverPlugins.setFallbackGatewayContext({
+      chatAbortControllers: abortControllers,
+      chatRunBuffers: new Map(),
+      chatDeltaSentAt: new Map(),
+      chatDeltaLastBroadcastLen: new Map(),
+      chatAbortedRuns: new Map(),
+      agentRunSeq: new Map(),
+      removeChatRun: () => undefined,
+      broadcast: () => {},
+      nodeSendToSession: () => {},
+    } as unknown as GatewayRequestContext);
+
+    const runtime = runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true });
+    const result = await runtime.agent.abort({ runId: "run-chat" });
+
+    expect(result).toEqual({ aborted: false });
+    expect(controller.signal.aborted).toBe(false);
+    expect(abortControllers.has("run-chat")).toBe(true);
   });
 });

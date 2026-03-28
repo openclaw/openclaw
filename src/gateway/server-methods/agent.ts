@@ -555,6 +555,10 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     if (claimedAbortController && requestedSessionKey) {
+      // This provisional entry is registered before reset/session-store work
+      // finishes, so it uses the current raw session key. dispatchAgentRunFromGateway
+      // re-registers the same controller with the final canonical session key
+      // once dispatch actually starts.
       setOwnedAbortControllerEntry({
         controller: claimedAbortController,
         runId,

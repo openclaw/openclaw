@@ -151,17 +151,17 @@ describe("plugin runtime command execution", () => {
     expect(runtime.version).toBe(VERSION);
   });
 
-  it("agent.abort throws by default without gateway binding", () => {
+  it("agent.abort rejects by default without gateway binding", async () => {
     const runtime = createPluginRuntime();
-    expect(() => runtime.agent.abort({ runId: "run-1" })).toThrow(
+    await expect(runtime.agent.abort({ runId: "run-1" })).rejects.toThrow(
       "Plugin runtime agent.abort is only available during a gateway request.",
     );
   });
 
-  it("agent.abort stays unavailable by default even after gateway initialization", () => {
+  it("agent.abort stays unavailable by default even after gateway initialization", async () => {
     const runtime = createPluginRuntime();
     setGatewayAgentAbort(vi.fn().mockResolvedValue({ aborted: true }));
-    expect(() => runtime.agent.abort({ runId: "run-1" })).toThrow(
+    await expect(runtime.agent.abort({ runId: "run-1" })).rejects.toThrow(
       "Plugin runtime agent.abort is only available during a gateway request.",
     );
   });

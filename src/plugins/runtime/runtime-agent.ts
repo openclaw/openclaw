@@ -26,7 +26,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveThinkingDefault,
     resolveAgentTimeoutMs,
     ensureAgentWorkspace,
-    abort(
+    async abort(
       _params: import("./types.js").AgentAbortParams,
     ): Promise<import("./types.js").AgentAbortResult> {
       throw new Error("Plugin runtime agent.abort is only available during a gateway request.");
