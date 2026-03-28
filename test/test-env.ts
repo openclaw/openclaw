@@ -5,6 +5,22 @@ import path from "node:path";
 
 type RestoreEntry = { key: string; value: string | undefined };
 
+function isTruthyEnvValue(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  switch (value.trim().toLowerCase()) {
+    case "":
+    case "0":
+    case "false":
+    case "no":
+    case "off":
+      return false;
+    default:
+      return true;
+  }
+}
+
 function restoreEnv(entries: RestoreEntry[]): void {
   for (const { key, value } of entries) {
     if (value === undefined) {
@@ -43,7 +59,7 @@ function loadProfileEnv(): void {
       process.env[key] = entry.slice(idx + 1);
       applied += 1;
     }
-    if (applied > 0) {
+    if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
       console.log(`[live] loaded ${applied} env vars from ~/.profile`);
     }
   } catch {
