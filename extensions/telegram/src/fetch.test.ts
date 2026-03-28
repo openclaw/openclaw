@@ -1,7 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
+const loggerInfo = vi.hoisted(() => vi.fn());
+const loggerDebug = vi.hoisted(() => vi.fn());
 
 const undiciFetch = vi.hoisted(() => vi.fn());
 const setGlobalDispatcher = vi.hoisted(() => vi.fn());
@@ -54,13 +56,39 @@ vi.mock("undici", () => ({
   setGlobalDispatcher,
 }));
 
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    createSubsystemLogger: () => ({
+      info: loggerInfo,
+      debug: loggerDebug,
+      warn: vi.fn(),
+      error: vi.fn(),
+      child: () => ({
+        info: loggerInfo,
+        debug: loggerDebug,
+        warn: vi.fn(),
+        error: vi.fn(),
+      }),
+    }),
+  };
+});
+
 let resolveFetch: typeof import("../../../src/infra/fetch.js").resolveFetch;
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
 
-beforeEach(async () => {
+beforeAll(async () => {
+  vi.resetModules();
   ({ resolveFetch } = await import("../../../src/infra/fetch.js"));
   ({ resolveTelegramFetch, resolveTelegramTransport } = await import("./fetch.js"));
+});
+
+beforeEach(() => {
+  vi.unstubAllEnvs();
+  loggerInfo.mockReset();
+  loggerDebug.mockReset();
 });
 
 function resolveTelegramFetchOrThrow(
@@ -217,7 +245,6 @@ afterEach(() => {
   ProxyAgentCtor.mockClear();
   setDefaultResultOrder.mockReset();
   setDefaultAutoSelectFamily.mockReset();
-  vi.unstubAllEnvs();
   vi.clearAllMocks();
 });
 
@@ -266,6 +293,15 @@ describe("resolveTelegramFetch", () => {
       }),
     );
     expect(typeof dispatcher?.options?.connect?.lookup).toBe("function");
+  });
+
+  it("emits default transport decisions at debug level", () => {
+    resolveTelegramFetchOrThrow();
+
+    expect(loggerInfo).not.toHaveBeenCalledWith("autoSelectFamily=true (default-node22)");
+    expect(loggerInfo).not.toHaveBeenCalledWith("dnsResultOrder=ipv4first (default-node22)");
+    expect(loggerDebug).toHaveBeenCalledWith("autoSelectFamily=true (default-node22)");
+    expect(loggerDebug).toHaveBeenCalledWith("dnsResultOrder=ipv4first (default-node22)");
   });
 
   it("uses EnvHttpProxyAgent dispatcher when proxy env is configured", async () => {

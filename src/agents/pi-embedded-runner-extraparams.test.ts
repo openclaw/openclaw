@@ -1,9 +1,23 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createConfiguredOllamaCompatNumCtxWrapper } from "../plugin-sdk/ollama.js";
+import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
+import {
+  createOpenRouterSystemCacheWrapper,
+  createOpenRouterWrapper,
+  isProxyReasoningUnsupported,
+} from "./pi-embedded-runner/proxy-stream-wrappers.js";
+import type { ProviderCapabilities } from "./provider-capabilities.js";
+import { __testing as providerCapabilitiesTesting } from "./provider-capabilities.js";
 
 const resolveProviderCapabilitiesWithPluginMock = vi.fn(
-  (params: { provider: string; workspaceDir?: string }) => {
+  (params: {
+    provider: string;
+    config?: import("../config/config.js").OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+  }): Partial<ProviderCapabilities> | undefined => {
     if (
       params.provider === "workspace-anthropic-proxy" &&
       params.workspaceDir === "/tmp/workspace-capabilities"
@@ -17,20 +31,38 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn(
   },
 );
 
-vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
-  const {
-    createOpenRouterSystemCacheWrapper,
-    createOpenRouterWrapper,
-    isProxyReasoningUnsupported,
-  } = await import("./pi-embedded-runner/proxy-stream-wrappers.js");
+import {
+  applyExtraParamsToAgent,
+  resolveAgentTransportOverride,
+  resolveExtraParams,
+  resolvePreparedExtraParams,
+} from "./pi-embedded-runner.js";
+import { log } from "./pi-embedded-runner/logger.js";
 
-  return {
-    ...actual,
-    prepareProviderExtraParams: (params: {
-      provider: string;
-      context: { extraParams?: Record<string, unknown> };
-    }) => {
+function createXaiFastModeWrapper(baseStreamFn: StreamFn | undefined, fastMode: boolean): StreamFn {
+  const fastModelIds = new Map<string, string>([
+    ["grok-3", "grok-3-fast"],
+    ["grok-3-mini", "grok-3-mini-fast"],
+    ["grok-4", "grok-4-fast"],
+    ["grok-4-0709", "grok-4-fast"],
+  ]);
+  return (model, context, options) => {
+    if (!fastMode || model.api !== "openai-completions" || model.provider !== "xai") {
+      return (baseStreamFn as StreamFn)(model, context, options);
+    }
+    const fastModelId =
+      typeof model.id === "string" ? fastModelIds.get(model.id.trim()) : undefined;
+    return (baseStreamFn as StreamFn)(
+      fastModelId ? { ...model, id: fastModelId } : model,
+      context,
+      options,
+    );
+  };
+}
+
+beforeEach(() => {
+  extraParamsTesting.setProviderRuntimeDepsForTest({
+    prepareProviderExtraParams: (params) => {
       if (params.provider !== "openai-codex") {
         return undefined;
       }
@@ -43,15 +75,16 @@ vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
         transport: "auto",
       };
     },
-    wrapProviderStreamFn: (params: {
-      provider: string;
-      context: {
-        modelId: string;
-        thinkingLevel?: import("../auto-reply/thinking.js").ThinkLevel;
-        extraParams?: Record<string, unknown>;
-        streamFn?: StreamFn;
-      };
-    }) => {
+    wrapProviderStreamFn: (params) => {
+      if (params.provider === "ollama") {
+        return createConfiguredOllamaCompatNumCtxWrapper(params.context);
+      }
+      if (params.provider === "xai") {
+        return createXaiFastModeWrapper(
+          params.context.streamFn,
+          params.context.extraParams?.fastMode === true,
+        );
+      }
       if (params.provider !== "openrouter") {
         return params.context.streamFn;
       }
@@ -80,13 +113,17 @@ vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
       const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
       return createOpenRouterSystemCacheWrapper(createOpenRouterWrapper(streamFn, thinkingLevel));
     },
-    resolveProviderCapabilitiesWithPlugin: (params: { provider: string; workspaceDir?: string }) =>
-      resolveProviderCapabilitiesWithPluginMock(params),
-  };
+  });
+  providerCapabilitiesTesting.setResolveProviderCapabilitiesWithPluginForTest(
+    resolveProviderCapabilitiesWithPluginMock,
+  );
+  resolveProviderCapabilitiesWithPluginMock.mockClear();
 });
 
-import { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner.js";
-import { log } from "./pi-embedded-runner/logger.js";
+afterEach(() => {
+  extraParamsTesting.resetProviderRuntimeDepsForTest();
+  providerCapabilitiesTesting.resetDepsForTests();
+});
 
 describe("resolveExtraParams", () => {
   it("returns undefined with no model config", () => {
@@ -1530,6 +1567,72 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("auto");
   });
 
+  it("returns prepared Codex transport defaults for runtime sessions", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+    });
+
+    expect(effectiveExtraParams.transport).toBe("auto");
+  });
+
+  it("uses prepared transport when session settings did not explicitly set one", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+    });
+
+    expect(
+      resolveAgentTransportOverride({
+        settingsManager: {
+          getGlobalSettings: () => ({}),
+          getProjectSettings: () => ({}),
+        },
+        effectiveExtraParams,
+      }),
+    ).toBe("auto");
+  });
+
+  it("keeps explicit session transport over prepared OpenAI defaults", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai",
+      modelId: "gpt-5",
+    });
+
+    expect(
+      resolveAgentTransportOverride({
+        settingsManager: {
+          getGlobalSettings: () => ({ transport: "sse" }),
+          getProjectSettings: () => ({}),
+        },
+        effectiveExtraParams,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("strips prototype pollution keys from extra params overrides", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai",
+      modelId: "gpt-5",
+      extraParamsOverride: {
+        __proto__: { polluted: true },
+        constructor: "blocked",
+        prototype: "blocked",
+        temperature: 0.2,
+      },
+    });
+
+    expect(effectiveExtraParams.temperature).toBe(0.2);
+    expect(Object.hasOwn(effectiveExtraParams, "__proto__")).toBe(false);
+    expect(Object.hasOwn(effectiveExtraParams, "constructor")).toBe(false);
+    expect(Object.hasOwn(effectiveExtraParams, "prototype")).toBe(false);
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+
   it("disables prompt caching for non-Anthropic Bedrock models", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
@@ -1868,20 +1971,20 @@ describe("applyExtraParamsToAgent", () => {
     expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
   });
 
-  it("maps MiniMax M2.1 /fast to the matching highspeed model", () => {
+  it("maps MiniMax M2.7 /fast to the matching highspeed model", () => {
     const resolvedModelId = runResolvedModelIdCase({
       applyProvider: "minimax",
-      applyModelId: "MiniMax-M2.1",
+      applyModelId: "MiniMax-M2.7",
       extraParamsOverride: { fastMode: true },
       model: {
         api: "anthropic-messages",
         provider: "minimax",
-        id: "MiniMax-M2.1",
+        id: "MiniMax-M2.7",
         baseUrl: "https://api.minimax.io/anthropic",
       } as Model<"anthropic-messages">,
     });
 
-    expect(resolvedModelId).toBe("MiniMax-M2.1-highspeed");
+    expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
   });
 
   it("keeps explicit MiniMax highspeed models unchanged when /fast is off", () => {

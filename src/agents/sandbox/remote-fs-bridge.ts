@@ -2,6 +2,7 @@ import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
 import type { SandboxBackendCommandParams, SandboxBackendCommandResult } from "./backend.js";
 import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
+import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.js";
 import {
   isPathInsideContainerRoot,
@@ -35,6 +36,11 @@ export function createRemoteShellSandboxFsBridge(params: {
 }
 
 class RemoteShellSandboxFsBridge implements SandboxFsBridge {
+  private readonly resolveRenameTargets = createWritableRenameTargetResolver(
+    (target) => this.resolveTarget(target),
+    (target, action) => this.ensureWritable(target, action),
+  );
+
   constructor(
     private readonly sandbox: SandboxContext,
     private readonly runtime: RemoteShellSandboxHandle,
@@ -165,10 +171,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     cwd?: string;
     signal?: AbortSignal;
   }): Promise<void> {
-    const from = this.resolveTarget({ filePath: params.from, cwd: params.cwd });
-    const to = this.resolveTarget({ filePath: params.to, cwd: params.cwd });
-    this.ensureWritable(from, "rename files");
-    this.ensureWritable(to, "rename files");
+    const { from, to } = this.resolveRenameTargets(params);
     const fromPinned = await this.resolvePinnedParent({
       containerPath: from.containerPath,
       action: "rename files",

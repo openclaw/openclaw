@@ -208,7 +208,7 @@
   min-height: 38px;
   padding: 0 14px;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   color: var(--muted);
   font-size: 13px;
@@ -256,7 +256,7 @@
   gap: 2px;
   padding: 3px;
   border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
 }
 
@@ -268,7 +268,7 @@
   justify-content: center;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -374,7 +374,7 @@
 }
 
 .sidebar-shell__footer {
-  padding: 12px 8px 0;
+  padding: 12px 0 0;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
@@ -389,7 +389,7 @@
   width: 32px;
   height: 32px;
   flex-shrink: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   box-shadow: 0 8px 18px color-mix(in srgb, black 12%, transparent);
 }
 
@@ -440,7 +440,7 @@
   justify-content: center;
   background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
   border: 1px solid color-mix(in srgb, var(--border-strong) 68%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   cursor: pointer;
   transition:
     background var(--duration-fast) ease,
@@ -507,7 +507,7 @@
   min-height: 28px;
   background: transparent;
   border: none;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
   cursor: pointer;
   text-align: left;
@@ -558,7 +558,7 @@
   gap: 8px;
   min-height: 40px;
   padding: 0 9px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
@@ -653,7 +653,7 @@
   min-height: 44px;
   padding: 0;
   margin: 0 auto;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   border-color: transparent;
   box-shadow: none;
 }
@@ -681,7 +681,7 @@
   top: 10px;
   bottom: 10px;
   width: 3px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--accent) 86%, transparent);
   box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 34%, transparent);
 }
@@ -712,7 +712,7 @@
 .sidebar--collapsed .sidebar-brand__logo {
   width: 34px;
   height: 34px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   box-shadow:
     0 10px 20px color-mix(in srgb, black 20%, transparent),
     inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
@@ -734,7 +734,7 @@
   gap: 10px;
   min-height: 40px;
   padding: 0 12px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
@@ -795,7 +795,7 @@
   min-height: 44px;
   padding: 0;
   justify-content: center;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
 }
 
 .sidebar--collapsed .sidebar-version__status {

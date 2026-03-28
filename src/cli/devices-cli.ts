@@ -159,9 +159,16 @@ async function approvePairingWithFallback(
     if (opts.json !== true) {
       defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
     }
-    const approved = await approveDevicePairing(requestId);
+    const approved = await approveDevicePairing(requestId, {
+      // Local CLI fallback already assumes direct machine access; treat it as an
+      // explicit admin approval path instead of relying on missing caller scopes.
+      callerScopes: ["operator.admin"],
+    });
     if (!approved) {
       return null;
+    }
+    if (approved.status === "forbidden") {
+      throw new Error(`missing scope: ${approved.missingScope}`, { cause: error });
     }
     return {
       requestId,

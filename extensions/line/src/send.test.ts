@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   pushMessageMock,
@@ -59,7 +59,7 @@ vi.mock("./channel-access-token.js", () => ({
   resolveLineChannelAccessToken: resolveLineChannelAccessTokenMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/channel-runtime", () => ({
   recordChannelActivity: recordChannelActivityMock,
 }));
 
@@ -74,28 +74,34 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
 let sendModule: typeof import("./send.js");
 
 describe("LINE send helpers", () => {
-  beforeAll(async () => {
-    sendModule = await import("./send.js");
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     pushMessageMock.mockReset();
     replyMessageMock.mockReset();
     showLoadingAnimationMock.mockReset();
     getProfileMock.mockReset();
-    MessagingApiClientMock.mockClear();
+    MessagingApiClientMock.mockReset();
     loadConfigMock.mockReset();
     resolveLineAccountMock.mockReset();
     resolveLineChannelAccessTokenMock.mockReset();
     recordChannelActivityMock.mockReset();
     logVerboseMock.mockReset();
 
+    MessagingApiClientMock.mockImplementation(function () {
+      return {
+        pushMessage: pushMessageMock,
+        replyMessage: replyMessageMock,
+        showLoadingAnimation: showLoadingAnimationMock,
+        getProfile: getProfileMock,
+      };
+    });
     loadConfigMock.mockReturnValue({});
     resolveLineAccountMock.mockReturnValue({ accountId: "default" });
     resolveLineChannelAccessTokenMock.mockReturnValue("line-token");
     pushMessageMock.mockResolvedValue({});
     replyMessageMock.mockResolvedValue({});
     showLoadingAnimationMock.mockResolvedValue({});
+    sendModule = await import("./send.js");
   });
 
   afterEach(() => {

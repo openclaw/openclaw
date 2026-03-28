@@ -4,6 +4,12 @@ import {
   createTopLevelChannelDmPolicy,
 } from "openclaw/plugin-sdk/setup";
 import {
+  isLineConfigured,
+  listLineAccountIds,
+  parseLineAllowFromId,
+  patchLineAccountConfig,
+} from "./setup-core.js";
+import {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   resolveLineAccount,
@@ -11,13 +17,7 @@ import {
   splitSetupEntries,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
-} from "../runtime-api.js";
-import {
-  isLineConfigured,
-  listLineAccountIds,
-  parseLineAllowFromId,
-  patchLineAccountConfig,
-} from "./setup-core.js";
+} from "./setup-runtime-api.js";
 
 const channel = "line" as const;
 

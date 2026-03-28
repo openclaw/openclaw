@@ -7,9 +7,9 @@ import {
   resolveModelRefFromString,
   type ModelRef,
 } from "../agents/model-selection.js";
-import { normalizeGoogleModelId, normalizeXaiModelId } from "../agents/models-config.providers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 
 export type CachedModelPricing = {
   input: number;
@@ -40,8 +40,6 @@ const PROVIDER_ALIAS_TO_OPENROUTER: Record<string, string> = {
   moonshot: "moonshotai",
   moonshotai: "moonshotai",
   "openai-codex": "openai",
-  qwen: "qwen",
-  "qwen-portal": "qwen",
   xai: "x-ai",
   zai: "z-ai",
 };
@@ -152,16 +150,25 @@ function canonicalizeOpenRouterLookupId(id: string): string {
       .replace(/^claude-(\d+)\.(\d+)-/u, "claude-$1-$2-")
       .replace(/^claude-([a-z]+)-(\d+)\.(\d+)$/u, "claude-$1-$2-$3");
   }
-  if (provider === "google") {
-    model = normalizeGoogleModelId(model);
-  }
-  if (provider === "x-ai") {
-    model = normalizeXaiModelId(model);
-  }
+  model =
+    normalizeProviderModelIdWithPlugin({
+      provider,
+      context: {
+        provider,
+        modelId: model,
+      },
+    }) ?? model;
   return `${provider}/${model}`;
 }
 
-function buildOpenRouterExactCandidates(ref: ModelRef): string[] {
+function buildOpenRouterExactCandidates(ref: ModelRef, seen = new Set<string>()): string[] {
+  const refKey = modelKey(ref.provider, ref.model);
+  if (seen.has(refKey)) {
+    return [];
+  }
+  const nextSeen = new Set(seen);
+  nextSeen.add(refKey);
+
   const candidates = new Set<string>();
   const canonicalProvider = canonicalizeOpenRouterProvider(ref.provider);
   const canonicalFullId = canonicalizeOpenRouterLookupId(modelKey(canonicalProvider, ref.model));
@@ -181,7 +188,7 @@ function buildOpenRouterExactCandidates(ref: ModelRef): string[] {
   if (WRAPPER_PROVIDERS.has(ref.provider) && ref.model.includes("/")) {
     const nestedRef = parseModelRef(ref.model, DEFAULT_PROVIDER);
     if (nestedRef) {
-      for (const candidate of buildOpenRouterExactCandidates(nestedRef)) {
+      for (const candidate of buildOpenRouterExactCandidates(nestedRef, nextSeen)) {
         candidates.add(candidate);
       }
     }

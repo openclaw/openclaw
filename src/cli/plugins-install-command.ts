@@ -1,9 +1,11 @@
 import fs from "node:fs";
+import { cleanStaleMatrixPluginConfig } from "../commands/doctor/providers/matrix.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, readConfigFileSnapshot } from "../config/config.js";
 import { installHooksFromNpmSpec, installHooksFromPath } from "../hooks/install.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub.js";
+import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { formatClawHubSpecifier, installPluginFromClawHub } from "../plugins/clawhub.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
@@ -14,9 +16,14 @@ import {
 } from "../plugins/marketplace.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
-import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { shortenHomePath } from "../utils.js";
 import { looksLikeLocalInstallSpec } from "./install-spec.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
+import {
+  resolvePluginInstallInvalidConfigPolicy,
+  resolvePluginInstallRequestContext,
+  type PluginInstallRequestContext,
+} from "./plugin-install-config-policy.js";
 import {
   resolveBundledInstallPlanBeforeNpm,
   resolveBundledInstallPlanForNpmFailure,
@@ -27,7 +34,6 @@ import {
   createPluginInstallLogger,
   decidePreferredClawHubFallback,
   formatPluginInstallWithHookFallbackError,
-  resolveFileNpmSpecToLocalPath,
 } from "./plugins-command-helpers.js";
 import { persistHookPackInstall, persistPluginInstall } from "./plugins-install-persist.js";
 
@@ -167,6 +173,62 @@ async function tryInstallHookPackFromNpmSpec(params: {
   return { ok: true };
 }
 
+function isAllowedMatrixRecoveryIssue(issue: { path?: string; message?: string }): boolean {
+  return (
+    (issue.path === "channels.matrix" && issue.message === "unknown channel id: matrix") ||
+    (issue.path === "plugins.load.paths" &&
+      typeof issue.message === "string" &&
+      issue.message.includes("plugin path not found"))
+  );
+}
+
+function buildInvalidPluginInstallConfigError(message: string): Error {
+  const error = new Error(message);
+  (error as { code?: string }).code = "INVALID_CONFIG";
+  return error;
+}
+
+async function loadConfigFromSnapshotForInstall(
+  request: PluginInstallRequestContext,
+): Promise<OpenClawConfig> {
+  if (resolvePluginInstallInvalidConfigPolicy(request) !== "recover-matrix-only") {
+    throw buildInvalidPluginInstallConfigError(
+      "Config invalid; run `openclaw doctor --fix` before installing plugins.",
+    );
+  }
+  const snapshot = await readConfigFileSnapshot();
+  const parsed = (snapshot.parsed ?? {}) as Record<string, unknown>;
+  if (!snapshot.exists || Object.keys(parsed).length === 0) {
+    throw buildInvalidPluginInstallConfigError(
+      "Config file could not be parsed; run `openclaw doctor` to repair it.",
+    );
+  }
+  if (
+    snapshot.legacyIssues.length > 0 ||
+    snapshot.issues.length === 0 ||
+    snapshot.issues.some((issue) => !isAllowedMatrixRecoveryIssue(issue))
+  ) {
+    throw buildInvalidPluginInstallConfigError(
+      "Config invalid outside the Matrix upgrade recovery path; run `openclaw doctor --fix` before reinstalling Matrix.",
+    );
+  }
+  const cleaned = await cleanStaleMatrixPluginConfig(snapshot.config);
+  return cleaned.config;
+}
+
+export async function loadConfigForInstall(
+  request: PluginInstallRequestContext,
+): Promise<OpenClawConfig> {
+  try {
+    return loadConfig();
+  } catch (err) {
+    if (extractErrorCode(err) !== "INVALID_CONFIG") {
+      throw err;
+    }
+  }
+  return loadConfigFromSnapshotForInstall(request);
+}
+
 export async function runPluginInstallCommand(params: {
   raw: string;
   opts: { link?: boolean; pin?: boolean; marketplace?: string };
@@ -185,7 +247,6 @@ export async function runPluginInstallCommand(params: {
     marketplace:
       params.opts.marketplace ?? (shorthand?.ok ? shorthand.marketplaceSource : undefined),
   };
-
   if (opts.marketplace) {
     if (opts.link) {
       defaultRuntime.error("`--link` is not supported with `--marketplace`.");
@@ -195,8 +256,25 @@ export async function runPluginInstallCommand(params: {
       defaultRuntime.error("`--pin` is not supported with `--marketplace`.");
       return defaultRuntime.exit(1);
     }
+  }
+  const requestResolution = resolvePluginInstallRequestContext({
+    rawSpec: raw,
+    marketplace: opts.marketplace,
+  });
+  if (!requestResolution.ok) {
+    defaultRuntime.error(requestResolution.error);
+    return defaultRuntime.exit(1);
+  }
+  const request = requestResolution.request;
+  const cfg = await loadConfigForInstall(request).catch((error: unknown) => {
+    defaultRuntime.error(formatErrorMessage(error));
+    return null;
+  });
+  if (!cfg) {
+    return defaultRuntime.exit(1);
+  }
 
-    const cfg = loadConfig();
+  if (opts.marketplace) {
     const result = await installPluginFromMarketplace({
       marketplace: opts.marketplace,
       plugin: raw,
@@ -223,14 +301,7 @@ export async function runPluginInstallCommand(params: {
     return;
   }
 
-  const fileSpec = resolveFileNpmSpecToLocalPath(raw);
-  if (fileSpec && !fileSpec.ok) {
-    defaultRuntime.error(fileSpec.error);
-    return defaultRuntime.exit(1);
-  }
-  const normalized = fileSpec && fileSpec.ok ? fileSpec.path : raw;
-  const resolved = resolveUserPath(normalized);
-  const cfg = loadConfig();
+  const resolved = request.resolvedPath ?? request.normalizedSpec;
 
   if (fs.existsSync(resolved)) {
     if (opts.link) {

@@ -5,6 +5,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import {
   addAllowlistEntry,
   recordAllowlistUse,
+  resolveApprovalAuditCandidatePath,
   resolveAllowAlwaysPatterns,
   resolveExecApprovals,
   type ExecAllowlistEntry,
@@ -575,7 +576,7 @@ async function executeSystemRunPhase(
         phase.agentId,
         match,
         phase.commandText,
-        phase.segments[0]?.resolution?.resolvedPath,
+        resolveApprovalAuditCandidatePath(phase.segments[0]?.resolution ?? null, phase.cwd),
       );
     }
   }

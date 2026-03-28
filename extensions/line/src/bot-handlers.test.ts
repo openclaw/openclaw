@@ -20,11 +20,15 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   upsertPairingRequestMock: vi.fn(async () => ({ code: "CODE", created: true })),
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
-  resolvePairingIdLabel: () => "lineUserId",
-  readChannelAllowFromStore: readAllowFromStoreMock,
-  upsertChannelPairingRequest: upsertPairingRequestMock,
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    resolvePairingIdLabel: () => "lineUserId",
+    readChannelAllowFromStore: readAllowFromStoreMock,
+    upsertChannelPairingRequest: upsertPairingRequestMock,
+  };
+});
 
 vi.mock("./download.js", () => ({
   downloadLineMedia: async () => {
@@ -73,6 +77,16 @@ let createLineWebhookReplayCache: typeof import("./bot-handlers.js").createLineW
 type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
+
+function buildDefaultLineMessageContext() {
+  return {
+    ctxPayload: { From: "line:group:group-1" },
+    replyToken: "reply-token",
+    route: { agentId: "default" },
+    isGroup: true,
+    accountId: "default",
+  };
+}
 
 function createReplayMessageEvent(params: {
   messageId: string;
@@ -200,16 +214,26 @@ async function startInflightReplayDuplicate(params: {
 
 describe("handleLineWebhookEvents", () => {
   beforeAll(async () => {
+    vi.resetModules();
     ({ handleLineWebhookEvents, createLineWebhookReplayCache } = await import("./bot-handlers.js"));
   });
 
   beforeEach(() => {
-    buildLineMessageContextMock.mockClear();
-    buildLinePostbackContextMock.mockClear();
-    readAllowFromStoreMock.mockClear();
-    upsertPairingRequestMock.mockClear();
+    buildLineMessageContextMock.mockReset();
+    buildLineMessageContextMock.mockImplementation(async () => ({
+      ctxPayload: { From: "line:group:group-1" },
+      replyToken: "reply-token",
+      route: { agentId: "default" },
+      isGroup: true,
+      accountId: "default",
+    }));
+    buildLinePostbackContextMock.mockReset();
+    buildLinePostbackContextMock.mockImplementation(async () => null as unknown);
+    readAllowFromStoreMock.mockReset();
+    readAllowFromStoreMock.mockImplementation(async () => [] as string[]);
+    upsertPairingRequestMock.mockReset();
+    upsertPairingRequestMock.mockImplementation(async () => ({ code: "CODE", created: true }));
   });
-
   it("blocks group messages when groupPolicy is disabled", async () => {
     const processMessage = vi.fn();
     const event = {
@@ -573,10 +597,11 @@ describe("handleLineWebhookEvents", () => {
       isRedelivery: true,
     });
     const { firstRun, secondRun } = await startInflightReplayDuplicate({ event, processMessage });
+    const firstFailure = expect(firstRun).rejects.toThrow("transient inflight failure");
+    const secondFailure = expect(secondRun).rejects.toThrow("transient inflight failure");
     rejectFirst?.(new Error("transient inflight failure"));
 
-    await expect(firstRun).rejects.toThrow("transient inflight failure");
-    await expect(secondRun).rejects.toThrow("transient inflight failure");
+    await Promise.all([firstFailure, secondFailure]);
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 

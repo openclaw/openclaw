@@ -5298,7 +5298,7 @@
         "advanced"
       ],
       "label": "Agent ACP Harness Agent",
-      "help": "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude).",
+      "help": "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude, cursor, gemini, openclaw).",
       "hasChildren": false
     },
     {
@@ -7124,7 +7124,7 @@
         "advanced"
       ],
       "label": "Approvals",
-      "help": "Approval routing controls for forwarding exec approval requests to chat destinations outside the originating session. Keep this disabled unless operators need explicit out-of-band approval visibility.",
+      "help": "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
       "hasChildren": true
     },
     {
@@ -7298,6 +7298,179 @@
       ],
       "label": "Approval Target Destination",
       "help": "Destination identifier inside the target channel (channel ID, user ID, or thread root depending on provider). Verify semantics per provider because destination format differs across channel integrations.",
+      "hasChildren": false
+    },
+    {
+      "path": "approvals.plugin",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Approval Forwarding",
+      "help": "Groups plugin-approval forwarding behavior including enablement, routing mode, filters, and explicit targets. Independent of exec approval forwarding. Configure here when plugin approval prompts must reach operational channels.",
+      "hasChildren": true
+    },
+    {
+      "path": "approvals.plugin.agentFilter",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Approval Agent Filter",
+      "help": "Optional allowlist of agent IDs eligible for forwarded plugin approvals, for example `[\"primary\", \"ops-agent\"]`. Use this to limit forwarding blast radius.",
+      "hasChildren": true
+    },
+    {
+      "path": "approvals.plugin.agentFilter.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "approvals.plugin.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Forward Plugin Approvals",
+      "help": "Enables forwarding of plugin approval requests to configured delivery destinations (default: false). Independent of approvals.exec.enabled.",
+      "hasChildren": false
+    },
+    {
+      "path": "approvals.plugin.mode",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Approval Forwarding Mode",
+      "help": "Controls where plugin approval prompts are sent: \"session\" uses origin chat, \"targets\" uses configured targets, and \"both\" sends to both paths.",
+      "hasChildren": false
+    },
+    {
+      "path": "approvals.plugin.sessionFilter",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "storage"
+      ],
+      "label": "Plugin Approval Session Filter",
+      "help": "Optional session-key filters matched as substring or regex-style patterns, for example `[\"discord:\", \"^agent:ops:\"]`. Use narrow patterns so only intended approval contexts are forwarded.",
+      "hasChildren": true
+    },
+    {
+      "path": "approvals.plugin.sessionFilter.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "approvals.plugin.targets",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Approval Forwarding Targets",
+      "help": "Explicit delivery targets used when plugin approval forwarding mode includes targets, each with channel and destination details.",
+      "hasChildren": true
+    },
+    {
+      "path": "approvals.plugin.targets.*",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "approvals.plugin.targets.*.accountId",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Approval Target Account ID",
+      "help": "Optional account selector for multi-account channel setups when plugin approvals must route through a specific account context.",
+      "hasChildren": false
+    },
+    {
+      "path": "approvals.plugin.targets.*.channel",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Approval Target Channel",
+      "help": "Channel/provider ID used for forwarded plugin approval delivery, such as discord, slack, or a plugin channel id.",
+      "hasChildren": false
+    },
+    {
+      "path": "approvals.plugin.targets.*.threadId",
+      "kind": "core",
+      "type": [
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Approval Target Thread ID",
+      "help": "Optional thread/topic target for channels that support threaded delivery of forwarded plugin approvals.",
+      "hasChildren": false
+    },
+    {
+      "path": "approvals.plugin.targets.*.to",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Approval Target Destination",
+      "help": "Destination identifier inside the target channel (channel ID, user ID, or thread root depending on provider).",
       "hasChildren": false
     },
     {
@@ -7529,6 +7702,16 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
+    },
+    {
+      "path": "auth.profiles.*.displayName",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "auth.profiles.*.email",
@@ -8391,7 +8574,6 @@
     {
       "path": "channels",
       "kind": "core",
-      "type": "object",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -8525,6 +8707,17 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.enrichGroupParticipantsFromContacts",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -9066,6 +9259,17 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.enrichGroupParticipantsFromContacts",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -10383,6 +10587,20 @@
       "hasChildren": false
     },
     {
+      "path": "channels.discord.accounts.*.guilds.*.channels.*.autoThreadName",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "message",
+        "generated"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.discord.accounts.*.guilds.*.channels.*.enabled",
       "kind": "channel",
       "type": "boolean",
@@ -11538,300 +11756,6 @@
       "hasChildren": false
     },
     {
-      "path": "channels.discord.accounts.*.voice.tts.edge",
-      "kind": "channel",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.edge.enabled",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.edge.lang",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.edge.outputFormat",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.edge.pitch",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.edge.proxy",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.edge.rate",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.edge.saveSubtitles",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.edge.timeoutMs",
-      "kind": "channel",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.edge.voice",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.edge.volume",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs",
-      "kind": "channel",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs.apiKey",
-      "kind": "channel",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "media",
-        "network",
-        "security"
-      ],
-      "hasChildren": true
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs.apiKey.id",
-      "kind": "channel",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs.apiKey.provider",
-      "kind": "channel",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs.apiKey.source",
-      "kind": "channel",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs.applyTextNormalization",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "auto",
-        "on",
-        "off"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs.baseUrl",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs.languageCode",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs.modelId",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs.seed",
-      "kind": "channel",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs.voiceId",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs.voiceSettings",
-      "kind": "channel",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs.voiceSettings.similarityBoost",
-      "kind": "channel",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs.voiceSettings.speed",
-      "kind": "channel",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs.voiceSettings.stability",
-      "kind": "channel",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs.voiceSettings.style",
-      "kind": "channel",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.elevenlabs.voiceSettings.useSpeakerBoost",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.discord.accounts.*.voice.tts.enabled",
       "kind": "channel",
       "type": "boolean",
@@ -11845,116 +11769,6 @@
       "path": "channels.discord.accounts.*.voice.tts.maxTextLength",
       "kind": "channel",
       "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.microsoft",
-      "kind": "channel",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.microsoft.enabled",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.microsoft.lang",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.microsoft.outputFormat",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.microsoft.pitch",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.microsoft.proxy",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.microsoft.rate",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.microsoft.saveSubtitles",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.microsoft.timeoutMs",
-      "kind": "channel",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.microsoft.voice",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.microsoft.volume",
-      "kind": "channel",
-      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -12066,7 +11880,27 @@
       "hasChildren": false
     },
     {
-      "path": "channels.discord.accounts.*.voice.tts.openai",
+      "path": "channels.discord.accounts.*.voice.tts.prefsPath",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.provider",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.providers",
       "kind": "channel",
       "type": "object",
       "required": false,
@@ -12076,7 +11910,44 @@
       "hasChildren": true
     },
     {
-      "path": "channels.discord.accounts.*.voice.tts.openai.apiKey",
+      "path": "channels.discord.accounts.*.voice.tts.providers.*",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.providers.*.*",
+      "kind": "channel",
+      "type": [
+        "array",
+        "boolean",
+        "null",
+        "number",
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.providers.*.*.*",
+      "kind": "channel",
+      "type": [],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.providers.*.apiKey",
       "kind": "channel",
       "type": [
         "object",
@@ -12095,7 +11966,7 @@
       "hasChildren": true
     },
     {
-      "path": "channels.discord.accounts.*.voice.tts.openai.apiKey.id",
+      "path": "channels.discord.accounts.*.voice.tts.providers.*.apiKey.id",
       "kind": "channel",
       "type": "string",
       "required": true,
@@ -12105,7 +11976,7 @@
       "hasChildren": false
     },
     {
-      "path": "channels.discord.accounts.*.voice.tts.openai.apiKey.provider",
+      "path": "channels.discord.accounts.*.voice.tts.providers.*.apiKey.provider",
       "kind": "channel",
       "type": "string",
       "required": true,
@@ -12115,80 +11986,10 @@
       "hasChildren": false
     },
     {
-      "path": "channels.discord.accounts.*.voice.tts.openai.apiKey.source",
+      "path": "channels.discord.accounts.*.voice.tts.providers.*.apiKey.source",
       "kind": "channel",
       "type": "string",
       "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.openai.baseUrl",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.openai.instructions",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.openai.model",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.openai.speed",
-      "kind": "channel",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.openai.voice",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.prefsPath",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.voice.tts.provider",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -13309,6 +13110,20 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.guilds.*.channels.*.autoThreadName",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "message",
+        "generated"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -14608,300 +14423,6 @@
       "hasChildren": false
     },
     {
-      "path": "channels.discord.voice.tts.edge",
-      "kind": "channel",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "channels.discord.voice.tts.edge.enabled",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.edge.lang",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.edge.outputFormat",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.edge.pitch",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.edge.proxy",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.edge.rate",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.edge.saveSubtitles",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.edge.timeoutMs",
-      "kind": "channel",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.edge.voice",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.edge.volume",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs",
-      "kind": "channel",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs.apiKey",
-      "kind": "channel",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "channels",
-        "media",
-        "network",
-        "security"
-      ],
-      "hasChildren": true
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs.apiKey.id",
-      "kind": "channel",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs.apiKey.provider",
-      "kind": "channel",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs.apiKey.source",
-      "kind": "channel",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs.applyTextNormalization",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "auto",
-        "on",
-        "off"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs.baseUrl",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs.languageCode",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs.modelId",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs.seed",
-      "kind": "channel",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs.voiceId",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs.voiceSettings",
-      "kind": "channel",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs.voiceSettings.similarityBoost",
-      "kind": "channel",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs.voiceSettings.speed",
-      "kind": "channel",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs.voiceSettings.stability",
-      "kind": "channel",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs.voiceSettings.style",
-      "kind": "channel",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.elevenlabs.voiceSettings.useSpeakerBoost",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.discord.voice.tts.enabled",
       "kind": "channel",
       "type": "boolean",
@@ -14915,116 +14436,6 @@
       "path": "channels.discord.voice.tts.maxTextLength",
       "kind": "channel",
       "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.microsoft",
-      "kind": "channel",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "channels.discord.voice.tts.microsoft.enabled",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.microsoft.lang",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.microsoft.outputFormat",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.microsoft.pitch",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.microsoft.proxy",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.microsoft.rate",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.microsoft.saveSubtitles",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.microsoft.timeoutMs",
-      "kind": "channel",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.microsoft.voice",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.microsoft.volume",
-      "kind": "channel",
-      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -15136,7 +14547,27 @@
       "hasChildren": false
     },
     {
-      "path": "channels.discord.voice.tts.openai",
+      "path": "channels.discord.voice.tts.prefsPath",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.provider",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.providers",
       "kind": "channel",
       "type": "object",
       "required": false,
@@ -15146,7 +14577,44 @@
       "hasChildren": true
     },
     {
-      "path": "channels.discord.voice.tts.openai.apiKey",
+      "path": "channels.discord.voice.tts.providers.*",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.discord.voice.tts.providers.*.*",
+      "kind": "channel",
+      "type": [
+        "array",
+        "boolean",
+        "null",
+        "number",
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.discord.voice.tts.providers.*.*.*",
+      "kind": "channel",
+      "type": [],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.providers.*.apiKey",
       "kind": "channel",
       "type": [
         "object",
@@ -15165,7 +14633,7 @@
       "hasChildren": true
     },
     {
-      "path": "channels.discord.voice.tts.openai.apiKey.id",
+      "path": "channels.discord.voice.tts.providers.*.apiKey.id",
       "kind": "channel",
       "type": "string",
       "required": true,
@@ -15175,7 +14643,7 @@
       "hasChildren": false
     },
     {
-      "path": "channels.discord.voice.tts.openai.apiKey.provider",
+      "path": "channels.discord.voice.tts.providers.*.apiKey.provider",
       "kind": "channel",
       "type": "string",
       "required": true,
@@ -15185,80 +14653,10 @@
       "hasChildren": false
     },
     {
-      "path": "channels.discord.voice.tts.openai.apiKey.source",
+      "path": "channels.discord.voice.tts.providers.*.apiKey.source",
       "kind": "channel",
       "type": "string",
       "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.openai.baseUrl",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.openai.instructions",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.openai.model",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.openai.speed",
-      "kind": "channel",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.openai.voice",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.prefsPath",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.voice.tts.provider",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -15381,8 +14779,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -15611,8 +15014,12 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -16210,8 +15617,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -16336,8 +15748,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -16628,8 +16045,12 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -17079,8 +16500,7 @@
       "path": "channels.feishu.requireMention",
       "kind": "channel",
       "type": "boolean",
-      "required": true,
-      "defaultValue": true,
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -17221,8 +16641,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -21618,8 +21043,14 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "access",
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": false
     },
     {
@@ -21628,8 +21059,13 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": false
     },
     {
@@ -21827,8 +21263,14 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security",
+        "storage"
+      ],
       "hasChildren": false
     },
     {
@@ -21880,8 +21322,14 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "access",
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": false
     },
     {
@@ -21890,8 +21338,13 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": false
     },
     {
@@ -22099,8 +21552,14 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security",
+        "storage"
+      ],
       "hasChildren": false
     },
     {
@@ -22144,8 +21603,14 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "access",
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": false
     },
     {
@@ -22285,13 +21750,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "access",
-        "channels",
-        "network"
-      ],
-      "label": "Matrix Allow Bot Messages",
-      "help": "Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set \"mentions\" to only accept bot messages that visibly mention this bot.",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -22793,8 +22252,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -23260,6 +22724,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.mattermost.accounts.*.allowPrivateNetwork",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.mattermost.accounts.*.baseUrl",
       "kind": "channel",
       "type": "string",
@@ -23328,8 +22802,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -23787,18 +23266,23 @@
       "hasChildren": false
     },
     {
+      "path": "channels.mattermost.allowPrivateNetwork",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.mattermost.baseUrl",
       "kind": "channel",
       "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "channels",
-        "network"
-      ],
-      "label": "Mattermost Base URL",
-      "help": "Base URL for your Mattermost server (e.g., https://chat.example.com).",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -23867,8 +23351,6 @@
         "network",
         "security"
       ],
-      "label": "Mattermost Bot Token",
-      "help": "Bot token from Mattermost System Console -> Integrations -> Bot Accounts.",
       "hasChildren": true
     },
     {
@@ -23933,12 +23415,7 @@
       ],
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "channels",
-        "network"
-      ],
-      "label": "Mattermost Chat Mode",
-      "help": "Reply to channel messages on mention (\"oncall\"), on trigger chars (\">\" or \"!\") (\"onchar\"), or on every message (\"onmessage\").",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -24018,12 +23495,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "channels",
-        "network"
-      ],
-      "label": "Mattermost Config Writes",
-      "help": "Allow Mattermost to write config in response to channel events/commands (default: true).",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -24244,12 +23716,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "channels",
-        "network"
-      ],
-      "label": "Mattermost Onchar Prefixes",
-      "help": "Trigger prefixes for onchar mode (default: [\">\", \"!\"]).",
+      "tags": [],
       "hasChildren": true
     },
     {
@@ -24284,12 +23751,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "channels",
-        "network"
-      ],
-      "label": "Mattermost Require Mention",
-      "help": "Require @mention in channels before responding (default: true).",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -24324,7 +23786,7 @@
         "network"
       ],
       "label": "Microsoft Teams",
-      "help": "Bot Framework; enterprise support.",
+      "help": "Teams SDK; enterprise support.",
       "hasChildren": true
     },
     {
@@ -24582,6 +24044,36 @@
       "hasChildren": false
     },
     {
+      "path": "channels.msteams.feedbackEnabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.feedbackReflection",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.feedbackReflectionCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.msteams.groupAllowFrom",
       "kind": "channel",
       "type": "array",
@@ -24612,6 +24104,16 @@
         "allowlist"
       ],
       "defaultValue": "allowlist",
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.groupWelcomeCard",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -24756,6 +24258,26 @@
       "path": "channels.msteams.mediaMaxMb",
       "kind": "channel",
       "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.promptStarters",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.msteams.promptStarters.*",
+      "kind": "channel",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -25245,6 +24767,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.msteams.welcomeCard",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.nextcloud-talk",
       "kind": "channel",
       "type": "object",
@@ -25300,6 +24832,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.nextcloud-talk.accounts.*.allowPrivateNetwork",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.nextcloud-talk.accounts.*.apiPassword",
       "kind": "channel",
       "type": [
@@ -25308,8 +24850,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -25431,8 +24978,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -25471,8 +25023,14 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security",
+        "storage"
+      ],
       "hasChildren": false
     },
     {
@@ -25888,6 +25446,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.nextcloud-talk.allowPrivateNetwork",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.nextcloud-talk.apiPassword",
       "kind": "channel",
       "type": [
@@ -25896,8 +25464,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -26019,8 +25592,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -26059,8 +25637,14 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security",
+        "storage"
+      ],
       "hasChildren": false
     },
     {
@@ -37545,8 +37129,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -37737,8 +37326,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -37813,8 +37407,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -38015,8 +37614,13 @@
       ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
       "hasChildren": true
     },
     {
@@ -44291,298 +43895,6 @@
       "hasChildren": false
     },
     {
-      "path": "messages.tts.edge",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "messages.tts.edge.enabled",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.edge.lang",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.edge.outputFormat",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.edge.pitch",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.edge.proxy",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.edge.rate",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.edge.saveSubtitles",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.edge.timeoutMs",
-      "kind": "core",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.edge.voice",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.edge.volume",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.elevenlabs",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "messages.tts.elevenlabs.apiKey",
-      "kind": "core",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "media",
-        "security"
-      ],
-      "hasChildren": true
-    },
-    {
-      "path": "messages.tts.elevenlabs.apiKey.id",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.elevenlabs.apiKey.provider",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.elevenlabs.apiKey.source",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.elevenlabs.applyTextNormalization",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "auto",
-        "on",
-        "off"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.elevenlabs.baseUrl",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.elevenlabs.languageCode",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.elevenlabs.modelId",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.elevenlabs.seed",
-      "kind": "core",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.elevenlabs.voiceId",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.elevenlabs.voiceSettings",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "messages.tts.elevenlabs.voiceSettings.similarityBoost",
-      "kind": "core",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.elevenlabs.voiceSettings.speed",
-      "kind": "core",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.elevenlabs.voiceSettings.stability",
-      "kind": "core",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.elevenlabs.voiceSettings.style",
-      "kind": "core",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.elevenlabs.voiceSettings.useSpeakerBoost",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "messages.tts.enabled",
       "kind": "core",
       "type": "boolean",
@@ -44596,116 +43908,6 @@
       "path": "messages.tts.maxTextLength",
       "kind": "core",
       "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.microsoft",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "messages.tts.microsoft.enabled",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.microsoft.lang",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.microsoft.outputFormat",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.microsoft.pitch",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.microsoft.proxy",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.microsoft.rate",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.microsoft.saveSubtitles",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.microsoft.timeoutMs",
-      "kind": "core",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.microsoft.voice",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.microsoft.volume",
-      "kind": "core",
-      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -44817,113 +44019,6 @@
       "hasChildren": false
     },
     {
-      "path": "messages.tts.openai",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "messages.tts.openai.apiKey",
-      "kind": "core",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "media",
-        "security"
-      ],
-      "hasChildren": true
-    },
-    {
-      "path": "messages.tts.openai.apiKey.id",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.openai.apiKey.provider",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.openai.apiKey.source",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.openai.baseUrl",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.openai.instructions",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.openai.model",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.openai.speed",
-      "kind": "core",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "messages.tts.openai.voice",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "messages.tts.prefsPath",
       "kind": "core",
       "type": "string",
@@ -44938,6 +44033,110 @@
       "kind": "core",
       "type": "string",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.providers",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "media"
+      ],
+      "label": "TTS Provider Settings",
+      "help": "Provider-specific TTS settings keyed by speech provider id. Use this instead of bundled provider-specific top-level keys so speech plugins stay decoupled from core config schema.",
+      "hasChildren": true
+    },
+    {
+      "path": "messages.tts.providers.*",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "media"
+      ],
+      "label": "TTS Provider Config",
+      "help": "Provider-specific TTS configuration for one speech provider id. Keep fields scoped to the plugin that owns that provider.",
+      "hasChildren": true
+    },
+    {
+      "path": "messages.tts.providers.*.*",
+      "kind": "core",
+      "type": [
+        "array",
+        "boolean",
+        "null",
+        "number",
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "messages.tts.providers.*.*.*",
+      "kind": "core",
+      "type": [],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.providers.*.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "media",
+        "security"
+      ],
+      "label": "TTS Provider API Key",
+      "help": "Provider API key used by that speech provider when its plugin requires authenticated TTS access.",
+      "hasChildren": true
+    },
+    {
+      "path": "messages.tts.providers.*.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.providers.*.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.providers.*.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -46846,6 +46045,127 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.browser",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/browser-plugin",
+      "help": "OpenClaw browser tool plugin (plugin: browser)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.browser.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/browser-plugin Config",
+      "help": "Plugin-defined config payload for browser.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.browser.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/browser-plugin",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.browser.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.browser.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.browser.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.browser.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.browser.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.browser.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.byteplus",
       "kind": "plugin",
       "type": "object",
@@ -47438,6 +46758,127 @@
     },
     {
       "path": "plugins.entries.deepgram.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.deepseek",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/deepseek-provider",
+      "help": "OpenClaw DeepSeek provider plugin (plugin: deepseek)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.deepseek.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/deepseek-provider Config",
+      "help": "Plugin-defined config payload for deepseek.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.deepseek.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/deepseek-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.deepseek.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.deepseek.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.deepseek.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.deepseek.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.deepseek.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.deepseek.subagent.allowModelOverride",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -50377,6 +49818,127 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.litellm",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/litellm-provider",
+      "help": "OpenClaw LiteLLM provider plugin (plugin: litellm)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.litellm.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/litellm-provider Config",
+      "help": "Plugin-defined config payload for litellm.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.litellm.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/litellm-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.litellm.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.litellm.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.litellm.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.litellm.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.litellm.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.litellm.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.llm-task",
       "kind": "plugin",
       "type": "object",
@@ -51314,6 +50876,127 @@
       "label": "@openclaw/microsoft-speech",
       "help": "OpenClaw Microsoft speech plugin (plugin: microsoft)",
       "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/microsoft-foundry",
+      "help": "OpenClaw Microsoft Foundry provider plugin (plugin: microsoft-foundry)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/microsoft-foundry Config",
+      "help": "Plugin-defined config payload for microsoft-foundry.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/microsoft-foundry",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
     },
     {
       "path": "plugins.entries.microsoft.config",
@@ -53285,6 +52968,24 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.openshell.config.mode",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "mirror",
+        "remote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Mode",
+      "help": "Sandbox mode. Use mirror for the default local-workspace flow or remote for a fully remote workspace.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.openshell.config.policy",
       "kind": "plugin",
       "type": "string",
@@ -53867,127 +53568,6 @@
     },
     {
       "path": "plugins.entries.qianfan.subagent.allowModelOverride",
-      "kind": "plugin",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "access"
-      ],
-      "label": "Allow Plugin Subagent Model Override",
-      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "qwen-portal-auth",
-      "help": "Plugin entry for qwen-portal-auth.",
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth.config",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "qwen-portal-auth Config",
-      "help": "Plugin-defined config payload for qwen-portal-auth.",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth.enabled",
-      "kind": "plugin",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Enable qwen-portal-auth",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth.hooks",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Plugin Hook Policy",
-      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth.hooks.allowPromptInjection",
-      "kind": "plugin",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "access"
-      ],
-      "label": "Allow Prompt Injection Hooks",
-      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth.subagent",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Plugin Subagent Policy",
-      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth.subagent.allowedModels",
-      "kind": "plugin",
-      "type": "array",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "access"
-      ],
-      "label": "Plugin Subagent Allowed Models",
-      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth.subagent.allowedModels.*",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth.subagent.allowModelOverride",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -56087,8 +55667,11 @@
       "type": "string",
       "required": false,
       "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security"
+      ],
       "hasChildren": false
     },
     {
@@ -60797,7 +60380,7 @@
         "tools"
       ],
       "label": "Enable apply_patch",
-      "help": "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
+      "help": "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
       "hasChildren": false
     },
     {
@@ -64450,6 +64033,21 @@
       ],
       "label": "Web Fetch Max Redirects",
       "help": "Maximum redirects allowed for web_fetch (default: 3).",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.maxResponseBytes",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "tools"
+      ],
+      "label": "Web Fetch Max Download Size (bytes)",
+      "help": "Max download size before truncation.",
       "hasChildren": false
     },
     {

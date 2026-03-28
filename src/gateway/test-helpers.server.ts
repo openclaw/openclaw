@@ -24,7 +24,12 @@ import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
-import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key.js";
+import {
+  DEFAULT_AGENT_ID,
+  normalizeMainKey,
+  parseAgentSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -74,9 +79,44 @@ const GATEWAY_TEST_ENV_KEYS = [
 let gatewayEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
+let tempControlUiRoot: string | undefined;
 let suiteConfigRootSeq = 0;
+let lastSyncedSessionStorePath: string | undefined;
+let lastSyncedSessionConfigJson: string | undefined;
 
-async function persistTestSessionStorePath(storePath: string): Promise<void> {
+function resolveGatewayTestMainSessionKeys(): string[] {
+  const resolved = resolveMainSessionKeyFromConfig();
+  const keys = new Set<string>();
+  if (resolved) {
+    keys.add(resolved);
+  }
+  if (resolved !== "global") {
+    const parsed = parseAgentSessionKey(resolved);
+    const agentId = parsed?.agentId ?? DEFAULT_AGENT_ID;
+    keys.add(`agent:${agentId}:main`);
+    const configuredMainKey = normalizeMainKey(
+      (testState.sessionConfig as { mainKey?: unknown } | undefined)?.mainKey as string | undefined,
+    );
+    keys.add(`agent:${agentId}:${configuredMainKey}`);
+  }
+  return [...keys];
+}
+
+function serializeGatewayTestSessionConfig(): string | undefined {
+  if (!testState.sessionConfig) {
+    return undefined;
+  }
+  return JSON.stringify(testState.sessionConfig);
+}
+
+function hasUnsyncedGatewayTestSessionConfig(): boolean {
+  return (
+    testState.sessionStorePath !== lastSyncedSessionStorePath ||
+    serializeGatewayTestSessionConfig() !== lastSyncedSessionConfigJson
+  );
+}
+
+async function persistTestSessionConfig(): Promise<void> {
   const configPaths = new Set<string>();
   if (process.env.OPENCLAW_CONFIG_PATH) {
     configPaths.add(process.env.OPENCLAW_CONFIG_PATH);
@@ -112,20 +152,30 @@ async function persistTestSessionStorePath(storePath: string): Promise<void> {
       preservedTemplateStore = existingStore;
     }
   }
-  const nextStoreValue = preservedTemplateStore || storePath;
+  const nextStoreValue =
+    typeof testState.sessionStorePath === "string"
+      ? preservedTemplateStore || testState.sessionStorePath
+      : preservedTemplateStore;
   for (const configPath of configPaths) {
     const config = { ...parsedConfigs.get(configPath) };
     const session =
       config.session && typeof config.session === "object" && !Array.isArray(config.session)
         ? { ...(config.session as Record<string, unknown>) }
         : {};
-    session.store = nextStoreValue;
+    if (typeof nextStoreValue === "string" && nextStoreValue.trim().length > 0) {
+      session.store = nextStoreValue;
+    }
+    if (testState.sessionConfig) {
+      Object.assign(session, testState.sessionConfig);
+    }
     config.session = session;
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
   }
   clearRuntimeConfigSnapshot();
   clearConfigCache();
+  lastSyncedSessionStorePath = testState.sessionStorePath;
+  lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
 }
 
 export async function writeSessionStore(params: {
@@ -155,7 +205,7 @@ export async function writeSessionStore(params: {
   // Gateway suites often reuse the same store path across tests while writing the
   // file directly; clear the in-process cache so handlers reload the seeded state.
   clearSessionStoreCacheForTest();
-  await persistTestSessionStorePath(storePath);
+  await persistTestSessionConfig();
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
   clearSessionStoreCacheForTest();
@@ -222,6 +272,19 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
     });
     await fs.mkdir(tempConfigRoot, { recursive: true });
   }
+  tempControlUiRoot = path.join(tempHome, ".openclaw-test-control-ui");
+  await fs.rm(tempControlUiRoot, {
+    recursive: true,
+    force: true,
+    maxRetries: 20,
+    retryDelay: 25,
+  });
+  await fs.mkdir(tempControlUiRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(tempControlUiRoot, "index.html"),
+    "<!doctype html><title>openclaw-test-control-ui</title>\n",
+    "utf-8",
+  );
   setTestConfigRoot(tempConfigRoot);
   clearRuntimeConfigSnapshot();
   clearConfigCache();
@@ -248,6 +311,8 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   testState.bindingsConfig = undefined;
   testState.channelsConfig = undefined;
   testState.allowFrom = undefined;
+  lastSyncedSessionStorePath = testState.sessionStorePath;
+  lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
   testIsNixMode.value = false;
   cronIsolatedRun.mockReset();
   cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
@@ -261,7 +326,9 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
   embeddedRunMock.waitResults.clear();
-  drainSystemEvents(resolveMainSessionKeyFromConfig());
+  for (const sessionKey of resolveGatewayTestMainSessionKeys()) {
+    drainSystemEvents(sessionKey);
+  }
   resetAgentRunContextForTest();
   const mod = await getServerModule();
   mod.__resetModelCatalogCacheForTest();
@@ -288,6 +355,7 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
     tempHome = undefined;
   }
   tempConfigRoot = undefined;
+  tempControlUiRoot = undefined;
   if (options.restoreEnv) {
     suiteConfigRootSeq = 0;
   }
@@ -415,6 +483,17 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
   const mod = await getServerModule();
   const resolvedOpts =
     opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;
+  if (
+    resolvedOpts?.controlUiEnabled === true &&
+    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1" &&
+    tempControlUiRoot &&
+    typeof (testState.gatewayControlUi as { root?: unknown } | undefined)?.root !== "string"
+  ) {
+    testState.gatewayControlUi = {
+      ...testState.gatewayControlUi,
+      root: tempControlUiRoot,
+    };
+  }
   return await mod.startGatewayServer(port, resolvedOpts);
 }
 
@@ -761,7 +840,7 @@ export async function connectReq(
 
 export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectReq>[1]) {
   const res = await connectReq(ws, opts);
-  expect(res.ok).toBe(true);
+  expect(res.ok, JSON.stringify(res)).toBe(true);
   expect((res.payload as { type?: unknown } | undefined)?.type).toBe("hello-ok");
   return res.payload as { type: "hello-ok" };
 }
@@ -810,6 +889,15 @@ export async function rpcReq<T extends Record<string, unknown>>(
   params?: unknown,
   timeoutMs?: number,
 ) {
+  if (hasUnsyncedGatewayTestSessionConfig()) {
+    await persistTestSessionConfig();
+  }
+  // Gateway suites often mutate testState-backed config/session inputs between
+  // RPCs while reusing one server instance; flush caches so the next request
+  // observes the updated test fixture state.
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+  clearSessionStoreCacheForTest();
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
   ws.send(JSON.stringify({ type: "req", id, method, params }));
@@ -833,12 +921,14 @@ export async function rpcReq<T extends Record<string, unknown>>(
 }
 
 export async function waitForSystemEvent(timeoutMs = 2000) {
-  const sessionKey = resolveMainSessionKeyFromConfig();
+  const sessionKeys = resolveGatewayTestMainSessionKeys();
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const events = peekSystemEvents(sessionKey);
-    if (events.length > 0) {
-      return events;
+    for (const sessionKey of sessionKeys) {
+      const events = peekSystemEvents(sessionKey);
+      if (events.length > 0) {
+        return events;
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }

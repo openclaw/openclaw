@@ -29,16 +29,19 @@ type AgentEventState = {
 
 const AGENT_EVENT_STATE_KEY = Symbol.for("openclaw.agentEvents.state");
 
-const state = resolveGlobalSingleton<AgentEventState>(AGENT_EVENT_STATE_KEY, () => ({
-  seqByRun: new Map<string, number>(),
-  listeners: new Set<(evt: AgentEventPayload) => void>(),
-  runContextById: new Map<string, AgentRunContext>(),
-}));
+function getAgentEventState(): AgentEventState {
+  return resolveGlobalSingleton<AgentEventState>(AGENT_EVENT_STATE_KEY, () => ({
+    seqByRun: new Map<string, number>(),
+    listeners: new Set<(evt: AgentEventPayload) => void>(),
+    runContextById: new Map<string, AgentRunContext>(),
+  }));
+}
 
 export function registerAgentRunContext(runId: string, context: AgentRunContext) {
   if (!runId) {
     return;
   }
+  const state = getAgentEventState();
   const existing = state.runContextById.get(runId);
   if (!existing) {
     state.runContextById.set(runId, { ...context });
@@ -59,18 +62,19 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
 }
 
 export function getAgentRunContext(runId: string) {
-  return state.runContextById.get(runId);
+  return getAgentEventState().runContextById.get(runId);
 }
 
 export function clearAgentRunContext(runId: string) {
-  state.runContextById.delete(runId);
+  getAgentEventState().runContextById.delete(runId);
 }
 
 export function resetAgentRunContextForTest() {
-  state.runContextById.clear();
+  getAgentEventState().runContextById.clear();
 }
 
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
+  const state = getAgentEventState();
   const nextSeq = (state.seqByRun.get(event.runId) ?? 0) + 1;
   state.seqByRun.set(event.runId, nextSeq);
   const context = state.runContextById.get(event.runId);
@@ -88,10 +92,12 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
 }
 
 export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
+  const state = getAgentEventState();
   return registerListener(state.listeners, listener);
 }
 
 export function resetAgentEventsForTest() {
+  const state = getAgentEventState();
   state.seqByRun.clear();
   state.listeners.clear();
   state.runContextById.clear();

@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   dispatchChannelMessageAction: vi.fn(),
   sendMessage: vi.fn(),
   sendPoll: vi.fn(),
-  getAgentScopedMediaLocalRoots: vi.fn(() => ["/tmp/agent-roots"]),
+  getAgentScopedMediaLocalRootsForSources: vi.fn(() => ["/tmp/agent-roots"]),
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
 }));
 
@@ -24,7 +24,7 @@ vi.mock("../../media/local-roots.js", async (importOriginal) => {
   return {
     ...actual,
     getDefaultMediaLocalRoots: mocks.getDefaultMediaLocalRoots,
-    getAgentScopedMediaLocalRoots: mocks.getAgentScopedMediaLocalRoots,
+    getAgentScopedMediaLocalRootsForSources: mocks.getAgentScopedMediaLocalRootsForSources,
   };
 });
 
@@ -77,11 +77,11 @@ describe("executeSendAction", () => {
     await executeSendAction({
       ctx: {
         cfg: {},
-        channel: "discord",
+        channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
         dryRun: false,
         mirror: {
-          sessionKey: "agent:main:discord:channel:123",
+          sessionKey: "agent:main:demo-outbound:channel:123",
           ...params.mirror,
         },
       },
@@ -98,14 +98,14 @@ describe("executeSendAction", () => {
     mocks.sendMessage.mockClear();
     mocks.sendPoll.mockClear();
     mocks.getDefaultMediaLocalRoots.mockClear();
-    mocks.getAgentScopedMediaLocalRoots.mockClear();
+    mocks.getAgentScopedMediaLocalRootsForSources.mockClear();
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
   });
 
   it("forwards ctx.agentId to sendMessage on core outbound path", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
     mocks.sendMessage.mockResolvedValue({
-      channel: "discord",
+      channel: "demo-outbound",
       to: "channel:123",
       via: "direct",
       mediaUrl: null,
@@ -114,7 +114,7 @@ describe("executeSendAction", () => {
     await executeSendAction({
       ctx: {
         cfg: {},
-        channel: "discord",
+        channel: "demo-outbound",
         params: {},
         agentId: "work",
         dryRun: false,
@@ -126,7 +126,7 @@ describe("executeSendAction", () => {
     expect(mocks.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "work",
-        channel: "discord",
+        channel: "demo-outbound",
         to: "channel:123",
         content: "hello",
       }),
@@ -139,7 +139,7 @@ describe("executeSendAction", () => {
     const result = await executePollAction({
       ctx: {
         cfg: {},
-        channel: "discord",
+        channel: "demo-outbound",
         params: {},
         dryRun: false,
       },
@@ -164,7 +164,7 @@ describe("executeSendAction", () => {
     const result = await executePollAction({
       ctx: {
         cfg: {},
-        channel: "discord",
+        channel: "demo-outbound",
         params: {
           pollQuestion: "Lunch?",
           pollOption: ["Pizza", "Sushi"],
@@ -187,7 +187,7 @@ describe("executeSendAction", () => {
     await executeSendAction({
       ctx: {
         cfg: {},
-        channel: "discord",
+        channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
         agentId: "agent-1",
         dryRun: false,
@@ -196,12 +196,43 @@ describe("executeSendAction", () => {
       message: "hello",
     });
 
-    expect(mocks.getAgentScopedMediaLocalRoots).toHaveBeenCalledWith({}, "agent-1");
+    expect(mocks.getAgentScopedMediaLocalRootsForSources).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "agent-1",
+      mediaSources: [],
+    });
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaLocalRoots: ["/tmp/agent-roots"],
       }),
     );
+  });
+
+  it("passes concrete media sources when widening plugin dispatch roots", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: {
+          to: "channel:123",
+          message: "hello",
+          media: "/Users/peter/Pictures/photo.png",
+        },
+        agentId: "agent-1",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+      mediaUrl: "/Users/peter/Pictures/photo.png",
+    });
+
+    expect(mocks.getAgentScopedMediaLocalRootsForSources).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "agent-1",
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
   });
 
   it("passes mirror idempotency keys through plugin-handled sends", async () => {
@@ -212,7 +243,7 @@ describe("executeSendAction", () => {
     });
 
     expectMirrorWrite({
-      sessionKey: "agent:main:discord:channel:123",
+      sessionKey: "agent:main:demo-outbound:channel:123",
       text: "hello",
       idempotencyKey: "idem-plugin-send-1",
     });
@@ -228,7 +259,7 @@ describe("executeSendAction", () => {
 
     expectMirrorWrite({
       agentId: "agent-9",
-      sessionKey: "agent:main:discord:channel:123",
+      sessionKey: "agent:main:demo-outbound:channel:123",
       text: "hello",
       mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
     });
@@ -236,7 +267,7 @@ describe("executeSendAction", () => {
 
   it("skips plugin dispatch during dry-run sends and forwards gateway + silent to sendMessage", async () => {
     mocks.sendMessage.mockResolvedValue({
-      channel: "discord",
+      channel: "demo-outbound",
       to: "channel:123",
       via: "gateway",
       mediaUrl: null,
@@ -245,7 +276,7 @@ describe("executeSendAction", () => {
     await executeSendAction({
       ctx: {
         cfg: {},
-        channel: "discord",
+        channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
         dryRun: true,
         silent: true,
@@ -280,7 +311,7 @@ describe("executeSendAction", () => {
   it("forwards poll args to sendPoll on core outbound path", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
     mocks.sendPoll.mockResolvedValue({
-      channel: "discord",
+      channel: "demo-outbound",
       to: "channel:123",
       question: "Lunch?",
       options: ["Pizza", "Sushi"],
@@ -293,7 +324,7 @@ describe("executeSendAction", () => {
     await executePollAction({
       ctx: {
         cfg: {},
-        channel: "discord",
+        channel: "demo-outbound",
         params: {},
         accountId: "acc-1",
         dryRun: false,
@@ -311,7 +342,7 @@ describe("executeSendAction", () => {
 
     expect(mocks.sendPoll).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "discord",
+        channel: "demo-outbound",
         accountId: "acc-1",
         to: "channel:123",
         question: "Lunch?",
@@ -326,7 +357,7 @@ describe("executeSendAction", () => {
 
   it("skips plugin dispatch during dry-run polls and forwards durationHours + silent", async () => {
     mocks.sendPoll.mockResolvedValue({
-      channel: "discord",
+      channel: "demo-outbound",
       to: "channel:123",
       question: "Lunch?",
       options: ["Pizza", "Sushi"],
@@ -339,7 +370,7 @@ describe("executeSendAction", () => {
     await executePollAction({
       ctx: {
         cfg: {},
-        channel: "discord",
+        channel: "demo-outbound",
         params: {},
         dryRun: true,
         silent: true,
