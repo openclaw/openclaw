@@ -1,4 +1,5 @@
 import { DEFAULT_EMOJIS, type StatusReactionEmojis } from "openclaw/plugin-sdk/channel-feedback";
+import type { TelegramChatDetails, TelegramGetChat } from "./bot/types.js";
 
 type StatusReactionEmojiKey = keyof Required<StatusReactionEmojis>;
 
@@ -156,35 +157,26 @@ export function isTelegramSupportedReactionEmoji(emoji: string): boolean {
 }
 
 export function extractTelegramAllowedEmojiReactions(
-  chat: unknown,
+  chat: TelegramChatDetails | null | undefined,
 ): Set<string> | null | undefined {
-  if (!chat || typeof chat !== "object") {
+  if (!chat) {
     return undefined;
   }
-
-  if (!Object.prototype.hasOwnProperty.call(chat, "available_reactions")) {
+  const availableReactions = chat.available_reactions;
+  if (typeof availableReactions === "undefined") {
     return undefined;
   }
-
-  const availableReactions = (chat as { available_reactions?: unknown }).available_reactions;
   if (availableReactions == null) {
     // Explicitly omitted/null => all emoji reactions are allowed in this chat.
     return null;
   }
-  if (!Array.isArray(availableReactions)) {
-    return new Set<string>();
-  }
 
   const allowed = new Set<string>();
   for (const reaction of availableReactions) {
-    if (!reaction || typeof reaction !== "object") {
+    if (reaction.type !== "emoji") {
       continue;
     }
-    const typedReaction = reaction as { type?: unknown; emoji?: unknown };
-    if (typedReaction.type !== "emoji" || typeof typedReaction.emoji !== "string") {
-      continue;
-    }
-    const emoji = typedReaction.emoji.trim();
+    const emoji = reaction.emoji.trim();
     if (emoji) {
       allowed.add(emoji);
     }
@@ -193,9 +185,9 @@ export function extractTelegramAllowedEmojiReactions(
 }
 
 export async function resolveTelegramAllowedEmojiReactions(params: {
-  chat: unknown;
+  chat: TelegramChatDetails | null | undefined;
   chatId: string | number;
-  getChat?: (chatId: string | number) => Promise<unknown>;
+  getChat?: TelegramGetChat;
 }): Promise<Set<string> | null> {
   const fromMessage = extractTelegramAllowedEmojiReactions(params.chat);
   if (fromMessage !== undefined) {
