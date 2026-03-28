@@ -71,9 +71,18 @@ function buildBundledChannelMaps(
 }
 
 function readBundledChannelPlugins(): readonly BundledChannelPluginShape[] | undefined {
-  return Array.isArray(bundledChannelModule.bundledChannelPlugins)
-    ? (bundledChannelModule.bundledChannelPlugins as readonly BundledChannelPluginShape[])
-    : undefined;
+  try {
+    return Array.isArray(bundledChannelModule.bundledChannelPlugins)
+      ? (bundledChannelModule.bundledChannelPlugins as readonly BundledChannelPluginShape[])
+      : undefined;
+  } catch (error) {
+    // Circular bundled channel imports can transiently hit TDZ during test/bootstrap
+    // initialization. Fall back to metadata/static schemas until the registry is ready.
+    if (error instanceof ReferenceError) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 function getBundledChannelMaps(): BundledChannelMaps {
