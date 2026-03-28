@@ -159,6 +159,59 @@ function resolveAwsSdkApiKeyVarName(env: NodeJS.ProcessEnv = process.env): strin
   return resolveAwsSdkEnvVarName(env) ?? "AWS_PROFILE";
 }
 
+function resolveMissingProviderApiKey(params: {
+  providerKey: string;
+  provider: ProviderConfig;
+  env: NodeJS.ProcessEnv;
+  profileApiKey: ProfileApiKeyResolution | undefined;
+  secretRefManagedProviders?: Set<string>;
+}): ProviderConfig {
+  const hasModels = Array.isArray(params.provider.models) && params.provider.models.length > 0;
+  const normalizedApiKey = normalizeOptionalSecretInput(params.provider.apiKey);
+  const hasConfiguredApiKey = Boolean(normalizedApiKey || params.provider.apiKey);
+  if (!hasModels || hasConfiguredApiKey) {
+    return params.provider;
+  }
+
+  const authMode = params.provider.auth;
+  const providerApiKeyResolver = PROVIDER_CONFIG_API_KEY_RESOLVERS[params.providerKey];
+  if (providerApiKeyResolver && (!authMode || authMode === "aws-sdk")) {
+    return {
+      ...params.provider,
+      apiKey: providerApiKeyResolver(params.env),
+    };
+  }
+  if (authMode === "aws-sdk") {
+    return {
+      ...params.provider,
+      apiKey: resolveAwsSdkApiKeyVarName(params.env),
+    };
+  }
+
+  const fromEnv = resolveEnvApiKeyVarName(params.providerKey, params.env);
+  const apiKey = fromEnv ?? params.profileApiKey?.apiKey;
+  if (!apiKey?.trim()) {
+    return params.provider;
+  }
+  if (params.profileApiKey && params.profileApiKey.source !== "plaintext") {
+    params.secretRefManagedProviders?.add(params.providerKey);
+  }
+  return {
+    ...params.provider,
+    apiKey,
+  };
+}
+
+function normalizeProviderSpecificConfig(
+  providerKey: string,
+  provider: ProviderConfig,
+): ProviderConfig {
+  if (shouldNormalizeGoogleProviderConfig(providerKey, provider)) {
+    return normalizeGoogleProviderConfig(providerKey, provider);
+  }
+  return provider;
+}
+
 function normalizeHeaderValues(params: {
   headers: ProviderConfig["headers"] | undefined;
   secretDefaults: SecretDefaults | undefined;
@@ -520,42 +573,25 @@ export function normalizeProviders(params: {
       }
     }
 
-    // If a provider defines models, pi's ModelRegistry requires apiKey to be set.
-    // Fill it from the environment or auth profiles when possible.
-    const hasModels =
-      Array.isArray(normalizedProvider.models) && normalizedProvider.models.length > 0;
-    const normalizedApiKey = normalizeOptionalSecretInput(normalizedProvider.apiKey);
-    const hasConfiguredApiKey = Boolean(normalizedApiKey || normalizedProvider.apiKey);
-    if (hasModels && !hasConfiguredApiKey) {
-      const authMode = normalizedProvider.auth;
-      const providerApiKeyResolver = PROVIDER_CONFIG_API_KEY_RESOLVERS[normalizedKey];
-      if (providerApiKeyResolver && (!authMode || authMode === "aws-sdk")) {
-        const apiKey = providerApiKeyResolver(env);
-        mutated = true;
-        normalizedProvider = { ...normalizedProvider, apiKey };
-      } else if (authMode === "aws-sdk") {
-        const apiKey = resolveAwsSdkApiKeyVarName(env);
-        mutated = true;
-        normalizedProvider = { ...normalizedProvider, apiKey };
-      } else {
-        const fromEnv = resolveEnvApiKeyVarName(normalizedKey, env);
-        const apiKey = fromEnv ?? profileApiKey?.apiKey;
-        if (apiKey?.trim()) {
-          if (profileApiKey && profileApiKey.source !== "plaintext") {
-            params.secretRefManagedProviders?.add(normalizedKey);
-          }
-          mutated = true;
-          normalizedProvider = { ...normalizedProvider, apiKey };
-        }
-      }
+    const providerWithApiKey = resolveMissingProviderApiKey({
+      providerKey: normalizedKey,
+      provider: normalizedProvider,
+      env,
+      profileApiKey,
+      secretRefManagedProviders: params.secretRefManagedProviders,
+    });
+    if (providerWithApiKey !== normalizedProvider) {
+      mutated = true;
+      normalizedProvider = providerWithApiKey;
     }
 
-    if (shouldNormalizeGoogleProviderConfig(normalizedKey, normalizedProvider)) {
-      const googleNormalized = normalizeGoogleProviderConfig(normalizedKey, normalizedProvider);
-      if (googleNormalized !== normalizedProvider) {
-        mutated = true;
-        normalizedProvider = googleNormalized;
-      }
+    const providerSpecificNormalized = normalizeProviderSpecificConfig(
+      normalizedKey,
+      normalizedProvider,
+    );
+    if (providerSpecificNormalized !== normalizedProvider) {
+      mutated = true;
+      normalizedProvider = providerSpecificNormalized;
     }
 
     const existing = next[normalizedKey];
