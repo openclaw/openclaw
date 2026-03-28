@@ -184,7 +184,7 @@
 | `deep-research` | ✅ 已安装 | Claude | 深度研究引擎 |
 | `claude-cli` | ✅ 已安装 | Claude (via CLI) | 复杂任务路由到本地 Claude Max |
 | `wechat-search` | ✅ 已安装 | Claude (via CLI) | 微信历史搜索（Claude CLI → MCP） |
-| `daily-digest` | 待开发 | DeepSeek | 每日消息摘要推送 |
+| `daily-digest` | ✅ 已安装 | DeepSeek | 每日消息摘要（支持 cron 定时推送） |
 
 ---
 
@@ -223,12 +223,15 @@
 
 **目标**：消息自动分类 + 跨渠道转发 + 微信历史搜索
 
-| 任务 | 说明 | 依赖 |
+| 任务 | 说明 | 状态 |
 |------|------|------|
-| 消息预分类 hook | OpenClaw `before_model_resolve` hook，DeepSeek 预处理 | Phase 1 |
-| 跨渠道转发 | 微信紧急消息 → iMessage 摘要推送 | 预分类 hook |
-| wechat-search skill | 整合 MCP Server 到 OpenClaw skill | 无 |
-| 每日摘要 MVP | Cron 触发，汇总当日三渠道消息 | 预分类 hook |
+| 消息分类增强 | CLAUDE.md 中细化分类规则，自动忽略公众号推送 | ✅ 完成 |
+| 跨渠道紧急转发 | CLAUDE.md 规则 + message 工具，紧急消息自动转发到 iMessage | ✅ 完成 |
+| wechat-search skill | 整合 MCP Server 到 OpenClaw skill | ✅ Phase 1 完成 |
+| daily-digest skill | 每日消息摘要，支持 cron 定时触发推送到飞书 | ✅ 完成 |
+| MCP 权限预授权 | settings.json 预授权微信 MCP 工具，非交互模式不再卡权限 | ✅ 完成 |
+
+**实现方式**：通过 CLAUDE.md 规则驱动（不写代码），利用 OpenClaw 原生 message 工具实现跨渠道转发，cron 工具实现定时触发。
 
 ### Phase 3：智能升级（2-4 周）
 
@@ -252,4 +255,5 @@
 | 2026-03-27 | BlueBubbles webhook 404 修复（commit 0a098fa） |
 | 2026-03-27 | 需求文档 v2 完成，确认架构方向 |
 | 2026-03-27 | Phase 1 v1：claude-cli / wechat-search skill 创建，CLAUDE.md 路由规则配置 |
-| 2026-03-28 | Phase 1 v2：发现 DeepSeek 无法可靠调用 CLI，改用 OpenClaw 原生 cliBackends 机制，用户 @model 切换 |
+| 2026-03-28 | Phase 1 v2：改用 OpenClaw 原生 cliBackends 机制，@model claude-cli/opus 切换验证通过 |
+| 2026-03-28 | Phase 2 完成：消息分类增强、跨渠道紧急转发、daily-digest skill、MCP 权限预授权 |
