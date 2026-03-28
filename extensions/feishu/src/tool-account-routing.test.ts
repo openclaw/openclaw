@@ -11,6 +11,7 @@ vi.mock("./client.js", () => ({
 }));
 
 let registerFeishuBitableTools: typeof import("./bitable.js").registerFeishuBitableTools;
+let registerFeishuChatTools: typeof import("./chat.js").registerFeishuChatTools;
 let registerFeishuDriveTools: typeof import("./drive.js").registerFeishuDriveTools;
 let registerFeishuPermTools: typeof import("./perm.js").registerFeishuPermTools;
 let registerFeishuWikiTools: typeof import("./wiki.js").registerFeishuWikiTools;
@@ -20,11 +21,13 @@ function createConfig(params: {
     wiki?: boolean;
     drive?: boolean;
     perm?: boolean;
+    chat?: boolean;
   };
   toolsB?: {
     wiki?: boolean;
     drive?: boolean;
     perm?: boolean;
+    chat?: boolean;
   };
   defaultAccount?: string;
 }): OpenClawPluginApi["config"] {
@@ -61,6 +64,7 @@ describe("feishu tool account routing", () => {
         ...(await import("./wiki.js")),
       })));
     ({ registerFeishuWikiTools } = await import("./wiki.js"));
+    ({ registerFeishuChatTools } = await import("./chat.js"));
     vi.clearAllMocks();
   });
 
@@ -120,6 +124,21 @@ describe("feishu tool account routing", () => {
     registerFeishuPermTools(api);
 
     const tool = resolveTool("feishu_perm", { agentAccountId: "b" });
+    await tool.execute("call", { action: "unknown_action" });
+
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
+  });
+
+  test("chat tool routes to agentAccountId", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        toolsA: { chat: false },
+        toolsB: { chat: true },
+      }),
+    );
+    registerFeishuChatTools(api);
+
+    const tool = resolveTool("feishu_chat", { agentAccountId: "b" });
     await tool.execute("call", { action: "unknown_action" });
 
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
