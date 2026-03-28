@@ -5,6 +5,7 @@ const IRC_TARGET_PATTERN = /^[^\s:]+$/u;
 
 export type ParsedIrcLine = {
   raw: string;
+  tags?: Map<string, string>;
   prefix?: string;
   command: string;
   params: string[];
@@ -25,6 +26,27 @@ export function parseIrcLine(line: string): ParsedIrcLine | null {
   }
 
   let cursor = raw;
+  let tags: Map<string, string> | undefined;
+
+  // Parse IRCv3 tags (starts with @)
+  if (cursor.startsWith("@")) {
+    const spaceIdx = cursor.indexOf(" ");
+    if (spaceIdx > 1) {
+      const tagsStr = cursor.slice(1, spaceIdx);
+      tags = new Map();
+      for (const tag of tagsStr.split(";")) {
+        if (!tag) continue;
+        const eqIdx = tag.indexOf("=");
+        if (eqIdx === -1) {
+          tags.set(tag, "");
+        } else {
+          tags.set(tag.slice(0, eqIdx), tag.slice(eqIdx + 1));
+        }
+      }
+      cursor = cursor.slice(spaceIdx + 1).trimStart();
+    }
+  }
+
   let prefix: string | undefined;
   if (cursor.startsWith(":")) {
     const idx = cursor.indexOf(" ");
@@ -69,6 +91,7 @@ export function parseIrcLine(line: string): ParsedIrcLine | null {
 
   return {
     raw,
+    tags,
     prefix,
     command: command.toUpperCase(),
     params,
@@ -119,7 +142,8 @@ function decodeLiteralEscapes(input: string): string {
 
 export function sanitizeIrcOutboundText(text: string): string {
   const decoded = decodeLiteralEscapes(text);
-  return stripIrcControlChars(decoded.replace(/\r?\n/g, " ")).trim();
+  // Preserve newlines for draft/multiline support - flattening happens in client if needed
+  return stripIrcControlChars(decoded).trim();
 }
 
 export function sanitizeIrcTarget(raw: string): string {

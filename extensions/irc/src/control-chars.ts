@@ -1,5 +1,6 @@
 export function isIrcControlChar(charCode: number): boolean {
-  return charCode <= 0x1f || charCode === 0x7f;
+  // 0x0a is newline - preserve for draft/multiline support
+  return (charCode <= 0x1f || charCode === 0x7f) && charCode !== 0x0a;
 }
 
 export function hasIrcControlChars(value: string): boolean {

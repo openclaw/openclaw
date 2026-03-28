@@ -336,7 +336,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       deliveryMode: "direct",
       chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
-      textChunkLimit: 350,
+      textChunkLimit: 16384,
     },
     attachedResults: {
       channel: "irc",
