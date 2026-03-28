@@ -494,11 +494,17 @@ export async function sendMSTeamsMessages(params: {
   const sendProactively = async (
     batch: MSTeamsRenderedMessage[],
     startIndex: number,
+    { preserveThread = false }: { preserveThread?: boolean } = {},
   ): Promise<string[]> => {
     const baseRef = buildConversationReference(params.conversationRef);
+    // When falling back from a revoked thread context in a channel conversation,
+    // preserve activityId so proactive messages land in the original thread
+    // rather than creating a new top-level channel post.
+    // For explicit top-level sends and non-channel conversations, clear it.
+    const conversationType = params.conversationRef.conversation?.conversationType?.toLowerCase();
     const proactiveRef: MSTeamsConversationReference = {
       ...baseRef,
-      activityId: undefined,
+      activityId: preserveThread && conversationType === "channel" ? baseRef.activityId : undefined,
     };
 
     const messageIds: string[] = [];
@@ -523,7 +529,10 @@ export async function sendMSTeamsMessages(params: {
         onRevoked: async () => {
           const remaining = messages.slice(idx);
           return {
-            ids: remaining.length > 0 ? await sendProactively(remaining, idx) : [],
+            ids:
+              remaining.length > 0
+                ? await sendProactively(remaining, idx, { preserveThread: true })
+                : [],
             fellBack: true,
           };
         },

@@ -404,6 +404,129 @@ describe("msteams messenger", () => {
       expect(ids).toEqual(["id:one", "id:two", "id:three"]);
     });
 
+    it("preserves activityId in proactive fallback for channel conversations", async () => {
+      const proactiveSent: string[] = [];
+      let capturedReference: { activityId?: string; conversation?: { id?: string } } | undefined;
+
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedReference = reference as typeof capturedReference;
+          await logic({
+            sendActivity: createRecordedSendActivity(proactiveSent),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      const channelRef: StoredConversationReference = {
+        ...baseRef,
+        conversation: {
+          ...baseRef.conversation,
+          conversationType: "channel",
+        },
+      };
+
+      const ctx = createRevokedThreadContext();
+
+      await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter,
+        appId: "app123",
+        conversationRef: channelRef,
+        context: ctx,
+        messages: [{ text: "hello" }],
+      });
+
+      expect(proactiveSent).toEqual(["hello"]);
+      // activityId must be preserved so the message lands in the thread
+      expect(capturedReference?.activityId).toBe("activity123");
+    });
+
+    it("clears activityId in proactive fallback for personal conversations", async () => {
+      const proactiveSent: string[] = [];
+      let capturedReference: { activityId?: string } | undefined;
+
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedReference = reference as typeof capturedReference;
+          await logic({
+            sendActivity: createRecordedSendActivity(proactiveSent),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      const personalRef: StoredConversationReference = {
+        ...baseRef,
+        conversation: {
+          ...baseRef.conversation,
+          conversationType: "personal",
+        },
+      };
+
+      const ctx = createRevokedThreadContext();
+
+      await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter,
+        appId: "app123",
+        conversationRef: personalRef,
+        context: ctx,
+        messages: [{ text: "hello" }],
+      });
+
+      expect(proactiveSent).toEqual(["hello"]);
+      // activityId should be cleared for DMs
+      expect(capturedReference?.activityId).toBeUndefined();
+    });
+
+    it("clears activityId in top-level send for channel conversations", async () => {
+      const sent: string[] = [];
+      let capturedReference: { activityId?: string } | undefined;
+
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedReference = reference as typeof capturedReference;
+          await logic({
+            sendActivity: createRecordedSendActivity(sent),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      const channelRef: StoredConversationReference = {
+        ...baseRef,
+        conversation: {
+          ...baseRef.conversation,
+          conversationType: "channel",
+        },
+      };
+
+      await sendMSTeamsMessages({
+        replyStyle: "top-level",
+        adapter,
+        appId: "app123",
+        conversationRef: channelRef,
+        messages: [{ text: "hello" }],
+      });
+
+      expect(sent).toEqual(["hello"]);
+      // top-level sends must always clear activityId, even for channels
+      expect(capturedReference?.activityId).toBeUndefined();
+    });
+
     it("retries top-level sends on transient (5xx)", async () => {
       const attempts: string[] = [];
 
