@@ -93,7 +93,7 @@
 |--------|----|----|----------|------|
 | Google Calendar | ❌ | ❌ | claude.ai Calendar MCP | 待认证 |
 | 剪贴板 | ❌ | ❌ | 自建 MCP（Python） | 待开发 |
-| 健康数据 | ❌ | ❌ | 导出 + MCP 解析 | 待调研 |
+| 健康数据(Garmin) | ✅ | - | Garmin Connect MCP Server | **2026-03-28 接通** |
 | 手机通知 | ❌ | ❌ | KDE Connect / 转发 | 待调研 |
 | 浏览器书签 | ❌ | ❌ | 本地文件读取 MCP | 待开发 |
 | 快递追踪 | ❌ | ❌ | 快递100 API MCP | 待调研 |
@@ -267,8 +267,8 @@
 
 | 任务 | 说明 | 优先级 |
 |------|------|--------|
-| 健康数据 MCP | 解析 Apple Health / 运动数据导出 | P1 |
-| health skill | 运动分析、久坐提醒、睡眠报告 | P1 |
+| Garmin Connect MCP | 步数/心率/睡眠/运动/压力数据 | ✅ 完成 |
+| health skill | 运动分析、久坐提醒、睡眠报告 | 待创建 |
 | 手机通知转发 | Tasker/快捷指令 → OpenClaw | P1 |
 | 通知过滤 skill | AI 过滤噪音通知 | P2 |
 
@@ -295,3 +295,4 @@
 | 2026-03-28 | Phase 3 完成：复杂度检测、memory skill、cron 定时任务、邮箱调研 |
 | 2026-03-28 | 项目正式命名**头号助手**，扩展为全方位个人 AI 助手 |
 | 2026-03-28 | Phase 4 完成：Google Calendar + Clipboard + Gmail MCP + 晨间简报 |
+| 2026-03-28 | Phase 5 进行中：Garmin Connect MCP 接通（步数/心率/睡眠/运动） |
