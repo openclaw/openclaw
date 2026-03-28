@@ -32,8 +32,8 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   // Telegram uses :topic:, other platforms use :thread:
   let threadId: string | undefined;
   const restJoined = rest.join(":");
-  const topicMatch = restJoined.match(/:topic:(\d+)$/);
-  const threadMatch = restJoined.match(/:thread:(\d+)$/);
+  const topicMatch = restJoined.match(/:topic:([^:]+)$/);
+  const threadMatch = restJoined.match(/:thread:([^:]+)$/);
   const match = topicMatch || threadMatch;
 
   if (match) {
@@ -41,7 +41,7 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   }
 
   // Remove :topic:N or :thread:N suffix from ID for target
-  const id = match ? restJoined.replace(/:(topic|thread):\d+$/, "") : restJoined.trim();
+  const id = match ? restJoined.replace(/:(topic|thread):[^:]+$/, "") : restJoined.trim();
 
   if (!id) {
     return null;
