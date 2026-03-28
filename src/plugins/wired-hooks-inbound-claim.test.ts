@@ -1,30 +1,50 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHookRunner } from "./hooks.js";
-import { createMockPluginRegistry } from "./hooks.test-helpers.js";
+import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
+
+const inboundClaimEvent = {
+  content: "who are you",
+  channel: "discord",
+  accountId: "default",
+  conversationId: "channel:1",
+  isGroup: true,
+};
+
+const inboundClaimCtx = {
+  channelId: "discord",
+  accountId: "default",
+  conversationId: "channel:1",
+};
+
+function createInboundClaimTelegramEvent() {
+  return {
+    content: "who are you",
+    channel: "telegram",
+    accountId: "default",
+    conversationId: "123:topic:77",
+    isGroup: true,
+  };
+}
+
+function createInboundClaimTelegramCtx() {
+  return {
+    channelId: "telegram",
+    accountId: "default",
+    conversationId: "123:topic:77",
+  };
+}
 
 describe("inbound_claim hook runner", () => {
   it("stops at the first handler that claims the event", async () => {
     const first = vi.fn().mockResolvedValue({ handled: true });
     const second = vi.fn().mockResolvedValue({ handled: true });
-    const registry = createMockPluginRegistry([
+    const { runner } = createHookRunnerWithRegistry([
       { hookName: "inbound_claim", handler: first },
       { hookName: "inbound_claim", handler: second },
     ]);
-    const runner = createHookRunner(registry);
 
     const result = await runner.runInboundClaim(
-      {
-        content: "who are you",
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "123:topic:77",
-        isGroup: true,
-      },
-      {
-        channelId: "telegram",
-        accountId: "default",
-        conversationId: "123:topic:77",
-      },
+      createInboundClaimTelegramEvent(),
+      createInboundClaimTelegramCtx(),
     );
 
     expect(result).toEqual({ handled: true });
@@ -39,23 +59,23 @@ describe("inbound_claim hook runner", () => {
     };
     const failing = vi.fn().mockRejectedValue(new Error("boom"));
     const succeeding = vi.fn().mockResolvedValue({ handled: true });
-    const registry = createMockPluginRegistry([
-      { hookName: "inbound_claim", handler: failing },
-      { hookName: "inbound_claim", handler: succeeding },
-    ]);
-    const runner = createHookRunner(registry, { logger });
+    const { runner } = createHookRunnerWithRegistry(
+      [
+        { hookName: "inbound_claim", handler: failing },
+        { hookName: "inbound_claim", handler: succeeding },
+      ],
+      { logger },
+    );
 
     const result = await runner.runInboundClaim(
       {
+        ...createInboundClaimTelegramEvent(),
         content: "hi",
-        channel: "telegram",
-        accountId: "default",
         conversationId: "123",
         isGroup: false,
       },
       {
-        channelId: "telegram",
-        accountId: "default",
+        ...createInboundClaimTelegramCtx(),
         conversationId: "123",
       },
     );
@@ -70,27 +90,16 @@ describe("inbound_claim hook runner", () => {
   it("can target a single plugin when core already owns the binding", async () => {
     const first = vi.fn().mockResolvedValue({ handled: true });
     const second = vi.fn().mockResolvedValue({ handled: true });
-    const registry = createMockPluginRegistry([
+    const { registry, runner } = createHookRunnerWithRegistry([
       { hookName: "inbound_claim", handler: first },
       { hookName: "inbound_claim", handler: second },
     ]);
     registry.typedHooks[1].pluginId = "other-plugin";
-    const runner = createHookRunner(registry);
 
     const result = await runner.runInboundClaimForPlugin(
       "test-plugin",
-      {
-        content: "who are you",
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1",
-        isGroup: true,
-      },
-      {
-        channelId: "discord",
-        accountId: "default",
-        conversationId: "channel:1",
-      },
+      inboundClaimEvent,
+      inboundClaimCtx,
     );
 
     expect(result).toEqual({ handled: true });
@@ -99,47 +108,25 @@ describe("inbound_claim hook runner", () => {
   });
 
   it("reports missing_plugin when the bound plugin is not loaded", async () => {
-    const registry = createMockPluginRegistry([]);
+    const { registry, runner } = createHookRunnerWithRegistry([]);
     registry.plugins = [];
-    const runner = createHookRunner(registry);
 
     const result = await runner.runInboundClaimForPluginOutcome(
       "missing-plugin",
-      {
-        content: "who are you",
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1",
-        isGroup: true,
-      },
-      {
-        channelId: "discord",
-        accountId: "default",
-        conversationId: "channel:1",
-      },
+      inboundClaimEvent,
+      inboundClaimCtx,
     );
 
     expect(result).toEqual({ status: "missing_plugin" });
   });
 
   it("reports no_handler when the plugin is loaded but has no targeted hooks", async () => {
-    const registry = createMockPluginRegistry([]);
-    const runner = createHookRunner(registry);
+    const { runner } = createHookRunnerWithRegistry([]);
 
     const result = await runner.runInboundClaimForPluginOutcome(
       "test-plugin",
-      {
-        content: "who are you",
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1",
-        isGroup: true,
-      },
-      {
-        channelId: "discord",
-        accountId: "default",
-        conversationId: "channel:1",
-      },
+      inboundClaimEvent,
+      inboundClaimCtx,
     );
 
     expect(result).toEqual({ status: "no_handler" });
@@ -151,23 +138,15 @@ describe("inbound_claim hook runner", () => {
       error: vi.fn(),
     };
     const failing = vi.fn().mockRejectedValue(new Error("boom"));
-    const registry = createMockPluginRegistry([{ hookName: "inbound_claim", handler: failing }]);
-    const runner = createHookRunner(registry, { logger });
+    const { runner } = createHookRunnerWithRegistry(
+      [{ hookName: "inbound_claim", handler: failing }],
+      { logger },
+    );
 
     const result = await runner.runInboundClaimForPluginOutcome(
       "test-plugin",
-      {
-        content: "who are you",
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1",
-        isGroup: true,
-      },
-      {
-        channelId: "discord",
-        accountId: "default",
-        conversationId: "channel:1",
-      },
+      inboundClaimEvent,
+      inboundClaimCtx,
     );
 
     expect(result).toEqual({ status: "error", error: "boom" });

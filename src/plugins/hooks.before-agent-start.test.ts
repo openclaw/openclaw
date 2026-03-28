@@ -7,7 +7,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
+import { addStaticTestHooks, addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type { PluginHookBeforeAgentStartResult, PluginHookRegistration } from "./types.js";
 
@@ -67,9 +67,10 @@ describe("before_agent_start hook merger", () => {
       priority?: number;
     }>,
   ) => {
-    for (const { pluginId, result, priority } of hooks) {
-      addBeforeAgentStartHook(registry, pluginId, () => result, priority);
-    }
+    addStaticTestHooks(registry, {
+      hookName: "before_agent_start",
+      hooks,
+    });
     const runner = createHookRunner(registry);
     return await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
   };

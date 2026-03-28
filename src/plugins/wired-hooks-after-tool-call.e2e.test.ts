@@ -52,6 +52,47 @@ function createToolHandlerCtx(params: {
   };
 }
 
+function getAfterToolCallCall(index = 0) {
+  const call = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[index];
+  return {
+    event: call?.[0] as
+      | {
+          toolName?: string;
+          params?: unknown;
+          error?: unknown;
+          durationMs?: unknown;
+          runId?: string;
+          toolCallId?: string;
+        }
+      | undefined,
+    context: call?.[1] as
+      | {
+          toolName?: string;
+          agentId?: string;
+          sessionKey?: string;
+          sessionId?: string;
+          runId?: string;
+          toolCallId?: string;
+        }
+      | undefined,
+  };
+}
+
+function expectAfterToolCallPayload(params: {
+  index?: number;
+  expectedEvent: Record<string, unknown>;
+  expectedContext: Record<string, unknown>;
+}) {
+  const { event, context } = getAfterToolCallCall(params.index);
+  expect(event).toBeDefined();
+  expect(context).toBeDefined();
+  if (!event || !context) {
+    throw new Error("missing hook call payload");
+  }
+  expect(event).toEqual(expect.objectContaining(params.expectedEvent));
+  expect(context).toEqual(expect.objectContaining(params.expectedContext));
+}
+
 let handleToolExecutionStart: typeof import("../agents/pi-embedded-subscribe.handlers.tools.js").handleToolExecutionStart;
 let handleToolExecutionEnd: typeof import("../agents/pi-embedded-subscribe.handlers.tools.js").handleToolExecutionEnd;
 
@@ -103,46 +144,24 @@ describe("after_tool_call hook wiring", () => {
 
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
     expect(hookMocks.runner.runBeforeToolCall).not.toHaveBeenCalled();
-
-    const firstCall = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(firstCall).toBeDefined();
-    const event = firstCall?.[0] as
-      | {
-          toolName?: string;
-          params?: unknown;
-          error?: unknown;
-          durationMs?: unknown;
-          runId?: string;
-          toolCallId?: string;
-        }
-      | undefined;
-    const context = firstCall?.[1] as
-      | {
-          toolName?: string;
-          agentId?: string;
-          sessionKey?: string;
-          sessionId?: string;
-          runId?: string;
-          toolCallId?: string;
-        }
-      | undefined;
-    expect(event).toBeDefined();
-    expect(context).toBeDefined();
-    if (!event || !context) {
-      throw new Error("missing hook call payload");
-    }
-    expect(event.toolName).toBe("read");
-    expect(event.params).toEqual({ path: "/tmp/file.txt" });
-    expect(event.error).toBeUndefined();
-    expect(typeof event.durationMs).toBe("number");
-    expect(event.runId).toBe("test-run-1");
-    expect(event.toolCallId).toBe("wired-hook-call-1");
-    expect(context.toolName).toBe("read");
-    expect(context.agentId).toBe("main");
-    expect(context.sessionKey).toBe("test-session");
-    expect(context.sessionId).toBe("test-ephemeral-session");
-    expect(context.runId).toBe("test-run-1");
-    expect(context.toolCallId).toBe("wired-hook-call-1");
+    expectAfterToolCallPayload({
+      expectedEvent: {
+        toolName: "read",
+        params: { path: "/tmp/file.txt" },
+        error: undefined,
+        runId: "test-run-1",
+        toolCallId: "wired-hook-call-1",
+      },
+      expectedContext: {
+        toolName: "read",
+        agentId: "main",
+        sessionKey: "test-session",
+        sessionId: "test-ephemeral-session",
+        runId: "test-run-1",
+        toolCallId: "wired-hook-call-1",
+      },
+    });
+    expect(typeof getAfterToolCallCall().event?.durationMs).toBe("number");
   });
 
   it("includes error in after_tool_call event on tool failure", async () => {
@@ -172,19 +191,8 @@ describe("after_tool_call hook wiring", () => {
     );
 
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
-
-    const firstCall = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(firstCall).toBeDefined();
-    const event = firstCall?.[0] as { error?: unknown } | undefined;
-    expect(event).toBeDefined();
-    if (!event) {
-      throw new Error("missing hook call payload");
-    }
-    expect(event.error).toBeDefined();
-
-    // agentId should be undefined when not provided
-    const context = firstCall?.[1] as { agentId?: string } | undefined;
-    expect(context?.agentId).toBeUndefined();
+    expect(getAfterToolCallCall().event?.error).toBeDefined();
+    expect(getAfterToolCallCall().context?.agentId).toBeUndefined();
   });
 
   it("does not call runAfterToolCall when no hooks registered", async () => {
@@ -264,15 +272,15 @@ describe("after_tool_call hook wiring", () => {
     );
 
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(2);
-
-    const callA = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[0];
-    const callB = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[1];
-    const eventA = callA?.[0] as { params?: unknown; runId?: string } | undefined;
-    const eventB = callB?.[0] as { params?: unknown; runId?: string } | undefined;
-
-    expect(eventA?.runId).toBe("run-a");
-    expect(eventA?.params).toEqual({ path: "/tmp/path-a.txt" });
-    expect(eventB?.runId).toBe("run-b");
-    expect(eventB?.params).toEqual({ path: "/tmp/path-b.txt" });
+    expectAfterToolCallPayload({
+      index: 0,
+      expectedEvent: { runId: "run-a", params: { path: "/tmp/path-a.txt" } },
+      expectedContext: {},
+    });
+    expectAfterToolCallPayload({
+      index: 1,
+      expectedEvent: { runId: "run-b", params: { path: "/tmp/path-b.txt" } },
+      expectedContext: {},
+    });
   });
 });
