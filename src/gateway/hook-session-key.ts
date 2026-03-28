@@ -10,9 +10,13 @@ function resolveSessionKey(raw: string | undefined): string | undefined {
 function normalizeHookValidatedSessionKey(raw: string | undefined): string | undefined {
   let value = resolveSessionKey(raw);
   while (value) {
-    const parsed = parseAgentSessionKey(value);
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    const parsed = parseAgentSessionKey(trimmed);
     if (!parsed) {
-      return value;
+      return trimmed;
     }
     value = parsed.rest;
   }

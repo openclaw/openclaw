@@ -296,6 +296,13 @@ describe("gateway hooks helpers", () => {
         sessionKey: "agent:main:agent:hooks:subagent:worker",
       }),
     ).toMatchObject({ ok: false });
+    expect(
+      resolveHookSessionKey({
+        hooksConfig: resolved,
+        source: "request",
+        sessionKey: "agent:main: subagent:worker",
+      }),
+    ).toMatchObject({ ok: false });
   });
 
   test("resolveHookSessionKey enforces allowed prefixes", () => {

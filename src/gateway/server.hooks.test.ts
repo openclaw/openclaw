@@ -388,6 +388,15 @@ describe("gateway server hooks", () => {
       const nestedDeniedBody = (await nestedDenied.json()) as { error?: string };
       expect(nestedDeniedBody.error).toContain("internal session namespace subagent:");
       expect(cronIsolatedRun).not.toHaveBeenCalled();
+
+      const spacedDenied = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        sessionKey: "agent:main: subagent:worker",
+      });
+      expect(spacedDenied.status).toBe(400);
+      const spacedDeniedBody = (await spacedDenied.json()) as { error?: string };
+      expect(spacedDeniedBody.error).toContain("internal session namespace subagent:");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
     });
   });
 
