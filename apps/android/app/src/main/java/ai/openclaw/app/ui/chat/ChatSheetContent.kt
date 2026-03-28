@@ -61,7 +61,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
 
-  LaunchedEffect(mainSessionKey) {
+  LaunchedEffect(Unit) {
     viewModel.loadChat(mainSessionKey)
   }
 
