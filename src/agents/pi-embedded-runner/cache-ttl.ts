@@ -19,6 +19,7 @@ const CACHE_RETENTION_TTL_MS = {
   short: 5 * 60_000,
   long: 60 * 60_000,
 } as const;
+const MAX_WARNED_SESSION_CACHE_TTL_MISMATCH_KEYS = 1_000;
 const warnedSessionCacheTtlMismatchKeys = new Set<string>();
 
 export type TimeBasedContextCompactMode = "none" | "compact" | "reset";
@@ -147,6 +148,9 @@ function maybeWarnSessionCacheTtlMismatch(params: {
   ].join(":");
   if (warnedSessionCacheTtlMismatchKeys.has(warningKey)) {
     return;
+  }
+  if (warnedSessionCacheTtlMismatchKeys.size >= MAX_WARNED_SESSION_CACHE_TTL_MISMATCH_KEYS) {
+    warnedSessionCacheTtlMismatchKeys.clear();
   }
   warnedSessionCacheTtlMismatchKeys.add(warningKey);
   log.warn("sessionCacheTtl exceeds explicit model cache ttl", {

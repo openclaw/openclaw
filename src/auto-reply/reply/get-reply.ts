@@ -217,6 +217,7 @@ export async function getReplyFromConfig(
     ctx: finalized,
     cfg,
     commandAuthorized,
+    isHeartbeat: opts?.isHeartbeat === true,
   });
   let {
     sessionCtx,

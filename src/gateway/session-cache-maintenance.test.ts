@@ -49,6 +49,26 @@ describe("session cache maintenance helpers", () => {
     ).toBe(false);
   });
 
+  it("still treats equal user and assistant timestamps as awaiting user reply", () => {
+    expect(
+      shouldRunIdleCacheCompaction({
+        entry: {
+          lastUserMessageAt: 2_000,
+          lastAssistantMessageAt: 2_000,
+          lastCacheTouchAt: 2_000,
+        },
+        policy: {
+          mode: "compact",
+          cacheTtlMs: ONE_HOUR_MS,
+          idleCompactionMinTokens: 20_000,
+          idleCompactionLeadMs: ONE_MINUTE_MS,
+        },
+        now: 2_000 + ONE_HOUR_MS - ONE_MINUTE_MS,
+        totalTokens: 25_000,
+      }),
+    ).toBe(true);
+  });
+
   it("does not warm short sessions below the default token floor", () => {
     expect(
       shouldRunIdleCacheCompaction({

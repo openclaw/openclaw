@@ -184,6 +184,7 @@ export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
+  isHeartbeat?: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
   const conversationBindingContext = resolveSessionConversationBindingContext(cfg, ctx);
@@ -467,11 +468,12 @@ export async function initSessionState(params: {
   const lastTo = deliveryFields.lastTo ?? lastToRaw;
   const lastAccountId = deliveryFields.lastAccountId ?? lastAccountIdRaw;
   const lastThreadId = deliveryFields.lastThreadId ?? lastThreadIdRaw;
+  const updatedAt = Date.now();
   sessionEntry = {
     ...baseEntry,
     sessionId,
-    updatedAt: Date.now(),
-    lastUserMessageAt: Date.now(),
+    updatedAt,
+    lastUserMessageAt: params.isHeartbeat === true ? baseEntry?.lastUserMessageAt : updatedAt,
     systemSent,
     abortedLastRun,
     // Persist previously stored thinking/verbose levels when present.

@@ -61,15 +61,16 @@ export async function updateSessionStoreAfterAgentRun(params: {
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
+  const now = Date.now();
   const entry = sessionStore[sessionKey] ?? {
     sessionId,
-    updatedAt: Date.now(),
+    updatedAt: now,
   };
   const next: SessionEntry = {
     ...entry,
     sessionId,
-    updatedAt: Date.now(),
-    lastAssistantMessageAt: Date.now(),
+    updatedAt: now,
+    lastAssistantMessageAt: now,
     contextTokens,
   };
   const cacheTtlMs = resolveCacheTtlMs({

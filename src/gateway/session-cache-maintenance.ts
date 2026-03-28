@@ -63,7 +63,7 @@ function isAwaitingUserReply(entry: SessionCacheTimingState): boolean {
     return false;
   }
   const lastUser = resolvePositiveTimestamp(entry.lastUserMessageAt);
-  return lastUser == null || lastAssistant > lastUser;
+  return lastUser == null || lastAssistant >= lastUser;
 }
 
 function resolveIdleCompactionThresholdMs(policy: SessionCacheMaintenancePolicy): number | null {
@@ -116,6 +116,17 @@ export function shouldRunIdleCacheCompaction(params: {
     return false;
   }
   return (params.totalTokens ?? 0) >= params.policy.idleCompactionMinTokens;
+}
+
+function shouldCheckIdleCacheCompactionWindow(params: {
+  entry: SessionCacheTimingState;
+  policy: SessionCacheMaintenancePolicy;
+  now: number;
+}): boolean {
+  return shouldRunIdleCacheCompaction({
+    ...params,
+    totalTokens: params.policy.idleCompactionMinTokens,
+  });
 }
 
 function resolveSessionCacheMaintenancePolicy(params: {
@@ -226,14 +237,13 @@ async function maybeCompactIdleSession(params: {
     skillsSnapshot: params.entry.skillsSnapshot,
     provider,
     model,
-    trigger: "manual",
+    trigger: "budget",
     currentTokenCount: params.totalTokens,
   });
 
-  const patch: Partial<SessionEntry> = {
-    lastIdleCompactionForCacheTouchAt: cacheTouchAt,
-  };
+  const patch: Partial<SessionEntry> = {};
   if (result.ok && result.compacted) {
+    patch.lastIdleCompactionForCacheTouchAt = cacheTouchAt;
     patch.compactionCount = (params.entry.compactionCount ?? 0) + 1;
     patch.lastCacheTouchAt = params.now;
     if (typeof result.result?.tokensAfter === "number" && result.result.tokensAfter > 0) {
@@ -256,12 +266,14 @@ async function maybeCompactIdleSession(params: {
       tokens: params.totalTokens,
     });
   }
-  await persistSessionMaintenancePatch({
-    target: params.target,
-    sessionKey: params.sessionKey,
-    patch,
-  });
-  return true;
+  if (Object.keys(patch).length > 0) {
+    await persistSessionMaintenancePatch({
+      target: params.target,
+      sessionKey: params.sessionKey,
+      patch,
+    });
+  }
+  return result.ok && result.compacted;
 }
 
 async function maybeResetExpiredSession(params: { sessionKey: string }): Promise<boolean> {
@@ -316,23 +328,32 @@ export async function runSessionCacheMaintenanceSweep(
         continue;
       }
 
-      const totalTokens = estimateSessionTotalTokens({ entry, target });
       if (
-        shouldRunIdleCacheCompaction({
+        policy.mode === "compact" &&
+        shouldCheckIdleCacheCompactionWindow({
           entry,
           policy,
           now,
-          totalTokens,
         })
       ) {
-        await maybeCompactIdleSession({
-          cfg,
-          entry,
-          sessionKey,
-          target,
-          now,
-          totalTokens: totalTokens ?? 0,
-        });
+        const totalTokens = estimateSessionTotalTokens({ entry, target });
+        if (
+          shouldRunIdleCacheCompaction({
+            entry,
+            policy,
+            now,
+            totalTokens,
+          })
+        ) {
+          await maybeCompactIdleSession({
+            cfg,
+            entry,
+            sessionKey,
+            target,
+            now,
+            totalTokens: totalTokens ?? 0,
+          });
+        }
       }
     }
   }
