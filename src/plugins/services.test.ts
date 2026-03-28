@@ -30,6 +30,10 @@ function createRegistry(services: OpenClawPluginService[]) {
   return registry;
 }
 
+function createServiceConfig() {
+  return {} as Parameters<typeof startPluginServices>[0]["config"];
+}
+
 function expectServiceContext(
   ctx: OpenClawPluginServiceContext,
   config: Parameters<typeof startPluginServices>[0]["config"],
@@ -88,7 +92,7 @@ describe("startPluginServices", () => {
     const stops: string[] = [];
     const contexts: OpenClawPluginServiceContext[] = [];
 
-    const config = {} as Parameters<typeof startPluginServices>[0]["config"];
+    const config = createServiceConfig();
     const handle = await startPluginServices({
       registry: createRegistry([
         createTrackingService("service-a", { starts, stops, contexts }),
@@ -123,7 +127,7 @@ describe("startPluginServices", () => {
         createTrackingService("service-ok", { stopSpy: stopOk }),
         createTrackingService("service-stop-fail", { stopSpy: stopThrows }),
       ]),
-      config: {} as Parameters<typeof startPluginServices>[0]["config"],
+      config: createServiceConfig(),
     });
 
     await handle.stop();

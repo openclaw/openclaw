@@ -19,6 +19,10 @@ function setManifestPlugins(plugins: Array<Record<string, unknown>>) {
   });
 }
 
+function expectAuthChoice(choiceId: string, providerId: string) {
+  expect(resolveManifestProviderAuthChoice(choiceId)?.providerId).toBe(providerId);
+}
+
 describe("provider auth choice manifest helpers", () => {
   it("flattens manifest auth choices", () => {
     setManifestPlugins([
@@ -52,7 +56,7 @@ describe("provider auth choice manifest helpers", () => {
         cliOption: "--openai-api-key <key>",
       },
     ]);
-    expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("openai");
+    expectAuthChoice("openai-api-key", "openai");
   });
 
   it.each([

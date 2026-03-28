@@ -14,6 +14,54 @@ vi.mock("./manifest-registry.js", () => ({
 
 import { resolveGatewayStartupPluginIds } from "./channel-plugin-ids.js";
 
+function createManifestRegistryFixture() {
+  return {
+    plugins: [
+      {
+        id: "demo-channel",
+        channels: ["demo-channel"],
+        origin: "bundled",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
+        id: "demo-default-on-sidecar",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: [],
+        cliBackends: [],
+      },
+      {
+        id: "demo-provider-plugin",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: undefined,
+        providers: ["demo-provider"],
+        cliBackends: ["demo-cli"],
+      },
+      {
+        id: "demo-bundled-sidecar",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
+        id: "demo-global-sidecar",
+        channels: [],
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+    ],
+    diagnostics: [],
+  };
+}
+
 function expectStartupPluginIds(config: OpenClawConfig, expected: readonly string[]) {
   expect(
     resolveGatewayStartupPluginIds({
@@ -27,51 +75,7 @@ function expectStartupPluginIds(config: OpenClawConfig, expected: readonly strin
 describe("resolveGatewayStartupPluginIds", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockReturnValue(["demo-channel"]);
-    loadPluginManifestRegistry.mockReset().mockReturnValue({
-      plugins: [
-        {
-          id: "demo-channel",
-          channels: ["demo-channel"],
-          origin: "bundled",
-          enabledByDefault: undefined,
-          providers: [],
-          cliBackends: [],
-        },
-        {
-          id: "demo-default-on-sidecar",
-          channels: [],
-          origin: "bundled",
-          enabledByDefault: true,
-          providers: [],
-          cliBackends: [],
-        },
-        {
-          id: "demo-provider-plugin",
-          channels: [],
-          origin: "bundled",
-          enabledByDefault: undefined,
-          providers: ["demo-provider"],
-          cliBackends: ["demo-cli"],
-        },
-        {
-          id: "demo-bundled-sidecar",
-          channels: [],
-          origin: "bundled",
-          enabledByDefault: undefined,
-          providers: [],
-          cliBackends: [],
-        },
-        {
-          id: "demo-global-sidecar",
-          channels: [],
-          origin: "global",
-          enabledByDefault: undefined,
-          providers: [],
-          cliBackends: [],
-        },
-      ],
-      diagnostics: [],
-    });
+    loadPluginManifestRegistry.mockReset().mockReturnValue(createManifestRegistryFixture());
   });
 
   it.each([

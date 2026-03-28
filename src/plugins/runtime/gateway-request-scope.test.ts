@@ -15,6 +15,15 @@ describe("gateway request scope", () => {
     return await import("./gateway-request-scope.js");
   }
 
+  async function withTestGatewayScope<T>(
+    run: (runtimeScope: Awaited<ReturnType<typeof importGatewayRequestScopeModule>>) => Promise<T>,
+  ) {
+    const runtimeScope = await importGatewayRequestScopeModule();
+    return await runtimeScope.withPluginRuntimeGatewayRequestScope(TEST_SCOPE, async () => {
+      return await run(runtimeScope);
+    });
+  }
+
   it("reuses AsyncLocalStorage across reloaded module instances", async () => {
     const first = await importGatewayRequestScopeModule();
 
@@ -26,9 +35,7 @@ describe("gateway request scope", () => {
   });
 
   it("attaches plugin id to the active scope", async () => {
-    const runtimeScope = await importGatewayRequestScopeModule();
-
-    await runtimeScope.withPluginRuntimeGatewayRequestScope(TEST_SCOPE, async () => {
+    await withTestGatewayScope(async (runtimeScope) => {
       await runtimeScope.withPluginRuntimePluginIdScope("voice-call", async () => {
         expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toEqual({
           ...TEST_SCOPE,

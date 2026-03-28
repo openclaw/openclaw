@@ -49,6 +49,42 @@ function getLastResolvedPluginConfig() {
     | undefined;
 }
 
+function createBundledProviderCompatOptions(params?: { onlyPluginIds?: readonly string[] }) {
+  return {
+    config: {
+      plugins: {
+        allow: ["openrouter"],
+      },
+    },
+    bundledProviderAllowlistCompat: true,
+    ...(params?.onlyPluginIds ? { onlyPluginIds: params.onlyPluginIds } : {}),
+  };
+}
+
+function expectResolvedAllowlistState(params?: {
+  expectedAllow?: readonly string[];
+  unexpectedAllow?: readonly string[];
+  expectedEntries?: Record<string, { enabled?: boolean }>;
+  expectedOnlyPluginIds?: readonly string[];
+}) {
+  expectLastLoadPluginsCall(
+    params?.expectedOnlyPluginIds ? { onlyPluginIds: params.expectedOnlyPluginIds } : undefined,
+  );
+
+  const config = getLastResolvedPluginConfig();
+  const allow = config?.plugins?.allow ?? [];
+
+  if (params?.expectedAllow) {
+    expect(allow).toEqual(expect.arrayContaining([...params.expectedAllow]));
+  }
+  if (params?.expectedEntries) {
+    expect(config?.plugins?.entries).toEqual(expect.objectContaining(params.expectedEntries));
+  }
+  for (const disallowedPluginId of params?.unexpectedAllow ?? []) {
+    expect(allow).not.toContain(disallowedPluginId);
+  }
+}
+
 describe("resolvePluginProviders", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -94,14 +130,7 @@ describe("resolvePluginProviders", () => {
   it.each([
     {
       name: "can augment restrictive allowlists for bundled provider compatibility",
-      options: {
-        config: {
-          plugins: {
-            allow: ["openrouter"],
-          },
-        },
-        bundledProviderAllowlistCompat: true,
-      },
+      options: createBundledProviderCompatOptions(),
       expectedAllow: ["openrouter", "google", "kilocode", "moonshot"],
       expectedEntries: {
         google: { enabled: true },
@@ -111,40 +140,20 @@ describe("resolvePluginProviders", () => {
     },
     {
       name: "does not reintroduce the retired google auth plugin id into compat allowlists",
-      options: {
-        config: {
-          plugins: {
-            allow: ["openrouter"],
-          },
-        },
-        bundledProviderAllowlistCompat: true,
-      },
+      options: createBundledProviderCompatOptions(),
       expectedAllow: ["google"],
       unexpectedAllow: ["google-gemini-cli-auth"],
     },
     {
       name: "does not inject non-bundled provider plugin ids into compat allowlists",
-      options: {
-        config: {
-          plugins: {
-            allow: ["openrouter"],
-          },
-        },
-        bundledProviderAllowlistCompat: true,
-      },
+      options: createBundledProviderCompatOptions(),
       unexpectedAllow: ["workspace-provider"],
     },
     {
       name: "scopes bundled provider compat expansion to the requested plugin ids",
-      options: {
-        config: {
-          plugins: {
-            allow: ["openrouter"],
-          },
-        },
-        bundledProviderAllowlistCompat: true,
+      options: createBundledProviderCompatOptions({
         onlyPluginIds: ["moonshot"],
-      },
+      }),
       expectedAllow: ["openrouter", "moonshot"],
       unexpectedAllow: ["google", "kilocode"],
       expectedOnlyPluginIds: ["moonshot"],
@@ -156,22 +165,12 @@ describe("resolvePluginProviders", () => {
         cloneOptions(options) as unknown as Parameters<typeof resolvePluginProviders>[0],
       );
 
-      expectLastLoadPluginsCall(
-        expectedOnlyPluginIds ? { onlyPluginIds: expectedOnlyPluginIds } : undefined,
-      );
-
-      const config = getLastResolvedPluginConfig();
-      const allow = config?.plugins?.allow ?? [];
-
-      if (expectedAllow) {
-        expect(allow).toEqual(expect.arrayContaining([...expectedAllow]));
-      }
-      if (expectedEntries) {
-        expect(config?.plugins?.entries).toEqual(expect.objectContaining(expectedEntries));
-      }
-      for (const disallowedPluginId of unexpectedAllow ?? []) {
-        expect(allow).not.toContain(disallowedPluginId);
-      }
+      expectResolvedAllowlistState({
+        expectedAllow,
+        expectedEntries,
+        expectedOnlyPluginIds,
+        unexpectedAllow,
+      });
     },
   );
 

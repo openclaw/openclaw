@@ -30,6 +30,13 @@ function expectRegisteredProviderEntry(
   expect(getRegisteredMemoryEmbeddingProvider(id)).toEqual(entry);
 }
 
+function createOwnedAdapterEntry(id: string) {
+  return {
+    adapter: createAdapter(id),
+    ownerPluginId: "memory-core",
+  };
+}
+
 afterEach(() => {
   clearMemoryEmbeddingProviders();
 });
@@ -57,33 +64,24 @@ describe("memory embedding provider registry", () => {
   it.each([
     {
       name: "tracks owner plugin ids in registered snapshots",
-      id: "alpha",
-      setup: (adapter: MemoryEmbeddingProviderAdapter) =>
-        registerMemoryEmbeddingProvider(adapter, { ownerPluginId: "memory-core" }),
+      entry: createOwnedAdapterEntry("alpha"),
+      setup: (entry: { adapter: MemoryEmbeddingProviderAdapter; ownerPluginId?: string }) =>
+        registerMemoryEmbeddingProvider(entry.adapter, { ownerPluginId: entry.ownerPluginId }),
       expectList: true,
     },
     {
       name: "restores registered snapshots with owner metadata",
-      id: "beta",
-      setup: (adapter: MemoryEmbeddingProviderAdapter) =>
-        restoreRegisteredMemoryEmbeddingProviders([
-          {
-            adapter,
-            ownerPluginId: "memory-core",
-          },
-        ]),
+      entry: createOwnedAdapterEntry("beta"),
+      setup: (entry: { adapter: MemoryEmbeddingProviderAdapter; ownerPluginId?: string }) =>
+        restoreRegisteredMemoryEmbeddingProviders([entry]),
       expectList: false,
     },
-  ] as const)("$name", ({ id, setup, expectList }) => {
-    const adapter = createAdapter(id);
-    const expectedEntry = {
-      adapter,
-      ownerPluginId: "memory-core",
-    };
+  ] as const)("$name", ({ entry, setup, expectList }) => {
+    const expectedEntry = entry;
 
-    setup(adapter);
+    setup(entry);
 
-    expectRegisteredProviderEntry(id, expectedEntry);
+    expectRegisteredProviderEntry(entry.adapter.id, expectedEntry);
     if (expectList) {
       expect(listRegisteredMemoryEmbeddingProviders()).toEqual([expectedEntry]);
     }
