@@ -15,19 +15,12 @@ import {
   resolveXaiCodeExecutionModel,
 } from "./src/code-execution-shared.js";
 
-type XaiPluginConfig = NonNullable<
-  NonNullable<OpenClawConfig["plugins"]>["entries"]
->["xai"] extends {
-  config?: infer Config;
-}
-  ? Config
-  : undefined;
-
-type CodeExecutionConfig = XaiPluginConfig extends infer Config
-  ? Config extends { codeExecution?: infer CodeExecution }
-    ? CodeExecution
-    : undefined
-  : undefined;
+type CodeExecutionConfig = {
+  enabled?: boolean;
+  model?: unknown;
+  maxTurns?: unknown;
+  timeoutSeconds?: number;
+};
 
 function readLegacyGrokApiKey(cfg?: OpenClawConfig): string | undefined {
   const search = cfg?.tools?.web?.search;
