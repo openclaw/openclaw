@@ -157,7 +157,7 @@ without knowing native tools exist.
 
 ```bash
 # Find your sender ID (check gateway logs or session info)
-openclaw config get state.knownSenders
+# Check gateway logs or run: openclaw session info
 ```
 
 Then add to your config:
