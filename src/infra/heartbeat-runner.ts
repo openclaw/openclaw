@@ -421,6 +421,12 @@ type HeartbeatPreflight = HeartbeatReasonFlags & {
 // session where the heartbeat actually runs.
 function isSessionScopedEvent(event: SystemEvent): boolean {
   const key = event.contextKey ?? "";
+  // Untagged events (no contextKey) are likely session-local notices and
+  // should stay in the originating session. Only events with an explicit
+  // non-session-scoped contextKey are migrated to the heartbeat session.
+  if (!key) {
+    return true;
+  }
   return key === "session-maintenance" || key.startsWith("session-maintenance:");
 }
 

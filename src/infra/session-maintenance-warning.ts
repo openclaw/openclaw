@@ -115,13 +115,13 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   const target = resolveWarningDeliveryTarget(params.entry);
 
   if (!target.channel || !target.to) {
-    enqueueSystemEvent(text, { sessionKey: params.sessionKey });
+    enqueueSystemEvent(text, { sessionKey: params.sessionKey, contextKey: "session-maintenance" });
     return;
   }
 
   const channel = normalizeMessageChannel(target.channel) ?? target.channel;
   if (!isDeliverableMessageChannel(channel)) {
-    enqueueSystemEvent(text, { sessionKey: params.sessionKey });
+    enqueueSystemEvent(text, { sessionKey: params.sessionKey, contextKey: "session-maintenance" });
     return;
   }
 
@@ -142,6 +142,6 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
     });
   } catch (err) {
     log.warn(`Failed to deliver session maintenance warning: ${String(err)}`);
-    enqueueSystemEvent(text, { sessionKey: params.sessionKey });
+    enqueueSystemEvent(text, { sessionKey: params.sessionKey, contextKey: "session-maintenance" });
   }
 }

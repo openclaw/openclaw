@@ -422,6 +422,105 @@ describe("system-event-triggered heartbeat session routing", () => {
     replySpy.mockRestore();
   });
 
+  it("keeps untagged events (no contextKey) in the originating session", async () => {
+    const tmpDir = await createCaseDir("hb-untagged-events");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+
+    const agentId = "main";
+    const heartbeatSessionKey = buildAgentPeerSessionKey({
+      agentId,
+      channel: "telegram",
+      peerKind: "group",
+      peerId: "-100heartbeat",
+    });
+    const dmSessionKey = buildAgentPeerSessionKey({
+      agentId,
+      channel: "telegram",
+      peerKind: "direct",
+      peerId: "444333222",
+    });
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: {
+            every: "5m",
+            target: "telegram",
+            to: "-100heartbeat",
+            session: heartbeatSessionKey,
+          },
+        },
+      },
+      session: { store: storePath },
+    };
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [resolveAgentMainSessionKey({ cfg, agentId })]: {
+          sessionId: "sid-main",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-100heartbeat",
+        },
+        [heartbeatSessionKey]: {
+          sessionId: "sid-heartbeat",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-100heartbeat",
+        },
+        [dmSessionKey]: {
+          sessionId: "sid-dm",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "444333222",
+        },
+      }),
+    );
+
+    // Enqueue an exec event (tagged — should migrate) and an untagged event (should stay)
+    enqueueSystemEvent("exec finished (xyz99999, code 0) :: build done", {
+      sessionKey: dmSessionKey,
+      contextKey: "exec:xyz99999",
+    });
+    enqueueSystemEvent("Session maintenance warning: would be evicted", {
+      sessionKey: dmSessionKey,
+      // No contextKey — simulates the real session-maintenance-warning.ts behavior
+      // before the contextKey fix; these should stay in the originating session.
+    });
+
+    expect(peekSystemEventEntries(dmSessionKey)).toHaveLength(2);
+    expect(hasSystemEvents(heartbeatSessionKey)).toBe(false);
+
+    replySpy.mockResolvedValue([{ text: "Build completed" }]);
+    const sendTelegram = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; chatId: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", chatId: "-100heartbeat" });
+
+    await runHeartbeatOnce({
+      cfg,
+      reason: "exec-event",
+      sessionKey: dmSessionKey,
+      deps: createHeartbeatDeps(sendTelegram),
+    });
+
+    // Tagged exec event should migrate to heartbeat session
+    const heartbeatEntries = peekSystemEventEntries(heartbeatSessionKey);
+    expect(heartbeatEntries).toHaveLength(1);
+    expect(heartbeatEntries[0].text).toContain("build done");
+
+    // Untagged event should remain in the originating DM session
+    const dmEntries = peekSystemEventEntries(dmSessionKey);
+    expect(dmEntries).toHaveLength(1);
+    expect(dmEntries[0].text).toContain("Session maintenance warning");
+
+    replySpy.mockRestore();
+  });
+
   it("falls back to forcedSessionKey when heartbeat.session is not configured", async () => {
     const tmpDir = await createCaseDir("hb-no-session-config");
     const storePath = path.join(tmpDir, "sessions.json");
