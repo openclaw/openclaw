@@ -4,6 +4,7 @@ const callGatewayMock = vi.fn();
 const getSubagentRunByChildSessionKeyMock = vi.fn();
 const captureSubagentCompletionReplyMock = vi.fn();
 const setSuppressAutoAnnounceMock = vi.fn();
+const clearSuppressAutoAnnounceMock = vi.fn();
 
 let createSessionsAwaitTool: typeof import("./sessions-await-tool.js").createSessionsAwaitTool;
 
@@ -16,6 +17,7 @@ async function loadFreshModules() {
     getSubagentRunByChildSessionKey: (...args: unknown[]) =>
       getSubagentRunByChildSessionKeyMock(...args),
     setSuppressAutoAnnounce: (...args: unknown[]) => setSuppressAutoAnnounceMock(...args),
+    clearSuppressAutoAnnounce: (...args: unknown[]) => clearSuppressAutoAnnounceMock(...args),
   }));
   vi.doMock("../subagent-announce.js", () => ({
     captureSubagentCompletionReply: (...args: unknown[]) =>

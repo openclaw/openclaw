@@ -35,7 +35,11 @@ import {
 } from "./subagent-attachments.js";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
+import {
+  clearSuppressAutoAnnounce,
+  countActiveRunsForSession,
+  registerSubagentRun,
+} from "./subagent-registry.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { readStringParam } from "./tools/common.js";
 import {
@@ -272,6 +276,8 @@ async function waitForSpawnedSubagentCompletion(params: {
       };
     }
     if (wait?.status === "timeout") {
+      // Restore auto-announce so the child can still announce if it completes later.
+      clearSuppressAutoAnnounce(params.runId);
       return {
         status: "timeout",
         waitTimeoutMs: timeoutMs,
