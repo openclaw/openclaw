@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const loadOpenClawPluginsMock = vi.fn();
+const resolveRuntimePluginRegistryMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 const getMemoryRuntimeMock = vi.fn();
 
@@ -9,7 +9,7 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 }));
 
 vi.mock("./loader.js", () => ({
-  loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
+  resolveRuntimePluginRegistry: (...args: unknown[]) => resolveRuntimePluginRegistryMock(...args),
 }));
 
 vi.mock("./memory-state.js", () => ({
@@ -23,7 +23,7 @@ let closeActiveMemorySearchManagers: typeof import("./memory-runtime.js").closeA
 describe("memory runtime auto-enable loading", () => {
   beforeEach(async () => {
     vi.resetModules();
-    loadOpenClawPluginsMock.mockReset();
+    resolveRuntimePluginRegistryMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
     getMemoryRuntimeMock.mockReset();
     applyPluginAutoEnableMock.mockImplementation((params: { config: unknown }) => ({
@@ -66,7 +66,7 @@ describe("memory runtime auto-enable loading", () => {
       config: rawConfig,
       env: process.env,
     });
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith({
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith({
       config: autoEnabledConfig,
     });
   });
@@ -97,7 +97,7 @@ describe("memory runtime auto-enable loading", () => {
     });
 
     expect(result).toEqual({ backend: "builtin" });
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith({
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith({
       config: autoEnabledConfig,
     });
   });
@@ -112,7 +112,7 @@ describe("memory runtime auto-enable loading", () => {
     await closeActiveMemorySearchManagers(rawConfig as never);
 
     expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 
   it("closes an already-registered memory runtime without reloading plugins", async () => {
@@ -124,6 +124,6 @@ describe("memory runtime auto-enable loading", () => {
     await closeActiveMemorySearchManagers({} as never);
 
     expect(runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 });
