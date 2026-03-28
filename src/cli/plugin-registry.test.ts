@@ -173,4 +173,32 @@ describe("ensurePluginRegistryLoaded", () => {
       }),
     );
   });
+
+  it("does not treat a tools-only pre-seeded registry as channel scope", async () => {
+    const config = {
+      plugins: { enabled: true },
+      channels: { "demo-channel-a": { enabled: true } },
+    };
+
+    mocks.loadConfig.mockReturnValue(config);
+    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [] });
+    mocks.getActivePluginRegistry.mockReturnValue({
+      plugins: [],
+      channels: [],
+      tools: [{ pluginId: "demo-tool" }],
+    });
+
+    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
+
+    ensurePluginRegistryLoaded({ scope: "configured-channels" });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        throwOnLoadError: true,
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+  });
 });
