@@ -142,6 +142,15 @@ Docs: https://docs.openclaw.ai
 - Telegram/outbound errors: preserve actionable 403 membership/block/kick details and treat `bot not a member` as a permanent delivery failure so Telegram sends stop retrying doomed chats. (#53635) Thanks @w-sss.
 - Telegram/photos: preflight Telegram photo dimension and aspect-ratio rules, and fall back to document sends when image metadata is invalid or unavailable so photo uploads stop failing with `PHOTO_INVALID_DIMENSIONS`. (#52545) Thanks @hnshah.
 - Slack/runtime defaults: trim Slack DM reply overhead, restore Codex auto transport, and tighten Slack/web-search runtime defaults around DM preview threading, cache scoping, warning dedupe, and explicit web-search opt-in. (#53957) Thanks @vincentkoc.
+- Security/gateway config: block agent `config.apply` and `config.patch` writes to `tools.exec.ask` and `tools.exec.security` so gateway config tools cannot silently disable exec approvals or broaden exec security.
+- Security/chat provenance: require `operator.admin` for system provenance injection so `chat.send` callers cannot spoof ACP-only provenance through client identity metadata.
+- Security/exec approvals: treat `/usr/bin/script` as a transparent wrapper during trust-plan resolution and allow-always persistence so wrapper registration cannot broaden exec approvals.
+- Security/Feishu uploads: route local doc and image upload inputs through media local-roots enforcement so Feishu uploads cannot read arbitrary host files outside the allowed sandbox and file policy.
+- Security/dotenv: filter untrusted CWD and workspace-config `.env` entries before startup and config loading so dotenv-based host-env takeover paths can no longer rewrite runtime state or package registries.
+- Security/media parsing: reject traversal and home-directory patterns in the shared media parse layer so parsed media paths cannot escape into arbitrary file reads.
+- Security/path resolution: prefer non-user-writable absolute helper binaries for OpenClaw CLI, ffmpeg, and OpenSSL resolution so PATH hijacks cannot replace trusted helpers with attacker-controlled executables.
+- Security/gateway command scopes: require `operator.admin` before Telegram target writeback and Talk Voice `/voice set` config writes persist through gateway message flows.
+- Security/OpenShell mirror: exclude workspace `hooks/` from mirror sync so untrusted sandbox files cannot become trusted host hooks on gateway startup.
 
 ## 2026.3.24-beta.2
 
@@ -222,6 +231,12 @@ Docs: https://docs.openclaw.ai
 - Docs/IRC: fix five `json55` code-fence typos in the IRC channel examples so Mintlify applies JSON5 syntax highlighting correctly. (#50842) Thanks @Hollychou924.
 - Discord/commands: trim overlong slash-command descriptions to Discord's 100-character limit and map rejected deploy indexes from Discord validation payloads back to command names/descriptions, so deploys stop failing on long descriptions and startup logs identify the rejected commands. (#54118) thanks @huntharo
 - Media/store: enforce the intended media file mode after writes and redirect downloads so restrictive umasks do not silently narrow saved media permissions.
+- Security/gateway auth: enforce `operator.read` and `models.list` on `/v1/models` so write-scoped callers cannot list models through the OpenAI-compatible HTTP surface.
+- Security/allowlist commands: require `operator.admin` for internal `/allowlist` mutations and channel allowlist persistence reached through `chat.send`.
+- Security/Feishu webhook: cap pre-auth webhook body reads with strict size and timeout guards before JSON parsing so slow-body requests cannot hold the webhook handler open.
+- Security/session policy: require sender ownership for `/send` policy changes so command-authorized non-owners cannot rewrite owner-only session delivery policy.
+- Security/bash stop: route `/bash stop` through the hardened process-tree killer so invalid or attacker-influenced SIGKILL targets cannot escape the intended bash-session scope.
+- Security/installer: hide staged project `.npmrc` files during skill and package installs so npm registry and git settings inside the stage directory cannot hijack trusted installs.
 
 ## 2026.3.23
 
