@@ -21,11 +21,17 @@
 #include "log.h"
 #include <string.h>
 
+typedef struct {
+    guint generation;
+    gchar *url;
+} GatewayHealthContext;
+
 static GatewayConfig *current_config = NULL;
 static gchar *current_http_url = NULL;
 static gchar *current_ws_url = NULL;
 static gboolean health_in_flight = FALSE;
 static gboolean initialized = FALSE;
+static guint current_health_generation = 0;
 
 static guint health_poll_timer_id = 0;
 #define HEALTH_POLL_INTERVAL_S 10
@@ -135,7 +141,18 @@ static void on_ws_status(const GatewayWsStatus *status, gpointer user_data) {
 }
 
 static void on_health_result(const GatewayHealthResult *result, gpointer user_data) {
-    (void)user_data;
+    GatewayHealthContext *ctx = (GatewayHealthContext *)user_data;
+    if (!ctx) return;
+    
+    gboolean is_current = (ctx->generation == current_health_generation);
+    g_free(ctx->url);
+    g_free(ctx);
+
+    if (!is_current) {
+        /* Drop stale callback; do not mutate health_in_flight or publish state */
+        return;
+    }
+
     health_in_flight = FALSE;
 
     if (!result) return;
@@ -182,7 +199,12 @@ static void on_health_result(const GatewayHealthResult *result, gpointer user_da
 static void do_health_check(void) {
     if (health_in_flight || !current_http_url) return;
     health_in_flight = TRUE;
-    gateway_http_check_health(current_http_url, on_health_result, NULL);
+
+    GatewayHealthContext *ctx = g_new0(GatewayHealthContext, 1);
+    ctx->generation = current_health_generation;
+    ctx->url = g_strdup(current_http_url);
+
+    gateway_http_check_health(current_http_url, on_health_result, ctx);
 }
 
 static gboolean on_health_poll_timer(gpointer user_data) {
@@ -201,6 +223,10 @@ static void teardown_transport(void) {
     current_http_url = NULL;
     g_free(current_ws_url);
     current_ws_url = NULL;
+
+    /* Reset health gate and increment generation so stale callbacks are ignored */
+    health_in_flight = FALSE;
+    current_health_generation++;
 }
 
 static void start_transport(void) {
