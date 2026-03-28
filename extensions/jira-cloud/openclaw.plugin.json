@@ -1,0 +1,11 @@
+{
+  "id": "jira-cloud",
+  "name": "Jira Cloud",
+  "description": "Jira Cloud skill pack for triage, planning, and release follow-up workflows.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

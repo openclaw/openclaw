@@ -261,6 +261,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/kilocode/**"
+"extensions: jira-cloud":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/jira-cloud/**"
 "extensions: openai":
   - changed-files:
       - any-glob-to-any-file:

@@ -1,0 +1,12 @@
+{
+  "name": "@kansodata/jira-cloud",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Jira Cloud skill pack plugin for OpenClaw.",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
