@@ -194,4 +194,32 @@ describe("agent-events sequencing", () => {
 
     first.resetAgentEventsForTest();
   });
+
+  test("clearAgentRunContext resets seq counter so re-used runId restarts from 1 (#51819)", async () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-leak", { sessionKey: "main" });
+
+    const seqs: number[] = [];
+    const stop = onAgentEvent((evt) => {
+      if (evt.runId === "run-leak") {
+        seqs.push(evt.seq);
+      }
+    });
+
+    emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
+    emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
+    // seq should be 1, 2
+    expect(seqs).toEqual([1, 2]);
+
+    clearAgentRunContext("run-leak");
+
+    // After clearing, re-registering the same runId should restart seq from 1
+    registerAgentRunContext("run-leak", { sessionKey: "main" });
+    emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
+
+    stop();
+
+    // Third event should be seq 1 (reset), not seq 3 (leaked)
+    expect(seqs).toEqual([1, 2, 1]);
+  });
 });
