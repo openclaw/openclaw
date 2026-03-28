@@ -51,7 +51,6 @@ const WRAPPER_PROVIDERS = new Set([
   "openrouter",
   "vercel-ai-gateway",
 ]);
-
 const log = createSubsystemLogger("gateway").child("model-pricing");
 
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;

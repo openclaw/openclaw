@@ -32,7 +32,10 @@ function modelPricingCacheKey(provider: string, model: string): string {
 function shouldNormalizeCachedPricingLookup(provider: string): boolean {
   const normalized = normalizeProviderId(provider);
   return (
-    normalized === "anthropic" || normalized === "openrouter" || WRAPPER_PROVIDERS.has(normalized)
+    normalized === "anthropic" ||
+    normalized === "openrouter" ||
+    normalized === "xai" ||
+    WRAPPER_PROVIDERS.has(normalized)
   );
 }
 
