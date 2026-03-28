@@ -1028,6 +1028,22 @@ export async function sendMessageTelegram(
   return textResult;
 }
 
+// Max retry attempts for sendChatAction to prevent infinite loops (issue #56096)
+const MAX_SEND_CHAT_ACTION_RETRIES = 5;
+
+/**
+ * Check if an error is recoverable for sendChatAction with stricter rules.
+ * Avoids retrying on 529 (overloaded) which can cause infinite loops.
+ */
+function shouldRetrySendChatAction(err: unknown): boolean {
+  const errMsg = formatErrorMessage(err).toLowerCase();
+  // Do not retry on 429 (rate limit) or 529 (overloaded) - these can cause infinite loops
+  if (errMsg.includes("429") || errMsg.includes("529") || errMsg.includes("overload")) {
+    return false;
+  }
+  return isRecoverableTelegramNetworkError(err, { context: "send" });
+}
+
 export async function sendTypingTelegram(
   to: string,
   opts: TelegramTypingOpts = {},
@@ -1041,23 +1057,46 @@ export async function sendTypingTelegram(
     persistTarget: to,
     verbose: opts.verbose,
   });
+
+  // Use limited retries with exponential backoff for sendChatAction
+  // This prevents infinite retry loops (issue #56096)
+  const typingRetryConfig: RetryConfig = {
+    attempts: MAX_SEND_CHAT_ACTION_RETRIES,
+    minDelayMs: 1000, // Start with 1s backoff
+    maxDelayMs: 30_000, // Cap at 30s
+    jitter: 0.2,
+  };
+
   const requestWithDiag = createTelegramRequestWithDiag({
     cfg,
     account,
-    retry: opts.retry,
+    retry: typingRetryConfig,
     verbose: opts.verbose,
-    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+    shouldRetry: shouldRetrySendChatAction,
   });
   const threadParams = buildTypingThreadParams(target.messageThreadId ?? opts.messageThreadId);
-  await requestWithDiag(
-    () =>
-      api.sendChatAction(
-        chatId,
-        "typing",
-        threadParams as Parameters<TelegramApi["sendChatAction"]>[2],
-      ),
-    "typing",
-  );
+
+  try {
+    await requestWithDiag(
+      () =>
+        api.sendChatAction(
+          chatId,
+          "typing",
+          threadParams as Parameters<TelegramApi["sendChatAction"]>[2],
+        ),
+      "typing",
+    );
+  } catch (err) {
+    // Log but don't fail - typing indicator is non-critical
+    // This ensures the main message flow continues even if typing fails
+    if (opts.verbose) {
+      sendLogger.warn(
+        `sendTypingTelegram failed after ${MAX_SEND_CHAT_ACTION_RETRIES} retries, continuing: ${formatErrorMessage(err)}`,
+      );
+    }
+    // Return success anyway - typing indicator is best-effort
+  }
+
   return { ok: true };
 }
 

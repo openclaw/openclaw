@@ -61,6 +61,25 @@ function is401Error(error: unknown): boolean {
 }
 
 /**
+ * Check if error is 429 (rate limit) or 529 (overloaded).
+ * These should NOT trigger retries as they cause infinite loops (issue #56096).
+ */
+function is429Or529Error(error: unknown): boolean {
+  if (!error) {
+    return false;
+  }
+  const message = error instanceof Error ? error.message : JSON.stringify(error);
+  const lowerMsg = message.toLowerCase();
+  return (
+    message.includes("429") ||
+    message.includes("529") ||
+    lowerMsg.includes("rate limit") ||
+    lowerMsg.includes("overload") ||
+    lowerMsg.includes("too many requests")
+  );
+}
+
+/**
  * Creates a GLOBAL (per-account) handler for sendChatAction that tracks 401 errors
  * across all message contexts. This prevents the infinite loop that caused Telegram
  * to delete bots (issue #27092).
@@ -108,6 +127,16 @@ export function createTelegramSendChatActionHandler({
         consecutive401Failures = 0;
       }
     } catch (error) {
+      // Issue #56096: Do not retry on 429/529 errors - they cause infinite loops
+      if (is429Or529Error(error)) {
+        logger(
+          `sendChatAction failed with rate limit/overloaded error (429/529). ` +
+            `Not retrying to prevent infinite loop.`,
+        );
+        // Re-throw without incrementing consecutive401Failures
+        throw error;
+      }
+
       if (is401Error(error)) {
         consecutive401Failures++;
 
