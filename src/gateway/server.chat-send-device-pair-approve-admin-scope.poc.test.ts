@@ -136,7 +136,10 @@ describe("gateway chat.send /pair approve admin scope", () => {
         });
         expect(viaChatSend.ok).toBe(true);
 
-        await vi.waitFor(async () => {
+        expect(viaChatSend.ok).toBe(true);
+        expect(viaChatSend.result?.text ?? viaChatSend.result?.reply).toMatch(
+          /Cannot approve a request requiring operator\.admin/,
+        );
           const paired = await getPairedDevice(pendingAdmin.identity.deviceId);
           expect(paired).toBeNull();
         });
