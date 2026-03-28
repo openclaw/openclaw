@@ -373,6 +373,21 @@ async function runTelegramDmAcpCommand(commandBody: string, cfg: OpenClawConfig 
   );
 }
 
+async function runSlackDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "slack",
+        originatingTo: "user:U123",
+        senderId: "U123",
+      },
+      cfg,
+    ),
+    true,
+  );
+}
+
 function createMatrixThreadParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
   const params = createConversationParams(
     commandBody,
@@ -802,7 +817,7 @@ describe("/acp command", () => {
         conversation: expect.objectContaining({
           channel: "discord",
           accountId: "default",
-          conversationId: "parent-1",
+          conversationId: "channel:parent-1",
         }),
       }),
     );
@@ -819,6 +834,22 @@ describe("/acp command", () => {
           channel: "bluebubbles",
           accountId: "default",
           conversationId: "+15555550123",
+        }),
+      }),
+    );
+  });
+
+  it("binds Slack DMs with --bind here through the generic conversation path", async () => {
+    const result = await runSlackDmAcpCommand("/acp spawn codex --bind here");
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "slack",
+          accountId: "default",
+          conversationId: "U123",
         }),
       }),
     );
