@@ -7164,6 +7164,94 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             },
             additionalProperties: false,
           },
+          code_execution: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              apiKey: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              model: {
+                type: "string",
+              },
+              maxTurns: {
+                type: "integer",
+                minimum: -9007199254740991,
+                maximum: 9007199254740991,
+              },
+              timeoutSeconds: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+            },
+            additionalProperties: false,
+          },
           exec: {
             type: "object",
             properties: {
@@ -12974,6 +13062,32 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "X Search Cache TTL (min)",
       help: "Cache TTL in minutes for x_search results.",
       tags: ["performance", "storage", "tools"],
+    },
+    "tools.code_execution.enabled": {
+      label: "Enable Code Execution Tool",
+      help: "Enable the code_execution tool (requires XAI_API_KEY or tools.code_execution.apiKey).",
+      tags: ["tools"],
+    },
+    "tools.code_execution.apiKey": {
+      label: "xAI API Key",
+      help: "xAI API key for remote code execution (fallback: XAI_API_KEY env var).",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.code_execution.model": {
+      label: "Code Execution Model",
+      help: 'Model to use for remote code execution (default: "grok-4-1-fast").',
+      tags: ["models", "tools"],
+    },
+    "tools.code_execution.maxTurns": {
+      label: "Code Execution Max Turns",
+      help: "Optional max internal tool turns xAI may use per code_execution request. Omit to let xAI choose.",
+      tags: ["performance", "tools"],
+    },
+    "tools.code_execution.timeoutSeconds": {
+      label: "Code Execution Timeout (sec)",
+      help: "Timeout in seconds for code_execution requests.",
+      tags: ["performance", "tools"],
     },
     "gateway.controlUi.basePath": {
       label: "Control UI Base Path",

@@ -292,6 +292,33 @@ function collectMessagesTtsAssignments(params: {
   });
 }
 
+function collectCodeExecutionAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const tools = params.config.tools as Record<string, unknown> | undefined;
+  if (!isRecord(tools)) {
+    return;
+  }
+  const codeExecution = isRecord(tools.code_execution) ? tools.code_execution : undefined;
+  if (!codeExecution) {
+    return;
+  }
+  collectSecretInputAssignment({
+    value: codeExecution.apiKey,
+    path: "tools.code_execution.apiKey",
+    expected: "string",
+    defaults: params.defaults,
+    context: params.context,
+    active: codeExecution.enabled !== false,
+    inactiveReason: "tools.code_execution is disabled.",
+    apply: (value) => {
+      codeExecution.apiKey = value;
+    },
+  });
+}
+
 function collectCronAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
@@ -425,5 +452,6 @@ export function collectCoreConfigAssignments(params: {
   collectGatewayAssignments(params);
   collectSandboxSshAssignments(params);
   collectMessagesTtsAssignments(params);
+  collectCodeExecutionAssignments(params);
   collectCronAssignments(params);
 }

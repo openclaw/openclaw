@@ -82,6 +82,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     profiles: ["coding"],
   },
   {
+    id: "code_execution",
+    label: "code_execution",
+    description: "Run sandboxed remote analysis with xAI",
+    sectionId: "runtime",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "web_search",
     label: "web_search",
     description: "Search the web",
