@@ -11,26 +11,80 @@ title: "mcp"
 
 `openclaw mcp` has two jobs:
 
-- run a Gateway-backed MCP bridge with `openclaw mcp serve`
-- manage OpenClaw-saved MCP server definitions with `list`, `show`, `set`, and `unset`
+- run OpenClaw as an MCP server with `openclaw mcp serve`
+- manage OpenClaw-owned outbound MCP server definitions with `list`, `show`,
+  `set`, and `unset`
 
-Use `openclaw mcp serve` when an external MCP client should talk directly to
-OpenClaw channel conversations.
+In other words:
+
+- `serve` is OpenClaw acting as an MCP server
+- `list` / `show` / `set` / `unset` is OpenClaw acting as an MCP client-side
+  registry for other MCP servers its runtimes may consume later
 
 Use [`openclaw acp`](/cli/acp) when OpenClaw should host a coding harness
 session itself and route that runtime through ACP.
 
-## What `serve` does
+## OpenClaw as an MCP server
 
-`openclaw mcp serve` starts a stdio MCP server that connects to a local or
-remote OpenClaw Gateway over WebSocket.
+This is the `openclaw mcp serve` path.
+
+## When to use `serve`
+
+Use `openclaw mcp serve` when:
+
+- Codex, Claude Code, or another MCP client should talk directly to
+  OpenClaw-backed channel conversations
+- you already have a local or remote OpenClaw Gateway with routed sessions
+- you want one MCP server that works across OpenClaw's channel backends instead
+  of running separate per-channel bridges
+
+Use [`openclaw acp`](/cli/acp) instead when OpenClaw should host the coding
+runtime itself and keep the agent session inside OpenClaw.
+
+## How it works
+
+`openclaw mcp serve` starts a stdio MCP server. The MCP client owns that
+process. While the client keeps the stdio session open, the bridge connects to a
+local or remote OpenClaw Gateway over WebSocket and exposes routed channel
+conversations over MCP.
+
+Lifecycle:
+
+1. the MCP client spawns `openclaw mcp serve`
+2. the bridge connects to Gateway
+3. routed sessions become MCP conversations and transcript/history tools
+4. live events are queued in memory while the bridge is connected
+5. if Claude channel mode is enabled, the same session can also receive
+   Claude-specific push notifications
+
+Important behavior:
+
+- live queue state starts when the bridge connects
+- older transcript history is read with `messages_read`
+- Claude push notifications only exist while the MCP session is alive
+- when the client disconnects, the bridge exits and the live queue is gone
+
+## Choose a client mode
+
+Use the same bridge in two different ways:
+
+- Generic MCP clients: standard MCP tools only. Use `conversations_list`,
+  `messages_read`, `events_poll`, `events_wait`, `messages_send`, and the
+  approval tools.
+- Claude Code: standard MCP tools plus the Claude-specific channel adapter.
+  Enable `--claude-channel-mode on` or leave the default `auto`.
+
+Today, `auto` behaves the same as `on`. There is no client capability detection
+yet.
+
+## What `serve` exposes
 
 The bridge uses existing Gateway session route metadata to expose channel-backed
-conversations. In practice, that means a conversation appears when OpenClaw has
-session state with a known channel route such as:
+conversations. A conversation appears when OpenClaw already has session state
+with a known route such as:
 
 - `channel`
-- `to`
+- recipient or destination metadata
 - optional `accountId`
 - optional `threadId`
 
@@ -110,6 +164,9 @@ Reads queued live events since a numeric cursor.
 
 Long-polls until the next matching queued event arrives or a timeout expires.
 
+Use this when a generic MCP client needs near-real-time delivery without a
+Claude-specific push protocol.
+
 ### `messages_send`
 
 Sends text back through the same route already recorded on the session.
@@ -155,7 +212,10 @@ Important limits:
 
 ## Claude channel notifications
 
-The bridge can also expose Claude-specific channel notifications.
+The bridge can also expose Claude-specific channel notifications. This is the
+OpenClaw equivalent of a Claude Code channel adapter: standard MCP tools remain
+available, but live inbound messages can also arrive as Claude-specific MCP
+notifications.
 
 Flags:
 
@@ -176,6 +236,8 @@ Current bridge behavior:
 - Claude permission requests received over MCP are tracked in-memory
 - if the linked conversation later sends `yes abcde` or `no abcde`, the bridge
   converts that to `notifications/claude/channel/permission`
+- these notifications are live-session only; if the MCP client disconnects,
+  there is no push target
 
 This is intentionally client-specific. Generic MCP clients should rely on the
 standard polling tools.
@@ -202,6 +264,10 @@ Example stdio client config:
 }
 ```
 
+For most generic MCP clients, start with the standard tool surface and ignore
+Claude mode. Turn Claude mode on only for clients that actually understand the
+Claude-specific notification methods.
+
 ## Options
 
 `openclaw mcp serve` supports:
@@ -213,6 +279,96 @@ Example stdio client config:
 - `--password-file <path>`: read password from file
 - `--claude-channel-mode <auto|on|off>`: Claude notification mode
 - `-v`, `--verbose`: verbose logs on stderr
+
+Prefer `--token-file` or `--password-file` over inline secrets when possible.
+
+## Security and trust boundary
+
+The bridge does not invent routing. It only exposes conversations that Gateway
+already knows how to route.
+
+That means:
+
+- sender allowlists, pairing, and channel-level trust still belong to the
+  underlying OpenClaw channel configuration
+- `messages_send` can only reply through an existing stored route
+- approval state is live/in-memory only for the current bridge session
+- bridge auth should use the same Gateway token or password controls you would
+  trust for any other remote Gateway client
+
+If a conversation is missing from `conversations_list`, the usual cause is not
+MCP configuration. It is missing or incomplete route metadata in the underlying
+Gateway session.
+
+## Testing
+
+OpenClaw ships a deterministic Docker smoke for this bridge:
+
+```bash
+pnpm test:docker:mcp-channels
+```
+
+That smoke:
+
+- starts a seeded Gateway container
+- starts a second container that spawns `openclaw mcp serve`
+- verifies conversation discovery, transcript reads, attachment metadata reads,
+  live event queue behavior, and outbound send routing
+- validates Claude-style channel and permission notifications over the real
+  stdio MCP bridge
+
+This is the fastest way to prove the bridge works without wiring a real
+Telegram, Discord, or iMessage account into the test run.
+
+For broader testing context, see [Testing](/help/testing).
+
+## Troubleshooting
+
+### No conversations returned
+
+Usually means the Gateway session is not already routable. Confirm that the
+underlying session has stored channel/provider, recipient, and optional
+account/thread route metadata.
+
+### `events_poll` or `events_wait` misses older messages
+
+Expected. The live queue starts when the bridge connects. Read older transcript
+history with `messages_read`.
+
+### Claude notifications do not show up
+
+Check all of these:
+
+- the client kept the stdio MCP session open
+- `--claude-channel-mode` is `on` or `auto`
+- the client actually understands the Claude-specific notification methods
+- the inbound message happened after the bridge connected
+
+### Approvals are missing
+
+`permissions_list_open` only shows approval requests observed while the bridge
+was connected. It is not a durable approval history API.
+
+## OpenClaw as an MCP client registry
+
+This is the `openclaw mcp list`, `show`, `set`, and `unset` path.
+
+These commands do not expose OpenClaw over MCP. They manage OpenClaw-owned MCP
+server definitions under `mcp.servers` in OpenClaw config.
+
+Those saved definitions are for runtimes that OpenClaw launches or configures
+later, such as embedded Pi and other runtime adapters. OpenClaw stores the
+definitions centrally so those runtimes do not need to keep their own duplicate
+MCP server lists.
+
+Important behavior:
+
+- these commands only read or write OpenClaw config
+- they do not connect to the target MCP server
+- they do not validate whether the command, URL, or remote transport is
+  reachable right now
+- runtime adapters decide which transport shapes they actually support at
+  execution time
 
 ## Saved MCP server definitions
 
@@ -232,10 +388,38 @@ Examples:
 openclaw mcp list
 openclaw mcp show context7 --json
 openclaw mcp set context7 '{"command":"uvx","args":["context7-mcp"]}'
+openclaw mcp set docs '{"url":"https://mcp.example.com"}'
 openclaw mcp unset context7
 ```
 
-These commands manage saved config only. They do not start the channel bridge.
+Example config shape:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "context7": {
+        "command": "uvx",
+        "args": ["context7-mcp"]
+      },
+      "docs": {
+        "url": "https://mcp.example.com"
+      }
+    }
+  }
+}
+```
+
+Typical fields:
+
+- `command`
+- `args`
+- `env`
+- `cwd` or `workingDirectory`
+- `url`
+
+These commands manage saved config only. They do not start the channel bridge,
+open a live MCP client session, or prove the target server is reachable.
 
 ## Current limits
 
