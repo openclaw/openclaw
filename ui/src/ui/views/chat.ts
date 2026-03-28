@@ -1349,28 +1349,6 @@ export function renderChat(props: ChatProps) {
 
           <div class="agent-chat__toolbar-right">
             ${nothing /* search hidden for now */}
-            ${canAbort
-              ? nothing
-              : html`
-                  <button
-                    class="btn btn--ghost"
-                    @click=${props.onNewSession}
-                    title="New chat"
-                    aria-label="New chat"
-                    ?disabled=${!props.connected}
-                  >
-                    ${icons.plus}
-                  </button>
-                  <button
-                    class="btn btn--ghost"
-                    @click=${props.onRenameSession}
-                    title="Rename chat"
-                    aria-label="Rename chat"
-                    ?disabled=${!props.connected}
-                  >
-                    ${icons.penLine}
-                  </button>
-                `}
             <button
               class="btn btn--ghost"
               @click=${() => exportMarkdown(props)}

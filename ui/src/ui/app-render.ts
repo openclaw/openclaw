@@ -84,7 +84,6 @@ import {
   deleteSessionsAndRefresh,
   loadSessions,
   patchSession,
-  resolveNewControlUiSessionLabel,
 } from "./controllers/sessions.ts";
 import {
   installSkill,
@@ -404,30 +403,29 @@ export function renderApp(state: AppViewState) {
       return;
     }
     const now = new Date();
-    const nextLabel = resolveNewControlUiSessionLabel(
-      window.prompt("New chat title:", createDefaultControlUiSessionLabel(now)),
-      now,
-    );
-    if (!nextLabel) {
-      return;
-    }
+    const nextLabel = createDefaultControlUiSessionLabel(now);
     state.lastError = null;
     const result = await createControlUiSession(state, {
       agentId: activeSessionAgentId,
       label: nextLabel,
+      now,
     });
     if (!result?.key) {
       state.lastError = state.sessionsError ?? "Failed to create chat";
       return;
     }
     switchChatSession(state, result.key);
+    if (state.tab !== "chat") {
+      state.setTab("chat" as import("./navigation.ts").Tab);
+    }
+    state.navDrawerOpen = false;
   };
   const handleRenameChatSession = async () => {
     if (!state.client || !state.connected) {
       return;
     }
     const currentLabel = currentSessionRow?.label?.trim() || "";
-    const promptValue = window.prompt("Rename chat:", currentLabel);
+    const promptValue = window.prompt(t("common.renameChat"), currentLabel);
     if (promptValue === null) {
       return;
     }
@@ -551,6 +549,21 @@ export function renderApp(state: AppViewState) {
               </button>
             </div>
             <div class="sidebar-shell__body">
+              <div class="sidebar-chat-actions">
+                <button
+                  type="button"
+                  class="nav-item nav-item--action sidebar-chat-action"
+                  title=${t("common.newChat")}
+                  aria-label=${t("common.newChat")}
+                  ?disabled=${!state.client || !state.connected}
+                  @click=${() => void handleCreateChatSession()}
+                >
+                  <span class="nav-item__icon" aria-hidden="true">${icons.edit}</span>
+                  ${!navCollapsed
+                    ? html`<span class="nav-item__text">${t("common.newChat")}</span>`
+                    : nothing}
+                </button>
+              </div>
               <nav class="sidebar-nav">
                 ${TAB_GROUPS.map((group) => {
                   const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
@@ -662,7 +675,9 @@ export function renderApp(state: AppViewState) {
           : html`<section class="content-header">
               <div>
                 ${isChat
-                  ? renderChatSessionSelect(state)
+                  ? renderChatSessionSelect(state, {
+                      onRenameSession: () => void handleRenameChatSession(),
+                    })
                   : html`<div class="page-title">${titleForTab(state.tab)}</div>`}
                 ${isChat ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
               </div>
@@ -1522,7 +1537,7 @@ export function renderApp(state: AppViewState) {
               onAbort: () => void state.handleAbortChat(),
               onQueueRemove: (id) => state.removeQueuedMessage(id),
               onNewSession: () => void handleCreateChatSession(),
-              onRenameSession: () => void handleRenameChatSession(),
+              onRenameSession: undefined,
               onClearHistory: async () => {
                 if (!state.client || !state.connected) {
                   return;

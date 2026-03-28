@@ -1,5 +1,5 @@
 import { render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import "../../styles.css";
 import { renderChat, type ChatProps } from "./chat.ts";
 
@@ -126,26 +126,13 @@ describe("chat context notice", () => {
     expect(icon.getBoundingClientRect().width).toBeLessThan(24);
   });
 
-  it("fires the new chat and rename chat toolbar actions", async () => {
-    const onNewSession = vi.fn();
-    const onRenameSession = vi.fn();
+  it("does not render session actions in the composer toolbar", async () => {
     const container = document.createElement("div");
     document.body.append(container);
-    render(
-      renderChat(
-        createProps({
-          onNewSession,
-          onRenameSession,
-        }),
-      ),
-      container,
-    );
+    render(renderChat(createProps({})), container);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
-    container.querySelector<HTMLButtonElement>('button[title="New chat"]')?.click();
-    container.querySelector<HTMLButtonElement>('button[title="Rename chat"]')?.click();
-
-    expect(onNewSession).toHaveBeenCalledTimes(1);
-    expect(onRenameSession).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('button[title="New chat"]')).toBeNull();
+    expect(container.querySelector('button[title="Rename chat"]')).toBeNull();
   });
 });

@@ -759,6 +759,10 @@
   max-width: 320px;
 }
 
+.chat-controls__session-action {
+  flex-shrink: 0;
+}
+
 .chat-controls__thinking {
   display: flex;
   align-items: center;

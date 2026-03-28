@@ -16,6 +16,8 @@ export const en: TranslationMap = {
     theme: "Theme",
     resources: "Resources",
     search: "Search",
+    newChat: "New chat",
+    renameChat: "Rename chat",
   },
   nav: {
     chat: "Chat",

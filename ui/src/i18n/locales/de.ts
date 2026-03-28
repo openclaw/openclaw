@@ -14,6 +14,8 @@ export const de: TranslationMap = {
     na: "k. A.",
     docs: "Dokumentation",
     resources: "Ressourcen",
+    newChat: "Neuer Chat",
+    renameChat: "Chat umbenennen",
   },
   nav: {
     chat: "Chat",

@@ -107,6 +107,24 @@ describe("control UI routing", () => {
     expect(app.querySelector(".sidebar-brand__copy")).not.toBeNull();
   });
 
+  it("keeps the new chat action at the top of the sidebar and collapses it to an icon", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    const action = app.querySelector<HTMLButtonElement>("button.sidebar-chat-action");
+    expect(action).not.toBeNull();
+    expect(action?.title).toBe("New chat");
+    expect(action?.querySelector(".nav-item__text")?.textContent?.trim()).toBe("New chat");
+
+    app.applySettings({ ...app.settings, navCollapsed: true });
+    await app.updateComplete;
+
+    const collapsedAction = app.querySelector<HTMLButtonElement>("button.sidebar-chat-action");
+    expect(collapsedAction).not.toBeNull();
+    expect(collapsedAction?.title).toBe("New chat");
+    expect(collapsedAction?.querySelector(".nav-item__text")).toBeNull();
+  });
+
   it("does not render a desktop sidebar resizer or inject a custom nav width", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;

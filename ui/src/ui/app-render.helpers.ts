@@ -130,9 +130,13 @@ function renderCronFilterIcon(hiddenCount: number) {
   `;
 }
 
-export function renderChatSessionSelect(state: AppViewState) {
+export function renderChatSessionSelect(
+  state: AppViewState,
+  opts?: { onRenameSession?: () => void },
+) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
   const modelSelect = renderChatModelSelect(state);
+  const canRenameSession = Boolean(opts?.onRenameSession);
   return html`
     <div class="chat-controls__session-row">
       <label class="field chat-controls__session">
@@ -163,6 +167,20 @@ export function renderChatSessionSelect(state: AppViewState) {
         </select>
       </label>
       ${modelSelect}
+      ${canRenameSession
+        ? html`
+            <button
+              type="button"
+              class="btn btn--sm btn--icon chat-controls__session-action"
+              title=${t("common.renameChat")}
+              aria-label=${t("common.renameChat")}
+              ?disabled=${!state.connected || !state.client}
+              @click=${() => opts?.onRenameSession?.()}
+            >
+              ${icons.penLine}
+            </button>
+          `
+        : nothing}
     </div>
   `;
 }

@@ -15,6 +15,8 @@ export const zh_CN: TranslationMap = {
     docs: "文档",
     resources: "资源",
     search: "搜索",
+    newChat: "新聊天",
+    renameChat: "重命名聊天",
   },
   nav: {
     chat: "聊天",

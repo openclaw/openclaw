@@ -642,29 +642,19 @@ describe("chat view", () => {
     expect(container.querySelector('button[title="Rename chat"]')).toBeNull();
   });
 
-  it("shows new chat and rename actions when aborting is unavailable", () => {
+  it("keeps session actions out of the composer toolbar", () => {
     const container = document.createElement("div");
-    const onNewSession = vi.fn();
-    const onRenameSession = vi.fn();
     render(
       renderChat(
         createProps({
           canAbort: false,
-          onNewSession,
-          onRenameSession,
         }),
       ),
       container,
     );
 
-    const newSessionButton = container.querySelector<HTMLButtonElement>('button[title="New chat"]');
-    const renameButton = container.querySelector<HTMLButtonElement>('button[title="Rename chat"]');
-    expect(newSessionButton).not.toBeUndefined();
-    expect(renameButton).not.toBeUndefined();
-    newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    renameButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onNewSession).toHaveBeenCalledTimes(1);
-    expect(onRenameSession).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('button[title="New chat"]')).toBeNull();
+    expect(container.querySelector('button[title="Rename chat"]')).toBeNull();
     expect(container.textContent).not.toContain("Stop");
   });
 
@@ -823,6 +813,20 @@ describe("chat view", () => {
     expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
     expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openai");
     vi.unstubAllGlobals();
+  });
+
+  it("renders a rename action in the chat header session row", () => {
+    const { state } = createChatHeaderState();
+    const onRenameSession = vi.fn();
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state, { onRenameSession }), container);
+
+    const renameButton = container.querySelector<HTMLButtonElement>('button[title="Rename chat"]');
+    expect(renameButton).not.toBeNull();
+    expect(renameButton?.disabled).toBe(false);
+
+    renameButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onRenameSession).toHaveBeenCalledTimes(1);
   });
 
   it("reloads effective tools after a chat-header model switch for the active tools panel", async () => {
