@@ -188,6 +188,13 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceContains("telegram", 'export * from "./telegram-core.js";');
     expectSourceContains("telegram", 'export * from "./telegram-runtime.js";');
+    expectSourceMentions("imessage", [
+      "normalizeIMessageHandle",
+      "parseChatAllowTargetPrefixes",
+      "parseChatTargetPrefixesOrThrow",
+      "resolveServicePrefixedAllowTarget",
+      "resolveServicePrefixedTarget",
+    ]);
     expectSourceMentions("reply-history", [
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
