@@ -60,7 +60,7 @@ export function resolvePluginProviders(params: {
     ? withBundledProviderVitestCompat({
         config: allowlistCompatConfig,
         pluginIds: bundledProviderCompatPluginIds,
-        env: params.env,
+        env,
       })
     : allowlistCompatConfig;
   const providerPluginIds = resolveEnabledProviderPluginIds({
