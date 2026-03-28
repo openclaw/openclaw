@@ -181,8 +181,14 @@ const OBFUSCATION_PATTERNS: ObfuscationPattern[] = [
   },
   {
     id: "var-expansion-obfuscation",
-    description: "Variable assignment chain with expansion (potential obfuscation)",
-    regex: /(?:[a-zA-Z_]\w{0,2}=[^;\s]+\s*;\s*){2,}[^$]*\$(?:[a-zA-Z_]|\{[a-zA-Z_])/,
+    // Narrowed: require the expanded variable to feed into an execution context
+    // (eval, exec, sh/bash/etc., or process substitution). The original broad regex
+    // matched any short-var assignment chain — including legitimate shell patterns like
+    // `case $x in ... ;;` or `taskfile=a.txt; log=b.log` — causing false positives.
+    // Real obfuscation: a=ZWNoby4=; b=$(echo $a|base64 -d); eval $b
+    description: "Variable assignment chain with expansion into execution context (potential obfuscation)",
+    regex:
+      /(?:[a-zA-Z_]\w{0,2}=[^;\s]+\s*;\s*){2,}[^$]*\$(?:[a-zA-Z_]|\{[a-zA-Z_])[^|&;\n]*(?:\|\s*(?:sh|bash|zsh|dash|ksh|fish)\b|;\s*(?:eval|exec)\b)/,
   },
 ];
 
