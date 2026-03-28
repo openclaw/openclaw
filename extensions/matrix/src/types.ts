@@ -73,7 +73,7 @@ export type MatrixConfig = {
   /** Matrix user id (@user:server). */
   userId?: string;
   /** Matrix access token. */
-  accessToken?: string;
+  accessToken?: SecretInput;
   /** Matrix password (used only to fetch access token). */
   password?: SecretInput;
   /** Optional Matrix device id (recommended when using access tokens + E2EE). */

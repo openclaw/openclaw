@@ -91,6 +91,97 @@ describe("resolveMatrixConfig", () => {
     expect(resolved.encryption).toBe(false);
   });
 
+  it("resolves accessToken SecretRef against the provided env", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://cfg.example.org",
+          accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
+        },
+      },
+      secrets: {
+        defaults: {
+          env: "default",
+        },
+      },
+    } as CoreConfig;
+    const env = {
+      MATRIX_ACCESS_TOKEN: "env-token",
+    } as NodeJS.ProcessEnv;
+
+    const resolved = resolveMatrixConfig(cfg, env);
+    expect(resolved.accessToken).toBe("env-token");
+  });
+
+  it("resolves password SecretRef against the provided env", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://cfg.example.org",
+          userId: "@cfg:example.org",
+          password: { source: "env", provider: "default", id: "MATRIX_PASSWORD" },
+        },
+      },
+      secrets: {
+        defaults: {
+          env: "default",
+        },
+      },
+    } as CoreConfig;
+    const env = {
+      MATRIX_PASSWORD: "env-pass",
+    } as NodeJS.ProcessEnv;
+
+    const resolved = resolveMatrixConfig(cfg, env);
+    expect(resolved.password).toBe("env-pass");
+  });
+
+  it("resolves account accessToken SecretRef against the provided env", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            ops: {
+              homeserver: "https://ops.example.org",
+              accessToken: { source: "env", provider: "default", id: "MATRIX_OPS_ACCESS_TOKEN" },
+            },
+          },
+        },
+      },
+      secrets: {
+        defaults: {
+          env: "default",
+        },
+      },
+    } as CoreConfig;
+    const env = {
+      MATRIX_OPS_ACCESS_TOKEN: "ops-token",
+    } as NodeJS.ProcessEnv;
+
+    const resolved = resolveMatrixConfigForAccount(cfg, "ops", env);
+    expect(resolved.accessToken).toBe("ops-token");
+  });
+
+  it("keeps unresolved accessToken SecretRef errors when env fallback is missing", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://cfg.example.org",
+          accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
+        },
+      },
+      secrets: {
+        defaults: {
+          env: "default",
+        },
+      },
+    } as CoreConfig;
+
+    expect(() => resolveMatrixConfig(cfg, {} as NodeJS.ProcessEnv)).toThrow(
+      /channels\.matrix\.accessToken: unresolved SecretRef "env:default:MATRIX_ACCESS_TOKEN"/i,
+    );
+  });
+
   it("uses account-scoped env vars for non-default accounts before global env", () => {
     const cfg = {
       channels: {

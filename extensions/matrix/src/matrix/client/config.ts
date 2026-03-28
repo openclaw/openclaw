@@ -1,3 +1,4 @@
+import { coerceSecretRef } from "openclaw/plugin-sdk/config-runtime";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -27,28 +28,50 @@ import { MatrixClient } from "../sdk.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 
-function clean(value: unknown, path: string): string {
-  if (
-    value !== null &&
-    typeof value === "object" &&
-    "source" in value &&
-    (value as Record<string, unknown>).source === "env" &&
-    "id" in value
-  ) {
-    const keys = Object.keys(value as object);
-    const envId = (value as Record<string, unknown>).id;
-    if (
-      typeof envId === "string" &&
-      /^[A-Z][A-Z0-9_]{0,127}$/.test(envId) &&
-      (keys.length === 2 || keys.length === 3)
-    ) {
-      const resolved = process.env[envId];
-      if (resolved !== undefined) {
-        value = resolved;
-      }
-    }
+type MatrixSecretDefaults = NonNullable<CoreConfig["secrets"]>["defaults"];
+
+function readEnvSecretRefFallback(params: {
+  value: unknown;
+  env?: NodeJS.ProcessEnv;
+  defaults?: MatrixSecretDefaults;
+}): string | undefined {
+  const ref = coerceSecretRef(params.value, params.defaults);
+  if (!ref || ref.source !== "env" || !params.env) {
+    return undefined;
   }
-  return normalizeResolvedSecretInputString({ value, path }) ?? "";
+
+  const resolved = params.env[ref.id];
+  if (typeof resolved !== "string") {
+    return undefined;
+  }
+
+  const trimmed = resolved.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function clean(
+  value: unknown,
+  path: string,
+  opts?: {
+    env?: NodeJS.ProcessEnv;
+    defaults?: MatrixSecretDefaults;
+    allowEnvSecretRefFallback?: boolean;
+  },
+): string {
+  const normalizedValue = opts?.allowEnvSecretRefFallback
+    ? (readEnvSecretRefFallback({
+        value,
+        env: opts.env,
+        defaults: opts.defaults,
+      }) ?? value)
+    : value;
+  return (
+    normalizeResolvedSecretInputString({
+      value: normalizedValue,
+      path,
+      defaults: opts?.defaults,
+    }) ?? ""
+  );
 }
 
 type MatrixEnvConfig = {
@@ -72,11 +95,23 @@ function resolveMatrixBaseConfigFieldPath(field: MatrixConfigStringField): strin
   return `channels.matrix.${field}`;
 }
 
+function shouldAllowEnvSecretRefFallback(field: MatrixConfigStringField): boolean {
+  return field === "accessToken" || field === "password";
+}
+
 function readMatrixBaseConfigField(
   matrix: ReturnType<typeof resolveMatrixBaseConfig>,
   field: MatrixConfigStringField,
+  opts?: {
+    env?: NodeJS.ProcessEnv;
+    defaults?: MatrixSecretDefaults;
+  },
 ): string {
-  return clean(matrix[field], resolveMatrixBaseConfigFieldPath(field));
+  return clean(matrix[field], resolveMatrixBaseConfigFieldPath(field), {
+    env: opts?.env,
+    defaults: opts?.defaults,
+    allowEnvSecretRefFallback: shouldAllowEnvSecretRefFallback(field),
+  });
 }
 
 function readMatrixAccountConfigField(
@@ -84,8 +119,16 @@ function readMatrixAccountConfigField(
   accountId: string,
   account: Partial<Record<MatrixConfigStringField, unknown>>,
   field: MatrixConfigStringField,
+  opts?: {
+    env?: NodeJS.ProcessEnv;
+    defaults?: MatrixSecretDefaults;
+  },
 ): string {
-  return clean(account[field], resolveMatrixConfigFieldPath(cfg, accountId, field));
+  return clean(account[field], resolveMatrixConfigFieldPath(cfg, accountId, field), {
+    env: opts?.env,
+    defaults: opts?.defaults,
+    allowEnvSecretRefFallback: shouldAllowEnvSecretRefFallback(field),
+  });
 }
 
 function clampMatrixInitialSyncLimit(value: unknown): number | undefined {
@@ -258,18 +301,22 @@ export function resolveMatrixConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): MatrixResolvedConfig {
   const matrix = resolveMatrixBaseConfig(cfg);
+  const fieldReadOptions = {
+    env,
+    defaults: cfg.secrets?.defaults,
+  };
   const defaultScopedEnv = resolveScopedMatrixEnvConfig(DEFAULT_ACCOUNT_ID, env);
   const globalEnv = resolveGlobalMatrixEnvConfig(env);
   const resolvedStrings = resolveMatrixAccountStringValues({
     accountId: DEFAULT_ACCOUNT_ID,
     scopedEnv: defaultScopedEnv,
     channel: {
-      homeserver: readMatrixBaseConfigField(matrix, "homeserver"),
-      userId: readMatrixBaseConfigField(matrix, "userId"),
-      accessToken: readMatrixBaseConfigField(matrix, "accessToken"),
-      password: readMatrixBaseConfigField(matrix, "password"),
-      deviceId: readMatrixBaseConfigField(matrix, "deviceId"),
-      deviceName: readMatrixBaseConfigField(matrix, "deviceName"),
+      homeserver: readMatrixBaseConfigField(matrix, "homeserver", fieldReadOptions),
+      userId: readMatrixBaseConfigField(matrix, "userId", fieldReadOptions),
+      accessToken: readMatrixBaseConfigField(matrix, "accessToken", fieldReadOptions),
+      password: readMatrixBaseConfigField(matrix, "password", fieldReadOptions),
+      deviceId: readMatrixBaseConfigField(matrix, "deviceId", fieldReadOptions),
+      deviceName: readMatrixBaseConfigField(matrix, "deviceName", fieldReadOptions),
     },
     globalEnv,
   });
@@ -297,10 +344,14 @@ export function resolveMatrixConfigForAccount(
   const matrix = resolveMatrixBaseConfig(cfg);
   const account = findMatrixAccountConfig(cfg, accountId) ?? {};
   const normalizedAccountId = normalizeAccountId(accountId);
+  const fieldReadOptions = {
+    env,
+    defaults: cfg.secrets?.defaults,
+  };
   const scopedEnv = resolveScopedMatrixEnvConfig(normalizedAccountId, env);
   const globalEnv = resolveGlobalMatrixEnvConfig(env);
   const accountField = (field: MatrixConfigStringField) =>
-    readMatrixAccountConfigField(cfg, normalizedAccountId, account, field);
+    readMatrixAccountConfigField(cfg, normalizedAccountId, account, field, fieldReadOptions);
   const resolvedStrings = resolveMatrixAccountStringValues({
     accountId: normalizedAccountId,
     account: {
@@ -313,12 +364,12 @@ export function resolveMatrixConfigForAccount(
     },
     scopedEnv,
     channel: {
-      homeserver: readMatrixBaseConfigField(matrix, "homeserver"),
-      userId: readMatrixBaseConfigField(matrix, "userId"),
-      accessToken: readMatrixBaseConfigField(matrix, "accessToken"),
-      password: readMatrixBaseConfigField(matrix, "password"),
-      deviceId: readMatrixBaseConfigField(matrix, "deviceId"),
-      deviceName: readMatrixBaseConfigField(matrix, "deviceName"),
+      homeserver: readMatrixBaseConfigField(matrix, "homeserver", fieldReadOptions),
+      userId: readMatrixBaseConfigField(matrix, "userId", fieldReadOptions),
+      accessToken: readMatrixBaseConfigField(matrix, "accessToken", fieldReadOptions),
+      password: readMatrixBaseConfigField(matrix, "password", fieldReadOptions),
+      deviceId: readMatrixBaseConfigField(matrix, "deviceId", fieldReadOptions),
+      deviceName: readMatrixBaseConfigField(matrix, "deviceName", fieldReadOptions),
     },
     globalEnv,
   });

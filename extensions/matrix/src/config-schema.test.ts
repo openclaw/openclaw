@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { MatrixConfigSchema } from "./config-schema.js";
 
 describe("MatrixConfigSchema SecretInput", () => {
+  it("accepts SecretRef accessToken at top-level", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts SecretRef password at top-level", () => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",
