@@ -543,11 +543,13 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
   try {
-    // Only relax SSRF guard when user explicitly enables allowFakeIp config.
-    // We no longer auto-detect proxy env vars because:
+    // Only relax SSRF guard and enable trusted proxy mode when user explicitly
+    // enables allowFakeIp config. We no longer auto-detect proxy env vars because:
     // 1. NO_PROXY exclusions mean some URLs bypass the proxy but SSRF is still relaxed
-    // 2. Users who need proxy + fake-ip should set allowFakeIp: true explicitly
-    // This keeps the security model simple: SSRF relaxation requires explicit opt-in.
+    // 2. Protocol-changing redirects keep SSRF relaxed after proxy stops
+    // 3. trusted_env_proxy mode trusts proxy-side DNS, weakening SSRF for normal fetches
+    // This keeps the security model simple: both SSRF relaxation and trusted proxy mode
+    // require explicit opt-in via allowFakeIp: true.
     const allowRfc2544 = params.allowFakeIp;
     const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
@@ -556,7 +558,9 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       // When tools.web.fetch.allowFakeIp is true, allow the RFC 2544 range
       // (198.18.0.0/15) in the SSRF guard for proxy fake-ip compatibility
       // (e.g., Clash TUN mode). Users must explicitly enable this config option.
-      useEnvProxy: true,
+      // Also enable trusted_env_proxy mode only when allowFakeIp is true,
+      // to avoid weakening SSRF for normal untrusted fetches.
+      useEnvProxy: allowRfc2544,
       policy: allowRfc2544 ? { allowRfc2544BenchmarkRange: true } : undefined,
       init: {
         headers: {
