@@ -1269,7 +1269,7 @@ describe("classifyFailoverReason", () => {
 
   it("classifies Chinese provider error messages correctly", () => {
     // ZhipuAI/GLM error code 1234: "网络错误" (network error) — real production error
-    // from https://github.com/openclaw/openclaw/issues/XXXXX
+    // from https://github.com/openclaw/openclaw/issues/56242
     expect(
       classifyFailoverReason(
         "LLM error 1234: 网络错误，错误id：202603281427587491f4467f1c4712，请联系客服。 (request_id: 202603281427587491f4467f1c4712)",
