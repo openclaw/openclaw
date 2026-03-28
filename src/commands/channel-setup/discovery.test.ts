@@ -4,7 +4,7 @@ import type { PluginAutoEnableResult } from "../../config/plugin-auto-enable.js"
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn<(args: { config: unknown; env?: NodeJS.ProcessEnv }) => PluginAutoEnableResult>(
-    ({ config }) => ({ config: config as never, changes: [] }),
+    ({ config }) => ({ config: config as never, changes: [] as string[] }),
   ),
 );
 
@@ -24,7 +24,7 @@ describe("listManifestInstalledChannelIds", () => {
     loadPluginManifestRegistry.mockReset();
     applyPluginAutoEnable
       .mockReset()
-      .mockImplementation(({ config }) => ({ config: config as never, changes: [] }));
+      .mockImplementation(({ config }) => ({ config: config as never, changes: [] as string[] }));
   });
 
   it("uses the auto-enabled config snapshot for manifest discovery", () => {
