@@ -83,6 +83,40 @@ describe("test planner", () => {
     artifacts.cleanupTempArtifacts();
   });
 
+  it("caps CI extension batch concurrency when multiple shared batches are scheduled", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      RUNNER_OS: "Linux",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "4",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "16",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "ci",
+        surfaces: ["extensions"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const sharedExtensionBatches = plan.selectedUnits.filter(
+      (unit) => unit.surface === "extensions" && !unit.isolate,
+    );
+
+    expect(plan.runtimeCapabilities.runtimeProfileName).toBe("ci-linux");
+    expect(plan.executionBudget.topLevelParallelLimitNoIsolate).toBe(4);
+    expect(sharedExtensionBatches.length).toBeGreaterThan(1);
+    expect(plan.topLevelParallelLimit).toBe(2);
+    artifacts.cleanupTempArtifacts();
+  });
+
   it("scales down mid-tier local concurrency under saturated load", () => {
     const artifacts = createExecutionArtifacts({
       RUNNER_OS: "Linux",
