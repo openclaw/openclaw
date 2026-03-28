@@ -621,9 +621,8 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
-      const isThinkingBlockError = /thinking.*(?:block|content|signature)|redacted_thinking/i.test(
-        message,
-      );
+      const isThinkingBlockError =
+        /\bthinking[_\s-]?(?:block|content|signature)\b|\bredacted_thinking\b/i.test(message);
       // Always sanitize error messages to avoid leaking raw API details to chat channels.
       const safeMessage = sanitizeUserFacingText(message, { errorContext: true });
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");

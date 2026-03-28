@@ -1867,6 +1867,64 @@ describe("runReplyAgent transient HTTP retry", () => {
   });
 });
 
+async function runReplyAgentWithThrownError(errorMessage: string) {
+  runEmbeddedPiAgentMock.mockReset();
+  runEmbeddedPiAgentMock.mockRejectedValue(new Error(errorMessage));
+
+  const typing = createMockTypingController();
+  const sessionCtx = {
+    Provider: "telegram",
+    MessageSid: "msg",
+  } as unknown as TemplateContext;
+  const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+  const followupRun = {
+    prompt: "hello",
+    summaryLine: "hello",
+    enqueuedAt: Date.now(),
+    run: {
+      sessionId: "session",
+      sessionKey: "main",
+      messageProvider: "telegram",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      config: {},
+      skillsSnapshot: {},
+      provider: "anthropic",
+      model: "claude",
+      thinkLevel: "low",
+      verboseLevel: "off",
+      elevatedLevel: "off",
+      bashElevated: {
+        enabled: false,
+        allowed: false,
+        defaultLevel: "off",
+      },
+      timeoutMs: 1_000,
+      blockReplyBreak: "message_end",
+    },
+  } as unknown as FollowupRun;
+
+  return runReplyAgent({
+    commandBody: "hello",
+    followupRun,
+    queueKey: "main",
+    resolvedQueue,
+    shouldSteer: false,
+    shouldFollowup: false,
+    isActive: false,
+    isStreaming: false,
+    typing,
+    sessionCtx,
+    defaultModel: "anthropic/claude",
+    resolvedVerboseLevel: "off",
+    isNewSession: false,
+    blockStreamingEnabled: false,
+    resolvedBlockStreamingBreak: "message_end",
+    shouldInjectGroupIntro: false,
+    typingMode: "instant",
+  });
+}
+
 describe("runReplyAgent billing error classification", () => {
   // Regression guard for the runner-level catch block in runAgentTurnWithFallback.
   // Billing errors from providers like OpenRouter can contain token/size wording that
@@ -1933,5 +1991,44 @@ describe("runReplyAgent billing error classification", () => {
     const payload = Array.isArray(result) ? result[0] : result;
     expect(payload?.text).toContain("billing error");
     expect(payload?.text).not.toContain("Context overflow");
+  });
+});
+
+describe("runReplyAgent thinking block error classification", () => {
+  it("returns the stale reasoning fallback for explicit thinking signature failures", async () => {
+    const result = await runReplyAgentWithThrownError(
+      "400 redacted_thinking signature mismatch for previous assistant turn",
+    );
+
+    const payload = Array.isArray(result) ? result[0] : result;
+    expect(payload?.text).toBe(
+      "⚠️ Session history contains stale reasoning data. Use /new to start a fresh session.",
+    );
+  });
+
+  it("keeps unrelated 'thinking about block' wording on the generic error fallback", async () => {
+    const result = await runReplyAgentWithThrownError(
+      "The model is thinking about block chain transactions right now",
+    );
+
+    const payload = Array.isArray(result) ? result[0] : result;
+    expect(payload?.text).toContain(
+      "Agent failed before reply: The model is thinking about block chain transactions right now.",
+    );
+    expect(payload?.text).not.toContain("stale reasoning data");
+  });
+});
+
+describe("runReplyAgent pre-reply error sanitization", () => {
+  it("sanitizes raw API payload errors before surfacing them to the user", async () => {
+    const result = await runReplyAgentWithThrownError(
+      '500 {"error":{"type":"server_error","message":"Something exploded"}}',
+    );
+
+    const payload = Array.isArray(result) ? result[0] : result;
+    expect(payload?.text).toContain(
+      "Agent failed before reply: HTTP 500 server_error: Something exploded.",
+    );
+    expect(payload?.text).not.toContain('{"error"');
   });
 });
