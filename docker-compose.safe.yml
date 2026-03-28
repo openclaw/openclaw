@@ -12,15 +12,18 @@
 
 services:
   # AEP safety proxy — sits between OpenClaw and the LLM API
+  # Uses pre-built GHCR image (instant start, models pre-cached).
+  # Falls back to local build if image not available.
   aep-proxy:
-    image: python:3.12-slim
-    command: >
-      sh -c "pip install --quiet aceteam-aep[all] &&
-             python -c \"
-      from aceteam_aep.proxy.app import create_proxy_app
-      import uvicorn
-      uvicorn.run(create_proxy_app(), host='0.0.0.0', port=8899)
-      \""
+    image: ghcr.io/aceteam-ai/aep-proxy:latest
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.12-slim
+        RUN pip install --no-cache-dir "aceteam-aep[all]"
+        EXPOSE 8899
+        ENTRYPOINT ["aceteam-aep"]
+        CMD ["proxy", "--port", "8899", "--host", "0.0.0.0"]
     ports:
       - "8899:8899"
     environment:
