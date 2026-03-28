@@ -29,6 +29,29 @@ function stripNullBytes(s: string): string {
 
 export { resolveAgentIdFromSessionKey };
 
+/**
+ * Resolve workspace scope settings for spawned subagents.
+ * Returns workspaceScope and workspaceFiles from config.
+ */
+export function resolveSubagentWorkspaceScope(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+}): {
+  workspaceScope?: "full" | "essential" | "minimal" | "none";
+  workspaceFiles?: string[];
+} {
+  const defaults = params.cfg.agents?.defaults?.subagents;
+  const agentConfig = params.agentId
+    ? resolveAgentConfig(params.cfg, params.agentId)?.subagents
+    : undefined;
+  
+  // Agent-level config overrides defaults
+  return {
+    workspaceScope: agentConfig?.workspaceScope ?? defaults?.workspaceScope,
+    workspaceFiles: agentConfig?.workspaceFiles ?? defaults?.workspaceFiles,
+  };
+}
+
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
 type ResolvedAgentConfig = {
