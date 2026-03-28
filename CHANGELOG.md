@@ -99,6 +99,7 @@ Docs: https://docs.openclaw.ai
 - Matrix/mentions: recognize `matrix.to` mentions whose visible label uses the bot's room display name, so `requireMention: true` rooms respond correctly in modern Matrix clients. (#55393) thanks @nickludlam.
 - Ollama/thinking off: route `thinkingLevel=off` through the live Ollama extension request path so thinking-capable Ollama models now receive top-level `think: false` instead of silently generating hidden reasoning tokens. (#53200) Thanks @BruceMacD.
 - Plugins/diffs: stage bundled `@pierre/diffs` runtime dependencies during packaged updates so the bundled diff viewer keeps loading after global installs and updates. (#56077) Thanks @gumadeiras.
+- Plugins/diffs: load bundled Pierre themes without JSON module imports so diff rendering keeps working on newer Node builds. (#45869) thanks @NickHood1984.
 
 ## 2026.3.24
 
