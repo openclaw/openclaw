@@ -59,6 +59,22 @@ const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   normalizeProviderTransportWithPlugin,
 };
 
+function normalizeResolvedTransportApi(api: unknown): ModelDefinitionConfig["api"] | undefined {
+  switch (api) {
+    case "anthropic-messages":
+    case "bedrock-converse-stream":
+    case "github-copilot":
+    case "google-generative-ai":
+    case "ollama":
+    case "openai-codex-responses":
+    case "openai-completions":
+    case "openai-responses":
+      return api;
+    default:
+      return undefined;
+  }
+}
+
 function sanitizeModelHeaders(
   headers: unknown,
   opts?: { stripSecretRefMarkers?: boolean },
@@ -116,7 +132,7 @@ function normalizeResolvedModel(params: {
 
 function resolveProviderTransport(params: {
   provider: string;
-  api?: ModelDefinitionConfig["api"] | null;
+  api?: ModelDefinitionConfig["api"] | Api | null;
   baseUrl?: string;
   cfg?: OpenClawConfig;
   runtimeHooks?: ProviderRuntimeHooks;
@@ -136,7 +152,7 @@ function resolveProviderTransport(params: {
   }) as { api?: ModelDefinitionConfig["api"] | null; baseUrl?: string } | undefined;
 
   return {
-    api: normalized?.api ?? params.api ?? undefined,
+    api: normalizeResolvedTransportApi(normalized?.api ?? params.api),
     baseUrl: normalized?.baseUrl ?? params.baseUrl,
   };
 }
@@ -224,7 +240,10 @@ function applyConfiguredProviderOverrides(params: {
   });
   return {
     ...discoveredModel,
-    api: resolvedTransport.api,
+    api:
+      resolvedTransport.api ??
+      normalizeResolvedTransportApi(discoveredModel.api) ??
+      "openai-responses",
     baseUrl: resolvedTransport.baseUrl ?? discoveredModel.baseUrl,
     reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
     input: normalizedInput,
@@ -432,7 +451,7 @@ function resolveConfiguredFallbackModel(params: {
     model: {
       id: modelId,
       name: modelId,
-      api: fallbackTransport.api,
+      api: fallbackTransport.api ?? "openai-responses",
       provider,
       baseUrl: fallbackTransport.baseUrl,
       reasoning: configuredModel?.reasoning ?? false,

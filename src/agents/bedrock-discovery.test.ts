@@ -236,6 +236,7 @@ describe("bedrock discovery", () => {
           },
           providers: {
             "amazon-bedrock": {
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
               headers: { "x-test-header": "1" },
               models: [],
             },
