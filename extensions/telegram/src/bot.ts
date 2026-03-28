@@ -491,11 +491,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   // from ANY chat are tracked together — prevents infinite retry storms.
   const sendChatActionHandler = createTelegramSendChatActionHandler({
     sendChatActionFn: (chatId, action, threadParams) =>
-      bot.api.sendChatAction(
-        chatId,
-        action,
-        threadParams as Parameters<typeof bot.api.sendChatAction>[2],
-      ),
+      bot.api.sendChatAction(chatId, action, threadParams),
     logger: (message) => logVerbose(`telegram: ${message}`),
   });
 
