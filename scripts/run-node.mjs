@@ -211,10 +211,10 @@ const shouldBuild = (deps) => {
 
   const currentHead = resolveGitHead(deps);
   if (currentHead && !stamp.head) {
-    return hasSourceMtimeChanged(stamp.mtime, deps);
+    return true;
   }
   if (currentHead && stamp.head && currentHead !== stamp.head) {
-    return hasSourceMtimeChanged(stamp.mtime, deps);
+    return true;
   }
   if (currentHead) {
     const dirty = hasDirtySourceTree(deps);
