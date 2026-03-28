@@ -21,6 +21,8 @@ type TelegramSendMessageDraft = (
   },
 ) => Promise<unknown>;
 
+type TelegramSendMessageParams = Parameters<Bot["api"]["sendMessage"]>[2];
+
 /**
  * Keep draft-id allocation shared across bundled chunks so concurrent preview
  * lanes do not accidentally reuse draft ids when code-split entries coexist.
@@ -179,7 +181,7 @@ export function createTelegramDraftStream(params: {
       : replyParams;
     const usedThreadParams =
       "message_thread_id" in (sendParams ?? {}) &&
-      typeof (sendParams as { message_thread_id?: unknown }).message_thread_id === "number";
+      typeof sendParams?.message_thread_id === "number";
     try {
       return {
         sent: await params.api.sendMessage(chatId, sendArgs.renderedText, sendParams),
@@ -189,9 +191,7 @@ export function createTelegramDraftStream(params: {
       if (!usedThreadParams || !THREAD_NOT_FOUND_RE.test(String(err))) {
         throw err;
       }
-      const threadlessParams = {
-        ...(sendParams as Record<string, unknown>),
-      };
+      const threadlessParams: TelegramSendMessageParams = { ...(sendParams ?? {}) };
       delete threadlessParams.message_thread_id;
       params.warn?.(sendArgs.fallbackWarnMessage);
       return {
