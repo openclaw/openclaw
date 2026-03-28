@@ -5,7 +5,7 @@ import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
 } from "../../context-engine/index.js";
-import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
+import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -73,7 +73,6 @@ import {
   buildErrorAgentMeta,
   buildUsageAgentMetaFields,
   createCompactionDiagId,
-  OVERLOAD_FAILOVER_BACKOFF_POLICY,
   resolveActiveErrorContext,
   resolveMaxRunRetryIterations,
   type RuntimeAuthState,
@@ -311,6 +310,17 @@ export async function runEmbeddedPiAgent(
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
       let timeoutCompactionAttempts = 0;
+      // Read config override if available — default 30s ceiling.
+      // A higher ceiling preserves the retry budget under sustained overload;
+      // operators with many auth profiles can lower this for faster rotation.
+      const overloadBackoffMaxMs =
+        params.config?.agents?.defaults?.embeddedPi?.overloadBackoffMaxMs ?? 30_000;
+      const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
+        initialMs: 250,
+        maxMs: overloadBackoffMaxMs,
+        factor: 2,
+        jitter: 0.2,
+      };
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;

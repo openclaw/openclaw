@@ -13980,6 +13980,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Embedded Pi runner hardening controls for how workspace-local Pi settings are trusted and applied in OpenClaw sessions.",
       tags: ["advanced"],
     },
+    "agents.defaults.embeddedPi.overloadBackoffMaxMs": {
+      help: "Maximum backoff delay in milliseconds before retrying after an API overloaded_error during auth profile failover (default: 30000). Lower values retry faster but risk exhausting the retry budget under sustained load.",
+      tags: ["reliability", "performance", "storage"],
+    },
     "agents.defaults.embeddedPi.projectSettingsPolicy": {
       label: "Embedded Pi Project Settings Policy",
       help: 'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
