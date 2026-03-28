@@ -6,10 +6,15 @@ const mocks = vi.hoisted(() => ({
   memoryRegister: vi.fn(),
   otherRegister: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
+  applyPluginAutoEnable: vi.fn(),
 }));
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (...args: unknown[]) => mocks.loadOpenClawPlugins(...args),
+}));
+
+vi.mock("../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable: (...args: unknown[]) => mocks.applyPluginAutoEnable(...args),
 }));
 
 import { registerPluginCliCommands } from "./cli.js";
@@ -47,6 +52,8 @@ describe("registerPluginCliCommands", () => {
     mocks.otherRegister.mockClear();
     mocks.loadOpenClawPlugins.mockReset();
     mocks.loadOpenClawPlugins.mockReturnValue(createCliRegistry());
+    mocks.applyPluginAutoEnable.mockReset();
+    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
   });
 
   it("skips plugin CLI registrars when commands already exist", () => {
@@ -68,6 +75,40 @@ describe("registerPluginCliCommands", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         env,
+      }),
+    );
+  });
+
+  it("loads plugin CLI commands from the auto-enabled config snapshot", () => {
+    const program = createProgram();
+    const rawConfig = {
+      plugins: {},
+      channels: { demo: { enabled: true } },
+    } as OpenClawConfig;
+    const autoEnabledConfig = {
+      ...rawConfig,
+      plugins: {
+        entries: {
+          demo: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+
+    registerPluginCliCommands(program, rawConfig);
+
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: rawConfig,
+      env: process.env,
+    });
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: autoEnabledConfig,
+      }),
+    );
+    expect(mocks.memoryRegister).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: autoEnabledConfig,
       }),
     );
   });
