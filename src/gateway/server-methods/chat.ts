@@ -1591,7 +1591,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 payload: {
                   kind: "btw",
                   runId: clientRunId,
-                  sessionKey: rawSessionKey,
+                  sessionKey,
                   question: btwReplies[0].btw.question.trim(),
                   text: btwText,
                   isError: btwReplies.some((payload) => payload.isError),
@@ -1601,7 +1601,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               broadcastChatFinal({
                 context,
                 runId: clientRunId,
-                sessionKey: rawSessionKey,
+                sessionKey,
               });
             } else {
               const combinedReply = deliveredReplies
@@ -1645,7 +1645,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               broadcastChatFinal({
                 context,
                 runId: clientRunId,
-                sessionKey: rawSessionKey,
+                sessionKey,
                 message,
               });
             }
@@ -1681,7 +1681,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           broadcastChatError({
             context,
             runId: clientRunId,
-            sessionKey: rawSessionKey,
+            sessionKey,
             errorMessage: String(err),
           });
         })
