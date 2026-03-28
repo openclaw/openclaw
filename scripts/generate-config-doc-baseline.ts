@@ -12,33 +12,38 @@ if (checkOnly && args.has("--write")) {
 }
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const result = await writeConfigDocBaselineStatefile({
-  repoRoot,
-  check: checkOnly,
-});
+try {
+  const result = await writeConfigDocBaselineStatefile({
+    repoRoot,
+    check: checkOnly,
+  });
 
-if (checkOnly) {
-  if (!result.changed) {
-    console.log(
-      `OK ${path.relative(repoRoot, result.jsonPath)} ${path.relative(repoRoot, result.statefilePath)}`,
+  if (checkOnly) {
+    if (!result.changed) {
+      console.log(
+        `OK ${path.relative(repoRoot, result.jsonPath)} ${path.relative(repoRoot, result.statefilePath)}`,
+      );
+      process.exit(0);
+    }
+    console.error(
+      [
+        "Config baseline drift detected.",
+        `Expected JSON baseline: ${path.relative(repoRoot, result.jsonPath)}`,
+        `Expected current: ${path.relative(repoRoot, result.statefilePath)}`,
+        "If this config-surface change is intentional, run `pnpm config:docs:gen` and commit the updated baseline files.",
+        "If not intentional, treat this as docs drift or a possible breaking config change and fix the schema/help changes first.",
+      ].join("\n"),
     );
-    process.exit(0);
+    process.exit(1);
   }
-  console.error(
+
+  console.log(
     [
-      "Config baseline drift detected.",
-      `Expected current: ${path.relative(repoRoot, result.jsonPath)}`,
-      `Expected current: ${path.relative(repoRoot, result.statefilePath)}`,
-      "If this config-surface change is intentional, run `pnpm config:docs:gen` and commit the updated baseline files.",
-      "If not intentional, treat this as docs drift or a possible breaking config change and fix the schema/help changes first.",
+      `Wrote ${path.relative(repoRoot, result.jsonPath)}`,
+      `Wrote ${path.relative(repoRoot, result.statefilePath)}`,
     ].join("\n"),
   );
+} catch (error) {
+  console.error("Failed to generate config doc baseline:", error);
   process.exit(1);
 }
-
-console.log(
-  [
-    `Wrote ${path.relative(repoRoot, result.jsonPath)}`,
-    `Wrote ${path.relative(repoRoot, result.statefilePath)}`,
-  ].join("\n"),
-);
