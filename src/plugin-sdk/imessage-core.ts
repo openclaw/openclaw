@@ -13,6 +13,11 @@ export {
 } from "./channel-config-helpers.js";
 export { IMessageConfigSchema } from "../config/zod-schema.providers-core.js";
 export {
+  matchIMessageAcpConversation,
+  normalizeIMessageAcpConversationId,
+  resolveIMessageConversationIdFromTarget,
+} from "../../extensions/imessage/api.js";
+export {
   parseChatAllowTargetPrefixes,
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedAllowTarget,
