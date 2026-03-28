@@ -220,7 +220,8 @@ function buildDashboardSessionKey(agentId: string): string {
   return `agent:${agentId}:dashboard:${randomUUID()}`;
 }
 
-function ensureSessionTranscriptFile(params: {
+/** @internal Exported for testing only. */
+export function ensureSessionTranscriptFile(params: {
   cfg: OpenClawConfig;
   sessionId: string;
   storePath: string;
