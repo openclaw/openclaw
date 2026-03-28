@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -11,6 +14,7 @@ const WORKSPACE_ID = "00000000-0000-0000-0000-000000000000";
 
 describe("memory read tools", () => {
   let db: Database.Database;
+  let tempDir: string | undefined;
 
   beforeEach(() => {
     db = new Database(":memory:");
@@ -19,6 +23,10 @@ describe("memory read tools", () => {
 
   afterEach(() => {
     db.close();
+    if (tempDir) {
+      rmSync(tempDir, { recursive: true, force: true });
+      tempDir = undefined;
+    }
   });
 
   it("marks rollout denial as an error result", async () => {
@@ -90,6 +98,51 @@ describe("memory read tools", () => {
     expect(JSON.parse(result.content[0].text).detail).toContain(
       "Unable to locate shared memory retrieval module.",
     );
+  });
+
+  it("reads from a file-backed readonly memory database", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "openclaw-memory-db-"));
+    const dbPath = join(tempDir, "airya.db");
+    const fileDb = new Database(dbPath);
+    createSchema(fileDb);
+    fileDb
+      .prepare(
+        `INSERT INTO airya_memory_items (
+          id, workspace_id, memory_class, memory_key, value_json, summary_text,
+          confidence, priority, provenance, review_state, status,
+          valid_from, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "11111111-1111-4111-8111-111111111111",
+        WORKSPACE_ID,
+        "decision_log",
+        "decision_log/test",
+        JSON.stringify({ value: "ok" }),
+        "Test memory row",
+        0.9,
+        80,
+        "human",
+        "not_required",
+        "active",
+        "2026-03-28T00:00:00.000Z",
+        "2026-03-28T00:00:00.000Z",
+        "2026-03-28T00:00:00.000Z",
+      );
+    fileDb.close();
+
+    const result = await invoke(
+      "memory_read",
+      { id: "11111111-1111-4111-8111-111111111111" },
+      { db: undefined, dbPath },
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      id: "11111111-1111-4111-8111-111111111111",
+      workspace_id: WORKSPACE_ID,
+      memory_key: "decision_log/test",
+    });
   });
 
   async function invoke(

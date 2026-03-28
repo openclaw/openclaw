@@ -1154,4 +1154,24 @@ describe("success path", () => {
     expect(text.workflows).toHaveLength(1);
     expect(text.count).toBe(1);
   });
+
+  it("keeps the tenth proxied success response as valid JSON", async () => {
+    const fetchFn = mockFetchOk({ workflows: [{ name: "test" }], count: 1 });
+    const config = makeConfig({ fetchFn });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    try {
+      for (let i = 0; i < 9; i++) {
+        await proxyToolCall("search_workflow_catalog", { query: "test" }, config);
+      }
+
+      const result = await proxyToolCall("search_workflow_catalog", { query: "test" }, config);
+      const text = JSON.parse(result.content[0].text);
+
+      expect(text.workflows).toHaveLength(1);
+      expect(text.count).toBe(1);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
 });

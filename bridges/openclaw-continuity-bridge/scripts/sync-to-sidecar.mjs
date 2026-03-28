@@ -14,6 +14,7 @@ const files = [
   "memory-read-tools.ts",
   "workspace-context.ts",
   "__tests__/engine-tools.test.ts",
+  "__tests__/memory-read-tools.test.ts",
   "__tests__/proxy.test.ts",
   "__tests__/openclaw-continuity-bridge.test.ts",
 ];

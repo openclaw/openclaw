@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-export HOME="/Users/clawdbot"
+export HOME="${HOME:-$(eval echo "~$(id -un)")}"
 export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 export NVM_DIR="$HOME/.nvm"

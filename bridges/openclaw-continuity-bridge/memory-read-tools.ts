@@ -477,7 +477,6 @@ function openReadDb(runtime: MemoryRuntime): { db: Database.Database; close: () 
   }
 
   const db = new Database(runtime.dbPath, { readonly: true });
-  db.pragma("journal_mode = WAL");
   db.pragma("busy_timeout = 5000");
   return { db, close: () => db.close() };
 }

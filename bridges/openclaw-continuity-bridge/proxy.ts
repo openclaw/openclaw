@@ -90,7 +90,7 @@ interface CallerInstanceCacheScope {
 let toolCallCounter = 0;
 const POLL_REMINDER_INTERVAL = 10;
 const POLL_REMINDER_TEXT =
-  "\n[COMM PROTOCOL: Consider calling check_messages at your next task boundary]";
+  "[COMM PROTOCOL: Consider calling check_messages at your next task boundary]";
 const BOOTSTRAP_TOOL = "register_agent_session";
 const DEFAULT_CALLER_INSTANCE_CACHE_KEY = "__default__";
 const cachedCallerInstanceIds = new Map<string, string>();
@@ -508,11 +508,13 @@ export async function proxyToolCall(
         } else {
           toolCallCounter++;
         }
-        let resultText = JSON.stringify(body.result, null, 2);
+        const content: McpToolResult["content"] = [
+          { type: "text", text: JSON.stringify(body.result, null, 2) },
+        ];
         if (toolCallCounter > 0 && toolCallCounter % POLL_REMINDER_INTERVAL === 0) {
-          resultText += POLL_REMINDER_TEXT;
+          content.push({ type: "text", text: POLL_REMINDER_TEXT });
         }
-        return { content: [{ type: "text", text: resultText }] };
+        return { content };
       }
 
       lastError = body.error ?? `HQ returned ${res.status}`;
