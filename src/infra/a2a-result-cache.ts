@@ -7,6 +7,60 @@
  * RFC-A2A-RESPONSE-ROUTING: Bounded storage with TTL cleanup.
  */
 
+/**
+ * A2A Error Codes - Typed error identifiers for A2A operations
+ */
+export enum A2AErrorCode {
+  NOT_ENABLED = "A2A_NOT_ENABLED",
+  AGENT_NOT_ALLOWED = "A2A_AGENT_NOT_ALLOWED",
+  SELF_CALL_BLOCKED = "A2A_SELF_CALL_BLOCKED",
+  CACHE_MISS = "A2A_CACHE_MISS",
+  CACHE_TIMEOUT = "A2A_CACHE_TIMEOUT",
+  AGENT_ERROR = "A2A_AGENT_ERROR",
+  EMPTY_RESPONSE = "A2A_EMPTY_RESPONSE",
+  INVALID_INPUT = "A2A_INVALID_INPUT",
+  SESSION_NOT_FOUND = "A2A_SESSION_NOT_FOUND",
+}
+
+/**
+ * Creates a typed A2A error with code
+ */
+export class A2AError extends Error {
+  constructor(
+    public readonly code: A2AErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "A2AError";
+  }
+
+  static notEnabled(): A2AError {
+    return new A2AError(A2AErrorCode.NOT_ENABLED, "A2A is not enabled in configuration");
+  }
+
+  static agentNotAllowed(agent: string): A2AError {
+    return new A2AError(A2AErrorCode.AGENT_NOT_ALLOWED, `Agent '${agent}' is not in allowlist`);
+  }
+
+  static selfCallBlocked(): A2AError {
+    return new A2AError(
+      A2AErrorCode.SELF_CALL_BLOCKED,
+      "Self-call not allowed - prevents infinite loops",
+    );
+  }
+
+  static cacheMiss(correlationId: string): A2AError {
+    return new A2AError(
+      A2AErrorCode.CACHE_MISS,
+      `No cached result for correlationId '${correlationId}'`,
+    );
+  }
+
+  static emptyResponse(): A2AError {
+    return new A2AError(A2AErrorCode.EMPTY_RESPONSE, "Agent returned empty or invalid response");
+  }
+}
+
 export interface A2AResult {
   status: "completed" | "error" | "timeout";
   output?: unknown;
@@ -77,24 +131,30 @@ export function storeA2AResult(
 /**
  * Retrieve a result from the cache.
  * Returns null if not found or expired.
+ * Tracks metrics for hit/miss rate monitoring.
  */
 export function getA2AResult(correlationId: string): A2AResult | null {
   const normalizedId = correlationId.trim();
   if (!normalizedId) {
+    metrics.misses++;
     return null;
   }
 
   const entry = resultCache.get(normalizedId);
   if (!entry) {
+    metrics.misses++;
     return null;
   }
 
   // Check expiration
   if (Date.now() > entry.expiresAt) {
     resultCache.delete(normalizedId);
+    metrics.misses++;
+    metrics.expirations++;
     return null;
   }
 
+  metrics.hits++;
   return entry.result;
 }
 
@@ -177,6 +237,8 @@ function evictOldest(): void {
     const [id] = entries[i];
     resultCache.delete(id);
   }
+
+  metrics.evictions += toEvict;
 }
 
 /**
@@ -227,3 +289,67 @@ export const __testing = {
   DEFAULT_TTL_MS,
   MAX_TTL_MS,
 };
+
+// ============================================================================
+// Metrics Tracking
+// ============================================================================
+
+interface A2ACacheMetrics {
+  hits: number;
+  misses: number;
+  evictions: number;
+  expirations: number;
+  lastResetAt: number;
+}
+
+const metrics: A2ACacheMetrics = {
+  hits: 0,
+  misses: 0,
+  evictions: 0,
+  expirations: 0,
+  lastResetAt: Date.now(),
+};
+
+/**
+ * Get cache metrics for monitoring and health status.
+ */
+export function getA2ACacheMetrics(): {
+  size: number;
+  maxSize: number;
+  hitRate: number;
+  hits: number;
+  misses: number;
+  evictions: number;
+  expirations: number;
+  oldestEntry?: number;
+  newestEntry?: number;
+  uptimeMs: number;
+} {
+  const stats = getA2AResultCacheStats();
+  const totalRequests = metrics.hits + metrics.misses;
+  const hitRate = totalRequests > 0 ? metrics.hits / totalRequests : 0;
+
+  return {
+    size: stats.size,
+    maxSize: stats.maxSize,
+    hitRate,
+    hits: metrics.hits,
+    misses: metrics.misses,
+    evictions: metrics.evictions,
+    expirations: metrics.expirations,
+    oldestEntry: stats.oldestEntry,
+    newestEntry: stats.newestEntry,
+    uptimeMs: Date.now() - metrics.lastResetAt,
+  };
+}
+
+/**
+ * Reset metrics (for testing or periodic reporting).
+ */
+export function resetA2ACacheMetrics(): void {
+  metrics.hits = 0;
+  metrics.misses = 0;
+  metrics.evictions = 0;
+  metrics.expirations = 0;
+  metrics.lastResetAt = Date.now();
+}

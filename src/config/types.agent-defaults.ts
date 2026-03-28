@@ -138,6 +138,17 @@ export type AgentDefaultsConfig = {
   repoRoot?: string;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
+  /** A2A result cache configuration. */
+  a2aCache?: {
+    /** Cleanup interval in milliseconds (default: 60000 = 1 minute). */
+    cleanupIntervalMs?: number;
+    /** Default TTL for cached results in milliseconds (default: 60000 = 1 minute). */
+    defaultTtlMs?: number;
+    /** Maximum TTL for cached results in milliseconds (default: 3600000 = 1 hour). */
+    maxTtlMs?: number;
+    /** Maximum number of entries in cache before LRU eviction (default: 10000). */
+    maxSize?: number;
+  };
   /** Max chars for injected bootstrap files before truncation (default: 20000). */
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */
