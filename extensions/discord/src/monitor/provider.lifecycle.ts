@@ -53,6 +53,16 @@ export async function runDiscordGatewayLifecycle(params: {
   const onGatewayDebug = reconnectController.onGatewayDebug;
   gatewayEmitter?.on("debug", onGatewayDebug);
 
+  // Update lastEventAt on gateway metrics (emitted every 60s by Carbon's ConnectionMonitor)
+  // Only update when the gateway is actually connected — the metrics interval keeps firing
+  // even after disconnect (during resume attempts), which would mask real stale-socket events.
+  const onGatewayMetrics = () => {
+    if (lifecycleStopping) return;
+    if (!gateway?.isConnected) return;
+    pushStatus({ lastEventAt: Date.now() });
+  };
+  gatewayEmitter?.on("metrics", onGatewayMetrics);
+
   let sawDisallowedIntents = false;
   const handleGatewayEvent = (event: DiscordGatewayEvent): "continue" | "stop" => {
     if (event.type === "disallowed-intents") {
@@ -132,6 +142,7 @@ export async function runDiscordGatewayLifecycle(params: {
     stopGatewayLogging();
     reconnectController.dispose();
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
+    gatewayEmitter?.removeListener("metrics", onGatewayMetrics);
     if (params.voiceManager) {
       await params.voiceManager.destroy();
       params.voiceManagerRef.current = null;
