@@ -27,10 +27,10 @@ describe("buildInboundMediaNote", () => {
     );
   });
 
-  it("skips media notes for attachments with understanding output", () => {
+  it("skips media notes for audio attachments with understanding output", () => {
     const note = buildInboundMediaNote({
-      MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
-      MediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+      MediaPaths: ["/tmp/a.ogg", "/tmp/b.png"],
+      MediaUrls: ["https://example.com/a.ogg", "https://example.com/b.png"],
       MediaUnderstanding: [
         {
           kind: "audio.transcription",
@@ -41,6 +41,29 @@ describe("buildInboundMediaNote", () => {
       ],
     });
     expect(note).toBe("[media attached: /tmp/b.png | https://example.com/b.png]");
+  });
+
+  it("keeps image paths when image understanding output exists", () => {
+    const note = buildInboundMediaNote({
+      MediaPaths: ["/tmp/photo.jpg", "/tmp/doc.pdf"],
+      MediaUrls: ["https://example.com/photo.jpg", "https://example.com/doc.pdf"],
+      MediaUnderstanding: [
+        {
+          kind: "image.description",
+          attachmentIndex: 0,
+          text: "A kitchen counter with items",
+          provider: "openai",
+        },
+      ],
+    });
+    // Image paths preserved so agent can access files on disk
+    expect(note).toBe(
+      [
+        "[media attached: 2 files]",
+        "[media attached 1/2: /tmp/photo.jpg | https://example.com/photo.jpg]",
+        "[media attached 2/2: /tmp/doc.pdf | https://example.com/doc.pdf]",
+      ].join("\n"),
+    );
   });
 
   it("only suppresses attachments when media understanding succeeded", () => {
@@ -75,7 +98,7 @@ describe("buildInboundMediaNote", () => {
     );
   });
 
-  it("suppresses attachments when media understanding succeeds via decisions", () => {
+  it("keeps image paths when media understanding succeeds via decisions", () => {
     const note = buildInboundMediaNote({
       MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
       MediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
@@ -85,7 +108,14 @@ describe("buildInboundMediaNote", () => {
         >[number],
       ],
     });
-    expect(note).toBe("[media attached: /tmp/b.png | https://example.com/b.png]");
+    // Image paths are preserved so the agent can access files on disk (e.g. photolog)
+    expect(note).toBe(
+      [
+        "[media attached: 2 files]",
+        "[media attached 1/2: /tmp/a.png | https://example.com/a.png]",
+        "[media attached 2/2: /tmp/b.png | https://example.com/b.png]",
+      ].join("\n"),
+    );
   });
 
   it("strips audio attachments when transcription succeeded via MediaUnderstanding (issue #4197)", () => {

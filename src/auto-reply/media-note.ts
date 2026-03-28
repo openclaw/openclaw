@@ -48,12 +48,14 @@ function isAudioPath(path: string | undefined): boolean {
 
 export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
   // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
+  // Only suppress audio attachments (transcript replaces the file).
+  // Image/video paths are kept so the agent can access the file on disk (e.g. photolog).
   const suppressed = new Set<number>();
   const transcribedAudioIndices = new Set<number>();
   if (Array.isArray(ctx.MediaUnderstanding)) {
     for (const output of ctx.MediaUnderstanding) {
-      suppressed.add(output.attachmentIndex);
       if (output.kind === "audio.transcription") {
+        suppressed.add(output.attachmentIndex);
         transcribedAudioIndices.add(output.attachmentIndex);
       }
     }
@@ -65,8 +67,8 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
       }
       for (const attachment of decision.attachments) {
         if (attachment.chosen?.outcome === "success") {
-          suppressed.add(attachment.attachmentIndex);
           if (decision.capability === "audio") {
+            suppressed.add(attachment.attachmentIndex);
             transcribedAudioIndices.add(attachment.attachmentIndex);
           }
         }
