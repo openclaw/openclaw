@@ -407,11 +407,7 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
     ctx.agent.streamFn = wrappedStreamFn;
   }
 
-  const anthropicBetas = resolveAnthropicBetas(
-    ctx.sanitizedExtraParams,
-    ctx.provider,
-    ctx.modelId,
-  );
+  const anthropicBetas = resolveAnthropicBetas(ctx.sanitizedExtraParams, ctx.provider, ctx.modelId);
   if (anthropicBetas?.length) {
     log.debug(
       `applying Anthropic beta header for ${ctx.provider}/${ctx.modelId}: ${anthropicBetas.join(",")}`,
