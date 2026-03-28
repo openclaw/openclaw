@@ -294,6 +294,6 @@ Sub-agents use a dedicated in-process queue lane:
 - Sub-agent announce is **best-effort**. If the gateway restarts, pending "announce back" work is lost.
 - Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
 - `sessions_spawn` is always non-blocking: it returns `{ status: "accepted", runId, childSessionKey }` immediately.
-- Sub-agent context only injects **5 bootstrap files**: `AGENTS.md`, `TOOLS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`. The `HEARTBEAM.md` and `BOOTSTRAP.md` are not injected.
+- Sub-agent context only injects **5 bootstrap files**: `AGENTS.md`, `TOOLS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`. The `HEARTBEAT.md` and `BOOTSTRAP.md` are not injected.
 - Maximum nesting depth is 5 (`maxSpawnDepth` range: 1–5). Depth 2 is recommended for most use cases.
 - `maxChildrenPerAgent` caps active children per session (default: 5, range: 1–20).
