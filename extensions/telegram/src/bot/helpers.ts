@@ -273,7 +273,10 @@ export function buildSenderName(msg: Message) {
 
 export function resolveTelegramMediaPlaceholder(
   msg:
-    | Pick<Message, "photo" | "video" | "video_note" | "audio" | "voice" | "document" | "sticker">
+    | Pick<
+        Message,
+        "photo" | "video" | "video_note" | "animation" | "audio" | "voice" | "document" | "sticker"
+      >
     | undefined
     | null,
 ): string | undefined {
@@ -283,7 +286,7 @@ export function resolveTelegramMediaPlaceholder(
   if (msg.photo) {
     return "<media:image>";
   }
-  if (msg.video || msg.video_note) {
+  if (msg.video || msg.video_note || msg.animation) {
     return "<media:video>";
   }
   if (msg.audio || msg.voice) {

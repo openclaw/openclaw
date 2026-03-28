@@ -391,3 +391,102 @@ describe("telegram forwarded bursts", () => {
     FORWARD_BURST_TEST_TIMEOUT_MS,
   );
 });
+
+describe("telegram video/animation media downloads (regression #56312)", () => {
+  const VIDEO_MEDIA_TEST_TIMEOUT_MS = process.platform === "win32" ? 120_000 : 90_000;
+
+  it(
+    "downloads video files to media/inbound and emits <media:video> placeholder",
+    async () => {
+      const runtimeError = vi.fn();
+      const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
+      const fetchSpy = mockTelegramFileDownload({
+        contentType: "video/mp4",
+        bytes: new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]),
+      });
+
+      try {
+        await handler({
+          message: {
+            message_id: 100,
+            chat: { id: 1234, type: "private" },
+            from: { id: 777, is_bot: false, first_name: "Ada" },
+            date: 1736380800,
+            video: {
+              file_id: "video_file_id_1",
+              file_unique_id: "video_unique_1",
+              width: 1280,
+              height: 720,
+              duration: 10,
+              file_size: 1024,
+            },
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ file_path: "videos/video1.mp4" }),
+        });
+
+        expect(runtimeError).not.toHaveBeenCalled();
+        expect(fetchSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            url: "https://api.telegram.org/file/bottok/videos/video1.mp4",
+          }),
+        );
+        expect(replySpy).toHaveBeenCalledTimes(1);
+        const payload = replySpy.mock.calls[0][0] as { Body?: string; MediaPaths?: string[] };
+        expect(payload.Body).toContain("<media:video>");
+        expect(Array.isArray(payload.MediaPaths) && payload.MediaPaths.length > 0).toBe(true);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    },
+    VIDEO_MEDIA_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "downloads animation (GIF) files to media/inbound and emits <media:video> placeholder",
+    async () => {
+      const runtimeError = vi.fn();
+      const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
+      const fetchSpy = mockTelegramFileDownload({
+        contentType: "video/mp4",
+        bytes: new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]),
+      });
+
+      try {
+        await handler({
+          message: {
+            message_id: 101,
+            chat: { id: 1234, type: "private" },
+            from: { id: 777, is_bot: false, first_name: "Ada" },
+            date: 1736380800,
+            animation: {
+              file_id: "animation_file_id_1",
+              file_unique_id: "animation_unique_1",
+              width: 480,
+              height: 270,
+              duration: 3,
+              file_size: 512,
+              file_name: "funny.mp4",
+            },
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ file_path: "animations/anim1.mp4" }),
+        });
+
+        expect(runtimeError).not.toHaveBeenCalled();
+        expect(fetchSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            url: "https://api.telegram.org/file/bottok/animations/anim1.mp4",
+          }),
+        );
+        expect(replySpy).toHaveBeenCalledTimes(1);
+        const payload = replySpy.mock.calls[0][0] as { Body?: string; MediaPaths?: string[] };
+        expect(payload.Body).toContain("<media:video>");
+        expect(Array.isArray(payload.MediaPaths) && payload.MediaPaths.length > 0).toBe(true);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    },
+    VIDEO_MEDIA_TEST_TIMEOUT_MS,
+  );
+});

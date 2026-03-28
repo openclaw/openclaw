@@ -75,6 +75,7 @@ function resolveMediaFileRef(msg: TelegramContext["message"]) {
     msg.photo?.[msg.photo.length - 1] ??
     msg.video ??
     msg.video_note ??
+    msg.animation ??
     msg.document ??
     msg.audio ??
     msg.voice
