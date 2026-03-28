@@ -6,7 +6,7 @@ import {
   resolvePluginSnapshotCacheTtlMs,
   shouldUsePluginSnapshotCache,
 } from "./cache-controls.js";
-import { getCompatibleActivePluginRegistry, loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPlugins, resolveRuntimePluginRegistry } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
@@ -202,10 +202,9 @@ export function resolveRuntimeWebSearchProviders(params: {
   bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
 }): PluginWebSearchProviderEntry[] {
-  const runtimeRegistry =
-    params.config === undefined
-      ? getCompatibleActivePluginRegistry()
-      : getCompatibleActivePluginRegistry(resolveWebSearchLoadOptions(params));
+  const runtimeRegistry = resolveRuntimePluginRegistry(
+    params.config === undefined ? undefined : resolveWebSearchLoadOptions(params),
+  );
   if (runtimeRegistry) {
     return mapRegistryWebSearchProviders({
       registry: runtimeRegistry,

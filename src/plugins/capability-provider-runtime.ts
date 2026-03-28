@@ -4,7 +4,7 @@ import {
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
-import { getCompatibleActivePluginRegistry, loadOpenClawPlugins } from "./loader.js";
+import { resolveRuntimePluginRegistry } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistry } from "./registry.js";
 
@@ -73,10 +73,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
       : {
           config: resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg }),
         };
-  const registry =
-    (loadOptions ? getCompatibleActivePluginRegistry(loadOptions) : undefined) ??
-    (loadOptions ? loadOpenClawPlugins(loadOptions) : undefined) ??
-    getCompatibleActivePluginRegistry();
+  const registry = resolveRuntimePluginRegistry(loadOptions);
   return (registry?.[params.key] ?? []).map(
     (entry) => entry.provider,
   ) as CapabilityProviderForKey<K>[];

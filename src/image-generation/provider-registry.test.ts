@@ -2,16 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 
-const { loadOpenClawPluginsMock, getCompatibleActivePluginRegistryMock } = vi.hoisted(() => ({
-  loadOpenClawPluginsMock: vi.fn(() => createEmptyPluginRegistry()),
-  getCompatibleActivePluginRegistryMock: vi.fn<
+const { resolveRuntimePluginRegistryMock } = vi.hoisted(() => ({
+  resolveRuntimePluginRegistryMock: vi.fn<
     (params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined
   >(() => undefined),
 }));
 
 vi.mock("../plugins/loader.js", () => ({
-  loadOpenClawPlugins: loadOpenClawPluginsMock,
-  getCompatibleActivePluginRegistry: getCompatibleActivePluginRegistryMock,
+  resolveRuntimePluginRegistry: resolveRuntimePluginRegistryMock,
 }));
 
 let getImageGenerationProvider: typeof import("./provider-registry.js").getImageGenerationProvider;
@@ -19,10 +17,8 @@ let listImageGenerationProviders: typeof import("./provider-registry.js").listIm
 
 describe("image-generation provider registry", () => {
   afterEach(() => {
-    loadOpenClawPluginsMock.mockReset();
-    loadOpenClawPluginsMock.mockReturnValue(createEmptyPluginRegistry());
-    getCompatibleActivePluginRegistryMock.mockReset();
-    getCompatibleActivePluginRegistryMock.mockReturnValue(undefined);
+    resolveRuntimePluginRegistryMock.mockReset();
+    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
     resetPluginRuntimeStateForTest();
   });
 
@@ -34,7 +30,7 @@ describe("image-generation provider registry", () => {
 
   it("does not load plugins when listing without config", () => {
     expect(listImageGenerationProviders()).toEqual([]);
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(undefined);
   });
 
   it("uses active plugin providers without loading from disk", () => {
@@ -56,12 +52,12 @@ describe("image-generation provider registry", () => {
       },
     });
     setActivePluginRegistry(registry);
-    getCompatibleActivePluginRegistryMock.mockReturnValue(registry);
+    resolveRuntimePluginRegistryMock.mockReturnValue(registry);
 
     const provider = getImageGenerationProvider("custom-image");
 
     expect(provider?.id).toBe("custom-image");
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(undefined);
   });
 
   it("ignores prototype-like provider ids and aliases", () => {
@@ -101,7 +97,7 @@ describe("image-generation provider registry", () => {
       },
     );
     setActivePluginRegistry(registry);
-    getCompatibleActivePluginRegistryMock.mockReturnValue(registry);
+    resolveRuntimePluginRegistryMock.mockReturnValue(registry);
 
     expect(listImageGenerationProviders().map((provider) => provider.id)).toEqual(["safe-image"]);
     expect(getImageGenerationProvider("__proto__")).toBeUndefined();

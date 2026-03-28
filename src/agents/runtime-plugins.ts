@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { getCompatibleActivePluginRegistry, loadOpenClawPlugins } from "../plugins/loader.js";
+import { resolveRuntimePluginRegistry } from "../plugins/loader.js";
 import { resolveUserPath } from "../utils.js";
 
 export function ensureRuntimePluginsLoaded(params: {
@@ -20,8 +20,5 @@ export function ensureRuntimePluginsLoaded(params: {
         }
       : undefined,
   };
-  if (getCompatibleActivePluginRegistry(loadOptions)) {
-    return;
-  }
-  loadOpenClawPlugins(loadOptions);
+  resolveRuntimePluginRegistry(loadOptions);
 }

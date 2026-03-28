@@ -317,6 +317,15 @@ export function getCompatibleActivePluginRegistry(
     : undefined;
 }
 
+export function resolveRuntimePluginRegistry(
+  options?: PluginLoadOptions,
+): PluginRegistry | undefined {
+  if (!options || !hasExplicitCompatibilityInputs(options)) {
+    return getCompatibleActivePluginRegistry();
+  }
+  return getCompatibleActivePluginRegistry(options) ?? loadOpenClawPlugins(options);
+}
+
 function validatePluginConfig(params: {
   schema?: Record<string, unknown>;
   cacheKey?: string;
