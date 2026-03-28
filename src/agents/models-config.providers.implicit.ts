@@ -10,7 +10,7 @@ import {
   resolvePluginDiscoveryProviders,
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
-import { ensureAuthProfileStore } from "./auth-profiles.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
@@ -107,7 +107,7 @@ async function resolvePluginImplicitProviders(
   order: import("../plugins/types.js").ProviderDiscoveryOrder,
 ): Promise<Record<string, ProviderConfig> | undefined> {
   const onlyPluginIds = resolveLiveProviderDiscoveryFilter(ctx.env);
-  const providers = resolvePluginDiscoveryProviders({
+  const providers = await resolvePluginDiscoveryProviders({
     config: ctx.config,
     workspaceDir: ctx.workspaceDir,
     env: ctx.env,

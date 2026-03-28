@@ -8,8 +8,6 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google.js";
 import { normalizeXaiModelId } from "../plugin-sdk/xai.js";
-import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
-import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
@@ -26,8 +24,33 @@ import {
   normalizeProviderId,
   normalizeProviderIdForAuth,
 } from "./provider-id.js";
+import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
 
 let log: ReturnType<typeof createSubsystemLogger> | null = null;
+
+type CliBackendRuntimeModule = typeof import("../plugins/cli-backends.runtime.js");
+
+const CLI_BACKEND_RUNTIME_CANDIDATES = [
+  "../plugins/cli-backends.runtime.js",
+  "../plugins/cli-backends.runtime.ts",
+] as const;
+
+let cliBackendRuntimeModule: CliBackendRuntimeModule | undefined;
+
+function loadCliBackendRuntime(): CliBackendRuntimeModule | null {
+  if (cliBackendRuntimeModule) {
+    return cliBackendRuntimeModule;
+  }
+  for (const candidate of CLI_BACKEND_RUNTIME_CANDIDATES) {
+    try {
+      cliBackendRuntimeModule = require(candidate) as CliBackendRuntimeModule;
+      return cliBackendRuntimeModule;
+    } catch {
+      // Try source/runtime candidates in order.
+    }
+  }
+  return null;
+}
 
 function getLog(): ReturnType<typeof createSubsystemLogger> {
   log ??= createSubsystemLogger("model-selection");
@@ -84,9 +107,8 @@ export {
 
 export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
   const normalized = normalizeProviderId(provider);
-  if (
-    resolveRuntimeCliBackends().some((backend) => normalizeProviderId(backend.id) === normalized)
-  ) {
+  const cliBackends = loadCliBackendRuntime()?.resolveRuntimeCliBackends() ?? [];
+  if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
     return true;
   }
   const backends = cfg?.agents?.defaults?.cliBackends ?? {};
@@ -139,7 +161,7 @@ function normalizeProviderModelId(provider: string, model: string): string {
     }
   }
   return (
-    normalizeProviderModelIdWithPlugin({
+    normalizeProviderModelIdWithRuntime({
       provider,
       context: {
         provider,
