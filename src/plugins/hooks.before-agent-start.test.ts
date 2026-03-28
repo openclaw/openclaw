@@ -47,61 +47,86 @@ describe("before_agent_start hook merger", () => {
     return result;
   };
 
-  it("returns modelOverride from a single plugin", async () => {
-    await expectSingleModelOverride("llama3.3:8b");
-  });
-
-  it("returns providerOverride from a single plugin", async () => {
-    const result = await runWithSingleHook({
-      providerOverride: "ollama",
-    });
-    expect(result?.providerOverride).toBe("ollama");
-  });
-
-  it("returns both modelOverride and providerOverride together", async () => {
-    addBeforeAgentStartHook(registry, "plugin-a", () => ({
-      modelOverride: "llama3.3:8b",
-      providerOverride: "ollama",
-    }));
-
+  const runWithHooks = async (
+    hooks: Array<{
+      pluginId: string;
+      result: PluginHookBeforeAgentStartResult;
+      priority?: number;
+    }>,
+  ) => {
+    for (const { pluginId, result, priority } of hooks) {
+      addBeforeAgentStartHook(registry, pluginId, () => result, priority);
+    }
     const runner = createHookRunner(registry);
-    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    return await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+  };
 
-    expect(result?.modelOverride).toBe("llama3.3:8b");
-    expect(result?.providerOverride).toBe("ollama");
+  it.each([
+    [
+      "returns modelOverride from a single plugin",
+      { modelOverride: "llama3.3:8b" },
+      {
+        modelOverride: "llama3.3:8b",
+      },
+    ],
+    [
+      "returns providerOverride from a single plugin",
+      { providerOverride: "ollama" },
+      {
+        providerOverride: "ollama",
+      },
+    ],
+    [
+      "returns both modelOverride and providerOverride together",
+      {
+        modelOverride: "llama3.3:8b",
+        providerOverride: "ollama",
+      },
+      {
+        modelOverride: "llama3.3:8b",
+        providerOverride: "ollama",
+      },
+    ],
+    [
+      "systemPrompt merges correctly alongside model overrides",
+      {
+        systemPrompt: "You are a helpful assistant",
+        modelOverride: "llama3.3:8b",
+        providerOverride: "ollama",
+      },
+      {
+        systemPrompt: "You are a helpful assistant",
+        modelOverride: "llama3.3:8b",
+        providerOverride: "ollama",
+      },
+    ],
+  ] as const)("%s", async (_name, hookResult, expected) => {
+    const result = await runWithHooks([{ pluginId: "plugin-a", result: hookResult }]);
+    expect(result).toEqual(expect.objectContaining(expected));
   });
 
   it("higher-priority plugin wins for modelOverride", async () => {
-    addBeforeAgentStartHook(registry, "low-priority", () => ({ modelOverride: "gpt-5.4" }), 1);
-    addBeforeAgentStartHook(
-      registry,
-      "high-priority",
-      () => ({ modelOverride: "llama3.3:8b" }),
-      10,
-    );
-
-    const runner = createHookRunner(registry);
-    const result = await runner.runBeforeAgentStart({ prompt: "PII prompt" }, stubCtx);
+    const result = await runWithHooks([
+      { pluginId: "low-priority", result: { modelOverride: "gpt-5.4" }, priority: 1 },
+      { pluginId: "high-priority", result: { modelOverride: "llama3.3:8b" }, priority: 10 },
+    ]);
 
     expect(result?.modelOverride).toBe("llama3.3:8b");
   });
 
   it("lower-priority plugin does not overwrite if it returns undefined", async () => {
-    addBeforeAgentStartHook(
-      registry,
-      "high-priority",
-      () => ({ modelOverride: "llama3.3:8b", providerOverride: "ollama" }),
-      10,
-    );
-    addBeforeAgentStartHook(
-      registry,
-      "low-priority",
-      () => ({ prependContext: "some context" }),
-      1,
-    );
-
-    const runner = createHookRunner(registry);
-    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    const result = await runWithHooks([
+      {
+        pluginId: "high-priority",
+        result: { modelOverride: "llama3.3:8b", providerOverride: "ollama" },
+        priority: 10,
+      },
+      {
+        pluginId: "low-priority",
+        result: { prependContext: "some context" },
+        priority: 1,
+      },
+    ]);
 
     // High-priority ran first (priority 10), low-priority ran second (priority 1).
     // Low-priority didn't return modelOverride, so ?? falls back to acc's value.
@@ -111,26 +136,18 @@ describe("before_agent_start hook merger", () => {
   });
 
   it("prependContext still concatenates when modelOverride is present", async () => {
-    addBeforeAgentStartHook(
-      registry,
-      "plugin-a",
-      () => ({
-        prependContext: "context A",
-        modelOverride: "llama3.3:8b",
-      }),
-      10,
-    );
-    addBeforeAgentStartHook(
-      registry,
-      "plugin-b",
-      () => ({
-        prependContext: "context B",
-      }),
-      1,
-    );
-
-    const runner = createHookRunner(registry);
-    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    const result = await runWithHooks([
+      {
+        pluginId: "plugin-a",
+        result: { prependContext: "context A", modelOverride: "llama3.3:8b" },
+        priority: 10,
+      },
+      {
+        pluginId: "plugin-b",
+        result: { prependContext: "context B" },
+        priority: 1,
+      },
+    ]);
 
     expect(result?.prependContext).toBe("context A\n\ncontext B");
     expect(result?.modelOverride).toBe("llama3.3:8b");
@@ -159,21 +176,6 @@ describe("before_agent_start hook merger", () => {
     const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
 
     expect(result).toBeUndefined();
-  });
-
-  it("systemPrompt merges correctly alongside model overrides", async () => {
-    addBeforeAgentStartHook(registry, "plugin-a", () => ({
-      systemPrompt: "You are a helpful assistant",
-      modelOverride: "llama3.3:8b",
-      providerOverride: "ollama",
-    }));
-
-    const runner = createHookRunner(registry);
-    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
-
-    expect(result?.systemPrompt).toBe("You are a helpful assistant");
-    expect(result?.modelOverride).toBe("llama3.3:8b");
-    expect(result?.providerOverride).toBe("ollama");
   });
 
   it("passes runId through the agent context to hook handlers", async () => {

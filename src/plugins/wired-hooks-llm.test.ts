@@ -2,14 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 
-describe("llm hook runner methods", () => {
-  it("runLlmInput invokes registered llm_input hooks", async () => {
-    const handler = vi.fn();
-    const registry = createMockPluginRegistry([{ hookName: "llm_input", handler }]);
-    const runner = createHookRunner(registry);
+const hookCtx = {
+  agentId: "main",
+  sessionId: "session-1",
+};
 
-    await runner.runLlmInput(
-      {
+describe("llm hook runner methods", () => {
+  it.each([
+    {
+      name: "runLlmInput invokes registered llm_input hooks",
+      hookName: "llm_input" as const,
+      methodName: "runLlmInput" as const,
+      event: {
         runId: "run-1",
         sessionId: "session-1",
         provider: "openai",
@@ -19,25 +23,13 @@ describe("llm hook runner methods", () => {
         historyMessages: [],
         imagesCount: 0,
       },
-      {
-        agentId: "main",
-        sessionId: "session-1",
-      },
-    );
-
-    expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-1", prompt: "hello" }),
-      expect.objectContaining({ sessionId: "session-1" }),
-    );
-  });
-
-  it("runLlmOutput invokes registered llm_output hooks", async () => {
-    const handler = vi.fn();
-    const registry = createMockPluginRegistry([{ hookName: "llm_output", handler }]);
-    const runner = createHookRunner(registry);
-
-    await runner.runLlmOutput(
-      {
+      expectedEvent: { runId: "run-1", prompt: "hello" },
+    },
+    {
+      name: "runLlmOutput invokes registered llm_output hooks",
+      hookName: "llm_output" as const,
+      methodName: "runLlmOutput" as const,
+      event: {
         runId: "run-1",
         sessionId: "session-1",
         provider: "openai",
@@ -50,14 +42,33 @@ describe("llm hook runner methods", () => {
           total: 30,
         },
       },
-      {
-        agentId: "main",
-        sessionId: "session-1",
-      },
-    );
+      expectedEvent: { runId: "run-1", assistantTexts: ["hi"] },
+    },
+  ] as const)("$name", async ({ hookName, methodName, event, expectedEvent }) => {
+    const handler = vi.fn();
+    const registry = createMockPluginRegistry([{ hookName, handler }]);
+    const runner = createHookRunner(registry);
+
+    if (methodName === "runLlmInput") {
+      await runner.runLlmInput(
+        {
+          ...event,
+          historyMessages: [...event.historyMessages],
+        },
+        hookCtx,
+      );
+    } else {
+      await runner.runLlmOutput(
+        {
+          ...event,
+          assistantTexts: [...event.assistantTexts],
+        },
+        hookCtx,
+      );
+    }
 
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-1", assistantTexts: ["hi"] }),
+      expect.objectContaining(expectedEvent),
       expect.objectContaining({ sessionId: "session-1" }),
     );
   });

@@ -10,24 +10,33 @@ import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 
 describe("gateway hook runner methods", () => {
-  it("runGatewayStart invokes registered gateway_start hooks", async () => {
+  const gatewayCtx = { port: 18789 };
+
+  it.each([
+    {
+      name: "runGatewayStart invokes registered gateway_start hooks",
+      hookName: "gateway_start" as const,
+      methodName: "runGatewayStart" as const,
+      event: { port: 18789 },
+    },
+    {
+      name: "runGatewayStop invokes registered gateway_stop hooks",
+      hookName: "gateway_stop" as const,
+      methodName: "runGatewayStop" as const,
+      event: { reason: "test shutdown" },
+    },
+  ] as const)("$name", async ({ hookName, methodName, event }) => {
     const handler = vi.fn();
-    const registry = createMockPluginRegistry([{ hookName: "gateway_start", handler }]);
+    const registry = createMockPluginRegistry([{ hookName, handler }]);
     const runner = createHookRunner(registry);
 
-    await runner.runGatewayStart({ port: 18789 }, { port: 18789 });
+    if (methodName === "runGatewayStart") {
+      await runner.runGatewayStart(event, gatewayCtx);
+    } else {
+      await runner.runGatewayStop(event, gatewayCtx);
+    }
 
-    expect(handler).toHaveBeenCalledWith({ port: 18789 }, { port: 18789 });
-  });
-
-  it("runGatewayStop invokes registered gateway_stop hooks", async () => {
-    const handler = vi.fn();
-    const registry = createMockPluginRegistry([{ hookName: "gateway_stop", handler }]);
-    const runner = createHookRunner(registry);
-
-    await runner.runGatewayStop({ reason: "test shutdown" }, { port: 18789 });
-
-    expect(handler).toHaveBeenCalledWith({ reason: "test shutdown" }, { port: 18789 });
+    expect(handler).toHaveBeenCalledWith(event, gatewayCtx);
   });
 
   it("hasHooks returns true for registered gateway hooks", () => {
