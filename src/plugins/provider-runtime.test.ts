@@ -60,6 +60,34 @@ const MODEL: ProviderRuntimeModel = {
   maxTokens: 8_192,
 };
 
+function createOpenAiCatalogProviderPlugin(
+  overrides: Partial<ProviderPlugin> = {},
+): ProviderPlugin {
+  return {
+    id: "openai",
+    label: "OpenAI",
+    auth: [],
+    suppressBuiltInModel: ({ provider, modelId }) =>
+      (provider === "openai" || provider === "azure-openai-responses") &&
+      modelId === "gpt-5.3-codex-spark"
+        ? { suppress: true, errorMessage: "openai-codex/gpt-5.3-codex-spark" }
+        : undefined,
+    augmentModelCatalog: () => [
+      { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+      { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
+      { provider: "openai", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
+      { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
+      { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
+      {
+        provider: "openai-codex",
+        id: "gpt-5.3-codex-spark",
+        name: "gpt-5.3-codex-spark",
+      },
+    ],
+    ...overrides,
+  };
+}
+
 describe("provider-runtime", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -236,29 +264,12 @@ describe("provider-runtime", () => {
           isModernModelRef: ({ modelId }) => modelId.startsWith("gpt-5"),
         },
         {
-          id: "openai",
-          label: "OpenAI",
-          auth: [],
-          buildMissingAuthMessage: () =>
-            'No API key found for provider "openai". Use openai-codex/gpt-5.4.',
-          buildUnknownModelHint,
-          suppressBuiltInModel: ({ provider, modelId }) =>
-            provider === "azure-openai-responses" && modelId === "gpt-5.3-codex-spark"
-              ? { suppress: true, errorMessage: "openai-codex/gpt-5.3-codex-spark" }
-              : undefined,
-          augmentModelCatalog: () => [
-            { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
-            { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
-            { provider: "openai", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
-            { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
-            { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
-            {
-              provider: "openai-codex",
-              id: "gpt-5.3-codex-spark",
-              name: "gpt-5.3-codex-spark",
-            },
-          ],
-        },
+          ...createOpenAiCatalogProviderPlugin({
+            buildMissingAuthMessage: () =>
+              'No API key found for provider "openai". Use openai-codex/gpt-5.4.',
+            buildUnknownModelHint,
+          }),
+        } as ProviderPlugin,
       ];
     });
 
@@ -550,31 +561,7 @@ describe("provider-runtime", () => {
       if (!onlyPluginIds || !onlyPluginIds.includes("openai")) {
         return [];
       }
-      return [
-        {
-          id: "openai",
-          label: "OpenAI",
-          auth: [],
-          suppressBuiltInModel: ({ provider, modelId }) =>
-            provider === "openai" && modelId === "gpt-5.3-codex-spark"
-              ? { suppress: true, errorMessage: "openai-codex/gpt-5.3-codex-spark" }
-              : provider === "azure-openai-responses" && modelId === "gpt-5.3-codex-spark"
-                ? { suppress: true, errorMessage: "openai-codex/gpt-5.3-codex-spark" }
-                : undefined,
-          augmentModelCatalog: () => [
-            { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
-            { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
-            { provider: "openai", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
-            { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
-            { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
-            {
-              provider: "openai-codex",
-              id: "gpt-5.3-codex-spark",
-              name: "gpt-5.3-codex-spark",
-            },
-          ],
-        },
-      ];
+      return [createOpenAiCatalogProviderPlugin()];
     });
 
     expect(
