@@ -91,11 +91,12 @@ describe("doctor discord provider repairs", () => {
     ]);
   });
 
-  it("skips unsafe numeric ids during repair", () => {
+  it("skips entire list when it contains unsafe numeric ids", () => {
     const cfg = {
       channels: {
         discord: {
           allowFrom: [42, 106232522769186816, -1, 123.45],
+          dm: { allowFrom: [99] },
         },
       },
     } as unknown as OpenClawConfig;
@@ -103,14 +104,14 @@ describe("doctor discord provider repairs", () => {
     const result = maybeRepairDiscordNumericIds(cfg);
 
     expect(result.changes).toEqual([
-      expect.stringContaining("channels.discord.allowFrom: converted 1 numeric entry to strings"),
+      expect.stringContaining(
+        "channels.discord.dm.allowFrom: converted 1 numeric entry to strings",
+      ),
     ]);
     expect(result.config.channels?.discord?.allowFrom).toEqual([
-      "42",
-      106232522769186816,
-      -1,
-      123.45,
+      42, 106232522769186816, -1, 123.45,
     ]);
+    expect(result.config.channels?.discord?.dm?.allowFrom).toEqual(["99"]);
   });
 
   it("formats numeric id warnings for safe entries", () => {

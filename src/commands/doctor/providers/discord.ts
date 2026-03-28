@@ -168,9 +168,15 @@ export function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
     if (!Array.isArray(raw)) {
       return;
     }
+    const hasUnsafe = raw.some(
+      (entry) => typeof entry === "number" && (!Number.isSafeInteger(entry) || entry < 0),
+    );
+    if (hasUnsafe) {
+      return;
+    }
     let converted = 0;
     const updated = raw.map((entry) => {
-      if (typeof entry === "number" && Number.isSafeInteger(entry) && entry >= 0) {
+      if (typeof entry === "number") {
         converted += 1;
         return String(entry);
       }
