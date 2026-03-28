@@ -23,6 +23,7 @@ import {
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
   normalizeMainKey,
+  parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { isWithinDir } from "./path-safety.js";
@@ -145,6 +146,18 @@ function canonicalizeSessionKeyForAgent(params: {
   }
   if (raw.toLowerCase() === "global" || raw.toLowerCase() === "unknown") {
     return raw.toLowerCase();
+  }
+
+  // When shared-store guard is active, do not remap keys that belong to a
+  // different agent — they are legitimate records for that agent, not orphans.
+  // Without this check, canonicalizeMainSessionAlias (which now recognises
+  // legacy agent:main:* aliases) would rewrite them before the
+  // skipCrossAgentRemap guard below has a chance to block it.
+  if (params.skipCrossAgentRemap) {
+    const parsed = parseAgentSessionKey(raw);
+    if (parsed && normalizeAgentId(parsed.agentId) !== agentId) {
+      return raw.toLowerCase();
+    }
   }
 
   const canonicalMain = canonicalizeMainSessionAlias({

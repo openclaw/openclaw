@@ -132,6 +132,36 @@ describe("migrateOrphanedSessionKeys", () => {
     expect((store["agent:ops:work"] as { sessionId: string }).sessionId).toBe("abc-123");
   });
 
+  it("preserves legitimate agent:main:* keys in shared stores with both main and non-main agents", async () => {
+    // When session.store lacks {agentId}, all agents resolve to the same file.
+    // The "main" agent's keys must not be remapped into the "ops" namespace.
+    const sharedStorePath = path.join(tmpDir, "shared-sessions.json");
+    writeStore(sharedStorePath, {
+      "agent:main:main": { sessionId: "main-session", updatedAt: 2000 },
+      "agent:ops:work": { sessionId: "ops-session", updatedAt: 1000 },
+    });
+
+    const cfg = {
+      session: { mainKey: "work", store: sharedStorePath },
+      agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
+    } as OpenClawConfig;
+
+    await migrateOrphanedSessionKeys({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    const store = readStore(sharedStorePath);
+    // main agent's session is canonicalised to use configured mainKey ("work"),
+    // but stays in the "main" agent namespace — NOT remapped into "ops".
+    expect(store["agent:main:work"]).toBeDefined();
+    expect((store["agent:main:work"] as { sessionId: string }).sessionId).toBe("main-session");
+    expect(store["agent:ops:work"]).toBeDefined();
+    expect((store["agent:ops:work"] as { sessionId: string }).sessionId).toBe("ops-session");
+    // The key must NOT have been merged into ops namespace
+    expect(Object.keys(store).filter((k) => k.startsWith("agent:ops:")).length).toBe(1);
+  });
+
   it("no-ops when default agentId is main and mainKey is main", async () => {
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     writeStore(storePath, {
