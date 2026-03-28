@@ -127,6 +127,7 @@ Docs: https://docs.openclaw.ai
 - Daemon/status: surface immediate gateway close reasons from lightweight probes and prefer those concrete auth or pairing failures over generic timeouts in `openclaw daemon status`. (#56282) Thanks @mbelinky.
 - Agents/failover: classify HTTP 410 errors as retryable timeouts by default while still preserving explicit session-expired, billing, and auth signals from the payload. (#55201) thanks @nikus-pan.
 - Agents/subagents: restore completion announce delivery for extension channels like BlueBubbles. (#56348)
+- Plugins/Matrix: load bundled `@matrix-org/matrix-sdk-crypto-nodejs` through `createRequire(...)` so E2EE media send and receive keep the package-local native binding lookup working in packaged ESM builds. (#54566) thanks @joelnishanth.
 
 ## 2026.3.24
 
