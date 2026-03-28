@@ -235,6 +235,17 @@ export async function runEmbeddedPiAgent(
         authProfileId: preferredProfileId,
         authProfileIdSource: params.authProfileIdSource,
       });
+      const fallbackBaselineSelection = (() => {
+        const baselineProvider = params.fallbackBaselineSelection?.provider?.trim();
+        const baselineModel = params.fallbackBaselineSelection?.model?.trim();
+        if (!baselineProvider || !baselineModel) {
+          return null;
+        }
+        return {
+          provider: baselineProvider,
+          model: baselineModel,
+        };
+      })();
       const resolvePersistedLiveSelection = () =>
         resolveLiveSessionModelSelection({
           cfg: params.config,
@@ -243,6 +254,17 @@ export async function runEmbeddedPiAgent(
           defaultProvider: provider,
           defaultModel: modelId,
         });
+      const hasMeaningfulLiveSelectionChange = (
+        nextSelection: ReturnType<typeof resolveLiveSessionModelSelection>,
+      ) => {
+        if (!hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), nextSelection)) {
+          return false;
+        }
+        if (!fallbackBaselineSelection) {
+          return true;
+        }
+        return hasDifferentLiveSessionModelSelection(fallbackBaselineSelection, nextSelection);
+      };
       const {
         advanceAuthProfile,
         initializeAuthProfile,
@@ -451,7 +473,7 @@ export async function runEmbeddedPiAgent(
           }
           runLoopIterations += 1;
           const nextSelection = resolvePersistedLiveSelection();
-          if (hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), nextSelection)) {
+          if (hasMeaningfulLiveSelectionChange(nextSelection)) {
             log.info(
               `live session model switch detected before attempt for ${params.sessionId}: ${provider}/${modelId} -> ${nextSelection.provider}/${nextSelection.model}`,
             );
@@ -611,7 +633,7 @@ export async function runEmbeddedPiAgent(
           if (
             failedOrAbortedAttempt &&
             canRestartForLiveSwitch &&
-            hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), persistedSelection)
+            hasMeaningfulLiveSelectionChange(persistedSelection)
           ) {
             log.info(
               `live session model switch detected after failed attempt for ${params.sessionId}: ${provider}/${modelId} -> ${persistedSelection.provider}/${persistedSelection.model}`,

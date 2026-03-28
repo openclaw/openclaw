@@ -382,6 +382,7 @@ export async function runAgentTurnWithFallback(params: {
               runId,
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               externalFallbackActive: runOptions?.externalFallbackActive,
+              fallbackBaselineSelection: runOptions?.fallbackBaselineSelection,
               model,
             },
           );

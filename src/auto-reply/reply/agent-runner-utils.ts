@@ -117,6 +117,10 @@ export function buildEmbeddedRunBaseParams(params: {
   authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
   allowTransientCooldownProbe?: boolean;
   externalFallbackActive?: boolean;
+  fallbackBaselineSelection?: {
+    provider: string;
+    model: string;
+  };
 }) {
   return {
     sessionFile: params.run.sessionFile,
@@ -140,6 +144,7 @@ export function buildEmbeddedRunBaseParams(params: {
     runId: params.runId,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     externalFallbackActive: params.externalFallbackActive,
+    fallbackBaselineSelection: params.fallbackBaselineSelection,
   };
 }
 
@@ -206,6 +211,10 @@ export function buildEmbeddedRunExecutionParams(params: {
   runId: string;
   allowTransientCooldownProbe?: boolean;
   externalFallbackActive?: boolean;
+  fallbackBaselineSelection?: {
+    provider: string;
+    model: string;
+  };
 }) {
   const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts(params);
   const runBaseParams = buildEmbeddedRunBaseParams({
@@ -216,6 +225,7 @@ export function buildEmbeddedRunExecutionParams(params: {
     authProfile,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     externalFallbackActive: params.externalFallbackActive,
+    fallbackBaselineSelection: params.fallbackBaselineSelection,
   });
   return {
     embeddedContext,

@@ -786,6 +786,7 @@ async function agentCommandInternal(
             storePath,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             externalFallbackActive: runOptions?.externalFallbackActive,
+            fallbackBaselineSelection: runOptions?.fallbackBaselineSelection,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (

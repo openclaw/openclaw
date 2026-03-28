@@ -753,6 +753,10 @@ describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => 
     expect(classifyFailoverReasonFromHttpStatus(402, billingMessage)).toBe("billing");
   });
 
+  it("treats bare leading 402 billing messages as billing", () => {
+    expect(classifyFailoverReason("402 Insufficient account balance")).toBe("billing");
+  });
+
   it("keeps explicit 402 rate-limit messages in the rate_limit lane", () => {
     const transientMessage = "rate limit exceeded";
     expect(classifyFailoverReason(`HTTP 402 Payment Required: ${transientMessage}`)).toBe(

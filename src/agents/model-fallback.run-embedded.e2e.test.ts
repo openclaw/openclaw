@@ -224,6 +224,7 @@ async function runEmbeddedFallback(params: {
         authProfileIdSource: "auto",
         allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
         externalFallbackActive: options?.externalFallbackActive,
+        fallbackBaselineSelection: options?.fallbackBaselineSelection,
         timeoutMs: 5_000,
         runId: params.runId,
         abortSignal: params.abortSignal,
@@ -601,6 +602,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
             authProfileIdSource: "auto",
             allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
             externalFallbackActive: options?.externalFallbackActive,
+            fallbackBaselineSelection: options?.fallbackBaselineSelection,
             timeoutMs: 5_000,
             runId,
             enqueue: async (task) => await task(),
@@ -609,7 +611,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
 
       // Third candidate should have succeeded
       expect(result.provider).toBe("openrouter");
-      expect(result.model).toBe("mock-3");
+      expect(result.model).toBe("openrouter/mock-3");
 
       // All three providers should have been attempted
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(3);

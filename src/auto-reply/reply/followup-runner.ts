@@ -233,6 +233,7 @@ export function createFollowupRunner(params: {
                 runId,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
                 externalFallbackActive: runOptions?.externalFallbackActive,
+                fallbackBaselineSelection: runOptions?.fallbackBaselineSelection,
                 blockReplyBreak: queued.run.blockReplyBreak,
                 bootstrapPromptWarningSignaturesSeen,
                 bootstrapPromptWarningSignature:

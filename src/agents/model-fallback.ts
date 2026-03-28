@@ -76,6 +76,15 @@ export type ModelFallbackRunOptions = {
    * fallbacks) and the inner runner's defaults-only fallback gate.
    */
   externalFallbackActive?: boolean;
+  /**
+   * Original requested model selection for the outer fallback run. Later
+   * fallback attempts can differ from the persisted session selection without
+   * implying a user-requested live model switch.
+   */
+  fallbackBaselineSelection?: {
+    provider: string;
+    model: string;
+  };
 };
 
 type ModelFallbackRunFn<T> = (
@@ -615,6 +624,12 @@ export async function runWithModelFallback<T>(params: {
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
+  const fallbackBaselineSelection = candidates[0]
+    ? {
+        provider: candidates[0].provider,
+        model: candidates[0].model,
+      }
+    : undefined;
 
   const hasFallbackCandidates = candidates.length > 1;
 
@@ -742,9 +757,16 @@ export async function runWithModelFallback<T>(params: {
     // Only set when there are remaining candidates after this one — the last
     // candidate has nothing to fall back to and should not get the flag.
     const hasRemainingCandidates = i < candidates.length - 1;
-    const effectiveOptions = hasRemainingCandidates
-      ? { ...runOptions, externalFallbackActive: true }
-      : runOptions;
+    const effectiveOptions =
+      i > 0
+        ? {
+            ...runOptions,
+            ...(hasRemainingCandidates ? { externalFallbackActive: true } : {}),
+            fallbackBaselineSelection,
+          }
+        : hasRemainingCandidates
+          ? { ...runOptions, externalFallbackActive: true }
+          : runOptions;
 
     const attemptRun = await runFallbackAttempt({
       run: params.run,

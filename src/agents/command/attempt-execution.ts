@@ -258,6 +258,10 @@ export function runAgentAttempt(params: {
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
   externalFallbackActive?: boolean;
+  fallbackBaselineSelection?: {
+    provider: string;
+    model: string;
+  };
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
@@ -400,6 +404,7 @@ export function runAgentAttempt(params: {
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     externalFallbackActive: params.externalFallbackActive,
+    fallbackBaselineSelection: params.fallbackBaselineSelection,
     onAgentEvent: params.onAgentEvent,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,

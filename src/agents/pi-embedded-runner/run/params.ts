@@ -135,4 +135,13 @@ export type RunEmbeddedPiAgentParams = {
    * errors even if its own config-based `fallbackConfigured` check is false.
    */
   externalFallbackActive?: boolean;
+  /**
+   * Original requested selection for an outer fallback run. Later fallback
+   * attempts can differ from persisted session selection without implying a
+   * user-requested live model switch.
+   */
+  fallbackBaselineSelection?: {
+    provider: string;
+    model: string;
+  };
 };
