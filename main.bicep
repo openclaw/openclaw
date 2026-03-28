@@ -250,6 +250,42 @@ node --require /tmp/patch.js openclaw.mjs config set channels.slack.groupPolicy 
 node --require /tmp/patch.js openclaw.mjs config set tools.profile full
 node --require /tmp/patch.js openclaw.mjs mcp set rag-search '{"url":"https://retrieval-mcp-server.internal.lemonforest-578b1773.eastus.azurecontainerapps.io/mcp","transport":"streamable-http"}'
 node --require /tmp/patch.js openclaw.mjs mcp set asireon-function-call '{"url":"https://asireon-func-mcp.internal.lemonforest-578b1773.eastus.azurecontainerapps.io/mcp","transport":"streamable-http"}'
+node --require /tmp/patch.js openclaw.mjs config set agents.defaults.model.primary '"anthropic/claude-opus-4-6"'
+node --require /tmp/patch.js openclaw.mjs config set agents.list[0] '{"id":"planner","model":{"primary":"anthropic/claude-opus-4-6"},"thinkingDefault":"high","subagents":{"allowAgents":["executor"]}}'
+node --require /tmp/patch.js openclaw.mjs config set agents.list[1] '{"id":"executor","model":{"primary":"openai/gpt-5-mini"},"thinkingDefault":"adaptive"}'
+mkdir -p /home/node/.openclaw/workspace-planner
+touch /home/node/.openclaw/workspace-planner/BOOTSTRAP.md
+cat << 'PLANNER_EOF' > /home/node/.openclaw/workspace-planner/AGENTS.md
+# Planner Agent
+
+You receive user tasks and produce a complete, actionable plan before any execution begins.
+
+## Responsibilities
+- Analyse the request thoroughly using extended thinking.
+- Decompose the work into numbered, self-contained steps.
+- Once the plan is finalised, delegate ALL execution to the executor agent via `sessions_spawn`.
+
+## Handoff rule (mandatory)
+When you have a complete plan, call `sessions_spawn` exactly once:
+- `agentId`: "executor"
+- `task`: the full plan as a structured prompt (include all context the executor will need)
+- Do NOT attempt to execute any step yourself.
+
+After sessions_spawn returns, summarise the executor's result for the user.
+PLANNER_EOF
+mkdir -p /home/node/.openclaw/workspace-executor
+touch /home/node/.openclaw/workspace-executor/BOOTSTRAP.md
+cat << 'EXECUTOR_EOF' > /home/node/.openclaw/workspace-executor/AGENTS.md
+# Executor Agent
+
+You receive a fully-formed plan from the planner agent and carry it out step by step.
+
+## Responsibilities
+- Execute each step of the plan completely and concisely.
+- Do not re-plan or ask clarifying questions — the plan is final.
+- Use available tools (web_search, rag-search, asireon-function-call, bash, etc.) as needed.
+- Return a structured summary of what was done and any outputs or artefacts produced.
+EXECUTOR_EOF
 exec node --require /tmp/patch.js openclaw.mjs gateway --allow-unconfigured --bind lan
             '''
           ]
