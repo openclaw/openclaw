@@ -428,6 +428,10 @@
       "types": "./dist/plugin-sdk/google.d.ts",
       "default": "./dist/plugin-sdk/google.js"
     },
+    "./plugin-sdk/global-singleton": {
+      "types": "./dist/plugin-sdk/global-singleton.d.ts",
+      "default": "./dist/plugin-sdk/global-singleton.js"
+    },
     "./plugin-sdk/huggingface": {
       "types": "./dist/plugin-sdk/huggingface.d.ts",
       "default": "./dist/plugin-sdk/huggingface.js"

@@ -640,6 +640,7 @@ describe("plugin-sdk subpath exports", () => {
     const [
       coreSdk,
       channelActionsSdk,
+      globalSingletonSdk,
       textRuntimeSdk,
       huggingfaceSdk,
       pluginEntrySdk,
@@ -650,6 +651,7 @@ describe("plugin-sdk subpath exports", () => {
     ] = await Promise.all([
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/core"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-actions"),
+      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/global-singleton"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/text-runtime"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/huggingface"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/plugin-entry"),
@@ -665,6 +667,9 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof coreSdk.optionalStringEnum).toBe("function");
     expect(typeof channelActionsSdk.optionalStringEnum).toBe("function");
     expect(typeof channelActionsSdk.stringEnum).toBe("function");
+    expect(typeof globalSingletonSdk.resolveGlobalMap).toBe("function");
+    expect(typeof globalSingletonSdk.resolveGlobalSingleton).toBe("function");
+    expect(typeof globalSingletonSdk.createScopedExpiringIdCache).toBe("function");
     expect(typeof textRuntimeSdk.createScopedExpiringIdCache).toBe("function");
     expect(typeof textRuntimeSdk.resolveGlobalMap).toBe("function");
     expect(typeof textRuntimeSdk.resolveGlobalSingleton).toBe("function");
