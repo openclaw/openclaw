@@ -30,6 +30,7 @@ function createHarness(params?: {
   storeAllowFrom?: string[];
   accountDataByType?: Record<string, unknown>;
   joinedMembersByRoom?: Record<string, string[]>;
+  getJoinedRoomsError?: Error;
   memberStateByRoomUser?: Record<string, Record<string, { is_direct?: boolean }>>;
   verifications?: Array<{
     id: string;
@@ -91,9 +92,11 @@ function createHarness(params?: {
         params?.joinedMembersByRoom?.[roomId] ?? ["@bot:example.org", "@alice:example.org"],
     ),
     getJoinedRooms: vi.fn(async () =>
-      Object.keys(params?.joinedMembersByRoom ?? {}).length > 0
-        ? Object.keys(params?.joinedMembersByRoom ?? {})
-        : ["!room:example.org"],
+      params?.getJoinedRoomsError
+        ? await Promise.reject(params.getJoinedRoomsError)
+        : Object.keys(params?.joinedMembersByRoom ?? {}).length > 0
+          ? Object.keys(params?.joinedMembersByRoom ?? {})
+          : ["!room:example.org"],
     ),
     getAccountData: vi.fn(
       async (eventType: string) =>
@@ -1089,6 +1092,51 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       String((call[1] as { body?: string } | undefined)?.body ?? ""),
     );
     expect(bodies.some((body) => body.includes("SAS decimal: 1111 2222 3333"))).toBe(false);
+  });
+
+  it("preserves strict-room SAS fallback when active DM inspection cannot resolve a room", async () => {
+    const { sendMessage, roomEventListener } = createHarness({
+      joinedMembersByRoom: {
+        "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
+      },
+      getJoinedRoomsError: new Error("temporary joined-room lookup failure"),
+      verifications: [
+        {
+          id: "verification-active",
+          transactionId: "$different-flow-id",
+          otherUserId: "@alice:example.org",
+          updatedAt: new Date("2026-02-25T21:43:54.000Z").toISOString(),
+          phaseName: "started",
+          phase: 3,
+          pending: true,
+          sas: {
+            decimal: [6158, 1986, 3513],
+            emoji: [
+              ["🎁", "Gift"],
+              ["🌍", "Globe"],
+              ["🐴", "Horse"],
+            ],
+          },
+        },
+      ],
+    });
+
+    roomEventListener("!dm:example.org", {
+      event_id: "$start-active",
+      sender: "@alice:example.org",
+      type: "m.key.verification.start",
+      origin_server_ts: Date.now(),
+      content: {
+        "m.relates_to": { event_id: "$req-active" },
+      },
+    });
+
+    await vi.waitFor(() => {
+      const bodies = (sendMessage.mock.calls as unknown[][]).map((call) =>
+        String((call[1] as { body?: string } | undefined)?.body ?? ""),
+      );
+      expect(bodies.some((body) => body.includes("SAS decimal: 6158 1986 3513"))).toBe(true);
+    });
   });
 
   it("prefers the active verification for the current DM when multiple active summaries exist", async () => {
