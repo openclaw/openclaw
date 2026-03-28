@@ -10,4 +10,7 @@
     <uses-permission
         android:name="android.permission.READ_CALL_LOG"
         tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.RECEIVE_SMS"
+        tools:node="remove" />
 </manifest>
