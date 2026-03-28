@@ -204,6 +204,26 @@ export function buildTelegramThreadParams(thread?: TelegramThreadSpec | null) {
 }
 
 /**
+ * Build a Telegram routing target that keeps real topic/thread ids in-band.
+ *
+ * This is used by generic reply plumbing that may not always carry a separate
+ * `threadId` field through every hop. General forum topic stays chat-scoped
+ * because Telegram rejects `message_thread_id=1` for message sends.
+ */
+export function buildTelegramRoutingTarget(
+  chatId: number | string,
+  thread?: TelegramThreadSpec | null,
+): string {
+  const base = `telegram:${chatId}`;
+  const threadParams = buildTelegramThreadParams(thread);
+  const messageThreadId = threadParams?.message_thread_id;
+  if (typeof messageThreadId !== "number") {
+    return base;
+  }
+  return `${base}:topic:${messageThreadId}`;
+}
+
+/**
  * Build thread params for typing indicators (sendChatAction).
  * Empirically, General topic (id=1) needs message_thread_id for typing to appear.
  */
