@@ -67,6 +67,9 @@ export function resolveCronSession(params: {
   const sessionEntry: SessionEntry = {
     // Preserve existing per-session overrides even when rolling to a new sessionId.
     ...entry,
+    ...(isNewSession && {
+      sessionFile: undefined,
+    }),
     // Always update these core fields
     sessionId,
     updatedAt: params.nowMs,

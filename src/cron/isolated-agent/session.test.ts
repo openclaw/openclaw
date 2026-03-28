@@ -144,6 +144,7 @@ describe("resolveCronSession", () => {
         entry: {
           sessionId: "existing-session-id-456",
           updatedAt: NOW_MS - 1000,
+          sessionFile: "/tmp/existing-session-id-456.jsonl",
           systemSent: true,
           modelOverride: "sonnet-4",
           providerOverride: "anthropic",
@@ -158,6 +159,23 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
+    });
+
+    it("clears inherited sessionFile when forceNew creates a fresh session", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-456",
+          updatedAt: NOW_MS - 1000,
+          sessionFile: "/tmp/existing-session-id-456.jsonl",
+          systemSent: true,
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.sessionId).not.toBe("existing-session-id-456");
+      expect(result.sessionEntry.sessionFile).toBeUndefined();
     });
 
     it("clears delivery routing metadata and deliveryContext when forceNew is true", () => {

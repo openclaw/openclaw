@@ -632,4 +632,42 @@ describe("resolveAndPersistSessionFile", () => {
     const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
     expect(saved[sessionKey]?.sessionFile).toBe(fallbackSessionFile);
   });
+
+  it("re-derives the transcript path when a new sessionId inherits a stale sessionFile", async () => {
+    const previousSessionId = "old-session-id";
+    const sessionId = "fresh-session-id";
+    const sessionKey = "agent:main:heartbeat";
+    const staleSessionFile = resolveSessionTranscriptPathInDir(previousSessionId, fixture.sessionsDir());
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: previousSessionId,
+          updatedAt: Date.now(),
+          sessionFile: staleSessionFile,
+        },
+      }),
+      "utf-8",
+    );
+    const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
+
+    const result = await resolveAndPersistSessionFile({
+      sessionId,
+      sessionKey,
+      sessionStore,
+      storePath: fixture.storePath(),
+      sessionEntry: {
+        ...sessionStore[sessionKey],
+        sessionId,
+      },
+      agentId: "main",
+      sessionsDir: fixture.sessionsDir(),
+    });
+
+    const expectedSessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    expect(result.sessionFile).toBe(expectedSessionFile);
+
+    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
+    expect(saved[sessionKey]?.sessionFile).toBe(expectedSessionFile);
+  });
 });
