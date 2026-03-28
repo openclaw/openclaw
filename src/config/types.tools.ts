@@ -476,19 +476,6 @@ type XSearchToolConfig = {
   cacheTtlMinutes?: number;
 };
 
-type CodeExecutionToolConfig = {
-  /** Enable remote xAI code execution (default: true when an xAI API key is available). */
-  enabled?: boolean;
-  /** API key for xAI (defaults to XAI_API_KEY env var). Supports SecretRef. */
-  apiKey?: SecretInput;
-  /** Model id to use for remote code execution. */
-  model?: string;
-  /** Optional max internal tool turns for xAI to use. */
-  maxTurns?: number;
-  /** Timeout in seconds for code execution requests. */
-  timeoutSeconds?: number;
-};
-
 export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -498,8 +485,6 @@ export type ToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
-  /** Remote xAI sandboxed code execution. */
-  code_execution?: CodeExecutionToolConfig;
   web?: {
     search?: {
       /** Enable web search tool (default: true when API key is present). */

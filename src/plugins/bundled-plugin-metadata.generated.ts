@@ -18525,6 +18525,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
     publicSurfaceArtifacts: [
       "api.js",
+      "code-execution.js",
       "model-definitions.js",
       "model-id.js",
       "onboard.js",
@@ -18532,6 +18533,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       "provider-models.js",
       "stream.js",
       "web-search.js",
+      "x-search.js",
     ],
     packageName: "@openclaw/xai-plugin",
     packageVersion: "2026.3.27",
@@ -18557,6 +18559,24 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               },
               inlineCitations: {
                 type: "boolean",
+              },
+            },
+          },
+          codeExecution: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              model: {
+                type: "string",
+              },
+              maxTurns: {
+                type: "number",
+              },
+              timeoutSeconds: {
+                type: "number",
               },
             },
           },
@@ -18596,10 +18616,26 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           label: "Inline Citations",
           help: "Include inline markdown citations in Grok responses.",
         },
+        "codeExecution.enabled": {
+          label: "Enable Code Execution",
+          help: "Enable the code_execution tool for remote xAI sandbox analysis.",
+        },
+        "codeExecution.model": {
+          label: "Code Execution Model",
+          help: "xAI model override for code_execution.",
+        },
+        "codeExecution.maxTurns": {
+          label: "Code Execution Max Turns",
+          help: "Optional max internal tool turns xAI may use for code_execution.",
+        },
+        "codeExecution.timeoutSeconds": {
+          label: "Code Execution Timeout",
+          help: "Timeout in seconds for code_execution requests.",
+        },
       },
       contracts: {
         webSearchProviders: ["grok"],
-        tools: ["x_search"],
+        tools: ["code_execution", "x_search"],
       },
     },
   },
