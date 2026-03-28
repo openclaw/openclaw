@@ -359,11 +359,7 @@ describe("loadModelCatalog", () => {
 
   it("matches models across canonical provider aliases", () => {
     expect(
-      findModelInCatalog(
-        [{ provider: "z.ai", id: "glm-5", name: "GLM-5" }],
-        "z-ai",
-        "glm-5",
-      ),
+      findModelInCatalog([{ provider: "z.ai", id: "glm-5", name: "GLM-5" }], "z-ai", "glm-5"),
     ).toEqual({
       provider: "z.ai",
       id: "glm-5",
