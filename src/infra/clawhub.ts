@@ -295,6 +295,10 @@ function satisfiesComparator(version: string, token: string): boolean {
   if (!trimmed) {
     return true;
   }
+  // Wildcard ranges match any version (standard semver behavior)
+  if (trimmed === "*" || trimmed === "x" || trimmed === "X") {
+    return true;
+  }
   if (trimmed.startsWith("^")) {
     const base = trimmed.slice(1).trim();
     const upperBound = upperBoundForCaret(base);
