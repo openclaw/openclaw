@@ -75,8 +75,9 @@ export async function inspectMatrixDirectRoomEvidence(params: {
   selfUserId?: string | null;
 }): Promise<MatrixDirectRoomEvidence> {
   const selfUserId =
-    trimMaybeString(params.selfUserId) ??
-    trimMaybeString(await params.client.getUserId().catch(() => null));
+    params.selfUserId !== undefined
+      ? trimMaybeString(params.selfUserId)
+      : trimMaybeString(await params.client.getUserId().catch(() => null));
   const joinedMembers = await readJoinedMatrixMembers(params.client, params.roomId);
   const strict = isStrictDirectMembership({
     selfUserId,
