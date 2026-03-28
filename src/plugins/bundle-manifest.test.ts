@@ -31,152 +31,175 @@ function expectLoadedManifest(rootDir: string, bundleFormat: "codex" | "claude" 
   return result.manifest;
 }
 
+function writeBundleManifest(
+  rootDir: string,
+  relativePath: string,
+  manifest: Record<string, unknown>,
+) {
+  mkdirSafe(path.dirname(path.join(rootDir, relativePath)));
+  fs.writeFileSync(path.join(rootDir, relativePath), JSON.stringify(manifest), "utf-8");
+}
+
 afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("bundle manifest parsing", () => {
-  it("detects and loads Codex bundle manifests", () => {
-    const rootDir = makeTempDir();
-    mkdirSafe(path.join(rootDir, ".codex-plugin"));
-    mkdirSafe(path.join(rootDir, "skills"));
-    mkdirSafe(path.join(rootDir, "hooks"));
-    fs.writeFileSync(
-      path.join(rootDir, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH),
-      JSON.stringify({
+  it.each([
+    {
+      name: "detects and loads Codex bundle manifests",
+      bundleFormat: "codex" as const,
+      setup: (rootDir: string) => {
+        mkdirSafe(path.join(rootDir, ".codex-plugin"));
+        mkdirSafe(path.join(rootDir, "skills"));
+        mkdirSafe(path.join(rootDir, "hooks"));
+        writeBundleManifest(rootDir, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH, {
+          name: "Sample Bundle",
+          description: "Codex fixture",
+          skills: "skills",
+          hooks: "hooks",
+          mcpServers: {
+            sample: {
+              command: "node",
+              args: ["server.js"],
+            },
+          },
+          apps: {
+            sample: {
+              title: "Sample App",
+            },
+          },
+        });
+      },
+      expected: {
+        id: "sample-bundle",
         name: "Sample Bundle",
         description: "Codex fixture",
-        skills: "skills",
-        hooks: "hooks",
-        mcpServers: {
-          sample: {
-            command: "node",
-            args: ["server.js"],
-          },
-        },
-        apps: {
-          sample: {
-            title: "Sample App",
-          },
-        },
-      }),
-      "utf-8",
-    );
-
-    expect(detectBundleManifestFormat(rootDir)).toBe("codex");
-    expect(expectLoadedManifest(rootDir, "codex")).toMatchObject({
-      id: "sample-bundle",
-      name: "Sample Bundle",
-      description: "Codex fixture",
-      bundleFormat: "codex",
-      skills: ["skills"],
-      hooks: ["hooks"],
-      capabilities: expect.arrayContaining(["hooks", "skills", "mcpServers", "apps"]),
-    });
-  });
-
-  it("detects and loads Claude bundle manifests from the component layout", () => {
-    const rootDir = makeTempDir();
-    mkdirSafe(path.join(rootDir, ".claude-plugin"));
-    mkdirSafe(path.join(rootDir, "skill-packs", "starter"));
-    mkdirSafe(path.join(rootDir, "commands-pack"));
-    mkdirSafe(path.join(rootDir, "agents-pack"));
-    mkdirSafe(path.join(rootDir, "hooks-pack"));
-    mkdirSafe(path.join(rootDir, "mcp"));
-    mkdirSafe(path.join(rootDir, "lsp"));
-    mkdirSafe(path.join(rootDir, "styles"));
-    mkdirSafe(path.join(rootDir, "hooks"));
-    fs.writeFileSync(path.join(rootDir, "hooks", "hooks.json"), '{"hooks":[]}', "utf-8");
-    fs.writeFileSync(path.join(rootDir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
-    fs.writeFileSync(
-      path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH),
-      JSON.stringify({
+        bundleFormat: "codex",
+        skills: ["skills"],
+        hooks: ["hooks"],
+        capabilities: expect.arrayContaining(["hooks", "skills", "mcpServers", "apps"]),
+      },
+    },
+    {
+      name: "detects and loads Claude bundle manifests from the component layout",
+      bundleFormat: "claude" as const,
+      setup: (rootDir: string) => {
+        for (const relativeDir of [
+          ".claude-plugin",
+          "skill-packs/starter",
+          "commands-pack",
+          "agents-pack",
+          "hooks-pack",
+          "mcp",
+          "lsp",
+          "styles",
+          "hooks",
+        ]) {
+          mkdirSafe(path.join(rootDir, relativeDir));
+        }
+        fs.writeFileSync(path.join(rootDir, "hooks", "hooks.json"), '{"hooks":[]}', "utf-8");
+        fs.writeFileSync(
+          path.join(rootDir, "settings.json"),
+          '{"hideThinkingBlock":true}',
+          "utf-8",
+        );
+        writeBundleManifest(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH, {
+          name: "Claude Sample",
+          description: "Claude fixture",
+          skills: ["skill-packs/starter"],
+          commands: "commands-pack",
+          agents: "agents-pack",
+          hooks: "hooks-pack",
+          mcpServers: "mcp",
+          lspServers: "lsp",
+          outputStyles: "styles",
+        });
+      },
+      expected: {
+        id: "claude-sample",
         name: "Claude Sample",
         description: "Claude fixture",
-        skills: ["skill-packs/starter"],
-        commands: "commands-pack",
-        agents: "agents-pack",
-        hooks: "hooks-pack",
-        mcpServers: "mcp",
-        lspServers: "lsp",
-        outputStyles: "styles",
-      }),
-      "utf-8",
-    );
-
-    expect(detectBundleManifestFormat(rootDir)).toBe("claude");
-    expect(expectLoadedManifest(rootDir, "claude")).toMatchObject({
-      id: "claude-sample",
-      name: "Claude Sample",
-      description: "Claude fixture",
-      bundleFormat: "claude",
-      skills: ["skill-packs/starter", "commands-pack", "agents-pack", "styles"],
-      settingsFiles: ["settings.json"],
-      hooks: ["hooks/hooks.json", "hooks-pack"],
-      capabilities: expect.arrayContaining([
-        "hooks",
-        "skills",
-        "commands",
-        "agents",
-        "mcpServers",
-        "lspServers",
-        "outputStyles",
-        "settings",
-      ]),
-    });
-  });
-
-  it("detects and loads Cursor bundle manifests", () => {
-    const rootDir = makeTempDir();
-    mkdirSafe(path.join(rootDir, ".cursor-plugin"));
-    mkdirSafe(path.join(rootDir, "skills"));
-    mkdirSafe(path.join(rootDir, ".cursor", "commands"));
-    mkdirSafe(path.join(rootDir, ".cursor", "rules"));
-    mkdirSafe(path.join(rootDir, ".cursor", "agents"));
-    fs.writeFileSync(path.join(rootDir, ".cursor", "hooks.json"), '{"hooks":[]}', "utf-8");
-    fs.writeFileSync(
-      path.join(rootDir, CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH),
-      JSON.stringify({
+        bundleFormat: "claude",
+        skills: ["skill-packs/starter", "commands-pack", "agents-pack", "styles"],
+        settingsFiles: ["settings.json"],
+        hooks: ["hooks/hooks.json", "hooks-pack"],
+        capabilities: expect.arrayContaining([
+          "hooks",
+          "skills",
+          "commands",
+          "agents",
+          "mcpServers",
+          "lspServers",
+          "outputStyles",
+          "settings",
+        ]),
+      },
+    },
+    {
+      name: "detects and loads Cursor bundle manifests",
+      bundleFormat: "cursor" as const,
+      setup: (rootDir: string) => {
+        for (const relativeDir of [
+          ".cursor-plugin",
+          "skills",
+          ".cursor/commands",
+          ".cursor/rules",
+          ".cursor/agents",
+        ]) {
+          mkdirSafe(path.join(rootDir, relativeDir));
+        }
+        fs.writeFileSync(path.join(rootDir, ".cursor", "hooks.json"), '{"hooks":[]}', "utf-8");
+        writeBundleManifest(rootDir, CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH, {
+          name: "Cursor Sample",
+          description: "Cursor fixture",
+          mcpServers: "./.mcp.json",
+        });
+        fs.writeFileSync(path.join(rootDir, ".mcp.json"), '{"servers":{}}', "utf-8");
+      },
+      expected: {
+        id: "cursor-sample",
         name: "Cursor Sample",
         description: "Cursor fixture",
-        mcpServers: "./.mcp.json",
+        bundleFormat: "cursor",
+        skills: ["skills", ".cursor/commands"],
+        hooks: [],
+        capabilities: expect.arrayContaining([
+          "skills",
+          "commands",
+          "agents",
+          "rules",
+          "hooks",
+          "mcpServers",
+        ]),
+      },
+    },
+    {
+      name: "detects manifestless Claude bundles from the default layout",
+      bundleFormat: "claude" as const,
+      setup: (rootDir: string) => {
+        mkdirSafe(path.join(rootDir, "commands"));
+        mkdirSafe(path.join(rootDir, "skills"));
+        fs.writeFileSync(
+          path.join(rootDir, "settings.json"),
+          '{"hideThinkingBlock":true}',
+          "utf-8",
+        );
+      },
+      expected: (rootDir: string) => ({
+        id: path.basename(rootDir).toLowerCase(),
+        skills: ["skills", "commands"],
+        settingsFiles: ["settings.json"],
+        capabilities: expect.arrayContaining(["skills", "commands", "settings"]),
       }),
-      "utf-8",
-    );
-    fs.writeFileSync(path.join(rootDir, ".mcp.json"), '{"servers":{}}', "utf-8");
-
-    expect(detectBundleManifestFormat(rootDir)).toBe("cursor");
-    expect(expectLoadedManifest(rootDir, "cursor")).toMatchObject({
-      id: "cursor-sample",
-      name: "Cursor Sample",
-      description: "Cursor fixture",
-      bundleFormat: "cursor",
-      skills: ["skills", ".cursor/commands"],
-      hooks: [],
-      capabilities: expect.arrayContaining([
-        "skills",
-        "commands",
-        "agents",
-        "rules",
-        "hooks",
-        "mcpServers",
-      ]),
-    });
-  });
-
-  it("detects manifestless Claude bundles from the default layout", () => {
+    },
+  ] as const)("$name", ({ bundleFormat, setup, expected }) => {
     const rootDir = makeTempDir();
-    mkdirSafe(path.join(rootDir, "commands"));
-    mkdirSafe(path.join(rootDir, "skills"));
-    fs.writeFileSync(path.join(rootDir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
+    setup(rootDir);
 
-    expect(detectBundleManifestFormat(rootDir)).toBe("claude");
-    const manifest = expectLoadedManifest(rootDir, "claude");
-    expect(manifest.id).toBe(path.basename(rootDir).toLowerCase());
-    expect(manifest.skills).toEqual(["skills", "commands"]);
-    expect(manifest.settingsFiles).toEqual(["settings.json"]);
-    expect(manifest.capabilities).toEqual(
-      expect.arrayContaining(["skills", "commands", "settings"]),
+    expect(detectBundleManifestFormat(rootDir)).toBe(bundleFormat);
+    expect(expectLoadedManifest(rootDir, bundleFormat)).toMatchObject(
+      typeof expected === "function" ? expected(rootDir) : expected,
     );
   });
 
