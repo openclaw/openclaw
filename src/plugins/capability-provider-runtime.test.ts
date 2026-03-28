@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "./registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
+import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 type MockManifestRegistry = {
   plugins: Array<Record<string, unknown>>;
@@ -14,6 +14,9 @@ function createEmptyMockManifestRegistry(): MockManifestRegistry {
 
 const mocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn(() => createEmptyPluginRegistry()),
+  getCompatibleActivePluginRegistry: vi.fn<
+    (params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined
+  >(() => undefined),
   loadPluginManifestRegistry: vi.fn<() => MockManifestRegistry>(() =>
     createEmptyMockManifestRegistry(),
   ),
@@ -24,6 +27,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: mocks.loadOpenClawPlugins,
+  getCompatibleActivePluginRegistry: mocks.getCompatibleActivePluginRegistry,
 }));
 
 vi.mock("./manifest-registry.js", () => ({
@@ -104,33 +108,14 @@ function setBundledCapabilityFixture(contractKey: string) {
   });
 }
 
-function setActiveSpeechCapabilityRegistry(providerId: string) {
-  const active = createEmptyPluginRegistry();
-  active.speechProviders.push({
-    pluginId: providerId,
-    pluginName: "OpenAI",
-    source: "test",
-    provider: {
-      id: providerId,
-      label: "OpenAI",
-      isConfigured: () => true,
-      synthesize: async () => ({
-        audioBuffer: Buffer.from("x"),
-        outputFormat: "mp3",
-        voiceCompatible: false,
-        fileExtension: ".mp3",
-      }),
-    },
-  });
-  setActivePluginRegistry(active);
-}
-
 describe("resolvePluginCapabilityProviders", () => {
   beforeEach(async () => {
     vi.resetModules();
     resetPluginRuntimeStateForTest();
     mocks.loadOpenClawPlugins.mockReset();
     mocks.loadOpenClawPlugins.mockReturnValue(createEmptyPluginRegistry());
+    mocks.getCompatibleActivePluginRegistry.mockReset();
+    mocks.getCompatibleActivePluginRegistry.mockReturnValue(undefined);
     mocks.loadPluginManifestRegistry.mockReset();
     mocks.loadPluginManifestRegistry.mockReturnValue(createEmptyMockManifestRegistry());
     mocks.withBundledPluginAllowlistCompat.mockReset();
@@ -143,7 +128,24 @@ describe("resolvePluginCapabilityProviders", () => {
   });
 
   it("uses the active registry when capability providers are already loaded", () => {
-    setActiveSpeechCapabilityRegistry("openai");
+    const active = createEmptyPluginRegistry();
+    active.speechProviders.push({
+      pluginId: "openai",
+      pluginName: "OpenAI",
+      source: "test",
+      provider: {
+        id: "openai",
+        label: "OpenAI",
+        isConfigured: () => true,
+        synthesize: async () => ({
+          audioBuffer: Buffer.from("x"),
+          outputFormat: "mp3",
+          voiceCompatible: false,
+          fileExtension: ".mp3",
+        }),
+      },
+    });
+    mocks.getCompatibleActivePluginRegistry.mockReturnValue(active);
 
     const providers = resolvePluginCapabilityProviders({ key: "speechProviders" });
 
@@ -170,5 +172,18 @@ describe("resolvePluginCapabilityProviders", () => {
       allowlistCompat,
       enablementCompat,
     });
+  });
+
+  it("reuses a compatible active registry even when the capability list is empty", () => {
+    const active = createEmptyPluginRegistry();
+    mocks.getCompatibleActivePluginRegistry.mockReturnValue(active);
+
+    const providers = resolvePluginCapabilityProviders({
+      key: "mediaUnderstandingProviders",
+      cfg: {} as OpenClawConfig,
+    });
+
+    expect(providers).toEqual([]);
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 });
