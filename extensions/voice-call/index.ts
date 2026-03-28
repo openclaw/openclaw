@@ -4,6 +4,7 @@ import {
   type GatewayRequestHandlerOptions,
   type OpenClawPluginApi,
 } from "./api.js";
+import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime-entry.js";
 import { registerVoiceCallCli } from "./src/cli.js";
 import {
   VoiceCallConfigSchema,
@@ -12,7 +13,6 @@ import {
   type VoiceCallConfig,
 } from "./src/config.js";
 import type { CoreConfig } from "./src/core-bridge.js";
-import { createVoiceCallRuntime, type VoiceCallRuntime } from "./src/runtime.js";
 
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {

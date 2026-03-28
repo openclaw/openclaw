@@ -49,6 +49,7 @@ import {
 import {
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
+  chunkTextForOutbound,
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
@@ -237,6 +238,31 @@ function matchMatrixAcpConversation(params: {
   return null;
 }
 
+function resolveMatrixCommandConversation(params: {
+  threadId?: string;
+  originatingTo?: string;
+  commandTo?: string;
+  fallbackTo?: string;
+}) {
+  const parentConversationId = [params.originatingTo, params.commandTo, params.fallbackTo]
+    .map((candidate) => {
+      const trimmed = candidate?.trim();
+      if (!trimmed) {
+        return undefined;
+      }
+      const target = resolveMatrixTargetIdentity(trimmed);
+      return target?.kind === "room" ? target.id : undefined;
+    })
+    .find((candidate): candidate is string => Boolean(candidate));
+  if (params.threadId) {
+    return {
+      conversationId: params.threadId,
+      ...(parentConversationId ? { parentConversationId } : {}),
+    };
+  }
+  return parentConversationId ? { conversationId: parentConversationId } : null;
+}
+
 export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
   createChatChannelPlugin<ResolvedMatrixAccount, MatrixProbe>({
     base: {
@@ -266,6 +292,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       groups: {
         resolveRequireMention: resolveMatrixGroupRequireMention,
         resolveToolPolicy: resolveMatrixGroupToolPolicy,
+      },
+      conversationBindings: {
+        supportsCurrentConversationBinding: true,
       },
       messaging: {
         normalizeTarget: normalizeMatrixMessagingTarget,
@@ -320,6 +349,13 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             bindingConversationId: compiledBinding.conversationId,
             conversationId,
             parentConversationId,
+          }),
+        resolveCommandConversation: ({ threadId, originatingTo, commandTo, fallbackTo }) =>
+          resolveMatrixCommandConversation({
+            threadId,
+            originatingTo,
+            commandTo,
+            fallbackTo,
           }),
       },
       status: createComputedAccountStatusAdapter<ResolvedMatrixAccount, MatrixProbe>({
@@ -454,7 +490,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
     },
     outbound: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getMatrixRuntime().channel.text.chunkMarkdownText!(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       ...createRuntimeOutboundDelegates({

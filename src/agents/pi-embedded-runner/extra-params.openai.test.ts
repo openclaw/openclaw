@@ -41,6 +41,7 @@ describe("extra-params: OpenAI attribution", () => {
 
     expect(headers).toEqual({
       originator: "openclaw",
+      version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
     });
   });
@@ -61,6 +62,7 @@ describe("extra-params: OpenAI attribution", () => {
 
     expect(headers).toEqual({
       originator: "openclaw",
+      version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
       "X-Custom": "1",
     });
@@ -89,6 +91,7 @@ describe("extra-params: OpenAI attribution", () => {
 
     expect(headers).toEqual({
       originator: "openclaw",
+      version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
     });
   });

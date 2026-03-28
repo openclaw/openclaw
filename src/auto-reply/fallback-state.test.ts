@@ -6,91 +6,82 @@ import {
 } from "./fallback-state.js";
 
 const baseAttempt = {
-  provider: "fireworks",
-  model: "fireworks/minimax-m2p5",
-  error: "Provider fireworks is in cooldown (all profiles unavailable)",
+  provider: "demo-primary",
+  model: "demo-primary/model-a",
+  error: "Provider demo-primary is in cooldown (all profiles unavailable)",
   reason: "rate_limit" as const,
 };
 
-describe("fallback-state", () => {
-  it("treats fallback as active only when state matches selected and active refs", () => {
-    const state: FallbackNoticeState = {
-      fallbackNoticeSelectedModel: "fireworks/minimax-m2p5",
-      fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
-      fallbackNoticeReason: "rate limit",
-    };
+const activeFallbackState: FallbackNoticeState = {
+  fallbackNoticeSelectedModel: "demo-primary/model-a",
+  fallbackNoticeActiveModel: "demo-fallback/model-b",
+  fallbackNoticeReason: "rate limit",
+};
 
-    const resolved = resolveActiveFallbackState({
-      selectedModelRef: "fireworks/minimax-m2p5",
-      activeModelRef: "deepinfra/moonshotai/Kimi-K2.5",
-      state,
-    });
-
-    expect(resolved.active).toBe(true);
-    expect(resolved.reason).toBe("rate limit");
+function resolveDemoFallbackTransition(
+  overrides: Partial<Parameters<typeof resolveFallbackTransition>[0]> = {},
+) {
+  return resolveFallbackTransition({
+    selectedProvider: "demo-primary",
+    selectedModel: "model-a",
+    activeProvider: "demo-fallback",
+    activeModel: "model-b",
+    attempts: [baseAttempt],
+    state: {},
+    ...overrides,
   });
+}
 
-  it("does not treat runtime drift as fallback when persisted state does not match", () => {
-    const state: FallbackNoticeState = {
-      fallbackNoticeSelectedModel: "anthropic/claude",
-      fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
-      fallbackNoticeReason: "rate limit",
-    };
-
+describe("fallback-state", () => {
+  it.each([
+    {
+      name: "treats fallback as active only when state matches selected and active refs",
+      state: activeFallbackState,
+      expected: { active: true, reason: "rate limit" },
+    },
+    {
+      name: "does not treat runtime drift as fallback when persisted state does not match",
+      state: {
+        fallbackNoticeSelectedModel: "other-provider/other-model",
+        fallbackNoticeActiveModel: "demo-fallback/model-b",
+        fallbackNoticeReason: "rate limit",
+      } satisfies FallbackNoticeState,
+      expected: { active: false, reason: undefined },
+    },
+  ])("$name", ({ state, expected }) => {
     const resolved = resolveActiveFallbackState({
-      selectedModelRef: "fireworks/minimax-m2p5",
-      activeModelRef: "deepinfra/moonshotai/Kimi-K2.5",
+      selectedModelRef: "demo-primary/model-a",
+      activeModelRef: "demo-fallback/model-b",
       state,
     });
 
-    expect(resolved.active).toBe(false);
-    expect(resolved.reason).toBeUndefined();
+    expect(resolved).toEqual(expected);
   });
 
   it("marks fallback transition when selected->active pair changes", () => {
-    const resolved = resolveFallbackTransition({
-      selectedProvider: "fireworks",
-      selectedModel: "fireworks/minimax-m2p5",
-      activeProvider: "deepinfra",
-      activeModel: "moonshotai/Kimi-K2.5",
-      attempts: [baseAttempt],
-      state: {},
-    });
+    const resolved = resolveDemoFallbackTransition();
 
     expect(resolved.fallbackActive).toBe(true);
     expect(resolved.fallbackTransitioned).toBe(true);
     expect(resolved.fallbackCleared).toBe(false);
     expect(resolved.stateChanged).toBe(true);
     expect(resolved.reasonSummary).toBe("rate limit");
-    expect(resolved.nextState.selectedModel).toBe("fireworks/minimax-m2p5");
-    expect(resolved.nextState.activeModel).toBe("deepinfra/moonshotai/Kimi-K2.5");
+    expect(resolved.nextState.selectedModel).toBe("demo-primary/model-a");
+    expect(resolved.nextState.activeModel).toBe("demo-fallback/model-b");
   });
 
   it("normalizes fallback reason whitespace for summaries", () => {
-    const resolved = resolveFallbackTransition({
-      selectedProvider: "fireworks",
-      selectedModel: "fireworks/minimax-m2p5",
-      activeProvider: "deepinfra",
-      activeModel: "moonshotai/Kimi-K2.5",
+    const resolved = resolveDemoFallbackTransition({
       attempts: [{ ...baseAttempt, reason: "rate_limit\n\tburst" }],
-      state: {},
     });
 
     expect(resolved.reasonSummary).toBe("rate limit burst");
   });
 
   it("refreshes reason when fallback remains active with same model pair", () => {
-    const resolved = resolveFallbackTransition({
-      selectedProvider: "fireworks",
-      selectedModel: "fireworks/minimax-m2p5",
-      activeProvider: "deepinfra",
-      activeModel: "moonshotai/Kimi-K2.5",
+    const resolved = resolveDemoFallbackTransition({
       attempts: [{ ...baseAttempt, reason: "timeout" }],
-      state: {
-        fallbackNoticeSelectedModel: "fireworks/minimax-m2p5",
-        fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
-        fallbackNoticeReason: "rate limit",
-      },
+      state: activeFallbackState,
     });
 
     expect(resolved.fallbackTransitioned).toBe(false);
@@ -99,17 +90,12 @@ describe("fallback-state", () => {
   });
 
   it("marks fallback as cleared when runtime returns to selected model", () => {
-    const resolved = resolveFallbackTransition({
-      selectedProvider: "fireworks",
-      selectedModel: "fireworks/minimax-m2p5",
-      activeProvider: "fireworks",
-      activeModel: "fireworks/minimax-m2p5",
+    const resolved = resolveDemoFallbackTransition({
+      activeProvider: "demo-primary",
+      selectedModel: "model-a",
+      activeModel: "model-a",
       attempts: [],
-      state: {
-        fallbackNoticeSelectedModel: "fireworks/minimax-m2p5",
-        fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
-        fallbackNoticeReason: "rate limit",
-      },
+      state: activeFallbackState,
     });
 
     expect(resolved.fallbackActive).toBe(false);

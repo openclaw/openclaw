@@ -12,13 +12,11 @@ const bundledCoverageEntrySources = buildPluginSdkEntrySources(bundledRepresenta
 
 describe("plugin-sdk bundled exports", () => {
   it("emits importable bundled subpath entries", { timeout: 120_000 }, async () => {
-    const bundleTempRoot = path.join(
-      process.cwd(),
-      "node_modules",
-      ".cache",
-      "openclaw-plugin-sdk-build",
+    const bundleCacheRoot = path.join(process.cwd(), "node_modules", ".cache");
+    await fs.mkdir(bundleCacheRoot, { recursive: true });
+    const bundleTempRoot = await fs.mkdtemp(
+      path.join(bundleCacheRoot, "openclaw-plugin-sdk-build-"),
     );
-    await fs.mkdir(bundleTempRoot, { recursive: true });
     const outDir = path.join(bundleTempRoot, "bundle");
     await fs.rm(outDir, { recursive: true, force: true });
     await fs.mkdir(outDir, { recursive: true });
@@ -28,6 +26,12 @@ describe("plugin-sdk bundled exports", () => {
       clean: false,
       config: false,
       dts: false,
+      deps: {
+        // Match the production host build contract: Matrix SDK packages stay
+        // external so the heavy runtime surface does not fold multiple
+        // matrix-js-sdk entrypoints into one bundle artifact.
+        neverBundle: ["@lancedb/lancedb", "@matrix-org/matrix-sdk-crypto-nodejs", "matrix-js-sdk"],
+      },
       // Full plugin-sdk coverage belongs to `pnpm build`, package contract
       // guardrails, and `subpaths.test.ts`. This file only keeps the expensive
       // bundler path honest across representative entrypoint families.

@@ -59,6 +59,7 @@ function createBundledFirecrawlEntry(): PluginWebSearchProviderEntry {
     pluginId: "firecrawl",
     label: "Firecrawl Search",
     hint: "Structured results",
+    onboardingScopes: ["text-inference"],
     envVars: ["FIRECRAWL_API_KEY"],
     placeholder: "fc-...",
     signupUrl: "https://example.com/firecrawl",

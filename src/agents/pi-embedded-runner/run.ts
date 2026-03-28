@@ -25,6 +25,12 @@ import {
   resolveFailoverStatus,
 } from "../failover-error.js";
 import {
+  hasDifferentLiveSessionModelSelection,
+  LiveSessionModelSwitchError,
+  resolveLiveSessionModelSelection,
+  consumeLiveSessionModelSwitch,
+} from "../live-model-switch.js";
+import {
   applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
   type ResolvedProviderAuth,
@@ -140,6 +146,7 @@ export async function runEmbeddedPiAgent(
       await ensureOpenClawModelsJson(params.config, agentDir);
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
+        runId: params.runId,
         agentId: workspaceResolution.agentId,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
@@ -221,6 +228,20 @@ export async function runEmbeddedPiAgent(
       let lastProfileId: string | undefined;
       let runtimeAuthState: RuntimeAuthState | null = null;
       let runtimeAuthRefreshCancelled = false;
+      const resolveCurrentLiveSelection = () => ({
+        provider,
+        model: modelId,
+        authProfileId: preferredProfileId,
+        authProfileIdSource: params.authProfileIdSource,
+      });
+      const resolvePersistedLiveSelection = () =>
+        resolveLiveSessionModelSelection({
+          cfg: params.config,
+          sessionKey: params.sessionKey,
+          agentId: workspaceResolution.agentId,
+          defaultProvider: provider,
+          defaultModel: modelId,
+        });
       const {
         advanceAuthProfile,
         initializeAuthProfile,
@@ -428,6 +449,13 @@ export async function runEmbeddedPiAgent(
             };
           }
           runLoopIterations += 1;
+          const nextSelection = resolvePersistedLiveSelection();
+          if (hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), nextSelection)) {
+            log.info(
+              `live session model switch detected before attempt for ${params.sessionId}: ${provider}/${modelId} -> ${nextSelection.provider}/${nextSelection.model}`,
+            );
+            throw new LiveSessionModelSwitchError(nextSelection);
+          }
           const runtimeAuthRetry = authRetryPending;
           authRetryPending = false;
           attemptedThinking.add(thinkLevel);
@@ -557,6 +585,38 @@ export async function runEmbeddedPiAgent(
             lastAssistant?.stopReason === "error"
               ? lastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
+          const canRestartForLiveSwitch =
+            !attempt.didSendViaMessagingTool &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !attempt.lastToolError &&
+            attempt.toolMetas.length === 0 &&
+            attempt.assistantTexts.length === 0;
+          const requestedSelection = consumeLiveSessionModelSwitch(params.sessionId);
+          if (
+            requestedSelection &&
+            canRestartForLiveSwitch &&
+            hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), requestedSelection)
+          ) {
+            log.info(
+              `live session model switch requested during active attempt for ${params.sessionId}: ${provider}/${modelId} -> ${requestedSelection.provider}/${requestedSelection.model}`,
+            );
+            throw new LiveSessionModelSwitchError(requestedSelection);
+          }
+          const failedOrAbortedAttempt =
+            aborted || Boolean(promptError) || Boolean(assistantErrorText) || timedOut;
+          const persistedSelection = failedOrAbortedAttempt
+            ? resolvePersistedLiveSelection()
+            : null;
+          if (
+            failedOrAbortedAttempt &&
+            canRestartForLiveSwitch &&
+            hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), persistedSelection)
+          ) {
+            log.info(
+              `live session model switch detected after failed attempt for ${params.sessionId}: ${provider}/${modelId} -> ${persistedSelection.provider}/${persistedSelection.model}`,
+            );
+            throw new LiveSessionModelSwitchError(persistedSelection);
+          }
 
           // ── Timeout-triggered compaction ──────────────────────────────────
           // When the LLM times out with high context usage, compact before

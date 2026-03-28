@@ -19,7 +19,10 @@ function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/S
     description: desc,
     filePath,
     baseDir: `/skills/${name}`,
-    sourceInfo: createSyntheticSourceInfo(filePath, { source: "workspace" }),
+    sourceInfo: createSyntheticSourceInfo(filePath, {
+      source: "workspace",
+      baseDir: `/skills/${name}`,
+    }),
     disableModelInvocation: false,
   };
 }

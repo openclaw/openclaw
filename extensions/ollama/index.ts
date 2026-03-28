@@ -13,7 +13,7 @@ import {
 } from "./src/embedding-provider.js";
 import { resolveOllamaApiBase } from "./src/provider-models.js";
 import {
-  createConfiguredOllamaCompatNumCtxWrapper,
+  createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
 } from "./src/stream.js";
 
@@ -145,7 +145,7 @@ export default definePluginEntry({
         });
       },
       wrapStreamFn: (ctx) => {
-        return createConfiguredOllamaCompatNumCtxWrapper(ctx);
+        return createConfiguredOllamaCompatStreamWrapper(ctx);
       },
       createEmbeddingProvider: async ({ config, model, remote }) => {
         const { provider, client } = await createOllamaEmbeddingProvider({
