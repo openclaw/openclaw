@@ -28,6 +28,22 @@ function scopeRank(scope: typeof pluginRegistryLoaded): number {
   }
 }
 
+function activeRegistrySatisfiesScope(
+  scope: PluginRegistryScope,
+  active: ReturnType<typeof getActivePluginRegistry>,
+): boolean {
+  if (!active) {
+    return false;
+  }
+  switch (scope) {
+    case "configured-channels":
+    case "channels":
+      return active.channels.length > 0;
+    case "all":
+      return false;
+  }
+}
+
 export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistryScope }): void {
   const scope = options?.scope ?? "all";
   if (scopeRank(pluginRegistryLoaded) >= scopeRank(scope)) {
@@ -36,12 +52,7 @@ export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistrySco
   const active = getActivePluginRegistry();
   // Tests (and callers) can pre-seed a registry (e.g. `test/setup.ts`); avoid
   // doing an expensive load when we already have plugins/channels/tools.
-  if (
-    scope !== "all" &&
-    pluginRegistryLoaded === "none" &&
-    active &&
-    (active.plugins.length > 0 || active.channels.length > 0 || active.tools.length > 0)
-  ) {
+  if (pluginRegistryLoaded === "none" && activeRegistrySatisfiesScope(scope, active)) {
     pluginRegistryLoaded = scope;
     return;
   }
