@@ -1703,6 +1703,15 @@
           }
         },
         {
+          "declaration": "export function waitForTransportReady(params: WaitForTransportReadyParams): Promise<void>;",
+          "exportName": "waitForTransportReady",
+          "kind": "function",
+          "source": {
+            "line": 21,
+            "path": "src/infra/transport-ready.ts"
+          }
+        },
+        {
           "declaration": "export function waitUntilAbort(signal?: AbortSignal | undefined, onAbort?: (() => void | Promise<void>) | undefined): Promise<void>;",
           "exportName": "waitUntilAbort",
           "kind": "function",
@@ -2459,12 +2468,30 @@
           }
         },
         {
+          "declaration": "export type TransportReadyResult = TransportReadyResult;",
+          "exportName": "TransportReadyResult",
+          "kind": "type",
+          "source": {
+            "line": 5,
+            "path": "src/infra/transport-ready.ts"
+          }
+        },
+        {
           "declaration": "export type TypingCallbacks = TypingCallbacks;",
           "exportName": "TypingCallbacks",
           "kind": "type",
           "source": {
             "line": 4,
             "path": "src/channels/typing.ts"
+          }
+        },
+        {
+          "declaration": "export type WaitForTransportReadyParams = WaitForTransportReadyParams;",
+          "exportName": "WaitForTransportReadyParams",
+          "kind": "type",
+          "source": {
+            "line": 10,
+            "path": "src/infra/transport-ready.ts"
           }
         }
       ],
