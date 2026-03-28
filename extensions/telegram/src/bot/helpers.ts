@@ -19,10 +19,10 @@ export type TelegramThreadSpec = {
 };
 
 export function extractTelegramForumFlag(value: unknown): boolean | undefined {
-  if (!value || typeof value !== "object") {
+  if (!value || typeof value !== "object" || !("is_forum" in value)) {
     return undefined;
   }
-  const forum = (value as { is_forum?: unknown }).is_forum;
+  const forum = value.is_forum;
   return typeof forum === "boolean" ? forum : undefined;
 }
 
