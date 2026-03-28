@@ -214,6 +214,7 @@
   "vllm",
   "xai",
   "webhook-ingress",
+  "webhook-request-guards",
   "webhook-path",
   "web-media",
   "voice-call",

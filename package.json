@@ -896,6 +896,10 @@
       "types": "./dist/plugin-sdk/webhook-ingress.d.ts",
       "default": "./dist/plugin-sdk/webhook-ingress.js"
     },
+    "./plugin-sdk/webhook-request-guards": {
+      "types": "./dist/plugin-sdk/webhook-request-guards.d.ts",
+      "default": "./dist/plugin-sdk/webhook-request-guards.js"
+    },
     "./plugin-sdk/webhook-path": {
       "types": "./dist/plugin-sdk/webhook-path.d.ts",
       "default": "./dist/plugin-sdk/webhook-path.js"
