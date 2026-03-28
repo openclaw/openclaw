@@ -1,9 +1,9 @@
 import { beforeEach, describe } from "vitest";
+import { __testing as bluebubblesConversationBindingTesting } from "../../../../extensions/bluebubbles/api.js";
+import { __testing as iMessageConversationBindingTesting } from "../../../../extensions/imessage/api.js";
 import { __testing as sessionBindingTesting } from "../../../infra/outbound/session-binding-service.js";
-import { bluebubblesConversationBindingTesting } from "../../../plugin-sdk/bluebubbles.js";
 import { discordThreadBindingTesting } from "../../../plugin-sdk/discord.js";
 import { feishuThreadBindingTesting } from "../../../plugin-sdk/feishu-conversation.js";
-import { iMessageConversationBindingTesting } from "../../../plugin-sdk/imessage.js";
 import { resetMatrixThreadBindingsForTests } from "../../../plugin-sdk/matrix.js";
 import { resetTelegramThreadBindingsForTests } from "../../../plugin-sdk/telegram-runtime-surface.js";
 import {

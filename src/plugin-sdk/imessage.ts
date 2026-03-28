@@ -48,7 +48,6 @@ export {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
 } from "./imessage-policy.js";
-export { __testing as iMessageConversationBindingTesting } from "../../extensions/imessage/api.js";
 export { IMessageConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
