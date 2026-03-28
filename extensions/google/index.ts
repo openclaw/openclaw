@@ -241,7 +241,11 @@ export default definePluginEntry({
         normalizeGoogleProviderConfig(provider, providerConfig),
       normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
       resolveDynamicModel: (ctx) =>
-        resolveGoogle31ForwardCompatModel({ providerId: "google", ctx }),
+        resolveGoogle31ForwardCompatModel({
+          providerId: ctx.provider,
+          templateProviderId: GOOGLE_GEMINI_CLI_PROVIDER_ID,
+          ctx,
+        }),
       wrapStreamFn: (ctx) => createGoogleThinkingPayloadWrapper(ctx.streamFn, ctx.thinkingLevel),
       isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     });
