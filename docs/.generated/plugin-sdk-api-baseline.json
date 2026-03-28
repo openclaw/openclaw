@@ -3171,7 +3171,7 @@
           "exportName": "buildChannelOutboundSessionRoute",
           "kind": "function",
           "source": {
-            "line": 182,
+            "line": 183,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3216,7 +3216,7 @@
           "exportName": "createChannelPluginBase",
           "kind": "function",
           "source": {
-            "line": 528,
+            "line": 529,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3225,8 +3225,17 @@
           "exportName": "createChatChannelPlugin",
           "kind": "function",
           "source": {
-            "line": 505,
+            "line": 506,
             "path": "src/plugin-sdk/core.ts"
+          }
+        },
+        {
+          "declaration": "export function createDedupeCache(options: DedupeCacheOptions): DedupeCache;",
+          "exportName": "createDedupeCache",
+          "kind": "function",
+          "source": {
+            "line": 17,
+            "path": "src/infra/dedupe.ts"
           }
         },
         {
@@ -3243,7 +3252,7 @@
           "exportName": "defineChannelPluginEntry",
           "kind": "function",
           "source": {
-            "line": 275,
+            "line": 276,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3261,7 +3270,7 @@
           "exportName": "defineSetupPluginEntry",
           "kind": "function",
           "source": {
-            "line": 312,
+            "line": 313,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3419,6 +3428,15 @@
           }
         },
         {
+          "declaration": "export function resolveGlobalDedupeCache(key: symbol, options: DedupeCacheOptions): DedupeCache;",
+          "exportName": "resolveGlobalDedupeCache",
+          "kind": "function",
+          "source": {
+            "line": 89,
+            "path": "src/infra/dedupe.ts"
+          }
+        },
+        {
           "declaration": "export function resolveTailnetHostWithRunner(runCommandWithTimeout?: TailscaleStatusCommandRunner | undefined): Promise<string | null>;",
           "exportName": "resolveTailnetHostWithRunner",
           "kind": "function",
@@ -3459,7 +3477,7 @@
           "exportName": "stripChannelTargetPrefix",
           "kind": "function",
           "source": {
-            "line": 162,
+            "line": 163,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3468,7 +3486,7 @@
           "exportName": "stripTargetKindPrefix",
           "kind": "function",
           "source": {
-            "line": 174,
+            "line": 175,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3549,7 +3567,7 @@
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
-            "line": 157,
+            "line": 158,
             "path": "src/plugin-sdk/core.ts"
           }
         },
