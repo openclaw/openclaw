@@ -24,6 +24,13 @@ function createRegistryWithRoute(path: string) {
   return registry;
 }
 
+function createRuntimeRegistryPair() {
+  return {
+    startupRegistry: createEmptyPluginRegistry(),
+    laterRegistry: createEmptyPluginRegistry(),
+  };
+}
+
 describe("plugin runtime route registry", () => {
   afterEach(() => {
     releasePinnedPluginHttpRouteRegistry();
@@ -37,8 +44,7 @@ describe("plugin runtime route registry", () => {
   });
 
   it("keeps the pinned route registry when the active plugin registry changes", () => {
-    const startupRegistry = createEmptyPluginRegistry();
-    const laterRegistry = createEmptyPluginRegistry();
+    const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
 
     setActivePluginRegistry(startupRegistry);
     pinActivePluginHttpRouteRegistry(startupRegistry);
@@ -48,8 +54,7 @@ describe("plugin runtime route registry", () => {
   });
 
   it("tracks route registry repins separately from the active registry version", () => {
-    const startupRegistry = createEmptyPluginRegistry();
-    const laterRegistry = createEmptyPluginRegistry();
+    const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
     const repinnedRegistry = createEmptyPluginRegistry();
 
     setActivePluginRegistry(startupRegistry);
