@@ -224,9 +224,10 @@ function applyConfiguredProviderOverrides(params: {
     cfg: params.cfg,
     runtimeHooks: params.runtimeHooks,
   });
+  const resolvedApi = resolvedTransport.api ?? (discoveredModel.api as ModelDefinitionConfig["api"]);
   return {
     ...discoveredModel,
-    api: resolvedTransport.api!,
+    api: resolvedApi,
     baseUrl: resolvedTransport.baseUrl ?? discoveredModel.baseUrl,
     reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
     input: normalizedInput,
