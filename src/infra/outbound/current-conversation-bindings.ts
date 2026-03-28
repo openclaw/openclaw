@@ -125,7 +125,7 @@ function resolveChannelSupportsCurrentConversationBinding(channel: string): bool
   if (!normalized) {
     return false;
   }
-  const matchesPluginId = (plugin: { id: string; meta?: { aliases?: string[] } }) =>
+  const matchesPluginId = (plugin: { id: string; meta?: { aliases?: readonly string[] } }) =>
     plugin.id === normalized ||
     (plugin.meta?.aliases ?? []).some((alias) => alias.trim().toLowerCase() === normalized);
   const plugin =
