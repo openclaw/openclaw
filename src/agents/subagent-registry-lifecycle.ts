@@ -362,6 +362,11 @@ export function createSubagentRegistryLifecycleController(params: {
       });
     };
 
+    if (entry.suppressAutoAnnounce === true) {
+      finalizeAnnounceCleanup(true);
+      return true;
+    }
+
     void runSubagentAnnounceFlow({
       childSessionKey: entry.childSessionKey,
       childRunId: entry.runId,

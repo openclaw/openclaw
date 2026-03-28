@@ -433,6 +433,11 @@ export function buildAgentSystemPrompt(params: {
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
+    ...(params.toolNames?.includes("sessions_await")
+      ? [
+          "For parallel sub-agent work, spawn each with `suppressAnnounce: true`, then call `sessions_await` with all session keys to block until every result is ready. This avoids polling and guarantees all results before you respond.",
+        ]
+      : []),
     ...(acpHarnessSpawnAllowed
       ? [
           'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',

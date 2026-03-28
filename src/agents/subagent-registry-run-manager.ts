@@ -269,6 +269,7 @@ export function createSubagentRunManager(params: {
     model?: string;
     workspaceDir?: string;
     runTimeoutSeconds?: number;
+    suppressAutoAnnounce?: boolean;
     expectsCompletionMessage?: boolean;
     spawnMode?: "run" | "session";
     attachmentsDir?: string;
@@ -298,6 +299,7 @@ export function createSubagentRunManager(params: {
       requesterDisplayKey: registerParams.requesterDisplayKey,
       task: registerParams.task,
       cleanup: registerParams.cleanup,
+      suppressAutoAnnounce: registerParams.suppressAutoAnnounce === true,
       expectsCompletionMessage: registerParams.expectsCompletionMessage,
       spawnMode,
       label: registerParams.label,
