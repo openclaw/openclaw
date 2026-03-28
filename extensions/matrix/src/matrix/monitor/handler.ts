@@ -919,6 +919,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             threadId: threadTarget,
             replyToId: draftReplyToId,
             preserveReplyId: replyToMode === "all",
+            previewTextLimit: textLimit,
             accountId: _route.accountId,
             log: logVerboseMessage,
           })
@@ -976,8 +977,15 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 !threadTarget &&
                 payload.replyToId?.trim() &&
                 payload.replyToId.trim() !== draftReplyToId;
+              const mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
 
-              if (draftEventId && payload.text && !hasMedia && !payloadReplyMismatch) {
+              if (
+                draftEventId &&
+                payload.text &&
+                !hasMedia &&
+                !payloadReplyMismatch &&
+                !mustDeliverFinalNormally
+              ) {
                 // Text-only: final edit of the draft message.  Skip if
                 // stop() already flushed identical text to avoid a
                 // redundant API call that wastes rate-limit budget.
@@ -1012,8 +1020,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 draftConsumed = true;
               } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
                 // Media payload: finalize draft text, send media separately.
-                let textEditOk = true;
-                if (payload.text && payload.text !== draftStream.lastSentText()) {
+                let textEditOk = !mustDeliverFinalNormally;
+                if (textEditOk && payload.text && payload.text !== draftStream.lastSentText()) {
                   textEditOk = await editMessageMatrix(roomId, draftEventId, payload.text, {
                     client,
                     cfg,
@@ -1024,14 +1032,18 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                     () => false,
                   );
                 }
-                // If the text edit failed, redact the stale draft and include
-                // text in media delivery so the final caption is not lost.
-                if (!textEditOk) {
+                const reusesDraftAsFinalText = Boolean(payload.text?.trim()) && textEditOk;
+                // If the text edit failed, or there is no final text to reuse
+                // the preview, redact the stale draft and include text in media
+                // delivery so the final caption is not lost.
+                if (!reusesDraftAsFinalText) {
                   await client.redactEvent(roomId, draftEventId).catch(() => {});
                 }
                 await deliverMatrixReplies({
                   cfg,
-                  replies: [{ ...payload, text: textEditOk ? undefined : payload.text }],
+                  replies: [
+                    { ...payload, text: reusesDraftAsFinalText ? undefined : payload.text },
+                  ],
                   roomId,
                   client,
                   runtime,
@@ -1045,8 +1057,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 draftConsumed = true;
               } else {
                 // Redact stale draft when the final delivery will create a
-                // new message (reply-target mismatch or no usable draft).
-                if (draftEventId && payloadReplyMismatch) {
+                // new message (reply-target mismatch, preview overflow, or no
+                // usable draft).
+                if (draftEventId && (payloadReplyMismatch || mustDeliverFinalNormally)) {
                   await client.redactEvent(roomId, draftEventId).catch(() => {});
                 }
                 await deliverMatrixReplies({

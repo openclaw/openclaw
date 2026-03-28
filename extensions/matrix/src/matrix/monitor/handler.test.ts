@@ -17,12 +17,16 @@ import { EventType } from "./types.js";
 const sendMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => ({ messageId: "evt", roomId: "!room" })),
 );
+const sendSingleTextMessageMatrixMock = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => ({ messageId: "$draft1", roomId: "!room" })),
+);
 const editMessageMatrixMock = vi.hoisted(() => vi.fn(async () => "$edited"));
 
 vi.mock("../send.js", () => ({
   editMessageMatrix: editMessageMatrixMock,
   reactMatrixMessage: vi.fn(async () => {}),
   sendMessageMatrix: sendMessageMatrixMock,
+  sendSingleTextMessageMatrix: sendSingleTextMessageMatrixMock,
   sendReadReceiptMatrix: vi.fn(async () => {}),
   sendTypingMatrix: vi.fn(async () => {}),
 }));
@@ -1407,6 +1411,9 @@ describe("matrix monitor handler draft streaming", () => {
     });
 
     sendMessageMatrixMock.mockReset().mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
+    sendSingleTextMessageMatrixMock
+      .mockReset()
+      .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
     editMessageMatrixMock.mockReset().mockResolvedValue("$edited");
     deliverMatrixRepliesMock.mockReset().mockResolvedValue(undefined);
 
@@ -1480,7 +1487,7 @@ describe("matrix monitor handler draft streaming", () => {
     opts.onPartialReply?.({ text: "Hello" });
     // Wait for the draft stream's immediate send to complete.
     await vi.waitFor(() => {
-      expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
     // Make the final edit fail.
@@ -1499,19 +1506,19 @@ describe("matrix monitor handler draft streaming", () => {
 
     opts.onPartialReply?.({ text: "Hello" });
     await vi.waitFor(() => {
-      expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
     // Final delivery — stream should stay stopped.
     await deliver({ text: "Hello" }, { kind: "final" });
 
     // Further partial updates should NOT create new messages.
-    sendMessageMatrixMock.mockClear();
+    sendSingleTextMessageMatrixMock.mockClear();
     opts.onPartialReply?.({ text: "Ghost" });
 
     // Give the draft stream loop time to fire if it were still active.
     await new Promise((r) => setTimeout(r, 50));
-    expect(sendMessageMatrixMock).not.toHaveBeenCalled();
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
     await finish();
   });
 
@@ -1522,7 +1529,7 @@ describe("matrix monitor handler draft streaming", () => {
     // Block 1: stream and deliver.
     opts.onPartialReply?.({ text: "Block one" });
     await vi.waitFor(() => {
-      expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
     await deliver({ text: "Block one" }, { kind: "block" });
 
@@ -1533,22 +1540,24 @@ describe("matrix monitor handler draft streaming", () => {
     opts.onAssistantMessageStart?.();
 
     // Block 2: partial text starts fresh (no stale offset).
-    sendMessageMatrixMock.mockClear();
-    sendMessageMatrixMock.mockResolvedValue({ messageId: "$draft2", roomId: "!room" });
+    sendSingleTextMessageMatrixMock.mockClear();
+    sendSingleTextMessageMatrixMock.mockResolvedValue({ messageId: "$draft2", roomId: "!room" });
 
     opts.onPartialReply?.({ text: "Block two" });
     await vi.waitFor(() => {
-      expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
     // The draft stream should have received "Block two", not empty string.
-    const sentBody = sendMessageMatrixMock.mock.calls[0]?.[1];
+    const sentBody = sendSingleTextMessageMatrixMock.mock.calls[0]?.[1];
     expect(sentBody).toBeTruthy();
     await finish();
   });
 
   it("stops draft stream on handler error (no leaked timer)", async () => {
-    sendMessageMatrixMock.mockReset().mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
+    sendSingleTextMessageMatrixMock
+      .mockReset()
+      .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
     editMessageMatrixMock.mockReset().mockResolvedValue("$edited");
     deliverMatrixRepliesMock.mockReset().mockResolvedValue(undefined);
 
@@ -1567,7 +1576,7 @@ describe("matrix monitor handler draft streaming", () => {
         // Simulate streaming then model error.
         capturedReplyOpts?.onPartialReply?.({ text: "partial" });
         await vi.waitFor(() => {
-          expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+          expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
         });
         throw new Error("model timeout");
       }) as never,
@@ -1589,10 +1598,10 @@ describe("matrix monitor handler draft streaming", () => {
     );
 
     // After handler exits, draft stream timer must not fire.
-    sendMessageMatrixMock.mockClear();
+    sendSingleTextMessageMatrixMock.mockClear();
     editMessageMatrixMock.mockClear();
     await new Promise((r) => setTimeout(r, 50));
-    expect(sendMessageMatrixMock).not.toHaveBeenCalled();
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
     expect(editMessageMatrixMock).not.toHaveBeenCalled();
   });
 
@@ -1602,7 +1611,7 @@ describe("matrix monitor handler draft streaming", () => {
 
     opts.onPartialReply?.({ text: "Streaming" });
     await vi.waitFor(() => {
-      expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
     // Compaction notice should bypass draft path and go to normal delivery.
@@ -1622,7 +1631,7 @@ describe("matrix monitor handler draft streaming", () => {
     // Simulate streaming: partial reply creates draft message.
     opts.onPartialReply?.({ text: "Partial reply" });
     await vi.waitFor(() => {
-      expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
     // Final delivery carries a different replyToId than the draft's.
@@ -1632,6 +1641,23 @@ describe("matrix monitor handler draft streaming", () => {
     // Draft should be redacted since it can't change reply relation.
     expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
     // Final answer delivered via normal path.
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    await finish();
+  });
+
+  it("redacts stale draft for media-only finals", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness();
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Partial reply" });
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    deliverMatrixRepliesMock.mockClear();
+    await deliver({ mediaUrl: "https://example.com/image.png" }, { kind: "final" });
+
+    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
     expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     await finish();
   });

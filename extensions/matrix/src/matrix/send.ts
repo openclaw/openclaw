@@ -257,6 +257,59 @@ export async function sendReadReceiptMatrix(
   });
 }
 
+export async function sendSingleTextMessageMatrix(
+  roomId: string,
+  text: string,
+  opts: {
+    client?: MatrixClient;
+    cfg?: CoreConfig;
+    replyToId?: string;
+    threadId?: string;
+    accountId?: string;
+  } = {},
+): Promise<MatrixSendResult> {
+  const trimmedText = text.trim();
+  if (!trimmedText) {
+    throw new Error("Matrix single-message send requires text");
+  }
+  return await withResolvedMatrixClient(
+    {
+      client: opts.client,
+      cfg: opts.cfg,
+      accountId: opts.accountId,
+    },
+    async (client) => {
+      const resolvedRoom = await resolveMatrixRoomId(client, roomId);
+      const cfg = opts.cfg ?? getCore().config.loadConfig();
+      const tableMode = getCore().channel.text.resolveMarkdownTableMode({
+        cfg,
+        channel: "matrix",
+        accountId: opts.accountId,
+      });
+      const convertedText = getCore().channel.text.convertMarkdownTables(trimmedText, tableMode);
+      const singleEventLimit = Math.min(
+        getCore().channel.text.resolveTextChunkLimit(cfg, "matrix", opts.accountId),
+        MATRIX_TEXT_LIMIT,
+      );
+      if (convertedText.length > singleEventLimit) {
+        throw new Error(
+          `Matrix single-message text exceeds limit (${convertedText.length} > ${singleEventLimit})`,
+        );
+      }
+      const normalizedThreadId = normalizeThreadId(opts.threadId);
+      const relation = normalizedThreadId
+        ? buildThreadRelation(normalizedThreadId, opts.replyToId)
+        : buildReplyRelation(opts.replyToId);
+      const content = buildTextContent(convertedText, relation);
+      const eventId = await client.sendMessage(resolvedRoom, content);
+      return {
+        messageId: eventId ?? "unknown",
+        roomId: resolvedRoom,
+      };
+    },
+  );
+}
+
 export async function editMessageMatrix(
   roomId: string,
   originalEventId: string,

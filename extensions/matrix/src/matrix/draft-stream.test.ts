@@ -2,14 +2,23 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { PluginRuntime } from "../runtime-api.js";
 
 const loadConfigMock = vi.fn(() => ({}));
+const resolveTextChunkLimitMock = vi.fn<
+  (cfg: unknown, channel: unknown, accountId?: unknown) => number
+>(() => 4000);
+const resolveChunkModeMock = vi.fn<(cfg: unknown, channel: unknown, accountId?: unknown) => string>(
+  () => "length",
+);
+const chunkMarkdownTextWithModeMock = vi.fn((text: string) => (text ? [text] : []));
 const runtimeStub = {
   config: { loadConfig: () => loadConfigMock() },
   channel: {
     text: {
-      resolveTextChunkLimit: () => 4000,
-      resolveChunkMode: () => "length",
+      resolveTextChunkLimit: (cfg: unknown, channel: unknown, accountId?: unknown) =>
+        resolveTextChunkLimitMock(cfg, channel, accountId),
+      resolveChunkMode: (cfg: unknown, channel: unknown, accountId?: unknown) =>
+        resolveChunkModeMock(cfg, channel, accountId),
       chunkMarkdownText: (text: string) => (text ? [text] : []),
-      chunkMarkdownTextWithMode: (text: string) => (text ? [text] : []),
+      chunkMarkdownTextWithMode: (text: string) => chunkMarkdownTextWithModeMock(text),
       resolveMarkdownTableMode: () => "code",
       convertMarkdownTables: (text: string) => text,
     },
@@ -48,6 +57,11 @@ describe("createMatrixDraftStream", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     client = createMockClient();
+    resolveTextChunkLimitMock.mockReset().mockReturnValue(4000);
+    resolveChunkModeMock.mockReset().mockReturnValue("length");
+    chunkMarkdownTextWithModeMock
+      .mockReset()
+      .mockImplementation((text: string) => (text ? [text] : []));
   });
 
   afterEach(() => {
@@ -247,5 +261,43 @@ describe("createMatrixDraftStream", () => {
     stream.update("More text");
     await stream.flush();
     expect(sendMessageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("bypasses newline chunking for the draft preview message", async () => {
+    resolveChunkModeMock.mockReturnValue("newline");
+    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("\n"));
+
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+    });
+
+    stream.update("line 1\nline 2");
+    await stream.flush();
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock.mock.calls[0]?.[1]).toMatchObject({ body: "line 1\nline 2" });
+  });
+
+  it("falls back to normal delivery when preview text exceeds one Matrix event", async () => {
+    const log = vi.fn();
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+      previewTextLimit: 5,
+      log,
+    });
+
+    stream.update("123456");
+    await stream.flush();
+
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    expect(stream.eventId()).toBeUndefined();
+    expect(stream.mustDeliverFinalNormally()).toBe(true);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("preview exceeded single-event limit"),
+    );
   });
 });
