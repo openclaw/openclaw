@@ -592,7 +592,12 @@ export async function onTimer(state: CronServiceState) {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       const dueCheckNow = state.deps.nowMs();
-      const due = collectRunnableJobs(state, dueCheckNow);
+      // skipAtIfAlreadyRan prevents one-shot "at" jobs from re-triggering
+      // when their scheduled time is in the past but deleteAfterRun cleanup
+      // hasn't persisted yet (e.g. after crash or slow persist) (#56488).
+      const due = collectRunnableJobs(state, dueCheckNow, {
+        skipAtIfAlreadyRan: true,
+      });
 
       if (due.length === 0) {
         // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs
@@ -998,7 +1003,7 @@ export async function runDueJobs(state: CronServiceState) {
     return;
   }
   const now = state.deps.nowMs();
-  const due = collectRunnableJobs(state, now);
+  const due = collectRunnableJobs(state, now, { skipAtIfAlreadyRan: true });
   for (const job of due) {
     await executeJob(state, job, now, { forced: false });
   }
