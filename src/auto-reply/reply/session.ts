@@ -4,7 +4,6 @@ import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { resolveConversationBindingContext } from "../../channels/conversation-binding-context.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
@@ -36,6 +35,7 @@ import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
+import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import {
@@ -81,7 +81,7 @@ function isResetAuthorizedForContext(params: {
   commandAuthorized: boolean;
 }): boolean {
   const auth = resolveCommandAuthorization(params);
-  if (!auth.isAuthorizedSender) {
+  if (!params.commandAuthorized && !auth.isAuthorizedSender) {
     return false;
   }
   const provider = params.ctx.Provider;
@@ -98,7 +98,7 @@ function isResetAuthorizedForContext(params: {
   return scopes.includes("operator.admin");
 }
 
-function resolveAcpResetBindingContext(
+function resolveSessionConversationBindingContext(
   cfg: OpenClawConfig,
   ctx: MsgContext,
 ): {
@@ -107,20 +107,9 @@ function resolveAcpResetBindingContext(
   conversationId: string;
   parentConversationId?: string;
 } | null {
-  const bindingContext = resolveConversationBindingContext({
+  const bindingContext = resolveConversationBindingContextFromMessage({
     cfg,
-    channel: ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider,
-    accountId: ctx.AccountId,
-    chatType: ctx.ChatType,
-    threadId: ctx.MessageThreadId,
-    threadParentId: ctx.ThreadParentId,
-    senderId: ctx.SenderId,
-    sessionKey: ctx.SessionKey,
-    parentSessionKey: ctx.ParentSessionKey,
-    originatingTo: ctx.OriginatingTo,
-    fallbackTo: ctx.To,
-    from: ctx.From,
-    nativeChannelId: ctx.NativeChannelId,
+    ctx,
   });
   if (!bindingContext) {
     return null;
@@ -138,9 +127,16 @@ function resolveAcpResetBindingContext(
 function resolveBoundAcpSessionForReset(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
+  bindingContext?: {
+    channel: string;
+    accountId: string;
+    conversationId: string;
+    parentConversationId?: string;
+  } | null;
 }): string | undefined {
   const activeSessionKey = normalizeConversationText(params.ctx.SessionKey);
-  const bindingContext = resolveAcpResetBindingContext(params.cfg, params.ctx);
+  const bindingContext =
+    params.bindingContext ?? resolveSessionConversationBindingContext(params.cfg, params.ctx);
   return resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
     channel: bindingContext?.channel,
@@ -157,22 +153,15 @@ function resolveBoundAcpSessionForReset(params: {
 function resolveBoundConversationSessionKey(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
+  bindingContext?: {
+    channel: string;
+    accountId: string;
+    conversationId: string;
+    parentConversationId?: string;
+  } | null;
 }): string | undefined {
-  const bindingContext = resolveConversationBindingContext({
-    cfg: params.cfg,
-    channel: params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
-    accountId: params.ctx.AccountId,
-    chatType: params.ctx.ChatType,
-    threadId: params.ctx.MessageThreadId,
-    threadParentId: params.ctx.ThreadParentId,
-    senderId: params.ctx.SenderId,
-    sessionKey: params.ctx.SessionKey,
-    parentSessionKey: params.ctx.ParentSessionKey,
-    originatingTo: params.ctx.OriginatingTo,
-    fallbackTo: params.ctx.To,
-    from: params.ctx.From,
-    nativeChannelId: params.ctx.NativeChannelId,
-  });
+  const bindingContext =
+    params.bindingContext ?? resolveSessionConversationBindingContext(params.cfg, params.ctx);
   if (!bindingContext) {
     return undefined;
   }
@@ -197,6 +186,7 @@ export async function initSessionState(params: {
   commandAuthorized: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
+  const conversationBindingContext = resolveSessionConversationBindingContext(cfg, ctx);
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
   const commandTargetSessionKey =
@@ -205,6 +195,7 @@ export async function initSessionState(params: {
     resolveBoundConversationSessionKey({
       cfg,
       ctx,
+      bindingContext: conversationBindingContext,
     }) ?? commandTargetSessionKey;
   const sessionCtxForState =
     targetSessionKey && targetSessionKey !== ctx.SessionKey
@@ -300,6 +291,7 @@ export async function initSessionState(params: {
     resolveBoundAcpSessionForReset({
       cfg,
       ctx: sessionCtxForState,
+      bindingContext: conversationBindingContext,
     }),
   );
   const shouldBypassAcpResetForTrigger = (triggerLower: string): boolean =>
