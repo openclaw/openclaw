@@ -667,4 +667,104 @@ describe("system-event-triggered heartbeat session routing", () => {
 
     replySpy.mockRestore();
   });
+
+  it("restores migrated events to originating session when heartbeat is skipped (empty-heartbeat-file)", async () => {
+    const tmpDir = await createCaseDir("hb-skip-restore");
+    const storePath = path.join(tmpDir, "sessions.json");
+
+    const agentId = "main";
+    const heartbeatSessionKey = buildAgentPeerSessionKey({
+      agentId,
+      channel: "telegram",
+      peerKind: "group",
+      peerId: "-100heartbeat",
+    });
+    const dmSessionKey = buildAgentPeerSessionKey({
+      agentId,
+      channel: "telegram",
+      peerKind: "direct",
+      peerId: "777666555",
+    });
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: {
+            every: "5m",
+            target: "telegram",
+            to: "-100heartbeat",
+            session: heartbeatSessionKey,
+          },
+        },
+      },
+      session: { store: storePath },
+    };
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [resolveAgentMainSessionKey({ cfg, agentId })]: {
+          sessionId: "sid-main",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-100heartbeat",
+        },
+        [heartbeatSessionKey]: {
+          sessionId: "sid-heartbeat",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-100heartbeat",
+        },
+        [dmSessionKey]: {
+          sessionId: "sid-dm",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "777666555",
+        },
+      }),
+    );
+
+    // Create an empty HEARTBEAT.md so the heartbeat is skipped
+    await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "   \n");
+
+    // Enqueue events into the DM session
+    enqueueSystemEvent("exec finished (notify-exit, code 0) :: cleanup done", {
+      sessionKey: dmSessionKey,
+      contextKey: "exec:notify-exit",
+    });
+    enqueueSystemEvent("Notification: disk usage warning", {
+      sessionKey: dmSessionKey,
+      contextKey: "notifications-event",
+    });
+
+    expect(peekSystemEventEntries(dmSessionKey)).toHaveLength(2);
+    expect(hasSystemEvents(heartbeatSessionKey)).toBe(false);
+
+    const sendTelegram = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; chatId: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", chatId: "-100heartbeat" });
+
+    // Use a reason that does NOT bypass file gates (exec:<id>:exit → "other")
+    const res = await runHeartbeatOnce({
+      cfg,
+      reason: "exec:notify-exit:exit",
+      sessionKey: dmSessionKey,
+      deps: createHeartbeatDeps(sendTelegram),
+    });
+
+    expect(res.status).toBe("skipped");
+    expect(res).toHaveProperty("reason", "empty-heartbeat-file");
+
+    // Events must be restored to the originating DM session, not orphaned
+    const dmEntries = peekSystemEventEntries(dmSessionKey);
+    expect(dmEntries).toHaveLength(2);
+    expect(dmEntries[0].text).toContain("cleanup done");
+    expect(dmEntries[1].text).toContain("disk usage warning");
+
+    // Heartbeat session should be empty (no orphaned events)
+    expect(hasSystemEvents(heartbeatSessionKey)).toBe(false);
+  });
 });

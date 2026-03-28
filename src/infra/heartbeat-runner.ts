@@ -456,16 +456,20 @@ async function resolveHeartbeatPreflight(params: {
   // session), migrate all events to the heartbeat session so they are visible
   // where the heartbeat actually runs. Only session-scoped events (like
   // session-maintenance warnings) stay in the originating session.
+  //
+  // Migration state is tracked so events can be restored to the originating
+  // session if the heartbeat ends up being skipped (e.g. empty HEARTBEAT.md).
   const originatingSessionKey = params.forcedSessionKey?.trim();
+  let migratedEvents: SystemEvent[] = [];
+  let preExistingHeartbeatEvents: SystemEvent[] = [];
   if (originatingSessionKey && originatingSessionKey !== session.sessionKey) {
     const originEvents = drainSystemEventEntries(originatingSessionKey);
-    const toMigrate: SystemEvent[] = [];
     const sessionScoped: SystemEvent[] = [];
     for (const event of originEvents) {
       if (isSessionScopedEvent(event)) {
         sessionScoped.push(event);
       } else {
-        toMigrate.push(event);
+        migratedEvents.push(event);
       }
     }
 
@@ -482,8 +486,8 @@ async function resolveHeartbeatPreflight(params: {
     // Drain destination events first so `lastText` is reset — prevents
     // the consecutive-duplicate guard in enqueueSystemEvent from silently
     // dropping migrated events whose text matches the destination's tail.
-    const existingEvents = drainSystemEventEntries(session.sessionKey);
-    for (const event of [...existingEvents, ...toMigrate]) {
+    preExistingHeartbeatEvents = drainSystemEventEntries(session.sessionKey);
+    for (const event of [...preExistingHeartbeatEvents, ...migratedEvents]) {
       enqueueSystemEvent(event.text, {
         sessionKey: session.sessionKey,
         contextKey: event.contextKey,
@@ -522,6 +526,25 @@ async function resolveHeartbeatPreflight(params: {
   try {
     const heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
     if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent)) {
+      // Restore migrated events to the originating session — the heartbeat
+      // won't run, so leaving them in the heartbeat session would orphan them.
+      if (migratedEvents.length > 0 && originatingSessionKey) {
+        drainSystemEventEntries(session.sessionKey);
+        for (const event of preExistingHeartbeatEvents) {
+          enqueueSystemEvent(event.text, {
+            sessionKey: session.sessionKey,
+            contextKey: event.contextKey,
+            deliveryContext: event.deliveryContext,
+          });
+        }
+        for (const event of migratedEvents) {
+          enqueueSystemEvent(event.text, {
+            sessionKey: originatingSessionKey,
+            contextKey: event.contextKey,
+            deliveryContext: event.deliveryContext,
+          });
+        }
+      }
       return {
         ...basePreflight,
         skipReason: "empty-heartbeat-file",
