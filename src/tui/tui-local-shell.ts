@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { Component, SelectItem } from "@mariozechner/pi-tui";
+import { splitShellArgs } from "../utils/shell-argv.js";
 import { createSearchableSelectList } from "./components/selectors.js";
 
 type LocalShellDeps = {
@@ -106,10 +107,18 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
     };
 
     await new Promise<void>((resolve) => {
-      const child = spawnCommand(cmd, {
-        // Intentionally a shell: this is an operator-only local TUI feature (prefixed with `!`)
-        // and is gated behind an explicit in-session approval prompt.
-        shell: true,
+      // Parse the command into argv to avoid shell injection. If parsing fails
+      // (e.g. unbalanced quotes), reject the command rather than passing it to a shell.
+      const argv = splitShellArgs(cmd);
+      if (!argv || argv.length === 0) {
+        deps.chatLog.addSystem("[local] error: failed to parse command (unbalanced quotes?)");
+        deps.tui.requestRender();
+        resolve();
+        return;
+      }
+      const [executable, ...args] = argv;
+      const child = spawnCommand(executable, args, {
+        shell: false,
         cwd: getCwd(),
         env: { ...env, OPENCLAW_SHELL: "tui-local" },
       });

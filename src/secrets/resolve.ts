@@ -698,7 +698,16 @@ async function resolveExecRefs(params: {
     });
   }
 
+  // Baseline env vars that child processes always receive for basic operation.
+  // Explicit passEnv and env entries are layered on top.
+  const SAFE_BASELINE_KEYS = ["PATH", "HOME", "USER", "LANG", "TERM", "TMPDIR", "TMP", "TEMP"];
   const childEnv: NodeJS.ProcessEnv = {};
+  for (const key of SAFE_BASELINE_KEYS) {
+    const value = params.env[key];
+    if (value !== undefined) {
+      childEnv[key] = value;
+    }
+  }
   for (const key of params.providerConfig.passEnv ?? []) {
     const value = params.env[key];
     if (value !== undefined) {

@@ -29,11 +29,8 @@ export function getDefaultLocalRoots(): readonly string[] {
 
 export async function assertLocalMediaAllowed(
   mediaPath: string,
-  localRoots: readonly string[] | "any" | undefined,
+  localRoots: readonly string[] | undefined,
 ): Promise<void> {
-  if (localRoots === "any") {
-    return;
-  }
   try {
     assertNoWindowsNetworkPath(mediaPath, "Local media path");
   } catch (err) {

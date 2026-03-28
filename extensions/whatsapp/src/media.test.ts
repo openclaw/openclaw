@@ -419,25 +419,25 @@ describe("local media root guard", () => {
     }
   });
 
-  it("requires readFile override for localRoots bypass", async () => {
+  it("requires readFile override for sandboxValidated bypass", async () => {
     await expect(
       loadWebMedia(tinyPngFile, {
         maxBytes: 1024 * 1024,
-        localRoots: "any",
+        sandboxValidated: true,
       }),
     ).rejects.toBeInstanceOf(LocalMediaAccessError);
     await expect(
       loadWebMedia(tinyPngFile, {
         maxBytes: 1024 * 1024,
-        localRoots: "any",
+        sandboxValidated: true,
       }),
     ).rejects.toMatchObject({ code: "unsafe-bypass" });
   });
 
-  it("allows any path when localRoots is 'any'", async () => {
+  it("allows any path when sandboxValidated with readFile", async () => {
     const result = await loadWebMedia(tinyPngFile, {
       maxBytes: 1024 * 1024,
-      localRoots: "any",
+      sandboxValidated: true,
       readFile: (filePath) => fs.readFile(filePath),
     });
     expect(result.kind).toBe("image");

@@ -94,11 +94,23 @@ export function pickAsset(
 
 async function downloadToFile(url: string, dest: string, maxRedirects = 5): Promise<void> {
   await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const settle = (err?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    };
     const req = request(url, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
         const location = res.headers.location;
         if (!location || maxRedirects <= 0) {
-          reject(new Error("Redirect loop or missing Location header"));
+          settle(new Error("Redirect loop or missing Location header"));
           return;
         }
         const redirectUrl = new URL(location, url).href;
@@ -106,13 +118,19 @@ async function downloadToFile(url: string, dest: string, maxRedirects = 5): Prom
         return;
       }
       if (!res.statusCode || res.statusCode >= 400) {
-        reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading file`));
+        settle(new Error(`HTTP ${res.statusCode ?? "?"} downloading file`));
         return;
       }
       const out = createWriteStream(dest);
-      pipeline(res, out).then(resolve).catch(reject);
+      pipeline(res, out)
+        .then(() => settle())
+        .catch((err) => {
+          req.destroy();
+          out.destroy();
+          settle(err);
+        });
     });
-    req.on("error", reject);
+    req.on("error", settle);
     req.end();
   });
 }
