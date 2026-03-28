@@ -126,6 +126,21 @@ describe("channel-auth", () => {
     );
   });
 
+  it("auto-picks the single auth-capable channel even when raw channel config is omitted", async () => {
+    mocks.loadConfig.mockReturnValue({ channels: {} });
+    plugin.config.listAccountIds.mockReturnValue(["default"]);
+    mocks.resolveAccount.mockReturnValue({ enabled: true });
+
+    await runChannelLogin({}, runtime);
+
+    expect(mocks.normalizeChannelId).toHaveBeenCalledWith("whatsapp");
+    expect(mocks.login).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelInput: "whatsapp",
+      }),
+    );
+  });
+
   it("ignores configured channels that do not support login when channel is omitted", async () => {
     const telegramPlugin = {
       id: "telegram",
