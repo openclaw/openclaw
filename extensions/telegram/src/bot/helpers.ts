@@ -18,7 +18,7 @@ export type TelegramThreadSpec = {
   scope: "dm" | "forum" | "none";
 };
 
-function extractTelegramForumFlag(value: unknown): boolean | undefined {
+export function extractTelegramForumFlag(value: unknown): boolean | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
