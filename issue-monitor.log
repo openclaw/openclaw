@@ -1,0 +1,25 @@
+[2026-03-27 23:51:22] === Issue 监控开始 ===
+[2026-03-27 23:51:22] --- 高优先级 Issue ---
+[2026-03-27 23:51:22] [HIGH] #53335: {"state":"OPEN","title":"[Bug]: /new command spawns subagent instead of resetting session","updatedAt":"2026-03-24T03:08:27Z"}
+[2026-03-27 23:51:22] [HIGH] #53247: {"state":"CLOSED","title":"[Bug]: WhatsApp plugin crashes agent in v2026.3.23 with missing light-runtime-api","updatedAt":"2026-03-27T04:15:31Z"}
+[2026-03-27 23:51:22] [HIGH] #53365: {"state":"OPEN","title":"[Bug]: openclaw-weixin v1.0.2 登录不出二维码，报错缺少函数 resolvePreferredOpenClawTmpDir","updatedAt":"2026-03-25T02:33:59Z"}
+[2026-03-27 23:51:22] --- 中优先级 Issue ---
+[2026-03-27 23:51:22] [MEDIUM] #53322: {"state":"OPEN","title":"[Bug]: Browser tool execution regression: assistant replies before browser actions run/completed","updatedAt":"2026-03-24T02:47:24Z"}
+[2026-03-27 23:51:22] [MEDIUM] #53317: {"state":"OPEN","title":"Bug: Gateway overwrites fresh OAuth token with stale cached state on startup (v2026.3.22, openai-codex)","updatedAt":"2026-03-26T10:51:28Z"}
+[2026-03-27 23:51:22] [MEDIUM] #53284: {"state":"OPEN","title":"[Bug]: Cron Isolated Session Messages Not Persisting in Web UI","updatedAt":"2026-03-24T14:54:15Z"}
+[2026-03-27 23:51:22] --- 检查新评论 ---
+[2026-03-27 23:51:35] === Issue 监控开始 ===
+[2026-03-27 23:51:35] --- 高优先级 Issue ---
+[2026-03-27 23:51:35] [HIGH] #53335: {"state":"OPEN","title":"[Bug]: /new command spawns subagent instead of resetting session","updatedAt":"2026-03-24T03:08:27Z"}
+[2026-03-27 23:51:35] [HIGH] #53247: {"state":"CLOSED","title":"[Bug]: WhatsApp plugin crashes agent in v2026.3.23 with missing light-runtime-api","updatedAt":"2026-03-27T04:15:31Z"}
+[2026-03-27 23:51:35] [HIGH] #53365: {"state":"OPEN","title":"[Bug]: openclaw-weixin v1.0.2 登录不出二维码，报错缺少函数 resolvePreferredOpenClawTmpDir","updatedAt":"2026-03-25T02:33:59Z"}
+[2026-03-27 23:51:35] --- 中优先级 Issue ---
+[2026-03-27 23:51:35] [MEDIUM] #53322: {"state":"OPEN","title":"[Bug]: Browser tool execution regression: assistant replies before browser actions run/completed","updatedAt":"2026-03-24T02:47:24Z"}
+[2026-03-27 23:51:35] [MEDIUM] #53317: {"state":"OPEN","title":"Bug: Gateway overwrites fresh OAuth token with stale cached state on startup (v2026.3.22, openai-codex)","updatedAt":"2026-03-26T10:51:28Z"}
+[2026-03-27 23:51:35] [MEDIUM] #53284: {"state":"OPEN","title":"[Bug]: Cron Isolated Session Messages Not Persisting in Web UI","updatedAt":"2026-03-24T14:54:15Z"}
+[2026-03-27 23:51:35] --- 检查新评论 ---
+[2026-03-27 23:51:35] #53335: 有评论更新
+[2026-03-27 23:51:35] #53247: 有评论更新
+[2026-03-27 23:51:35] #53365: 有评论更新
+[2026-03-27 23:51:35] === Issue 监控完成 ===
+

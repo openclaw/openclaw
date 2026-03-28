@@ -1,0 +1,31 @@
+/bin/sh: 1: /home/w/.openclaw/workspace/scripts/monitor-pr-ci.sh: not found
+/bin/sh: 1: /home/w/.openclaw/workspace/scripts/monitor-pr-ci.sh: not found
+/bin/sh: 1: /home/w/.openclaw/workspace/scripts/monitor-pr-ci.sh: not found
+/bin/sh: 1: /home/w/.openclaw/workspace/scripts/monitor-pr-ci.sh: not found
+/bin/sh: 1: /home/w/.openclaw/workspace/scripts/monitor-pr-ci.sh: not found
+[2026-03-27 23:52:19] === PR CI 监控开始 ===
+[2026-03-27 23:52:19] --- 监控中的 PR ---
+[2026-03-27 23:52:19] #54569: {"mergeStateStatus":"UNKNOWN","title":"fix(matrix): lazy import music-metadata to avoid ESM __dirname issue"}
+[2026-03-27 23:52:19] #54611: {"mergeStateStatus":"UNKNOWN","title":"fix(telegram): always return currentChannelId to prevent DM regression"}
+[2026-03-27 23:52:19] --- 检查新评论 ---
+[2026-03-27 23:52:38] === PR CI 监控开始 ===
+[2026-03-27 23:52:38] --- 监控中的 PR ---
+[2026-03-27 23:52:38] #54569: {"mergeStateStatus":"CLEAN","title":"fix(matrix): lazy import music-metadata to avoid ESM __dirname issue"}
+[2026-03-27 23:52:38] ⚠️  #54569 CI 全绿，可以合并！
+[2026-03-27 23:52:38] #54611: {"mergeStateStatus":"CLEAN","title":"fix(telegram): always return currentChannelId to prevent DM regression"}
+[2026-03-27 23:52:38] ⚠️  #54611 CI 全绿，可以合并！
+[2026-03-27 23:52:38] --- 检查新评论 ---
+[2026-03-27 23:52:38] #54569: 可能有新评论
+[2026-03-27 23:52:38] #54611: 可能有新评论
+[2026-03-27 23:52:38] === PR CI 监控完成 ===
+
+[2026-03-28 00:00:01] === PR CI 监控开始 ===
+[2026-03-28 00:00:01] --- 监控中的 PR ---
+[2026-03-28 00:00:01] #54569: {"mergeStateStatus":"UNKNOWN","title":"fix(matrix): lazy import music-metadata to avoid ESM __dirname issue"}
+[2026-03-28 00:00:01] #54611: {"mergeStateStatus":"UNKNOWN","title":"fix(telegram): always return currentChannelId to prevent DM regression"}
+[2026-03-28 00:00:01] --- 检查新评论 ---
+[2026-03-28 00:00:01] #54569: 可能有新评论
+[2026-03-28 00:00:01] #54611: 可能有新评论
+[2026-03-28 00:00:01] === PR CI 监控完成 ===
+
+PR CI 监控完成，日志：/home/w/.openclaw/workspace/memory/pr-ci-monitor.log
