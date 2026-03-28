@@ -127,17 +127,18 @@ export type ChannelMeta = {
   docsLabel?: string;
   blurb: string;
   order?: number;
-  aliases?: string[];
+  aliases?: readonly string[];
   selectionDocsPrefix?: string;
   selectionDocsOmitLabel?: boolean;
-  selectionExtras?: string[];
+  selectionExtras?: readonly string[];
   detailLabel?: string;
   systemImage?: string;
+  markdownCapable?: boolean;
   showConfigured?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;
-  preferOver?: string[];
+  preferOver?: readonly string[];
 };
 
 /** Snapshot row returned by channel status and lifecycle surfaces. */

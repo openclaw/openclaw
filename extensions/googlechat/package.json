@@ -30,12 +30,14 @@
       "detailLabel": "Google Chat",
       "docsPath": "/channels/googlechat",
       "docsLabel": "googlechat",
-      "blurb": "Google Workspace Chat app via HTTP webhooks.",
+      "blurb": "Google Workspace Chat app with HTTP webhook.",
       "aliases": [
         "gchat",
         "google-chat"
       ],
-      "order": 55
+      "order": 55,
+      "systemImage": "message.badge",
+      "markdownCapable": true
     },
     "install": {
       "npmSpec": "@openclaw/googlechat",
