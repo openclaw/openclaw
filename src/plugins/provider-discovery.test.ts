@@ -61,6 +61,19 @@ function createCatalogRuntimeContext() {
   };
 }
 
+function expectNormalizedDiscoveryResult(params: {
+  provider: ProviderPlugin;
+  result: Parameters<typeof normalizePluginDiscoveryResult>[0]["result"];
+  expected: Record<string, unknown>;
+}) {
+  expect(
+    normalizePluginDiscoveryResult({
+      provider: params.provider,
+      result: params.result,
+    }),
+  ).toEqual(params.expected);
+}
+
 describe("groupPluginDiscoveryProvidersByOrder", () => {
   it.each([
     {
@@ -132,8 +145,7 @@ describe("normalizePluginDiscoveryResult", () => {
       },
     },
   ] as const)("$name", ({ provider, result, expected }) => {
-    const normalized = normalizePluginDiscoveryResult({ provider, result });
-    expect(normalized).toEqual(expected);
+    expectNormalizedDiscoveryResult({ provider, result, expected });
   });
 });
 
