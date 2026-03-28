@@ -101,17 +101,24 @@ export function applyPiCompactionSettingsFromConfig(params: {
 /** Decide whether Pi's internal auto-compaction should be disabled for this run. */
 export function shouldDisablePiAutoCompaction(params: {
   contextEngineInfo?: ContextEngineInfo;
+  cfg?: OpenClawConfig;
 }): boolean {
-  return params.contextEngineInfo?.ownsCompaction === true;
+  if (params.contextEngineInfo?.ownsCompaction === true) {
+    return true;
+  }
+  const mode = params.cfg?.agents?.defaults?.compaction?.mode;
+  return mode === "warn" || mode === "error" || mode === "none";
 }
 
 /** Disable Pi auto-compaction via settings when a context engine owns compaction. */
 export function applyPiAutoCompactionGuard(params: {
   settingsManager: PiSettingsManagerLike;
   contextEngineInfo?: ContextEngineInfo;
+  cfg?: OpenClawConfig;
 }): { supported: boolean; disabled: boolean } {
   const disable = shouldDisablePiAutoCompaction({
     contextEngineInfo: params.contextEngineInfo,
+    cfg: params.cfg,
   });
   const hasMethod = typeof params.settingsManager.setCompactionEnabled === "function";
   if (!disable || !hasMethod) {

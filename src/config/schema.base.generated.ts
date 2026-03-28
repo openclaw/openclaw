@@ -2298,6 +2298,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         type: "string",
                         const: "safeguard",
                       },
+                      {
+                        type: "string",
+                        const: "warn",
+                      },
+                      {
+                        type: "string",
+                        const: "error",
+                      },
+                      {
+                        type: "string",
+                        const: "none",
+                      },
                     ],
                   },
                   reserveTokens: {
@@ -13867,7 +13879,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "agents.defaults.compaction.mode": {
       label: "Compaction Mode",
-      help: 'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
+      help: 'Compaction strategy mode: "default" uses baseline behavior, "safeguard" applies stricter guardrails to preserve recent context, "warn" stops with a warning message when near limit, "error" fails directly when near limit, and "none" disables auto-compaction entirely (letting it fail at the model limit). Keep "default" unless you observe aggressive history loss near limit boundaries.',
       tags: ["advanced"],
     },
     "agents.defaults.compaction.reserveTokens": {

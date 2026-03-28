@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents: add compaction modes (`warn`, `error`, `none`) with a proactive context guard that stops execution before reaching the model's limit, preventing cryptic provider errors and preserving control during long-running sessions.
 - MiniMax: add image generation provider for `image-01` model, supporting generate and image-to-image editing with aspect ratio control. (#54487) Thanks @liyuan97.
 - Podman: simplify the container setup around the current rootless user, install the launch helper under `~/.local/bin`, and document the host-CLI `openclaw --container <name> ...` workflow instead of a dedicated `openclaw` service user.
 - Slack/tool actions: add an explicit `upload-file` Slack action that routes file uploads through the existing Slack upload transport, with optional filename/title/comment overrides for channels and DMs.
