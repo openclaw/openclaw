@@ -134,67 +134,81 @@ describe("installPluginFromClawHub", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("rejects packages whose plugin API range exceeds the runtime version", async () => {
-    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.3.21");
-
-    await expect(installPluginFromClawHub({ spec: "clawhub:demo" })).resolves.toMatchObject({
-      ok: false,
-      code: CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
-      error:
-        'Plugin "demo" requires plugin API >=2026.3.22, but this OpenClaw runtime exposes 2026.3.21.',
-    });
-  });
-
-  it("rejects skill families and redirects to skills install", async () => {
-    fetchClawHubPackageDetailMock.mockResolvedValueOnce({
-      package: {
-        name: "calendar",
-        displayName: "Calendar",
-        family: "skill",
-        channel: "official",
-        isOfficial: true,
-        createdAt: 0,
-        updatedAt: 0,
+  it.each([
+    {
+      name: "rejects packages whose plugin API range exceeds the runtime version",
+      setup: () => {
+        resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.3.21");
       },
-    });
-
-    await expect(installPluginFromClawHub({ spec: "clawhub:calendar" })).resolves.toMatchObject({
-      ok: false,
-      code: CLAWHUB_INSTALL_ERROR_CODE.SKILL_PACKAGE,
-      error: '"calendar" is a skill. Use "openclaw skills install calendar" instead.',
-    });
-  });
-
-  it("returns typed package-not-found failures", async () => {
-    fetchClawHubPackageDetailMock.mockRejectedValueOnce(
-      new ClawHubRequestError({
-        path: "/api/v1/packages/demo",
-        status: 404,
-        body: "Package not found",
-      }),
-    );
-
-    await expect(installPluginFromClawHub({ spec: "clawhub:demo" })).resolves.toMatchObject({
-      ok: false,
-      code: CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND,
-      error: "Package not found on ClawHub.",
-    });
-  });
-
-  it("returns typed version-not-found failures", async () => {
-    parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "demo", version: "9.9.9" });
-    fetchClawHubPackageVersionMock.mockRejectedValueOnce(
-      new ClawHubRequestError({
-        path: "/api/v1/packages/demo/versions/9.9.9",
-        status: 404,
-        body: "Version not found",
-      }),
-    );
-
-    await expect(installPluginFromClawHub({ spec: "clawhub:demo@9.9.9" })).resolves.toMatchObject({
-      ok: false,
-      code: CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND,
-      error: "Version not found on ClawHub: demo@9.9.9.",
-    });
+      spec: "clawhub:demo",
+      expected: {
+        ok: false,
+        code: CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+        error:
+          'Plugin "demo" requires plugin API >=2026.3.22, but this OpenClaw runtime exposes 2026.3.21.',
+      },
+    },
+    {
+      name: "rejects skill families and redirects to skills install",
+      setup: () => {
+        fetchClawHubPackageDetailMock.mockResolvedValueOnce({
+          package: {
+            name: "calendar",
+            displayName: "Calendar",
+            family: "skill",
+            channel: "official",
+            isOfficial: true,
+            createdAt: 0,
+            updatedAt: 0,
+          },
+        });
+      },
+      spec: "clawhub:calendar",
+      expected: {
+        ok: false,
+        code: CLAWHUB_INSTALL_ERROR_CODE.SKILL_PACKAGE,
+        error: '"calendar" is a skill. Use "openclaw skills install calendar" instead.',
+      },
+    },
+    {
+      name: "returns typed package-not-found failures",
+      setup: () => {
+        fetchClawHubPackageDetailMock.mockRejectedValueOnce(
+          new ClawHubRequestError({
+            path: "/api/v1/packages/demo",
+            status: 404,
+            body: "Package not found",
+          }),
+        );
+      },
+      spec: "clawhub:demo",
+      expected: {
+        ok: false,
+        code: CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND,
+        error: "Package not found on ClawHub.",
+      },
+    },
+    {
+      name: "returns typed version-not-found failures",
+      setup: () => {
+        parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "demo", version: "9.9.9" });
+        fetchClawHubPackageVersionMock.mockRejectedValueOnce(
+          new ClawHubRequestError({
+            path: "/api/v1/packages/demo/versions/9.9.9",
+            status: 404,
+            body: "Version not found",
+          }),
+        );
+      },
+      spec: "clawhub:demo@9.9.9",
+      expected: {
+        ok: false,
+        code: CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND,
+        error: "Version not found on ClawHub: demo@9.9.9.",
+      },
+    },
+  ] as const)("$name", async ({ setup, spec, expected }) => {
+    setup();
+    await expect(installPluginFromClawHub({ spec })).resolves.toMatchObject(expected);
   });
 });

@@ -71,11 +71,19 @@ describe("buildPluginConfigSchema", () => {
 describe("emptyPluginConfigSchema", () => {
   it("accepts undefined and empty objects only", () => {
     const schema = emptyPluginConfigSchema();
-    expect(schema.safeParse?.(undefined)).toEqual({ success: true, data: undefined });
-    expect(schema.safeParse?.({})).toEqual({ success: true, data: {} });
-    expect(schema.safeParse?.({ nope: true })).toEqual({
-      success: false,
-      error: { issues: [{ path: [], message: "config must be empty" }] },
+    expect(schema.safeParse).toBeDefined();
+    expect([
+      [undefined, { success: true, data: undefined }],
+      [{}, { success: true, data: {} }],
+      [
+        { nope: true },
+        { success: false, error: { issues: [{ path: [], message: "config must be empty" }] } },
+      ],
+    ] as const).toSatisfy((cases) => {
+      for (const [value, expected] of cases) {
+        expect(schema.safeParse?.(value)).toEqual(expected);
+      }
+      return true;
     });
   });
 });

@@ -43,6 +43,26 @@ function expectRouteRegistrationDenied(params: {
   expect(registry.httpRoutes).toHaveLength(1);
 }
 
+function expectRegisteredRouteShape(
+  registry: ReturnType<typeof createEmptyPluginRegistry>,
+  params: {
+    path: string;
+    handler?: unknown;
+    auth: "plugin" | "gateway";
+    match?: "exact" | "prefix";
+  },
+) {
+  expect(registry.httpRoutes).toHaveLength(1);
+  expect(registry.httpRoutes[0]).toEqual(
+    expect.objectContaining({
+      path: params.path,
+      auth: params.auth,
+      ...(params.match ? { match: params.match } : {}),
+      ...(params.handler ? { handler: params.handler } : {}),
+    }),
+  );
+}
+
 describe("registerPluginHttpRoute", () => {
   afterEach(() => {
     releasePinnedPluginHttpRouteRegistry();
@@ -60,11 +80,12 @@ describe("registerPluginHttpRoute", () => {
       registry,
     });
 
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]?.path).toBe("/plugins/demo");
-    expect(registry.httpRoutes[0]?.handler).toBe(handler);
-    expect(registry.httpRoutes[0]?.auth).toBe("plugin");
-    expect(registry.httpRoutes[0]?.match).toBe("exact");
+    expectRegisteredRouteShape(registry, {
+      path: "/plugins/demo",
+      handler,
+      auth: "plugin",
+      match: "exact",
+    });
 
     unregister();
     expect(registry.httpRoutes).toHaveLength(0);
@@ -129,17 +150,21 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes).toHaveLength(0);
   });
 
-  it("rejects conflicting route registrations without replaceExisting", () => {
-    expectRouteRegistrationDenied({
+  it.each([
+    {
+      name: "rejects conflicting route registrations without replaceExisting",
       replaceExisting: false,
       expectedLogFragment: "route conflict",
-    });
-  });
-
-  it("rejects route replacement when a different plugin owns the route", () => {
-    expectRouteRegistrationDenied({
+    },
+    {
+      name: "rejects route replacement when a different plugin owns the route",
       replaceExisting: true,
       expectedLogFragment: "route replacement denied",
+    },
+  ] as const)("$name", ({ replaceExisting, expectedLogFragment }) => {
+    expectRouteRegistrationDenied({
+      replaceExisting,
+      expectedLogFragment,
     });
   });
 
@@ -190,8 +215,10 @@ describe("registerPluginHttpRoute", () => {
       handler: vi.fn(),
     });
 
-    expect(startupRegistry.httpRoutes).toHaveLength(1);
-    expect(startupRegistry.httpRoutes[0]?.path).toBe("/bluebubbles-webhook");
+    expectRegisteredRouteShape(startupRegistry, {
+      path: "/bluebubbles-webhook",
+      auth: "plugin",
+    });
     expect(laterActiveRegistry.httpRoutes).toHaveLength(0);
 
     unregister();
