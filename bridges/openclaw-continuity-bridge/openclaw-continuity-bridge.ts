@@ -855,7 +855,8 @@ async function toWebRequest(
     req.method === "GET" || req.method === "HEAD"
       ? undefined
       : await readRequestBody(req, bodySizeLimitBytes);
-  return new Request(new URL(req.url ?? "/", `http://${host}:${port}`), {
+  const requestUrl = new URL(req.url ?? "/", `http://${host}:${port}`).toString();
+  return new Request(requestUrl, {
     method: req.method ?? "GET",
     headers: req.headers as Record<string, string>,
     body: body ? new Uint8Array(body) : undefined,
