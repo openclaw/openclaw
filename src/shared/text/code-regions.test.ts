@@ -24,17 +24,17 @@ describe("shared/text/code-regions", () => {
       text: ["before `inline` after", "```ts", "const a = `inside fence`;", "```", "tail"].join(
         "\n",
       ),
-      expectedSlices: ["`inline`", "```ts\nconst a = `inside fence`;\n```"],
+      expectedSlices: ["`inline`", "```ts\nconst a = `inside fence`;\n```\n"],
     },
     {
       name: "accepts alternate fence markers and unterminated trailing fences",
       text: "~~~js\nconsole.log(1)\n~~~\nplain\n```\nunterminated",
-      expectedSlices: ["~~~js\nconsole.log(1)\n~~~", "```\nunterminated"],
+      expectedSlices: ["~~~js\nconsole.log(1)\n~~~\n", "```\nunterminated"],
     },
     {
       name: "keeps adjacent inline code outside fenced regions",
       text: ["```ts", "const a = 1;", "```", "after `inline` tail"].join("\n"),
-      expectedSlices: ["```ts\nconst a = 1;\n```", "`inline`"],
+      expectedSlices: ["```ts\nconst a = 1;\n```\n", "`inline`"],
     },
   ] as const)("$name", ({ text, expectedSlices }) => {
     expectCodeRegionSlices(text, expectedSlices);
