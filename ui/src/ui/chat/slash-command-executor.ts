@@ -4,6 +4,7 @@
  */
 
 import {
+  buildQualifiedChatModelValue,
   createChatModelOverride,
   resolvePreferredServerChatModelValue,
 } from "../chat-model-ref.ts";
@@ -191,7 +192,9 @@ async function executeModel(
       ]);
       const session = resolveCurrentSession(sessions, sessionKey);
       const model = session?.model || sessions?.defaults?.model || "default";
-      const available = models.map((m: ModelCatalogEntry) => m.id);
+      const available = models.map((m: ModelCatalogEntry) =>
+        buildQualifiedChatModelValue(m.id, m.provider),
+      );
       const lines = [`**Current model:** \`${model}\``];
       if (available.length > 0) {
         lines.push(
