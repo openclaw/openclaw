@@ -1,7 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
-import { hasEnvHttpProxyConfigured } from "../../infra/net/proxy-env.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchFirecrawlMetadata } from "../../secrets/runtime-web-tools.js";
@@ -544,23 +543,20 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
   try {
-    // Detect proxy based on the request URL protocol to match EnvHttpProxyAgent semantics.
-    // For http:// URLs, only HTTP_PROXY matters; for https:// URLs, HTTPS_PROXY takes precedence.
-    const parsedUrl = new URL(params.url);
-    const protocol = parsedUrl.protocol.replace(":", "") as "http" | "https";
-    const envProxyConfigured = hasEnvHttpProxyConfigured(protocol);
-    const allowRfc2544 = envProxyConfigured || params.allowFakeIp;
+    // Only relax SSRF guard when user explicitly enables allowFakeIp config.
+    // We no longer auto-detect proxy env vars because:
+    // 1. NO_PROXY exclusions mean some URLs bypass the proxy but SSRF is still relaxed
+    // 2. Users who need proxy + fake-ip should set allowFakeIp: true explicitly
+    // This keeps the security model simple: SSRF relaxation requires explicit opt-in.
+    const allowRfc2544 = params.allowFakeIp;
     const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
-      // When a proxy is configured (e.g. Clash fake-ip mode), enable env proxy
-      // routing and allow the RFC 2544 benchmark range (198.18.0.0/15) in the
-      // SSRF guard. Without useEnvProxy, requests stay in STRICT mode and
-      // direct-connect to the fake-ip address instead of going through the proxy.
-      // When tools.web.fetch.allowFakeIp is true, also allow the RFC 2544 range
-      // for users who use TUN mode proxies without setting HTTP_PROXY env vars.
-      useEnvProxy: envProxyConfigured,
+      // When tools.web.fetch.allowFakeIp is true, allow the RFC 2544 range
+      // (198.18.0.0/15) in the SSRF guard for proxy fake-ip compatibility
+      // (e.g., Clash TUN mode). Users must explicitly enable this config option.
+      useEnvProxy: true,
       policy: allowRfc2544 ? { allowRfc2544BenchmarkRange: true } : undefined,
       init: {
         headers: {
