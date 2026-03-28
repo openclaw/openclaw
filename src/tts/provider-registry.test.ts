@@ -83,7 +83,17 @@ describe("speech provider registry", () => {
 
     expect(listSpeechProviders(cfg).map((provider) => provider.id)).toEqual(["microsoft"]);
     expect(getSpeechProvider("edge", cfg)?.id).toBe("microsoft");
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith({ config: cfg });
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith({
+      config: {
+        plugins: {
+          entries: {
+            elevenlabs: { enabled: true },
+            microsoft: { enabled: true },
+            openai: { enabled: true },
+          },
+        },
+      },
+    });
   });
 
   it("returns no providers when neither plugins nor active registry provide speech support", () => {
