@@ -641,7 +641,8 @@ export class AcpxRuntime implements AcpRuntime {
         throw new AcpRuntimeError("ACP_TURN_FAILED", exit.error.message, { cause: exit.error });
       }
 
-      if ((exit.code ?? 0) !== 0 && !sawError) {
+      const exitedWithFailure = exit.code !== null ? exit.code !== 0 : exit.signal !== null;
+      if (exitedWithFailure && !sawError) {
         yield {
           type: "error",
           message: formatAcpxExitMessage({

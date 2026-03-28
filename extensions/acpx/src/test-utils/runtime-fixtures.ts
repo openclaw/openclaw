@@ -270,6 +270,10 @@ if (command === "prompt") {
     process.exit(5);
   }
 
+  if (process.env.MOCK_ACPX_PROMPT_SIGNAL) {
+    process.kill(process.pid, process.env.MOCK_ACPX_PROMPT_SIGNAL);
+  }
+
   if (stdinText.includes("split-spacing")) {
     emitUpdate(sessionFromOption, {
       sessionUpdate: "agent_message_chunk",

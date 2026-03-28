@@ -199,7 +199,7 @@ function isStaleSessionInitError(params: { code: string; message: string }): boo
 }
 
 async function maybeUnbindStaleBoundConversations(params: {
-  sessionKey: string;
+  targetSessionKey: string;
   error: { code: string; message: string };
 }): Promise<void> {
   if (!isStaleSessionInitError(params.error)) {
@@ -207,17 +207,17 @@ async function maybeUnbindStaleBoundConversations(params: {
   }
   try {
     const removed = await getSessionBindingService().unbind({
-      targetSessionKey: params.sessionKey,
+      targetSessionKey: params.targetSessionKey,
       reason: ACP_STALE_BINDING_UNBIND_REASON,
     });
     if (removed.length > 0) {
       logVerbose(
-        `dispatch-acp: removed ${removed.length} stale bound conversation(s) for ${params.sessionKey} after ${params.error.code}: ${params.error.message}`,
+        `dispatch-acp: removed ${removed.length} stale bound conversation(s) for ${params.targetSessionKey} after ${params.error.code}: ${params.error.message}`,
       );
     }
   } catch (error) {
     logVerbose(
-      `dispatch-acp: failed to unbind stale bound conversations for ${params.sessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+      `dispatch-acp: failed to unbind stale bound conversations for ${params.targetSessionKey}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }
@@ -335,6 +335,7 @@ export async function tryDispatchAcpReply(params: {
   if (acpResolution.kind === "none") {
     return null;
   }
+  const canonicalSessionKey = acpResolution.sessionKey;
 
   let queuedFinal = false;
   const delivery = createAcpDispatchDeliveryCoordinator({
@@ -386,7 +387,7 @@ export async function tryDispatchAcpReply(params: {
     }
     if (acpResolution.kind === "stale") {
       await maybeUnbindStaleBoundConversations({
-        sessionKey,
+        targetSessionKey: canonicalSessionKey,
         error: acpResolution.error,
       });
       const delivered = await delivery.deliver("final", {
@@ -480,7 +481,7 @@ export async function tryDispatchAcpReply(params: {
       fallbackMessage: "ACP turn failed before completion.",
     });
     await maybeUnbindStaleBoundConversations({
-      sessionKey,
+      targetSessionKey: canonicalSessionKey,
       error: acpError,
     });
     const delivered = await delivery.deliver("final", {

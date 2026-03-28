@@ -175,6 +175,42 @@ describe("AcpxRuntime", () => {
     expect(promptArgs).toContain("--approve-all");
   });
 
+  it("surfaces signal-only prompt exits as runtime errors", async () => {
+    const previousSignal = process.env.MOCK_ACPX_PROMPT_SIGNAL;
+    process.env.MOCK_ACPX_PROMPT_SIGNAL = "SIGTERM";
+
+    try {
+      const { runtime } = await createMockRuntimeFixture();
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:signal-exit",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      const events = [];
+      for await (const event of runtime.runTurn({
+        handle,
+        text: "signal-only-exit",
+        mode: "prompt",
+        requestId: "req-signal",
+      })) {
+        events.push(event);
+      }
+
+      expect(events).toContainEqual({
+        type: "error",
+        message: "acpx exited with signal SIGTERM",
+      });
+      expect(events.some((event) => event.type === "done")).toBe(false);
+    } finally {
+      if (previousSignal === undefined) {
+        delete process.env.MOCK_ACPX_PROMPT_SIGNAL;
+      } else {
+        process.env.MOCK_ACPX_PROMPT_SIGNAL = previousSignal;
+      }
+    }
+  });
+
   it("uses sessions new with --resume-session when resumeSessionId is provided", async () => {
     const { runtime, logPath } = await createMockRuntimeFixture();
     const resumeSessionId = "sid-resume-123";
