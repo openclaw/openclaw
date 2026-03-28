@@ -2,7 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { promisify } from "node:util";
+import { promisify, TextDecoder } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { logDebug, logError } from "../logger.js";
@@ -104,12 +104,12 @@ export async function runExec(
 ): Promise<{ stdout: string; stderr: string }> {
   const options =
     typeof opts === "number"
-      ? { timeout: opts, encoding: "utf8" as const }
+      ? { timeout: opts, encoding: "buffer" as const }
       : {
           timeout: opts.timeoutMs,
           maxBuffer: opts.maxBuffer,
           cwd: opts.cwd,
-          encoding: "utf8" as const,
+          encoding: "buffer" as const,
         };
   try {
     const argv = [command, ...args];
@@ -129,13 +129,19 @@ export async function runExec(
       execArgs = args;
     }
     const useCmdWrapper = isWindowsBatchCommand(execCommand);
-    const { stdout, stderr } = useCmdWrapper
+    const { stdout: stdoutBuffer, stderr: stderrBuffer } = useCmdWrapper
       ? await execFileAsync(
           process.env.ComSpec ?? "cmd.exe",
           ["/d", "/s", "/c", buildCmdExeCommandLine(execCommand, execArgs)],
           { ...options, windowsVerbatimArguments: true },
         )
       : await execFileAsync(execCommand, execArgs, options);
+    
+    // Decode buffers with platform-specific encoding
+    const decoder = new TextDecoder(process.platform === "win32" ? "gbk" : "utf-8");
+    const stdout = decoder.decode(stdoutBuffer);
+    const stderr = decoder.decode(stderrBuffer);
+    
     if (shouldLogVerbose()) {
       if (stdout.trim()) {
         logDebug(stdout.trim());
@@ -244,6 +250,11 @@ export async function runCommandWithTimeout(
   );
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
+    // Create TextDecoder once outside stream callbacks
+    const encoding = process.platform === "win32" ? "gbk" : "utf-8";
+    const stdoutDecoder = new TextDecoder(encoding);
+    const stderrDecoder = new TextDecoder(encoding);
+    
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -303,12 +314,22 @@ export async function runCommandWithTimeout(
     }
 
     child.stdout?.on("data", (d) => {
-      stdout += d.toString();
+      // Stream decoding with { stream: true } to handle multi-byte characters
+      stdout += stdoutDecoder.decode(d, { stream: true });
       armNoOutputTimer();
     });
     child.stderr?.on("data", (d) => {
-      stderr += d.toString();
+      // Stream decoding with { stream: true } to handle multi-byte characters
+      stderr += stderrDecoder.decode(d, { stream: true });
       armNoOutputTimer();
+    });
+    child.stdout?.on("end", () => {
+      // Final decode to flush any remaining bytes
+      stdout += stdoutDecoder.decode();
+    });
+    child.stderr?.on("end", () => {
+      // Final decode to flush any remaining bytes
+      stderr += stderrDecoder.decode();
     });
     child.on("error", (err) => {
       if (settled) {
