@@ -3715,76 +3715,48 @@ describe("resolveRuntimePluginRegistry", () => {
     expect(resolveRuntimePluginRegistry(differentGatewayOptions)).not.toBe(registry);
   });
 
+  // --- Helper: set up a gateway registry with typical gateway-scoped options ---
+
+  function setupGatewayRegistry() {
+    const registry = createEmptyPluginRegistry();
+    const gatewayOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["telegram"],
+      coreGatewayHandlers: { "sessions.get": () => undefined },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
+    setActivePluginRegistry(registry, cacheKey);
+    return registry;
+  }
+
   // --- R1: Per-field isolation tests ---
 
-  it("does not fall back when only coreGatewayHandlers is gateway-scoped", () => {
-    const registry = createEmptyPluginRegistry();
-    const gatewayOptions = {
-      config: { plugins: { allow: ["demo"] } },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["telegram"],
-      coreGatewayHandlers: { "sessions.get": () => undefined },
-    };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
-    setActivePluginRegistry(registry, cacheKey);
-
+  it.each([
+    {
+      field: "coreGatewayHandlers",
+      options: { coreGatewayHandlers: { "sessions.list": () => undefined } },
+    },
+    {
+      field: "includeSetupOnlyChannelPlugins",
+      options: { includeSetupOnlyChannelPlugins: true },
+    },
+    {
+      field: "preferSetupRuntimeForChannelPlugins",
+      options: { preferSetupRuntimeForChannelPlugins: true },
+    },
+  ])("does not fall back when only $field is gateway-scoped", ({ options }) => {
+    const registry = setupGatewayRegistry();
     const scopedOptions = {
       config: { plugins: { allow: ["demo"] } },
       workspaceDir: "/tmp/workspace-a",
-      coreGatewayHandlers: { "sessions.list": () => undefined },
-    };
-    expect(resolveRuntimePluginRegistry(scopedOptions)).not.toBe(registry);
-  });
-
-  it("does not fall back when only includeSetupOnlyChannelPlugins is gateway-scoped", () => {
-    const registry = createEmptyPluginRegistry();
-    const gatewayOptions = {
-      config: { plugins: { allow: ["demo"] } },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["telegram"],
-      coreGatewayHandlers: { "sessions.get": () => undefined },
-    };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
-    setActivePluginRegistry(registry, cacheKey);
-
-    const scopedOptions = {
-      config: { plugins: { allow: ["demo"] } },
-      workspaceDir: "/tmp/workspace-a",
-      includeSetupOnlyChannelPlugins: true,
-    };
-    expect(resolveRuntimePluginRegistry(scopedOptions)).not.toBe(registry);
-  });
-
-  it("does not fall back when only preferSetupRuntimeForChannelPlugins is gateway-scoped", () => {
-    const registry = createEmptyPluginRegistry();
-    const gatewayOptions = {
-      config: { plugins: { allow: ["demo"] } },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["telegram"],
-      coreGatewayHandlers: { "sessions.get": () => undefined },
-    };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
-    setActivePluginRegistry(registry, cacheKey);
-
-    const scopedOptions = {
-      config: { plugins: { allow: ["demo"] } },
-      workspaceDir: "/tmp/workspace-a",
-      preferSetupRuntimeForChannelPlugins: true,
+      ...options,
     };
     expect(resolveRuntimePluginRegistry(scopedOptions)).not.toBe(registry);
   });
 
   it("treats empty onlyPluginIds as non-gateway-scoped", () => {
-    const registry = createEmptyPluginRegistry();
-    const gatewayOptions = {
-      config: { plugins: { allow: ["demo"] } },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["telegram"],
-      coreGatewayHandlers: { "sessions.get": () => undefined },
-    };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
-    setActivePluginRegistry(registry, cacheKey);
-
+    const registry = setupGatewayRegistry();
     const toolOptions = {
       config: { plugins: { allow: ["demo"] } },
       workspaceDir: "/tmp/workspace-a",
@@ -3793,76 +3765,48 @@ describe("resolveRuntimePluginRegistry", () => {
     expect(resolveRuntimePluginRegistry(toolOptions)).toBe(registry);
   });
 
-  // --- R2: Caller-shape regression tests ---
-
-  it("falls back for tools.ts caller shape (config + workspaceDir + runtimeOptions + env + logger)", () => {
-    const registry = createEmptyPluginRegistry();
-    const gatewayOptions = {
-      config: { plugins: { allow: ["demo"] } },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["telegram"],
-      coreGatewayHandlers: { "sessions.get": () => undefined },
-    };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
-    setActivePluginRegistry(registry, cacheKey);
-
+  it("treats includeSetupOnlyChannelPlugins: false as non-gateway-scoped", () => {
+    const registry = setupGatewayRegistry();
     const toolOptions = {
       config: { plugins: { allow: ["demo"] } },
       workspaceDir: "/tmp/workspace-a",
-      runtimeOptions: { allowGatewaySubagentBinding: true },
-      env: {},
-      logger: undefined,
+      includeSetupOnlyChannelPlugins: false,
     };
     expect(resolveRuntimePluginRegistry(toolOptions)).toBe(registry);
   });
 
-  it("falls back for memory-runtime.ts caller shape (config only)", () => {
-    const registry = createEmptyPluginRegistry();
-    const gatewayOptions = {
-      config: { plugins: { allow: ["demo"] } },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["telegram"],
-      coreGatewayHandlers: { "sessions.get": () => undefined },
-    };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
-    setActivePluginRegistry(registry, cacheKey);
+  // --- R2: Caller-shape regression tests ---
 
-    const memoryOptions = {
-      config: { plugins: { allow: ["demo"] } },
-    };
-    expect(resolveRuntimePluginRegistry(memoryOptions)).toBe(registry);
-  });
-
-  it("falls back for channel-resolution.ts caller shape (config + workspaceDir + runtimeOptions)", () => {
-    const registry = createEmptyPluginRegistry();
-    const gatewayOptions = {
-      config: { plugins: { allow: ["demo"] } },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["telegram"],
-      coreGatewayHandlers: { "sessions.get": () => undefined },
-    };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
-    setActivePluginRegistry(registry, cacheKey);
-
-    const channelOptions = {
-      config: { plugins: { allow: ["demo"] } },
-      workspaceDir: "/tmp/workspace-a",
-      runtimeOptions: { allowGatewaySubagentBinding: true },
-    };
-    expect(resolveRuntimePluginRegistry(channelOptions)).toBe(registry);
+  it.each([
+    {
+      caller: "tools.ts",
+      options: {
+        config: { plugins: { allow: ["demo"] } },
+        workspaceDir: "/tmp/workspace-a",
+        runtimeOptions: { allowGatewaySubagentBinding: true },
+        env: {},
+        logger: undefined,
+      },
+    },
+    {
+      caller: "memory-runtime.ts",
+      options: { config: { plugins: { allow: ["demo"] } } },
+    },
+    {
+      caller: "channel-resolution.ts",
+      options: {
+        config: { plugins: { allow: ["demo"] } },
+        workspaceDir: "/tmp/workspace-a",
+        runtimeOptions: { allowGatewaySubagentBinding: true },
+      },
+    },
+  ])("falls back to active registry for $caller caller shape", ({ options }) => {
+    const registry = setupGatewayRegistry();
+    expect(resolveRuntimePluginRegistry(options)).toBe(registry);
   });
 
   it("does not fall back for web-search-providers.runtime.ts caller shape with onlyPluginIds", () => {
-    const registry = createEmptyPluginRegistry();
-    const gatewayOptions = {
-      config: { plugins: { allow: ["demo"] } },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["telegram"],
-      coreGatewayHandlers: { "sessions.get": () => undefined },
-    };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
-    setActivePluginRegistry(registry, cacheKey);
-
+    const registry = setupGatewayRegistry();
     const webSearchOptions = {
       config: { plugins: { allow: ["demo"] } },
       onlyPluginIds: ["web-search-plugin"],
@@ -3873,17 +3817,13 @@ describe("resolveRuntimePluginRegistry", () => {
   // --- R3: Cold-start test ---
 
   it("falls through to loadOpenClawPlugins when no active registry exists and caller is not gateway-scoped", () => {
-    // No setActivePluginRegistry call — active registry is null
     const toolOptions = {
       config: { plugins: { allow: ["demo"] } },
       workspaceDir: "/tmp/workspace-a",
       runtimeOptions: { allowGatewaySubagentBinding: true },
     };
-    // loadOpenClawPlugins returns a fresh registry (or undefined in test env)
     const result = resolveRuntimePluginRegistry(toolOptions);
-    // In test env with no plugins, this will NOT be the active registry (which is null)
     expect(getActivePluginRegistry()).toBeNull();
-    // Result comes from loadOpenClawPlugins, not from fallback
     expect(result).not.toBeNull();
   });
 });

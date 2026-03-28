@@ -345,12 +345,10 @@ export function resolveRuntimePluginRegistry(
   options?: PluginLoadOptions,
 ): PluginRegistry | undefined {
   if (!options || !hasExplicitCompatibilityInputs(options)) {
-    defaultLogger().debug("resolve-registry: returning active (no explicit inputs)");
     return getCompatibleActivePluginRegistry();
   }
   const compatible = getCompatibleActivePluginRegistry(options);
   if (compatible) {
-    defaultLogger().debug("resolve-registry: returning compatible active (cache key match)");
     return compatible;
   }
   // When the caller does not restrict the plugin set with gateway-specific
