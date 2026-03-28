@@ -234,7 +234,8 @@ export function buildAgentSystemPrompt(params: {
     exec: "Run shell commands (pty available for TTY-required CLIs)",
     process: "Manage background exec sessions",
     web_search: "Search the web",
-    x_search: "Search X (formerly Twitter) posts with xAI",
+    x_search:
+      "Search X (formerly Twitter) posts with xAI, including targeted post or thread lookups; for per-post stats use the exact post URL or status ID when possible",
     web_fetch: "Fetch and extract readable content from a URL",
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser: "Control web browser",
