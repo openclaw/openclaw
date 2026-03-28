@@ -24,6 +24,7 @@ export type { BaseProbeResult } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { getChatChannelMeta } from "../channels/registry.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 export {
