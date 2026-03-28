@@ -8,8 +8,16 @@ export type RequiredParamGroup = {
 
 const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
 
-function parameterValidationError(message: string): Error {
-  return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
+const TOOL_PARAM_EXAMPLES: Record<string, string> = {
+  read: 'Example: read({"path": "/absolute/path/to/file"})',
+  write: 'Example: write({"path": "/absolute/path/to/file", "content": "file content"})',
+  edit: 'Example: edit({"path": "/absolute/path/to/file", "oldText": "text to find", "newText": "replacement"})',
+};
+
+function parameterValidationError(message: string, toolName?: string): Error {
+  const example = toolName ? TOOL_PARAM_EXAMPLES[toolName] : undefined;
+  const suffix = example ? `${RETRY_GUIDANCE_SUFFIX} ${example}` : RETRY_GUIDANCE_SUFFIX;
+  return new Error(`${message}.${suffix}`);
 }
 
 export const CLAUDE_PARAM_GROUPS = {
@@ -184,10 +192,11 @@ export function assertRequiredParams(
   toolName: string,
 ): void {
   if (!record || typeof record !== "object") {
-    throw parameterValidationError(`Missing parameters for ${toolName}`);
+    throw parameterValidationError(`Missing parameters for ${toolName}`, toolName);
   }
 
   const missingLabels: string[] = [];
+  const acceptedKeys: string[] = [];
   for (const group of groups) {
     const satisfied = group.keys.some((key) => {
       if (!(key in record)) {
@@ -206,13 +215,14 @@ export function assertRequiredParams(
     if (!satisfied) {
       const label = group.label ?? group.keys.join(" or ");
       missingLabels.push(label);
+      acceptedKeys.push(`${label} (${group.keys.join(", ")})`);
     }
   }
 
   if (missingLabels.length > 0) {
     const joined = missingLabels.join(", ");
     const noun = missingLabels.length === 1 ? "parameter" : "parameters";
-    throw parameterValidationError(`Missing required ${noun}: ${joined}`);
+    throw parameterValidationError(`Missing required ${noun}: ${joined}`, toolName);
   }
 }
 
