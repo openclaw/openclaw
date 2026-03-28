@@ -19,6 +19,7 @@ import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
+import type { MarkdownConfig } from "../../config/types.base.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
@@ -31,6 +32,7 @@ import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRootsForSources } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { stripMarkdown } from "../../shared/text/strip-markdown.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
@@ -38,7 +40,7 @@ import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
-import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
+import { isPlainTextSurface, sanitizeForPlainText, shouldStripMarkdown } from "./sanitize-text.js";
 import { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
@@ -320,6 +322,7 @@ function normalizePayloadsForChannelDelivery(
   payloads: ReplyPayload[],
   channel: Exclude<OutboundChannel, "none">,
   handler: ChannelHandler,
+  markdownConfig?: MarkdownConfig,
 ): ReplyPayload[] {
   const normalizedPayloads: ReplyPayload[] = [];
   for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
@@ -335,6 +338,18 @@ function normalizePayloadsForChannelDelivery(
         };
       }
     }
+    // Strip markdown formatting for channels that cannot render it.
+    // Runs after HTML sanitization because sanitizeForPlainText converts
+    // HTML tags to lightweight markup (e.g. <b> → *text*) that stripMarkdown
+    // then removes.
+    if (shouldStripMarkdown(channel, markdownConfig) && sanitizedPayload.text) {
+      if (!handler.shouldSkipPlainTextSanitization?.(sanitizedPayload)) {
+        sanitizedPayload = {
+          ...sanitizedPayload,
+          text: stripMarkdown(sanitizedPayload.text),
+        };
+      }
+    }
     const normalizedPayload = handler.normalizePayload
       ? handler.normalizePayload(sanitizedPayload)
       : sanitizedPayload;
@@ -346,6 +361,14 @@ function normalizePayloadsForChannelDelivery(
     }
   }
   return normalizedPayloads;
+}
+
+function resolveChannelMarkdownConfig(
+  cfg: OpenClawConfig,
+  channel: string,
+): MarkdownConfig | undefined {
+  const channelsConfig = cfg.channels as Record<string, { markdown?: MarkdownConfig }> | undefined;
+  return channelsConfig?.[channel]?.markdown;
 }
 
 function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
@@ -633,7 +656,13 @@ async function deliverOutboundPayloadsCore(
       results.push(await handler.sendText(chunk, overrides));
     }
   };
-  const normalizedPayloads = normalizePayloadsForChannelDelivery(payloads, channel, handler);
+  const channelMarkdownConfig = resolveChannelMarkdownConfig(cfg, channel);
+  const normalizedPayloads = normalizePayloadsForChannelDelivery(
+    payloads,
+    channel,
+    handler,
+    channelMarkdownConfig,
+  );
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   const mirrorIsGroup = params.mirror?.isGroup;
