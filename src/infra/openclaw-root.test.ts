@@ -29,6 +29,16 @@ function setPackageRoot(root: string, name = "openclaw") {
   setFile(path.join(root, "package.json"), JSON.stringify({ name }));
 }
 
+function expectResolvedPackageRoot(
+  syncResolver: typeof import("./openclaw-root.js").resolveOpenClawPackageRootSync,
+  asyncResolver: typeof import("./openclaw-root.js").resolveOpenClawPackageRoot,
+  opts: Parameters<typeof import("./openclaw-root.js").resolveOpenClawPackageRootSync>[0],
+  expected: string | null,
+) {
+  expect(syncResolver(opts)).toBe(expected);
+  return expect(asyncResolver(opts)).resolves.toBe(expected);
+}
+
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   const wrapped = {
@@ -205,7 +215,11 @@ describe("resolveOpenClawPackageRoot", () => {
     },
   ])("$name", async ({ setup }) => {
     const { opts, expected } = setup();
-    expect(resolveOpenClawPackageRootSync(opts)).toBe(expected);
-    await expect(resolveOpenClawPackageRoot(opts)).resolves.toBe(expected);
+    await expectResolvedPackageRoot(
+      resolveOpenClawPackageRootSync,
+      resolveOpenClawPackageRoot,
+      opts,
+      expected,
+    );
   });
 });

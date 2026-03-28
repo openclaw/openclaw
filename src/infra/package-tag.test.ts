@@ -15,7 +15,10 @@ describe("normalizePackageTagInput", () => {
     { input: " latest ", expected: "latest" },
     { input: "@other/plugin@beta", expected: "@other/plugin@beta" },
     { input: "openclawer@beta", expected: "openclawer@beta" },
-  ])("normalizes %j", ({ input, expected }) => {
-    expect(normalizePackageTagInput(input, packageNames)).toBe(expected);
-  });
+  ] satisfies ReadonlyArray<{ input: string | undefined; expected: string | null }>)(
+    "normalizes %j",
+    ({ input, expected }) => {
+      expect(normalizePackageTagInput(input, packageNames)).toBe(expected);
+    },
+  );
 });
