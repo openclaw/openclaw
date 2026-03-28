@@ -174,9 +174,21 @@ describe("plugin-sdk root alias", () => {
 
   it.each([
     {
+      name: "prefers source loading when the source root alias runs in development",
+      options: {
+        distExists: true,
+        env: { NODE_ENV: "development" },
+        monolithicExports: {
+          slowHelper: (): string => "loaded",
+        },
+      },
+      expectedTryNative: false,
+    },
+    {
       name: "prefers native loading when compat resolves to dist",
       options: {
         distExists: true,
+        env: { NODE_ENV: "production" },
         monolithicExports: {
           slowHelper: (): string => "loaded",
         },
