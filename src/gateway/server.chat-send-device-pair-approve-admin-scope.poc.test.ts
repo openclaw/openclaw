@@ -138,6 +138,7 @@ describe("gateway chat.send /pair approve admin scope", () => {
         expect(viaChatSend.ok).toBe(true);
         expect(["started", "ok"]).toContain(String(viaChatSend.payload?.status ?? ""));
 
+        let completedChatSend = viaChatSend;
         if (viaChatSend.payload?.status !== "ok") {
           await vi.waitFor(
             async () => {
@@ -148,11 +149,15 @@ describe("gateway chat.send /pair approve admin scope", () => {
               });
               expect(again.ok).toBe(true);
               expect(again.payload?.status).toBe("ok");
+              completedChatSend = again;
             },
             { timeout: 5_000 },
           );
         }
 
+        expect(completedChatSend.result?.text ?? completedChatSend.result?.reply).toMatch(
+          /Cannot approve a request requiring operator\.admin/,
+        );
         const paired = await getPairedDevice(pendingAdmin.identity.deviceId);
         expect(paired).toBeNull();
 
