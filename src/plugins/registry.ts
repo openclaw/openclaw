@@ -292,6 +292,22 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
 
     const normalized = names.map((name) => name.trim()).filter(Boolean);
+
+    // Deduplicate: skip if the same plugin already registered a tool with any
+    // of the same names.  This prevents duplicate entries when a plugin's
+    // registerFull() callback is invoked multiple times during config
+    // hot-reload cycles (see #56114).
+    if (normalized.length > 0) {
+      const alreadyRegistered = registry.tools.some(
+        (existing) =>
+          existing.pluginId === record.id &&
+          existing.names.some((n) => normalized.includes(n)),
+      );
+      if (alreadyRegistered) {
+        return;
+      }
+    }
+
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
