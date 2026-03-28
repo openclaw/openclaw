@@ -86,7 +86,6 @@ describe("collectExposureMatrixFindings - dmPolicy parity (#55612)", () => {
     };
     const findings = collectExposureMatrixFindings(cfg);
     const ids = findings.map((f) => f.checkId);
-    expect(ids).toContain("security.exposure.open_channels_with_elevated");
     expect(ids).toContain("security.exposure.open_dms_with_elevated");
     expect(
       findings.find((f) => f.checkId === "security.exposure.open_dms_with_elevated")?.severity,
@@ -124,7 +123,6 @@ describe("collectExposureMatrixFindings - dmPolicy parity (#55612)", () => {
     const ids = findings.map((f) => f.checkId);
     expect(ids).toContain("security.exposure.open_groups_with_elevated");
     expect(ids).toContain("security.exposure.open_dms_with_elevated");
-    expect(ids).toContain("security.exposure.open_channels_with_elevated");
   });
 
   it("preserves existing groupPolicy='open' behavior unchanged", () => {

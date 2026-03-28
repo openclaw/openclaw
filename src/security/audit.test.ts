@@ -3824,7 +3824,6 @@ description: test skill
       tools: { elevated: { enabled: true, allowFrom: { whatsapp: ["+1"] } } },
       channels: { whatsapp: { dmPolicy: "open" } },
     });
-    expectFinding(res, "security.exposure.open_channels_with_elevated", "critical");
     expectFinding(res, "security.exposure.open_dms_with_elevated", "critical");
   });
 
@@ -3859,7 +3858,6 @@ description: test skill
     });
     expectFinding(res, "security.exposure.open_groups_with_elevated", "critical");
     expectFinding(res, "security.exposure.open_dms_with_elevated", "critical");
-    expectFinding(res, "security.exposure.open_channels_with_elevated", "critical");
   });
 
   it("flags session.dmScope=main when multi-user signals are detected", async () => {

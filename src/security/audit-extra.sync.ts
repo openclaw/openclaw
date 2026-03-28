@@ -1306,16 +1306,6 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
 
   const elevatedEnabled = cfg.tools?.elevated?.enabled !== false;
   if (elevatedEnabled) {
-    findings.push({
-      checkId: "security.exposure.open_channels_with_elevated",
-      severity: "critical",
-      title: "Open groupPolicy/dmPolicy with elevated tools enabled",
-      detail:
-        `Found open policy at:\n${allOpenPaths.map((p) => `- ${p}`).join("\n")}\n` +
-        "With tools.elevated enabled, a prompt injection from these channels can become a high-impact incident.",
-      remediation: `Set groupPolicy/dmPolicy to "allowlist" or "pairing" and keep elevated allowlists extremely tight.`,
-    });
-
     if (openGroups.length > 0) {
       findings.push({
         checkId: "security.exposure.open_groups_with_elevated",
@@ -1405,8 +1395,11 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
       'If users may be mutually untrusted, split trust boundaries (separate gateways + credentials, ideally separate OS users/hosts). If you intentionally run shared-user access, set agents.defaults.sandbox.mode="all", keep tools.fs.workspaceOnly=true, deny runtime/fs/web tools unless required, and keep personal/private identities + credentials off that runtime.',
   });
 
+  const hasDmSignal = signals.some(
+    (s) => s.includes("dmPolicy") || s.includes(".dm.policy") || s.includes(".dm.allowFrom"),
+  );
   const dmScope = cfg.session?.dmScope ?? "main";
-  if (dmScope === "main") {
+  if (dmScope === "main" && hasDmSignal) {
     findings.push({
       checkId: "security.trust_model.dm_scope_main_multi_user",
       severity: "critical",
