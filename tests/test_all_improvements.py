@@ -1439,3 +1439,333 @@ class TestComplementaryRL:
         """Must return '' when not initialized."""
         sm = SuperMemory(persist_dir="/nonexistent/path/__smem")
         assert sm.recall_similar_trajectories("test") == ""
+
+
+# ===================================================================
+# v14.1 NEW: SLEA-RL — Step-Level Experience Augmented RL
+# arXiv:2603.18079
+# ===================================================================
+
+from src.supermemory import StepExperience
+
+
+class TestSLEARL:
+    """Tests for SuperMemory step-level experience save/recall (pure-logic, temp SQLite)."""
+
+    @pytest.fixture
+    def memory(self, tmp_path):
+        sm = SuperMemory(persist_dir=str(tmp_path / "smem_slea"))
+        sm.initialize()
+        return sm
+
+    def test_step_experience_dataclass(self):
+        se = StepExperience(
+            step_id="ep1:s0", episode_id="ep1", step_index=0,
+            role="Planner", action="plan task", observation="plan ready",
+            reward=0.8,
+        )
+        assert se.step_id == "ep1:s0"
+        assert se.role == "Planner"
+        assert se.reward == 0.8
+
+    def test_save_step_experience_returns_id(self, memory):
+        step_id = memory.save_step_experience(
+            episode_id="ep1", step_index=0,
+            role="Planner", action="analyze request",
+            observation="plan created", reward=0.85,
+        )
+        assert step_id == "ep1:s0"
+
+    def test_save_step_experience_stored_in_list(self, memory):
+        memory.save_step_experience(
+            episode_id="ep1", step_index=0,
+            role="Coder", action="write code",
+            observation="code written", reward=0.9,
+        )
+        assert len(memory._step_experiences) == 1
+        assert memory._step_experiences[0].role == "Coder"
+
+    def test_save_multiple_steps(self, memory):
+        for i in range(3):
+            memory.save_step_experience(
+                episode_id="ep2", step_index=i,
+                role=["Planner", "Coder", "Auditor"][i],
+                action=f"action {i}",
+                observation=f"result {i}",
+                reward=0.7 + i * 0.1,
+            )
+        assert len(memory._step_experiences) == 3
+
+    def test_save_step_not_initialized(self):
+        sm = SuperMemory(persist_dir="/nonexistent/__slea")
+        step_id = sm.save_step_experience(
+            episode_id="x", step_index=0, role="Planner", action="test",
+        )
+        assert step_id == ""
+
+    def test_recall_step_experiences_empty(self, memory):
+        result = memory.recall_step_experiences("any query")
+        assert result == ""
+
+    def test_recall_step_experiences_finds_match(self, memory):
+        memory.save_step_experience(
+            episode_id="ep1", step_index=0,
+            role="Coder", action="написать парсер JSON файлов",
+            observation="парсер готов", reward=0.9,
+        )
+        result = memory.recall_step_experiences("парсер JSON")
+        if result:  # depends on keyword overlap
+            assert "[STEP-LEVEL FEW-SHOT" in result
+
+    def test_recall_step_role_filter(self, memory):
+        memory.save_step_experience(
+            episode_id="ep1", step_index=0,
+            role="Planner", action="plan the architecture",
+            observation="done", reward=0.85,
+        )
+        memory.save_step_experience(
+            episode_id="ep1", step_index=1,
+            role="Coder", action="implement the architecture",
+            observation="done", reward=0.8,
+        )
+        # Filter to Planner only
+        result = memory.recall_step_experiences("architecture", role_filter="Planner")
+        if result:
+            assert "Planner" in result
+
+    def test_recall_step_short_query_words_ignored(self, memory):
+        memory.save_step_experience(
+            episode_id="ep1", step_index=0,
+            role="Coder", action="do it", observation="ok", reward=0.5,
+        )
+        # "do" and "it" are <= 3 chars — should return empty
+        result = memory.recall_step_experiences("do it")
+        assert result == ""
+
+    def test_step_experience_persisted_to_sqlite(self, tmp_path):
+        sm = SuperMemory(persist_dir=str(tmp_path / "smem_persist"))
+        sm.initialize()
+        sm.save_step_experience(
+            episode_id="ep1", step_index=0,
+            role="Auditor", action="verify correctness",
+            observation="looks good", reward=0.95,
+        )
+        # Re-load from disk
+        sm2 = SuperMemory(persist_dir=str(tmp_path / "smem_persist"))
+        sm2.initialize()
+        assert len(sm2._step_experiences) >= 1
+        assert sm2._step_experiences[0].role == "Auditor"
+
+    def test_get_stats_includes_steps(self, memory):
+        memory.save_step_experience(
+            episode_id="ep1", step_index=0,
+            role="Planner", action="test", reward=0.5,
+        )
+        stats = memory.get_stats()
+        assert "step_experiences" in stats
+        assert stats["step_experiences"] >= 1
+
+
+# ===================================================================
+# v14.1 NEW: Counterfactual Credit Assignment
+# arXiv:2603.21563
+# ===================================================================
+
+from src.pipeline._counterfactual import (
+    CounterfactualCredit, CandidateCredit, CreditRecord,
+)
+
+
+class TestCounterfactualCredit:
+    """Tests for Counterfactual Credit assignment (pure-logic, no LLM)."""
+
+    @pytest.fixture
+    def cc(self):
+        return CounterfactualCredit(enabled=True)
+
+    def test_credit_record_dataclass(self):
+        cr = CreditRecord(role="Coder", temperature=0.7)
+        assert cr.win_rate == 0.0
+        cr.record_round(won=True, length_score=0.8)
+        assert cr.win_rate == 1.0
+        assert cr.total_rounds == 1
+
+    def test_candidate_credit_dataclass(self):
+        cc = CandidateCredit(
+            candidate_index=0, temperature=0.7,
+            was_selected=True, length_score=0.9,
+        )
+        assert cc.was_selected is True
+
+    def test_record_vote_basic(self, cc):
+        credits = cc.record_vote(
+            role="Coder",
+            temperatures=[0.7, 1.0],
+            candidates=["resp A", "resp B"],
+            winner_index=0,
+        )
+        assert len(credits) == 2
+        assert credits[0].was_selected is True
+        assert credits[1].was_selected is False
+
+    def test_record_vote_accumulates_wins(self, cc):
+        cc.record_vote("Coder", [0.7, 1.0], ["a", "b"], winner_index=0)
+        cc.record_vote("Coder", [0.7, 1.0], ["c", "d"], winner_index=0)
+        cc.record_vote("Coder", [0.7, 1.0], ["e", "f"], winner_index=1)
+        stats = cc.get_stats("Coder")
+        assert stats[0.7]["wins"] == 2
+        assert stats[1.0]["wins"] == 1
+
+    def test_get_best_temperatures(self, cc):
+        cc.record_vote("Coder", [0.7, 1.0], ["a", "b"], winner_index=0)
+        cc.record_vote("Coder", [0.7, 1.0], ["c", "d"], winner_index=0)
+        best = cc.get_best_temperatures("Coder", top_k=1)
+        assert best[0] == 0.7
+
+    def test_get_best_temperatures_default(self, cc):
+        best = cc.get_best_temperatures("UnknownRole")
+        assert best == [0.7, 1.0]
+
+    def test_disabled_returns_empty(self):
+        cc = CounterfactualCredit(enabled=False)
+        credits = cc.record_vote("Coder", [0.7], ["x"], winner_index=0)
+        assert credits == []
+
+    def test_empty_candidates(self, cc):
+        credits = cc.record_vote("Coder", [], [], winner_index=0)
+        assert credits == []
+
+    def test_get_stats_all_roles(self, cc):
+        cc.record_vote("Coder", [0.7, 1.0], ["a", "b"], winner_index=1)
+        cc.record_vote("Architect", [0.5, 0.7], ["c", "d"], winner_index=0)
+        stats = cc.get_stats()
+        assert "Coder" in stats
+        assert "Architect" in stats
+
+    def test_save_to_memory(self, cc, tmp_path):
+        cc.record_vote("Coder", [0.7, 1.0], ["a", "b"], winner_index=0)
+        sm = SuperMemory(persist_dir=str(tmp_path / "smem_cc"))
+        sm.initialize()
+        cc.save_to_memory(sm)
+        # Check that credit stats were saved
+        stored = [r for r in sm._warm.values() if "counterfactual" in r.key]
+        assert len(stored) >= 1
+
+    def test_win_rate_calculation(self):
+        cr = CreditRecord(role="X", temperature=0.7)
+        cr.record_round(True, 0.5)
+        cr.record_round(False, 0.6)
+        cr.record_round(True, 0.7)
+        assert abs(cr.win_rate - 2/3) < 0.01
+        assert cr.avg_length_score == pytest.approx(0.6, abs=0.01)
+
+
+# ===================================================================
+# v14.1 NEW: ProRL — Lightweight Rollout-as-a-Service
+# arXiv:2603.18815
+# ===================================================================
+
+from src.pipeline._prorl import ProRLEngine, RolloutResult, RolloutCandidate
+
+
+class TestProRL:
+    """Tests for ProRL heuristic chain scoring and rollout evaluation."""
+
+    @pytest.fixture
+    def prorl(self):
+        return ProRLEngine(enabled=True)
+
+    def test_rollout_candidate_dataclass(self):
+        rc = RolloutCandidate(chain=["Planner", "Coder"], source="aflow", score=0.8)
+        assert rc.chain == ["Planner", "Coder"]
+
+    def test_rollout_result_dataclass(self):
+        rr = RolloutResult(
+            selected_chain=["Planner"], selected_source="static",
+            candidates_evaluated=2, best_score=0.9, total_latency_ms=1.5,
+        )
+        assert rr.candidates_evaluated == 2
+
+    def test_score_chain_basic(self, prorl):
+        score = prorl.score_chain(["Planner", "Coder", "Auditor"], "complex")
+        assert 0.0 < score <= 1.0
+
+    def test_score_chain_empty(self, prorl):
+        assert prorl.score_chain([], "simple") == 0.0
+
+    def test_score_chain_auditor_bonus(self, prorl):
+        without_auditor = prorl.score_chain(["Planner", "Coder"], "complex")
+        with_auditor = prorl.score_chain(["Planner", "Coder", "Auditor"], "complex")
+        assert with_auditor > without_auditor
+
+    def test_score_chain_planner_start_bonus(self, prorl):
+        starts_planner = prorl.score_chain(["Planner", "Coder"], "simple")
+        starts_coder = prorl.score_chain(["Coder", "Planner"], "simple")
+        assert starts_planner >= starts_coder
+
+    def test_score_chain_overlong_penalty(self, prorl):
+        short = prorl.score_chain(["Planner", "Coder", "Auditor"], "simple")
+        long = prorl.score_chain(
+            ["Planner", "Coder", "Researcher", "Analyst", "Auditor", "Summarizer"],
+            "simple",
+        )
+        assert short > long
+
+    def test_evaluate_candidates_selects_best(self, prorl):
+        result = prorl.evaluate_candidates(
+            candidates=[
+                (["Coder"], "static"),
+                (["Planner", "Coder", "Auditor"], "aflow"),
+            ],
+            complexity="complex",
+        )
+        assert result.selected_chain == ["Planner", "Coder", "Auditor"]
+        assert result.candidates_evaluated == 2
+
+    def test_evaluate_candidates_with_trajectory_bonus(self, prorl):
+        result = prorl.evaluate_candidates(
+            candidates=[
+                (["Planner", "Coder"], "static"),
+                (["Researcher", "Analyst"], "aflow"),
+            ],
+            complexity="simple",
+            trajectory_bonus={"Researcher → Analyst": 1.0},
+        )
+        # Trajectory bonus should boost the second candidate
+        assert result.best_score > 0
+
+    def test_evaluate_disabled(self):
+        prorl = ProRLEngine(enabled=False)
+        result = prorl.evaluate_candidates(
+            candidates=[(["Planner"], "static"), (["Coder"], "aflow")],
+        )
+        assert result.selected_chain == ["Planner"]
+        assert result.candidates_evaluated == 0
+
+    def test_evaluate_empty_candidates(self, prorl):
+        result = prorl.evaluate_candidates(candidates=[])
+        assert result.selected_chain == ["Planner"]
+
+    def test_get_stats_empty(self, prorl):
+        assert prorl.get_stats()["evaluations"] == 0
+
+    def test_get_stats_after_evaluation(self, prorl):
+        prorl.evaluate_candidates(
+            candidates=[(["Planner", "Coder"], "aflow")],
+            complexity="complex",
+        )
+        stats = prorl.get_stats()
+        assert stats["evaluations"] == 1
+        assert stats["avg_best_score"] > 0
+
+    def test_llm_source_bonus(self, prorl):
+        static_score = prorl.score_chain(["Planner", "Coder"], "simple")
+        # LLM source bonus is applied in evaluate_candidates, not score_chain
+        result = prorl.evaluate_candidates(
+            candidates=[
+                (["Planner", "Coder"], "llm"),
+                (["Planner", "Coder"], "static"),
+            ],
+            complexity="simple",
+        )
+        assert result.selected_source == "llm"

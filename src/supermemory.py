@@ -67,6 +67,24 @@ class EpisodeRecord:
 
 
 @dataclass
+class StepExperience:
+    """v14.1 SLEA-RL: A single step within an episode for fine-grained retrieval.
+
+    arXiv:2603.18079 — Step-Level Experience Augmented RL
+    Stores intermediate step data (role, action, observation, reward)
+    to enable step-level few-shot retrieval instead of episode-level only.
+    """
+    step_id: str
+    episode_id: str
+    step_index: int
+    role: str
+    action: str  # what the agent did (prompt summary or tool call)
+    observation: str  # result / response
+    reward: float  # per-step quality score
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
 class RecallResult:
     """A single result from recall()."""
     content: str
@@ -114,6 +132,7 @@ class SuperMemory:
         self._warm: Dict[str, MemoryRecord] = {}
         self._cold: Dict[str, MemoryRecord] = {}
         self._episodes: List[EpisodeRecord] = []
+        self._step_experiences: List[StepExperience] = []
 
     # ------------------------------------------------------------------
     # Initialization
@@ -181,6 +200,20 @@ class SuperMemory:
             CREATE INDEX IF NOT EXISTS idx_memories_tier ON memories(tier);
             CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance DESC);
             CREATE INDEX IF NOT EXISTS idx_episodes_task ON episodes(task);
+
+            -- v14.1 SLEA-RL: step-level experiences
+            CREATE TABLE IF NOT EXISTS step_experiences (
+                step_id TEXT PRIMARY KEY,
+                episode_id TEXT NOT NULL,
+                step_index INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                action TEXT NOT NULL,
+                observation TEXT NOT NULL DEFAULT '',
+                reward REAL DEFAULT 0.0,
+                timestamp REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_steps_episode ON step_experiences(episode_id);
+            CREATE INDEX IF NOT EXISTS idx_steps_role ON step_experiences(role);
         """)
         self._conn.commit()
 
@@ -205,6 +238,21 @@ class SuperMemory:
                 reward=row[3], success=bool(row[4]),
                 timestamp=row[5], summary=row[6] or "",
             ))
+
+        # v14.1 SLEA-RL: load recent step experiences
+        try:
+            cursor = self._conn.execute(
+                "SELECT * FROM step_experiences ORDER BY timestamp DESC LIMIT 500"
+            )
+            for row in cursor.fetchall():
+                self._step_experiences.append(StepExperience(
+                    step_id=row[0], episode_id=row[1], step_index=row[2],
+                    role=row[3], action=row[4], observation=row[5],
+                    reward=row[6], timestamp=row[7] or time.time(),
+                ))
+        except sqlite3.OperationalError:
+            # Table may not exist yet in older DBs — will be created on next init
+            pass
 
     # ------------------------------------------------------------------
     # Store
@@ -479,6 +527,7 @@ class SuperMemory:
             "warm_items": len(self._warm),
             "cold_items": len(self._cold),
             "episodes": len(self._episodes),
+            "step_experiences": len(self._step_experiences),
             "hot_tokens": self._total_tokens("hot"),
             "warm_tokens": self._total_tokens("warm"),
             "cold_tokens": self._total_tokens("cold"),
@@ -605,6 +654,103 @@ class SuperMemory:
             lines.append(f"Example {i} (relevance {score:.2f}):")
             lines.append(f"  Task: {ep.task[:100]}")
             lines.append(f"  {ep.summary or 'No summary'}")
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # v14.1: SLEA-RL — Step-Level Experience Augmented RL
+    # arXiv:2603.18079 — Dilxat Muhtar et al.
+    # ------------------------------------------------------------------
+
+    def save_step_experience(
+        self,
+        episode_id: str,
+        step_index: int,
+        role: str,
+        action: str,
+        observation: str = "",
+        reward: float = 0.0,
+    ) -> str:
+        """Сохраняет отдельный шаг выполнения пайплайна как step-level experience.
+
+        Позволяет recall_step_experiences искать релевантные шаги по роли/ключевым словам
+        для более точной few-shot инжекции на уровне отдельных шагов (а не целых эпизодов).
+
+        Returns step_id, пустую строку если SuperMemory не инициализирована.
+        """
+        if not self._initialized:
+            return ""
+
+        step_id = f"{episode_id}:s{step_index}"
+        step = StepExperience(
+            step_id=step_id,
+            episode_id=episode_id,
+            step_index=step_index,
+            role=role,
+            action=action[:500],
+            observation=observation[:500],
+            reward=reward,
+        )
+        self._step_experiences.insert(0, step)
+
+        # Persist to SQLite
+        if self._conn:
+            try:
+                self._conn.execute("""
+                    INSERT OR REPLACE INTO step_experiences
+                    (step_id, episode_id, step_index, role, action, observation, reward, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (step.step_id, step.episode_id, step.step_index,
+                      step.role, step.action, step.observation,
+                      step.reward, step.timestamp))
+                self._conn.commit()
+            except Exception as e:
+                logger.warning("SLEA-RL: step save DB error", error=str(e))
+
+        logger.debug(
+            "SLEA-RL: step experience saved",
+            step_id=step_id, role=role, reward=round(reward, 2),
+        )
+        return step_id
+
+    def recall_step_experiences(
+        self,
+        query: str,
+        role_filter: Optional[str] = None,
+        top_k: int = 5,
+    ) -> str:
+        """Ищет похожие step-level experiences для few-shot инжекции.
+
+        Фильтрует по role_filter (если задан) и ключевым словам из query.
+        Возвращает отформатированный блок [STEP-LEVEL FEW-SHOT] или пустую строку.
+        """
+        if not self._initialized or not self._step_experiences:
+            return ""
+
+        query_words = set(w.lower() for w in query.split() if len(w) > 3)
+        if not query_words:
+            return ""
+
+        scored: list[tuple[float, StepExperience]] = []
+        for step in self._step_experiences[:200]:
+            if role_filter and step.role != role_filter:
+                continue
+            text = (step.action + " " + step.observation).lower()
+            overlap = sum(1 for w in query_words if w in text)
+            if overlap > 0:
+                score = (step.reward * 0.4) + (overlap / max(len(query_words), 1)) * 0.6
+                scored.append((score, step))
+
+        scored.sort(key=lambda x: -x[0])
+        top = scored[:top_k]
+        if not top:
+            return ""
+
+        lines = ["[STEP-LEVEL FEW-SHOT from past step experiences]"]
+        for i, (score, s) in enumerate(top, 1):
+            lines.append(f"Step {i} (role={s.role}, relevance={score:.2f}):")
+            lines.append(f"  Action: {s.action[:200]}")
+            if s.observation:
+                lines.append(f"  Observation: {s.observation[:200]}")
         return "\n".join(lines)
 
     def decay(self, factor: float = 0.95) -> int:

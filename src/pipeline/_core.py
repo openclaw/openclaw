@@ -73,6 +73,10 @@ from src.pipeline._aflow import AFlowEngine
 from src.pipeline._sage import SAGEEngine
 from src.safety.mac_constitution import MACConstitution
 
+# v14.1: Counterfactual Credit + ProRL rollout evaluation
+from src.pipeline._counterfactual import CounterfactualCredit
+from src.pipeline._prorl import ProRLEngine
+
 logger = structlog.get_logger(__name__)
 
 
@@ -199,6 +203,18 @@ class PipelineExecutor:
             enabled=mac_cfg.get("enabled", True),
         )
 
+        # v14.1: Counterfactual Credit for Ensemble Voting attribution
+        cc_cfg = self.config.get("system", {}).get("counterfactual_credit", {})
+        self._counterfactual = CounterfactualCredit(
+            enabled=cc_cfg.get("enabled", True),
+        )
+
+        # v14.1: ProRL lightweight rollout evaluation
+        prorl_cfg = self.config.get("system", {}).get("prorl", {})
+        self._prorl = ProRLEngine(
+            enabled=prorl_cfg.get("enabled", True),
+        )
+
     def _init_supermemory(self) -> None:
         init_supermemory(self)
 
@@ -283,6 +299,29 @@ class PipelineExecutor:
                 max_chain_len=max_steps,
             )
             chain = aflow_result.chain or self.get_chain(brigade)
+
+            # v14.1: ProRL — evaluate AFlow chain vs static fallback
+            static_chain = self.get_chain(brigade)[:max_steps]
+            _complexity = classify_complexity(prompt)
+            try:
+                prorl_result = self._prorl.evaluate_candidates(
+                    candidates=[
+                        (chain[:max_steps], aflow_result.source),
+                        (static_chain, "static"),
+                    ],
+                    complexity=_complexity,
+                )
+                chain = prorl_result.selected_chain
+                source = prorl_result.selected_source
+                logger.info(
+                    "ProRL: chain selected",
+                    chain=chain, source=source,
+                    score=prorl_result.best_score,
+                )
+                return chain, source
+            except Exception as _prorl_err:
+                logger.debug("ProRL evaluation failed (non-fatal)", error=str(_prorl_err))
+
             logger.info(
                 "AFlow chain generated",
                 chain=chain,
@@ -679,6 +718,23 @@ class PipelineExecutor:
                 logger.debug(f"Git auto-commit failed: {e}")
 
             context_briefing = compress_for_next_step(role_name, response)
+
+            # v14.1: SLEA-RL — сохраняем step-level experience
+            if self._supermemory and response and not response.startswith("⚠️"):
+                try:
+                    _step_reward = 0.7  # default for non-error steps
+                    if "error" in response.lower() or "fail" in response.lower():
+                        _step_reward = 0.3
+                    self._supermemory.save_step_experience(
+                        episode_id=f"run:{int(time.time())}",
+                        step_index=step_index,
+                        role=role_name,
+                        action=prompt[:200],
+                        observation=response[:300],
+                        reward=_step_reward,
+                    )
+                except Exception as _slea_err:
+                    logger.debug("SLEA-RL step save failed (non-fatal)", error=str(_slea_err))
             step_index += 1
 
         raw_response = steps_results[-1]["response"] if steps_results else ""
@@ -759,6 +815,13 @@ class PipelineExecutor:
                 )
             except Exception as _trl_err:
                 logger.debug("Trajectory save failed (non-fatal)", error=str(_trl_err))
+
+        # v14.1: Counterfactual Credit — persist stats to SuperMemory
+        if self._supermemory:
+            try:
+                self._counterfactual.save_to_memory(self._supermemory)
+            except Exception as _cc_err:
+                logger.debug("Counterfactual credit save failed (non-fatal)", error=str(_cc_err))
 
         logger.info(f"Pipeline COMPLETE: brigade={brigade}, steps={len(steps_results)}")
 
@@ -907,10 +970,26 @@ class PipelineExecutor:
                 idx = int(m.group(1)) - 1
                 if 0 <= idx < len(candidates):
                     logger.info("Ensemble: Auditor selected winner", idx=idx + 1)
+                    # v14.1: Counterfactual Credit — record vote outcome
+                    try:
+                        self._counterfactual.record_vote(
+                            role=role_name, temperatures=temperatures,
+                            candidates=candidates, winner_index=idx,
+                        )
+                    except Exception:
+                        pass
                     return candidates[idx]
             # Otherwise return the synthesised composite
             if verdict and len(verdict.strip()) > 30:
                 logger.info("Ensemble: Auditor synthesised composite answer")
+                # v14.1: Counterfactual Credit — composite = first candidate wins by default
+                try:
+                    self._counterfactual.record_vote(
+                        role=role_name, temperatures=temperatures,
+                        candidates=candidates, winner_index=0,
+                    )
+                except Exception:
+                    pass
                 return verdict
         except Exception as e:
             logger.warning("Ensemble Auditor failed, using longest candidate", error=str(e))
