@@ -212,6 +212,13 @@ export function resolveMattermostThreadSessionContext(params: {
     parentSessionKey: threadKeys.parentSessionKey,
   };
 }
+
+export function resolveMattermostReactionChannelId(
+  payload: Pick<MattermostEventPayload, "broadcast" | "data">,
+): string | undefined {
+  return payload.broadcast?.channel_id?.trim() || payload.data?.channel_id?.trim() || undefined;
+}
+
 function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]): string {
   if (mediaList.length === 0) {
     return "";
@@ -1492,7 +1499,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const senderName = senderInfo?.username?.trim() || userId;
 
     // Resolve the channel from broadcast or post to route to the correct agent session
-    const channelId = payload.broadcast?.channel_id;
+    const channelId = resolveMattermostReactionChannelId(payload);
     if (!channelId) {
       // Without a channel id we cannot verify DM/group policies — drop to be safe
       logVerboseMessage(
