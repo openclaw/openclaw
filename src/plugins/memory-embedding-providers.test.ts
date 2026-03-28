@@ -57,17 +57,33 @@ function expectMemoryEmbeddingProviderIds(expectedIds: readonly string[]) {
   expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([...expectedIds]);
 }
 
+function expectMemoryEmbeddingProviderState(params: {
+  expectedIds: readonly string[];
+  expectedCurrent?: { id: string; adapter: MemoryEmbeddingProviderAdapter };
+}) {
+  if (params.expectedCurrent) {
+    expect(getMemoryEmbeddingProvider(params.expectedCurrent.id)).toBe(
+      params.expectedCurrent.adapter,
+    );
+  }
+  expectMemoryEmbeddingProviderIds(params.expectedIds);
+}
+
 afterEach(() => {
   clearMemoryEmbeddingProviders();
 });
 
 describe("memory embedding provider registry", () => {
   it("registers and lists adapters in insertion order", () => {
-    registerMemoryEmbeddingProvider(createAdapter("alpha"));
-    registerMemoryEmbeddingProvider(createAdapter("beta"));
+    const alpha = createAdapter("alpha");
+    const beta = createAdapter("beta");
+    registerMemoryEmbeddingProvider(alpha);
+    registerMemoryEmbeddingProvider(beta);
 
-    expect(getMemoryEmbeddingProvider("alpha")?.id).toBe("alpha");
-    expectMemoryEmbeddingProviderIds(["alpha", "beta"]);
+    expectMemoryEmbeddingProviderState({
+      expectedIds: ["alpha", "beta"],
+      expectedCurrent: { id: "alpha", adapter: alpha },
+    });
   });
 
   it("restores a previous snapshot", () => {

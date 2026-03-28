@@ -49,6 +49,16 @@ function expectActiveRouteRegistryResolution(params: {
   );
 }
 
+function expectPinnedRouteRegistry(
+  startupRegistry: ReturnType<typeof createEmptyPluginRegistry>,
+  laterRegistry: ReturnType<typeof createEmptyPluginRegistry>,
+) {
+  setActivePluginRegistry(startupRegistry);
+  pinActivePluginHttpRouteRegistry(startupRegistry);
+  setActivePluginRegistry(laterRegistry);
+  expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(startupRegistry);
+}
+
 describe("plugin runtime route registry", () => {
   afterEach(() => {
     releasePinnedPluginHttpRouteRegistry();
@@ -63,12 +73,7 @@ describe("plugin runtime route registry", () => {
 
   it("keeps the pinned route registry when the active plugin registry changes", () => {
     const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
-
-    setActivePluginRegistry(startupRegistry);
-    pinActivePluginHttpRouteRegistry(startupRegistry);
-    setActivePluginRegistry(laterRegistry);
-
-    expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(startupRegistry);
+    expectPinnedRouteRegistry(startupRegistry, laterRegistry);
   });
 
   it("tracks route registry repins separately from the active registry version", () => {
