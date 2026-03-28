@@ -6,7 +6,7 @@ const getChannelPluginMock = vi.hoisted(() => vi.fn());
 const applyPluginAutoEnableMock = vi.hoisted(() => vi.fn());
 const resolveRuntimePluginRegistryMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryMock = vi.hoisted(() => vi.fn());
-const getActivePluginRegistryKeyMock = vi.hoisted(() => vi.fn());
+const getActivePluginChannelRegistryVersionMock = vi.hoisted(() => vi.fn());
 const normalizeMessageChannelMock = vi.hoisted(() => vi.fn());
 const isDeliverableMessageChannelMock = vi.hoisted(() => vi.fn());
 
@@ -29,7 +29,8 @@ vi.mock("../../plugins/loader.js", () => ({
 
 vi.mock("../../plugins/runtime.js", () => ({
   getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
-  getActivePluginRegistryKey: (...args: unknown[]) => getActivePluginRegistryKeyMock(...args),
+  getActivePluginChannelRegistryVersion: (...args: unknown[]) =>
+    getActivePluginChannelRegistryVersionMock(...args),
 }));
 
 vi.mock("../../utils/message-channel.js", () => ({
@@ -64,7 +65,7 @@ describe("outbound channel resolution", () => {
     applyPluginAutoEnableMock.mockReset();
     resolveRuntimePluginRegistryMock.mockReset();
     getActivePluginRegistryMock.mockReset();
-    getActivePluginRegistryKeyMock.mockReset();
+    getActivePluginChannelRegistryVersionMock.mockReset();
     normalizeMessageChannelMock.mockReset();
     isDeliverableMessageChannelMock.mockReset();
 
@@ -75,7 +76,7 @@ describe("outbound channel resolution", () => {
       ["telegram", "discord", "slack"].includes(String(value)),
     );
     getActivePluginRegistryMock.mockReturnValue({ channels: [] });
-    getActivePluginRegistryKeyMock.mockReturnValue("registry-key");
+    getActivePluginChannelRegistryVersionMock.mockReturnValue(1);
     applyPluginAutoEnableMock.mockReturnValue({ config: { autoEnabled: true } });
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
@@ -173,6 +174,24 @@ describe("outbound channel resolution", () => {
       }),
     ).toBeUndefined();
 
+    channelResolution.resolveOutboundChannelPlugin({
+      channel: "telegram",
+      cfg: { channels: {} } as never,
+    });
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries bootstrap when the pinned channel registry version changes", async () => {
+    getChannelPluginMock.mockReturnValue(undefined);
+    const channelResolution = await importChannelResolution("channel-version-change");
+
+    channelResolution.resolveOutboundChannelPlugin({
+      channel: "telegram",
+      cfg: { channels: {} } as never,
+    });
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
+
+    getActivePluginChannelRegistryVersionMock.mockReturnValue(2);
     channelResolution.resolveOutboundChannelPlugin({
       channel: "telegram",
       cfg: { channels: {} } as never,

@@ -4,7 +4,10 @@ import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { resolveRuntimePluginRegistry } from "../../plugins/loader.js";
-import { getActivePluginRegistry, getActivePluginRegistryKey } from "../../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginChannelRegistryVersion,
+} from "../../plugins/runtime.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -44,8 +47,7 @@ function maybeBootstrapChannelPlugin(params: {
     return;
   }
 
-  const registryKey = getActivePluginRegistryKey() ?? "<none>";
-  const attemptKey = `${registryKey}:${params.channel}`;
+  const attemptKey = `${getActivePluginChannelRegistryVersion()}:${params.channel}`;
   if (bootstrapAttempts.has(attemptKey)) {
     return;
   }
