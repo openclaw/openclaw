@@ -1,9 +1,9 @@
 import { EventEmitter } from "node:events";
+import type { Client } from "@buape/carbon";
 import type { GatewayPlugin } from "@buape/carbon/gateway";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 import type { WaitForDiscordGatewayStopParams } from "../monitor.gateway.js";
-import type { MutableDiscordGateway } from "./gateway-handle.js";
 import type { DiscordGatewayEvent } from "./gateway-supervisor.js";
 
 type LifecycleParams = Parameters<
@@ -118,6 +118,9 @@ describe("runDiscordGatewayLifecycle", () => {
       error: runtimeError,
       exit: runtimeExit,
     };
+    const client = {
+      getPlugin: vi.fn((name: string) => (name === "gateway" ? gateway : undefined)),
+    } as unknown as Client;
     return {
       start,
       stop,
@@ -128,7 +131,7 @@ describe("runDiscordGatewayLifecycle", () => {
       statusSink,
       lifecycleParams: {
         accountId: params?.accountId ?? "default",
-        gateway: gateway as unknown as MutableDiscordGateway,
+        client,
         runtime,
         isDisallowedIntentsError: params?.isDisallowedIntentsError ?? (() => false),
         voiceManager: null,
