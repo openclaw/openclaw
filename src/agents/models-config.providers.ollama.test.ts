@@ -61,7 +61,7 @@ describe("Ollama provider", () => {
   }
 
   async function resolveProvidersWithOllamaKey(agentDir: string) {
-    return await withOllamaApiKey(async () => await resolveImplicitProvidersForTest({ agentDir }));
+    return withOllamaApiKey(() => resolveImplicitProvidersForTest({ agentDir }));
   }
 
   const createTagModel = (name: string) => ({ name, modified_at: "", size: 1, digest: "" });
