@@ -379,9 +379,12 @@ export async function sendMessageSlack(
       tableAttachments = markdownTablesToBlockKitAttachment(allTables);
       // Slack only allows one table block per message. Render any
       // additional tables as code blocks in the text stream.
+      // When there's no surrounding text, also include the first
+      // table's code representation so the text field (used for
+      // notifications/accessibility) has complete content.
       if (allTables.length > 1) {
-        const extraTablesText = allTables
-          .slice(1)
+        const tablesToRender = chunks.length === 0 ? allTables : allTables.slice(1);
+        const extraTablesText = tablesToRender
           .map((t) => "```\n" + tableFallbackText([t]) + "\n```")
           .join("\n\n");
         chunks.push(extraTablesText);
