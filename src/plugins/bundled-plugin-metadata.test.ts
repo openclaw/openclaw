@@ -20,6 +20,14 @@ const BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS = 300_000;
 
 installGeneratedPluginTempRootCleanup();
 
+function expectTestOnlyArtifactsExcluded(artifacts: readonly string[]) {
+  for (const artifact of artifacts) {
+    expect(artifact).not.toMatch(/^test-/);
+    expect(artifact).not.toContain(".test-");
+    expect(artifact).not.toMatch(/\.test\.js$/);
+  }
+}
+
 describe("bundled plugin metadata", () => {
   it(
     "matches the generated metadata snapshot",
@@ -49,13 +57,9 @@ describe("bundled plugin metadata", () => {
   });
 
   it("excludes test-only public surface artifacts", () => {
-    for (const entry of BUNDLED_PLUGIN_METADATA) {
-      for (const artifact of entry.publicSurfaceArtifacts ?? []) {
-        expect(artifact).not.toMatch(/^test-/);
-        expect(artifact).not.toContain(".test-");
-        expect(artifact).not.toMatch(/\.test\.js$/);
-      }
-    }
+    BUNDLED_PLUGIN_METADATA.forEach((entry) =>
+      expectTestOnlyArtifactsExcluded(entry.publicSurfaceArtifacts ?? []),
+    );
   });
 
   it("prefers built generated paths when present and falls back to source paths", () => {
