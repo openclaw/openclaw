@@ -127,6 +127,7 @@ is a small, self-contained module with a clear purpose and documented contract.
   | `plugin-sdk/channel-runtime` | Runtime wiring helpers | Channel runtime utilities |
   | `plugin-sdk/channel-send-result` | Send result types | Reply result types |
   | `plugin-sdk/runtime-store` | Persistent plugin storage | `createPluginRuntimeStore` |
+  | `plugin-sdk/approval-runtime` | Approval prompt helpers | Exec/plugin approval payload and reply helpers |
   | `plugin-sdk/collection-runtime` | Bounded cache helpers | `pruneMapToMaxSize` |
   | `plugin-sdk/diagnostic-runtime` | Diagnostic gating helpers | `isDiagnosticFlagEnabled`, `isDiagnosticsEnabled` |
   | `plugin-sdk/error-runtime` | Error formatting helpers | `formatUncaughtError`, error graph helpers |

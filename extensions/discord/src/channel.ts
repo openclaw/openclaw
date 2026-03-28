@@ -4,6 +4,12 @@ import {
   createAccountScopedAllowlistNameResolver,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
+import {
+  buildPluginApprovalRequestMessage,
+  buildPluginApprovalResolvedMessage,
+  type PluginApprovalRequest,
+  type PluginApprovalResolved,
+} from "openclaw/plugin-sdk/approval-runtime";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
@@ -14,12 +20,8 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import {
-  buildPluginApprovalRequestMessage,
-  buildPluginApprovalResolvedMessage,
   createRuntimeOutboundDelegates,
   resolveOutboundSendDep,
-  type PluginApprovalRequest,
-  type PluginApprovalResolved,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
 import {
