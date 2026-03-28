@@ -943,7 +943,9 @@ export const dispatchTelegramMessage = async ({
       removeAfterReply: removeAckAfterReply,
       ackReactionPromise,
       ackReactionValue: ackReactionPromise ? "ack" : null,
-      remove: () => reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve(),
+      remove: async () => {
+        await (reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve());
+      },
       onError: (err) => {
         if (!msg.message_id) {
           return;
