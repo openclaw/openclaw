@@ -216,6 +216,10 @@ export const TelegramAccountSchemaBase = z
     streamMode: z.enum(["off", "partial", "block"]).optional(),
     mediaMaxMb: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
+    // Subagent start announcements: send user-facing message when subagent spawns
+    subagentStartAnnouncements: z.boolean().optional(),
+    // Model status notices: send user-facing messages about selected/fallback model
+    modelStatusNotices: z.boolean().optional(),
     retry: RetryConfigSchema,
     network: z
       .object({
