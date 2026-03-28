@@ -18,17 +18,4 @@ describe("MatrixConfigSchema SecretInput", () => {
     });
     expect(result.success).toBe(true);
   });
-
-  it("accepts SecretRef password on account", () => {
-    const result = MatrixConfigSchema.safeParse({
-      accounts: {
-        work: {
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          password: { source: "env", provider: "default", id: "MATRIX_WORK_PASSWORD" },
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
 });

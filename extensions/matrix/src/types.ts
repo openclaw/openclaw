@@ -1,4 +1,4 @@
-import type { DmPolicy, GroupPolicy, SecretInput } from "./runtime-api.js";
+import type { DmPolicy, GroupPolicy, OpenClawConfig, SecretInput } from "./runtime-api.js";
 export type { DmPolicy, GroupPolicy };
 
 export type ReplyToMode = "off" | "first" | "all";
@@ -152,12 +152,6 @@ export type CoreConfig = {
     ackReaction?: string;
     ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "none" | "off";
   };
-  secrets?: {
-    defaults?: {
-      env?: string;
-      file?: string;
-      exec?: string;
-    };
-  };
+  secrets?: OpenClawConfig["secrets"];
   [key: string]: unknown;
 };

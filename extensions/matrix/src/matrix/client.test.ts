@@ -182,6 +182,31 @@ describe("resolveMatrixConfig", () => {
     );
   });
 
+  it("does not bypass env provider allowlists during startup fallback", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://cfg.example.org",
+          accessToken: { source: "env", provider: "matrix-env", id: "MATRIX_ACCESS_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          "matrix-env": {
+            source: "env",
+            allowlist: ["OTHER_MATRIX_ACCESS_TOKEN"],
+          },
+        },
+      },
+    } as CoreConfig;
+
+    expect(() =>
+      resolveMatrixConfig(cfg, {
+        MATRIX_ACCESS_TOKEN: "env-token",
+      } as NodeJS.ProcessEnv),
+    ).toThrow(/not allowlisted in secrets\.providers\.matrix-env\.allowlist/i);
+  });
+
   it("uses account-scoped env vars for non-default accounts before global env", () => {
     const cfg = {
       channels: {

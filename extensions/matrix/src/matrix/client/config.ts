@@ -28,16 +28,32 @@ import { MatrixClient } from "../sdk.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 
-type MatrixSecretDefaults = NonNullable<CoreConfig["secrets"]>["defaults"];
-
 function readEnvSecretRefFallback(params: {
   value: unknown;
   env?: NodeJS.ProcessEnv;
-  defaults?: MatrixSecretDefaults;
+  config?: Pick<CoreConfig, "secrets">;
 }): string | undefined {
-  const ref = coerceSecretRef(params.value, params.defaults);
+  const ref = coerceSecretRef(params.value, params.config?.secrets?.defaults);
   if (!ref || ref.source !== "env" || !params.env) {
     return undefined;
+  }
+
+  const providerConfig = params.config?.secrets?.providers?.[ref.provider];
+  if (providerConfig) {
+    if (providerConfig.source !== "env") {
+      throw new Error(
+        `Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "env".`,
+      );
+    }
+    if (providerConfig.allowlist && !providerConfig.allowlist.includes(ref.id)) {
+      throw new Error(
+        `Environment variable "${ref.id}" is not allowlisted in secrets.providers.${ref.provider}.allowlist.`,
+      );
+    }
+  } else if (ref.provider !== (params.config?.secrets?.defaults?.env?.trim() || "default")) {
+    throw new Error(
+      `Secret provider "${ref.provider}" is not configured (ref: ${ref.source}:${ref.provider}:${ref.id}).`,
+    );
   }
 
   const resolved = params.env[ref.id];
@@ -54,7 +70,7 @@ function clean(
   path: string,
   opts?: {
     env?: NodeJS.ProcessEnv;
-    defaults?: MatrixSecretDefaults;
+    config?: Pick<CoreConfig, "secrets">;
     allowEnvSecretRefFallback?: boolean;
   },
 ): string {
@@ -62,14 +78,14 @@ function clean(
     ? (readEnvSecretRefFallback({
         value,
         env: opts.env,
-        defaults: opts.defaults,
+        config: opts.config,
       }) ?? value)
     : value;
   return (
     normalizeResolvedSecretInputString({
       value: normalizedValue,
       path,
-      defaults: opts?.defaults,
+      defaults: opts?.config?.secrets?.defaults,
     }) ?? ""
   );
 }
@@ -104,12 +120,12 @@ function readMatrixBaseConfigField(
   field: MatrixConfigStringField,
   opts?: {
     env?: NodeJS.ProcessEnv;
-    defaults?: MatrixSecretDefaults;
+    config?: Pick<CoreConfig, "secrets">;
   },
 ): string {
   return clean(matrix[field], resolveMatrixBaseConfigFieldPath(field), {
     env: opts?.env,
-    defaults: opts?.defaults,
+    config: opts?.config,
     allowEnvSecretRefFallback: shouldAllowEnvSecretRefFallback(field),
   });
 }
@@ -121,12 +137,12 @@ function readMatrixAccountConfigField(
   field: MatrixConfigStringField,
   opts?: {
     env?: NodeJS.ProcessEnv;
-    defaults?: MatrixSecretDefaults;
+    config?: Pick<CoreConfig, "secrets">;
   },
 ): string {
   return clean(account[field], resolveMatrixConfigFieldPath(cfg, accountId, field), {
     env: opts?.env,
-    defaults: opts?.defaults,
+    config: opts?.config,
     allowEnvSecretRefFallback: shouldAllowEnvSecretRefFallback(field),
   });
 }
@@ -303,7 +319,7 @@ export function resolveMatrixConfig(
   const matrix = resolveMatrixBaseConfig(cfg);
   const fieldReadOptions = {
     env,
-    defaults: cfg.secrets?.defaults,
+    config: cfg,
   };
   const defaultScopedEnv = resolveScopedMatrixEnvConfig(DEFAULT_ACCOUNT_ID, env);
   const globalEnv = resolveGlobalMatrixEnvConfig(env);
@@ -346,7 +362,7 @@ export function resolveMatrixConfigForAccount(
   const normalizedAccountId = normalizeAccountId(accountId);
   const fieldReadOptions = {
     env,
-    defaults: cfg.secrets?.defaults,
+    config: cfg,
   };
   const scopedEnv = resolveScopedMatrixEnvConfig(normalizedAccountId, env);
   const globalEnv = resolveGlobalMatrixEnvConfig(env);
