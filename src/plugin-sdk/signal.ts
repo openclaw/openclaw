@@ -51,6 +51,7 @@ export { SignalConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { normalizeE164 } from "../utils.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
+export { chunkText } from "../auto-reply/chunk.js";
 export {
   createCliPathTextInput,
   createDelegatedTextInputShouldPrompt,
