@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { agentsBindCommand } from "./agents.js";
 import { setDefaultChannelPluginRegistryForTests } from "./channel-test-helpers.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -28,10 +27,14 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   writeConfigFile: writeConfigFileMock,
 }));
 
+let agentsBindCommand: typeof import("./agents.js").agentsBindCommand;
+
 describe("agents bind matrix integration", () => {
   const runtime = createTestRuntime();
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ agentsBindCommand } = await import("./agents.js"));
     readConfigFileSnapshotMock.mockClear();
     writeConfigFileMock.mockClear();
     runtime.log.mockClear();
