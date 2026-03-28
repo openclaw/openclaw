@@ -186,16 +186,23 @@ function Invoke-Logged {
     [Parameter(Mandatory = $true)][scriptblock]$Command
   )
 
+  $output = $null
   $previousErrorActionPreference = $ErrorActionPreference
   $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
   try {
     $ErrorActionPreference = 'Continue'
     $PSNativeCommandUseErrorActionPreference = $false
-    & $Command *>> $LogPath
+    # Merge native stderr into stdout before logging so npm/openclaw warnings do not
+    # surface as PowerShell error records and abort a healthy in-place update.
+    $output = & $Command *>&1
     $exitCode = $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $previousErrorActionPreference
     $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+  }
+
+  if ($null -ne $output) {
+    $output | Tee-Object -FilePath $LogPath -Append | Out-Null
   }
 
   if ($exitCode -ne 0) {
@@ -214,7 +221,7 @@ function Invoke-CaptureLogged {
   try {
     $ErrorActionPreference = 'Continue'
     $PSNativeCommandUseErrorActionPreference = $false
-    $output = & $Command 2>&1
+    $output = & $Command *>&1
     $exitCode = $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $previousErrorActionPreference
