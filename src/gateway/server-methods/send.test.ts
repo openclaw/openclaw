@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
+  applyPluginAutoEnable: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -43,10 +44,6 @@ function resolveAgentIdFromSessionKeyForTests(params: { sessionKey?: string }): 
   return "main";
 }
 
-function passthroughPluginAutoEnable(config: unknown) {
-  return { config, changes: [] as unknown[] };
-}
-
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: ({
     sessionKey,
@@ -60,7 +57,8 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: ({ config }: { config: unknown }) => passthroughPluginAutoEnable(config),
+  applyPluginAutoEnable: ({ config, env }: { config: unknown; env?: unknown }) =>
+    mocks.applyPluginAutoEnable({ config, env }),
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
@@ -166,6 +164,7 @@ describe("gateway send mirroring", () => {
     vi.clearAllMocks();
     registrySeq += 1;
     setActivePluginRegistry(createTestRegistry([]), `send-test-${registrySeq}`);
+    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved" });
     mocks.resolveMessageChannelSelection.mockResolvedValue({
       channel: "slack",
@@ -298,6 +297,32 @@ describe("gateway send mirroring", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ messageId: "m-single-send" }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
+  it("auto-picks the single configured channel from the auto-enabled config snapshot for send", async () => {
+    const autoEnabledConfig = { channels: { slack: {} }, plugins: { allow: ["slack"] } };
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mockDeliverySuccess("m-single-send-auto");
+
+    const { respond } = await runSend({
+      to: "x",
+      message: "hi",
+      idempotencyKey: "idem-missing-channel-auto-enabled",
+    });
+
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: {},
+      env: process.env,
+    });
+    expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
+      cfg: autoEnabledConfig,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ messageId: "m-single-send-auto" }),
       undefined,
       expect.objectContaining({ channel: "slack" }),
     );
