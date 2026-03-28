@@ -29,6 +29,12 @@ type CodeExecutionConfig = XaiPluginConfig extends infer Config
     : undefined
   : undefined;
 
+function readCodeExecutionConfigRecord(
+  config?: CodeExecutionConfig,
+): Record<string, unknown> | undefined {
+  return config && typeof config === "object" ? (config as Record<string, unknown>) : undefined;
+}
+
 function readLegacyGrokApiKey(cfg?: OpenClawConfig): string | undefined {
   const search = cfg?.tools?.web?.search;
   if (!search || typeof search !== "object") {
@@ -76,7 +82,7 @@ function resolveCodeExecutionEnabled(params: {
   runtimeConfig?: OpenClawConfig;
   config?: CodeExecutionConfig;
 }): boolean {
-  if (params.config?.enabled === false) {
+  if (readCodeExecutionConfigRecord(params.config)?.enabled === false) {
     return false;
   }
   return Boolean(
@@ -130,14 +136,19 @@ export function createCodeExecutionTool(options?: {
       }
 
       const task = readStringParam(args, "task", { required: true });
-      const codeExecutionConfigRecord = codeExecutionConfig as Record<string, unknown> | undefined;
+      const codeExecutionConfigRecord = readCodeExecutionConfigRecord(codeExecutionConfig);
       const model = resolveXaiCodeExecutionModel(codeExecutionConfigRecord);
       const maxTurns = resolveXaiCodeExecutionMaxTurns(codeExecutionConfigRecord);
+      const timeoutSeconds =
+        typeof codeExecutionConfigRecord?.timeoutSeconds === "number" &&
+        Number.isFinite(codeExecutionConfigRecord.timeoutSeconds)
+          ? codeExecutionConfigRecord.timeoutSeconds
+          : 30;
       const startedAt = Date.now();
       const result = await requestXaiCodeExecution({
         apiKey,
         model,
-        timeoutSeconds: codeExecutionConfig?.timeoutSeconds ?? 30,
+        timeoutSeconds,
         maxTurns,
         task,
       });
