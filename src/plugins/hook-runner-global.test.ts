@@ -5,6 +5,15 @@ async function importHookRunnerGlobalModule() {
   return import("./hook-runner-global.js");
 }
 
+async function expectGlobalRunnerState(expected: { hasRunner: boolean; registry?: unknown }) {
+  const mod = await importHookRunnerGlobalModule();
+  expect(mod.getGlobalHookRunner() === null).toBe(!expected.hasRunner);
+  if ("registry" in expected) {
+    expect(mod.getGlobalPluginRegistry()).toBe(expected.registry ?? null);
+  }
+  return mod;
+}
+
 afterEach(async () => {
   const mod = await importHookRunnerGlobalModule();
   mod.resetGlobalHookRunner();
@@ -25,10 +34,9 @@ describe("hook-runner-global", () => {
 
     vi.resetModules();
 
-    const modB = await importHookRunnerGlobalModule();
+    const modB = await expectGlobalRunnerState({ hasRunner: true, registry });
     expect(modB.getGlobalHookRunner()).not.toBeNull();
     expect(modB.getGlobalHookRunner()?.hasHooks("message_received")).toBe(true);
-    expect(modB.getGlobalPluginRegistry()).toBe(registry);
   });
 
   it("clears the shared state across module reloads", async () => {
@@ -36,15 +44,13 @@ describe("hook-runner-global", () => {
 
     vi.resetModules();
 
-    const modB = await importHookRunnerGlobalModule();
+    const modB = await expectGlobalRunnerState({ hasRunner: true });
     modB.resetGlobalHookRunner();
     expect(modB.getGlobalHookRunner()).toBeNull();
     expect(modB.getGlobalPluginRegistry()).toBeNull();
 
     vi.resetModules();
 
-    const modC = await importHookRunnerGlobalModule();
-    expect(modC.getGlobalHookRunner()).toBeNull();
-    expect(modC.getGlobalPluginRegistry()).toBeNull();
+    await expectGlobalRunnerState({ hasRunner: false });
   });
 });

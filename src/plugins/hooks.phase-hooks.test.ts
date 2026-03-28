@@ -1,30 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createHookRunner } from "./hooks.js";
+import { addStaticTestHooks } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
-  PluginHookRegistration,
 } from "./types.js";
-
-function addTypedHook(
-  registry: PluginRegistry,
-  hookName: "before_model_resolve" | "before_prompt_build",
-  pluginId: string,
-  handler: () =>
-    | PluginHookBeforeModelResolveResult
-    | PluginHookBeforePromptBuildResult
-    | Promise<PluginHookBeforeModelResolveResult | PluginHookBeforePromptBuildResult>,
-  priority?: number,
-) {
-  registry.typedHooks.push({
-    pluginId,
-    hookName,
-    handler,
-    priority,
-    source: "test",
-  } as PluginHookRegistration);
-}
 
 describe("phase hooks merger", () => {
   let registry: PluginRegistry;
@@ -41,9 +22,10 @@ describe("phase hooks merger", () => {
       priority?: number;
     }>;
   }) {
-    for (const { pluginId, result, priority } of params.hooks) {
-      addTypedHook(registry, params.hookName, pluginId, () => result, priority);
-    }
+    addStaticTestHooks(registry, {
+      hookName: params.hookName,
+      hooks: [...params.hooks],
+    });
     const runner = createHookRunner(registry);
     if (params.hookName === "before_model_resolve") {
       return await runner.runBeforeModelResolve({ prompt: "test" }, {});

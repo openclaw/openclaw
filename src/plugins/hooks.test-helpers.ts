@@ -1,3 +1,4 @@
+import { createHookRunner } from "./hooks.js";
 import type { PluginRegistry } from "./registry.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { PluginHookAgentContext, PluginHookRegistration } from "./types.js";
@@ -62,4 +63,58 @@ export function addTestHook(params: {
     priority: params.priority ?? 0,
     source: "test",
   } as PluginHookRegistration);
+}
+
+export function addTestHooks(
+  registry: PluginRegistry,
+  hooks: ReadonlyArray<{
+    pluginId: string;
+    hookName: PluginHookRegistration["hookName"];
+    handler: PluginHookRegistration["handler"];
+    priority?: number;
+  }>,
+) {
+  for (const hook of hooks) {
+    addTestHook({
+      registry,
+      pluginId: hook.pluginId,
+      hookName: hook.hookName,
+      handler: hook.handler,
+      ...(hook.priority !== undefined ? { priority: hook.priority } : {}),
+    });
+  }
+}
+
+export function addStaticTestHooks<TResult>(
+  registry: PluginRegistry,
+  params: {
+    hookName: PluginHookRegistration["hookName"];
+    hooks: ReadonlyArray<{
+      pluginId: string;
+      result: TResult;
+      priority?: number;
+      handler?: () => TResult | Promise<TResult>;
+    }>;
+  },
+) {
+  addTestHooks(
+    registry,
+    params.hooks.map(({ pluginId, result, priority, handler }) => ({
+      pluginId,
+      hookName: params.hookName,
+      handler: (handler ?? (() => result)) as PluginHookRegistration["handler"],
+      ...(priority !== undefined ? { priority } : {}),
+    })),
+  );
+}
+
+export function createHookRunnerWithRegistry(
+  hooks: Array<{ hookName: string; handler: (...args: unknown[]) => unknown }>,
+  options?: Parameters<typeof createHookRunner>[1],
+) {
+  const registry = createMockPluginRegistry(hooks);
+  return {
+    registry,
+    runner: createHookRunner(registry, options),
+  };
 }

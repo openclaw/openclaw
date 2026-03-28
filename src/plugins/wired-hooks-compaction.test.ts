@@ -91,6 +91,17 @@ describe("compaction hook wiring", () => {
     };
   }
 
+  function expectCompactionEvent(params: {
+    call: ReturnType<typeof getBeforeCompactionCall> | ReturnType<typeof getAfterCompactionCall>;
+    expectedEvent: Record<string, unknown>;
+    expectedSessionKey?: string;
+  }) {
+    expect(params.call.event).toEqual(expect.objectContaining(params.expectedEvent));
+    if (params.expectedSessionKey !== undefined) {
+      expect(params.call.hookCtx?.sessionKey).toBe(params.expectedSessionKey);
+    }
+  }
+
   function runCompactionEnd(
     ctx: ReturnType<typeof createCompactionEndCtx> | Record<string, unknown>,
     event: {
@@ -127,11 +138,15 @@ describe("compaction hook wiring", () => {
     handleAutoCompactionStart(ctx as never);
 
     expect(hookMocks.runner.runBeforeCompaction).toHaveBeenCalledTimes(1);
-    const { event, hookCtx } = getBeforeCompactionCall();
-    expect(event?.messageCount).toBe(3);
-    expect(event?.messages).toEqual([1, 2, 3]);
-    expect(event?.sessionFile).toBe("/tmp/test.jsonl");
-    expect(hookCtx?.sessionKey).toBe("agent:main:web-abc123");
+    expectCompactionEvent({
+      call: getBeforeCompactionCall(),
+      expectedEvent: {
+        messageCount: 3,
+        messages: [1, 2, 3],
+        sessionFile: "/tmp/test.jsonl",
+      },
+      expectedSessionKey: "agent:main:web-abc123",
+    });
     expect(ctx.ensureCompactionPromise).toHaveBeenCalledTimes(1);
     expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
       runId: "r1",
@@ -158,11 +173,15 @@ describe("compaction hook wiring", () => {
     runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
 
     expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
-    const { event, hookCtx } = getAfterCompactionCall();
-    expect(event?.messageCount).toBe(2);
-    expect(event?.compactedCount).toBe(1);
-    expect(event?.sessionFile).toBe("/tmp/session.jsonl");
-    expect(hookCtx?.sessionKey).toBe("agent:main:web-xyz");
+    expectCompactionEvent({
+      call: getAfterCompactionCall(),
+      expectedEvent: {
+        messageCount: 2,
+        compactedCount: 1,
+        sessionFile: "/tmp/session.jsonl",
+      },
+      expectedSessionKey: "agent:main:web-xyz",
+    });
     expect(ctx.incrementCompactionCount).toHaveBeenCalledTimes(1);
     expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledTimes(1);
     expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
