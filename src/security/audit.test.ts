@@ -215,6 +215,19 @@ async function audit(
   });
 }
 
+async function runAuditCases<
+  T extends {
+    run: () => Promise<SecurityAuditReport>;
+    assert: (res: SecurityAuditReport) => void;
+  },
+>(cases: readonly T[]) {
+  await Promise.all(
+    cases.map(async ({ run, assert }) => {
+      assert(await run());
+    }),
+  );
+}
+
 function hasFinding(res: SecurityAuditReport, checkId: string, severity?: string): boolean {
   return res.findings.some(
     (f) => f.checkId === checkId && (severity == null || f.severity === severity),
@@ -553,12 +566,7 @@ description: test skill
       },
     ] as const;
 
-    await Promise.all(
-      cases.map(async (testCase) => {
-        const res = await testCase.run();
-        testCase.assert(res);
-      }),
-    );
+    await runAuditCases(cases);
   });
 
   it("scores dangerous gateway.tools.allow over HTTP by exposure", async () => {
@@ -1231,12 +1239,7 @@ description: test skill
       },
     ] as const;
 
-    await Promise.all(
-      cases.map(async (testCase) => {
-        const res = await testCase.run();
-        testCase.assert(res);
-      }),
-    );
+    await runAuditCases(cases);
   });
 
   it("uses symlink target permissions for config checks", async () => {
@@ -1471,21 +1474,23 @@ description: test skill
       },
     ] as const;
 
-    await Promise.all(
-      cases.map(async (testCase) => {
-        const res = await audit(testCase.cfg);
-        if (testCase.expectedFindings.length > 0) {
-          expect(res.findings, testCase.name).toEqual(
-            expect.arrayContaining(
-              testCase.expectedFindings.map((finding) => expect.objectContaining(finding)),
-            ),
-          );
-        }
-        const expectedAbsent = "expectedAbsent" in testCase ? testCase.expectedAbsent : [];
-        for (const checkId of expectedAbsent) {
-          expect(hasFinding(res, checkId), `${testCase.name}:${checkId}`).toBe(false);
-        }
-      }),
+    await runAuditCases(
+      cases.map((testCase) => ({
+        run: () => audit(testCase.cfg),
+        assert: (res: SecurityAuditReport) => {
+          if (testCase.expectedFindings.length > 0) {
+            expect(res.findings, testCase.name).toEqual(
+              expect.arrayContaining(
+                testCase.expectedFindings.map((finding) => expect.objectContaining(finding)),
+              ),
+            );
+          }
+          const expectedAbsent = "expectedAbsent" in testCase ? testCase.expectedAbsent : [];
+          for (const checkId of expectedAbsent) {
+            expect(hasFinding(res, checkId), `${testCase.name}:${checkId}`).toBe(false);
+          }
+        },
+      })),
     );
   });
 
@@ -1527,21 +1532,23 @@ description: test skill
       },
     ] as const;
 
-    await Promise.all(
-      cases.map(async (testCase) => {
-        const res = await audit(testCase.cfg);
-        const finding = res.findings.find(
-          (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
-        );
-        expect(finding?.severity, testCase.name).toBe("warn");
-        for (const text of testCase.detailIncludes) {
-          expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
-        }
-        const detailExcludes = "detailExcludes" in testCase ? testCase.detailExcludes : [];
-        for (const text of detailExcludes) {
-          expect(finding?.detail, `${testCase.name}:${text}`).not.toContain(text);
-        }
-      }),
+    await runAuditCases(
+      cases.map((testCase) => ({
+        run: () => audit(testCase.cfg),
+        assert: (res: SecurityAuditReport) => {
+          const finding = res.findings.find(
+            (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
+          );
+          expect(finding?.severity, testCase.name).toBe("warn");
+          for (const text of testCase.detailIncludes) {
+            expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
+          }
+          const detailExcludes = "detailExcludes" in testCase ? testCase.detailExcludes : [];
+          for (const text of detailExcludes) {
+            expect(finding?.detail, `${testCase.name}:${text}`).not.toContain(text);
+          }
+        },
+      })),
     );
   });
 
@@ -1581,26 +1588,28 @@ description: test skill
       },
     ] as const;
 
-    await Promise.all(
-      cases.map(async (testCase) => {
-        const res = await audit(testCase.cfg);
-        if ("expectedAbsent" in testCase && testCase.expectedAbsent) {
-          expectNoFinding(res, "gateway.nodes.allow_commands_dangerous");
-          return;
-        }
-        const expectedSeverity =
-          "expectedSeverity" in testCase ? testCase.expectedSeverity : undefined;
-        if (!expectedSeverity) {
-          return;
-        }
+    await runAuditCases(
+      cases.map((testCase) => ({
+        run: () => audit(testCase.cfg),
+        assert: (res: SecurityAuditReport) => {
+          if ("expectedAbsent" in testCase && testCase.expectedAbsent) {
+            expectNoFinding(res, "gateway.nodes.allow_commands_dangerous");
+            return;
+          }
+          const expectedSeverity =
+            "expectedSeverity" in testCase ? testCase.expectedSeverity : undefined;
+          if (!expectedSeverity) {
+            return;
+          }
 
-        const finding = res.findings.find(
-          (f) => f.checkId === "gateway.nodes.allow_commands_dangerous",
-        );
-        expect(finding?.severity, testCase.name).toBe(expectedSeverity);
-        expect(finding?.detail, testCase.name).toContain("camera.snap");
-        expect(finding?.detail, testCase.name).toContain("screen.record");
-      }),
+          const finding = res.findings.find(
+            (f) => f.checkId === "gateway.nodes.allow_commands_dangerous",
+          );
+          expect(finding?.severity, testCase.name).toBe(expectedSeverity);
+          expect(finding?.detail, testCase.name).toContain("camera.snap");
+          expect(finding?.detail, testCase.name).toContain("screen.record");
+        },
+      })),
     );
   });
 
