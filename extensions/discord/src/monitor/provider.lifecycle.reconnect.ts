@@ -49,6 +49,7 @@ export function createDiscordGatewayReconnectController(params: {
   abortSignal?: AbortSignal;
   pushStatus: (patch: Parameters<DiscordMonitorStatusSink>[0]) => void;
   isLifecycleStopping: () => boolean;
+  signalLifecycleStopping?: () => void;
   drainPendingGatewayErrors: () => "continue" | "stop";
 }) {
   let forceStopHandler: ((err: unknown) => void) | undefined;
@@ -57,6 +58,7 @@ export function createDiscordGatewayReconnectController(params: {
   let helloConnectedPollId: ReturnType<typeof setInterval> | undefined;
   let reconnectInFlight: Promise<void> | undefined;
   let consecutiveHelloStalls = 0;
+  let waitForStopActive = false;
 
   const shouldStop = () => params.isLifecycleStopping() || params.abortSignal?.aborted;
   const resetHelloStallCounter = () => {
@@ -394,6 +396,12 @@ export function createDiscordGatewayReconnectController(params: {
       })();
     }, DISCORD_GATEWAY_HELLO_TIMEOUT_MS);
   };
+  const onGatewayMetrics = () => {
+    if (!params.gateway?.isConnected || shouldStop()) {
+      return;
+    }
+    params.pushStatus({ lastEventAt: Date.now() });
+  };
   const onAbort = () => {
     reconnectStallWatchdog.disarm();
     const at = Date.now();
@@ -401,7 +409,11 @@ export function createDiscordGatewayReconnectController(params: {
     if (!params.gateway) {
       return;
     }
+    params.signalLifecycleStopping?.();
     params.gateway.options.reconnect = { maxAttempts: 0 };
+    if (waitForStopActive) {
+      return;
+    }
     params.gateway.disconnect();
   };
   const ensureStartupReady = async () => {
@@ -479,8 +491,10 @@ export function createDiscordGatewayReconnectController(params: {
     ensureStartupReady,
     onAbort,
     onGatewayDebug,
+    onGatewayMetrics,
     clearHelloWatch,
     registerForceStop: (handler: (err: unknown) => void) => {
+      waitForStopActive = true;
       forceStopHandler = handler;
       if (queuedForceStopError !== undefined) {
         const queued = queuedForceStopError;
@@ -489,6 +503,7 @@ export function createDiscordGatewayReconnectController(params: {
       }
     },
     dispose: () => {
+      waitForStopActive = false;
       reconnectStallWatchdog.stop();
       clearHelloWatch();
       params.abortSignal?.removeEventListener("abort", onAbort);

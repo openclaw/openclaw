@@ -48,10 +48,15 @@ export async function runDiscordGatewayLifecycle(params: {
     abortSignal: params.abortSignal,
     pushStatus,
     isLifecycleStopping: () => lifecycleStopping,
+    signalLifecycleStopping: () => {
+      lifecycleStopping = true;
+    },
     drainPendingGatewayErrors: () => drainPendingGatewayErrors(),
   });
   const onGatewayDebug = reconnectController.onGatewayDebug;
+  const onGatewayMetrics = reconnectController.onGatewayMetrics;
   gatewayEmitter?.on("debug", onGatewayDebug);
+  gatewayEmitter?.on("metrics", onGatewayMetrics);
 
   let sawDisallowedIntents = false;
   const handleGatewayEvent = (event: DiscordGatewayEvent): "continue" | "stop" => {
@@ -132,6 +137,7 @@ export async function runDiscordGatewayLifecycle(params: {
     stopGatewayLogging();
     reconnectController.dispose();
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
+    gatewayEmitter?.removeListener("metrics", onGatewayMetrics);
     if (params.voiceManager) {
       await params.voiceManager.destroy();
       params.voiceManagerRef.current = null;

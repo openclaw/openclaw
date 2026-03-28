@@ -849,10 +849,120 @@ describe("runDiscordGatewayLifecycle", () => {
     abortController.abort();
 
     await expect(lifecyclePromise).resolves.toBeUndefined();
-    expect(runtimeLog).not.toHaveBeenCalledWith(
+    expect(runtimeLog).toHaveBeenCalledWith(
       expect.stringContaining("ignoring expected reconnect-exhausted during shutdown"),
     );
-    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("Max reconnect attempts"));
+    expect(runtimeError).not.toHaveBeenCalledWith(
+      expect.stringContaining("Max reconnect attempts"),
+    );
+  });
+
+  it("suppresses reconnect-exhausted emitted during abort-driven disconnect", async () => {
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    let lifecycleHandler: ((event: DiscordGatewayEvent) => void) | undefined;
+    let signalWaitReady: (() => void) | undefined;
+    const waitReady = new Promise<void>((resolve) => {
+      signalWaitReady = resolve;
+    });
+
+    waitForDiscordGatewayStopMock.mockImplementationOnce(
+      (waitParams: WaitForDiscordGatewayStopParams) =>
+        new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const cleanup = () => {
+            waitParams.abortSignal?.removeEventListener("abort", onAbort);
+            waitParams.gatewaySupervisor?.detachLifecycle();
+          };
+          const finishResolve = () => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            try {
+              waitParams.gateway?.disconnect?.();
+            } finally {
+              cleanup();
+              resolve();
+            }
+          };
+          const finishReject = (err: unknown) => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            try {
+              waitParams.gateway?.disconnect?.();
+            } finally {
+              cleanup();
+              reject(err);
+            }
+          };
+          const onAbort = () => {
+            finishResolve();
+          };
+
+          if (waitParams.abortSignal?.aborted) {
+            finishResolve();
+            return;
+          }
+
+          waitParams.abortSignal?.addEventListener("abort", onAbort, { once: true });
+          waitParams.gatewaySupervisor?.attachLifecycle((event) => {
+            const shouldStop = (waitParams.onGatewayEvent?.(event) ?? "stop") === "stop";
+            if (shouldStop) {
+              finishReject(event.err);
+            }
+          });
+          signalWaitReady?.();
+          waitParams.registerForceStop?.((err) => {
+            finishReject(err);
+          });
+        }),
+    );
+
+    const emitter = new EventEmitter();
+    const gateway: MockGateway = {
+      isConnected: true,
+      options: { intents: 0, reconnect: { maxAttempts: 50 } } as GatewayPlugin["options"],
+      disconnect: vi.fn(() => {
+        lifecycleHandler?.(
+          createGatewayEvent(
+            "reconnect-exhausted",
+            "Max reconnect attempts (0) reached after code 1005",
+          ),
+        );
+      }),
+      connect: vi.fn(),
+      emitter,
+    };
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+    const abortController = new AbortController();
+    const { lifecycleParams, gatewaySupervisor, runtimeError, runtimeLog } = createLifecycleHarness(
+      {
+        gateway,
+      },
+    );
+    lifecycleParams.abortSignal = abortController.signal;
+    gatewaySupervisor.attachLifecycle.mockImplementation((handler) => {
+      lifecycleHandler = handler;
+    });
+    gatewaySupervisor.detachLifecycle.mockImplementation(() => {
+      lifecycleHandler = undefined;
+    });
+
+    const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+    await waitReady;
+    abortController.abort();
+
+    await expect(lifecyclePromise).resolves.toBeUndefined();
+    expect(gateway.disconnect).toHaveBeenCalledTimes(1);
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("ignoring expected reconnect-exhausted during shutdown"),
+    );
+    expect(runtimeError).not.toHaveBeenCalledWith(
+      expect.stringContaining("Max reconnect attempts"),
+    );
   });
 
   it("rejects reconnect-exhausted queued before startup when shutdown has not begun", async () => {
@@ -884,6 +994,55 @@ describe("runDiscordGatewayLifecycle", () => {
     await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
       "Max reconnect attempts",
     );
+  });
+
+  it("updates lastEventAt from metrics only while connected", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+      let resolveWait: (() => void) | undefined;
+      waitForDiscordGatewayStopMock.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveWait = resolve;
+          }),
+      );
+
+      const statusUpdates: Array<Record<string, unknown>> = [];
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+      lifecycleParams.statusSink = vi.fn((patch) => {
+        statusUpdates.push({ ...patch });
+      });
+
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const beforeMetrics = statusUpdates.filter((patch) => "lastEventAt" in patch).length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      emitter.emit("metrics");
+
+      const afterConnectedMetrics = statusUpdates.filter((patch) => "lastEventAt" in patch).length;
+      expect(afterConnectedMetrics).toBe(beforeMetrics + 1);
+      expect(statusUpdates.at(-1)).toEqual({ lastEventAt: Date.now() });
+
+      gateway.isConnected = false;
+      await vi.advanceTimersByTimeAsync(60_000);
+      emitter.emit("metrics");
+
+      const afterDisconnectedMetrics = statusUpdates.filter(
+        (patch) => "lastEventAt" in patch,
+      ).length;
+      expect(afterDisconnectedMetrics).toBe(afterConnectedMetrics);
+
+      resolveWait?.();
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not push connected: true when abortSignal is already aborted", async () => {
