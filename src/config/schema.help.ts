@@ -724,15 +724,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional max internal search/tool turns xAI may use per x_search request. Omit to let xAI choose.",
   "tools.web.x_search.timeoutSeconds": "Timeout in seconds for x_search requests.",
   "tools.web.x_search.cacheTtlMinutes": "Cache TTL in minutes for x_search results.",
-  "tools.code_execution.enabled":
-    "Enable the code_execution tool (requires XAI_API_KEY or tools.code_execution.apiKey).",
-  "tools.code_execution.apiKey":
-    "xAI API key for remote code execution (fallback: XAI_API_KEY env var).",
-  "tools.code_execution.model":
-    'Model to use for remote code execution (default: "grok-4-1-fast").',
-  "tools.code_execution.maxTurns":
-    "Optional max internal tool turns xAI may use per code_execution request. Omit to let xAI choose.",
-  "tools.code_execution.timeoutSeconds": "Timeout in seconds for code_execution requests.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":
