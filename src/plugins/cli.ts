@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import type { OpenClawPluginCliCommandDescriptor } from "./types.js";
@@ -15,7 +16,11 @@ function loadPluginCliRegistry(
   loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
 ) {
   const config = cfg ?? loadConfig();
-  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const resolvedConfig = applyPluginAutoEnable({ config, env: env ?? process.env }).config;
+  const workspaceDir = resolveAgentWorkspaceDir(
+    resolvedConfig,
+    resolveDefaultAgentId(resolvedConfig),
+  );
   const logger: PluginLogger = {
     info: (msg: string) => log.info(msg),
     warn: (msg: string) => log.warn(msg),
@@ -23,11 +28,11 @@ function loadPluginCliRegistry(
     debug: (msg: string) => log.debug(msg),
   };
   return {
-    config,
+    config: resolvedConfig,
     workspaceDir,
     logger,
     registry: loadOpenClawPlugins({
-      config,
+      config: resolvedConfig,
       workspaceDir,
       env,
       logger,
