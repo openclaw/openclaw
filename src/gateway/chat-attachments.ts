@@ -44,6 +44,8 @@ const MIME_TO_EXT: Record<string, string> = {
   "image/png": ".png",
   "image/webp": ".webp",
   "image/gif": ".gif",
+  "image/heic": ".heic",
+  "image/heif": ".heif",
   // bmp/tiff excluded from SUPPORTED_OFFLOAD_MIMES to avoid extension-loss
   // bug in store.ts; entries kept here for future extension support
   "image/bmp": ".bmp",
@@ -58,6 +60,8 @@ const SUPPORTED_OFFLOAD_MIMES = new Set([
   "image/png",
   "image/webp",
   "image/gif",
+  "image/heic",
+  "image/heif",
 ]);
 
 function normalizeMime(mime?: string): string | undefined {
@@ -287,7 +291,7 @@ export async function parseMessageWithAttachments(
           buffer,
           finalMime,
           "inbound",
-          undefined,
+          maxBytes,
           labelWithExt,
         );
 
