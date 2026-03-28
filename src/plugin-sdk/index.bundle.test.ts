@@ -15,7 +15,7 @@ const bundledCoverageEntrySources = {
   ...buildPluginSdkEntrySources(bundledRepresentativeEntrypoints),
   ...matrixRuntimeCoverageEntries,
 };
-const bareMatrixSdkImportPattern = /from\s+["']matrix-js-sdk["']/;
+const bareMatrixSdkImportPattern = /(?:from|require|import)\s*\(?\s*["']matrix-js-sdk["']/;
 
 async function listBuiltJsFiles(rootDir: string): Promise<string[]> {
   const entries = await fs.readdir(rootDir, { withFileTypes: true });
