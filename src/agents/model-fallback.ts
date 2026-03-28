@@ -195,27 +195,33 @@ async function runFallbackCandidate<T>(params: {
         ? await params.run(params.provider, params.model, params.options)
         : await params.run(params.provider, params.model);
 
+    const shouldRetryCandidate = !params.options?.allowTransientCooldownProbe;
+
     // Apply internal retry for rate-limiting errors BEFORE giving up and
     // moving to the next candidate model in the fallback chain.
-    const result = await retryAsync(runFn, {
-      attempts: 1 + Math.max(rateLimitRetryBudget, overloadedRetryBudget, authRetryBudget),
-      minDelayMs: 2000,
-      maxDelayMs: 30000,
-      jitter: 0.1,
-      shouldRetry: (err, attempt) => {
-        const reason = resolveFailoverReasonFromError(err);
-        if (reason === "rate_limit") {
-          return attempt <= rateLimitRetryBudget;
-        }
-        if (reason === "overloaded") {
-          return attempt <= overloadedRetryBudget;
-        }
-        if (reason === "auth") {
-          return attempt <= authRetryBudget;
-        }
-        return false;
-      },
-    });
+    // Cooldown probes are intentionally single-shot so fallback can continue
+    // quickly to other providers without repeated backoff delays.
+    const result = shouldRetryCandidate
+      ? await retryAsync(runFn, {
+          attempts: 1 + Math.max(rateLimitRetryBudget, overloadedRetryBudget, authRetryBudget),
+          minDelayMs: 2000,
+          maxDelayMs: 30000,
+          jitter: 0.1,
+          shouldRetry: (err, attempt) => {
+            const reason = resolveFailoverReasonFromError(err);
+            if (reason === "rate_limit") {
+              return attempt <= rateLimitRetryBudget;
+            }
+            if (reason === "overloaded") {
+              return attempt <= overloadedRetryBudget;
+            }
+            if (reason === "auth") {
+              return attempt <= authRetryBudget;
+            }
+            return false;
+          },
+        })
+      : await runFn();
 
     return {
       ok: true,
