@@ -57,6 +57,8 @@ const mockedModuleIds = [
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
 let originalProcessArgv: string[];
 let originalProcessTitle: string;
+let originalProcessTitleDescriptor: PropertyDescriptor | undefined;
+let observedProcessTitle: string;
 let originalNodeNoWarnings: string | undefined;
 let originalHideBanner: string | undefined;
 let originalForceStderr: boolean;
@@ -76,9 +78,21 @@ beforeEach(() => {
   vi.clearAllMocks();
   originalProcessArgv = [...process.argv];
   originalProcessTitle = process.title;
+  originalProcessTitleDescriptor = Object.getOwnPropertyDescriptor(process, "title");
+  observedProcessTitle = originalProcessTitle;
   originalNodeNoWarnings = process.env.NODE_NO_WARNINGS;
   originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
   originalForceStderr = loggingState.forceConsoleToStderr;
+  // Worker-thread Vitest runs do not reliably mutate the real process title,
+  // so capture writes at the property boundary instead.
+  Object.defineProperty(process, "title", {
+    configurable: true,
+    enumerable: originalProcessTitleDescriptor?.enumerable ?? true,
+    get: () => observedProcessTitle,
+    set: (value: string) => {
+      observedProcessTitle = value;
+    },
+  });
   loggingState.forceConsoleToStderr = false;
   delete process.env.NODE_NO_WARNINGS;
   delete process.env.OPENCLAW_HIDE_BANNER;
@@ -86,7 +100,16 @@ beforeEach(() => {
 
 afterEach(() => {
   process.argv = originalProcessArgv;
-  process.title = originalProcessTitle;
+  if (originalProcessTitleDescriptor && "value" in originalProcessTitleDescriptor) {
+    Object.defineProperty(process, "title", {
+      ...originalProcessTitleDescriptor,
+      value: originalProcessTitle,
+    });
+  } else if (originalProcessTitleDescriptor) {
+    Object.defineProperty(process, "title", originalProcessTitleDescriptor);
+  } else {
+    process.title = originalProcessTitle;
+  }
   loggingState.forceConsoleToStderr = originalForceStderr;
   if (originalNodeNoWarnings === undefined) {
     delete process.env.NODE_NO_WARNINGS;
@@ -130,6 +153,12 @@ describe("registerPreActionHooks", () => {
     const channels = program.command("channels");
     channels.command("add").action(() => {});
     program
+      .command("plugins")
+      .command("install")
+      .argument("<spec>")
+      .option("--marketplace <marketplace>")
+      .action(() => {});
+    program
       .command("update")
       .command("status")
       .option("--json")
@@ -149,6 +178,7 @@ describe("registerPreActionHooks", () => {
       .command("validate")
       .option("--json")
       .action(() => {});
+    config.command("schema").action(() => {});
     registerPreActionHooks(program, "9.9.9-test");
     return program;
   }
@@ -175,6 +205,7 @@ describe("registerPreActionHooks", () => {
   }
 
   it("handles debug mode and plugin-required command preaction", async () => {
+    const processTitleSetSpy = vi.spyOn(process, "title", "set");
     await runPreAction({
       parseArgv: ["status"],
       processArgv: ["node", "openclaw", "status", "--debug"],
@@ -187,7 +218,7 @@ describe("registerPreActionHooks", () => {
       commandPath: ["status"],
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
-    expect(process.title).toBe("openclaw-status");
+    expect(processTitleSetSpy).toHaveBeenCalledWith("openclaw-status");
 
     vi.clearAllMocks();
     await runPreAction({
@@ -202,6 +233,7 @@ describe("registerPreActionHooks", () => {
       commandPath: ["message", "send"],
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
+    processTitleSetSpy.mockRestore();
   });
 
   it("keeps setup alias and channels add manifest-first", async () => {
@@ -227,6 +259,61 @@ describe("registerPreActionHooks", () => {
       commandPath: ["channels", "add"],
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("only allows invalid config for explicit Matrix reinstall requests", async () => {
+    await runPreAction({
+      parseArgv: ["plugins", "install", "@openclaw/matrix"],
+      processArgv: ["node", "openclaw", "plugins", "install", "@openclaw/matrix"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["plugins", "install", "alpha"],
+      processArgv: ["node", "openclaw", "plugins", "install", "alpha"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["plugins", "install", "./extensions/matrix"],
+      processArgv: ["node", "openclaw", "plugins", "install", "./extensions/matrix"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["plugins", "install", "@openclaw/matrix", "--marketplace", "local/repo"],
+      processArgv: [
+        "node",
+        "openclaw",
+        "plugins",
+        "install",
+        "@openclaw/matrix",
+        "--marketplace",
+        "local/repo",
+      ],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+    });
   });
 
   it("skips help/version preaction and respects banner opt-out", async () => {
@@ -331,6 +418,15 @@ describe("registerPreActionHooks", () => {
     await runPreAction({
       parseArgv: ["config", "validate"],
       processArgv: ["node", "openclaw", "--profile", "work", "config", "validate"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+  });
+
+  it("bypasses config guard for config schema", async () => {
+    await runPreAction({
+      parseArgv: ["config", "schema"],
+      processArgv: ["node", "openclaw", "config", "schema"],
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();

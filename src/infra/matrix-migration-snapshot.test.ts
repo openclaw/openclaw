@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveMatrixAccountStorageRoot } from "../../extensions/matrix/runtime-api.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
+import { resolveMatrixAccountStorageRoot } from "../plugin-sdk/matrix.js";
 import { detectLegacyMatrixCrypto } from "./matrix-legacy-crypto.js";
 
 const createBackupArchiveMock = vi.hoisted(() => vi.fn());
@@ -11,16 +11,24 @@ vi.mock("./backup-create.js", () => ({
   createBackupArchive: (...args: unknown[]) => createBackupArchiveMock(...args),
 }));
 
-import {
-  hasActionableMatrixMigration,
-  maybeCreateMatrixMigrationSnapshot,
-  resolveMatrixMigrationSnapshotMarkerPath,
-  resolveMatrixMigrationSnapshotOutputDir,
-} from "./matrix-migration-snapshot.js";
+let hasActionableMatrixMigration: typeof import("./matrix-migration-snapshot.js").hasActionableMatrixMigration;
+let maybeCreateMatrixMigrationSnapshot: typeof import("./matrix-migration-snapshot.js").maybeCreateMatrixMigrationSnapshot;
+let resolveMatrixMigrationSnapshotMarkerPath: typeof import("./matrix-migration-snapshot.js").resolveMatrixMigrationSnapshotMarkerPath;
+let resolveMatrixMigrationSnapshotOutputDir: typeof import("./matrix-migration-snapshot.js").resolveMatrixMigrationSnapshotOutputDir;
 
 describe("matrix migration snapshots", () => {
   afterEach(() => {
     createBackupArchiveMock.mockReset();
+  });
+
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      hasActionableMatrixMigration,
+      maybeCreateMatrixMigrationSnapshot,
+      resolveMatrixMigrationSnapshotMarkerPath,
+      resolveMatrixMigrationSnapshotOutputDir,
+    } = await import("./matrix-migration-snapshot.js"));
   });
 
   it("creates a backup marker after writing a pre-migration snapshot", async () => {

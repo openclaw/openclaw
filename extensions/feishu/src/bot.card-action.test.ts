@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import {
   handleFeishuCardAction,
   resetProcessedFeishuCardActionTokensForTests,
@@ -11,9 +13,10 @@ import {
   FEISHU_APPROVAL_REQUEST_ACTION,
 } from "./card-ux-approval.js";
 
-// Mock resolveFeishuAccount
+// Mock account resolution
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: vi.fn().mockReturnValue({ accountId: "mock-account" }),
+  resolveFeishuRuntimeAccount: vi.fn().mockReturnValue({ accountId: "mock-account" }),
 }));
 
 // Mock bot.js to verify handleFeishuMessage call
@@ -32,8 +35,8 @@ vi.mock("./send.js", () => ({
 import { handleFeishuMessage } from "./bot.js";
 
 describe("Feishu Card Action Handler", () => {
-  const cfg = {} as any; // Minimal mock
-  const runtime = { log: vi.fn(), error: vi.fn() } as any;
+  const cfg: ClawdbotConfig = {};
+  const runtime: RuntimeEnv = createRuntimeEnv();
 
   function createCardActionEvent(params: {
     token: string;

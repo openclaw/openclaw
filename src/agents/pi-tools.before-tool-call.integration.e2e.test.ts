@@ -4,7 +4,9 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { addTestHook, createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import type { PluginHookRegistration } from "../plugins/types.js";
 
 type ToolDefinitionAdapterModule = typeof import("./pi-tool-definition-adapter.js");
 type PiToolsAbortModule = typeof import("./pi-tools.abort.js");
@@ -39,6 +41,12 @@ beforeEach(async () => {
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
 
+type BeforeToolCallHookInstall = {
+  pluginId: string;
+  priority?: number;
+  handler: BeforeToolCallHandlerMock;
+};
+
 function installBeforeToolCallHook(params?: {
   enabled?: boolean;
   runBeforeToolCallImpl?: (...args: unknown[]) => unknown;
@@ -52,6 +60,21 @@ function installBeforeToolCallHook(params?: {
   }
   initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_tool_call", handler }]));
   return handler;
+}
+
+function installBeforeToolCallHooks(hooks: BeforeToolCallHookInstall[]): void {
+  resetGlobalHookRunner();
+  const registry = createEmptyPluginRegistry();
+  for (const hook of hooks) {
+    addTestHook({
+      registry,
+      pluginId: hook.pluginId,
+      hookName: "before_tool_call",
+      handler: hook.handler as PluginHookRegistration["handler"],
+      priority: hook.priority,
+    });
+  }
+  initializeGlobalHookRunner(registry);
 }
 
 describe("before_tool_call hook integration", () => {
@@ -119,6 +142,28 @@ describe("before_tool_call hook integration", () => {
     await expect(
       tool.execute("call-3", { cmd: "rm -rf /" }, undefined, extensionContext),
     ).rejects.toThrow("blocked");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("does not execute lower-priority hooks after block=true", async () => {
+    const high = vi.fn().mockResolvedValue({ block: true, blockReason: "blocked-high" });
+    const low = vi.fn().mockResolvedValue({ params: { shouldNotApply: true } });
+    installBeforeToolCallHooks([
+      { pluginId: "high", priority: 100, handler: high },
+      { pluginId: "low", priority: 0, handler: low },
+    ]);
+
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any);
+    const extensionContext = {} as Parameters<typeof tool.execute>[3];
+
+    await expect(
+      tool.execute("call-stop", { cmd: "rm -rf /" }, undefined, extensionContext),
+    ).rejects.toThrow("blocked-high");
+
+    expect(high).toHaveBeenCalledTimes(1);
+    expect(low).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
   });
 

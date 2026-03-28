@@ -7,9 +7,9 @@ import {
   resolveModelRefFromString,
   type ModelRef,
 } from "../agents/model-selection.js";
-import { normalizeGoogleModelId, normalizeXaiModelId } from "../agents/models-config.providers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 
 export type CachedModelPricing = {
   input: number;
@@ -40,8 +40,6 @@ const PROVIDER_ALIAS_TO_OPENROUTER: Record<string, string> = {
   moonshot: "moonshotai",
   moonshotai: "moonshotai",
   "openai-codex": "openai",
-  qwen: "qwen",
-  "qwen-portal": "qwen",
   xai: "x-ai",
   zai: "z-ai",
 };
@@ -152,12 +150,14 @@ function canonicalizeOpenRouterLookupId(id: string): string {
       .replace(/^claude-(\d+)\.(\d+)-/u, "claude-$1-$2-")
       .replace(/^claude-([a-z]+)-(\d+)\.(\d+)$/u, "claude-$1-$2-$3");
   }
-  if (provider === "google") {
-    model = normalizeGoogleModelId(model);
-  }
-  if (provider === "x-ai") {
-    model = normalizeXaiModelId(model);
-  }
+  model =
+    normalizeProviderModelIdWithPlugin({
+      provider,
+      context: {
+        provider,
+        modelId: model,
+      },
+    }) ?? model;
   return `${provider}/${model}`;
 }
 

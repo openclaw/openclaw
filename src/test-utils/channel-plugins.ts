@@ -7,7 +7,7 @@ import type {
 } from "../channels/plugins/types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 
-type TestChannelRegistration = {
+export type TestChannelRegistration = {
   pluginId: string;
   plugin: unknown;
   source: string;
@@ -115,4 +115,35 @@ export const createOutboundTestPlugin = (params: {
   }),
   outbound: params.outbound,
   ...(params.messaging ? { messaging: params.messaging } : {}),
+});
+
+export type BindingResolverTestPlugin = Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config"
+> & {
+  setup?: Pick<NonNullable<ChannelPlugin["setup"]>, "resolveBindingAccountId">;
+};
+
+export const createBindingResolverTestPlugin = (params: {
+  id: ChannelId;
+  label?: string;
+  docsPath?: string;
+  capabilities?: ChannelCapabilities;
+  config?: Partial<ChannelPlugin["config"]>;
+  resolveBindingAccountId?: NonNullable<ChannelPlugin["setup"]>["resolveBindingAccountId"];
+}): BindingResolverTestPlugin => ({
+  ...createChannelTestPluginBase({
+    id: params.id,
+    label: params.label,
+    docsPath: params.docsPath,
+    capabilities: params.capabilities,
+    config: params.config,
+  }),
+  ...(params.resolveBindingAccountId
+    ? {
+        setup: {
+          resolveBindingAccountId: params.resolveBindingAccountId,
+        },
+      }
+    : {}),
 });

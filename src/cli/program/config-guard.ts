@@ -15,7 +15,6 @@ const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "stop",
   "restart",
 ]);
-const ALLOWED_INVALID_PLUGINS_SUBCOMMANDS = new Set(["install"]);
 let didRunDoctorConfigFlow = false;
 let configSnapshotPromise: Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> | null =
   null;
@@ -38,6 +37,7 @@ export async function ensureConfigReady(params: {
   runtime: RuntimeEnv;
   commandPath?: string[];
   suppressDoctorStdout?: boolean;
+  allowInvalid?: boolean;
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
   let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
@@ -74,13 +74,11 @@ export async function ensureConfigReady(params: {
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
   const allowInvalid = commandName
-    ? ALLOWED_INVALID_COMMANDS.has(commandName) ||
+    ? params.allowInvalid === true ||
+      ALLOWED_INVALID_COMMANDS.has(commandName) ||
       (commandName === "gateway" &&
         subcommandName &&
-        ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName)) ||
-      (commandName === "plugins" &&
-        subcommandName &&
-        ALLOWED_INVALID_PLUGINS_SUBCOMMANDS.has(subcommandName))
+        ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
     : false;
   const { formatConfigIssueLines } = await import("../../config/issue-format.js");
   const issues =

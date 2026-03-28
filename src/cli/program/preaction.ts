@@ -8,6 +8,10 @@ import { defaultRuntime } from "../../runtime.js";
 import { getCommandPathWithRootOptions, getVerboseFlag, hasHelpOrVersion } from "../argv.js";
 import { emitCliBanner } from "../banner.js";
 import { resolveCliName } from "../cli-name.js";
+import {
+  resolvePluginInstallInvalidConfigPolicy,
+  resolvePluginInstallPreactionRequest,
+} from "../plugin-install-config-policy.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
 
 function setProcessTitleForCommand(actionCommand: Command) {
@@ -45,9 +49,7 @@ function shouldBypassConfigGuard(commandPath: string[]): boolean {
   if (CONFIG_GUARD_BYPASS_COMMANDS.has(primary)) {
     return true;
   }
-  // config validate is the explicit validation command; let it render
-  // validation failures directly without preflight guard output duplication.
-  if (primary === "config" && secondary === "validate") {
+  if (primary === "config" && (secondary === "validate" || secondary === "schema")) {
     return true;
   }
   return false;
@@ -81,6 +83,18 @@ function shouldLoadPluginsForCommand(commandPath: string[], jsonOutputMode: bool
   }
   return true;
 }
+function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
+  return (
+    resolvePluginInstallInvalidConfigPolicy(
+      resolvePluginInstallPreactionRequest({
+        actionCommand,
+        commandPath,
+        argv: process.argv,
+      }),
+    ) === "recover-matrix-only"
+  );
+}
+
 function getRootCommand(command: Command): Command {
   let current = command;
   while (current.parent) {
@@ -133,10 +147,12 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (shouldBypassConfigGuard(commandPath)) {
       return;
     }
+    const allowInvalid = shouldAllowInvalidConfigForAction(actionCommand, commandPath);
     const { ensureConfigReady } = await loadConfigGuardModule();
     await ensureConfigReady({
       runtime: defaultRuntime,
       commandPath,
+      ...(allowInvalid ? { allowInvalid: true } : {}),
       ...(jsonOutputMode ? { suppressDoctorStdout: true } : {}),
     });
     // Load plugins for commands that need channel access.

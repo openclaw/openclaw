@@ -5,6 +5,7 @@ import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { CONFIG_PATH } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
+import { resolveRestartSentinelPath } from "../infra/restart-sentinel.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
 
@@ -71,7 +72,9 @@ const approveAllPendingPairings = async () => {
   const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
   const list = await listDevicePairing();
   for (const pending of list.pending) {
-    await approveDevicePairing(pending.requestId);
+    await approveDevicePairing(pending.requestId, {
+      callerScopes: pending.scopes ?? ["operator.admin"],
+    });
   }
 };
 
@@ -151,7 +154,7 @@ describe("gateway update.run", () => {
       }, FAST_WAIT_OPTS);
       expect(sigusr1).toHaveBeenCalled();
 
-      const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");
+      const sentinelPath = resolveRestartSentinelPath();
       const raw = await fs.readFile(sentinelPath, "utf-8");
       const parsed = JSON.parse(raw) as {
         payload?: { kind?: string; stats?: { mode?: string } };

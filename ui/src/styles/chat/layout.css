@@ -227,8 +227,8 @@
   position: absolute;
   top: 4px;
   right: 4px;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   border: none;
   background: rgba(0, 0, 0, 0.7);
@@ -497,13 +497,13 @@
   height: 30px;
   border-radius: var(--radius-md);
   border: none;
-  background: var(--muted-strong);
-  color: var(--text-strong);
+  background: transparent;
+  color: var(--muted);
   cursor: pointer;
   flex-shrink: 0;
   transition:
     background var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
+    color var(--duration-fast) ease;
   padding: 0;
 }
 
@@ -518,8 +518,8 @@
 }
 
 .chat-send-btn:hover:not(:disabled) {
-  background: var(--muted);
-  box-shadow: none;
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
 .chat-send-btn:disabled {
@@ -529,6 +529,7 @@
 
 .chat-send-btn--stop {
   background: var(--danger);
+  color: var(--destructive-foreground);
 }
 
 .chat-send-btn--stop:hover:not(:disabled) {
@@ -702,8 +703,8 @@
   position: absolute;
   top: 2px;
   right: 2px;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   border: none;
   background: rgba(0, 0, 0, 0.6);

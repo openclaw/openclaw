@@ -4,6 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
+import {
+  readEmbeddedGatewayTokenForTest,
+  testServiceAuditCodes,
+} from "./doctor-service-audit.test-helpers.js";
 import type { LegacyStateDetection } from "./doctor-state-migrations.js";
 
 let originalIsTTY: boolean | undefined;
@@ -224,19 +228,8 @@ vi.mock("../daemon/inspect.js", () => ({
 vi.mock("../daemon/service-audit.js", () => ({
   auditGatewayServiceConfig,
   needsNodeRuntimeMigration: vi.fn(() => false),
-  readEmbeddedGatewayToken: (
-    command: {
-      environment?: Record<string, string>;
-      environmentValueSources?: Record<string, "inline" | "file">;
-    } | null,
-  ) =>
-    command?.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN === "file"
-      ? undefined
-      : command?.environment?.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined,
-  SERVICE_AUDIT_CODES: {
-    gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
-    gatewayTokenMismatch: "gateway-token-mismatch",
-  },
+  readEmbeddedGatewayToken: readEmbeddedGatewayTokenForTest,
+  SERVICE_AUDIT_CODES: testServiceAuditCodes,
 }));
 
 vi.mock("../daemon/program-args.js", () => ({

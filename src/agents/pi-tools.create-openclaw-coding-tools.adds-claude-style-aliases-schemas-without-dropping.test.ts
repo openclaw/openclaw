@@ -4,15 +4,15 @@ import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
+import { createBrowserTool } from "../plugin-sdk/browser.js";
 import { XAI_UNSUPPORTED_SCHEMA_KEYWORDS } from "../plugin-sdk/provider-tools.js";
+import { applyXaiModelCompat } from "../plugin-sdk/xai.js";
 import "./test-helpers/fast-coding-tools.js";
-import { applyXaiModelCompat } from "./model-compat.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { findUnsupportedSchemaKeywords } from "./pi-embedded-runner/google.js";
 import { __testing, createOpenClawCodingTools } from "./pi-tools.js";
 import { createOpenClawReadTool, createSandboxedReadTool } from "./pi-tools.read.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
-import { createBrowserTool } from "./tools/browser-tool.js";
 
 const defaultTools = createOpenClawCodingTools();
 
@@ -164,9 +164,8 @@ describe("createOpenClawCodingTools", () => {
     expect(browser.description).toMatch(/profile="user"/i);
   });
   it("keeps browser tool schema properties after normalization", () => {
-    const browser = defaultTools.find((tool) => tool.name === "browser");
-    expect(browser).toBeDefined();
-    const parameters = browser?.parameters as {
+    const browser = createBrowserTool();
+    const parameters = browser.parameters as {
       anyOf?: unknown[];
       properties?: Record<string, unknown>;
       required?: string[];
@@ -193,10 +192,8 @@ describe("createOpenClawCodingTools", () => {
     expect(parameters.required ?? []).not.toContain("raw");
   });
   it("flattens anyOf-of-literals to enum for provider compatibility", () => {
-    const browser = defaultTools.find((tool) => tool.name === "browser");
-    expect(browser).toBeDefined();
-
-    const parameters = browser?.parameters as {
+    const browser = createBrowserTool();
+    const parameters = browser.parameters as {
       properties?: Record<string, unknown>;
     };
     const action = parameters.properties?.action as

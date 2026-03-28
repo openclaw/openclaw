@@ -123,6 +123,13 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toContain("gateway.port");
   });
 
+  it("restarts the gateway for browser plugin config changes", () => {
+    const plan = buildGatewayReloadPlan(["browser.enabled"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("browser.enabled");
+    expect(plan.hotReasons).toEqual([]);
+  });
+
   it("restarts the Gmail watcher for hooks.gmail changes", () => {
     const plan = buildGatewayReloadPlan(["hooks.gmail.account"]);
     expect(plan.restartGateway).toBe(false);
@@ -198,6 +205,11 @@ describe("buildGatewayReloadPlan", () => {
   });
 
   it.each([
+    {
+      path: "browser.enabled",
+      expectRestartGateway: true,
+      expectRestartReason: "browser.enabled",
+    },
     {
       path: "gateway.channelHealthCheckMinutes",
       expectRestartGateway: false,

@@ -1,5 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { dashboardCommand } from "./dashboard.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
@@ -29,6 +28,8 @@ vi.mock("../infra/clipboard.js", () => ({
 vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValues: resolveSecretRefValuesMock,
 }));
+
+let dashboardCommand: typeof import("./dashboard.js").dashboardCommand;
 
 const runtime = {
   log: vi.fn(),
@@ -62,6 +63,10 @@ function mockSnapshot(token: unknown = "abc") {
 }
 
 describe("dashboardCommand", () => {
+  beforeAll(async () => {
+    ({ dashboardCommand } = await import("./dashboard.js"));
+  });
+
   beforeEach(() => {
     resetRuntime();
     readConfigFileSnapshotMock.mockClear();
@@ -173,9 +178,8 @@ describe("dashboardCommand", () => {
     );
   });
 
-  it("resolves env-template gateway.auth.token before building dashboard URL", async () => {
+  it("keeps URL non-tokenized when env-template gateway.auth.token is unresolved", async () => {
     mockSnapshot("${CUSTOM_GATEWAY_TOKEN}");
-    process.env.CUSTOM_GATEWAY_TOKEN = "resolved-secret-token";
     copyToClipboardMock.mockResolvedValue(true);
     detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
     openUrlMock.mockResolvedValue(true);
@@ -185,6 +189,11 @@ describe("dashboardCommand", () => {
     expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
     expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
     expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Token auto-auth unavailable: gateway.auth.token SecretRef is unresolved (env:default:CUSTOM_GATEWAY_TOKEN).",
+      ),
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(
       expect.stringContaining("Token auto-auth is disabled for SecretRef-managed"),
     );
   });

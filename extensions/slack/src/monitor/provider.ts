@@ -16,15 +16,19 @@ import {
 } from "openclaw/plugin-sdk/config-runtime";
 import type { SessionScope } from "openclaw/plugin-sdk/config-runtime";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
-import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/infra-runtime";
-import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/infra-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
-import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  computeBackoff,
+  createNonExitingRuntime,
+  sleepWithAbort,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/runtime-env";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
+import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
@@ -114,10 +118,17 @@ function resolveSlackBoltInterop(params: {
   throw new TypeError("Unable to resolve @slack/bolt App/HTTPReceiver exports");
 }
 
-const { App, HTTPReceiver } = resolveSlackBoltInterop({
-  defaultImport: SlackBolt,
-  namespaceImport: SlackBoltNamespace,
-});
+let slackBoltInterop: SlackBoltResolvedExports | undefined;
+
+function getSlackBoltInterop(): SlackBoltResolvedExports {
+  if (!slackBoltInterop) {
+    slackBoltInterop = resolveSlackBoltInterop({
+      defaultImport: SlackBolt,
+      namespaceImport: SlackBoltNamespace,
+    });
+  }
+  return slackBoltInterop;
+}
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -250,6 +261,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
+  const { App, HTTPReceiver } = getSlackBoltInterop();
 
   const receiver =
     slackMode === "http"
@@ -575,6 +587,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 }
 
 export { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
+
+export const resolveSlackRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
 
 export const __testing = {
   publishSlackConnectedStatus,

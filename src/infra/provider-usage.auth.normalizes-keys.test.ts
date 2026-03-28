@@ -3,24 +3,193 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
-import { clearConfigCache, type OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 
-const resolveProviderUsageAuthWithPluginMock = vi.fn(async (..._args: unknown[]) => null);
+vi.mock("../agents/auth-profiles.js", () => {
+  const normalizeProvider = (provider?: string | null): string =>
+    String(provider ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/^z-ai$/, "zai");
+  const dedupeProfileIds = (profileIds: string[]): string[] => [...new Set(profileIds)];
+  const listProfilesForProvider = (
+    store: { profiles?: Record<string, { provider?: string } | undefined> },
+    provider: string,
+  ): string[] =>
+    Object.entries(store.profiles ?? {})
+      .filter(([, profile]) => normalizeProvider(profile?.provider) === normalizeProvider(provider))
+      .map(([profileId]) => profileId);
+  const readStore = (agentDir?: string) => {
+    if (!agentDir) {
+      return { version: 1, profiles: {} };
+    }
+    const authPath = path.join(agentDir, "auth-profiles.json");
+    try {
+      const parsed = JSON.parse(nodeFs.readFileSync(authPath, "utf8")) as {
+        version?: number;
+        profiles?: Record<string, unknown>;
+        order?: Record<string, string[]>;
+        lastGood?: Record<string, string>;
+        usageStats?: Record<string, unknown>;
+      };
+      return {
+        version: parsed.version ?? 1,
+        profiles: parsed.profiles ?? {},
+        ...(parsed.order ? { order: parsed.order } : {}),
+        ...(parsed.lastGood ? { lastGood: parsed.lastGood } : {}),
+        ...(parsed.usageStats ? { usageStats: parsed.usageStats } : {}),
+      };
+    } catch {
+      return { version: 1, profiles: {} };
+    }
+  };
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderUsageAuthWithPlugin: resolveProviderUsageAuthWithPluginMock,
+  const resolveAuthProfileOrder = (params: {
+    cfg?: { auth?: { profiles?: Record<string, { provider?: string } | undefined> } };
+    store: {
+      profiles: Record<string, { provider?: string } | undefined>;
+      order?: Record<string, string[]>;
+    };
+    provider: string;
+  }): string[] => {
+    const provider = normalizeProvider(params.provider);
+    const configured = Object.entries(params.cfg?.auth?.profiles ?? {})
+      .filter(([, profile]) => normalizeProvider(profile?.provider) === provider)
+      .map(([profileId]) => profileId);
+    if (configured.length > 0) {
+      return dedupeProfileIds(configured);
+    }
+    const ordered = params.store.order?.[params.provider] ?? params.store.order?.[provider];
+    if (ordered?.length) {
+      return dedupeProfileIds(ordered);
+    }
+    return dedupeProfileIds(listProfilesForProvider(params.store, provider));
+  };
+
+  const resolveApiKeyForProfile = async (params: {
+    store: {
+      profiles: Record<
+        string,
+        | {
+            type?: string;
+            provider?: string;
+            key?: string;
+            token?: string;
+            accessToken?: string;
+            email?: string;
+            expires?: number;
+          }
+        | undefined
+      >;
+    };
+    profileId: string;
+  }): Promise<{ apiKey: string; provider: string; email?: string } | null> => {
+    const cred = params.store.profiles[params.profileId];
+    if (!cred) {
+      return null;
+    }
+    const profileProvider = normalizeProvider(params.profileId.split(":")[0] ?? "");
+    const credentialProvider = normalizeProvider(cred.provider);
+    if (profileProvider && credentialProvider && profileProvider !== credentialProvider) {
+      return null;
+    }
+    if (cred.type === "api_key") {
+      return cred.key ? { apiKey: cred.key, provider: cred.provider ?? profileProvider } : null;
+    }
+    if (cred.type === "token") {
+      if (typeof cred.expires === "number" && cred.expires <= Date.now()) {
+        return null;
+      }
+      return cred.token
+        ? { apiKey: cred.token, provider: cred.provider ?? profileProvider, email: cred.email }
+        : null;
+    }
+    if (cred.type === "oauth") {
+      if (typeof cred.expires === "number" && cred.expires <= Date.now()) {
+        return null;
+      }
+      const token = cred.accessToken ?? cred.token;
+      return token
+        ? { apiKey: token, provider: cred.provider ?? profileProvider, email: cred.email }
+        : null;
+    }
+    return null;
+  };
+
+  return {
+    clearRuntimeAuthProfileStoreSnapshots: () => {},
+    ensureAuthProfileStore: (agentDir?: string) => readStore(agentDir),
+    dedupeProfileIds,
+    listProfilesForProvider,
+    resolveApiKeyForProfile,
+    resolveAuthProfileOrder,
+  };
+});
+
+const providerRuntimeMocks = vi.hoisted(() => ({
+  resolveProviderUsageAuthWithPluginMock: vi.fn(async (..._args: unknown[]) => null),
+  providerRuntimeMock: {
+    augmentModelCatalogWithProviderPlugins: vi.fn((catalog: unknown) => catalog),
+    buildProviderAuthDoctorHintWithPlugin: vi.fn(() => undefined),
+    buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
+    buildProviderUnknownModelHintWithPlugin: vi.fn(() => undefined),
+    clearProviderRuntimeHookCache: vi.fn(() => {}),
+    createProviderEmbeddingProvider: vi.fn(() => undefined),
+    formatProviderAuthProfileApiKeyWithPlugin: vi.fn(() => undefined),
+    normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
+    prepareProviderDynamicModel: vi.fn(async () => {}),
+    prepareProviderExtraParams: vi.fn(() => undefined),
+    prepareProviderRuntimeAuth: vi.fn(async () => undefined),
+    refreshProviderOAuthCredentialWithPlugin: vi.fn(async () => undefined),
+    resetProviderRuntimeHookCacheForTest: vi.fn(() => {}),
+    resolveProviderBinaryThinking: vi.fn(() => undefined),
+    resolveProviderBuiltInModelSuppression: vi.fn(() => undefined),
+    resolveProviderCacheTtlEligibility: vi.fn(() => undefined),
+    resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
+    resolveProviderDefaultThinkingLevel: vi.fn(() => undefined),
+    resolveProviderModernModelRef: vi.fn(() => undefined),
+    resolveProviderRuntimePlugin: vi.fn(() => undefined),
+    resolveProviderStreamFn: vi.fn(() => undefined),
+    resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
+    resolveProviderUsageSnapshotWithPlugin: vi.fn(async () => undefined),
+    resolveProviderXHighThinking: vi.fn(() => undefined),
+    runProviderDynamicModel: vi.fn(() => undefined),
+    wrapProviderStreamFn: vi.fn(() => undefined),
+  },
 }));
+
+vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+  return {
+    ...actual,
+    ...providerRuntimeMocks.providerRuntimeMock,
+    resolveProviderUsageAuthWithPlugin: providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock,
+  };
+});
+
+vi.mock("../plugins/provider-runtime.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/provider-runtime.ts")>();
+  return {
+    ...actual,
+    ...providerRuntimeMocks.providerRuntimeMock,
+    resolveProviderUsageAuthWithPlugin: providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock,
+  };
+});
 
 vi.mock("../agents/cli-credentials.js", () => ({
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
-  readQwenCliCredentialsCached: () => null,
+}));
+
+vi.mock("../agents/auth-profiles/external-cli-sync.js", () => ({
+  syncExternalCliCredentials: () => false,
 }));
 
 let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
+let clearRuntimeAuthProfileStoreSnapshots: typeof import("../agents/auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
+let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
 
 describe("resolveProviderAuths key normalization", () => {
   let suiteRoot = "";
@@ -35,7 +204,6 @@ describe("resolveProviderAuths key normalization", () => {
 
   beforeAll(async () => {
     suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-suite-"));
-    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
   });
 
   afterAll(async () => {
@@ -44,11 +212,15 @@ describe("resolveProviderAuths key normalization", () => {
     suiteCase = 0;
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
+    ({ clearRuntimeAuthProfileStoreSnapshots } = await import("../agents/auth-profiles.js"));
+    ({ clearConfigCache } = await import("../config/config.js"));
     clearConfigCache();
     clearRuntimeAuthProfileStoreSnapshots();
-    resolveProviderUsageAuthWithPluginMock.mockReset();
-    resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
+    providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock.mockReset();
+    providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -60,9 +232,15 @@ describe("resolveProviderAuths key normalization", () => {
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const base = path.join(suiteRoot, `case-${++suiteCase}`);
     nodeFs.mkdirSync(base, { recursive: true });
-    nodeFs.mkdirSync(path.join(base, ".openclaw", "agents", "main", "sessions"), {
-      recursive: true,
-    });
+    const stateDir = path.join(base, ".openclaw");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    nodeFs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
+    nodeFs.mkdirSync(agentDir, { recursive: true });
+    nodeFs.writeFileSync(
+      path.join(agentDir, "auth-profiles.json"),
+      `${JSON.stringify({ version: 1, profiles: {} }, null, 2)}\n`,
+      "utf8",
+    );
     return await fn(base);
   }
 
