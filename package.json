@@ -456,6 +456,10 @@
       "types": "./dist/plugin-sdk/fetch-runtime.d.ts",
       "default": "./dist/plugin-sdk/fetch-runtime.js"
     },
+    "./plugin-sdk/file-lock": {
+      "types": "./dist/plugin-sdk/file-lock.d.ts",
+      "default": "./dist/plugin-sdk/file-lock.js"
+    },
     "./plugin-sdk/group-access": {
       "types": "./dist/plugin-sdk/group-access.d.ts",
       "default": "./dist/plugin-sdk/group-access.js"
