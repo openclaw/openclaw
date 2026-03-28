@@ -195,6 +195,47 @@ describe("tools.effective handler", () => {
     );
   });
 
+  it("falls back to origin.threadId when delivery context omits thread metadata", async () => {
+    vi.mocked(loadSessionEntry).mockReturnValueOnce({
+      cfg: {},
+      canonicalKey: "main:abc",
+      entry: {
+        sessionId: "session-origin-thread",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastAccountId: "acct-1",
+        lastTo: "channel-1",
+        origin: {
+          provider: "telegram",
+          accountId: "acct-1",
+          threadId: 42,
+        },
+        groupId: "group-4",
+        groupChannel: "#ops",
+        space: "workspace-5",
+        chatType: "group",
+        modelProvider: "openai",
+        model: "gpt-4.1",
+      },
+    } as never);
+    const deliveryContextModule = await import("../../utils/delivery-context.js");
+    vi.mocked(deliveryContextModule.deliveryContextFromSession).mockReturnValueOnce({
+      channel: "telegram",
+      to: "channel-1",
+      accountId: "acct-1",
+    });
+
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    expect(vi.mocked(resolveEffectiveToolInventory)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentThreadTs: "42",
+      }),
+    );
+    expect((respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
+  });
+
   it("passes senderIsOwner=true for admin-scoped callers", async () => {
     const respond = vi.fn();
     await toolsEffectiveHandlers["tools.effective"]({
