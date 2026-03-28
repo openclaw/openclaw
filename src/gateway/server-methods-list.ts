@@ -104,6 +104,7 @@ const BASE_METHODS = [
   "projects.get",
   "projects.board.get",
   "projects.queue.get",
+  "projects.task.checkpoint.get",
   "gateway.identity.get",
   "system-presence",
   "system-event",

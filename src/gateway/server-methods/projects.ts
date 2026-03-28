@@ -91,4 +91,20 @@ export const projectsHandlers: GatewayRequestHandlers = {
     }
     respond(true, { queue });
   },
+
+  "projects.task.checkpoint.get": async ({ params, respond }) => {
+    if (!projectsService) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "projects service not started"));
+      return;
+    }
+    const name = validateProjectParam(params, respond);
+    if (!name) return;
+    const taskId = typeof params.taskId === "string" && params.taskId.trim() ? params.taskId.trim() : null;
+    if (!taskId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "missing required param: taskId"));
+      return;
+    }
+    const checkpoint = await projectsService.getTaskCheckpoint(name, taskId);
+    respond(true, { checkpoint });
+  },
 };

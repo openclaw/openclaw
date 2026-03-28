@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { CheckpointData } from "../projects/checkpoint.js";
+import { checkpointPath, readCheckpoint } from "../projects/checkpoint.js";
 import { ProjectSyncService } from "../projects/sync-service.js";
 import type { BoardIndex, ProjectIndex, QueueIndex, SyncEvent } from "../projects/sync-types.js";
 import type { GatewayBroadcastFn } from "./server-broadcast.js";
@@ -101,6 +103,13 @@ export class ProjectGatewayService {
     return this.readJsonFile<QueueIndex>(
       path.join(this.projectsRoot, name, ".index", "queue.json"),
     );
+  }
+
+  /** Read a task's checkpoint sidecar file. Returns null if not found. */
+  async getTaskCheckpoint(projectName: string, taskId: string): Promise<CheckpointData | null> {
+    const taskFile = path.join(this.projectsRoot, projectName, "tasks", `${taskId}.md`);
+    const cpPath = checkpointPath(taskFile);
+    return readCheckpoint(cpPath);
   }
 
   /** Read and parse a JSON file, returning null on ENOENT or parse error. */
