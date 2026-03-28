@@ -239,12 +239,27 @@ function createGatewayPlugin(params: {
 }): carbonGateway.GatewayPlugin {
   class SafeGatewayPlugin extends carbonGateway.GatewayPlugin {
     private gatewayInfoUsedFallback = false;
+    /**
+     * Promise that resolves when the async registerClient completes.
+     * Carbon's Client constructor calls registerClient synchronously
+     * (fire-and-forget), so this must be awaited after construction
+     * to ensure the gateway actually connects (#56492).
+     */
+    registrationReady: Promise<void> | null = null;
 
     constructor() {
       super(params.options);
     }
 
     override async registerClient(
+      client: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0],
+    ) {
+      const work = this._registerClientAsync(client);
+      this.registrationReady = work;
+      return work;
+    }
+
+    private async _registerClientAsync(
       client: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0],
     ) {
       if (!this.gatewayInfo || this.gatewayInfoUsedFallback) {

@@ -894,7 +894,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       gatewaySupervisor: createdGatewaySupervisor,
       autoPresenceController: createdAutoPresenceController,
       eventQueueOpts,
-    } = createDiscordMonitorClient({
+    } = await createDiscordMonitorClient({
       accountId: account.accountId,
       applicationId,
       token,

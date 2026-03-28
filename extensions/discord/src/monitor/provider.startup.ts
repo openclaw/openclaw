@@ -66,7 +66,7 @@ export function createDiscordStatusReadyListener(params: {
   })();
 }
 
-export function createDiscordMonitorClient(params: {
+export async function createDiscordMonitorClient(params: {
   accountId: string;
   applicationId: string;
   token: string;
@@ -125,6 +125,15 @@ export function createDiscordMonitorClient(params: {
     clientPlugins,
   );
   const gateway = client.getPlugin<GatewayPlugin>("gateway") as MutableDiscordGateway | undefined;
+
+  // Carbon's Client constructor calls plugin.registerClient() synchronously,
+  // but SafeGatewayPlugin.registerClient is async (fetches gateway metadata).
+  // The constructor drops the promise, so we must await it explicitly (#56492).
+  const gatewayWithRegistration = gateway as (MutableDiscordGateway & { registrationReady?: Promise<void> | null }) | undefined;
+  if (gatewayWithRegistration?.registrationReady) {
+    await gatewayWithRegistration.registrationReady;
+  }
+
   const gatewaySupervisor = params.createGatewaySupervisor({
     gateway,
     isDisallowedIntentsError: params.isDisallowedIntentsError,
