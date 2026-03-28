@@ -1154,6 +1154,13 @@ export async function handleOpenResponsesHttpRequest(
           output: toolCallOutput,
           usage,
         });
+        if (accumulatedThinking) {
+          writeSseEvent(res, {
+            type: "response.reasoning.done",
+            item_id: reasoningItemId,
+            text: accumulatedThinking,
+          });
+        }
         closed = true;
         unsubscribe();
         rememberResponseSession();
