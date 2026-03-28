@@ -217,6 +217,14 @@
   - Long-lived PRs (>24h) must be rebased onto `upstream/main` every 2 days to avoid falling behind
   - If a PR is >100 commits behind main, close it and create a new branch from fresh `upstream/main`
   - Verify fix is NOT already in `upstream/main` before creating PR (search commit messages and code)
+- **PR review monitoring (required):**
+  - After pushing a PR, monitor Greptile/CI comments every 1 minute until all checks pass
+  - Command: `gh pr view <PR#> --json comments --jq '.comments[] | select(.author.login=="greptile-apps") | .body'`
+  - Priority response:
+    - **P0/P1**: Fix immediately, push new commit, re-trigger Greptile with `@greptile-apps Please re-review`
+    - **P2**: Address if concise (tests, minor suggestions), or note as follow-up
+  - Do not merge until Greptile confidence score ≥ 4/5 and no P0/P1 findings
+  - After each fix push, comment on PR to notify reviewers and re-trigger automated checks
 - When answering questions, respond with high-confidence answers only: verify in code; do not guess.
 - Never update the Carbon dependency.
 - Any dependency with `pnpm.patchedDependencies` must use an exact version (no `^`/`~`).
