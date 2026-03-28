@@ -157,6 +157,7 @@ export const __testing = {
   resolvePluginRuntimeModulePath,
   shouldPreferNativeJiti,
   getCompatibleActivePluginRegistry,
+  isGatewayScopedLoad,
   resolvePluginLoadCacheContext,
   get maxPluginRegistryCacheEntries() {
     return pluginRegistryCacheEntryCap;
@@ -305,6 +306,22 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   };
 }
 
+/**
+ * Returns true when the load options include gateway-specific fields that
+ * restrict or reshape the plugin set (onlyPluginIds, coreGatewayHandlers,
+ * includeSetupOnlyChannelPlugins, preferSetupRuntimeForChannelPlugins).
+ * When these are absent the caller wants the full plugin set and the active
+ * gateway registry is a safe superset.
+ */
+function isGatewayScopedLoad(options: PluginLoadOptions): boolean {
+  return Boolean(
+    options.onlyPluginIds?.length ||
+    options.coreGatewayHandlers ||
+    options.includeSetupOnlyChannelPlugins ||
+    options.preferSetupRuntimeForChannelPlugins,
+  );
+}
+
 function getCompatibleActivePluginRegistry(
   options: PluginLoadOptions = {},
 ): PluginRegistry | undefined {
@@ -330,7 +347,22 @@ export function resolveRuntimePluginRegistry(
   if (!options || !hasExplicitCompatibilityInputs(options)) {
     return getCompatibleActivePluginRegistry();
   }
-  return getCompatibleActivePluginRegistry(options) ?? loadOpenClawPlugins(options);
+  const compatible = getCompatibleActivePluginRegistry(options);
+  if (compatible) {
+    return compatible;
+  }
+  // When the caller does not restrict the plugin set with gateway-specific
+  // fields (onlyPluginIds, coreGatewayHandlers, etc.), the active registry
+  // set during gateway startup is a safe superset of what the caller needs.
+  // Reuse it to avoid a redundant load that may miss already-activated
+  // plugin state (tool registrations, hooks, memory providers).
+  if (!isGatewayScopedLoad(options)) {
+    const active = getActivePluginRegistry();
+    if (active) {
+      return active;
+    }
+  }
+  return loadOpenClawPlugins(options);
 }
 
 function validatePluginConfig(params: {
