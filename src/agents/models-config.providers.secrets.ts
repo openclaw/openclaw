@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatApiKeyPreview } from "../plugins/provider-auth-input.js";
-import { resolvePluginDiscoveryProviders } from "../plugins/provider-discovery.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { listProfilesForProvider } from "./auth-profiles/profiles.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
@@ -439,24 +438,8 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
       source: "config";
     }
   | undefined {
-  // Providers own any provider-specific fallback auth logic via
-  // resolveSyntheticAuth(...). Discovery/bootstrap callers may consume
-  // non-secret markers from source config, but must never persist plaintext.
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const providerPlugin = resolvePluginDiscoveryProviders({
-    config: params.config,
-  }).find(
-    (provider) =>
-      normalizeProviderId(provider.id) === normalizedProvider ||
-      provider.aliases?.some((alias) => normalizeProviderId(alias) === normalizedProvider),
-  );
-  const synthetic = providerPlugin?.resolveSyntheticAuth?.({
-    config: params.config,
-    provider: params.provider,
-    providerConfig: params.config?.models?.providers?.[params.provider],
-  });
-  let apiKey = synthetic?.apiKey?.trim();
-  if (!apiKey && normalizeProviderId(params.provider) === "xai") {
+  let apiKey: string | undefined;
+  if (normalizeProviderId(params.provider) === "xai") {
     const pluginApiKey = normalizeOptionalSecretInput(
       params.config?.plugins?.entries?.xai?.config &&
         typeof params.config.plugins.entries.xai.config === "object" &&
