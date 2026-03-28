@@ -173,6 +173,9 @@ export type CommandOptions = {
   noOutputTimeoutMs?: number;
 };
 
+const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
+const WINDOWS_CLOSE_STATE_POLL_MS = 10;
+
 export function resolveCommandEnv(params: {
   argv: string[];
   env?: NodeJS.ProcessEnv;
@@ -366,16 +369,33 @@ export async function runCommandWithTimeout(
     };
     child.on("close", (code, signal) => {
       if (
-        childExitState == null &&
-        code == null &&
-        signal == null &&
-        child.exitCode == null &&
-        child.signalCode == null
+        process.platform !== "win32" ||
+        childExitState != null ||
+        code != null ||
+        signal != null ||
+        child.exitCode != null ||
+        child.signalCode != null
       ) {
-        setImmediate(() => resolveFromClose(code, signal));
+        resolveFromClose(code, signal);
         return;
       }
-      resolveFromClose(code, signal);
+
+      const startedAt = Date.now();
+      const waitForExitState = () => {
+        if (settled) {
+          return;
+        }
+        if (childExitState != null || child.exitCode != null || child.signalCode != null) {
+          resolveFromClose(code, signal);
+          return;
+        }
+        if (Date.now() - startedAt >= WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS) {
+          resolveFromClose(code, signal);
+          return;
+        }
+        setTimeout(waitForExitState, WINDOWS_CLOSE_STATE_POLL_MS);
+      };
+      waitForExitState();
     });
   });
 }

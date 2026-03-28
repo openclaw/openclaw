@@ -32,6 +32,7 @@ function createMockChild(params?: {
   closeSignal?: NodeJS.Signals | null;
   exitCode?: number | null;
   exitCodeAfterClose?: number | null;
+  exitCodeAfterCloseDelayMs?: number;
   signal?: NodeJS.Signals | null;
 }): MockChild {
   const child = new EventEmitter() as MockChild;
@@ -49,9 +50,9 @@ function createMockChild(params?: {
   queueMicrotask(() => {
     child.emit("close", params?.closeCode ?? 0, params?.closeSignal ?? params?.signal ?? null);
     if (params?.exitCodeAfterClose !== undefined) {
-      setImmediate(() => {
+      setTimeout(() => {
         child.exitCode = params.exitCodeAfterClose ?? null;
-      });
+      }, params.exitCodeAfterCloseDelayMs ?? 0);
     }
   });
   return child;
@@ -123,9 +124,14 @@ describe("windows command wrapper behavior", () => {
     }
   });
 
-  it("waits one tick when Windows close reports null before exitCode settles", async () => {
+  it("waits for Windows exitCode settlement after close reports null", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const child = createMockChild({ closeCode: null, exitCode: null, exitCodeAfterClose: 0 });
+    const child = createMockChild({
+      closeCode: null,
+      exitCode: null,
+      exitCodeAfterClose: 0,
+      exitCodeAfterCloseDelayMs: 50,
+    });
 
     spawnMock.mockImplementation(() => child);
 
