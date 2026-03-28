@@ -42,7 +42,7 @@ internal sealed class NodeInvokeDispatcher : IRequestHandler<DispatchNodeInvokeC
         catch (Exception ex)
         {
             _logger.LogError(ex, "node.invoke failed id={Id} command={Command}", req.Id, req.Command);
-            return new NodeInvokeResponse(req.Id, false, null, ex.Message);
+            return new NodeInvokeResponse(req.Id, false, null, ex.ToString());
         }
     }
 
@@ -75,7 +75,7 @@ internal sealed class NodeInvokeDispatcher : IRequestHandler<DispatchNodeInvokeC
     private async Task<string> HandleCameraListAsync(CancellationToken ct)
     {
         var result = await _mediator.Send(new CameraListQuery(), ct);
-        if (result.IsError) throw new InvalidOperationException(result.FirstError.Description);
+        if (result.IsError) throw new InvalidOperationException($"{result.FirstError.Code}: {result.FirstError.Description}");
         return JsonSerializer.Serialize(new { devices = result.Value });
     }
 
@@ -86,7 +86,7 @@ internal sealed class NodeInvokeDispatcher : IRequestHandler<DispatchNodeInvokeC
         int? delayMs = doc.RootElement.TryGetProperty("delayMs", out var dl) && dl.ValueKind == JsonValueKind.Number ? dl.GetInt32() : null;
 
         var result = await _mediator.Send(new CameraSnapCommand(deviceId, delayMs), ct);
-        if (result.IsError) throw new InvalidOperationException(result.FirstError.Description);
+        if (result.IsError) throw new InvalidOperationException($"{result.FirstError.Code}: {result.FirstError.Description}");
         var snap = result.Value;
         return JsonSerializer.Serialize(new { format = snap.Format, base64 = snap.Base64, width = snap.Width, height = snap.Height });
     }
@@ -99,7 +99,7 @@ internal sealed class NodeInvokeDispatcher : IRequestHandler<DispatchNodeInvokeC
         var includeAudio = doc.RootElement.TryGetProperty("includeAudio", out var ia) && ia.ValueKind == JsonValueKind.True;
 
         var result = await _mediator.Send(new CameraClipCommand(deviceId, durationMs, includeAudio), ct);
-        if (result.IsError) throw new InvalidOperationException(result.FirstError.Description);
+        if (result.IsError) throw new InvalidOperationException($"{result.FirstError.Code}: {result.FirstError.Description}");
         var clip = result.Value;
         return JsonSerializer.Serialize(new { format = clip.Format, base64 = clip.Base64, durationMs = clip.DurationMs, hasAudio = clip.HasAudio });
     }
@@ -107,15 +107,16 @@ internal sealed class NodeInvokeDispatcher : IRequestHandler<DispatchNodeInvokeC
     private async Task<string> HandleScreenRecordAsync(string paramsJson, CancellationToken ct)
     {
         var result = await _mediator.Send(new NodeScreenRecordCommand(paramsJson), ct);
-        if (result.IsError) throw new InvalidOperationException(result.FirstError.Description);
+        if (result.IsError) throw new InvalidOperationException($"{result.FirstError.Code}: {result.FirstError.Description}");
         var rec = result.Value;
+        // Gateway places payloadJSON content into raw.payload — no wrapper needed.
         return JsonSerializer.Serialize(new { format = rec.Format, base64 = rec.Base64, durationMs = rec.DurationMs, fps = rec.Fps, screenIndex = rec.ScreenIndex, hasAudio = rec.HasAudio });
     }
 
     private async Task<string> HandleSystemRunAsync(string paramsJson, string correlationId, CancellationToken ct)
     {
         var result = await _mediator.Send(new EvaluateExecRequestCommand(paramsJson, correlationId), ct);
-        if (result.IsError) throw new InvalidOperationException(result.FirstError.Description);
+        if (result.IsError) throw new InvalidOperationException($"{result.FirstError.Code}: {result.FirstError.Description}");
         var cmd = result.Value;
         return JsonSerializer.Serialize(new { exitCode = cmd.ExitCode, stdout = cmd.Stdout, stderr = cmd.Stderr, durationMs = cmd.DurationMs });
     }
@@ -127,7 +128,7 @@ internal sealed class NodeInvokeDispatcher : IRequestHandler<DispatchNodeInvokeC
             throw new InvalidOperationException("INVALID_PARAMS: name is required");
         var name = nameEl.GetString()!;
         var result = await _mediator.Send(new SystemWhichQuery(name), ct);
-        if (result.IsError) throw new InvalidOperationException(result.FirstError.Description);
+        if (result.IsError) throw new InvalidOperationException($"{result.FirstError.Code}: {result.FirstError.Description}");
         var path = result.Value;
         return JsonSerializer.Serialize(new { found = path.IsFound, fullPath = path.FullPath, executableName = path.ExecutableName });
     }
@@ -135,14 +136,14 @@ internal sealed class NodeInvokeDispatcher : IRequestHandler<DispatchNodeInvokeC
     private async Task<string> HandleSystemNotifyAsync(string paramsJson, CancellationToken ct)
     {
         var result = await _mediator.Send(new SystemNotifyCommand(paramsJson), ct);
-        if (result.IsError) throw new InvalidOperationException(result.FirstError.Description);
+        if (result.IsError) throw new InvalidOperationException($"{result.FirstError.Code}: {result.FirstError.Description}");
         return "{}";
     }
 
     private async Task<string> HandleGetExecApprovalsAsync(CancellationToken ct)
     {
         var result = await _mediator.Send(new GetExecApprovalsQuery(), ct);
-        if (result.IsError) throw new InvalidOperationException(result.FirstError.Description);
+        if (result.IsError) throw new InvalidOperationException($"{result.FirstError.Code}: {result.FirstError.Description}");
         return JsonSerializer.Serialize(result.Value, new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -165,7 +166,7 @@ internal sealed class NodeInvokeDispatcher : IRequestHandler<DispatchNodeInvokeC
         }) ?? new ExecApprovalsFile { Version = 1 };
 
         var result = await _mediator.Send(new SetExecApprovalsCommand(file, baseHash), ct);
-        if (result.IsError) throw new InvalidOperationException(result.FirstError.Description);
+        if (result.IsError) throw new InvalidOperationException($"{result.FirstError.Code}: {result.FirstError.Description}");
 
         return JsonSerializer.Serialize(result.Value, new JsonSerializerOptions
         {
@@ -194,7 +195,7 @@ internal sealed class NodeInvokeDispatcher : IRequestHandler<DispatchNodeInvokeC
         catch { /* malformed JSON — use defaults, same as macOS OpenClawLocationGetParams() fallback */ }
 
         var result = await _mediator.Send(new GetLocationQuery(desiredAccuracy, maxAgeMs, timeoutMs), ct);
-        if (result.IsError) throw new InvalidOperationException(result.FirstError.Description);
+        if (result.IsError) throw new InvalidOperationException($"{result.FirstError.Code}: {result.FirstError.Description}");
         var loc = result.Value;
 
         // Response field names and timestamp format must match OpenClawLocationPayload exactly
@@ -218,14 +219,14 @@ internal sealed class NodeInvokeDispatcher : IRequestHandler<DispatchNodeInvokeC
     private async Task<string> HandleCanvasPresentAsync(string paramsJson, CancellationToken ct)
     {
         var result = await _mediator.Send(new CanvasPresentCommand(paramsJson), ct);
-        if (result.IsError) throw new InvalidOperationException(result.FirstError.Description);
+        if (result.IsError) throw new InvalidOperationException($"{result.FirstError.Code}: {result.FirstError.Description}");
         return "{}";
     }
 
     private async Task<string> HandleCanvasHideAsync(CancellationToken ct)
     {
         var result = await _mediator.Send(new CanvasHideCommand(), ct);
-        if (result.IsError) throw new InvalidOperationException(result.FirstError.Description);
+        if (result.IsError) throw new InvalidOperationException($"{result.FirstError.Code}: {result.FirstError.Description}");
         return "{}";
     }
 
@@ -236,18 +237,19 @@ internal sealed class NodeInvokeDispatcher : IRequestHandler<DispatchNodeInvokeC
             throw new InvalidOperationException("INVALID_PARAMS: url is required");
         var url = urlEl.GetString()!;
         var result = await _mediator.Send(new CanvasNavigateCommand(url), ct);
-        if (result.IsError) throw new InvalidOperationException(result.FirstError.Description);
+        if (result.IsError) throw new InvalidOperationException($"{result.FirstError.Code}: {result.FirstError.Description}");
         return "{}";
     }
 
     private async Task<string> HandleCanvasEvalAsync(string paramsJson, CancellationToken ct)
     {
         using var doc = JsonDocument.Parse(paramsJson);
-        if (!doc.RootElement.TryGetProperty("script", out var scriptEl) || scriptEl.ValueKind != JsonValueKind.String)
-            throw new InvalidOperationException("INVALID_PARAMS: script is required");
+        // Gateway sends "javaScript" (canvas-tool.ts protocol name).
+        if (!doc.RootElement.TryGetProperty("javaScript", out var scriptEl) || scriptEl.ValueKind != JsonValueKind.String)
+            throw new InvalidOperationException("INVALID_PARAMS: javaScript is required");
         var script = scriptEl.GetString()!;
         var result = await _mediator.Send(new CanvasEvalCommand(script), ct);
-        if (result.IsError) throw new InvalidOperationException(result.FirstError.Description);
+        if (result.IsError) throw new InvalidOperationException($"{result.FirstError.Code}: {result.FirstError.Description}");
         var eval = result.Value;
         return JsonSerializer.Serialize(new { success = eval.Success, result = eval.ResultJson, error = eval.Error });
     }
@@ -255,15 +257,18 @@ internal sealed class NodeInvokeDispatcher : IRequestHandler<DispatchNodeInvokeC
     private async Task<string> HandleCanvasSnapshotAsync(CancellationToken ct)
     {
         var result = await _mediator.Send(new CanvasSnapshotQuery(), ct);
-        if (result.IsError) throw new InvalidOperationException(result.FirstError.Description);
+        if (result.IsError) throw new InvalidOperationException($"{result.FirstError.Code}: {result.FirstError.Description}");
         var snap = result.Value;
-        return JsonSerializer.Serialize(new { base64 = snap.Base64, width = snap.Width, height = snap.Height });
+        // Gateway places payloadJSON content into raw.payload (nodes.ts:1100).
+        // parseCanvasSnapshotPayload expects { format, base64 } at the top level — no wrapper.
+        // WebView2 CapturePreviewAsync only supports PNG.
+        return JsonSerializer.Serialize(new { format = "png", base64 = snap.Base64 });
     }
 
     private async Task<string> HandleBrowserProxyAsync(string paramsJson, CancellationToken ct)
     {
         var result = await _mediator.Send(new BrowserProxyCommand(paramsJson), ct);
-        if (result.IsError) throw new InvalidOperationException(result.FirstError.Description);
+        if (result.IsError) throw new InvalidOperationException($"{result.FirstError.Code}: {result.FirstError.Description}");
         return result.Value;
     }
 
