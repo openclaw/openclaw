@@ -581,41 +581,43 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     const rawDelta = text.startsWith(rawPrior) ? text.slice(rawPrior.length) : text;
     state.lastStreamedReasoningRaw = text;
 
-    // Compute formatted text and delta for channel consumers.
-    const formatted = formatReasoningMessage(text);
-    const formattedPrior = state.lastStreamedReasoning ?? "";
-    const formattedDelta =
-      formatted && formatted !== formattedPrior
-        ? formatted.startsWith(formattedPrior)
-          ? formatted.slice(formattedPrior.length)
-          : formatted
-        : undefined;
-    if (formatted && formatted !== formattedPrior) {
-      state.lastStreamedReasoning = formatted;
-    }
-
-    // Skip if nothing actually changed.
-    if (!rawDelta && !formattedDelta) {
+    if (!rawDelta) {
       return;
     }
 
-    // Single event with both raw and formatted fields. HTTP listeners
-    // use rawText; channel-specific consumers use text/delta.
+    // Always emit a non-broadcast raw event for HTTP listeners (e.g.
+    // OpenResponses /v1/responses). Uses "thinking-raw" so the generic
+    // WS broadcast path does not forward it to Control UI / channel clients.
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "thinking-raw",
+      data: { rawText: text, rawDelta },
+    });
+
+    if (!state.streamReasoning) {
+      return;
+    }
+
+    const formatted = formatReasoningMessage(text);
+    if (!formatted) {
+      return;
+    }
+    if (formatted === state.lastStreamedReasoning) {
+      return;
+    }
+    const prior = state.lastStreamedReasoning ?? "";
+    const delta = formatted.startsWith(prior) ? formatted.slice(prior.length) : formatted;
+    state.lastStreamedReasoning = formatted;
+
     emitAgentEvent({
       runId: params.runId,
       stream: "thinking",
-      data: {
-        ...(formatted ? { text: formatted, delta: formattedDelta } : {}),
-        rawText: text,
-        rawDelta,
-      },
+      data: { text: formatted, delta, rawText: text, rawDelta },
     });
 
-    if (state.streamReasoning && formatted && formattedDelta) {
-      void params.onReasoningStream?.({
-        text: formatted,
-      });
-    }
+    void params.onReasoningStream?.({
+      text: formatted,
+    });
   };
 
   const resetForCompactionRetry = () => {
