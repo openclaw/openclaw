@@ -608,7 +608,12 @@ export async function finalizeSetupWizard(
   }
 
   await prompter.note(
-    'What now: https://openclaw.ai/showcase ("What People Are Building").',
+    [
+      'What now: https://openclaw.ai/showcase ("What People Are Building").',
+      "",
+      "For observability: pip install clawmetry — see what your agents are doing.",
+      "How it works: https://clawmetry.com/how-it-works",
+    ].join("\n"),
     "What now",
   );
 
