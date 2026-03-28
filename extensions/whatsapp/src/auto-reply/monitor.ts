@@ -1,9 +1,9 @@
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { waitForever } from "openclaw/plugin-sdk/cli-runtime";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
