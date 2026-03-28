@@ -56,10 +56,22 @@ const breakerByTarget = new Map<string, BreakerState>();
 const MAX_CONSECUTIVE_FAILURES = 5;
 const MAX_RETRY_BACKOFF_MS = 60_000;
 const BREAKER_COOLDOWN_MS = 5 * 60_000; // 5 minutes
+// Safety cap: evict the oldest breaker entry (by insertion order) when the map
+// grows beyond this size. In practice the count is bounded by active
+// agent/session targets, but this prevents unbounded growth if something
+// generates many unique failing target keys.
+const MAX_BREAKER_ENTRIES = 1_000;
 
 function getBreakerState(targetKey: string): BreakerState {
   let state = breakerByTarget.get(targetKey);
   if (!state) {
+    // Evict oldest entry if we hit the cap.
+    if (breakerByTarget.size >= MAX_BREAKER_ENTRIES) {
+      const oldest = breakerByTarget.keys().next().value;
+      if (oldest !== undefined) {
+        breakerByTarget.delete(oldest);
+      }
+    }
     state = { failures: 0, trippedAt: 0 };
     breakerByTarget.set(targetKey, state);
   }
@@ -299,7 +311,6 @@ function schedulePendingWakes(fallbackDelayMs?: number) {
     try {
       for (const pendingWake of pendingBatch) {
         const targetKey = getWakeTargetKey(pendingWake);
-        const breaker = getBreakerState(targetKey);
         const wakeOpts = {
           reason: pendingWake.reason ?? undefined,
           ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
@@ -310,6 +321,9 @@ function schedulePendingWakes(fallbackDelayMs?: number) {
         activeWake = null;
         processedTargets.add(targetKey);
         if (res.status === "failed") {
+          // Defer getBreakerState to the failure path to avoid
+          // needlessly creating entries for targets that succeed.
+          const breaker = getBreakerState(targetKey);
           breaker.failures += 1;
           const retryReason = resolveRetryWakeReason(pendingWake.reason);
           if (breaker.failures >= MAX_CONSECUTIVE_FAILURES) {
