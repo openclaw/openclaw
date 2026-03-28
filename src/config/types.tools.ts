@@ -533,6 +533,12 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /**
+       * Allow RFC 2544 benchmark range (198.18.0.0/15) in SSRF guard for proxy fake-ip
+       * compatibility (e.g., Clash TUN mode). Enable this if you use a proxy with fake-ip
+       * DNS without setting HTTP_PROXY/HTTPS_PROXY environment variables.
+       */
+      allowFakeIp?: boolean;
       firecrawl?: {
         /** Enable Firecrawl fallback (default: true when apiKey is set). */
         enabled?: boolean;

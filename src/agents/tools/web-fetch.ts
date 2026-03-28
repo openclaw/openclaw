@@ -1,8 +1,8 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
-import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { hasEnvHttpProxyConfigured } from "../../infra/net/proxy-env.js";
+import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchFirecrawlMetadata } from "../../secrets/runtime-web-tools.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
@@ -102,6 +102,13 @@ function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
     return fetch.readability;
   }
   return true;
+}
+
+function resolveFetchAllowFakeIp(fetch?: WebFetchConfig): boolean {
+  if (typeof fetch?.allowFakeIp === "boolean") {
+    return fetch.allowFakeIp;
+  }
+  return false;
 }
 
 function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
@@ -459,6 +466,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  allowFakeIp: boolean;
 };
 
 function toFirecrawlContentParams(
@@ -536,7 +544,8 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
   try {
-    const useProxy = hasEnvHttpProxyConfigured();
+    const envProxyConfigured = hasEnvHttpProxyConfigured();
+    const allowRfc2544 = envProxyConfigured || params.allowFakeIp;
     const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
@@ -545,8 +554,10 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       // routing and allow the RFC 2544 benchmark range (198.18.0.0/15) in the
       // SSRF guard. Without useEnvProxy, requests stay in STRICT mode and
       // direct-connect to the fake-ip address instead of going through the proxy.
-      useEnvProxy: useProxy,
-      policy: useProxy ? { allowRfc2544BenchmarkRange: true } : undefined,
+      // When tools.web.fetch.allowFakeIp is true, also allow the RFC 2544 range
+      // for users who use TUN mode proxies without setting HTTP_PROXY env vars.
+      useEnvProxy: envProxyConfigured,
+      policy: allowRfc2544 ? { allowRfc2544BenchmarkRange: true } : undefined,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -795,6 +806,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        allowFakeIp: resolveFetchAllowFakeIp(fetch),
         firecrawlEnabled,
         firecrawlApiKey,
         firecrawlBaseUrl,

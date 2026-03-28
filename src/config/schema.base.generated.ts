@@ -5542,6 +5542,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   readability: {
                     type: "boolean",
                   },
+                  allowFakeIp: {
+                    type: "boolean",
+                  },
                   firecrawl: {
                     type: "object",
                     properties: {
@@ -12906,6 +12909,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "tools.web.fetch.readability": {
       label: "Web Fetch Readability Extraction",
       help: "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
+      tags: ["tools"],
+    },
+    "tools.web.fetch.allowFakeIp": {
+      label: "Allow Fake IP",
+      help: "Allow RFC 2544 benchmark range (198.18.0.0/15) in SSRF guard for proxy fake-ip compatibility (e.g., Clash TUN mode). Enable this if you use a proxy with fake-ip DNS without setting HTTP_PROXY/HTTPS_PROXY environment variables.",
       tags: ["tools"],
     },
     "tools.web.fetch.firecrawl.enabled": {
