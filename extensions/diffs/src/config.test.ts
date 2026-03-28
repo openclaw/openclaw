@@ -1,4 +1,10 @@
 import fs from "node:fs";
+import {
+  disposeHighlighter,
+  RegisteredCustomThemes,
+  ResolvedThemes,
+  ResolvingThemes,
+} from "@pierre/diffs";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
@@ -308,6 +314,56 @@ describe("renderDiffDocument", () => {
     expect(rendered.fileCount).toBe(2);
     expect(rendered.html).toContain("Workspace patch");
     expect(rendered.imageHtml).toContain("max-width: 1180px;");
+  });
+
+  it("re-registers pierre theme loaders before rendering", async () => {
+    await disposeHighlighter();
+
+    const originalLightLoader = RegisteredCustomThemes.get("pierre-light");
+    const originalDarkLoader = RegisteredCustomThemes.get("pierre-dark");
+    const brokenLoader = async () => {
+      throw new Error("broken pierre theme loader");
+    };
+
+    RegisteredCustomThemes.set("pierre-light", brokenLoader);
+    RegisteredCustomThemes.set("pierre-dark", brokenLoader);
+    ResolvedThemes.delete("pierre-light");
+    ResolvedThemes.delete("pierre-dark");
+    ResolvingThemes.delete("pierre-light");
+    ResolvingThemes.delete("pierre-dark");
+
+    try {
+      const rendered = await renderDiffDocument(
+        {
+          kind: "before_after",
+          before: "const value = 1;\n",
+          after: "const value = 2;\n",
+          path: "src/example.ts",
+        },
+        {
+          presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+          image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
+          expandUnchanged: false,
+        },
+      );
+
+      expect(rendered.fileCount).toBe(1);
+      expect(rendered.html).toContain("src/example.ts");
+      expect(RegisteredCustomThemes.get("pierre-light")).not.toBe(brokenLoader);
+      expect(RegisteredCustomThemes.get("pierre-dark")).not.toBe(brokenLoader);
+    } finally {
+      if (originalLightLoader) {
+        RegisteredCustomThemes.set("pierre-light", originalLightLoader);
+      } else {
+        RegisteredCustomThemes.delete("pierre-light");
+      }
+      if (originalDarkLoader) {
+        RegisteredCustomThemes.set("pierre-dark", originalDarkLoader);
+      } else {
+        RegisteredCustomThemes.delete("pierre-dark");
+      }
+      await disposeHighlighter();
+    }
   });
 
   it("rejects patches that exceed file-count limits", async () => {
