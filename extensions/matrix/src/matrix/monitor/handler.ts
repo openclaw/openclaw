@@ -919,7 +919,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             threadId: threadTarget,
             replyToId: draftReplyToId,
             preserveReplyId: replyToMode === "all",
-            previewTextLimit: textLimit,
             accountId: _route.accountId,
             log: logVerboseMessage,
           })

@@ -1,7 +1,7 @@
 import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
 import type { CoreConfig } from "../types.js";
 import type { MatrixClient } from "./sdk.js";
-import { editMessageMatrix, sendSingleTextMessageMatrix } from "./send.js";
+import { editMessageMatrix, prepareMatrixSingleText, sendSingleTextMessageMatrix } from "./send.js";
 
 const DEFAULT_THROTTLE_MS = 1000;
 
@@ -30,12 +30,10 @@ export function createMatrixDraftStream(params: {
   replyToId?: string;
   /** When true, reset() restores the original replyToId instead of clearing it. */
   preserveReplyId?: boolean;
-  previewTextLimit?: number;
   accountId?: string;
   log?: (message: string) => void;
 }): MatrixDraftStream {
   const { roomId, client, cfg, threadId, accountId, log } = params;
-  const previewTextLimit = Math.min(params.previewTextLimit ?? 4000, 4000);
 
   let currentEventId: string | undefined;
   let lastSentText = "";
@@ -49,14 +47,15 @@ export function createMatrixDraftStream(params: {
     if (!trimmed) {
       return false;
     }
-    if (trimmed.length > previewTextLimit) {
+    const preparedText = prepareMatrixSingleText(trimmed, { cfg, accountId });
+    if (!preparedText.fitsInSingleEvent) {
       finalizeInPlaceBlocked = true;
       if (!currentEventId) {
         sendFailed = true;
       }
       stopped = true;
       log?.(
-        `draft-stream: preview exceeded single-event limit (${trimmed.length} > ${previewTextLimit})`,
+        `draft-stream: preview exceeded single-event limit (${preparedText.convertedText.length} > ${preparedText.singleEventLimit})`,
       );
       return false;
     }
@@ -65,12 +64,12 @@ export function createMatrixDraftStream(params: {
     if (sendFailed) {
       return false;
     }
-    if (trimmed === lastSentText) {
+    if (preparedText.trimmedText === lastSentText) {
       return true;
     }
     try {
       if (!currentEventId) {
-        const result = await sendSingleTextMessageMatrix(roomId, trimmed, {
+        const result = await sendSingleTextMessageMatrix(roomId, preparedText.trimmedText, {
           client,
           cfg,
           replyToId,
@@ -78,16 +77,16 @@ export function createMatrixDraftStream(params: {
           accountId,
         });
         currentEventId = result.messageId;
-        lastSentText = trimmed;
+        lastSentText = preparedText.trimmedText;
         log?.(`draft-stream: created message ${currentEventId}`);
       } else {
-        await editMessageMatrix(roomId, currentEventId, trimmed, {
+        await editMessageMatrix(roomId, currentEventId, preparedText.trimmedText, {
           client,
           cfg,
           threadId,
           accountId,
         });
-        lastSentText = trimmed;
+        lastSentText = preparedText.trimmedText;
       }
       return true;
     } catch (err) {

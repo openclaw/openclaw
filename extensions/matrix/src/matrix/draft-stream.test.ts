@@ -9,6 +9,7 @@ const resolveChunkModeMock = vi.fn<(cfg: unknown, channel: unknown, accountId?: 
   () => "length",
 );
 const chunkMarkdownTextWithModeMock = vi.fn((text: string) => (text ? [text] : []));
+const convertMarkdownTablesMock = vi.fn((text: string) => text);
 const runtimeStub = {
   config: { loadConfig: () => loadConfigMock() },
   channel: {
@@ -20,7 +21,7 @@ const runtimeStub = {
       chunkMarkdownText: (text: string) => (text ? [text] : []),
       chunkMarkdownTextWithMode: (text: string) => chunkMarkdownTextWithModeMock(text),
       resolveMarkdownTableMode: () => "code",
-      convertMarkdownTables: (text: string) => text,
+      convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
     },
   },
 } as unknown as PluginRuntime;
@@ -62,6 +63,7 @@ describe("createMatrixDraftStream", () => {
     chunkMarkdownTextWithModeMock
       .mockReset()
       .mockImplementation((text: string) => (text ? [text] : []));
+    convertMarkdownTablesMock.mockReset().mockImplementation((text: string) => text);
   });
 
   afterEach(() => {
@@ -282,11 +284,11 @@ describe("createMatrixDraftStream", () => {
 
   it("falls back to normal delivery when preview text exceeds one Matrix event", async () => {
     const log = vi.fn();
+    resolveTextChunkLimitMock.mockReturnValue(5);
     const stream = createMatrixDraftStream({
       roomId: "!room:test",
       client,
       cfg: {} as import("../types.js").CoreConfig,
-      previewTextLimit: 5,
       log,
     });
 
@@ -295,6 +297,27 @@ describe("createMatrixDraftStream", () => {
 
     expect(sendMessageMock).not.toHaveBeenCalled();
     expect(stream.eventId()).toBeUndefined();
+    expect(stream.mustDeliverFinalNormally()).toBe(true);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("preview exceeded single-event limit"),
+    );
+  });
+
+  it("uses converted Matrix text when checking the single-event preview limit", async () => {
+    const log = vi.fn();
+    resolveTextChunkLimitMock.mockReturnValue(5);
+    convertMarkdownTablesMock.mockImplementation(() => "123456");
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+      log,
+    });
+
+    stream.update("1234");
+    await stream.flush();
+
+    expect(sendMessageMock).not.toHaveBeenCalled();
     expect(stream.mustDeliverFinalNormally()).toBe(true);
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("preview exceeded single-event limit"),

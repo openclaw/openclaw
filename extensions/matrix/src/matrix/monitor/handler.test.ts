@@ -21,9 +21,21 @@ const sendSingleTextMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => ({ messageId: "$draft1", roomId: "!room" })),
 );
 const editMessageMatrixMock = vi.hoisted(() => vi.fn(async () => "$edited"));
+const prepareMatrixSingleTextMock = vi.hoisted(() =>
+  vi.fn((text: string) => {
+    const trimmedText = text.trim();
+    return {
+      trimmedText,
+      convertedText: trimmedText,
+      singleEventLimit: 4000,
+      fitsInSingleEvent: true,
+    };
+  }),
+);
 
 vi.mock("../send.js", () => ({
   editMessageMatrix: editMessageMatrixMock,
+  prepareMatrixSingleText: prepareMatrixSingleTextMock,
   reactMatrixMessage: vi.fn(async () => {}),
   sendMessageMatrix: sendMessageMatrixMock,
   sendSingleTextMessageMatrix: sendSingleTextMessageMatrixMock,
@@ -40,6 +52,15 @@ vi.mock("./replies.js", () => ({
 beforeEach(() => {
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
   installMatrixMonitorTestRuntime();
+  prepareMatrixSingleTextMock.mockReset().mockImplementation((text: string) => {
+    const trimmedText = text.trim();
+    return {
+      trimmedText,
+      convertedText: trimmedText,
+      singleEventLimit: 4000,
+      fitsInSingleEvent: true,
+    };
+  });
 });
 
 function createReactionHarness(params?: {
@@ -1501,25 +1522,29 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("does not reset draft stream after final delivery", async () => {
-    const { dispatch } = createStreamingHarness();
-    const { deliver, opts, finish } = await dispatch();
+    vi.useFakeTimers();
+    try {
+      const { dispatch } = createStreamingHarness();
+      const { deliver, opts, finish } = await dispatch();
 
-    opts.onPartialReply?.({ text: "Hello" });
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+      opts.onPartialReply?.({ text: "Hello" });
+      await vi.waitFor(() => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      });
 
-    // Final delivery — stream should stay stopped.
-    await deliver({ text: "Hello" }, { kind: "final" });
+      // Final delivery — stream should stay stopped.
+      await deliver({ text: "Hello" }, { kind: "final" });
 
-    // Further partial updates should NOT create new messages.
-    sendSingleTextMessageMatrixMock.mockClear();
-    opts.onPartialReply?.({ text: "Ghost" });
+      // Further partial updates should NOT create new messages.
+      sendSingleTextMessageMatrixMock.mockClear();
+      opts.onPartialReply?.({ text: "Ghost" });
 
-    // Give the draft stream loop time to fire if it were still active.
-    await new Promise((r) => setTimeout(r, 50));
-    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
-    await finish();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+      await finish();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("resets materializedTextLength on assistant message start", async () => {
@@ -1555,54 +1580,59 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("stops draft stream on handler error (no leaked timer)", async () => {
-    sendSingleTextMessageMatrixMock
-      .mockReset()
-      .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
-    editMessageMatrixMock.mockReset().mockResolvedValue("$edited");
-    deliverMatrixRepliesMock.mockReset().mockResolvedValue(undefined);
+    vi.useFakeTimers();
+    try {
+      sendSingleTextMessageMatrixMock
+        .mockReset()
+        .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
+      editMessageMatrixMock.mockReset().mockResolvedValue("$edited");
+      deliverMatrixRepliesMock.mockReset().mockResolvedValue(undefined);
 
-    let capturedReplyOpts: ReplyOpts | undefined;
+      let capturedReplyOpts: ReplyOpts | undefined;
 
-    const { handler } = createMatrixHandlerTestHarness({
-      streaming: "partial",
-      createReplyDispatcherWithTyping: () => ({
-        dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
-        replyOptions: {},
-        markDispatchIdle: () => {},
-        markRunComplete: () => {},
-      }),
-      dispatchReplyFromConfig: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
-        capturedReplyOpts = args?.replyOptions;
-        // Simulate streaming then model error.
-        capturedReplyOpts?.onPartialReply?.({ text: "partial" });
-        await vi.waitFor(() => {
-          expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-        });
-        throw new Error("model timeout");
-      }) as never,
-      withReplyDispatcher: async <T>(params: {
-        dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
-        run: () => Promise<T>;
-        onSettled?: () => void | Promise<void>;
-      }) => {
-        const result = await params.run();
-        await params.onSettled?.();
-        return result;
-      },
-    });
+      const { handler } = createMatrixHandlerTestHarness({
+        streaming: "partial",
+        createReplyDispatcherWithTyping: () => ({
+          dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
+          replyOptions: {},
+          markDispatchIdle: () => {},
+          markRunComplete: () => {},
+        }),
+        dispatchReplyFromConfig: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
+          capturedReplyOpts = args?.replyOptions;
+          // Simulate streaming then model error.
+          capturedReplyOpts?.onPartialReply?.({ text: "partial" });
+          await vi.waitFor(() => {
+            expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+          });
+          throw new Error("model timeout");
+        }) as never,
+        withReplyDispatcher: async <T>(params: {
+          dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
+          run: () => Promise<T>;
+          onSettled?: () => void | Promise<void>;
+        }) => {
+          const result = await params.run();
+          await params.onSettled?.();
+          return result;
+        },
+      });
 
-    // Handler should not throw (outer catch absorbs it).
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
-    );
+      // Handler should not throw (outer catch absorbs it).
+      await handler(
+        "!room:example.org",
+        createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
+      );
 
-    // After handler exits, draft stream timer must not fire.
-    sendSingleTextMessageMatrixMock.mockClear();
-    editMessageMatrixMock.mockClear();
-    await new Promise((r) => setTimeout(r, 50));
-    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
-    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+      // After handler exits, draft stream timer must not fire.
+      sendSingleTextMessageMatrixMock.mockClear();
+      editMessageMatrixMock.mockClear();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+      expect(editMessageMatrixMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("skips compaction notices in draft finalization", async () => {

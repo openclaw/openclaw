@@ -34,6 +34,13 @@ const getCore = () => getMatrixRuntime();
 export type { MatrixSendOpts, MatrixSendResult } from "./send/types.js";
 export { resolveMatrixRoomId } from "./send/targets.js";
 
+export type MatrixPreparedSingleText = {
+  trimmedText: string;
+  convertedText: string;
+  singleEventLimit: number;
+  fitsInSingleEvent: boolean;
+};
+
 type MatrixClientResolveOpts = {
   client?: MatrixClient;
   cfg?: CoreConfig;
@@ -62,6 +69,33 @@ function normalizeMatrixClientResolveOpts(
   };
 }
 
+export function prepareMatrixSingleText(
+  text: string,
+  opts: {
+    cfg?: CoreConfig;
+    accountId?: string;
+  } = {},
+): MatrixPreparedSingleText {
+  const trimmedText = text.trim();
+  const cfg = opts.cfg ?? getCore().config.loadConfig();
+  const tableMode = getCore().channel.text.resolveMarkdownTableMode({
+    cfg,
+    channel: "matrix",
+    accountId: opts.accountId,
+  });
+  const convertedText = getCore().channel.text.convertMarkdownTables(trimmedText, tableMode);
+  const singleEventLimit = Math.min(
+    getCore().channel.text.resolveTextChunkLimit(cfg, "matrix", opts.accountId),
+    MATRIX_TEXT_LIMIT,
+  );
+  return {
+    trimmedText,
+    convertedText,
+    singleEventLimit,
+    fitsInSingleEvent: convertedText.length <= singleEventLimit,
+  };
+}
+
 export async function sendMessageMatrix(
   to: string,
   message: string | undefined,
@@ -81,21 +115,14 @@ export async function sendMessageMatrix(
     async (client) => {
       const roomId = await resolveMatrixRoomId(client, to);
       const cfg = opts.cfg ?? getCore().config.loadConfig();
-      const tableMode = getCore().channel.text.resolveMarkdownTableMode({
+      const { convertedText, singleEventLimit } = prepareMatrixSingleText(trimmedMessage, {
         cfg,
-        channel: "matrix",
         accountId: opts.accountId,
       });
-      const convertedMessage = getCore().channel.text.convertMarkdownTables(
-        trimmedMessage,
-        tableMode,
-      );
-      const textLimit = getCore().channel.text.resolveTextChunkLimit(cfg, "matrix", opts.accountId);
-      const chunkLimit = Math.min(textLimit, MATRIX_TEXT_LIMIT);
       const chunkMode = getCore().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
       const chunks = getCore().channel.text.chunkMarkdownTextWithMode(
-        convertedMessage,
-        chunkLimit,
+        convertedText,
+        singleEventLimit,
         chunkMode,
       );
       const threadId = normalizeThreadId(opts.threadId);
@@ -268,9 +295,18 @@ export async function sendSingleTextMessageMatrix(
     accountId?: string;
   } = {},
 ): Promise<MatrixSendResult> {
-  const trimmedText = text.trim();
+  const { trimmedText, convertedText, singleEventLimit, fitsInSingleEvent } =
+    prepareMatrixSingleText(text, {
+      cfg: opts.cfg,
+      accountId: opts.accountId,
+    });
   if (!trimmedText) {
     throw new Error("Matrix single-message send requires text");
+  }
+  if (!fitsInSingleEvent) {
+    throw new Error(
+      `Matrix single-message text exceeds limit (${convertedText.length} > ${singleEventLimit})`,
+    );
   }
   return await withResolvedMatrixClient(
     {
@@ -280,22 +316,6 @@ export async function sendSingleTextMessageMatrix(
     },
     async (client) => {
       const resolvedRoom = await resolveMatrixRoomId(client, roomId);
-      const cfg = opts.cfg ?? getCore().config.loadConfig();
-      const tableMode = getCore().channel.text.resolveMarkdownTableMode({
-        cfg,
-        channel: "matrix",
-        accountId: opts.accountId,
-      });
-      const convertedText = getCore().channel.text.convertMarkdownTables(trimmedText, tableMode);
-      const singleEventLimit = Math.min(
-        getCore().channel.text.resolveTextChunkLimit(cfg, "matrix", opts.accountId),
-        MATRIX_TEXT_LIMIT,
-      );
-      if (convertedText.length > singleEventLimit) {
-        throw new Error(
-          `Matrix single-message text exceeds limit (${convertedText.length} > ${singleEventLimit})`,
-        );
-      }
       const normalizedThreadId = normalizeThreadId(opts.threadId);
       const relation = normalizedThreadId
         ? buildThreadRelation(normalizedThreadId, opts.replyToId)
