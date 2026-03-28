@@ -9,9 +9,7 @@ const waitState = vi.hoisted(() => ({
 }));
 
 vi.mock("../../infra/agent-events.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/agent-events.js")>(
-    "../../infra/agent-events.js",
-  );
+  const actual = await importOriginal<typeof import("../../infra/agent-events.js")>();
   return {
     ...actual,
     getAgentRunContext: vi.fn(() => ({
@@ -25,8 +23,7 @@ vi.mock("./agent-job.js", () => ({
 }));
 
 vi.mock("./agent-wait-dedupe.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("./agent-wait-dedupe.js")>("./agent-wait-dedupe.js");
+  const actual = await importOriginal<typeof import("./agent-wait-dedupe.js")>();
   return {
     ...actual,
     readTerminalSnapshotFromGatewayDedupe: waitState.readTerminalSnapshotFromGatewayDedupe,

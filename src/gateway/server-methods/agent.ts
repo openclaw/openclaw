@@ -595,7 +595,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
       registerAgentRunContext(idem, {
         sessionKey: canonicalSessionKey,
-        requestedStructuredOutput: request.streamParams?.toolChoice != null,
+        requestedStructuredOutput:
+          request.streamParams?.toolChoice != null && request.streamParams.toolChoice !== "none",
       });
     }
 

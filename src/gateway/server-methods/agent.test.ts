@@ -369,6 +369,32 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it('treats request-level toolChoice "none" as non-structured output intent', async () => {
+    primeMainAgentRun();
+    mocks.registerAgentRunContext.mockClear();
+
+    await invokeAgent(
+      {
+        message: "test toolChoice none",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        streamParams: { toolChoice: "none" },
+        idempotencyKey: "test-idem-toolchoice-none",
+      },
+      {
+        reqId: "test-idem-toolchoice-none",
+      },
+    );
+
+    expect(mocks.registerAgentRunContext).toHaveBeenCalledWith(
+      "test-idem-toolchoice-none",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        requestedStructuredOutput: false,
+      }),
+    );
+  });
+
   it("rejects provider and model overrides for write-scoped callers", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
