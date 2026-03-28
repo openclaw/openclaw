@@ -40,6 +40,7 @@ import { sendMessageMattermost } from "./mattermost/send.js";
 import { resolveMattermostOpaqueTarget } from "./mattermost/target-resolution.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import {
+  chunkTextForOutbound,
   createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -437,7 +438,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
   outbound: {
     base: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getMattermostRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       resolveTarget: ({ to }) => {
