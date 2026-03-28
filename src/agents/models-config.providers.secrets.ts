@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatApiKeyPreview } from "../plugins/provider-auth-input.js";
+import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { listProfilesForProvider } from "./auth-profiles/profiles.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
@@ -13,7 +14,6 @@ import {
   resolveNonEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -438,34 +438,16 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
       source: "config";
     }
   | undefined {
-  let apiKey: string | undefined;
-  if (normalizeProviderId(params.provider) === "xai") {
-    const pluginApiKey = normalizeOptionalSecretInput(
-      params.config?.plugins?.entries?.xai?.config &&
-        typeof params.config.plugins.entries.xai.config === "object" &&
-        !Array.isArray(params.config.plugins.entries.xai.config)
-        ? ((params.config.plugins.entries.xai.config as { webSearch?: { apiKey?: unknown } })
-            .webSearch?.apiKey ?? undefined)
-        : undefined,
-    );
-    const pluginApiKeyRef = coerceSecretRef(
-      params.config?.plugins?.entries?.xai?.config &&
-        typeof params.config.plugins.entries.xai.config === "object" &&
-        !Array.isArray(params.config.plugins.entries.xai.config)
-        ? ((params.config.plugins.entries.xai.config as { webSearch?: { apiKey?: unknown } })
-            .webSearch?.apiKey ?? undefined)
-        : undefined,
-    );
-    const legacyApiKey = normalizeOptionalSecretInput(
-      params.config?.tools?.web?.search?.grok?.apiKey,
-    );
-    const legacyApiKeyRef = coerceSecretRef(params.config?.tools?.web?.search?.grok?.apiKey);
-    apiKey =
-      pluginApiKey ??
-      (pluginApiKeyRef ? resolveNonEnvSecretRefApiKeyMarker(pluginApiKeyRef.source) : undefined) ??
-      legacyApiKey ??
-      (legacyApiKeyRef ? resolveNonEnvSecretRefApiKeyMarker(legacyApiKeyRef.source) : undefined);
-  }
+  const synthetic = resolveProviderSyntheticAuthWithPlugin({
+    provider: params.provider,
+    config: params.config,
+    context: {
+      config: params.config,
+      provider: params.provider,
+      providerConfig: params.config?.models?.providers?.[params.provider],
+    },
+  });
+  const apiKey = synthetic?.apiKey?.trim();
   if (!apiKey) {
     if (shouldTraceProviderAuth(params.provider)) {
       log.info("[xai-auth] bootstrap config fallback: no config-backed key found");
