@@ -112,6 +112,24 @@ function resolveOptionalDemoTools(toolAllowlist?: readonly string[]) {
   return resolvePluginTools(createResolveToolsParams({ toolAllowlist }));
 }
 
+function createAutoEnabledOptionalContext() {
+  const rawContext = createContext();
+  const autoEnabledConfig = {
+    ...rawContext.config,
+    plugins: {
+      ...rawContext.config.plugins,
+      entries: {
+        "optional-demo": { enabled: true },
+      },
+    },
+  };
+  return { rawContext, autoEnabledConfig };
+}
+
+function expectAutoEnabledOptionalLoad(autoEnabledConfig: unknown) {
+  expectLoaderCall({ config: autoEnabledConfig });
+}
+
 function expectResolvedToolNames(
   tools: ReturnType<typeof resolvePluginTools>,
   expectedToolNames: readonly string[],
@@ -245,16 +263,7 @@ describe("resolvePluginTools optional tools", () => {
 
   it("loads plugin tools from the auto-enabled config snapshot", () => {
     setOptionalDemoRegistry();
-    const rawContext = createContext();
-    const autoEnabledConfig = {
-      ...rawContext.config,
-      plugins: {
-        ...rawContext.config.plugins,
-        entries: {
-          "optional-demo": { enabled: true },
-        },
-      },
-    };
+    const { rawContext, autoEnabledConfig } = createAutoEnabledOptionalContext();
     applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
 
     resolvePluginTools({
@@ -276,21 +285,12 @@ describe("resolvePluginTools optional tools", () => {
         env: process.env,
       }),
     );
-    expectLoaderCall({ config: autoEnabledConfig });
+    expectAutoEnabledOptionalLoad(autoEnabledConfig);
   });
 
   it("does not reuse a cached active registry when auto-enable changes the config snapshot", () => {
     setOptionalDemoRegistry();
-    const rawContext = createContext();
-    const autoEnabledConfig = {
-      ...rawContext.config,
-      plugins: {
-        ...rawContext.config.plugins,
-        entries: {
-          "optional-demo": { enabled: true },
-        },
-      },
-    };
+    const { rawContext, autoEnabledConfig } = createAutoEnabledOptionalContext();
     applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
 
     const tools = resolvePluginTools({
@@ -302,7 +302,7 @@ describe("resolvePluginTools optional tools", () => {
     });
 
     expectResolvedToolNames(tools, ["optional_tool"]);
-    expectLoaderCall({ config: autoEnabledConfig });
+    expectAutoEnabledOptionalLoad(autoEnabledConfig);
   });
 
   it("reuses a compatible active registry instead of loading again", () => {

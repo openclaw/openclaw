@@ -141,6 +141,39 @@ function expectCalledOnce(...mocks: Array<{ mock: { calls: unknown[] } }>) {
   }
 }
 
+function expectResolvedValues(
+  cases: ReadonlyArray<{
+    actual: () => unknown;
+    expected: unknown;
+  }>,
+) {
+  for (const testCase of cases) {
+    expect(testCase.actual()).toEqual(testCase.expected);
+  }
+}
+
+async function expectResolvedMatches(
+  cases: ReadonlyArray<{
+    actual: () => Promise<unknown>;
+    expected: Record<string, unknown>;
+  }>,
+) {
+  for (const testCase of cases) {
+    await expect(testCase.actual()).resolves.toMatchObject(testCase.expected);
+  }
+}
+
+async function expectResolvedAsyncValues(
+  cases: ReadonlyArray<{
+    actual: () => Promise<unknown>;
+    expected: unknown;
+  }>,
+) {
+  for (const testCase of cases) {
+    await expect(testCase.actual()).resolves.toEqual(testCase.expected);
+  }
+}
+
 describe("provider-runtime", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -396,20 +429,94 @@ describe("provider-runtime", () => {
       }),
     ).toBeTypeOf("function");
 
-    await expect(
-      createProviderEmbeddingProvider({
-        provider: DEMO_PROVIDER_ID,
-        context: {
-          config: {} as never,
-          provider: DEMO_PROVIDER_ID,
+    await expectResolvedMatches([
+      {
+        actual: () =>
+          createProviderEmbeddingProvider({
+            provider: DEMO_PROVIDER_ID,
+            context: {
+              config: {} as never,
+              provider: DEMO_PROVIDER_ID,
+              model: "demo-embed",
+            },
+          }),
+        expected: {
+          id: "demo",
           model: "demo-embed",
+          client: { token: "embed-token" },
         },
-      }),
-    ).resolves.toMatchObject({
-      id: "demo",
-      model: "demo-embed",
-      client: { token: "embed-token" },
-    });
+      },
+      {
+        actual: () =>
+          prepareProviderRuntimeAuth({
+            provider: DEMO_PROVIDER_ID,
+            env: process.env,
+            context: createDemoResolvedModelContext({
+              env: process.env,
+              apiKey: "source-token",
+              authMode: "api-key",
+            }),
+          }),
+        expected: {
+          apiKey: "runtime-token",
+          baseUrl: "https://runtime.example.com/v1",
+          expiresAt: 123,
+        },
+      },
+      {
+        actual: () =>
+          refreshProviderOAuthCredentialWithPlugin({
+            provider: DEMO_PROVIDER_ID,
+            context: {
+              type: "oauth",
+              provider: DEMO_PROVIDER_ID,
+              access: "oauth-access",
+              refresh: "oauth-refresh",
+              expires: Date.now() + 60_000,
+            },
+          }),
+        expected: {
+          access: "refreshed-access-token",
+        },
+      },
+      {
+        actual: () =>
+          resolveProviderUsageAuthWithPlugin({
+            provider: DEMO_PROVIDER_ID,
+            env: process.env,
+            context: {
+              config: {} as never,
+              env: process.env,
+              provider: DEMO_PROVIDER_ID,
+              resolveApiKeyFromConfigAndStore: () => "source-token",
+              resolveOAuthToken: async () => null,
+            },
+          }),
+        expected: {
+          token: "usage-token",
+          accountId: "usage-account",
+        },
+      },
+      {
+        actual: () =>
+          resolveProviderUsageSnapshotWithPlugin({
+            provider: DEMO_PROVIDER_ID,
+            env: process.env,
+            context: {
+              config: {} as never,
+              env: process.env,
+              provider: DEMO_PROVIDER_ID,
+              token: "usage-token",
+              timeoutMs: 5_000,
+              fetchFn: vi.fn() as never,
+            },
+          }),
+        expected: {
+          provider: "zai",
+          windows: [{ label: "Day", usedPercent: 25 }],
+        },
+      },
+    ]);
 
     expect(
       wrapProviderStreamFn({
@@ -430,22 +537,6 @@ describe("provider-runtime", () => {
       api: "openai-codex-responses",
     });
 
-    await expect(
-      prepareProviderRuntimeAuth({
-        provider: DEMO_PROVIDER_ID,
-        env: process.env,
-        context: createDemoResolvedModelContext({
-          env: process.env,
-          apiKey: "source-token",
-          authMode: "api-key",
-        }),
-      }),
-    ).resolves.toMatchObject({
-      apiKey: "runtime-token",
-      baseUrl: "https://runtime.example.com/v1",
-      expiresAt: 123,
-    });
-
     expect(
       formatProviderAuthProfileApiKeyWithPlugin({
         provider: DEMO_PROVIDER_ID,
@@ -459,147 +550,111 @@ describe("provider-runtime", () => {
       }),
     ).toBe('{"token":"oauth-access"}');
 
-    await expect(
-      refreshProviderOAuthCredentialWithPlugin({
-        provider: DEMO_PROVIDER_ID,
-        context: {
-          type: "oauth",
-          provider: DEMO_PROVIDER_ID,
-          access: "oauth-access",
-          refresh: "oauth-refresh",
-          expires: Date.now() + 60_000,
-        },
-      }),
-    ).resolves.toMatchObject({
-      access: "refreshed-access-token",
-    });
+    await expectResolvedAsyncValues([
+      {
+        actual: () =>
+          buildProviderAuthDoctorHintWithPlugin({
+            provider: DEMO_PROVIDER_ID,
+            context: {
+              provider: DEMO_PROVIDER_ID,
+              profileId: "demo:default",
+              store: { version: 1, profiles: {} },
+            },
+          }),
+        expected: "Repair demo:default",
+      },
+    ]);
 
-    await expect(
-      buildProviderAuthDoctorHintWithPlugin({
-        provider: DEMO_PROVIDER_ID,
-        context: {
-          provider: DEMO_PROVIDER_ID,
-          profileId: "demo:default",
-          store: { version: 1, profiles: {} },
+    expectResolvedValues([
+      {
+        actual: () =>
+          resolveProviderCacheTtlEligibility({
+            provider: DEMO_PROVIDER_ID,
+            context: {
+              provider: DEMO_PROVIDER_ID,
+              modelId: "anthropic/claude-sonnet-4-5",
+            },
+          }),
+        expected: true,
+      },
+      {
+        actual: () =>
+          resolveProviderBinaryThinking({
+            provider: DEMO_PROVIDER_ID,
+            context: {
+              provider: DEMO_PROVIDER_ID,
+              modelId: "glm-5",
+            },
+          }),
+        expected: true,
+      },
+      {
+        actual: () =>
+          resolveProviderXHighThinking({
+            provider: DEMO_PROVIDER_ID,
+            context: {
+              provider: DEMO_PROVIDER_ID,
+              modelId: "gpt-5.4",
+            },
+          }),
+        expected: true,
+      },
+      {
+        actual: () =>
+          resolveProviderDefaultThinkingLevel({
+            provider: DEMO_PROVIDER_ID,
+            context: {
+              provider: DEMO_PROVIDER_ID,
+              modelId: "gpt-5.4",
+              reasoning: true,
+            },
+          }),
+        expected: "low",
+      },
+      {
+        actual: () =>
+          resolveProviderModernModelRef({
+            provider: DEMO_PROVIDER_ID,
+            context: {
+              provider: DEMO_PROVIDER_ID,
+              modelId: "gpt-5.4",
+            },
+          }),
+        expected: true,
+      },
+      {
+        actual: () =>
+          resolveProviderSyntheticAuthWithPlugin({
+            provider: DEMO_PROVIDER_ID,
+            context: {
+              provider: DEMO_PROVIDER_ID,
+              providerConfig: {
+                api: "openai-completions",
+                baseUrl: "http://localhost:11434",
+                models: [],
+              },
+            },
+          }),
+        expected: {
+          apiKey: "demo-local",
+          source: "models.providers.demo (synthetic local key)",
+          mode: "api-key",
         },
-      }),
-    ).resolves.toBe("Repair demo:default");
-
-    await expect(
-      resolveProviderUsageAuthWithPlugin({
-        provider: DEMO_PROVIDER_ID,
-        env: process.env,
-        context: {
-          config: {} as never,
-          env: process.env,
-          provider: DEMO_PROVIDER_ID,
-          resolveApiKeyFromConfigAndStore: () => "source-token",
-          resolveOAuthToken: async () => null,
-        },
-      }),
-    ).resolves.toMatchObject({
-      token: "usage-token",
-      accountId: "usage-account",
-    });
-
-    await expect(
-      resolveProviderUsageSnapshotWithPlugin({
-        provider: DEMO_PROVIDER_ID,
-        env: process.env,
-        context: {
-          config: {} as never,
-          env: process.env,
-          provider: DEMO_PROVIDER_ID,
-          token: "usage-token",
-          timeoutMs: 5_000,
-          fetchFn: vi.fn() as never,
-        },
-      }),
-    ).resolves.toMatchObject({
-      provider: "zai",
-      windows: [{ label: "Day", usedPercent: 25 }],
-    });
-
-    expect(
-      resolveProviderCacheTtlEligibility({
-        provider: DEMO_PROVIDER_ID,
-        context: {
-          provider: DEMO_PROVIDER_ID,
-          modelId: "anthropic/claude-sonnet-4-5",
-        },
-      }),
-    ).toBe(true);
-
-    expect(
-      resolveProviderBinaryThinking({
-        provider: DEMO_PROVIDER_ID,
-        context: {
-          provider: DEMO_PROVIDER_ID,
-          modelId: "glm-5",
-        },
-      }),
-    ).toBe(true);
-
-    expect(
-      resolveProviderXHighThinking({
-        provider: DEMO_PROVIDER_ID,
-        context: {
-          provider: DEMO_PROVIDER_ID,
-          modelId: "gpt-5.4",
-        },
-      }),
-    ).toBe(true);
-
-    expect(
-      resolveProviderDefaultThinkingLevel({
-        provider: DEMO_PROVIDER_ID,
-        context: {
-          provider: DEMO_PROVIDER_ID,
-          modelId: "gpt-5.4",
-          reasoning: true,
-        },
-      }),
-    ).toBe("low");
-
-    expect(
-      resolveProviderModernModelRef({
-        provider: DEMO_PROVIDER_ID,
-        context: {
-          provider: DEMO_PROVIDER_ID,
-          modelId: "gpt-5.4",
-        },
-      }),
-    ).toBe(true);
-
-    expect(
-      resolveProviderSyntheticAuthWithPlugin({
-        provider: DEMO_PROVIDER_ID,
-        context: {
-          provider: DEMO_PROVIDER_ID,
-          providerConfig: {
-            api: "openai-completions",
-            baseUrl: "http://localhost:11434",
-            models: [],
-          },
-        },
-      }),
-    ).toEqual({
-      apiKey: "demo-local",
-      source: "models.providers.demo (synthetic local key)",
-      mode: "api-key",
-    });
-
-    expect(
-      buildProviderUnknownModelHintWithPlugin({
-        provider: "openai",
-        env: process.env,
-        context: {
-          env: process.env,
-          provider: "openai",
-          modelId: "gpt-5.4",
-        },
-      }),
-    ).toBe("Use demo setup for gpt-5.4");
+      },
+      {
+        actual: () =>
+          buildProviderUnknownModelHintWithPlugin({
+            provider: "openai",
+            env: process.env,
+            context: {
+              env: process.env,
+              provider: "openai",
+              modelId: "gpt-5.4",
+            },
+          }),
+        expected: "Use demo setup for gpt-5.4",
+      },
+    ]);
 
     expectCodexMissingAuthHint(buildProviderMissingAuthMessageWithPlugin);
     expectCodexBuiltInSuppression(resolveProviderBuiltInModelSuppression);
