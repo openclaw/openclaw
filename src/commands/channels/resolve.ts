@@ -3,6 +3,7 @@ import type { ChannelResolveKind, ChannelResolveResult } from "../../channels/pl
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
+import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
@@ -78,7 +79,10 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     targetIds: getChannelsCommandSecretTargetIds(),
     mode: "read_only_operational",
   });
-  let cfg = resolvedConfig;
+  let cfg = applyPluginAutoEnable({
+    config: resolvedConfig,
+    env: process.env,
+  }).config;
   for (const entry of diagnostics) {
     runtime.log(`[secrets] ${entry}`);
   }
