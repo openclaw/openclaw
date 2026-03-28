@@ -56,7 +56,7 @@ import type {
   GroupMessageEvent,
 } from "./types.js";
 import { TypingKeepAlive, TYPING_INPUT_SECOND } from "./typing-keepalive.js";
-import { resolveTTSConfig } from "./utils/audio-convert.js";
+import { isGlobalTTSAvailable, resolveTTSConfig } from "./utils/audio-convert.js";
 import { runDiagnostics } from "./utils/platform.js";
 import { parseFaceTags, parseRefIndices, buildAttachmentSummaries } from "./utils/text-parsing.js";
 
@@ -169,10 +169,15 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         ? `${ttsCfg.apiKey.slice(0, 4)}****${ttsCfg.apiKey.slice(-4)}`
         : "****";
     log?.info(
-      `[qqbot:${account.accountId}] TTS configured: model=${ttsCfg.model}, voice=${ttsCfg.voice}, authStyle=${ttsCfg.authStyle ?? "bearer"}, baseUrl=${ttsCfg.baseUrl}`,
+      `[qqbot:${account.accountId}] TTS configured (plugin): model=${ttsCfg.model}, voice=${ttsCfg.voice}, authStyle=${ttsCfg.authStyle ?? "bearer"}, baseUrl=${ttsCfg.baseUrl}`,
     );
     log?.info(
       `[qqbot:${account.accountId}] TTS apiKey: ${maskedKey}${ttsCfg.queryParams ? `, queryParams=${JSON.stringify(ttsCfg.queryParams)}` : ""}${ttsCfg.speed !== undefined ? `, speed=${ttsCfg.speed}` : ""}`,
+    );
+  } else if (isGlobalTTSAvailable(cfg as OpenClawConfig)) {
+    const globalProvider = (cfg as OpenClawConfig).messages?.tts?.provider ?? "auto";
+    log?.info(
+      `[qqbot:${account.accountId}] TTS configured (global fallback): provider=${globalProvider}`,
     );
   } else {
     log?.info(
@@ -679,7 +684,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
             ? `qqbot:dm:${event.guildId}`
             : `qqbot:c2c:${event.senderId}`;
 
-        const hasTTS = !!resolveTTSConfig(cfg as Record<string, unknown>);
+        const hasTTS =
+          !!resolveTTSConfig(cfg as Record<string, unknown>) ||
+          isGlobalTTSAvailable(cfg as OpenClawConfig);
 
         let quotePart = "";
         if (replyToIsQuote) {

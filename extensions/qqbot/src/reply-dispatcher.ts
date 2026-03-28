@@ -1,4 +1,6 @@
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { textToSpeech as globalTextToSpeech } from "openclaw/plugin-sdk/speech-runtime";
 import {
   getAccessToken,
   sendC2CMessage,
@@ -16,7 +18,13 @@ import {
   sendGroupFileMessage,
 } from "./api.js";
 import type { ResolvedQQBotAccount } from "./types.js";
-import { resolveTTSConfig, textToSilk, formatDuration } from "./utils/audio-convert.js";
+import {
+  isGlobalTTSAvailable,
+  resolveTTSConfig,
+  textToSilk,
+  audioFileToSilkBase64,
+  formatDuration,
+} from "./utils/audio-convert.js";
 import {
   checkFileSize,
   readFileAsync,
@@ -281,64 +289,111 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
     const ttsText = payload.caption || payload.path;
     if (!ttsText?.trim()) {
       log?.error(`[qqbot:${account.accountId}] Voice missing text`);
-    } else {
-      const ttsCfg = resolveTTSConfig(cfg as Record<string, unknown>);
-      if (!ttsCfg) {
-        log?.error(
-          `[qqbot:${account.accountId}] TTS not configured (channels.qqbot.tts in openclaw.json)`,
-        );
-      } else {
-        log?.info(
-          `[qqbot:${account.accountId}] TTS: "${ttsText.slice(0, 50)}..." via ${ttsCfg.model}`,
-        );
-        const ttsDir = getQQBotDataDir("tts");
-        const { silkPath, silkBase64, duration } = await textToSilk(ttsText, ttsCfg, ttsDir);
-        log?.info(
-          `[qqbot:${account.accountId}] TTS done: ${formatDuration(duration)}, file saved: ${silkPath}`,
-        );
-
-        await sendWithTokenRetry(
-          account.appId,
-          account.clientSecret,
-          async (token) => {
-            if (target.type === "c2c") {
-              await sendC2CVoiceMessage(
-                account.appId,
-                token,
-                target.senderId,
-                silkBase64,
-                undefined,
-                target.messageId,
-                ttsText,
-                silkPath,
-              );
-            } else if (target.type === "group" && target.groupOpenid) {
-              await sendGroupVoiceMessage(
-                account.appId,
-                token,
-                target.groupOpenid,
-                silkBase64,
-                undefined,
-                target.messageId,
-              );
-            } else if (target.type === "dm" && target.guildId) {
-              log?.error(
-                `[qqbot:${account.accountId}] Voice not supported in DM, sending text fallback`,
-              );
-              await sendDmMessage(token, target.guildId, ttsText, target.messageId);
-            } else if (target.channelId) {
-              log?.error(
-                `[qqbot:${account.accountId}] Voice not supported in channel, sending text fallback`,
-              );
-              await sendChannelMessage(token, target.channelId, ttsText, target.messageId);
-            }
-          },
-          log,
-          account.accountId,
-        );
-        log?.info(`[qqbot:${account.accountId}] Voice message sent`);
-      }
+      return;
     }
+
+    let silkBase64: string | undefined;
+    let silkPath: string | undefined;
+    let duration: number | undefined;
+    let providerLabel: string | undefined;
+
+    // Strategy 1: Plugin-specific TTS (OpenAI-compatible /audio/speech API).
+    const ttsCfg = resolveTTSConfig(cfg as Record<string, unknown>);
+    if (ttsCfg) {
+      log?.info(
+        `[qqbot:${account.accountId}] TTS (plugin): "${ttsText.slice(0, 50)}..." via ${ttsCfg.model}`,
+      );
+      const ttsDir = getQQBotDataDir("tts");
+      const result = await textToSilk(ttsText, ttsCfg, ttsDir);
+      silkBase64 = result.silkBase64;
+      silkPath = result.silkPath;
+      duration = result.duration;
+      providerLabel = ttsCfg.model;
+    } else {
+      // Strategy 2: Fall back to global TTS provider registry (e.g. Edge TTS).
+      if (!isGlobalTTSAvailable(cfg as OpenClawConfig)) {
+        log?.error(
+          `[qqbot:${account.accountId}] TTS not configured (neither plugin channels.qqbot.tts nor global messages.tts)`,
+        );
+        return;
+      }
+      log?.info(`[qqbot:${account.accountId}] TTS (global fallback): "${ttsText.slice(0, 50)}..."`);
+      const globalResult = await globalTextToSpeech({
+        text: ttsText,
+        cfg: cfg as OpenClawConfig,
+        channel: "qqbot",
+      });
+      if (!globalResult.success || !globalResult.audioPath) {
+        log?.error(
+          `[qqbot:${account.accountId}] Global TTS failed: ${globalResult.error ?? "unknown"}`,
+        );
+        return;
+      }
+      log?.info(
+        `[qqbot:${account.accountId}] Global TTS returned: provider=${globalResult.provider}, format=${globalResult.outputFormat}, path=${globalResult.audioPath}`,
+      );
+      providerLabel = globalResult.provider ?? "global";
+
+      // Convert the global TTS audio file to SILK for QQ upload.
+      const base64 = await audioFileToSilkBase64(globalResult.audioPath);
+      if (!base64) {
+        log?.error(`[qqbot:${account.accountId}] Failed to convert global TTS audio to SILK`);
+        return;
+      }
+      silkBase64 = base64;
+      silkPath = globalResult.audioPath;
+      duration = 0; // Duration unknown from global TTS; use 0 as fallback.
+    }
+
+    if (!silkBase64) {
+      log?.error(`[qqbot:${account.accountId}] TTS produced no audio output`);
+      return;
+    }
+
+    log?.info(
+      `[qqbot:${account.accountId}] TTS done (${providerLabel}): ${duration ? formatDuration(duration) : "N/A"}, file: ${silkPath ?? "N/A"}`,
+    );
+
+    await sendWithTokenRetry(
+      account.appId,
+      account.clientSecret,
+      async (token) => {
+        if (target.type === "c2c") {
+          await sendC2CVoiceMessage(
+            account.appId,
+            token,
+            target.senderId,
+            silkBase64!,
+            undefined,
+            target.messageId,
+            ttsText,
+            silkPath,
+          );
+        } else if (target.type === "group" && target.groupOpenid) {
+          await sendGroupVoiceMessage(
+            account.appId,
+            token,
+            target.groupOpenid,
+            silkBase64!,
+            undefined,
+            target.messageId,
+          );
+        } else if (target.type === "dm" && target.guildId) {
+          log?.error(
+            `[qqbot:${account.accountId}] Voice not supported in DM, sending text fallback`,
+          );
+          await sendDmMessage(token, target.guildId, ttsText, target.messageId);
+        } else if (target.channelId) {
+          log?.error(
+            `[qqbot:${account.accountId}] Voice not supported in channel, sending text fallback`,
+          );
+          await sendChannelMessage(token, target.channelId, ttsText, target.messageId);
+        }
+      },
+      log,
+      account.accountId,
+    );
+    log?.info(`[qqbot:${account.accountId}] Voice message sent`);
   } catch (err) {
     log?.error(`[qqbot:${account.accountId}] TTS/voice send failed: ${err}`);
   }

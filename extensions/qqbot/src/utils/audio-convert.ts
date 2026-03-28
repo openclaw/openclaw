@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { decode, encode, isSilk } from "silk-wasm";
 import { debugLog, debugError, debugWarn } from "./debug-log.js";
 import { detectFfmpeg, isWindows } from "./platform.js";
@@ -239,6 +240,25 @@ export function resolveTTSConfig(cfg: Record<string, unknown>): TTSConfig | null
   }
 
   return null;
+}
+
+/**
+ * Check whether global TTS is potentially available by inspecting the
+ * framework-level `messages.tts` config.  This mirrors the resolution logic
+ * in the core `resolveTtsConfig`: when `auto` is set it must not be `"off"`;
+ * when only the legacy `enabled` boolean is present it must be truthy;
+ * when neither is set TTS defaults to off.
+ *
+ * This does NOT guarantee a specific provider is registered/configured – it
+ * only checks that TTS is not explicitly (or implicitly) disabled.
+ */
+export function isGlobalTTSAvailable(cfg: OpenClawConfig): boolean {
+  const msgTts = cfg.messages?.tts;
+  if (!msgTts) return false;
+  // Framework canonical field takes precedence.
+  if (msgTts.auto) return msgTts.auto !== "off";
+  // Legacy compat: `enabled: true` → "always", absent/false → "off".
+  return msgTts.enabled === true;
 }
 
 /** Build the TTS endpoint URL and auth headers. */
