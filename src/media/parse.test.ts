@@ -10,21 +10,14 @@ describe("splitMediaFromOutput", () => {
       audioAsVoice?: boolean;
     },
   ) {
-    const expectedOutput: {
-      mediaUrls?: string[];
-      text: string;
-      audioAsVoice?: boolean;
-    } = {
-      text: "",
-      ...expected,
-    };
-    if (expected.mediaUrls === undefined) {
-      delete expectedOutput.mediaUrls;
+    const output = splitMediaFromOutput(input);
+    expect(output.text).toBe(expected.text ?? "");
+    if ("mediaUrls" in expected) {
+      expect(output.mediaUrls).toEqual(expected.mediaUrls);
     }
-    if (expected.audioAsVoice === undefined) {
-      delete expectedOutput.audioAsVoice;
+    if ("audioAsVoice" in expected) {
+      expect(output.audioAsVoice).toBe(expected.audioAsVoice);
     }
-    expect(splitMediaFromOutput(input)).toEqual(expect.objectContaining(expectedOutput));
   }
 
   function expectStableAudioAsVoiceDetectionCase(input: string) {
