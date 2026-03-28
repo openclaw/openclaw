@@ -82,6 +82,27 @@ async function withClearedAnthropicEnv<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+async function withClearedZaiEnv<T>(fn: () => Promise<T>): Promise<T> {
+  const previousZai = process.env.ZAI_API_KEY;
+  const previousLegacyZai = process.env.Z_AI_API_KEY;
+  delete process.env.ZAI_API_KEY;
+  delete process.env.Z_AI_API_KEY;
+  try {
+    return await fn();
+  } finally {
+    if (previousZai === undefined) {
+      delete process.env.ZAI_API_KEY;
+    } else {
+      process.env.ZAI_API_KEY = previousZai;
+    }
+    if (previousLegacyZai === undefined) {
+      delete process.env.Z_AI_API_KEY;
+    } else {
+      process.env.Z_AI_API_KEY = previousLegacyZai;
+    }
+  }
+}
+
 async function buildAnthropicPlanFromModelsJsonApiKey(apiKey: string) {
   return await buildProbeTargets({
     cfg: {
@@ -223,46 +244,48 @@ describe("buildProbeTargets reason codes", () => {
   });
 
   it("matches canonical providers against alias-valued catalog probe models", async () => {
-    mockStore = {
-      version: 1,
-      profiles: {},
-      order: {},
-    };
-    loadModelCatalogMock.mockResolvedValueOnce([
-      { provider: "z.ai", id: "glm-4.7", name: "GLM-4.7" },
-    ]);
+    await withClearedZaiEnv(async () => {
+      mockStore = {
+        version: 1,
+        profiles: {},
+        order: {},
+      };
+      loadModelCatalogMock.mockResolvedValueOnce([
+        { provider: "z.ai", id: "glm-4.7", name: "GLM-4.7" },
+      ]);
 
-    const plan = await buildProbeTargets({
-      cfg: {
-        models: {
-          providers: {
-            zai: {
-              baseUrl: "https://api.z.ai/v1",
-              api: "openai-responses",
-              apiKey: "sk-zai-test", // pragma: allowlist secret
-              models: [],
+      const plan = await buildProbeTargets({
+        cfg: {
+          models: {
+            providers: {
+              zai: {
+                baseUrl: "https://api.z.ai/v1",
+                api: "openai-responses",
+                apiKey: "sk-zai-test", // pragma: allowlist secret
+                models: [],
+              },
             },
           },
+        } as OpenClawConfig,
+        providers: ["zai"],
+        modelCandidates: [],
+        options: {
+          timeoutMs: 5_000,
+          concurrency: 1,
+          maxTokens: 16,
         },
-      } as OpenClawConfig,
-      providers: ["zai"],
-      modelCandidates: [],
-      options: {
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
-    });
+      });
 
-    expect(plan.results).toEqual([]);
-    expect(plan.targets).toHaveLength(1);
-    expect(plan.targets[0]).toEqual(
-      expect.objectContaining({
-        provider: "zai",
-        model: { provider: "zai", model: "glm-4.7" },
-        source: "models.json",
-        label: "models.json",
-      }),
-    );
+      expect(plan.results).toEqual([]);
+      expect(plan.targets).toHaveLength(1);
+      expect(plan.targets[0]).toEqual(
+        expect.objectContaining({
+          provider: "zai",
+          model: { provider: "zai", model: "glm-4.7" },
+          source: "models.json",
+          label: "models.json",
+        }),
+      );
+    });
   });
 });
