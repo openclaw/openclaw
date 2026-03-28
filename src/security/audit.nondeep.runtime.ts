@@ -20,6 +20,7 @@ export {
   collectSandboxBrowserHashLabelFindings,
   collectIncludeFilePermFindings,
   collectPluginsTrustFindings,
+  collectSkillIntegrityFindings,
   collectStateDeepFilesystemFindings,
   collectWorkspaceSkillSymlinkEscapeFindings,
   readConfigSnapshotForAudit,

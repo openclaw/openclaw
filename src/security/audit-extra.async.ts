@@ -1322,3 +1322,82 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
 
   return findings;
 }
+
+export async function collectSkillIntegrityFindings(params: {
+  cfg: OpenClawConfig;
+  stateDir: string;
+}): Promise<SecurityAuditFinding[]> {
+  const findings: SecurityAuditFinding[] = [];
+  let verifyAllSkillIntegrity: typeof import("../agents/skills-clawhub.js").verifyAllSkillIntegrity;
+  try {
+    const mod = await import("../agents/skills-clawhub.js");
+    verifyAllSkillIntegrity = mod.verifyAllSkillIntegrity;
+  } catch {
+    return findings;
+  }
+
+  const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
+  const missingHashSlugs: string[] = [];
+  const mismatchEntries: Array<{ slug: string; expected: string; actual: string }> = [];
+
+  for (const workspaceDir of workspaceDirs) {
+    try {
+      const results = await verifyAllSkillIntegrity({
+        workspaceDir,
+        skillRootDir: workspaceDir,
+      });
+      for (const result of results) {
+        if (result.status === "missing_hash") {
+          missingHashSlugs.push(result.slug);
+        } else if (result.status === "hash_mismatch") {
+          mismatchEntries.push({
+            slug: result.slug,
+            expected: result.expectedHash ?? "unknown",
+            actual: result.actualHash ?? "unknown",
+          });
+        }
+      }
+    } catch {
+      // workspace dir may not have clawhub skills
+    }
+  }
+
+  if (mismatchEntries.length > 0) {
+    findings.push({
+      checkId: "skills.integrity.hash_mismatch",
+      severity: "critical",
+      title: "Installed skill contents changed since installation (possible tampering)",
+      detail:
+        "The following skills have content hashes that do not match the recorded install-time hash:\n" +
+        mismatchEntries
+          .slice(0, 10)
+          .map(
+            (e) =>
+              `- ${e.slug} (expected: ${e.expected.slice(0, 12)}..., actual: ${e.actual.slice(0, 12)}...)`,
+          )
+          .join("\n") +
+        (mismatchEntries.length > 10 ? `\n+${mismatchEntries.length - 10} more` : ""),
+      remediation:
+        "Reinstall affected skills from a trusted source. " +
+        "If changes are intentional, run the skill install command again to update the recorded hash.",
+    });
+  }
+
+  if (missingHashSlugs.length > 0) {
+    findings.push({
+      checkId: "skills.integrity.missing_hash",
+      severity: "info",
+      title: "Installed skills have no recorded integrity hash",
+      detail:
+        `${missingHashSlugs.length} skill(s) are missing integrity hashes in the lockfile: ` +
+        missingHashSlugs.slice(0, 10).join(", ") +
+        (missingHashSlugs.length > 10 ? ` (+${missingHashSlugs.length - 10} more)` : "") +
+        ".\nSkills installed before integrity verification was added will not have hashes.",
+      remediation:
+        "Reinstall or update these skills to record their integrity hashes. " +
+        "Run: openclaw skills update",
+    });
+  }
+
+  return findings;
+}
