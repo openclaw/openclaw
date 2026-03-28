@@ -1,13 +1,10 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import {
-  buildTelegramTopicConversationId,
-  normalizeConversationText,
-  parseTelegramChatIdFromTarget,
-} from "../../acp/conversation-id.js";
+import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { resolveConversationBindingContext } from "../../channels/conversation-binding-context.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
@@ -29,7 +26,7 @@ import {
   type SessionScope,
 } from "../../config/sessions/types.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
-import { resolveConversationIdFromTargets } from "../../infra/outbound/conversation-id.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -39,7 +36,6 @@ import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
-import { parseDiscordParentChannelFromSessionKey } from "./discord-parent-channel.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import {
@@ -102,79 +98,40 @@ function isResetAuthorizedForContext(params: {
   return scopes.includes("operator.admin");
 }
 
-function resolveAcpResetBindingContext(ctx: MsgContext): {
+function resolveAcpResetBindingContext(
+  cfg: OpenClawConfig,
+  ctx: MsgContext,
+): {
   channel: string;
   accountId: string;
   conversationId: string;
   parentConversationId?: string;
 } | null {
-  const channelRaw = normalizeConversationText(
-    ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "",
-  ).toLowerCase();
-  if (!channelRaw) {
-    return null;
-  }
-  const accountId = normalizeConversationText(ctx.AccountId) || "default";
-  const normalizedThreadId =
-    ctx.MessageThreadId != null ? normalizeConversationText(String(ctx.MessageThreadId)) : "";
-
-  if (channelRaw === "telegram") {
-    const parentConversationId =
-      parseTelegramChatIdFromTarget(ctx.OriginatingTo) ?? parseTelegramChatIdFromTarget(ctx.To);
-    let conversationId =
-      resolveConversationIdFromTargets({
-        threadId: normalizedThreadId || undefined,
-        targets: [ctx.OriginatingTo, ctx.To],
-      }) ?? "";
-    if (normalizedThreadId && parentConversationId) {
-      conversationId =
-        buildTelegramTopicConversationId({
-          chatId: parentConversationId,
-          topicId: normalizedThreadId,
-        }) ?? conversationId;
-    }
-    if (!conversationId) {
-      return null;
-    }
-    return {
-      channel: channelRaw,
-      accountId,
-      conversationId,
-      ...(parentConversationId ? { parentConversationId } : {}),
-    };
-  }
-
-  const conversationId = resolveConversationIdFromTargets({
-    threadId: normalizedThreadId || undefined,
-    targets: [ctx.OriginatingTo, ctx.To],
+  const bindingContext = resolveConversationBindingContext({
+    cfg,
+    channel: ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider,
+    accountId: ctx.AccountId,
+    chatType: ctx.ChatType,
+    threadId: ctx.MessageThreadId,
+    threadParentId: ctx.ThreadParentId,
+    senderId: ctx.SenderId,
+    sessionKey: ctx.SessionKey,
+    parentSessionKey: ctx.ParentSessionKey,
+    originatingTo: ctx.OriginatingTo,
+    fallbackTo: ctx.To,
+    from: ctx.From,
+    nativeChannelId: ctx.NativeChannelId,
   });
-  if (!conversationId) {
+  if (!bindingContext) {
     return null;
-  }
-  let parentConversationId: string | undefined;
-  if (channelRaw === "discord" && normalizedThreadId) {
-    const fromContext = normalizeConversationText(ctx.ThreadParentId);
-    if (fromContext && fromContext !== conversationId) {
-      parentConversationId = fromContext;
-    } else {
-      const fromParentSession = parseDiscordParentChannelFromSessionKey(ctx.ParentSessionKey);
-      if (fromParentSession && fromParentSession !== conversationId) {
-        parentConversationId = fromParentSession;
-      } else {
-        const fromTargets = resolveConversationIdFromTargets({
-          targets: [ctx.OriginatingTo, ctx.To],
-        });
-        if (fromTargets && fromTargets !== conversationId) {
-          parentConversationId = fromTargets;
-        }
-      }
-    }
   }
   return {
-    channel: channelRaw,
-    accountId,
-    conversationId,
-    ...(parentConversationId ? { parentConversationId } : {}),
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    conversationId: bindingContext.conversationId,
+    ...(bindingContext.parentConversationId
+      ? { parentConversationId: bindingContext.parentConversationId }
+      : {}),
   };
 }
 
@@ -183,7 +140,7 @@ function resolveBoundAcpSessionForReset(params: {
   ctx: MsgContext;
 }): string | undefined {
   const activeSessionKey = normalizeConversationText(params.ctx.SessionKey);
-  const bindingContext = resolveAcpResetBindingContext(params.ctx);
+  const bindingContext = resolveAcpResetBindingContext(params.cfg, params.ctx);
   return resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
     channel: bindingContext?.channel,
@@ -197,6 +154,43 @@ function resolveBoundAcpSessionForReset(params: {
   });
 }
 
+function resolveBoundConversationSessionKey(params: {
+  cfg: OpenClawConfig;
+  ctx: MsgContext;
+}): string | undefined {
+  const bindingContext = resolveConversationBindingContext({
+    cfg: params.cfg,
+    channel: params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
+    accountId: params.ctx.AccountId,
+    chatType: params.ctx.ChatType,
+    threadId: params.ctx.MessageThreadId,
+    threadParentId: params.ctx.ThreadParentId,
+    senderId: params.ctx.SenderId,
+    sessionKey: params.ctx.SessionKey,
+    parentSessionKey: params.ctx.ParentSessionKey,
+    originatingTo: params.ctx.OriginatingTo,
+    fallbackTo: params.ctx.To,
+    from: params.ctx.From,
+    nativeChannelId: params.ctx.NativeChannelId,
+  });
+  if (!bindingContext) {
+    return undefined;
+  }
+  const binding = getSessionBindingService().resolveByConversation({
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    conversationId: bindingContext.conversationId,
+    ...(bindingContext.parentConversationId
+      ? { parentConversationId: bindingContext.parentConversationId }
+      : {}),
+  });
+  if (!binding?.targetSessionKey) {
+    return undefined;
+  }
+  getSessionBindingService().touch(binding.bindingId);
+  return binding.targetSessionKey;
+}
+
 export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -205,8 +199,13 @@ export async function initSessionState(params: {
   const { ctx, cfg, commandAuthorized } = params;
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
-  const targetSessionKey =
+  const commandTargetSessionKey =
     ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
+  const targetSessionKey =
+    resolveBoundConversationSessionKey({
+      cfg,
+      ctx,
+    }) ?? commandTargetSessionKey;
   const sessionCtxForState =
     targetSessionKey && targetSessionKey !== ctx.SessionKey
       ? { ...ctx, SessionKey: targetSessionKey }
