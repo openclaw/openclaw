@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  downloadClawHubPackageArchive,
   parseClawHubPluginSpec,
   resolveClawHubAuthToken,
   searchClawHubSkills,
@@ -163,5 +164,24 @@ describe("clawhub helpers", () => {
     };
 
     await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toEqual([]);
+  });
+
+  it("downloads scoped package archives without creating nested temp paths", async () => {
+    const archiveBytes = Uint8Array.from([1, 2, 3, 4]);
+    const result = await downloadClawHubPackageArchive({
+      name: "@mkv21/elevenlabs-stt",
+      fetchImpl: async () =>
+        new Response(archiveBytes, {
+          status: 200,
+          headers: { "content-type": "application/zip" },
+        }),
+    });
+
+    try {
+      expect(path.basename(result.archivePath)).toBe("@mkv21__elevenlabs-stt.zip");
+      await expect(fs.readFile(result.archivePath)).resolves.toEqual(Buffer.from(archiveBytes));
+    } finally {
+      await fs.rm(path.dirname(result.archivePath), { recursive: true, force: true });
+    }
   });
 });

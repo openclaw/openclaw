@@ -181,6 +181,15 @@ type ClawHubConfigLike = {
   user?: ClawHubConfigLike | null;
 };
 
+function buildClawHubArchiveFileName(rawName: string, fallback: string): string {
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    return `${fallback}.zip`;
+  }
+  const safeStem = trimmed.replace(/[\\/]+/g, "__").replace(/\0/g, "").trim() || fallback;
+  return `${safeStem}.zip`;
+}
+
 export class ClawHubRequestError extends Error {
   readonly status: number;
   readonly requestPath: string;
@@ -580,7 +589,7 @@ export async function downloadClawHubPackageArchive(params: {
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-package-"));
-  const archivePath = path.join(tmpDir, `${params.name}.zip`);
+  const archivePath = path.join(tmpDir, buildClawHubArchiveFileName(params.name, "package"));
   await fs.writeFile(archivePath, bytes);
   return {
     archivePath,
@@ -618,7 +627,7 @@ export async function downloadClawHubSkillArchive(params: {
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-skill-"));
-  const archivePath = path.join(tmpDir, `${params.slug}.zip`);
+  const archivePath = path.join(tmpDir, buildClawHubArchiveFileName(params.slug, "skill"));
   await fs.writeFile(archivePath, bytes);
   return {
     archivePath,
