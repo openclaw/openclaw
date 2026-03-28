@@ -1,4 +1,4 @@
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/infra-runtime";
+import { fetchWithSsrFGuard } from "../runtime-api.js";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
