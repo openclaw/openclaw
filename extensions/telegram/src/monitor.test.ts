@@ -286,19 +286,12 @@ vi.mock("@grammyjs/runner", () => ({
   run: runSpy,
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
-  return {
-    ...actual,
-    computeBackoff,
-    sleepWithAbort,
-  };
-});
-
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
   return {
     ...actual,
+    computeBackoff,
+    sleepWithAbort,
     registerUnhandledRejectionHandler: registerUnhandledRejectionHandlerMock,
   };
 });
@@ -553,7 +546,9 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     expect(emitUnhandledRejection(await makeTaggedPollingFetchError())).toBe(true);
     expect(firstCycle.stop).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(2));
+    // Unhandled polling rejections restart via TelegramPollingSession backoff,
+    // so the second runner cycle is not immediate.
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(2), { timeout: 4_000 });
     abort.abort();
     await monitor;
     expectRecoverableRetryState(2);

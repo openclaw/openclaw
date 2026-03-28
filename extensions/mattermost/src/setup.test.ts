@@ -1,9 +1,12 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../../test/helpers/extensions/plugin-api.js";
-import plugin from "../index.js";
 import type { OpenClawConfig, OpenClawPluginApi } from "../runtime-api.js";
-import { mattermostSetupWizard } from "./setup-surface.js";
+
+vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
+  getBundledChannelRuntimeMap: () => new Map(),
+  getBundledChannelConfigSchemaMap: () => new Map(),
+}));
 
 const resolveMattermostAccount = vi.hoisted(() => vi.fn());
 const normalizeMattermostBaseUrl = vi.hoisted(() => vi.fn((value: string | undefined) => value));
@@ -51,7 +54,16 @@ function createApi(
   });
 }
 
+let plugin: typeof import("../index.js").default;
+let mattermostSetupWizard: typeof import("./setup-surface.js").mattermostSetupWizard;
+
 describe("mattermost setup", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ default: plugin } = await import("../index.js"));
+    ({ mattermostSetupWizard } = await import("./setup-surface.js"));
+  });
+
   afterEach(() => {
     resolveMattermostAccount.mockReset();
     normalizeMattermostBaseUrl.mockReset();
