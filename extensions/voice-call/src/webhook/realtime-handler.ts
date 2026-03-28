@@ -338,10 +338,10 @@ export class RealtimeCallHandler {
       },
 
       onClose: (reason) => {
-        emitCallEnd(reason);
         if (reason === "error") {
-          // Bridge gave up reconnecting — actively terminate the live call transport
-          // so the caller is not left connected in silence while billing continues.
+          // Bridge gave up reconnecting — emit call.ended now and actively
+          // terminate the call so the caller is not left connected in silence.
+          emitCallEnd("error");
           if (ws.readyState === WebSocket.OPEN) {
             ws.close(1011, "Bridge disconnected");
           }
@@ -352,6 +352,10 @@ export class RealtimeCallHandler {
               console.warn(`[voice-call] Failed to hang up call ${callSid} after bridge close:`, msg);
             });
         }
+        // On "completed", Twilio's terminal status webhook (CallStatus=completed)
+        // will arrive via the normal processEvent path and emit call.ended there.
+        // Emitting it here too would create a duplicate/ghost history entry because
+        // the manager auto-registers unknown callIds on terminal events.
       },
     });
 
