@@ -70,6 +70,7 @@ vi.mock("../../runtime-api.js", () => {
       ...snapshot,
       ...(extra ?? {}),
     }),
+    chunkTextForOutbound: vi.fn((text: string) => [text]),
     buildSecretInputSchema: () => z.string(),
     collectStatusIssuesFromLastError: () => [],
     createActionGate: () => () => true,
