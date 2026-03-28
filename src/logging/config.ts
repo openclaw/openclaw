@@ -1,6 +1,5 @@
 import { getCommandPathWithRootOptions } from "../cli/argv.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
-import { loggingState } from "./state.js";
 
 type LoggingConfig = OpenClawConfig["logging"];
 
@@ -11,11 +10,6 @@ export function shouldSkipMutatingLoggingConfigRead(argv: string[] = process.arg
 
 export function readLoggingConfig(): LoggingConfig | undefined {
   if (shouldSkipMutatingLoggingConfigRead()) {
-    return undefined;
-  }
-  // Guard: prevent re-entrancy when loadConfig() triggers patched console.* calls.
-  // The guard flag is also set in resolveConsoleSettings(); this is a secondary guard.
-  if (loggingState.resolvingConsoleSettings) {
     return undefined;
   }
   try {
