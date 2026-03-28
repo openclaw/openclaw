@@ -104,6 +104,17 @@ function expectInstalledBundledDirScenario(params: {
   });
 }
 
+function expectInstalledBundledDirScenarioCase(
+  createScenario: () => {
+    installedRoot: string;
+    cwd?: string;
+    argv1?: string;
+    bundledDirOverride?: string;
+  },
+) {
+  expectInstalledBundledDirScenario(createScenario());
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   if (originalBundledDir === undefined) {
@@ -181,34 +192,42 @@ describe("resolveBundledPluginsDir", () => {
     });
   });
 
-  it("prefers the running CLI package root over an unrelated cwd checkout", () => {
-    const installedRoot = createOpenClawRoot({
-      prefix: "openclaw-bundled-dir-installed-",
-      hasDistExtensions: true,
-    });
-    const cwdRepoRoot = createOpenClawRoot({
-      prefix: "openclaw-bundled-dir-cwd-",
-      hasExtensions: true,
-      hasSrc: true,
-      hasGitCheckout: true,
-    });
-
-    expectInstalledBundledDirScenario({
-      installedRoot,
-      cwd: cwdRepoRoot,
-      argv1: path.join(installedRoot, "openclaw.mjs"),
-    });
-  });
-
-  it("falls back to the running installed package when the override path is stale", () => {
-    const installedRoot = createOpenClawRoot({
-      prefix: "openclaw-bundled-dir-override-",
-      hasDistExtensions: true,
-    });
-    expectInstalledBundledDirScenario({
-      installedRoot,
-      argv1: path.join(installedRoot, "openclaw.mjs"),
-      bundledDirOverride: path.join(installedRoot, "missing-extensions"),
-    });
+  it.each([
+    {
+      name: "prefers the running CLI package root over an unrelated cwd checkout",
+      createScenario: () => {
+        const installedRoot = createOpenClawRoot({
+          prefix: "openclaw-bundled-dir-installed-",
+          hasDistExtensions: true,
+        });
+        const cwdRepoRoot = createOpenClawRoot({
+          prefix: "openclaw-bundled-dir-cwd-",
+          hasExtensions: true,
+          hasSrc: true,
+          hasGitCheckout: true,
+        });
+        return {
+          installedRoot,
+          cwd: cwdRepoRoot,
+          argv1: path.join(installedRoot, "openclaw.mjs"),
+        };
+      },
+    },
+    {
+      name: "falls back to the running installed package when the override path is stale",
+      createScenario: () => {
+        const installedRoot = createOpenClawRoot({
+          prefix: "openclaw-bundled-dir-override-",
+          hasDistExtensions: true,
+        });
+        return {
+          installedRoot,
+          argv1: path.join(installedRoot, "openclaw.mjs"),
+          bundledDirOverride: path.join(installedRoot, "missing-extensions"),
+        };
+      },
+    },
+  ] as const)("$name", ({ createScenario }) => {
+    expectInstalledBundledDirScenarioCase(createScenario);
   });
 });

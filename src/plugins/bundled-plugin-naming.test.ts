@@ -88,11 +88,17 @@ function resolveAllowedPackageNamesForId(pluginId: string): string[] {
   return ALLOWED_PACKAGE_SUFFIXES.map((suffix) => `@openclaw/${pluginId}${suffix}`);
 }
 
+function resolveBundledPluginMismatches(
+  collectMismatches: (records: BundledPluginRecord[]) => string[],
+) {
+  return collectMismatches(readBundledPluginRecords());
+}
+
 function expectNoBundledPluginNamingMismatches(params: {
   message: string;
   collectMismatches: (records: BundledPluginRecord[]) => string[];
 }) {
-  const mismatches = params.collectMismatches(readBundledPluginRecords());
+  const mismatches = resolveBundledPluginMismatches(params.collectMismatches);
   expect(mismatches, `${params.message}\nFound: ${mismatches.join(", ") || "<none>"}`).toEqual([]);
 }
 

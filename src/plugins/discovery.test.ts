@@ -185,6 +185,54 @@ function expectCandidatePresence(
   });
 }
 
+function expectCandidateOrder(
+  candidates: Array<{ idHint: string }>,
+  expectedIds: readonly string[],
+) {
+  expect(candidates.map((candidate) => candidate.idHint)).toEqual(expectedIds);
+}
+
+function expectBundleCandidateMatch(params: {
+  candidates: Array<{
+    idHint?: string;
+    format?: string;
+    bundleFormat?: string;
+    source?: string;
+    rootDir?: string;
+  }>;
+  idHint: string;
+  bundleFormat: string;
+  source: string;
+  expectRootDir?: boolean;
+}) {
+  const bundle = findCandidateById(params.candidates, params.idHint);
+  expect(bundle).toBeDefined();
+  expect(bundle).toEqual(
+    expect.objectContaining({
+      idHint: params.idHint,
+      format: "bundle",
+      bundleFormat: params.bundleFormat,
+      source: params.source,
+    }),
+  );
+  if (params.expectRootDir) {
+    expect(normalizePathForAssertion(bundle?.rootDir)).toBe(
+      normalizePathForAssertion(fs.realpathSync(params.source)),
+    );
+  }
+}
+
+function expectCachedDiscoveryPair(params: {
+  first: ReturnType<typeof discoverWithCachedEnv>;
+  second: ReturnType<typeof discoverWithCachedEnv>;
+  assert: (
+    first: ReturnType<typeof discoverWithCachedEnv>,
+    second: ReturnType<typeof discoverWithCachedEnv>,
+  ) => void;
+}) {
+  params.assert(params.first, params.second);
+}
+
 async function expectRejectedPackageExtensionEntry(params: {
   stateDir: string;
   setup: (stateDir: string) => boolean | void;
@@ -227,10 +275,7 @@ describe("discoverOpenClawPlugins", () => {
     fs.writeFileSync(path.join(workspaceExt, "beta.ts"), "export default function () {}", "utf-8");
 
     const { candidates } = await discoverWithStateDir(stateDir, { workspaceDir });
-
-    const ids = candidates.map((c) => c.idHint);
-    expect(ids).toContain("alpha");
-    expect(ids).toContain("beta");
+    expectCandidateIds(candidates, { includes: ["alpha", "beta"] });
   });
 
   it("resolves tilde workspace dirs against the provided env", () => {
@@ -249,9 +294,7 @@ describe("discoverOpenClawPlugins", () => {
       },
     });
 
-    expect(result.candidates.some((candidate) => candidate.idHint === "tilde-workspace")).toBe(
-      true,
-    );
+    expectCandidatePresence(result, { present: ["tilde-workspace"] });
   });
 
   it("ignores backup and disabled plugin directories in scanned roots", async () => {
@@ -276,12 +319,10 @@ describe("discoverOpenClawPlugins", () => {
     fs.writeFileSync(path.join(liveDir, "index.ts"), "export default function () {}", "utf-8");
 
     const { candidates } = await discoverWithStateDir(stateDir, {});
-
-    const ids = candidates.map((candidate) => candidate.idHint);
-    expect(ids).toContain("live");
-    expect(ids).not.toContain("feishu.backup-20260222");
-    expect(ids).not.toContain("telegram.disabled.20260222");
-    expect(ids).not.toContain("discord.bak");
+    expectCandidateIds(candidates, {
+      includes: ["live"],
+      excludes: ["feishu.backup-20260222", "telegram.disabled.20260222", "discord.bak"],
+    });
   });
 
   it("loads package extension packs", async () => {
@@ -340,8 +381,7 @@ describe("discoverOpenClawPlugins", () => {
     );
 
     const { candidates } = await discoverWithStateDir(stateDir, {});
-
-    expect(candidates.map((candidate) => candidate.idHint)).toEqual(["opik-openclaw"]);
+    expectCandidateOrder(candidates, ["opik-openclaw"]);
   });
 
   it.each([
@@ -461,22 +501,14 @@ describe("discoverOpenClawPlugins", () => {
     const stateDir = makeTempDir();
     const bundleDir = setup(stateDir);
     const { candidates } = await discoverWithStateDir(stateDir, {});
-    const bundle = findCandidateById(candidates, idHint);
 
-    expect(bundle).toBeDefined();
-    expect(bundle).toEqual(
-      expect.objectContaining({
-        idHint,
-        format: "bundle",
-        bundleFormat,
-        source: bundleDir,
-      }),
-    );
-    if (expectRootDir) {
-      expect(normalizePathForAssertion(bundle?.rootDir)).toBe(
-        normalizePathForAssertion(fs.realpathSync(bundleDir)),
-      );
-    }
+    expectBundleCandidateMatch({
+      candidates,
+      idHint,
+      bundleFormat,
+      source: bundleDir,
+      expectRootDir,
+    });
   });
 
   it.each([
@@ -777,7 +809,7 @@ describe("discoverOpenClawPlugins", () => {
     },
   ] as const)("$name", ({ setup }) => {
     const { first, second, assert } = setup();
-    assert(first, second);
+    expectCachedDiscoveryPair({ first, second, assert });
   });
 
   it("treats configured load-path order as cache-significant", () => {
@@ -798,7 +830,7 @@ describe("discoverOpenClawPlugins", () => {
       env,
     });
 
-    expect(first.candidates.map((candidate) => candidate.idHint)).toEqual(["alpha", "beta"]);
-    expect(second.candidates.map((candidate) => candidate.idHint)).toEqual(["beta", "alpha"]);
+    expectCandidateOrder(first.candidates, ["alpha", "beta"]);
+    expectCandidateOrder(second.candidates, ["beta", "alpha"]);
   });
 });

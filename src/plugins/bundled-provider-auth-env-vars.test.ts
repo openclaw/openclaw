@@ -29,6 +29,14 @@ function expectGeneratedAuthEnvVarModuleState(params: {
   expect(result.wrote).toBe(params.expectedWrote);
 }
 
+function expectGeneratedAuthEnvVarCheckMode(tempRoot: string) {
+  expectGeneratedAuthEnvVarModuleState({
+    tempRoot,
+    expectedChanged: false,
+    expectedWrote: false,
+  });
+}
+
 function expectBundledProviderEnvVars(expected: Record<string, readonly string[]>) {
   expect(
     Object.fromEntries(
@@ -40,6 +48,12 @@ function expectBundledProviderEnvVars(expected: Record<string, readonly string[]
       ]),
     ),
   ).toEqual(expected);
+}
+
+function expectMissingBundledProviderEnvVars(providerIds: readonly string[]) {
+  providerIds.forEach((providerId) => {
+    expect(providerId in BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES).toBe(false);
+  });
 }
 
 describe("bundled provider auth env vars", () => {
@@ -60,7 +74,7 @@ describe("bundled provider auth env vars", () => {
       openai: ["OPENAI_API_KEY"],
       fal: ["FAL_KEY"],
     });
-    expect("openai-codex" in BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES).toBe(false);
+    expectMissingBundledProviderEnvVars(["openai-codex"]);
   });
 
   it("supports check mode for stale generated artifacts", () => {
@@ -79,11 +93,7 @@ describe("bundled provider auth env vars", () => {
     });
     expect(initial.wrote).toBe(true);
 
-    expectGeneratedAuthEnvVarModuleState({
-      tempRoot,
-      expectedChanged: false,
-      expectedWrote: false,
-    });
+    expectGeneratedAuthEnvVarCheckMode(tempRoot);
 
     fs.writeFileSync(
       path.join(tempRoot, "src/plugins/bundled-provider-auth-env-vars.generated.ts"),

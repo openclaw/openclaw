@@ -1,8 +1,12 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadEnabledClaudeBundleCommands } from "./bundle-commands.js";
-import { createBundleMcpTempHarness, withBundleHomeEnv } from "./bundle-mcp.test-support.js";
+import {
+  createEnabledPluginEntries,
+  createBundleMcpTempHarness,
+  withBundleHomeEnv,
+  writeBundleTextFiles,
+  writeClaudeBundleManifest,
+} from "./bundle-mcp.test-support.js";
 
 const tempHarness = createBundleMcpTempHarness();
 
@@ -15,24 +19,33 @@ async function writeClaudeBundleCommandFixture(params: {
   pluginId: string;
   commands: Array<{ relativePath: string; contents: string[] }>;
 }) {
-  const pluginRoot = path.join(params.homeDir, ".openclaw", "extensions", params.pluginId);
-  await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
-  await fs.writeFile(
-    path.join(pluginRoot, ".claude-plugin", "plugin.json"),
-    `${JSON.stringify({ name: params.pluginId }, null, 2)}\n`,
-    "utf-8",
-  );
-  await Promise.all(
-    params.commands.map(async (command) => {
-      await fs.mkdir(path.dirname(path.join(pluginRoot, command.relativePath)), {
-        recursive: true,
-      });
-      await fs.writeFile(
-        path.join(pluginRoot, command.relativePath),
+  const pluginRoot = await writeClaudeBundleManifest({
+    homeDir: params.homeDir,
+    pluginId: params.pluginId,
+    manifest: { name: params.pluginId },
+  });
+  await writeBundleTextFiles(
+    pluginRoot,
+    Object.fromEntries(
+      params.commands.map((command) => [
+        command.relativePath,
         [...command.contents, ""].join("\n"),
-        "utf-8",
-      );
-    }),
+      ]),
+    ),
+  );
+}
+
+function expectEnabledClaudeBundleCommands(
+  commands: ReturnType<typeof loadEnabledClaudeBundleCommands>,
+  expected: Array<{
+    pluginId: string;
+    rawName: string;
+    description: string;
+    promptTemplate: string;
+  }>,
+) {
+  expect(commands).toEqual(
+    expect.arrayContaining(expected.map((entry) => expect.objectContaining(entry))),
   );
 }
 
@@ -76,29 +89,25 @@ describe("loadEnabledClaudeBundleCommands", () => {
           workspaceDir,
           cfg: {
             plugins: {
-              entries: {
-                "compound-bundle": { enabled: true },
-              },
+              entries: createEnabledPluginEntries(["compound-bundle"]),
             },
           },
         });
 
-        expect(commands).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              pluginId: "compound-bundle",
-              rawName: "office-hours",
-              description: "Help with scoping and architecture",
-              promptTemplate: "Give direct engineering advice.",
-            }),
-            expect.objectContaining({
-              pluginId: "compound-bundle",
-              rawName: "workflows:review",
-              description: "Run a structured review",
-              promptTemplate: "Review the code. $ARGUMENTS",
-            }),
-          ]),
-        );
+        expectEnabledClaudeBundleCommands(commands, [
+          {
+            pluginId: "compound-bundle",
+            rawName: "office-hours",
+            description: "Help with scoping and architecture",
+            promptTemplate: "Give direct engineering advice.",
+          },
+          {
+            pluginId: "compound-bundle",
+            rawName: "workflows:review",
+            description: "Run a structured review",
+            promptTemplate: "Review the code. $ARGUMENTS",
+          },
+        ]);
         expect(commands.some((entry) => entry.rawName === "disabled")).toBe(false);
       },
     );

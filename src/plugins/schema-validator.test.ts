@@ -31,28 +31,58 @@ function expectIssueMessageIncludes(
   });
 }
 
+function expectSuccessfulValidationValue(params: {
+  input: Parameters<typeof validateJsonSchemaValue>[0];
+  expectedValue: unknown;
+}) {
+  const result = validateJsonSchemaValue(params.input);
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    expect(result.value).toEqual(params.expectedValue);
+  }
+}
+
+function expectValidationSuccess(params: Parameters<typeof validateJsonSchemaValue>[0]) {
+  const result = validateJsonSchemaValue(params);
+  expect(result.ok).toBe(true);
+}
+
+function expectUriValidationCase(params: {
+  input: Parameters<typeof validateJsonSchemaValue>[0];
+  ok: boolean;
+  expectedPath?: string;
+  expectedMessage?: string;
+}) {
+  if (params.ok) {
+    expectValidationSuccess(params.input);
+    return;
+  }
+
+  const result = expectValidationFailure(params.input);
+  const issue = expectValidationIssue(result, params.expectedPath ?? "");
+  expect(issue?.message).toContain(params.expectedMessage ?? "");
+}
+
 describe("schema validator", () => {
   it("can apply JSON Schema defaults while validating", () => {
-    const res = validateJsonSchemaValue({
-      cacheKey: "schema-validator.test.defaults",
-      schema: {
-        type: "object",
-        properties: {
-          mode: {
-            type: "string",
-            default: "auto",
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.defaults",
+        schema: {
+          type: "object",
+          properties: {
+            mode: {
+              type: "string",
+              default: "auto",
+            },
           },
+          additionalProperties: false,
         },
-        additionalProperties: false,
+        value: {},
+        applyDefaults: true,
       },
-      value: {},
-      applyDefaults: true,
+      expectedValue: { mode: "auto" },
     });
-
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.value).toEqual({ mode: "auto" });
-    }
   });
 
   it.each([
@@ -275,18 +305,12 @@ describe("schema validator", () => {
   ])(
     "supports uri-formatted string schemas: $title",
     ({ params, ok, expectedPath, expectedMessage }) => {
-      const result = validateJsonSchemaValue(params);
-
-      if (ok) {
-        expect(result.ok).toBe(true);
-        return;
-      }
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        const issue = expectValidationIssue(result, expectedPath as string);
-        expect(issue?.message).toContain(expectedMessage);
-      }
+      expectUriValidationCase({
+        input: params,
+        ok,
+        expectedPath,
+        expectedMessage,
+      });
     },
   );
 });
