@@ -165,6 +165,8 @@ async function touchSessionStore(params: {
       sendPolicy: params.entry?.sendPolicy,
       lastChannel: params.entry?.lastChannel,
       lastTo: params.entry?.lastTo,
+      lastAccountId: params.entry?.lastAccountId,
+      lastThreadId: params.entry?.lastThreadId,
     };
   });
 }
