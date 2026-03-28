@@ -45,6 +45,8 @@ export type SlashCommandResult = {
   sessionPatch?: {
     modelOverride?: ChatModelOverride | null;
   };
+  /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
+  trackRunId?: string;
 };
 
 export type SlashCommandContext = {
@@ -737,8 +739,15 @@ async function executeRedirect(
         content: resolved.error === "empty" ? "Usage: `/redirect [id] <message>`" : resolved.error,
       };
     }
-    await client.request("sessions.steer", { key: resolved.key, message: resolved.message });
-    return { content: resolved.label ? `Redirected \`${resolved.label}\`.` : "Redirected." };
+    const resp = await client.request<{ runId?: string }>("sessions.steer", {
+      key: resolved.key,
+      message: resolved.message,
+    });
+    const runId = typeof resp?.runId === "string" ? resp.runId : undefined;
+    return {
+      content: resolved.label ? `Redirected \`${resolved.label}\`.` : "Redirected.",
+      trackRunId: runId,
+    };
   } catch (err) {
     return { content: `Failed to redirect: ${String(err)}` };
   }
