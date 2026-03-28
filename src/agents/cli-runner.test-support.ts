@@ -43,9 +43,15 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
 }));
 
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-}));
+vi.mock("../infra/heartbeat-wake.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+    "../infra/heartbeat-wake.js",
+  );
+  return {
+    ...actual,
+    requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+  };
+});
 
 vi.mock("./bootstrap-files.js", () => ({
   makeBootstrapWarn: () => () => {},
@@ -159,9 +165,15 @@ export async function setupCliRunnerTestModule() {
   vi.doMock("../infra/system-events.js", () => ({
     enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
   }));
-  vi.doMock("../infra/heartbeat-wake.js", () => ({
-    requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-  }));
+  vi.doMock("../infra/heartbeat-wake.js", async () => {
+    const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+      "../infra/heartbeat-wake.js",
+    );
+    return {
+      ...actual,
+      requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+    };
+  });
   vi.doMock("./bootstrap-files.js", () => ({
     makeBootstrapWarn: () => () => {},
     resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,

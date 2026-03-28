@@ -45,9 +45,15 @@ describe("emitExecSystemEvent", () => {
     vi.resetModules();
     requestHeartbeatNowMock.mockClear();
     enqueueSystemEventMock.mockClear();
-    vi.doMock("../infra/heartbeat-wake.js", () => ({
-      requestHeartbeatNow: requestHeartbeatNowMock,
-    }));
+    vi.doMock("../infra/heartbeat-wake.js", async () => {
+      const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+        "../infra/heartbeat-wake.js",
+      );
+      return {
+        ...actual,
+        requestHeartbeatNow: requestHeartbeatNowMock,
+      };
+    });
     vi.doMock("../infra/system-events.js", () => ({
       enqueueSystemEvent: enqueueSystemEventMock,
     }));
