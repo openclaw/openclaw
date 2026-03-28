@@ -1,11 +1,13 @@
+import type { ReactionTypeEmoji } from "@grammyjs/types";
 import { DEFAULT_EMOJIS, type StatusReactionEmojis } from "openclaw/plugin-sdk/channel-feedback";
 import type { TelegramChatDetails, TelegramGetChat } from "./bot/types.js";
 
 type StatusReactionEmojiKey = keyof Required<StatusReactionEmojis>;
+export type TelegramReactionEmoji = ReactionTypeEmoji["emoji"];
 
 const TELEGRAM_GENERIC_REACTION_FALLBACKS = ["👍", "👀", "🔥"] as const;
 
-const TELEGRAM_SUPPORTED_REACTION_EMOJIS = new Set<string>([
+const TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST = [
   "❤",
   "👍",
   "👎",
@@ -79,7 +81,11 @@ const TELEGRAM_SUPPORTED_REACTION_EMOJIS = new Set<string>([
   "🤷",
   "🤷‍♀",
   "😡",
-]);
+] as const satisfies readonly TelegramReactionEmoji[];
+
+const TELEGRAM_SUPPORTED_REACTION_EMOJIS = new Set<TelegramReactionEmoji>(
+  TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST,
+);
 
 export const TELEGRAM_STATUS_REACTION_VARIANTS: Record<StatusReactionEmojiKey, string[]> = {
   queued: ["👀", "👍", "🔥"],
@@ -152,13 +158,13 @@ export function buildTelegramStatusReactionVariants(
   return variantsByRequested;
 }
 
-export function isTelegramSupportedReactionEmoji(emoji: string): boolean {
-  return TELEGRAM_SUPPORTED_REACTION_EMOJIS.has(emoji);
+export function isTelegramSupportedReactionEmoji(emoji: string): emoji is TelegramReactionEmoji {
+  return TELEGRAM_SUPPORTED_REACTION_EMOJIS.has(emoji as TelegramReactionEmoji);
 }
 
 export function extractTelegramAllowedEmojiReactions(
   chat: TelegramChatDetails | null | undefined,
-): Set<string> | null | undefined {
+): Set<TelegramReactionEmoji> | null | undefined {
   if (!chat) {
     return undefined;
   }
@@ -171,16 +177,16 @@ export function extractTelegramAllowedEmojiReactions(
     return null;
   }
   if (!Array.isArray(availableReactions)) {
-    return new Set<string>();
+    return new Set<TelegramReactionEmoji>();
   }
 
-  const allowed = new Set<string>();
+  const allowed = new Set<TelegramReactionEmoji>();
   for (const reaction of availableReactions) {
     if (reaction.type !== "emoji") {
       continue;
     }
     const emoji = reaction.emoji.trim();
-    if (emoji) {
+    if (emoji && isTelegramSupportedReactionEmoji(emoji)) {
       allowed.add(emoji);
     }
   }
@@ -191,7 +197,7 @@ export async function resolveTelegramAllowedEmojiReactions(params: {
   chat: TelegramChatDetails | null | undefined;
   chatId: string | number;
   getChat?: TelegramGetChat;
-}): Promise<Set<string> | null> {
+}): Promise<Set<TelegramReactionEmoji> | null> {
   const fromMessage = extractTelegramAllowedEmojiReactions(params.chat);
   if (fromMessage !== undefined) {
     return fromMessage;
@@ -216,8 +222,8 @@ export async function resolveTelegramAllowedEmojiReactions(params: {
 export function resolveTelegramReactionVariant(params: {
   requestedEmoji: string;
   variantsByRequestedEmoji: Map<string, string[]>;
-  allowedEmojiReactions?: Set<string> | null;
-}): string | undefined {
+  allowedEmojiReactions?: Set<TelegramReactionEmoji> | null;
+}): TelegramReactionEmoji | undefined {
   const requestedEmoji = normalizeEmoji(params.requestedEmoji);
   if (!requestedEmoji) {
     return undefined;
@@ -232,9 +238,12 @@ export function resolveTelegramReactionVariant(params: {
   ]);
 
   for (const candidate of variants) {
+    if (!isTelegramSupportedReactionEmoji(candidate)) {
+      continue;
+    }
     const isAllowedByChat =
       params.allowedEmojiReactions == null || params.allowedEmojiReactions.has(candidate);
-    if (isAllowedByChat && isTelegramSupportedReactionEmoji(candidate)) {
+    if (isAllowedByChat) {
       return candidate;
     }
   }
