@@ -3,9 +3,20 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 
+type MockManifestRegistry = {
+  plugins: Array<Record<string, unknown>>;
+  diagnostics: unknown[];
+};
+
+function createEmptyMockManifestRegistry(): MockManifestRegistry {
+  return { plugins: [], diagnostics: [] };
+}
+
 const mocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn(() => createEmptyPluginRegistry()),
-  loadPluginManifestRegistry: vi.fn(() => ({ plugins: [], diagnostics: [] })),
+  loadPluginManifestRegistry: vi.fn<() => MockManifestRegistry>(() =>
+    createEmptyMockManifestRegistry(),
+  ),
   withBundledPluginAllowlistCompat: vi.fn(({ config }) => config),
   withBundledPluginEnablementCompat: vi.fn(({ config }) => config),
   withBundledPluginVitestCompat: vi.fn(({ config }) => config),
@@ -34,7 +45,7 @@ describe("resolvePluginCapabilityProviders", () => {
     mocks.loadOpenClawPlugins.mockReset();
     mocks.loadOpenClawPlugins.mockReturnValue(createEmptyPluginRegistry());
     mocks.loadPluginManifestRegistry.mockReset();
-    mocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
+    mocks.loadPluginManifestRegistry.mockReturnValue(createEmptyMockManifestRegistry());
     mocks.withBundledPluginAllowlistCompat.mockReset();
     mocks.withBundledPluginAllowlistCompat.mockImplementation(({ config }) => config);
     mocks.withBundledPluginEnablementCompat.mockReset();
