@@ -23,6 +23,15 @@ describe("Claude bundle plugin inspect integration", () => {
     return result.manifest;
   }
 
+  function expectClaudeManifestField(params: {
+    field: "skills" | "hooks" | "settingsFiles" | "capabilities";
+    includes: readonly string[];
+  }) {
+    const manifest = expectLoadedClaudeManifest();
+    const values = manifest[params.field];
+    expect(values).toEqual(expect.arrayContaining([...params.includes]));
+  }
+
   beforeAll(() => {
     rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-bundle-"));
 
@@ -129,30 +138,26 @@ describe("Claude bundle plugin inspect integration", () => {
     expect(m.bundleFormat).toBe("claude");
   });
 
-  it("resolves skills from skills, commands, and agents paths", () => {
-    const manifest = expectLoadedClaudeManifest();
-    expect(manifest.skills).toContain("skill-packs");
-    expect(manifest.skills).toContain("extra-commands");
-    // Agent and output style dirs are merged into skills so their .md files are discoverable
-    expect(manifest.skills).toContain("agents");
-    expect(manifest.skills).toContain("output-styles");
-  });
-
-  it("resolves hooks from default and declared paths", () => {
-    const manifest = expectLoadedClaudeManifest();
-    // Default hooks/hooks.json path + declared custom-hooks
-    expect(manifest.hooks).toContain("hooks/hooks.json");
-    expect(manifest.hooks).toContain("custom-hooks");
-  });
-
-  it("detects settings files", () => {
-    expect(expectLoadedClaudeManifest().settingsFiles).toEqual(["settings.json"]);
-  });
-
-  it("detects all bundle capabilities", () => {
-    const caps = expectLoadedClaudeManifest().capabilities;
-    expect(caps).toEqual(
-      expect.arrayContaining([
+  it.each([
+    {
+      name: "resolves skills from skills, commands, and agents paths",
+      field: "skills" as const,
+      includes: ["skill-packs", "extra-commands", "agents", "output-styles"],
+    },
+    {
+      name: "resolves hooks from default and declared paths",
+      field: "hooks" as const,
+      includes: ["hooks/hooks.json", "custom-hooks"],
+    },
+    {
+      name: "detects settings files",
+      field: "settingsFiles" as const,
+      includes: ["settings.json"],
+    },
+    {
+      name: "detects all bundle capabilities",
+      field: "capabilities" as const,
+      includes: [
         "skills",
         "commands",
         "agents",
@@ -161,8 +166,10 @@ describe("Claude bundle plugin inspect integration", () => {
         "lspServers",
         "outputStyles",
         "settings",
-      ]),
-    );
+      ],
+    },
+  ] as const)("$name", ({ field, includes }) => {
+    expectClaudeManifestField({ field, includes });
   });
 
   it("inspects MCP runtime support with supported and unsupported servers", () => {

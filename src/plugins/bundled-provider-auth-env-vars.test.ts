@@ -15,6 +15,20 @@ import {
 
 installGeneratedPluginTempRootCleanup();
 
+function expectGeneratedAuthEnvVarModuleState(params: {
+  tempRoot: string;
+  expectedChanged: boolean;
+  expectedWrote: boolean;
+}) {
+  const result = writeBundledProviderAuthEnvVarModule({
+    repoRoot: params.tempRoot,
+    outputPath: "src/plugins/bundled-provider-auth-env-vars.generated.ts",
+    check: true,
+  });
+  expect(result.changed).toBe(params.expectedChanged);
+  expect(result.wrote).toBe(params.expectedWrote);
+}
+
 describe("bundled provider auth env vars", () => {
   it("matches the generated manifest snapshot", () => {
     expect(BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES).toEqual(
@@ -70,13 +84,11 @@ describe("bundled provider auth env vars", () => {
     });
     expect(initial.wrote).toBe(true);
 
-    const current = writeBundledProviderAuthEnvVarModule({
-      repoRoot: tempRoot,
-      outputPath: "src/plugins/bundled-provider-auth-env-vars.generated.ts",
-      check: true,
+    expectGeneratedAuthEnvVarModuleState({
+      tempRoot,
+      expectedChanged: false,
+      expectedWrote: false,
     });
-    expect(current.changed).toBe(false);
-    expect(current.wrote).toBe(false);
 
     fs.writeFileSync(
       path.join(tempRoot, "src/plugins/bundled-provider-auth-env-vars.generated.ts"),
@@ -84,12 +96,10 @@ describe("bundled provider auth env vars", () => {
       "utf8",
     );
 
-    const stale = writeBundledProviderAuthEnvVarModule({
-      repoRoot: tempRoot,
-      outputPath: "src/plugins/bundled-provider-auth-env-vars.generated.ts",
-      check: true,
+    expectGeneratedAuthEnvVarModuleState({
+      tempRoot,
+      expectedChanged: true,
+      expectedWrote: false,
     });
-    expect(stale.changed).toBe(true);
-    expect(stale.wrote).toBe(false);
   });
 });
