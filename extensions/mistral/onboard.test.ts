@@ -8,6 +8,7 @@ import {
   createLegacyProviderConfig,
   EXPECTED_FALLBACKS,
 } from "../../test/helpers/extensions/onboard-config.js";
+import { applyMistralModelCompat } from "./api.js";
 import { buildMistralModelDefinition as buildBundledMistralModelDefinition } from "./model-definitions.js";
 import {
   applyMistralConfig,
@@ -51,8 +52,8 @@ describe("mistral onboard", () => {
     expect(mistralDefault?.maxTokens).toBe(16384);
   });
 
-  it("uses the bundled mistral default model definition", () => {
-    const bundled = buildBundledMistralModelDefinition();
+  it("uses the bundled mistral default model definition with the Mistral compat patch", () => {
+    const bundled = applyMistralModelCompat(buildBundledMistralModelDefinition());
     const cfg = applyMistralProviderConfig({});
     const defaultModel = cfg.models?.providers?.mistral?.models.find(
       (model) => model.id === bundled.id,
@@ -62,6 +63,11 @@ describe("mistral onboard", () => {
       id: bundled.id,
       contextWindow: bundled.contextWindow,
       maxTokens: bundled.maxTokens,
+      compat: {
+        supportsStore: false,
+        supportsReasoningEffort: false,
+        maxTokensField: "max_tokens",
+      },
     });
   });
 

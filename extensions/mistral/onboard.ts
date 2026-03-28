@@ -2,6 +2,7 @@ import {
   createDefaultModelPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
+import { applyMistralModelCompat } from "./api.js";
 import {
   buildMistralModelDefinition,
   MISTRAL_BASE_URL,
@@ -16,7 +17,7 @@ const mistralPresetAppliers = createDefaultModelPresetAppliers({
     providerId: "mistral",
     api: "openai-completions",
     baseUrl: MISTRAL_BASE_URL,
-    defaultModel: buildMistralModelDefinition(),
+    defaultModel: applyMistralModelCompat(buildMistralModelDefinition()),
     defaultModelId: MISTRAL_DEFAULT_MODEL_ID,
     aliases: [{ modelRef: MISTRAL_DEFAULT_MODEL_REF, alias: "Mistral" }],
   }),
