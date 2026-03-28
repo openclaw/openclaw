@@ -317,7 +317,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
         }
         // Final chunk - process accumulated caps
         if (accumulatedCaps.includes("draft/multiline")) {
-          sendRaw(`CAP REQ draft/multiline`);
+          sendRaw(`CAP REQ :draft/multiline`);
         } else {
           resolveCapComplete?.();
           sendRaw(`CAP END`);
