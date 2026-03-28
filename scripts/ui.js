@@ -90,23 +90,25 @@ function createSpawnOptions(cmd, args, envOverride) {
 }
 
 function run(cmd, args) {
-  let child;
-  try {
-    child = spawn(cmd, args, createSpawnOptions(cmd, args));
-  } catch (err) {
-    console.error(`Failed to launch ${cmd}:`, err);
-    process.exit(1);
-    return;
-  }
-
-  child.on("error", (err) => {
-    console.error(`Failed to launch ${cmd}:`, err);
-    process.exit(1);
-  });
-  child.on("exit", (code) => {
-    if (code !== 0) {
-      process.exit(code ?? 1);
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn(cmd, args, createSpawnOptions(cmd, args));
+    } catch (err) {
+      reject(err);
+      return;
     }
+
+    child.on("error", (err) => {
+      reject(err);
+    });
+    child.on("exit", (code, signal) => {
+      if (signal) {
+        reject(new Error(`${cmd} exited with signal ${signal}`));
+        return;
+      }
+      resolve(code ?? 1);
+    });
   });
 }
 
@@ -115,16 +117,12 @@ function runSync(cmd, args, envOverride) {
   try {
     result = spawnSync(cmd, args, createSpawnOptions(cmd, args, envOverride));
   } catch (err) {
-    console.error(`Failed to launch ${cmd}:`, err);
-    process.exit(1);
-    return;
+    throw new Error(`Failed to launch ${cmd}: ${String(err)}`, { cause: err });
   }
   if (result.signal) {
-    process.exit(1);
+    return 1;
   }
-  if ((result.status ?? 1) !== 0) {
-    process.exit(result.status ?? 1);
-  }
+  return result.status ?? 1;
 }
 
 function depsInstalled(kind) {
@@ -159,45 +157,81 @@ function resolveScriptAction(action) {
   return null;
 }
 
-export function main(argv = process.argv.slice(2)) {
+function resolveComparablePath(filePath) {
+  const resolved = path.resolve(filePath);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+export function isDirectExecutionForEntry(entry = process.argv[1], moduleUrl = import.meta.url) {
+  if (!entry) {
+    return false;
+  }
+  // Treat symlinked absolute script paths as direct execution too, so
+  // installed wrappers that point back into a repo checkout still run `main()`.
+  return resolveComparablePath(entry) === resolveComparablePath(fileURLToPath(moduleUrl));
+}
+
+export async function main(argv = process.argv.slice(2)) {
   const [action, ...rest] = argv;
   if (!action) {
     usage();
-    process.exit(2);
+    return 2;
   }
 
   const runner = resolveRunner();
   if (!runner) {
     process.stderr.write("Missing UI runner: install pnpm, then retry.\n");
-    process.exit(1);
+    return 1;
   }
 
   const script = resolveScriptAction(action);
   if (action !== "install" && !script) {
     usage();
-    process.exit(2);
+    return 2;
   }
 
   if (action === "install") {
-    run(runner.cmd, ["install", ...rest]);
-    return;
+    try {
+      return await run(runner.cmd, ["install", ...rest]);
+    } catch (err) {
+      console.error(`Failed to launch ${runner.cmd}:`, err);
+      return 1;
+    }
   }
 
   if (!depsInstalled(action === "test" ? "test" : "build")) {
     const installEnv =
       action === "build" ? { ...process.env, NODE_ENV: "production" } : process.env;
     const installArgs = action === "build" ? ["install", "--prod"] : ["install"];
-    runSync(runner.cmd, installArgs, installEnv);
+    try {
+      const installCode = runSync(runner.cmd, installArgs, installEnv);
+      if (installCode !== 0) {
+        return installCode;
+      }
+    } catch (err) {
+      console.error(`Failed to launch ${runner.cmd}:`, err);
+      return 1;
+    }
   }
 
-  run(runner.cmd, ["run", script, ...rest]);
+  try {
+    return await run(runner.cmd, ["run", script, ...rest]);
+  } catch (err) {
+    console.error(`Failed to launch ${runner.cmd}:`, err);
+    return 1;
+  }
 }
 
-const isDirectExecution = (() => {
-  const entry = process.argv[1];
-  return Boolean(entry && path.resolve(entry) === fileURLToPath(import.meta.url));
-})();
+const isDirectExecution = isDirectExecutionForEntry();
 
 if (isDirectExecution) {
-  main();
+  void main().then((code) => {
+    if (code !== 0) {
+      process.exit(code);
+    }
+  });
 }

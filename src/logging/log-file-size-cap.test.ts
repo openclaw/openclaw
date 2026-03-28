@@ -14,14 +14,17 @@ const DEFAULT_MAX_FILE_BYTES = 500 * 1024 * 1024;
 
 describe("log file size cap", () => {
   let logPath = "";
+  let originalUmask = 0;
 
   beforeEach(() => {
     logPath = path.join(os.tmpdir(), `openclaw-log-cap-${crypto.randomUUID()}.log`);
+    originalUmask = process.umask();
     resetLogger();
     setLoggerOverride(null);
   });
 
   afterEach(() => {
+    process.umask(originalUmask);
     resetLogger();
     setLoggerOverride(null);
     vi.restoreAllMocks();
@@ -64,5 +67,33 @@ describe("log file size cap", () => {
       .map(([firstArg]) => String(firstArg))
       .filter((line) => line.includes("log file size cap reached"));
     expect(capWarnings).toHaveLength(1);
+  });
+
+  it("creates missing configured log files with 0600 even under a permissive umask", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    process.umask(0);
+    setLoggerOverride({ level: "info", file: logPath });
+
+    const logger = getLogger();
+    logger.info("create-mode-check");
+
+    expect(fs.statSync(logPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("tightens a permissively pre-created configured log file to 0600 on first write", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    process.umask(0o002);
+    fs.writeFileSync(logPath, "", { encoding: "utf8" });
+    fs.chmodSync(logPath, 0o664);
+    setLoggerOverride({ level: "info", file: logPath });
+
+    const logger = getLogger();
+    logger.info("normalize-mode-check");
+
+    expect(fs.statSync(logPath).mode & 0o777).toBe(0o600);
   });
 });

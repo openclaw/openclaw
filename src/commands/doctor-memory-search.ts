@@ -14,6 +14,13 @@ import { resolveActiveMemoryBackendConfig } from "../plugins/memory-runtime.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 
+// Use the built-in Gateway doctor probe here instead of the memory plugin CLI.
+// The memory command surface depends on the active memory plugin being loaded,
+// while doctor.memory.status remains available in the current baseline.
+const MEMORY_STATUS_VERIFY_COMMAND = formatCliCommand(
+  "openclaw gateway call doctor.memory.status --json",
+);
+
 function resolveSuggestedRemoteMemoryProvider(): string | undefined {
   return listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata().find(
     (provider) => provider.transport === "remote",
@@ -71,7 +78,7 @@ export async function noteMemorySearchHealth(
               "but the gateway reports local embeddings are not ready.",
               detail ? `Gateway probe: ${detail}` : null,
               "",
-              `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+              `Verify: ${MEMORY_STATUS_VERIFY_COMMAND}`,
             ]
               .filter(Boolean)
               .join("\n"),
@@ -90,7 +97,7 @@ export async function noteMemorySearchHealth(
             ? `- Switch to a remote provider: ${formatCliCommand(`openclaw config set agents.defaults.memorySearch.provider ${suggestedRemoteProvider}`)}`
             : `- Switch to a remote embedding provider in config`,
           "",
-          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+          `Verify: ${MEMORY_STATUS_VERIFY_COMMAND}`,
         ].join("\n"),
         "Memory search",
       );
@@ -105,7 +112,7 @@ export async function noteMemorySearchHealth(
         [
           `Memory search provider is set to "${resolved.provider}" but the API key was not found in the CLI environment.`,
           "The running gateway reports memory embeddings are ready for the default agent.",
-          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+          `Verify: ${MEMORY_STATUS_VERIFY_COMMAND}`,
         ].join("\n"),
         "Memory search",
       );
@@ -124,7 +131,7 @@ export async function noteMemorySearchHealth(
         `- Configure credentials: ${formatCliCommand("openclaw configure --section model")}`,
         `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
         "",
-        `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        `Verify: ${MEMORY_STATUS_VERIFY_COMMAND}`,
       ].join("\n"),
       "Memory search",
     );
@@ -149,7 +156,7 @@ export async function noteMemorySearchHealth(
       [
         'Memory search provider is set to "auto" but the API key was not found in the CLI environment.',
         "The running gateway reports memory embeddings are ready for the default agent.",
-        `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        `Verify: ${MEMORY_STATUS_VERIFY_COMMAND}`,
       ].join("\n"),
       "Memory search",
     );
@@ -169,7 +176,7 @@ export async function noteMemorySearchHealth(
       `- For local embeddings: configure agents.defaults.memorySearch.provider and local model path`,
       `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
       "",
-      `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+      `Verify: ${MEMORY_STATUS_VERIFY_COMMAND}`,
     ].join("\n"),
     "Memory search",
   );

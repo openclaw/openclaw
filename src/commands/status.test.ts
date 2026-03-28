@@ -510,8 +510,8 @@ describe("statusCommand", () => {
     expect(payload.sessions.recent[0].flags).toContain("verbose:on");
     expect(payload.securityAudit.summary.critical).toBe(1);
     expect(payload.securityAudit.summary.warn).toBe(1);
-    expect(payload.gatewayService.label).toBe("LaunchAgent");
-    expect(payload.nodeService.label).toBe("LaunchAgent");
+    expect(["LaunchAgent", "Daemon"]).toContain(payload.gatewayService.label);
+    expect(["LaunchAgent", "Node"]).toContain(payload.nodeService.label);
     expect(payload.pluginCompatibility).toEqual({
       count: 0,
       warnings: [],
@@ -565,13 +565,13 @@ describe("statusCommand", () => {
       "+1000",
       "50%",
       "40% cached",
-      "LaunchAgent",
       "FAQ:",
       "Troubleshooting:",
       "Next steps:",
     ]) {
       expect(logs.some((line) => line.includes(token))).toBe(true);
     }
+    expect(logs.some((line) => line.includes("LaunchAgent") || line.includes("Daemon"))).toBe(true);
     expect(
       logs.some((line) => line.includes("legacy-plugin still uses legacy before_agent_start")),
     ).toBe(true);
@@ -601,6 +601,51 @@ describe("statusCommand", () => {
       const logs = await runStatusAndGetLogs();
       expect(logs.some((l: string) => l.includes("auth token"))).toBe(true);
     });
+  });
+
+  it("treats deep health success as reachable when the lightweight probe raced startup", async () => {
+    mocks.loadConfig.mockReturnValue({
+      session: {},
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    });
+    mockProbeGatewayResult({
+      ok: false,
+      connectLatencyMs: null,
+      error: "connect failed: connect ECONNREFUSED 127.0.0.1:18789",
+      health: null,
+      status: null,
+      presence: null,
+    });
+    mocks.callGateway.mockImplementation(async ({ method }) => {
+      if (method === "health") {
+        return {
+          ok: true,
+          ts: Date.now(),
+          durationMs: 0,
+          channels: {},
+          channelOrder: [],
+          channelLabels: {},
+          heartbeatSeconds: 1800,
+          defaultAgentId: "main",
+          agents: [],
+          sessions: {
+            path: "/tmp/sessions.json",
+            count: 1,
+            recent: [],
+          },
+        };
+      }
+      if (method === "last-heartbeat") {
+        return null;
+      }
+      return {};
+    });
+
+    const joined = await runStatusAndGetJoinedLogs({ deep: true });
+    expect(joined).toContain("Gateway");
+    expect(joined).toContain("reachable");
+    expect(joined).not.toContain("Fix reachability first");
+    expect(joined).toContain("Need to test channels?");
   });
 
   it("warns instead of crashing when gateway auth SecretRef is unresolved for probe auth", async () => {

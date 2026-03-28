@@ -176,6 +176,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   }
   let currentFileBytes = getCurrentLogFileBytes(settings.file);
   let warnedAboutSizeCap = false;
+  let ensuredFileMode = false;
 
   logger.attachTransport((logObj: LogObj) => {
     try {
@@ -201,6 +202,9 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
         return;
       }
       if (appendLogLine(settings.file, payload)) {
+        if (!ensuredFileMode) {
+          ensuredFileMode = ensureLogFileMode(settings.file);
+        }
         currentFileBytes = nextBytes;
       }
     } catch {
@@ -231,7 +235,18 @@ function getCurrentLogFileBytes(file: string): number {
 
 function appendLogLine(file: string, line: string): boolean {
   try {
-    fs.appendFileSync(file, line, { encoding: "utf8" });
+    fs.appendFileSync(file, line, { encoding: "utf8", mode: 0o600 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ensureLogFileMode(file: string): boolean {
+  try {
+    if ((fs.statSync(file).mode & 0o777) !== 0o600) {
+      fs.chmodSync(file, 0o600);
+    }
     return true;
   } catch {
     return false;

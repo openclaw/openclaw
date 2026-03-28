@@ -87,6 +87,8 @@ describe("noteMemorySearchHealth", () => {
     const message = String(note.mock.calls[0]?.[0] ?? "");
     expect(message).toContain("gateway reports local embeddings are not ready");
     expect(message).toContain("node-llama-cpp not installed");
+    expect(message).toContain("openclaw gateway call doctor.memory.status --json");
+    expect(message).not.toContain("openclaw memory status --deep");
   });
 
   it("does not warn when local provider with default model and gateway probe is ready", async () => {
@@ -226,6 +228,8 @@ describe("noteMemorySearchHealth", () => {
 
     const message = note.mock.calls[0]?.[0] as string;
     expect(message).toContain("reports memory embeddings are ready");
+    expect(message).toContain("openclaw gateway call doctor.memory.status --json");
+    expect(message).not.toContain("openclaw memory status --deep");
   });
 
   it("uses model configure hint when gateway probe is unavailable and API key is missing", async () => {
@@ -265,6 +269,7 @@ describe("noteMemorySearchHealth", () => {
     const message = String(note.mock.calls[0]?.[0] ?? "");
     expect(message).toContain("needs at least one embedding provider");
     expect(message).toContain("openclaw configure --section model");
+    expect(message).toContain("openclaw gateway call doctor.memory.status --json");
   });
 
   it("still warns in auto mode when only ollama credentials exist", async () => {

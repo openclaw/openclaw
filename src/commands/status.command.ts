@@ -181,8 +181,11 @@ export async function statusCommand(
         },
       )
     : undefined;
+  // A successful deep health RPC is authoritative proof that the gateway is
+  // reachable, even if the earlier lightweight probe raced a warm-up window.
+  const gatewayReachableForDisplay = gatewayReachable || Boolean(health);
   const lastHeartbeat =
-    opts.deep && gatewayReachable
+    opts.deep && gatewayReachableForDisplay
       ? await loadGatewayCallModule()
           .then(({ callGateway }) =>
             callGateway<HeartbeatEventPayload | null>({
@@ -221,7 +224,7 @@ export async function statusCommand(
         url: gatewayConnection.url,
         urlSource: gatewayConnection.urlSource,
         misconfigured: remoteUrlMissing,
-        reachable: gatewayReachable,
+        reachable: gatewayReachableForDisplay,
         connectLatencyMs: gatewayProbe?.connectLatencyMs ?? null,
         self: gatewaySelf,
         error: gatewayProbe?.error ?? null,
@@ -308,7 +311,7 @@ export async function statusCommand(
       : `${gatewayConnection.url}${gatewayConnection.urlSource ? ` (${gatewayConnection.urlSource})` : ""}`;
     const reach = remoteUrlMissing
       ? warn("misconfigured (remote.url missing)")
-      : gatewayReachable
+      : gatewayReachableForDisplay
         ? ok(`reachable ${formatDuration(gatewayProbe?.connectLatencyMs)}`)
         : warn(gatewayProbe?.error ? `unreachable (${gatewayProbe.error})` : "unreachable");
     const auth =
@@ -389,7 +392,7 @@ export async function statusCommand(
     if (!opts.deep) {
       return null;
     }
-    if (!gatewayReachable) {
+    if (!gatewayReachableForDisplay) {
       return warn("unavailable");
     }
     if (!lastHeartbeat) {
@@ -743,7 +746,7 @@ export async function statusCommand(
   runtime.log("Next steps:");
   runtime.log(`  Need to share?      ${formatCliCommand("openclaw status --all")}`);
   runtime.log(`  Need to debug live? ${formatCliCommand("openclaw logs --follow")}`);
-  if (gatewayReachable) {
+  if (gatewayReachableForDisplay) {
     runtime.log(`  Need to test channels? ${formatCliCommand("openclaw status --deep")}`);
   } else {
     runtime.log(`  Fix reachability first: ${formatCliCommand("openclaw gateway probe")}`);
