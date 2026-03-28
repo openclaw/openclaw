@@ -54,6 +54,8 @@ function resolveProviderDocsById(params?: {
       config: params?.config,
       workspaceDir: params?.workspaceDir,
       env: params?.env,
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
     })
       .filter((provider): provider is ProviderPlugin & { docsPath: string } =>
         Boolean(provider.docsPath?.trim()),
