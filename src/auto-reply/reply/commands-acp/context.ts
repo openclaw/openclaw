@@ -6,11 +6,13 @@ import {
 import { DISCORD_THREAD_BINDING_CHANNEL } from "../../../channels/thread-bindings-policy.js";
 import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { resolveBlueBubblesConversationIdFromTarget } from "../../../plugin-sdk/bluebubbles.js";
 import {
   buildFeishuConversationId,
   parseFeishuDirectConversationId,
   parseFeishuTargetId,
 } from "../../../plugin-sdk/feishu.js";
+import { resolveIMessageConversationIdFromTarget } from "../../../plugin-sdk/imessage-core.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import { parseDiscordParentChannelFromSessionKey } from "../discord-parent-channel.js";
@@ -158,6 +160,20 @@ export function resolveAcpCommandConversationId(params: HandleCommandsParams): s
       parseFeishuDirectConversationId(params.ctx.OriginatingTo) ??
       parseFeishuDirectConversationId(params.command.to) ??
       parseFeishuDirectConversationId(params.ctx.To)
+    );
+  }
+  if (channel === "bluebubbles") {
+    return (
+      resolveBlueBubblesConversationIdFromTarget(params.ctx.OriginatingTo ?? "") ??
+      resolveBlueBubblesConversationIdFromTarget(params.command.to ?? "") ??
+      resolveBlueBubblesConversationIdFromTarget(params.ctx.To ?? "")
+    );
+  }
+  if (channel === "imessage") {
+    return (
+      resolveIMessageConversationIdFromTarget(params.ctx.OriginatingTo ?? "") ??
+      resolveIMessageConversationIdFromTarget(params.command.to ?? "") ??
+      resolveIMessageConversationIdFromTarget(params.ctx.To ?? "")
     );
   }
   return resolveConversationIdFromTargets({
