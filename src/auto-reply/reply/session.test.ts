@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
+import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
@@ -905,6 +906,7 @@ describe("initSessionState RawBody", () => {
       },
     },
   ])("routes generic current-conversation bindings for $name", async ({ conversation, ctx }) => {
+    setDefaultChannelPluginRegistryForTests();
     const storePath = await createStorePath("openclaw-generic-current-binding-");
     const boundSessionKey = `agent:codex:acp:binding:${conversation.channel}:default:test`;
 
