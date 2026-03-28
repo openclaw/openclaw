@@ -82,7 +82,10 @@ describe("channelsHandlers channels.status", () => {
     const respond = vi.fn();
 
     await channelsHandlers["channels.status"]({
+      req: {} as never,
       params: { probe: false, timeoutMs: 2000 } as never,
+      client: null,
+      isWebchatConnect: () => false,
       respond,
       context: {
         getRuntimeSnapshot: () => ({
