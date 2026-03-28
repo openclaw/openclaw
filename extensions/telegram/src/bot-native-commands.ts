@@ -186,7 +186,10 @@ async function resolveTelegramCommandAuth(params: {
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
-  const getChat: TelegramGetChat = bot.api.getChat.bind(bot.api);
+  const getChat =
+    typeof bot.api.getChat === "function"
+      ? (bot.api.getChat.bind(bot.api) as TelegramGetChat)
+      : undefined;
   const isForum = await resolveTelegramForumFlag({
     chatId,
     chatType: msg.chat.type,
