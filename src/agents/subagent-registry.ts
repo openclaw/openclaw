@@ -561,6 +561,11 @@ async function restoreSubagentRunsOnce(): Promise<void> {
     if (restoredCount === 0) {
       return;
     }
+    // Capture restored run IDs BEFORE the async rehydration step.
+    // New runs may be registered into subagentRuns during the await window;
+    // we must only resume the runs that were restored from disk, not any
+    // newly-registered runs that arrived concurrently during gateway startup.
+    const restoredRunIds = new Set(subagentRuns.keys());
     // Ordering: rehydrateSessionStoreEntries MUST run before
     // reconcileOrphanedRestoredRuns.  The rehydration step injects synthetic
     // session-store entries for runs whose store write fell inside the ~400 ms
@@ -581,8 +586,13 @@ async function restoreSubagentRunsOnce(): Promise<void> {
     ensureListener();
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
     startSweeper();
-    for (const runId of subagentRuns.keys()) {
-      resumeSubagentRun(runId);
+    // Only resume the runs that were present before the async rehydration step.
+    // Runs registered concurrently during the await window will be managed by
+    // their own lifecycle and must not be routed through restart recovery.
+    for (const runId of restoredRunIds) {
+      if (subagentRuns.has(runId)) {
+        resumeSubagentRun(runId);
+      }
     }
 
     // Cold-start restore path: queue the same recovery pass that restart
