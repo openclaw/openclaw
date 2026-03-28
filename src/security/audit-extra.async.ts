@@ -825,6 +825,34 @@ export async function collectPluginsTrustFindings(params: {
     }
   }
 
+  const legacyModePlugins: string[] = [];
+  for (const pluginDir of pluginDirs) {
+    try {
+      const { loadPluginManifest } = await import("../plugins/manifest.js");
+      const manifestResult = loadPluginManifest(pluginDir, false);
+      if (manifestResult.ok && !manifestResult.manifest.capabilities) {
+        legacyModePlugins.push(manifestResult.manifest.id);
+      }
+    } catch {
+      // manifest load failure — other checks cover this
+    }
+  }
+  if (legacyModePlugins.length > 0) {
+    findings.push({
+      checkId: "plugins.capabilities.legacy_unrestricted",
+      severity: "warn",
+      title: "Extension plugins run without declared capabilities (legacy unrestricted mode)",
+      detail:
+        `${legacyModePlugins.length} plugin(s) do not declare capabilities in their manifest:\n` +
+        legacyModePlugins.slice(0, 15).map((id) => `- ${id}`).join("\n") +
+        (legacyModePlugins.length > 15 ? `\n+${legacyModePlugins.length - 15} more` : "") +
+        "\nPlugins without a capabilities field have unrestricted access to the full PluginRuntime surface.",
+      remediation:
+        "Plugin authors should add a capabilities field to openclaw.plugin.json declaring the minimum permissions required. " +
+        "See docs/proposals/plugin-capability-model.md for the schema.",
+    });
+  }
+
   return findings;
 }
 
