@@ -438,6 +438,9 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
       source: "config";
     }
   | undefined {
+  // Providers own any provider-specific fallback auth logic via
+  // resolveSyntheticAuth(...). Discovery/bootstrap callers may consume
+  // non-secret markers from source config, but must never persist plaintext.
   const synthetic = resolveProviderSyntheticAuthWithPlugin({
     provider: params.provider,
     config: params.config,

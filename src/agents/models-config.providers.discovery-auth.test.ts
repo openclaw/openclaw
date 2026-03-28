@@ -205,4 +205,29 @@ describe("provider discovery auth marker guardrails", () => {
 
     expect(providers?.xai?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
   });
+
+  it("does not surface xai provider auth when the xai plugin is disabled", async () => {
+    const agentDir = await createAgentDirWithAuthProfiles({});
+
+    const providers = await resolveImplicitProvidersForTest({
+      agentDir,
+      env: {},
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              enabled: false,
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-config-key", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(providers?.xai).toBeUndefined();
+  });
 });
