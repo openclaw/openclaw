@@ -1,10 +1,10 @@
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { registerPluginCliCommands } from "./cli.js";
-import { clearPluginLoaderCache } from "./loader.js";
-import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
-import { resetPluginRuntimeStateForTest } from "./runtime.js";
+let registerPluginCliCommands: typeof import("./cli.js").registerPluginCliCommands;
+let clearPluginLoaderCache: typeof import("./loader.js").clearPluginLoaderCache;
+let clearPluginManifestRegistryCache: typeof import("./manifest-registry.js").clearPluginManifestRegistryCache;
+let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 
 function resetPluginState() {
   clearPluginLoaderCache();
@@ -13,7 +13,14 @@ function resetPluginState() {
 }
 
 describe("registerPluginCliCommands browser plugin integration", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    ({ clearPluginLoaderCache } =
+      await vi.importActual<typeof import("./loader.js")>("./loader.js"));
+    ({ clearPluginManifestRegistryCache } =
+      await vi.importActual<typeof import("./manifest-registry.js")>("./manifest-registry.js"));
+    ({ resetPluginRuntimeStateForTest } =
+      await vi.importActual<typeof import("./runtime.js")>("./runtime.js"));
+    ({ registerPluginCliCommands } = await vi.importActual<typeof import("./cli.js")>("./cli.js"));
     resetPluginState();
   });
 
