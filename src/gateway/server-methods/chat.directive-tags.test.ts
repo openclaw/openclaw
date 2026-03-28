@@ -894,6 +894,49 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("chat.send falls back to origin thread metadata for configured main CLI delivery inheritance", async () => {
+    createTranscriptFixture("openclaw-chat-send-config-main-origin-thread-routes-");
+    mockState.mainSessionKey = "work";
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      origin: {
+        provider: "telegram",
+        accountId: "default",
+        threadId: "42",
+      },
+      lastTo: "telegram:6812765697",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-config-main-origin-thread-routes",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.CLI,
+            id: "cli",
+          },
+        },
+      } as unknown,
+      sessionKey: "agent:main:work",
+      deliver: true,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:6812765697",
+        ExplicitDeliverRoute: true,
+        AccountId: "default",
+        MessageThreadId: "42",
+      }),
+    );
+  });
+
   it("chat.send keeps configured main delivery inheritance when connect metadata omits client details", async () => {
     createTranscriptFixture("openclaw-chat-send-config-main-connect-no-client-");
     mockState.mainSessionKey = "work";
