@@ -98,21 +98,21 @@ export function resolveMatrixAccount(params: {
   const env = params.env ?? process.env;
   const accountId = normalizeAccountId(params.accountId);
   const matrixBase = resolveMatrixBaseConfig(params.cfg);
-  const explicitAccountConfig =
-    accountId === DEFAULT_ACCOUNT_ID
-      ? matrixBase
-      : (findMatrixAccountConfig(params.cfg, accountId) ?? {});
   const base = resolveMatrixAccountConfig({ cfg: params.cfg, accountId });
+  const explicitAuthConfig =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? base
+      : (findMatrixAccountConfig(params.cfg, accountId) ?? {});
   const enabled = base.enabled !== false && matrixBase.enabled !== false;
 
   const resolved = resolveMatrixConfigForAccount(params.cfg, accountId, env);
   const hasHomeserver = Boolean(resolved.homeserver);
   const hasUserId = Boolean(resolved.userId);
   const hasAccessToken =
-    Boolean(resolved.accessToken) || hasConfiguredSecretInput(explicitAccountConfig.accessToken);
+    Boolean(resolved.accessToken) || hasConfiguredSecretInput(explicitAuthConfig.accessToken);
   const hasPassword = Boolean(resolved.password);
   const hasPasswordAuth =
-    hasUserId && (hasPassword || hasConfiguredSecretInput(explicitAccountConfig.password));
+    hasUserId && (hasPassword || hasConfiguredSecretInput(explicitAuthConfig.password));
   const stored = loadMatrixCredentials(env, accountId);
   const hasStored =
     stored && resolved.homeserver
