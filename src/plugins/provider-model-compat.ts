@@ -142,7 +142,7 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     return model;
   }
 
-  const normalizedCompat: ModelCompatConfig = compat
+  const baseCompat: ModelCompatConfig = compat
     ? {
         ...compat,
         supportsDeveloperRole: forcedDeveloperRole || false,
@@ -155,15 +155,12 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   // OpenAI-native backends: it rejects `store`, uses `max_tokens` instead of
   // `max_completion_tokens`, and does not support OpenAI-style
   // `reasoning_effort`.
-  if (isMistralEndpoint(model)) {
-    normalizedCompat.supportsStore = false;
-    normalizedCompat.supportsReasoningEffort = false;
-    normalizedCompat.maxTokensField = "max_tokens";
-  }
+  const mistralOverrides: Partial<ModelCompatConfig> = isMistralEndpoint(model)
+    ? { supportsStore: false, supportsReasoningEffort: false, maxTokensField: "max_tokens" }
+    : {};
 
-  // Return a new object — do not mutate the caller's model reference.
   return {
     ...model,
-    compat: normalizedCompat,
+    compat: { ...baseCompat, ...mistralOverrides },
   } as typeof model;
 }
