@@ -10,8 +10,21 @@ import {
 } from "../../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../provider-id.js";
+<<<<<<< HEAD
 import { resolveCacheRetention } from "./anthropic-cache-retention.js";
 import { createAnthropicToolPayloadCompatibilityWrapper } from "./anthropic-family-tool-payload-compat.js";
+=======
+import {
+  createAnthropicBetaHeadersWrapper,
+  createAnthropicFastModeWrapper,
+  createAnthropicServiceTierWrapper,
+  createAnthropicToolPayloadCompatibilityWrapper,
+  resolveAnthropicFastMode,
+  resolveAnthropicServiceTier,
+  resolveAnthropicBetas,
+  resolveCacheRetention,
+} from "./anthropic-stream-wrappers.js";
+>>>>>>> fix: normalize Z.AI tool_stream provider ids
 import { createBedrockNoCacheWrapper, isAnthropicBedrockModel } from "./bedrock-stream-wrappers.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
