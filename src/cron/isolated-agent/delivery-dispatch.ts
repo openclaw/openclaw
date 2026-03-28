@@ -412,7 +412,8 @@ export async function dispatchCronDelivery(
             if (!p.text || hasResponsePrefix(p.text, responsePrefix)) {
               return p;
             }
-            return { ...p, text: `${responsePrefix} ${p.text}` };
+            const sep = /\s$/.test(responsePrefix) ? "" : " ";
+            return { ...p, text: `${responsePrefix}${sep}${p.text}` };
           })
         : rawPayloads;
       if (payloadsForDelivery.length === 0) {
