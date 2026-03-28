@@ -1300,6 +1300,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           toolSchemaProfile: {
                             type: "string",
                           },
+                          unsupportedToolSchemaKeywords: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                          },
                           nativeWebSearchTool: {
                             type: "boolean",
                           },
