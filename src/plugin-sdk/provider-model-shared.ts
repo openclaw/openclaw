@@ -28,11 +28,3 @@ export {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
 } from "../plugins/provider-model-helpers.js";
-export {
-  MINIMAX_DEFAULT_MODEL_ID,
-  MINIMAX_DEFAULT_MODEL_REF,
-  MINIMAX_TEXT_MODEL_CATALOG,
-  MINIMAX_TEXT_MODEL_ORDER,
-  MINIMAX_TEXT_MODEL_REFS,
-  isMiniMaxModernModelId,
-} from "./minimax.js";
