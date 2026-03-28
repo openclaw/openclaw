@@ -20,6 +20,7 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
+let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 
 function makeTool(name: string) {
   return {
@@ -140,6 +141,7 @@ describe("resolvePluginTools optional tools", () => {
       changes: [],
     }));
     ({ resetPluginRuntimeStateForTest } = await import("./runtime.js"));
+    ({ setActivePluginRegistry } = await import("./runtime.js"));
     resetPluginRuntimeStateForTest();
     ({ resolvePluginTools } = await import("./tools.js"));
   });
@@ -271,6 +273,57 @@ describe("resolvePluginTools optional tools", () => {
         env: process.env,
       }),
     );
+    expectLoaderCall({ config: autoEnabledConfig });
+  });
+
+  it("does not reuse a cached active registry when auto-enable changes the config snapshot", () => {
+    setOptionalDemoRegistry();
+    const rawContext = createContext();
+    const autoEnabledConfig = {
+      ...rawContext.config,
+      plugins: {
+        ...rawContext.config.plugins,
+        entries: {
+          "optional-demo": { enabled: true },
+        },
+      },
+    };
+    applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    setActivePluginRegistry(
+      {
+        plugins: [],
+        tools: [],
+        hooks: [],
+        typedHooks: [],
+        channels: [],
+        channelSetups: [],
+        providers: [],
+        cliBackends: [],
+        speechProviders: [],
+        mediaUnderstandingProviders: [],
+        imageGenerationProviders: [],
+        webSearchProviders: [],
+        gatewayHandlers: {},
+        gatewayMethodScopes: {},
+        httpRoutes: [],
+        cliRegistrars: [],
+        services: [],
+        commands: [],
+        conversationBindingResolvedHandlers: [],
+        diagnostics: [],
+      } as never,
+      "stale-registry",
+    );
+
+    const tools = resolvePluginTools({
+      context: {
+        ...rawContext,
+        config: rawContext.config as never,
+      } as never,
+      toolAllowlist: ["optional_tool"],
+    });
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
     expectLoaderCall({ config: autoEnabledConfig });
   });
 });
