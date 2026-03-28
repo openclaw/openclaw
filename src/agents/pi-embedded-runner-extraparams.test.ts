@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createXaiFastModeWrapper } from "../../extensions/xai/stream.js";
 import { createConfiguredOllamaCompatNumCtxWrapper } from "../plugin-sdk/ollama.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import {
@@ -57,6 +58,12 @@ beforeEach(() => {
     wrapProviderStreamFn: (params) => {
       if (params.provider === "ollama") {
         return createConfiguredOllamaCompatNumCtxWrapper(params.context);
+      }
+      if (params.provider === "xai") {
+        return createXaiFastModeWrapper(
+          params.context.streamFn,
+          params.context.extraParams?.fastMode === true,
+        );
       }
       if (params.provider !== "openrouter") {
         return params.context.streamFn;

@@ -4,6 +4,7 @@ import { applyXaiModelCompat, buildXaiProvider } from "./api.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import {
+  createXaiFastModeWrapper,
   createXaiToolCallArgumentDecodingWrapper,
   createXaiToolPayloadCompatibilityWrapper,
 } from "./stream.js";
@@ -47,13 +48,14 @@ export default defineSingleProviderPluginEntry({
         tool_stream: true,
       };
     },
-    wrapStreamFn: (ctx) =>
-      createToolStreamWrapper(
-        createXaiToolCallArgumentDecodingWrapper(
-          createXaiToolPayloadCompatibilityWrapper(ctx.streamFn),
-        ),
-        ctx.extraParams?.tool_stream !== false,
-      ),
+    wrapStreamFn: (ctx) => {
+      let streamFn = createXaiToolPayloadCompatibilityWrapper(ctx.streamFn);
+      if (typeof ctx.extraParams?.fastMode === "boolean") {
+        streamFn = createXaiFastModeWrapper(streamFn, ctx.extraParams.fastMode);
+      }
+      streamFn = createXaiToolCallArgumentDecodingWrapper(streamFn);
+      return createToolStreamWrapper(streamFn, ctx.extraParams?.tool_stream !== false);
+    },
     normalizeResolvedModel: ({ model }) => applyXaiModelCompat(model),
     resolveDynamicModel: (ctx) => resolveXaiForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),

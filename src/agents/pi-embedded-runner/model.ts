@@ -3,6 +3,7 @@ import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveGoogleGenerativeAiTransport } from "../../plugin-sdk/google.js";
+import { normalizeModelCompat } from "../../plugins/provider-model-compat.js";
 import {
   buildProviderUnknownModelHintWithPlugin,
   clearProviderRuntimeHookCache,
@@ -14,7 +15,6 @@ import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
-import { normalizeModelCompat } from "../model-compat.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import {
   buildSuppressedBuiltInModelError,

@@ -1,44 +1,109 @@
-import {
-  getScopedCredentialValue,
-  resolveWebSearchProviderCredential,
-} from "openclaw/plugin-sdk/provider-web-search";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../../test/helpers/extensions/env.js";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
-import { __testing as grokProviderTesting } from "./src/grok-web-search-provider.js";
-import { __testing } from "./web-search.js";
+import { __testing, createXaiWebSearchProvider } from "./web-search.js";
 
-const { extractXaiWebSearchContent, resolveXaiInlineCitations, resolveXaiWebSearchModel } =
-  __testing;
+const {
+  extractXaiWebSearchContent,
+  resolveXaiInlineCitations,
+  resolveXaiToolSearchConfig,
+  resolveXaiWebSearchCredential,
+  resolveXaiWebSearchModel,
+} = __testing;
 
 describe("xai web search config resolution", () => {
   it("prefers configured api keys and resolves grok scoped defaults", () => {
-    expect(grokProviderTesting.resolveGrokApiKey({ apiKey: "xai-secret" })).toBe("xai-secret");
-    expect(grokProviderTesting.resolveGrokModel()).toBe("grok-4-1-fast");
-    expect(grokProviderTesting.resolveGrokInlineCitations()).toBe(false);
+    expect(resolveXaiWebSearchCredential({ grok: { apiKey: "xai-secret" } })).toBe("xai-secret");
+    expect(resolveXaiWebSearchModel()).toBe("grok-4-1-fast");
+    expect(resolveXaiInlineCitations()).toBe(false);
   });
 
   it("uses config apiKey when provided", () => {
-    const searchConfig = { grok: { apiKey: "xai-test-key" } }; // pragma: allowlist secret
-    expect(
-      resolveWebSearchProviderCredential({
-        credentialValue: getScopedCredentialValue(searchConfig, "grok"),
-        path: "tools.web.search.grok.apiKey",
-        envVars: ["XAI_API_KEY"],
-      }),
-    ).toBe("xai-test-key");
+    expect(resolveXaiWebSearchCredential({ grok: { apiKey: "xai-test-key" } })).toBe(
+      "xai-test-key",
+    );
   });
 
   it("returns undefined when no apiKey is available", () => {
     withEnv({ XAI_API_KEY: undefined }, () => {
+      expect(resolveXaiWebSearchCredential({})).toBeUndefined();
+    });
+  });
+
+  it("resolves env SecretRefs without requiring a runtime snapshot", () => {
+    withEnv({ XAI_WEB_SEARCH_KEY: "xai-env-ref-key" }, () => {
       expect(
-        resolveWebSearchProviderCredential({
-          credentialValue: getScopedCredentialValue({}, "grok"),
-          path: "tools.web.search.grok.apiKey",
-          envVars: ["XAI_API_KEY"],
+        resolveXaiWebSearchCredential({
+          grok: {
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "XAI_WEB_SEARCH_KEY",
+            },
+          },
         }),
-      ).toBeUndefined();
+      ).toBe("xai-env-ref-key");
+    });
+  });
+
+  it("merges canonical plugin config into the tool search config", () => {
+    const searchConfig = resolveXaiToolSearchConfig({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: "plugin-key",
+                  inlineCitations: true,
+                  model: "grok-4-fast-reasoning",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "grok" },
+    });
+
+    expect(resolveXaiWebSearchCredential(searchConfig)).toBe("plugin-key");
+    expect(resolveXaiInlineCitations(searchConfig)).toBe(true);
+    expect(resolveXaiWebSearchModel(searchConfig)).toBe("grok-4-fast");
+  });
+
+  it("treats unresolved non-env SecretRefs as missing credentials instead of throwing", async () => {
+    await withEnv({ XAI_API_KEY: undefined }, async () => {
+      const provider = createXaiWebSearchProvider();
+      const maybeTool = provider.createTool({
+        config: {
+          plugins: {
+            entries: {
+              xai: {
+                enabled: true,
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "file",
+                      provider: "vault",
+                      id: "/providers/xai/web-search",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+      expect(maybeTool).toBeTruthy();
+      if (!maybeTool) {
+        throw new Error("expected xai web search tool");
+      }
+
+      await expect(maybeTool.execute({ query: "OpenClaw" })).resolves.toMatchObject({
+        error: "missing_xai_api_key",
+      });
     });
   });
 
@@ -78,7 +143,7 @@ describe("xai web search config resolution", () => {
 
   it("builds wrapped payloads with optional inline citations", () => {
     expect(
-      grokProviderTesting.buildXaiWebSearchPayload({
+      __testing.buildXaiWebSearchPayload({
         query: "q",
         provider: "grok",
         model: "grok-4-fast",

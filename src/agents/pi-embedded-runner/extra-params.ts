@@ -38,7 +38,6 @@ import {
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
-import { createXaiFastModeWrapper } from "./xai-stream-wrappers.js";
 
 const defaultProviderRuntimeDeps = {
   prepareProviderExtraParams: prepareProviderExtraParamsRuntime,
@@ -378,13 +377,6 @@ function applyPostPluginStreamWrappers(
       `applying MiniMax fast mode=${ctx.effectiveExtraParams.fastMode} for ${ctx.provider}/${ctx.modelId}`,
     );
     ctx.agent.streamFn = createMinimaxFastModeWrapper(
-      ctx.agent.streamFn,
-      ctx.effectiveExtraParams.fastMode,
-    );
-    log.debug(
-      `applying xAI fast mode=${ctx.effectiveExtraParams.fastMode} for ${ctx.provider}/${ctx.modelId}`,
-    );
-    ctx.agent.streamFn = createXaiFastModeWrapper(
       ctx.agent.streamFn,
       ctx.effectiveExtraParams.fastMode,
     );
