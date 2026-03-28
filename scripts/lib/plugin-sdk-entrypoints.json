@@ -182,6 +182,7 @@
   "provider-tools",
   "provider-usage",
   "provider-web-search",
+  "retry-runtime",
   "param-readers",
   "provider-zai-endpoint",
   "secret-input",

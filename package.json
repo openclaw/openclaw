@@ -768,6 +768,10 @@
       "types": "./dist/plugin-sdk/provider-web-search.d.ts",
       "default": "./dist/plugin-sdk/provider-web-search.js"
     },
+    "./plugin-sdk/retry-runtime": {
+      "types": "./dist/plugin-sdk/retry-runtime.d.ts",
+      "default": "./dist/plugin-sdk/retry-runtime.js"
+    },
     "./plugin-sdk/param-readers": {
       "types": "./dist/plugin-sdk/param-readers.d.ts",
       "default": "./dist/plugin-sdk/param-readers.js"

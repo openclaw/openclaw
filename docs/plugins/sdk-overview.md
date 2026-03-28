@@ -95,6 +95,7 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
     | `plugin-sdk/config-runtime` | Config load/write helpers |
     | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
     | `plugin-sdk/fetch-runtime` | Wrapped fetch, proxy, and pinned lookup helpers |
+    | `plugin-sdk/retry-runtime` | Retry config and retry runner helpers |
     | `plugin-sdk/agent-runtime` | Agent dir/identity/workspace helpers |
     | `plugin-sdk/directory-runtime` | Config-backed directory query/dedup |
     | `plugin-sdk/keyed-async-queue` | `KeyedAsyncQueue` |
