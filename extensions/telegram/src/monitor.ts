@@ -75,6 +75,29 @@ const isGrammyHttpError = (err: unknown): boolean => {
   return (err as { name?: string }).name === "HttpError";
 };
 
+/**
+ * Per-token registry of active polling sessions. Prevents duplicate pollers
+ * for the same bot token, which cause Telegram 409 Conflict errors.
+ *
+ * When a new session starts for a token that already has an active session,
+ * we wait for the previous session to fully release its getUpdates long-poll
+ * before proceeding. This handles hot-reload races, external script conflicts,
+ * and watchdog restart overlaps where waitForGracefulStop times out.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/56230
+ */
+type ActivePollerEntry = {
+  accountId: string;
+  startedAt: number;
+  /** Resolves when this polling session exits (finally block runs). */
+  done: Promise<void>;
+};
+
+const activePollers = new Map<string, ActivePollerEntry>();
+
+/** Wait timeout for a previous session to release before starting a new one. */
+const DUPLICATE_POLLER_DRAIN_MS = 5_000;
+
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
   let pollingSession: TelegramPollingSession | undefined;
@@ -104,6 +127,10 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     return false;
   });
 
+  let resolvedToken: string | undefined;
+  let resolvedAccountId: string | undefined;
+  let resolvePollerDone: (() => void) | undefined;
+
   try {
     const cfg = opts.config ?? loadConfig();
     const account = resolveTelegramAccount({
@@ -116,6 +143,37 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         `Telegram bot token missing for account "${account.accountId}" (set channels.telegram.accounts.${account.accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).`,
       );
     }
+
+    resolvedToken = token;
+    resolvedAccountId = account.accountId;
+
+    // Duplicate-poller guard: if another session is already polling this token,
+    // wait for it to release before starting a new one.
+    const existing = activePollers.get(token);
+    if (existing) {
+      const elapsed = Math.round((Date.now() - existing.startedAt) / 1000);
+      log(
+        `[telegram] [${account.accountId}] waiting for previous polling session to release (duplicate-poller guard; previous started ${elapsed}s ago)`,
+      );
+      await Promise.race([
+        existing.done,
+        new Promise<void>((resolve) => setTimeout(resolve, DUPLICATE_POLLER_DRAIN_MS)),
+      ]);
+      // Clean up stale entry if it's still there after timeout.
+      if (activePollers.get(token) === existing) {
+        activePollers.delete(token);
+      }
+    }
+
+    // Register this session in the active poller registry.
+    const pollerDone = new Promise<void>((resolve) => {
+      resolvePollerDone = resolve;
+    });
+    activePollers.set(token, {
+      accountId: account.accountId,
+      startedAt: Date.now(),
+      done: pollerDone,
+    });
 
     const proxyFetch =
       opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
@@ -205,6 +263,16 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     });
     await pollingSession.runUntilAbort();
   } finally {
+    // Remove this session from the active poller registry and signal completion
+    // so any waiting session can proceed.
+    if (resolvedToken) {
+      const entry = activePollers.get(resolvedToken);
+      if (entry && entry.accountId === (resolvedAccountId ?? "default")) {
+        activePollers.delete(resolvedToken);
+      }
+    }
+    resolvePollerDone?.();
+
     await execApprovalsHandler?.stop().catch(() => {});
     unregisterHandler();
   }
