@@ -30,12 +30,14 @@ function makeEntry(params: {
     label?: string;
   }>;
 }): SkillEntry {
+  const filePath = `/tmp/${params.name}/SKILL.md`;
+  const baseDir = `/tmp/${params.name}`;
   return {
     skill: createFixtureSkill({
       name: params.name,
       description: `desc:${params.name}`,
-      filePath: `/tmp/${params.name}/SKILL.md`,
-      baseDir: `/tmp/${params.name}`,
+      filePath,
+      baseDir,
       source: params.source ?? "openclaw-workspace",
     }),
     frontmatter: {},

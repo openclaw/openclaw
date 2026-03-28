@@ -32,12 +32,13 @@ describe("skills-cli (e2e)", () => {
 
   function createEntries(): SkillEntry[] {
     const baseDir = path.join(tempWorkspaceDir, "peekaboo");
+    const filePath = path.join(baseDir, "SKILL.md");
     return [
       {
         skill: createFixtureSkill({
           name: "peekaboo",
           description: "Capture UI screenshots",
-          filePath: path.join(baseDir, "SKILL.md"),
+          filePath,
           baseDir,
           source: "openclaw-bundled",
         }),

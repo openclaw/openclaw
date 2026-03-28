@@ -925,6 +925,100 @@ verify_gateway() {
   guest_run_openclaw "" "" gateway status --deep --require-rpc
 }
 
+restart_gateway() {
+  local runner_name log_name done_name done_status launcher_state
+  local poll_rc state_rc log_rc start_seconds poll_deadline startup_checked
+  runner_name="openclaw-gateway-restart-$RANDOM-$RANDOM.ps1"
+  log_name="openclaw-gateway-restart-$RANDOM-$RANDOM.log"
+  done_name="openclaw-gateway-restart-$RANDOM-$RANDOM.done"
+  start_seconds="$SECONDS"
+  poll_deadline=$((SECONDS + TIMEOUT_GATEWAY_S + 60))
+  startup_checked=0
+
+  guest_powershell "$(cat <<EOF
+\$runner = Join-Path \$env:TEMP '$runner_name'
+\$log = Join-Path \$env:TEMP '$log_name'
+\$done = Join-Path \$env:TEMP '$done_name'
+Remove-Item \$runner, \$log, \$done -Force -ErrorAction SilentlyContinue
+@'
+\$ErrorActionPreference = 'Stop'
+\$PSNativeCommandUseErrorActionPreference = \$false
+\$log = Join-Path \$env:TEMP '$log_name'
+\$done = Join-Path \$env:TEMP '$done_name'
+try {
+  \$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
+  & \$openclaw gateway restart *>&1 | Tee-Object -FilePath \$log -Append | Out-Null
+  Set-Content -Path \$done -Value ([string]\$LASTEXITCODE)
+} catch {
+  if (Test-Path \$log) {
+    Add-Content -Path \$log -Value (\$_ | Out-String)
+  } else {
+    (\$_ | Out-String) | Set-Content -Path \$log
+  }
+  Set-Content -Path \$done -Value '1'
+}
+'@ | Set-Content -Path \$runner
+Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', \$runner) -WindowStyle Hidden | Out-Null
+EOF
+)"
+
+  while :; do
+    set +e
+    done_status="$(
+      guest_powershell_poll 20 "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
+    )"
+    poll_rc=$?
+    set -e
+    done_status="${done_status//$'\r'/}"
+    if [[ $poll_rc -ne 0 ]]; then
+      warn "windows gateway restart helper poll failed; retrying"
+      if (( SECONDS >= poll_deadline )); then
+        warn "windows gateway restart helper timed out while polling done file"
+        return 1
+      fi
+      sleep 2
+      continue
+    fi
+    if [[ -n "$done_status" ]]; then
+      set +e
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      log_rc=$?
+      set -e
+      if [[ $log_rc -ne 0 ]]; then
+        warn "windows gateway restart helper log drain failed after completion"
+      fi
+      [[ "$done_status" == "0" ]]
+      return $?
+    fi
+    if [[ "$startup_checked" -eq 0 && $((SECONDS - start_seconds)) -ge 20 ]]; then
+      set +e
+      launcher_state="$(
+        guest_powershell_poll 20 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; 'runner=' + (Test-Path \$runner) + ' log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done)"
+      )"
+      state_rc=$?
+      set -e
+      launcher_state="${launcher_state//$'\r'/}"
+      startup_checked=1
+      if [[ $state_rc -eq 0 && "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
+        warn "windows gateway restart helper failed to materialize guest files"
+        return 1
+      fi
+    fi
+    if (( SECONDS >= poll_deadline )); then
+      set +e
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      log_rc=$?
+      set -e
+      if [[ $log_rc -ne 0 ]]; then
+        warn "windows gateway restart helper log drain failed after timeout"
+      fi
+      warn "windows gateway restart helper timed out waiting for done file"
+      return 1
+    fi
+    sleep 2
+  done
+}
+
 show_gateway_status_compat() {
   if guest_run_openclaw "" "" gateway status --help | grep -Fq -- "--require-rpc"; then
     guest_run_openclaw "" "" gateway status --deep --require-rpc
@@ -934,7 +1028,8 @@ show_gateway_status_compat() {
 }
 
 verify_turn() {
-  guest_run_openclaw "" "" agent --agent main --message "Reply with exact ASCII text OK only." --json
+  guest_run_openclaw "OPENAI_API_KEY" "$OPENAI_API_KEY_VALUE" \
+    agent --agent main --message "Reply with exact ASCII text OK only." --json
 }
 
 capture_latest_ref_failure() {
@@ -990,6 +1085,7 @@ run_upgrade_lane() {
   phase_run "upgrade.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz" || return $?
   UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
   phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
+  phase_run "upgrade.gateway-restart" "$TIMEOUT_GATEWAY_S" restart_gateway || return $?
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard || return $?
   phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway || return $?
   UPGRADE_GATEWAY_STATUS="pass"
