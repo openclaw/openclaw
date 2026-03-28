@@ -6,11 +6,10 @@ import {
   resolvePluginSnapshotCacheTtlMs,
   shouldUsePluginSnapshotCache,
 } from "./cache-controls.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { getCompatibleActivePluginRegistry, loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
-import { getActivePluginRegistry } from "./runtime.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 import {
   resolveBundledWebSearchResolutionConfig,
@@ -94,6 +93,53 @@ function resolveWebSearchCandidatePluginIds(params: {
   return ids.length > 0 ? ids : undefined;
 }
 
+function resolveWebSearchLoadOptions(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  bundledAllowlistCompat?: boolean;
+  onlyPluginIds?: readonly string[];
+  activate?: boolean;
+  cache?: boolean;
+}) {
+  const env = params.env ?? process.env;
+  const { config } = resolveBundledWebSearchResolutionConfig({
+    ...params,
+    env,
+  });
+  const onlyPluginIds = resolveWebSearchCandidatePluginIds({
+    config,
+    workspaceDir: params.workspaceDir,
+    env,
+    onlyPluginIds: params.onlyPluginIds,
+  });
+  return {
+    env,
+    config,
+    workspaceDir: params.workspaceDir,
+    cache: params.cache ?? false,
+    activate: params.activate ?? false,
+    ...(onlyPluginIds ? { onlyPluginIds } : {}),
+    logger: createPluginLoaderLogger(log),
+  } satisfies PluginLoadOptions;
+}
+
+function mapRegistryWebSearchProviders(params: {
+  registry: ReturnType<typeof loadOpenClawPlugins>;
+  onlyPluginIds?: readonly string[];
+}): PluginWebSearchProviderEntry[] {
+  const onlyPluginIdSet =
+    params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
+  return sortWebSearchProviders(
+    params.registry.webSearchProviders
+      .filter((entry) => !onlyPluginIdSet || onlyPluginIdSet.has(entry.pluginId))
+      .map((entry) => ({
+        ...entry.provider,
+        pluginId: entry.pluginId,
+      })),
+  );
+}
+
 export function resolvePluginWebSearchProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -122,32 +168,10 @@ export function resolvePluginWebSearchProviders(params: {
       return cached.providers;
     }
   }
-  const { config } = resolveBundledWebSearchResolutionConfig({
-    ...params,
-    env,
+  const loadOptions = resolveWebSearchLoadOptions(params);
+  const resolved = mapRegistryWebSearchProviders({
+    registry: loadOpenClawPlugins(loadOptions),
   });
-  const onlyPluginIds = resolveWebSearchCandidatePluginIds({
-    config,
-    workspaceDir: params.workspaceDir,
-    env,
-    onlyPluginIds: params.onlyPluginIds,
-  });
-  const registry = loadOpenClawPlugins({
-    config,
-    workspaceDir: params.workspaceDir,
-    env,
-    cache: params.cache ?? false,
-    activate: params.activate ?? false,
-    ...(onlyPluginIds ? { onlyPluginIds } : {}),
-    logger: createPluginLoaderLogger(log),
-  });
-
-  const resolved = sortWebSearchProviders(
-    registry.webSearchProviders.map((entry) => ({
-      ...entry.provider,
-      pluginId: entry.pluginId,
-    })),
-  );
   if (cacheOwnerConfig && shouldMemoizeSnapshot) {
     const ttlMs = resolvePluginSnapshotCacheTtlMs(env);
     let configCache = webSearchProviderSnapshotCache.get(cacheOwnerConfig);
@@ -178,18 +202,15 @@ export function resolveRuntimeWebSearchProviders(params: {
   bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
 }): PluginWebSearchProviderEntry[] {
-  const runtimeProviders = getActivePluginRegistry()?.webSearchProviders ?? [];
-  const onlyPluginIdSet =
-    params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
-  if (runtimeProviders.length > 0) {
-    return sortWebSearchProviders(
-      runtimeProviders
-        .filter((entry) => !onlyPluginIdSet || onlyPluginIdSet.has(entry.pluginId))
-        .map((entry) => ({
-          ...entry.provider,
-          pluginId: entry.pluginId,
-        })),
-    );
+  const runtimeRegistry =
+    params.config === undefined
+      ? getCompatibleActivePluginRegistry()
+      : getCompatibleActivePluginRegistry(resolveWebSearchLoadOptions(params));
+  if (runtimeRegistry) {
+    return mapRegistryWebSearchProviders({
+      registry: runtimeRegistry,
+      onlyPluginIds: params.onlyPluginIds,
+    });
   }
   return resolvePluginWebSearchProviders(params);
 }
