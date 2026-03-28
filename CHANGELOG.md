@@ -104,6 +104,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/diffs: load bundled Pierre themes without JSON module imports so diff rendering keeps working on newer Node builds. (#45869) thanks @NickHood1984.
 - Plugins/uninstall: remove owned `channels.<id>` config when uninstalling channel plugins, and keep the uninstall preview aligned with explicit channel ownership so built-in channels and shared keys stay intact. (#35915) Thanks @wbxl2000.
 - Plugins/Matrix: prefer explicit DM signals when choosing outbound direct rooms and routing unmapped verification summaries, so strict 2-person fallback rooms do not outrank the real DM. (#56076) thanks @gumadeiras
+- Microsoft Teams/proactive DMs: prefer the freshest personal conversation reference for `user:<aadObjectId>` sends when multiple stored references exist, so replies stop targeting stale DM threads. (#54702) Thanks @gumclaw.
 
 ## 2026.3.24
 
