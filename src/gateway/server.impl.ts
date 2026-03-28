@@ -747,6 +747,12 @@ export async function startGatewayServer(
   let skillsChangeUnsub = () => {};
   let channelHealthMonitor: ReturnType<typeof startChannelHealthMonitor> | null = null;
   let stopModelPricingRefresh = () => {};
+  let deliveryRecoveryTimerStopped = false;
+  let deliveryRecoveryTimer: { stop: () => void } | null = {
+    stop() {
+      deliveryRecoveryTimerStopped = true;
+    },
+  };
   let configReloader: { stop: () => Promise<void> } = { stop: async () => {} };
   const closeOnStartupFailure = async () => {
     if (diagnosticsEnabled) {
@@ -760,6 +766,7 @@ export async function startGatewayServer(
     authRateLimiter?.dispose();
     browserAuthRateLimiter.dispose();
     stopModelPricingRefresh();
+    deliveryRecoveryTimer?.stop();
     channelHealthMonitor?.stop();
     clearSecretsRuntimeSnapshot();
     await createGatewayCloseHandler({
@@ -1112,12 +1119,6 @@ export async function startGatewayServer(
     // Periodic delivery queue recovery: retry pending outbound messages when
     // their target channel is connected.  Replaces the previous startup-only
     // recovery which raced with channel connection.
-    let deliveryRecoveryTimerStopped = false;
-    let deliveryRecoveryTimer: { stop: () => void } | null = {
-      stop() {
-        deliveryRecoveryTimerStopped = true;
-      },
-    };
     if (!minimalTestGateway) {
       void (async () => {
         const { startDeliveryRecoveryTimer } = await import("../infra/outbound/delivery-queue.js");
