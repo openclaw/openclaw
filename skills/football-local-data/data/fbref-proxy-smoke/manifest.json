@@ -1,0 +1,11 @@
+{
+  "fetchedAt": "2026-03-28T10:45:43Z",
+  "source": "fbref (via soccerdata)",
+  "notesUrl": "https://fbref.com/",
+  "leagues": ["Big 5 European Leagues Combined"],
+  "seasons": ["2425", "2526"],
+  "depth": "core",
+  "manifestStatus": "in_progress",
+  "files": [],
+  "proxyEnabled": true
+}

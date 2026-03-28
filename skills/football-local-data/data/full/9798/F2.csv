@@ -1,0 +1,553 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,,,,,,,,,,,,,,,,,,,,,
+F2,02/08/97,Beauvais,Nimes,5,3,H,,,,,,,,,,,,,,,,,,,,,
+F2,02/08/97,Caen,Amiens,1,3,A,,,,,,,,,,,,,,,,,,,,,
+F2,02/08/97,Laval,Gueugnon,0,0,D,,,,,,,,,,,,,,,,,,,,,
+F2,02/08/97,Louhans-Cuis.,Le Mans,1,0,H,,,,,,,,,,,,,,,,,,,,,
+F2,02/08/97,Nice,Red Star 93,1,1,D,,,,,,,,,,,,,,,,,,,,,
+F2,02/08/97,Niort,Valence,1,1,D,,,,,,,,,,,,,,,,,,,,,
+F2,02/08/97,Sochaux,Martigues,4,1,H,,,,,,,,,,,,,,,,,,,,,
+F2,02/08/97,St Etienne,Lille,2,2,D,,,,,,,,,,,,,,,,,,,,,
+F2,02/08/97,Toulon,Lorient,0,1,A,,,,,,,,,,,,,,,,,,,,,
+F2,02/08/97,Troyes,Nancy,4,2,H,,,,,,,,,,,,,,,,,,,,,
+F2,02/08/97,Wasquehal,Mulhouse,2,1,H,,,,,,,,,,,,,,,,,,,,,
+F2,09/08/97,Amiens,Laval,2,0,H,,,,,,,,,,,,,,,,,,,,,
+F2,09/08/97,Gueugnon,Niort,0,0,D,,,,,,,,,,,,,,,,,,,,,
+F2,09/08/97,Le Mans,Beauvais,1,1,D,,,,,,,,,,,,,,,,,,,,,
+F2,09/08/97,Lille,Martigues,7,3,H,,,,,,,,,,,,,,,,,,,,,
+F2,09/08/97,Mulhouse,Caen,4,2,H
+F2,09/08/97,Nancy,Wasquehal,2,1,H
+F2,09/08/97,Nimes,St Etienne,3,0,H
+F2,09/08/97,Red Star 93,Louhans-Cuis.,1,0,H
+F2,09/08/97,Troyes,Toulon,1,0,H
+F2,09/08/97,Valence,Sochaux,1,2,A
+F2,11/08/97,Lorient,Nice,1,1,D
+F2,15/08/97,Toulon,Gueugnon,1,3,A
+F2,16/08/97,Beauvais,Red Star 93,2,1,H
+F2,16/08/97,Caen,Nancy,2,2,D
+F2,16/08/97,Laval,Mulhouse,3,0,H
+F2,16/08/97,Louhans-Cuis.,Lorient,1,3,A
+F2,16/08/97,Martigues,Nimes,0,0,D
+F2,16/08/97,Nice,Valence,0,0,D
+F2,16/08/97,Niort,Amiens,0,0,D
+F2,16/08/97,Sochaux,Lille,0,0,D
+F2,16/08/97,St Etienne,Le Mans,1,2,A
+F2,16/08/97,Wasquehal,Troyes,0,4,A
+F2,20/08/97,Amiens,Louhans-Cuis.,1,1,D
+F2,20/08/97,Gueugnon,Nice,1,2,A
+F2,20/08/97,Le Mans,Martigues,0,0,D
+F2,20/08/97,Lorient,Sochaux,2,1,H
+F2,20/08/97,Mulhouse,Niort,3,0,H
+F2,20/08/97,Nancy,Laval,2,0,H
+F2,20/08/97,Nimes,Lille,0,0,D
+F2,20/08/97,Red Star 93,St Etienne,1,0,H
+F2,20/08/97,Troyes,Caen,2,1,H
+F2,20/08/97,Valence,Toulon,2,1,H
+F2,20/08/97,Wasquehal,Beauvais,3,2,H
+F2,23/08/97,Beauvais,Valence,1,2,A
+F2,23/08/97,Caen,Wasquehal,6,0,H
+F2,23/08/97,Laval,Troyes,2,1,H
+F2,23/08/97,Lille,Le Mans,2,0,H
+F2,23/08/97,Louhans-Cuis.,Gueugnon,2,1,H
+F2,23/08/97,Martigues,Red Star 93,2,0,H
+F2,23/08/97,Nice,Amiens,1,1,D
+F2,23/08/97,Niort,Nancy,2,1,H
+F2,23/08/97,Sochaux,Nimes,1,0,H
+F2,23/08/97,St Etienne,Lorient,0,0,D
+F2,23/08/97,Toulon,Mulhouse,2,1,H
+F2,29/08/97,Amiens,St Etienne,0,0,D
+F2,30/08/97,Caen,Sochaux,2,1,H
+F2,30/08/97,Gueugnon,Beauvais,1,1,D
+F2,30/08/97,Le Mans,Nimes,1,2,A
+F2,30/08/97,Lorient,Martigues,5,1,H
+F2,30/08/97,Mulhouse,Nice,1,1,D
+F2,30/08/97,Nancy,Toulon,3,0,H
+F2,30/08/97,Red Star 93,Lille,1,1,D
+F2,30/08/97,Troyes,Niort,1,0,H
+F2,30/08/97,Valence,Louhans-Cuis.,2,1,H
+F2,30/08/97,Wasquehal,Laval,1,2,A
+F2,03/09/97,Beauvais,Lorient,1,1,D
+F2,03/09/97,Laval,Caen,0,2,A
+F2,03/09/97,Lille,Gueugnon,2,0,H
+F2,03/09/97,Louhans-Cuis.,Mulhouse,0,0,D
+F2,03/09/97,Martigues,Valence,2,0,H
+F2,03/09/97,Nice,Nancy,1,1,D
+F2,03/09/97,Nimes,Red Star 93,2,2,D
+F2,03/09/97,Niort,Wasquehal,3,1,H
+F2,03/09/97,Sochaux,Le Mans,0,2,A
+F2,03/09/97,St Etienne,Troyes,1,1,D
+F2,03/09/97,Toulon,Amiens,1,1,D
+F2,06/09/97,Amiens,Nimes,2,0,H
+F2,06/09/97,Caen,Niort,0,0,D
+F2,06/09/97,Gueugnon,Martigues,3,0,H
+F2,06/09/97,Laval,Sochaux,0,1,A
+F2,06/09/97,Lorient,Lille,2,0,H
+F2,06/09/97,Mulhouse,Beauvais,0,0,D
+F2,06/09/97,Nancy,Louhans-Cuis.,3,1,H
+F2,06/09/97,Red Star 93,Le Mans,2,1,H
+F2,06/09/97,Troyes,Nice,1,1,D
+F2,06/09/97,Valence,St Etienne,1,1,D
+F2,06/09/97,Wasquehal,Toulon,1,1,D
+F2,13/09/97,Beauvais,Nancy,0,0,D
+F2,13/09/97,Le Mans,Lorient,2,2,D
+F2,13/09/97,Lille,Mulhouse,1,0,H
+F2,13/09/97,Louhans-Cuis.,Troyes,1,1,D
+F2,13/09/97,Martigues,Amiens,3,2,H
+F2,13/09/97,Nice,Wasquehal,1,0,H
+F2,13/09/97,Nimes,Valence,1,2,A
+F2,13/09/97,Niort,Laval,1,2,A
+F2,13/09/97,Sochaux,Red Star 93,1,1,D
+F2,13/09/97,St Etienne,Gueugnon,0,1,A
+F2,13/09/97,Toulon,Caen,2,1,H
+F2,20/09/97,Amiens,Lille,0,0,D
+F2,20/09/97,Gueugnon,Nimes,1,0,H
+F2,20/09/97,Laval,Toulon,1,1,D
+F2,20/09/97,Lorient,Red Star 93,5,2,H
+F2,20/09/97,Mulhouse,Martigues,4,1,H
+F2,20/09/97,Nancy,St Etienne,2,0,H
+F2,20/09/97,Niort,Sochaux,0,0,D
+F2,20/09/97,Troyes,Beauvais,0,0,D
+F2,20/09/97,Valence,Le Mans,1,0,H
+F2,20/09/97,Wasquehal,Louhans-Cuis.,2,1,H
+F2,21/09/97,Caen,Nice,0,0,D
+F2,24/09/97,Beauvais,Amiens,1,0,H
+F2,24/09/97,Le Mans,Gueugnon,2,3,A
+F2,24/09/97,Lille,Nancy,2,3,A
+F2,24/09/97,Louhans-Cuis.,Caen,0,2,A
+F2,24/09/97,Martigues,Troyes,1,4,A
+F2,24/09/97,Nimes,Lorient,1,0,H
+F2,24/09/97,Red Star 93,Valence,1,1,D
+F2,24/09/97,Sochaux,Wasquehal,2,1,H
+F2,24/09/97,St Etienne,Mulhouse,2,2,D
+F2,24/09/97,Toulon,Niort,1,1,D
+F2,27/09/97,Amiens,Le Mans,2,0,H
+F2,27/09/97,Caen,Beauvais,0,1,A
+F2,27/09/97,Gueugnon,Red Star 93,4,0,H
+F2,27/09/97,Laval,Louhans-Cuis.,3,0,H
+F2,27/09/97,Mulhouse,Nimes,3,2,H
+F2,27/09/97,Niort,Nice,4,2,H
+F2,27/09/97,Toulon,Sochaux,0,0,D
+F2,27/09/97,Troyes,Lille,1,1,D
+F2,27/09/97,Valence,Lorient,3,2,H
+F2,27/09/97,Wasquehal,St Etienne,2,1,H
+F2,28/09/97,Nancy,Martigues,0,0,D
+F2,03/10/97,Le Mans,Mulhouse,0,1,A
+F2,04/10/97,Beauvais,Laval,1,1,D
+F2,04/10/97,Lille,Valence,1,1,D
+F2,04/10/97,Lorient,Gueugnon,3,0,H
+F2,04/10/97,Louhans-Cuis.,Niort,1,0,H
+F2,04/10/97,Martigues,Wasquehal,1,3,A
+F2,04/10/97,Nimes,Nancy,0,3,A
+F2,04/10/97,Red Star 93,Amiens,2,0,H
+F2,04/10/97,Sochaux,Troyes,4,0,H
+F2,04/10/97,St Etienne,Caen,3,0,H
+F2,05/10/97,Nice,Toulon,1,1,D
+F2,08/10/97,Amiens,Lorient,3,0,H
+F2,08/10/97,Caen,Martigues,5,0,H
+F2,08/10/97,Gueugnon,Valence,1,0,H
+F2,08/10/97,Laval,St Etienne,4,1,H
+F2,08/10/97,Mulhouse,Red Star 93,2,1,H
+F2,08/10/97,Nice,Nimes,3,0,H
+F2,08/10/97,Niort,Beauvais,1,1,D
+F2,08/10/97,Toulon,Louhans-Cuis.,2,0,H
+F2,08/10/97,Troyes,Le Mans,0,0,D
+F2,08/10/97,Wasquehal,Lille,1,1,D
+F2,09/10/97,Nancy,Sochaux,2,0,H
+F2,15/10/97,Beauvais,Toulon,3,2,H
+F2,15/10/97,Le Mans,Wasquehal,1,0,H
+F2,15/10/97,Lille,Caen,3,0,H
+F2,15/10/97,Lorient,Mulhouse,1,1,D
+F2,15/10/97,Louhans-Cuis.,Nice,0,1,A
+F2,15/10/97,Martigues,Laval,3,2,H
+F2,15/10/97,Nimes,Troyes,1,1,D
+F2,15/10/97,Red Star 93,Nancy,0,1,A
+F2,15/10/97,Sochaux,Gueugnon,2,0,H
+F2,15/10/97,Valence,Amiens,3,0,H
+F2,18/10/97,Amiens,Gueugnon,2,1,H
+F2,18/10/97,Caen,Le Mans,0,0,D
+F2,18/10/97,Laval,Lille,1,2,A
+F2,18/10/97,Louhans-Cuis.,Sochaux,0,1,A
+F2,18/10/97,Mulhouse,Valence,1,1,D
+F2,18/10/97,Nancy,Lorient,2,0,H
+F2,18/10/97,Nice,Beauvais,2,0,H
+F2,18/10/97,Niort,Martigues,0,0,D
+F2,18/10/97,Toulon,St Etienne,0,2,A
+F2,18/10/97,Troyes,Red Star 93,2,0,H
+F2,18/10/97,Wasquehal,Nimes,0,1,A
+F2,24/10/97,Lorient,Troyes,3,0,H
+F2,25/10/97,Beauvais,Louhans-Cuis.,1,0,H
+F2,25/10/97,Gueugnon,Mulhouse,1,0,H
+F2,25/10/97,Le Mans,Laval,0,2,A
+F2,25/10/97,Lille,Niort,3,0,H
+F2,25/10/97,Martigues,Toulon,2,1,H
+F2,25/10/97,Nimes,Caen,3,1,H
+F2,25/10/97,Red Star 93,Wasquehal,1,1,D
+F2,25/10/97,Sochaux,Amiens,3,1,H
+F2,25/10/97,Valence,Nancy,1,1,D
+F2,26/10/97,St Etienne,Nice,3,2,H
+F2,31/10/97,Beauvais,Sochaux,1,1,D
+F2,31/10/97,Caen,Red Star 93,1,1,D
+F2,31/10/97,Laval,Nimes,2,1,H
+F2,31/10/97,Louhans-Cuis.,St Etienne,0,0,D
+F2,31/10/97,Mulhouse,Amiens,4,0,H
+F2,31/10/97,Nancy,Gueugnon,3,0,H
+F2,31/10/97,Nice,Martigues,1,1,D
+F2,31/10/97,Niort,Le Mans,3,0,H
+F2,31/10/97,Toulon,Lille,1,0,H
+F2,31/10/97,Troyes,Valence,2,2,D
+F2,31/10/97,Wasquehal,Lorient,1,2,A
+F2,04/11/97,St Etienne,Niort,4,2,H
+F2,07/11/97,Red Star 93,Laval,1,0,H
+F2,08/11/97,Amiens,Nancy,1,1,D
+F2,08/11/97,Gueugnon,Troyes,0,1,A
+F2,08/11/97,Le Mans,Toulon,5,0,H
+F2,08/11/97,Lorient,Caen,3,0,H
+F2,08/11/97,Martigues,Louhans-Cuis.,3,1,H
+F2,08/11/97,Nimes,Niort,1,1,D
+F2,08/11/97,Sochaux,Mulhouse,3,0,H
+F2,08/11/97,St Etienne,Beauvais,1,1,D
+F2,08/11/97,Valence,Wasquehal,2,1,H
+F2,09/11/97,Lille,Nice,2,0,H
+F2,12/11/97,Nice,Laval,1,0,H
+F2,14/11/97,Beauvais,Martigues,0,0,D
+F2,14/11/97,Caen,Valence,1,1,D
+F2,14/11/97,Louhans-Cuis.,Lille,2,2,D
+F2,14/11/97,Nancy,Mulhouse,2,1,H
+F2,14/11/97,Niort,Red Star 93,2,0,H
+F2,14/11/97,Toulon,Nimes,0,1,A
+F2,14/11/97,Troyes,Amiens,2,1,H
+F2,14/11/97,Wasquehal,Gueugnon,1,0,H
+F2,15/11/97,Laval,Lorient,0,1,A
+F2,15/11/97,Nice,Le Mans,0,2,A
+F2,15/11/97,St Etienne,Sochaux,3,2,H
+F2,18/11/97,Amiens,Wasquehal,2,0,H
+F2,18/11/97,Gueugnon,Caen,2,1,H
+F2,18/11/97,Le Mans,Nancy,1,0,H
+F2,18/11/97,Lille,Beauvais,3,0,H
+F2,18/11/97,Lorient,Niort,2,0,H
+F2,18/11/97,Martigues,St Etienne,1,0,H
+F2,18/11/97,Mulhouse,Troyes,0,0,D
+F2,18/11/97,Nimes,Louhans-Cuis.,0,0,D
+F2,18/11/97,Red Star 93,Toulon,3,1,H
+F2,18/11/97,Sochaux,Nice,1,1,D
+F2,18/11/97,Valence,Laval,2,0,H
+F2,22/11/97,Beauvais,Le Mans,1,2,A
+F2,22/11/97,Caen,Mulhouse,2,1,H
+F2,22/11/97,Laval,Amiens,3,0,H
+F2,22/11/97,Louhans-Cuis.,Red Star 93,2,0,H
+F2,22/11/97,Martigues,Lille,1,1,D
+F2,22/11/97,Nice,Lorient,1,1,D
+F2,22/11/97,Niort,Gueugnon,1,0,H
+F2,22/11/97,Sochaux,Valence,1,0,H
+F2,22/11/97,St Etienne,Nimes,1,1,D
+F2,22/11/97,Toulon,Troyes,2,1,H
+F2,22/11/97,Wasquehal,Nancy,3,1,H
+F2,02/12/97,Lille,Sochaux,0,0,D
+F2,03/12/97,Amiens,Niort,1,0,H
+F2,03/12/97,Gueugnon,Toulon,1,0,H
+F2,03/12/97,Le Mans,St Etienne,3,0,H
+F2,03/12/97,Lorient,Louhans-Cuis.,2,1,H
+F2,03/12/97,Nimes,Martigues,0,2,A
+F2,03/12/97,Red Star 93,Beauvais,1,1,D
+F2,03/12/97,Valence,Nice,1,1,D
+F2,06/12/97,Beauvais,Wasquehal,0,0,D
+F2,06/12/97,Caen,Troyes,2,0,H
+F2,06/12/97,Laval,Nancy,0,0,D
+F2,06/12/97,Lille,Nimes,2,1,H
+F2,06/12/97,Louhans-Cuis.,Amiens,0,1,A
+F2,06/12/97,Martigues,Le Mans,0,0,D
+F2,06/12/97,Nice,Gueugnon,2,0,H
+F2,06/12/97,Niort,Mulhouse,1,0,H
+F2,06/12/97,Sochaux,Lorient,0,1,A
+F2,06/12/97,St Etienne,Red Star 93,1,0,H
+F2,06/12/97,Toulon,Valence,0,0,D
+F2,09/12/97,Mulhouse,Laval,0,1,A
+F2,10/12/97,Nancy,Caen,3,0,H
+F2,10/12/97,Troyes,Wasquehal,1,0,H
+F2,13/12/97,Amiens,Nice,2,2,D
+F2,13/12/97,Gueugnon,Louhans-Cuis.,1,0,H
+F2,13/12/97,Le Mans,Lille,1,1,D
+F2,13/12/97,Lorient,St Etienne,4,0,H
+F2,13/12/97,Mulhouse,Toulon,4,0,H
+F2,13/12/97,Nancy,Niort,1,1,D
+F2,13/12/97,Nimes,Sochaux,2,1,H
+F2,13/12/97,Red Star 93,Martigues,2,1,H
+F2,13/12/97,Troyes,Laval,0,1,A
+F2,13/12/97,Valence,Beauvais,1,3,A
+F2,13/12/97,Wasquehal,Caen,5,2,H
+F2,09/01/98,Martigues,Lorient,0,1,A
+F2,10/01/98,Beauvais,Gueugnon,3,2,H
+F2,10/01/98,Laval,Wasquehal,2,2,D
+F2,10/01/98,Lille,Red Star 93,4,1,H
+F2,10/01/98,Louhans-Cuis.,Valence,2,0,H
+F2,10/01/98,Nice,Mulhouse,0,0,D
+F2,10/01/98,Nimes,Le Mans,1,1,D
+F2,10/01/98,Niort,Troyes,2,0,H
+F2,10/01/98,Sochaux,Caen,2,0,H
+F2,10/01/98,St Etienne,Amiens,2,1,H
+F2,10/01/98,Toulon,Nancy,0,0,D
+F2,21/01/98,Amiens,Toulon,1,2,A
+F2,21/01/98,Caen,Laval,2,0,H
+F2,21/01/98,Gueugnon,Lille,4,0,H
+F2,21/01/98,Le Mans,Sochaux,0,0,D
+F2,21/01/98,Lorient,Beauvais,2,0,H
+F2,21/01/98,Mulhouse,Louhans-Cuis.,3,3,D
+F2,21/01/98,Nancy,Nice,2,1,H
+F2,21/01/98,Red Star 93,Nimes,2,3,A
+F2,21/01/98,Troyes,St Etienne,1,2,A
+F2,21/01/98,Valence,Martigues,0,0,D
+F2,21/01/98,Wasquehal,Niort,2,1,H
+F2,24/01/98,Beauvais,Mulhouse,1,1,D
+F2,24/01/98,Le Mans,Red Star 93,6,3,H
+F2,24/01/98,Lille,Lorient,1,0,H
+F2,24/01/98,Louhans-Cuis.,Nancy,1,1,D
+F2,24/01/98,Martigues,Gueugnon,2,0,H
+F2,24/01/98,Nice,Troyes,0,0,D
+F2,24/01/98,Nimes,Amiens,0,0,D
+F2,24/01/98,Niort,Caen,0,0,D
+F2,24/01/98,Sochaux,Laval,1,1,D
+F2,24/01/98,St Etienne,Valence,0,0,D
+F2,24/01/98,Toulon,Wasquehal,1,0,H
+F2,04/02/98,Amiens,Martigues,2,1,H
+F2,04/02/98,Caen,Toulon,1,1,D
+F2,04/02/98,Gueugnon,St Etienne,1,1,D
+F2,04/02/98,Laval,Niort,0,0,D
+F2,04/02/98,Lorient,Le Mans,1,1,D
+F2,04/02/98,Mulhouse,Lille,1,3,A
+F2,04/02/98,Nancy,Beauvais,0,1,A
+F2,04/02/98,Red Star 93,Sochaux,2,0,H
+F2,04/02/98,Troyes,Louhans-Cuis.,0,1,A
+F2,04/02/98,Valence,Nimes,0,1,A
+F2,04/02/98,Wasquehal,Nice,2,1,H
+F2,10/02/98,St Etienne,Nancy,0,2,A
+F2,11/02/98,Beauvais,Troyes,0,1,A
+F2,11/02/98,Le Mans,Valence,1,1,D
+F2,11/02/98,Lille,Amiens,0,1,A
+F2,11/02/98,Louhans-Cuis.,Wasquehal,5,0,H
+F2,11/02/98,Martigues,Mulhouse,1,1,D
+F2,11/02/98,Nice,Caen,0,1,A
+F2,11/02/98,Nimes,Gueugnon,1,0,H
+F2,11/02/98,Red Star 93,Lorient,3,2,H
+F2,11/02/98,Sochaux,Niort,1,1,D
+F2,11/02/98,Toulon,Laval,1,1,D
+F2,14/02/98,Amiens,Beauvais,2,1,H
+F2,14/02/98,Caen,Louhans-Cuis.,5,0,H
+F2,14/02/98,Gueugnon,Le Mans,1,1,D
+F2,14/02/98,Laval,Nice,1,1,D
+F2,14/02/98,Lorient,Nimes,4,0,H
+F2,14/02/98,Mulhouse,St Etienne,1,2,A
+F2,14/02/98,Nancy,Lille,1,1,D
+F2,14/02/98,Niort,Toulon,3,0,H
+F2,14/02/98,Troyes,Martigues,3,0,H
+F2,14/02/98,Valence,Red Star 93,0,0,D
+F2,14/02/98,Wasquehal,Sochaux,1,1,D
+F2,20/02/98,Le Mans,Amiens,4,2,H
+F2,21/02/98,Beauvais,Caen,2,3,A
+F2,21/02/98,Lille,Troyes,0,2,A
+F2,21/02/98,Lorient,Valence,1,1,D
+F2,21/02/98,Louhans-Cuis.,Laval,1,0,H
+F2,21/02/98,Martigues,Nancy,0,0,D
+F2,21/02/98,Nice,Niort,0,2,A
+F2,21/02/98,Nimes,Mulhouse,2,0,H
+F2,21/02/98,Red Star 93,Gueugnon,2,0,H
+F2,21/02/98,Sochaux,Toulon,4,1,H
+F2,21/02/98,St Etienne,Wasquehal,0,0,D
+F2,07/03/98,Amiens,Red Star 93,0,0,D
+F2,07/03/98,Caen,St Etienne,2,0,H
+F2,07/03/98,Gueugnon,Lorient,1,2,A
+F2,07/03/98,Laval,Beauvais,2,0,H
+F2,07/03/98,Mulhouse,Le Mans,1,2,A
+F2,07/03/98,Nancy,Nimes,1,0,H
+F2,07/03/98,Niort,Louhans-Cuis.,1,1,D
+F2,07/03/98,Toulon,Nice,1,0,H
+F2,07/03/98,Troyes,Sochaux,0,1,A
+F2,07/03/98,Valence,Lille,3,1,H
+F2,07/03/98,Wasquehal,Martigues,1,0,H
+F2,14/03/98,Beauvais,Niort,1,1,D
+F2,14/03/98,Le Mans,Troyes,1,1,D
+F2,14/03/98,Lille,Wasquehal,1,1,D
+F2,14/03/98,Lorient,Amiens,0,0,D
+F2,14/03/98,Louhans-Cuis.,Toulon,1,0,H
+F2,14/03/98,Martigues,Caen,0,2,A
+F2,14/03/98,Nimes,Nice,0,0,D
+F2,14/03/98,Red Star 93,Mulhouse,2,1,H
+F2,14/03/98,Sochaux,Nancy,0,1,A
+F2,14/03/98,St Etienne,Laval,3,2,H
+F2,14/03/98,Valence,Gueugnon,2,2,D
+F2,24/03/98,Amiens,Valence,1,1,D
+F2,24/03/98,Caen,Lille,0,2,A
+F2,24/03/98,Gueugnon,Sochaux,3,1,H
+F2,24/03/98,Laval,Martigues,1,0,H
+F2,24/03/98,Mulhouse,Lorient,1,0,H
+F2,24/03/98,Nancy,Red Star 93,2,0,H
+F2,24/03/98,Nice,Louhans-Cuis.,2,0,H
+F2,24/03/98,Niort,St Etienne,1,3,A
+F2,24/03/98,Toulon,Beauvais,2,0,H
+F2,24/03/98,Troyes,Nimes,1,1,D
+F2,24/03/98,Wasquehal,Le Mans,1,0,H
+F2,28/03/98,Beauvais,Nice,1,0,H
+F2,28/03/98,Gueugnon,Amiens,0,1,A
+F2,28/03/98,Le Mans,Caen,2,0,H
+F2,28/03/98,Lille,Laval,3,0,H
+F2,28/03/98,Lorient,Nancy,2,3,A
+F2,28/03/98,Martigues,Niort,0,0,D
+F2,28/03/98,Nimes,Wasquehal,2,1,H
+F2,28/03/98,Red Star 93,Troyes,0,0,D
+F2,28/03/98,Sochaux,Louhans-Cuis.,0,1,A
+F2,28/03/98,St Etienne,Toulon,3,1,H
+F2,28/03/98,Valence,Mulhouse,1,0,H
+F2,05/04/98,Nancy,Valence,2,4,A
+F2,07/04/98,Amiens,Sochaux,0,2,A
+F2,07/04/98,Caen,Nimes,3,1,H
+F2,07/04/98,Laval,Le Mans,2,3,A
+F2,07/04/98,Louhans-Cuis.,Beauvais,1,0,H
+F2,07/04/98,Mulhouse,Gueugnon,1,2,A
+F2,07/04/98,Nice,St Etienne,2,0,H
+F2,07/04/98,Niort,Lille,2,0,H
+F2,07/04/98,Toulon,Martigues,1,2,A
+F2,07/04/98,Troyes,Lorient,0,2,A
+F2,07/04/98,Wasquehal,Red Star 93,2,4,A
+F2,18/04/98,Amiens,Mulhouse,1,0,H
+F2,18/04/98,Gueugnon,Nancy,2,2,D
+F2,18/04/98,Le Mans,Niort,1,0,H
+F2,18/04/98,Lille,Toulon,0,1,A
+F2,18/04/98,Lorient,Wasquehal,1,0,H
+F2,18/04/98,Martigues,Nice,0,0,D
+F2,18/04/98,Nimes,Laval,1,1,D
+F2,18/04/98,Red Star 93,Caen,1,0,H
+F2,18/04/98,Sochaux,Beauvais,2,0,H
+F2,18/04/98,St Etienne,Louhans-Cuis.,2,2,D
+F2,18/04/98,Valence,Troyes,0,1,A
+F2,23/04/98,Nice,Lille,2,1,H
+F2,24/04/98,Beauvais,St Etienne,0,0,D
+F2,24/04/98,Caen,Lorient,1,1,D
+F2,24/04/98,Laval,Red Star 93,3,1,H
+F2,24/04/98,Louhans-Cuis.,Martigues,3,0,H
+F2,24/04/98,Mulhouse,Sochaux,2,2,D
+F2,24/04/98,Nancy,Amiens,2,0,H
+F2,24/04/98,Niort,Nimes,1,0,H
+F2,24/04/98,Toulon,Le Mans,6,1,H
+F2,24/04/98,Troyes,Gueugnon,3,0,H
+F2,24/04/98,Wasquehal,Valence,1,1,D
+F2,29/04/98,Amiens,Troyes,0,2,A
+F2,29/04/98,Gueugnon,Wasquehal,2,1,H
+F2,29/04/98,Le Mans,Nice,2,0,H
+F2,29/04/98,Lille,Louhans-Cuis.,3,1,H
+F2,29/04/98,Lorient,Laval,1,1,D
+F2,29/04/98,Martigues,Beauvais,0,0,D
+F2,29/04/98,Mulhouse,Nancy,2,2,D
+F2,29/04/98,Nimes,Toulon,2,0,H
+F2,29/04/98,Red Star 93,Niort,1,1,D
+F2,29/04/98,Sochaux,St Etienne,4,0,H
+F2,29/04/98,Valence,Caen,2,2,D
+F2,05/05/98,Beauvais,Lille,2,1,H
+F2,05/05/98,Caen,Gueugnon,4,0,H
+F2,05/05/98,Laval,Valence,2,2,D
+F2,05/05/98,Louhans-Cuis.,Nimes,2,0,H
+F2,05/05/98,Nancy,Le Mans,1,1,D
+F2,05/05/98,Nice,Sochaux,2,1,H
+F2,05/05/98,Niort,Lorient,0,0,D
+F2,05/05/98,St Etienne,Martigues,1,1,D
+F2,05/05/98,Toulon,Red Star 93,2,3,A
+F2,05/05/98,Troyes,Mulhouse,1,1,D
+F2,05/05/98,Wasquehal,Amiens,2,0,H
+F2,08/05/98,Amiens,Caen,1,1,D
+F2,08/05/98,Gueugnon,Laval,2,1,H
+F2,08/05/98,Le Mans,Louhans-Cuis.,1,0,H
+F2,08/05/98,Lille,St Etienne,2,1,H
+F2,08/05/98,Lorient,Toulon,1,3,A
+F2,08/05/98,Martigues,Sochaux,1,2,A
+F2,08/05/98,Mulhouse,Wasquehal,1,2,A
+F2,08/05/98,Nancy,Troyes,1,1,D
+F2,08/05/98,Nimes,Beauvais,0,0,D
+F2,08/05/98,Red Star 93,Nice,1,0,H
+F2,08/05/98,Valence,Niort,2,2,D
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,

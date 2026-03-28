@@ -1,0 +1,307 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,,,,,,,,,,,,,,,,,,,,,
+P1,23/08/97,Farense,Sp Lisbon,0,0,D,,,,,,,,,,,,,,,,,,,,,
+P1,23/08/97,Guimaraes,Academica,1,0,H,,,,,,,,,,,,,,,,,,,,,
+P1,24/08/97,Belenenses,Sp Braga,2,2,D,,,,,,,,,,,,,,,,,,,,,
+P1,24/08/97,Benfica,Campomaiorense,4,0,H,,,,,,,,,,,,,,,,,,,,,
+P1,24/08/97,Boavista,Setubal,2,1,H,,,,,,,,,,,,,,,,,,,,,
+P1,24/08/97,Desp. Chaves,Rio Ave,0,2,A,,,,,,,,,,,,,,,,,,,,,
+P1,24/08/97,Maritimo,Est Amadora,2,1,H,,,,,,,,,,,,,,,,,,,,,
+P1,24/08/97,Salgueiros,Leca,0,0,D,,,,,,,,,,,,,,,,,,,,,
+P1,25/08/97,Varzim,Porto,0,2,A,,,,,,,,,,,,,,,,,,,,,
+P1,29/08/97,Rio Ave,Guimaraes,1,2,A,,,,,,,,,,,,,,,,,,,,,
+P1,30/08/97,Porto,Belenenses,2,0,H,,,,,,,,,,,,,,,,,,,,,
+P1,31/08/97,Academica,Boavista,2,0,H,,,,,,,,,,,,,,,,,,,,,
+P1,31/08/97,Campomaiorense,Salgueiros,0,0,D,,,,,,,,,,,,,,,,,,,,,
+P1,31/08/97,Est Amadora,Varzim,0,0,D,,,,,,,,,,,,,,,,,,,,,
+P1,31/08/97,Leca,Maritimo,1,1,D,,,,,,,,,,,,,,,,,,,,,
+P1,31/08/97,Setubal,Benfica,1,0,H
+P1,31/08/97,Sp Braga,Farense,2,2,D
+P1,31/08/97,Sp Lisbon,Desp. Chaves,2,0,H
+P1,12/09/97,Desp. Chaves,Sp Braga,1,2,A
+P1,12/09/97,Guimaraes,Sp Lisbon,1,0,H
+P1,13/09/97,Benfica,Academica,1,1,D
+P1,13/09/97,Porto,Est Amadora,4,0,H
+P1,14/09/97,Belenenses,Farense,0,3,A
+P1,14/09/97,Boavista,Rio Ave,1,2,A
+P1,14/09/97,Maritimo,Campomaiorense,2,1,H
+P1,14/09/97,Salgueiros,Setubal,1,1,D
+P1,14/09/97,Varzim,Leca,1,0,H
+P1,20/09/97,Academica,Salgueiros,2,1,H
+P1,20/09/97,Campomaiorense,Varzim,1,1,D
+P1,20/09/97,Farense,Desp. Chaves,1,0,H
+P1,20/09/97,Rio Ave,Benfica,3,1,H
+P1,21/09/97,Est Amadora,Belenenses,1,1,D
+P1,21/09/97,Setubal,Maritimo,1,1,D
+P1,21/09/97,Sp Braga,Guimaraes,3,2,H
+P1,22/09/97,Leca,Porto,2,3,A
+P1,22/09/97,Sp Lisbon,Boavista,1,0,H
+P1,26/09/97,Boavista,Sp Braga,0,0,D
+P1,26/09/97,Guimaraes,Farense,2,0,H
+P1,27/09/97,Benfica,Sp Lisbon,0,0,D
+P1,27/09/97,Porto,Campomaiorense,3,0,H
+P1,28/09/97,Belenenses,Desp. Chaves,0,1,A
+P1,28/09/97,Est Amadora,Leca,2,1,H
+P1,28/09/97,Maritimo,Academica,4,1,H
+P1,28/09/97,Salgueiros,Rio Ave,5,1,H
+P1,28/09/97,Varzim,Setubal,1,0,H
+P1,04/10/97,Sp Braga,Benfica,1,1,D
+P1,05/10/97,Academica,Varzim,1,1,D
+P1,05/10/97,Campomaiorense,Est Amadora,2,0,H
+P1,05/10/97,Desp. Chaves,Guimaraes,1,2,A
+P1,05/10/97,Leca,Belenenses,1,1,D
+P1,05/10/97,Rio Ave,Maritimo,2,0,H
+P1,05/10/97,Sp Lisbon,Salgueiros,2,1,H
+P1,06/10/97,Farense,Boavista,0,0,D
+P1,06/10/97,Setubal,Porto,1,1,D
+P1,17/10/97,Maritimo,Sp Lisbon,0,1,A
+P1,18/10/97,Boavista,Desp. Chaves,2,1,H
+P1,18/10/97,Porto,Academica,2,1,H
+P1,19/10/97,Belenenses,Guimaraes,1,0,H
+P1,19/10/97,Benfica,Farense,3,1,H
+P1,19/10/97,Est Amadora,Setubal,1,0,H
+P1,19/10/97,Leca,Campomaiorense,1,0,H
+P1,19/10/97,Varzim,Rio Ave,1,3,A
+P1,26/10/97,Salgueiros,Sp Braga,1,0,H
+P1,31/10/97,Rio Ave,Porto,0,0,D
+P1,31/10/97,Sp Braga,Maritimo,3,1,H
+P1,01/11/97,Desp. Chaves,Benfica,0,1,A
+P1,01/11/97,Sp Lisbon,Varzim,1,1,D
+P1,02/11/97,Academica,Est Amadora,0,1,A
+P1,02/11/97,Campomaiorense,Belenenses,2,1,H
+P1,02/11/97,Farense,Salgueiros,0,0,D
+P1,02/11/97,Guimaraes,Boavista,1,1,D
+P1,02/11/97,Setubal,Leca,2,1,H
+P1,08/11/97,Maritimo,Farense,1,1,D
+P1,08/11/97,Porto,Sp Lisbon,1,1,D
+P1,09/11/97,Belenenses,Boavista,0,0,D
+P1,09/11/97,Campomaiorense,Setubal,2,1,H
+P1,09/11/97,Est Amadora,Rio Ave,1,2,A
+P1,09/11/97,Leca,Academica,1,0,H
+P1,09/11/97,Salgueiros,Desp. Chaves,2,0,H
+P1,09/11/97,Varzim,Sp Braga,1,0,H
+P1,10/11/97,Benfica,Guimaraes,1,0,H
+P1,21/11/97,Boavista,Benfica,0,0,D
+P1,22/11/97,Sp Braga,Porto,1,2,A
+P1,22/11/97,Sp Lisbon,Est Amadora,2,2,D
+P1,23/11/97,Academica,Campomaiorense,1,1,D
+P1,23/11/97,Desp. Chaves,Maritimo,1,0,H
+P1,23/11/97,Farense,Varzim,1,0,H
+P1,23/11/97,Guimaraes,Salgueiros,3,0,H
+P1,23/11/97,Rio Ave,Leca,2,2,D
+P1,23/11/97,Setubal,Belenenses,0,0,D
+P1,29/11/97,Belenenses,Benfica,1,2,A
+P1,30/11/97,Campomaiorense,Rio Ave,4,1,H
+P1,30/11/97,Est Amadora,Sp Braga,1,0,H
+P1,30/11/97,Maritimo,Guimaraes,0,1,A
+P1,30/11/97,Salgueiros,Boavista,1,1,D
+P1,30/11/97,Setubal,Academica,0,1,A
+P1,30/11/97,Varzim,Desp. Chaves,1,1,D
+P1,01/12/97,Leca,Sp Lisbon,1,0,H
+P1,01/12/97,Porto,Farense,5,2,H
+P1,05/12/97,Desp. Chaves,Porto,2,2,D
+P1,05/12/97,Sp Braga,Leca,3,1,H
+P1,06/12/97,Boavista,Maritimo,0,1,A
+P1,06/12/97,Guimaraes,Varzim,5,0,H
+P1,06/12/97,Sp Lisbon,Campomaiorense,2,0,H
+P1,07/12/97,Academica,Belenenses,0,0,D
+P1,07/12/97,Benfica,Salgueiros,2,2,D
+P1,07/12/97,Farense,Est Amadora,1,1,D
+P1,07/12/97,Rio Ave,Setubal,3,0,H
+P1,12/12/97,Maritimo,Benfica,1,0,H
+P1,13/12/97,Academica,Rio Ave,0,0,D
+P1,13/12/97,Belenenses,Salgueiros,1,2,A
+P1,13/12/97,Campomaiorense,Sp Braga,4,0,H
+P1,13/12/97,Est Amadora,Desp. Chaves,4,1,H
+P1,13/12/97,Leca,Farense,2,1,H
+P1,13/12/97,Porto,Guimaraes,1,0,H
+P1,13/12/97,Varzim,Boavista,0,0,D
+P1,15/12/97,Setubal,Sp Lisbon,2,0,H
+P1,20/12/97,Salgueiros,Maritimo,2,0,H
+P1,20/12/97,Sp Braga,Setubal,2,2,D
+P1,21/12/97,Benfica,Varzim,4,0,H
+P1,21/12/97,Desp. Chaves,Leca,0,1,A
+P1,21/12/97,Farense,Campomaiorense,2,2,D
+P1,21/12/97,Guimaraes,Est Amadora,1,0,H
+P1,21/12/97,Rio Ave,Belenenses,3,0,H
+P1,21/12/97,Sp Lisbon,Academica,1,0,H
+P1,22/12/97,Boavista,Porto,3,4,A
+P1,03/01/98,Academica,Sp Braga,2,2,D
+P1,03/01/98,Porto,Benfica,2,0,H
+P1,04/01/98,Belenenses,Maritimo,0,2,A
+P1,04/01/98,Campomaiorense,Desp. Chaves,2,1,H
+P1,04/01/98,Est Amadora,Boavista,1,2,A
+P1,04/01/98,Leca,Guimaraes,1,0,H
+P1,04/01/98,Setubal,Farense,4,1,H
+P1,04/01/98,Varzim,Salgueiros,0,2,A
+P1,05/01/98,Rio Ave,Sp Lisbon,0,0,D
+P1,09/01/98,Salgueiros,Porto,1,3,A
+P1,10/01/98,Belenenses,Sp Lisbon,0,4,A
+P1,10/01/98,Boavista,Leca,2,0,H
+P1,10/01/98,Sp Braga,Rio Ave,1,0,H
+P1,11/01/98,Benfica,Est Amadora,2,2,D
+P1,11/01/98,Desp. Chaves,Setubal,1,3,A
+P1,11/01/98,Farense,Academica,0,0,D
+P1,11/01/98,Guimaraes,Campomaiorense,2,1,H
+P1,11/01/98,Maritimo,Varzim,2,1,H
+P1,17/01/98,Academica,Desp. Chaves,1,2,A
+P1,18/01/98,Campomaiorense,Boavista,2,2,D
+P1,18/01/98,Est Amadora,Salgueiros,1,0,H
+P1,18/01/98,Leca,Benfica,1,2,A
+P1,18/01/98,Porto,Maritimo,2,1,H
+P1,18/01/98,Rio Ave,Farense,0,3,A
+P1,18/01/98,Setubal,Guimaraes,0,0,D
+P1,18/01/98,Varzim,Belenenses,2,1,H
+P1,19/01/98,Sp Lisbon,Sp Braga,1,1,D
+P1,24/01/98,Campomaiorense,Benfica,1,2,A
+P1,25/01/98,Academica,Guimaraes,2,1,H
+P1,25/01/98,Est Amadora,Maritimo,1,1,D
+P1,25/01/98,Leca,Salgueiros,3,0,H
+P1,25/01/98,Porto,Varzim,4,3,H
+P1,25/01/98,Rio Ave,Desp. Chaves,1,0,H
+P1,25/01/98,Setubal,Boavista,1,2,A
+P1,25/01/98,Sp Braga,Belenenses,1,1,D
+P1,25/01/98,Sp Lisbon,Farense,3,2,H
+P1,30/01/98,Desp. Chaves,Sp Lisbon,3,2,H
+P1,31/01/98,Belenenses,Porto,1,0,H
+P1,31/01/98,Boavista,Academica,6,0,H
+P1,31/01/98,Farense,Sp Braga,1,1,D
+P1,01/02/98,Benfica,Setubal,2,0,H
+P1,01/02/98,Guimaraes,Rio Ave,0,0,D
+P1,01/02/98,Maritimo,Leca,2,0,H
+P1,01/02/98,Salgueiros,Campomaiorense,5,2,H
+P1,01/02/98,Varzim,Est Amadora,2,2,D
+P1,07/02/98,Academica,Benfica,1,2,A
+P1,08/02/98,Campomaiorense,Maritimo,2,1,H
+P1,08/02/98,Farense,Belenenses,3,1,H
+P1,08/02/98,Leca,Varzim,1,0,H
+P1,08/02/98,Rio Ave,Boavista,1,1,D
+P1,08/02/98,Setubal,Salgueiros,1,3,A
+P1,08/02/98,Sp Braga,Desp. Chaves,5,0,H
+P1,08/02/98,Sp Lisbon,Guimaraes,1,1,D
+P1,09/02/98,Est Amadora,Porto,2,1,H
+P1,13/02/98,Boavista,Sp Lisbon,1,0,H
+P1,14/02/98,Guimaraes,Sp Braga,1,0,H
+P1,15/02/98,Belenenses,Est Amadora,0,2,A
+P1,15/02/98,Benfica,Rio Ave,2,1,H
+P1,15/02/98,Desp. Chaves,Farense,2,2,D
+P1,15/02/98,Maritimo,Setubal,1,0,H
+P1,15/02/98,Porto,Leca,3,1,H
+P1,15/02/98,Salgueiros,Academica,0,1,A
+P1,15/02/98,Varzim,Campomaiorense,3,0,H
+P1,20/02/98,Campomaiorense,Porto,2,2,D
+P1,20/02/98,Sp Braga,Boavista,1,2,A
+P1,21/02/98,Academica,Maritimo,0,0,D
+P1,21/02/98,Desp. Chaves,Belenenses,1,0,H
+P1,21/02/98,Farense,Guimaraes,2,0,H
+P1,21/02/98,Leca,Est Amadora,0,4,A
+P1,21/02/98,Rio Ave,Salgueiros,1,1,D
+P1,21/02/98,Setubal,Varzim,1,1,D
+P1,21/02/98,Sp Lisbon,Benfica,1,4,A
+P1,27/02/98,Salgueiros,Sp Lisbon,0,2,A
+P1,28/02/98,Guimaraes,Desp. Chaves,5,1,H
+P1,01/03/98,Belenenses,Leca,0,1,A
+P1,01/03/98,Benfica,Sp Braga,3,0,H
+P1,01/03/98,Boavista,Farense,2,2,D
+P1,01/03/98,Est Amadora,Campomaiorense,2,1,H
+P1,01/03/98,Maritimo,Rio Ave,3,2,H
+P1,01/03/98,Porto,Setubal,1,0,H
+P1,01/03/98,Varzim,Academica,1,1,D
+P1,06/03/98,Academica,Porto,0,1,A
+P1,08/03/98,Campomaiorense,Leca,4,0,H
+P1,08/03/98,Desp. Chaves,Boavista,1,3,A
+P1,08/03/98,Farense,Benfica,1,1,D
+P1,08/03/98,Guimaraes,Belenenses,2,2,D
+P1,08/03/98,Rio Ave,Varzim,0,0,D
+P1,08/03/98,Setubal,Est Amadora,2,1,H
+P1,08/03/98,Sp Braga,Salgueiros,0,2,A
+P1,08/03/98,Sp Lisbon,Maritimo,1,1,D
+P1,13/03/98,Varzim,Sp Lisbon,0,1,A
+P1,14/03/98,Boavista,Guimaraes,0,1,A
+P1,14/03/98,Porto,Rio Ave,2,0,H
+P1,15/03/98,Belenenses,Campomaiorense,0,1,A
+P1,15/03/98,Benfica,Desp. Chaves,3,1,H
+P1,15/03/98,Est Amadora,Academica,1,0,H
+P1,15/03/98,Leca,Setubal,1,3,A
+P1,15/03/98,Maritimo,Sp Braga,1,1,D
+P1,15/03/98,Salgueiros,Farense,4,1,H
+P1,21/03/98,Academica,Leca,1,1,D
+P1,21/03/98,Boavista,Belenenses,4,0,H
+P1,21/03/98,Sp Lisbon,Porto,2,0,H
+P1,22/03/98,Desp. Chaves,Salgueiros,0,0,D
+P1,22/03/98,Farense,Maritimo,0,2,A
+P1,22/03/98,Guimaraes,Benfica,0,1,A
+P1,22/03/98,Rio Ave,Est Amadora,1,0,H
+P1,22/03/98,Setubal,Campomaiorense,2,1,H
+P1,22/03/98,Sp Braga,Varzim,3,1,H
+P1,28/03/98,Benfica,Boavista,1,2,A
+P1,29/03/98,Belenenses,Setubal,1,0,H
+P1,29/03/98,Campomaiorense,Academica,1,2,A
+P1,29/03/98,Est Amadora,Sp Lisbon,2,1,H
+P1,29/03/98,Leca,Rio Ave,2,1,H
+P1,29/03/98,Maritimo,Desp. Chaves,1,0,H
+P1,29/03/98,Porto,Sp Braga,4,0,H
+P1,29/03/98,Salgueiros,Guimaraes,0,0,D
+P1,29/03/98,Varzim,Farense,1,0,H
+P1,03/04/98,Farense,Porto,1,2,A
+P1,04/04/98,Boavista,Salgueiros,3,0,H
+P1,04/04/98,Sp Braga,Est Amadora,1,1,D
+P1,04/04/98,Sp Lisbon,Leca,2,0,H
+P1,05/04/98,Academica,Setubal,2,0,H
+P1,05/04/98,Benfica,Belenenses,2,1,H
+P1,05/04/98,Desp. Chaves,Varzim,2,1,H
+P1,05/04/98,Guimaraes,Maritimo,0,0,D
+P1,05/04/98,Rio Ave,Campomaiorense,1,1,D
+P1,10/04/98,Campomaiorense,Sp Lisbon,3,5,A
+P1,11/04/98,Belenenses,Academica,2,0,H
+P1,11/04/98,Est Amadora,Farense,2,1,H
+P1,11/04/98,Leca,Sp Braga,0,0,D
+P1,11/04/98,Maritimo,Boavista,1,0,H
+P1,11/04/98,Porto,Desp. Chaves,3,1,H
+P1,11/04/98,Salgueiros,Benfica,0,2,A
+P1,11/04/98,Setubal,Rio Ave,1,0,H
+P1,11/04/98,Varzim,Guimaraes,1,2,A
+P1,17/04/98,Sp Lisbon,Setubal,2,1,H
+P1,18/04/98,Boavista,Varzim,2,0,H
+P1,18/04/98,Guimaraes,Porto,0,1,A
+P1,19/04/98,Benfica,Maritimo,3,1,H
+P1,19/04/98,Desp. Chaves,Est Amadora,2,0,H
+P1,19/04/98,Farense,Leca,1,1,D
+P1,19/04/98,Rio Ave,Academica,3,0,H
+P1,19/04/98,Salgueiros,Belenenses,1,1,D
+P1,19/04/98,Sp Braga,Campomaiorense,2,1,H
+P1,24/04/98,Maritimo,Salgueiros,1,4,A
+P1,25/04/98,Varzim,Benfica,0,0,D
+P1,26/04/98,Belenenses,Rio Ave,2,4,A
+P1,26/04/98,Campomaiorense,Farense,5,2,H
+P1,26/04/98,Est Amadora,Guimaraes,0,1,A
+P1,26/04/98,Leca,Desp. Chaves,0,1,A
+P1,26/04/98,Porto,Boavista,3,2,H
+P1,26/04/98,Setubal,Sp Braga,5,1,H
+P1,27/04/98,Academica,Sp Lisbon,1,1,D
+P1,01/05/98,Maritimo,Belenenses,2,0,H
+P1,02/05/98,Benfica,Porto,3,0,H
+P1,03/05/98,Boavista,Est Amadora,4,0,H
+P1,03/05/98,Desp. Chaves,Campomaiorense,1,0,H
+P1,03/05/98,Farense,Setubal,2,0,H
+P1,03/05/98,Guimaraes,Leca,0,0,D
+P1,03/05/98,Salgueiros,Varzim,3,1,H
+P1,03/05/98,Sp Braga,Academica,3,2,H
+P1,03/05/98,Sp Lisbon,Rio Ave,2,2,D
+P1,08/05/98,Sp Lisbon,Belenenses,1,0,H
+P1,10/05/98,Academica,Farense,1,0,H
+P1,10/05/98,Campomaiorense,Guimaraes,2,3,A
+P1,10/05/98,Leca,Boavista,0,3,A
+P1,10/05/98,Porto,Salgueiros,7,2,H
+P1,10/05/98,Rio Ave,Sp Braga,0,4,A
+P1,10/05/98,Setubal,Desp. Chaves,1,2,A
+P1,10/05/98,Varzim,Maritimo,0,4,A
+P1,11/05/98,Est Amadora,Benfica,2,0,H
+P1,17/05/98,Belenenses,Varzim,1,0,H
+P1,17/05/98,Benfica,Leca,7,1,H
+P1,17/05/98,Boavista,Campomaiorense,1,2,A
+P1,17/05/98,Desp. Chaves,Academica,0,0,D
+P1,17/05/98,Farense,Rio Ave,1,0,H
+P1,17/05/98,Guimaraes,Setubal,2,1,H
+P1,17/05/98,Maritimo,Porto,3,2,H
+P1,17/05/98,Salgueiros,Est Amadora,2,1,H
+P1,17/05/98,Sp Braga,Sp Lisbon,2,0,H

@@ -1,0 +1,59 @@
+{
+  "fetchedAt": "2026-03-28T10:43:10Z",
+  "source": "fbref (via soccerdata)",
+  "notesUrl": "https://fbref.com/",
+  "leagues": [
+    "Big 5 European Leagues Combined",
+    "ENG-Premier League",
+    "ESP-La Liga",
+    "FRA-Ligue 1",
+    "GER-Bundesliga",
+    "INT-European Championship",
+    "INT-Women's World Cup",
+    "INT-World Cup",
+    "ITA-Serie A"
+  ],
+  "seasons": [
+    "9394",
+    "9495",
+    "9596",
+    "9697",
+    "9798",
+    "9899",
+    "9900",
+    "0001",
+    "0102",
+    "0203",
+    "0304",
+    "0405",
+    "0506",
+    "0607",
+    "0708",
+    "0809",
+    "0910",
+    "1011",
+    "1112",
+    "1213",
+    "1314",
+    "1415",
+    "1516",
+    "1617",
+    "1718",
+    "1819",
+    "1920",
+    "2021",
+    "2122",
+    "2223",
+    "2324",
+    "2425",
+    "2526"
+  ],
+  "depth": "core",
+  "manifestStatus": "in_progress",
+  "files": [
+    {
+      "name": "schedule.csv",
+      "error": "Could not download https://fbref.com/en/comps/."
+    }
+  ]
+}

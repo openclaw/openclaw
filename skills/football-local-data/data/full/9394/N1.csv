@@ -1,0 +1,553 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,,,,,,,,,,,,,,,,,,,,,
+N1,14/08/93,Go Ahead Eagles,Vitesse,1,4,A,,,,,,,,,,,,,,,,,,,,,
+N1,14/08/93,Heerenveen,Sparta,1,0,H,,,,,,,,,,,,,,,,,,,,,
+N1,14/08/93,NAC Breda,Roda JC,2,3,A,,,,,,,,,,,,,,,,,,,,,
+N1,14/08/93,Willem II,MVV Maastricht,1,0,H,,,,,,,,,,,,,,,,,,,,,
+N1,15/08/93,Ajax,Waalwijk,3,0,H,,,,,,,,,,,,,,,,,,,,,
+N1,15/08/93,Feyenoord,Cambuur,1,0,H,,,,,,,,,,,,,,,,,,,,,
+N1,15/08/93,Groningen,PSV Eindhoven,1,2,A,,,,,,,,,,,,,,,,,,,,,
+N1,15/08/93,Twente,VVV Venlo,3,0,H,,,,,,,,,,,,,,,,,,,,,
+N1,15/08/93,Volendam,Utrecht,2,2,D,,,,,,,,,,,,,,,,,,,,,
+N1,20/08/93,Cambuur,NAC Breda,1,3,A,,,,,,,,,,,,,,,,,,,,,
+N1,21/08/93,PSV Eindhoven,Go Ahead Eagles,3,0,H,,,,,,,,,,,,,,,,,,,,,
+N1,22/08/93,Roda JC,Volendam,2,0,H,,,,,,,,,,,,,,,,,,,,,
+N1,22/08/93,Sparta,Willem II,1,0,H,,,,,,,,,,,,,,,,,,,,,
+N1,22/08/93,Utrecht,Ajax,1,4,A,,,,,,,,,,,,,,,,,,,,,
+N1,22/08/93,Waalwijk,Twente,1,3,A,,,,,,,,,,,,,,,,,,,,,
+N1,25/08/93,Ajax,Sparta,3,0,H
+N1,25/08/93,Feyenoord,Twente,1,0,H
+N1,25/08/93,Go Ahead Eagles,Utrecht,4,0,H
+N1,25/08/93,Groningen,Roda JC,3,5,A
+N1,25/08/93,Heerenveen,PSV Eindhoven,0,0,D
+N1,25/08/93,MVV Maastricht,Waalwijk,1,1,D
+N1,25/08/93,NAC Breda,VVV Venlo,4,1,H
+N1,25/08/93,Volendam,Cambuur,4,1,H
+N1,25/08/93,Willem II,Vitesse,0,3,A
+N1,28/08/93,VVV Venlo,Volendam,2,0,H
+N1,29/08/93,Cambuur,Groningen,0,2,A
+N1,29/08/93,PSV Eindhoven,Willem II,2,1,H
+N1,29/08/93,Roda JC,Go Ahead Eagles,2,1,H
+N1,29/08/93,Sparta,MVV Maastricht,2,2,D
+N1,29/08/93,Twente,NAC Breda,0,1,A
+N1,29/08/93,Utrecht,Heerenveen,0,1,A
+N1,29/08/93,Vitesse,Ajax,0,1,A
+N1,31/08/93,Waalwijk,Feyenoord,1,2,A
+N1,01/09/93,MVV Maastricht,Ajax,1,1,D
+N1,01/09/93,Utrecht,Groningen,2,0,H
+N1,04/09/93,Go Ahead Eagles,Cambuur,3,0,H
+N1,04/09/93,Heerenveen,Roda JC,0,0,D
+N1,04/09/93,MVV Maastricht,Vitesse,0,2,A
+N1,04/09/93,Willem II,Utrecht,4,1,H
+N1,05/09/93,Ajax,PSV Eindhoven,2,0,H
+N1,05/09/93,Groningen,VVV Venlo,0,3,A
+N1,05/09/93,NAC Breda,Feyenoord,1,2,A
+N1,05/09/93,Sparta,Waalwijk,1,1,D
+N1,05/09/93,Volendam,Twente,2,5,A
+N1,08/09/93,Cambuur,Heerenveen,1,2,A
+N1,08/09/93,Feyenoord,Volendam,2,0,H
+N1,08/09/93,PSV Eindhoven,MVV Maastricht,4,2,H
+N1,08/09/93,Roda JC,Willem II,1,1,D
+N1,08/09/93,Vitesse,Sparta,2,0,H
+N1,08/09/93,VVV Venlo,Go Ahead Eagles,1,0,H
+N1,08/09/93,Waalwijk,NAC Breda,1,0,H
+N1,11/09/93,Heerenveen,VVV Venlo,1,0,H
+N1,11/09/93,MVV Maastricht,Utrecht,2,1,H
+N1,11/09/93,Sparta,PSV Eindhoven,0,0,D
+N1,11/09/93,Willem II,Cambuur,4,1,H
+N1,12/09/93,Ajax,Roda JC,2,0,H
+N1,12/09/93,Go Ahead Eagles,Twente,3,3,D
+N1,12/09/93,Groningen,Feyenoord,0,4,A
+N1,12/09/93,Vitesse,Waalwijk,4,1,H
+N1,12/09/93,Volendam,NAC Breda,1,3,A
+N1,19/09/93,Twente,Groningen,0,1,A
+N1,19/09/93,Vitesse,Heerenveen,3,0,H
+N1,25/09/93,Utrecht,Sparta,3,1,H
+N1,26/09/93,Feyenoord,Go Ahead Eagles,1,0,H
+N1,26/09/93,NAC Breda,Groningen,2,1,H
+N1,26/09/93,Roda JC,MVV Maastricht,4,1,H
+N1,26/09/93,Twente,Heerenveen,2,1,H
+N1,26/09/93,Waalwijk,Volendam,1,3,A
+N1,02/10/93,Go Ahead Eagles,NAC Breda,0,0,D
+N1,02/10/93,MVV Maastricht,Cambuur,0,0,D
+N1,02/10/93,PSV Eindhoven,Waalwijk,1,1,D
+N1,02/10/93,Willem II,Twente,2,0,H
+N1,03/10/93,Ajax,VVV Venlo,2,0,H
+N1,03/10/93,Sparta,Roda JC,2,0,H
+N1,03/10/93,Vitesse,Utrecht,2,2,D
+N1,04/10/93,Heerenveen,Feyenoord,1,3,A
+N1,06/10/93,VVV Venlo,Vitesse,2,1,H
+N1,15/10/93,Roda JC,Vitesse,2,1,H
+N1,16/10/93,Cambuur,Sparta,1,1,D
+N1,16/10/93,NAC Breda,Heerenveen,6,0,H
+N1,16/10/93,VVV Venlo,MVV Maastricht,1,7,A
+N1,17/10/93,Feyenoord,Willem II,2,0,H
+N1,17/10/93,Twente,Ajax,2,1,H
+N1,17/10/93,Utrecht,PSV Eindhoven,0,4,A
+N1,17/10/93,Volendam,Go Ahead Eagles,0,1,A
+N1,17/10/93,Waalwijk,Groningen,2,3,A
+N1,22/10/93,MVV Maastricht,Twente,0,2,A
+N1,23/10/93,Go Ahead Eagles,Groningen,3,0,H
+N1,23/10/93,Heerenveen,Volendam,3,1,H
+N1,23/10/93,PSV Eindhoven,Roda JC,2,0,H
+N1,24/10/93,Ajax,Feyenoord,2,2,D
+N1,24/10/93,Sparta,VVV Venlo,2,2,D
+N1,24/10/93,Utrecht,Waalwijk,3,1,H
+N1,24/10/93,Vitesse,Cambuur,2,1,H
+N1,24/10/93,Willem II,NAC Breda,2,0,H
+N1,27/10/93,Cambuur,Ajax,0,3,A
+N1,27/10/93,Groningen,Volendam,0,0,D
+N1,27/10/93,PSV Eindhoven,Vitesse,0,1,A
+N1,27/10/93,VVV Venlo,Feyenoord,1,1,D
+N1,29/10/93,Roda JC,Utrecht,4,0,H
+N1,30/10/93,NAC Breda,Ajax,0,5,A
+N1,31/10/93,Cambuur,PSV Eindhoven,1,3,A
+N1,31/10/93,Feyenoord,MVV Maastricht,4,0,H
+N1,31/10/93,Groningen,Heerenveen,2,2,D
+N1,31/10/93,Twente,Sparta,0,0,D
+N1,31/10/93,Volendam,Willem II,0,3,A
+N1,31/10/93,Waalwijk,Go Ahead Eagles,1,2,A
+N1,06/11/93,Heerenveen,Go Ahead Eagles,1,4,A
+N1,06/11/93,MVV Maastricht,NAC Breda,2,1,H
+N1,06/11/93,PSV Eindhoven,VVV Venlo,3,2,H
+N1,06/11/93,Willem II,Groningen,4,1,H
+N1,07/11/93,Ajax,Volendam,3,1,H
+N1,07/11/93,Roda JC,Waalwijk,2,0,H
+N1,07/11/93,Sparta,Feyenoord,3,4,A
+N1,07/11/93,Utrecht,Cambuur,2,0,H
+N1,07/11/93,Vitesse,Twente,3,0,H
+N1,13/11/93,VVV Venlo,Willem II,0,0,D
+N1,19/11/93,VVV Venlo,Utrecht,1,1,D
+N1,20/11/93,Go Ahead Eagles,Willem II,3,0,H
+N1,20/11/93,NAC Breda,Sparta,4,3,H
+N1,21/11/93,Feyenoord,Vitesse,1,1,D
+N1,21/11/93,Groningen,Ajax,0,4,A
+N1,21/11/93,Volendam,MVV Maastricht,5,0,H
+N1,21/11/93,Waalwijk,Heerenveen,1,1,D
+N1,28/11/93,Willem II,Heerenveen,1,1,D
+N1,29/11/93,Ajax,Go Ahead Eagles,4,0,H
+N1,29/11/93,PSV Eindhoven,Feyenoord,1,3,A
+N1,29/11/93,Roda JC,VVV Venlo,0,0,D
+N1,29/11/93,Utrecht,Twente,1,0,H
+N1,04/12/93,Go Ahead Eagles,MVV Maastricht,2,2,D
+N1,04/12/93,NAC Breda,PSV Eindhoven,2,2,D
+N1,05/12/93,Feyenoord,Utrecht,1,1,D
+N1,05/12/93,Groningen,Sparta,1,4,A
+N1,05/12/93,Twente,Roda JC,2,1,H
+N1,05/12/93,Volendam,Vitesse,2,0,H
+N1,05/12/93,VVV Venlo,Cambuur,1,0,H
+N1,05/12/93,Willem II,Waalwijk,4,1,H
+N1,06/12/93,Heerenveen,Ajax,1,4,A
+N1,10/12/93,Cambuur,Twente,1,1,D
+N1,10/12/93,Roda JC,Feyenoord,1,0,H
+N1,11/12/93,MVV Maastricht,Heerenveen,3,1,H
+N1,11/12/93,PSV Eindhoven,Volendam,3,0,H
+N1,12/12/93,Ajax,Willem II,3,1,H
+N1,12/12/93,Sparta,Go Ahead Eagles,1,0,H
+N1,12/12/93,Utrecht,NAC Breda,0,5,A
+N1,12/12/93,Vitesse,Groningen,4,1,H
+N1,12/12/93,Waalwijk,VVV Venlo,1,2,A
+N1,15/12/93,Cambuur,Roda JC,0,1,A
+N1,18/12/93,MVV Maastricht,Willem II,1,0,H
+N1,18/12/93,PSV Eindhoven,Groningen,1,1,D
+N1,18/12/93,VVV Venlo,Twente,0,0,D
+N1,19/12/93,Sparta,Heerenveen,3,0,H
+N1,19/12/93,Utrecht,Volendam,3,1,H
+N1,19/12/93,Vitesse,Go Ahead Eagles,5,0,H
+N1,09/01/94,Cambuur,Waalwijk,1,1,D
+N1,09/01/94,Sparta,Volendam,4,1,H
+N1,09/01/94,Twente,PSV Eindhoven,0,0,D
+N1,09/01/94,Vitesse,NAC Breda,3,1,H
+N1,15/01/94,Go Ahead Eagles,PSV Eindhoven,0,4,A
+N1,15/01/94,Heerenveen,Vitesse,0,4,A
+N1,15/01/94,NAC Breda,Cambuur,2,0,H
+N1,15/01/94,Willem II,Sparta,5,1,H
+N1,16/01/94,Ajax,MVV Maastricht,4,1,H
+N1,16/01/94,Feyenoord,VVV Venlo,5,0,H
+N1,16/01/94,Groningen,Utrecht,4,1,H
+N1,16/01/94,Twente,Waalwijk,2,1,H
+N1,21/01/94,VVV Venlo,NAC Breda,1,1,D
+N1,22/01/94,Cambuur,Volendam,3,1,H
+N1,22/01/94,PSV Eindhoven,Heerenveen,1,1,D
+N1,26/01/94,MVV Maastricht,Groningen,2,0,H
+N1,29/01/94,Go Ahead Eagles,Roda JC,3,1,H
+N1,29/01/94,Heerenveen,Utrecht,1,0,H
+N1,29/01/94,NAC Breda,Twente,2,1,H
+N1,30/01/94,Ajax,Vitesse,3,1,H
+N1,30/01/94,Feyenoord,Waalwijk,1,1,D
+N1,30/01/94,Groningen,Cambuur,2,2,D
+N1,30/01/94,MVV Maastricht,Sparta,0,0,D
+N1,30/01/94,Volendam,VVV Venlo,1,1,D
+N1,30/01/94,Willem II,PSV Eindhoven,1,1,D
+N1,02/02/94,Roda JC,NAC Breda,1,2,A
+N1,02/02/94,Waalwijk,Ajax,0,3,A
+N1,05/02/94,Cambuur,Go Ahead Eagles,1,0,H
+N1,05/02/94,VVV Venlo,Groningen,1,3,A
+N1,06/02/94,Feyenoord,NAC Breda,1,1,D
+N1,06/02/94,PSV Eindhoven,Ajax,4,1,H
+N1,06/02/94,Roda JC,Heerenveen,1,1,D
+N1,06/02/94,Twente,Volendam,2,0,H
+N1,06/02/94,Utrecht,Willem II,1,1,D
+N1,06/02/94,Vitesse,MVV Maastricht,1,3,A
+N1,06/02/94,Waalwijk,Sparta,3,1,H
+N1,11/02/94,Vitesse,Willem II,0,1,A
+N1,13/02/94,Sparta,Ajax,0,1,A
+N1,13/02/94,Utrecht,Go Ahead Eagles,2,0,H
+N1,13/02/94,Volendam,Roda JC,2,0,H
+N1,18/02/94,Heerenveen,Cambuur,1,2,A
+N1,18/02/94,MVV Maastricht,PSV Eindhoven,2,1,H
+N1,19/02/94,Go Ahead Eagles,VVV Venlo,2,0,H
+N1,19/02/94,NAC Breda,Waalwijk,3,0,H
+N1,19/02/94,Willem II,Roda JC,0,3,A
+N1,20/02/94,Ajax,Utrecht,3,0,H
+N1,20/02/94,Groningen,Twente,1,1,D
+N1,20/02/94,Sparta,Vitesse,4,1,H
+N1,20/02/94,Volendam,Feyenoord,0,1,A
+N1,23/02/94,Cambuur,Feyenoord,0,0,D
+N1,27/02/94,Twente,Go Ahead Eagles,1,1,D
+N1,27/02/94,Utrecht,MVV Maastricht,3,0,H
+N1,01/03/94,Feyenoord,Heerenveen,0,0,D
+N1,05/03/94,MVV Maastricht,Roda JC,1,0,H
+N1,05/03/94,Willem II,VVV Venlo,3,0,H
+N1,06/03/94,Ajax,Cambuur,3,2,H
+N1,06/03/94,Go Ahead Eagles,Feyenoord,1,1,D
+N1,06/03/94,Groningen,NAC Breda,0,0,D
+N1,06/03/94,Sparta,Utrecht,3,2,H
+N1,06/03/94,Vitesse,PSV Eindhoven,0,0,D
+N1,06/03/94,Volendam,Waalwijk,3,1,H
+N1,08/03/94,Heerenveen,Twente,2,2,D
+N1,09/03/94,Roda JC,Groningen,2,0,H
+N1,09/03/94,Waalwijk,MVV Maastricht,0,2,A
+N1,11/03/94,VVV Venlo,Ajax,0,1,A
+N1,12/03/94,Cambuur,MVV Maastricht,2,1,H
+N1,12/03/94,NAC Breda,Go Ahead Eagles,2,2,D
+N1,13/03/94,Roda JC,Sparta,4,0,H
+N1,13/03/94,Twente,Feyenoord,1,1,D
+N1,13/03/94,Utrecht,Vitesse,2,1,H
+N1,13/03/94,Volendam,Groningen,1,0,H
+N1,13/03/94,Waalwijk,PSV Eindhoven,1,1,D
+N1,18/03/94,Heerenveen,NAC Breda,1,3,A
+N1,19/03/94,Go Ahead Eagles,Volendam,0,1,A
+N1,19/03/94,MVV Maastricht,VVV Venlo,0,0,D
+N1,20/03/94,Groningen,Waalwijk,1,2,A
+N1,20/03/94,PSV Eindhoven,Utrecht,1,0,H
+N1,20/03/94,Sparta,Cambuur,4,0,H
+N1,20/03/94,Vitesse,Roda JC,1,3,A
+N1,20/03/94,Willem II,Feyenoord,2,1,H
+N1,25/03/94,Roda JC,PSV Eindhoven,4,0,H
+N1,26/03/94,Cambuur,Vitesse,1,3,A
+N1,26/03/94,NAC Breda,Willem II,1,1,D
+N1,26/03/94,VVV Venlo,Sparta,1,4,A
+N1,27/03/94,Feyenoord,Ajax,2,1,H
+N1,27/03/94,Groningen,Go Ahead Eagles,3,1,H
+N1,27/03/94,Twente,MVV Maastricht,4,2,H
+N1,27/03/94,Volendam,Heerenveen,3,0,H
+N1,27/03/94,Waalwijk,Utrecht,3,0,H
+N1,31/03/94,Twente,Willem II,4,0,H
+N1,01/04/94,MVV Maastricht,Feyenoord,1,1,D
+N1,02/04/94,Go Ahead Eagles,Waalwijk,2,0,H
+N1,02/04/94,PSV Eindhoven,Cambuur,2,0,H
+N1,04/04/94,Sparta,Twente,2,5,A
+N1,04/04/94,Utrecht,Roda JC,1,1,D
+N1,04/04/94,Vitesse,VVV Venlo,4,0,H
+N1,04/04/94,Willem II,Volendam,0,2,A
+N1,05/04/94,Heerenveen,Groningen,2,0,H
+N1,06/04/94,Ajax,NAC Breda,5,0,H
+N1,08/04/94,VVV Venlo,PSV Eindhoven,0,3,A
+N1,09/04/94,Cambuur,Utrecht,2,1,H
+N1,09/04/94,Go Ahead Eagles,Heerenveen,2,3,A
+N1,10/04/94,Feyenoord,Sparta,5,1,H
+N1,10/04/94,Groningen,Willem II,4,1,H
+N1,10/04/94,NAC Breda,MVV Maastricht,1,4,A
+N1,10/04/94,Twente,Vitesse,0,1,A
+N1,10/04/94,Waalwijk,Roda JC,1,1,D
+N1,12/04/94,Volendam,Ajax,1,0,H
+N1,14/04/94,PSV Eindhoven,Twente,3,2,H
+N1,16/04/94,Heerenveen,Waalwijk,0,3,A
+N1,16/04/94,MVV Maastricht,Volendam,1,1,D
+N1,16/04/94,Sparta,NAC Breda,0,0,D
+N1,16/04/94,Willem II,Go Ahead Eagles,0,0,D
+N1,17/04/94,Ajax,Twente,6,0,H
+N1,17/04/94,Roda JC,Cambuur,1,1,D
+N1,17/04/94,Utrecht,VVV Venlo,2,3,A
+N1,17/04/94,Vitesse,Feyenoord,1,2,A
+N1,23/04/94,Heerenveen,Willem II,1,2,A
+N1,23/04/94,NAC Breda,Vitesse,2,2,D
+N1,23/04/94,VVV Venlo,Roda JC,2,2,D
+N1,24/04/94,Go Ahead Eagles,Ajax,0,3,A
+N1,24/04/94,Groningen,MVV Maastricht,3,2,H
+N1,24/04/94,Twente,Utrecht,1,0,H
+N1,24/04/94,Volendam,Sparta,2,1,H
+N1,24/04/94,Waalwijk,Cambuur,3,0,H
+N1,27/04/94,Cambuur,Willem II,0,1,A
+N1,27/04/94,Feyenoord,Groningen,2,2,D
+N1,27/04/94,NAC Breda,Volendam,3,1,H
+N1,27/04/94,PSV Eindhoven,Sparta,2,1,H
+N1,27/04/94,Roda JC,Ajax,1,2,A
+N1,27/04/94,VVV Venlo,Heerenveen,1,1,D
+N1,27/04/94,Waalwijk,Vitesse,0,0,D
+N1,01/05/94,Ajax,Heerenveen,2,1,H
+N1,01/05/94,Cambuur,VVV Venlo,2,1,H
+N1,01/05/94,MVV Maastricht,Go Ahead Eagles,2,2,D
+N1,01/05/94,PSV Eindhoven,NAC Breda,3,1,H
+N1,01/05/94,Roda JC,Twente,1,4,A
+N1,01/05/94,Sparta,Groningen,3,0,H
+N1,01/05/94,Utrecht,Feyenoord,0,0,D
+N1,01/05/94,Vitesse,Volendam,2,1,H
+N1,01/05/94,Waalwijk,Willem II,1,0,H
+N1,03/05/94,Ajax,Groningen,0,2,A
+N1,03/05/94,Feyenoord,PSV Eindhoven,2,1,H
+N1,07/05/94,Go Ahead Eagles,Sparta,1,5,A
+N1,08/05/94,Feyenoord,Roda JC,2,1,H
+N1,08/05/94,Groningen,Vitesse,0,0,D
+N1,08/05/94,Heerenveen,MVV Maastricht,3,1,H
+N1,08/05/94,NAC Breda,Utrecht,2,2,D
+N1,08/05/94,Twente,Cambuur,4,1,H
+N1,08/05/94,Volendam,PSV Eindhoven,3,2,H
+N1,08/05/94,VVV Venlo,Waalwijk,0,2,A
+N1,08/05/94,Willem II,Ajax,2,1,H
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,

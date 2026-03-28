@@ -1,0 +1,463 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HTR,GBH,GBD,GBA,IWH,IWD,IWA
+SP2,02/09/00,Albacete,Tenerife,1,0,H,1,0,H,,,,2.2,2.8,2.8
+SP2,02/09/00,Getafe,Cordoba,0,0,D,0,0,D,,,,2.3,2.8,2.6
+SP2,02/09/00,Lleida,Eibar,0,0,D,0,0,D,,,,1.7,2.8,4.2
+SP2,03/09/00,Compostela,Betis,0,0,D,0,0,D,,,,2.6,2.8,2.3
+SP2,03/09/00,Elche,Salamanca,2,0,H,1,0,H,,,,2.6,2.8,2.3
+SP2,03/09/00,Jaen,Ferrol,1,0,H,0,0,D,,,,1.85,2.8,3.5
+SP2,03/09/00,Leganes,Extremadura,1,1,D,1,0,H,,,,2.2,2.8,2.8
+SP2,03/09/00,Levante,Ath Madrid,4,1,H,0,1,A,,,,2.8,2.8,2.2
+SP2,03/09/00,Recreativo,Badajoz,0,0,D,0,0,D,,,,2.2,2.7,2.9
+SP2,03/09/00,Sevilla,Murcia,2,1,H,0,0,D,,,,1.4,3.4,5.6
+SP2,03/09/00,Sp Gijon,U.Las Palmas,0,0,D,0,0,D,,,,1.6,3,4.5
+SP2,09/09/00,Ath Madrid,Recreativo,0,1,A,0,1,A,,,,1.5,3.3,4.8
+SP2,09/09/00,U.Las Palmas,Getafe,0,1,A,0,0,D,,,,2.1,2.7,3.1
+SP2,10/09/00,Badajoz,Jaen,0,1,A,0,0,D,,,,1.8,2.7,3.8
+SP2,10/09/00,Betis,Elche,1,2,A,0,2,A,,,,1.45,3.3,5.2
+SP2,10/09/00,Cordoba,Levante,1,1,D,1,1,D,,,,2.1,2.7,3.1
+SP2,10/09/00,Eibar,Leganes,0,1,A,0,0,D,,,,1.9,2.6,3.5
+SP2,10/09/00,Extremadura,Albacete,1,1,D,1,0,H,,,,1.75,2.8,3.9
+SP2,10/09/00,Murcia,Lleida,0,0,D,0,0,D,,,,2.3,2.6,2.8
+SP2,10/09/00,Ferrol,Compostela,1,3,A,0,1,A,,,,2.3,2.9,2.5
+SP2,10/09/00,Salamanca,Sevilla,0,1,A,0,1,A,,,,2.2,2.7,2.9
+SP2,10/09/00,Tenerife,Sp Gijon,1,0,H,0,0,D,,,,1.9,2.6,3.5
+SP2,16/09/00,Albacete,Eibar,1,3,A,0,2,A,,,,1.7,2.9,4
+SP2,16/09/00,Elche,Sevilla,1,2,A,0,1,A,,,,2.5,2.9,2.3
+SP2,17/09/00,Betis,Ferrol,2,1,H,2,0,H,,,,1.4,3.6,5.5
+SP2,17/09/00,Compostela,Badajoz,0,1,A,0,0,D,,,,1.9,2.8,3.3
+SP2,17/09/00,Getafe,Tenerife,0,5,A,0,2,A,,,,2.2,2.9,2.7
+SP2,17/09/00,Jaen,Ath Madrid,1,0,H,0,0,D,,,,2.4,2.9,2.4
+SP2,17/09/00,Leganes,Murcia,3,2,H,2,1,H,,,,1.7,2.9,4
+SP2,17/09/00,Levante,U.Las Palmas,2,0,H,2,0,H,,,,1.6,3.2,4.2
+SP2,17/09/00,Lleida,Salamanca,0,3,A,0,3,A,,,,2.1,2.8,3
+SP2,17/09/00,Recreativo,Cordoba,1,0,H,1,0,H,,,,1.9,2.7,3.4
+SP2,17/09/00,Sp Gijon,Extremadura,2,0,H,2,0,H,,,,2.2,2.7,2.9
+SP2,23/09/00,Ath Madrid,Compostela,2,0,H,1,0,H,,,,1.65,3.2,4
+SP2,23/09/00,Cordoba,Jaen,1,0,H,0,0,D,,,,1.9,3.1,3
+SP2,23/09/00,Ferrol,Elche,2,1,H,1,0,H,,,,2.5,2.9,2.3
+SP2,23/09/00,Tenerife,Levante,1,1,D,0,1,A,,,,1.75,3.1,3.6
+SP2,23/09/00,U.Las Palmas,Recreativo,0,0,D,0,0,D,,,,,,
+SP2,24/09/00,Badajoz,Betis,0,0,D,0,0,D,,,,2.35,3,2.35
+SP2,24/09/00,Eibar,Sp Gijon,0,0,D,0,0,D,,,,2,2.9,3
+SP2,24/09/00,Extremadura,Getafe,1,0,H,0,0,D,,,,1.6,3.2,4.2
+SP2,24/09/00,Murcia,Albacete,2,0,H,1,0,H,,,,2.3,2.9,2.5
+SP2,24/09/00,Salamanca,Leganes,1,1,D,0,1,A,,,,1.7,3.1,3.8
+SP2,24/09/00,Sevilla,Lleida,2,0,H,1,0,H,,,,1.4,3.6,5.5
+SP2,30/09/00,Elche,Lleida,2,1,H,0,0,D,,,,1.8,3,3.5
+SP2,30/09/00,Leganes,Sevilla,1,1,D,0,0,D,,,,2.8,2.8,2.2
+SP2,30/09/00,Ferrol,Badajoz,2,2,D,1,1,D,,,,2.3,2.9,2.5
+SP2,30/09/00,Recreativo,Tenerife,0,0,D,0,0,D,,,,2.2,2.8,2.8
+SP2,01/10/00,Albacete,Salamanca,1,0,H,0,0,D,,,,2.1,2.9,2.9
+SP2,01/10/00,Betis,Ath Madrid,1,1,D,1,0,H,,,,1.75,3.1,3.6
+SP2,01/10/00,Compostela,Cordoba,0,1,A,0,0,D,,,,1.85,3,3.3
+SP2,01/10/00,Getafe,Eibar,0,0,D,0,0,D,,,,2.1,2.8,3
+SP2,01/10/00,Jaen,U.Las Palmas,1,0,H,0,0,D,,,,1.6,3.2,4.2
+SP2,01/10/00,Levante,Extremadura,1,0,H,0,0,D,,,,1.8,3.1,3.4
+SP2,01/10/00,Sp Gijon,Murcia,2,2,D,0,2,A,,,,1.55,3.3,4.5
+SP2,07/10/00,Cordoba,Betis,1,0,H,1,0,H,,,,2.45,2.8,2.45
+SP2,07/10/00,Eibar,Levante,0,0,D,0,0,D,,,,2.3,2.6,2.8
+SP2,08/10/00,Ath Madrid,Ferrol,1,1,D,0,0,D,,,,1.45,3.5,5
+SP2,08/10/00,Badajoz,Elche,1,1,D,0,1,A,,,,2.1,2.7,3.1
+SP2,08/10/00,Extremadura,Recreativo,1,1,D,0,1,A,,,,1.75,2.9,3.8
+SP2,08/10/00,Lleida,Leganes,1,0,H,1,0,H,,,,2.3,2.7,2.7
+SP2,08/10/00,Murcia,Getafe,2,1,H,1,0,H,,,,1.9,2.8,3.3
+SP2,08/10/00,Salamanca,Sp Gijon,2,1,H,1,0,H,,,,1.9,2.8,3.3
+SP2,08/10/00,Sevilla,Albacete,1,0,H,0,0,D,,,,1.5,3.3,4.8
+SP2,08/10/00,Tenerife,Jaen,1,1,D,1,1,D,,,,1.65,3.1,4
+SP2,08/10/00,U.Las Palmas,Compostela,1,1,D,0,1,A,,,,2.4,2.7,2.6
+SP2,14/10/00,Badajoz,Ath Madrid,0,0,D,0,0,D,,,,2.1,2.9,2.9
+SP2,14/10/00,Betis,U.Las Palmas,2,0,H,1,0,H,,,,,,
+SP2,15/10/00,Albacete,Lleida,2,1,H,1,1,D,,,,1.65,2.9,4.2
+SP2,15/10/00,Compostela,Tenerife,0,2,A,0,2,A,,,,2.45,2.8,2.45
+SP2,15/10/00,Elche,Leganes,1,1,D,1,1,D,,,,1.8,2.9,3.6
+SP2,15/10/00,Getafe,Salamanca,1,2,A,1,0,H,,,,2.45,2.8,2.45
+SP2,15/10/00,Jaen,Extremadura,0,0,D,0,0,D,,,,1.7,3.1,3.8
+SP2,15/10/00,Levante,Murcia,2,3,A,2,1,H,,,,1.5,3.2,5
+SP2,15/10/00,Ferrol,Cordoba,0,2,A,0,1,A,,,,2.45,2.8,2.45
+SP2,15/10/00,Recreativo,Eibar,3,0,H,1,0,H,,,,2,2.8,3.1
+SP2,15/10/00,Sp Gijon,Sevilla,3,0,H,1,0,H,,,,2.45,2.8,2.45
+SP2,21/10/00,Ath Madrid,Elche,2,0,H,1,0,H,1.8,3.05,4.2,1.7,3.1,3.8
+SP2,21/10/00,Tenerife,Betis,0,1,A,0,1,A,2,3,3.2,1.9,2.9,3.2
+SP2,21/10/00,U.Las Palmas,Ferrol,1,3,A,1,1,D,2.1,2.9,3.25,,,
+SP2,22/10/00,Cordoba,Badajoz,2,0,H,1,0,H,1.75,3.1,4.15,1.55,3.3,4.5
+SP2,22/10/00,Eibar,Jaen,1,0,H,1,0,H,2.4,3.05,2.6,2.4,2.9,2.4
+SP2,22/10/00,Extremadura,Compostela,3,2,H,2,1,H,1.8,3.1,4.05,1.8,3,3.5
+SP2,22/10/00,Leganes,Albacete,0,0,D,0,0,D,2.05,2.8,3.35,1.8,2.9,3.6
+SP2,22/10/00,Lleida,Sp Gijon,0,1,A,0,0,D,2.3,3.05,2.75,2.2,2.8,2.8
+SP2,22/10/00,Murcia,Recreativo,2,0,H,2,0,H,2.15,2.85,3.25,2.1,2.9,2.9
+SP2,22/10/00,Salamanca,Levante,1,1,D,0,0,D,2.15,3,2.95,2,2.8,3.1
+SP2,22/10/00,Sevilla,Getafe,1,1,D,1,1,D,1.35,3.7,7.5,1.35,3.8,6.2
+SP2,28/10/00,Badajoz,U.Las Palmas,3,1,H,0,0,D,1.8,3.1,3.8,,,
+SP2,28/10/00,Compostela,Eibar,2,1,H,1,1,D,2.2,3,2.9,2,2.7,3.2
+SP2,28/10/00,Levante,Sevilla,2,0,H,0,0,D,2.4,2.9,2.6,2.3,2.8,2.6
+SP2,28/10/00,Ferrol,Tenerife,1,2,A,0,0,D,2.6,2.9,2.5,2.45,2.8,2.45
+SP2,28/10/00,Recreativo,Salamanca,0,0,D,0,0,D,2.15,2.9,3.1,2,2.7,3.2
+SP2,29/10/00,Ath Madrid,Cordoba,1,1,D,0,0,D,1.95,3,3.35,1.9,2.9,3.2
+SP2,29/10/00,Betis,Extremadura,1,0,H,1,0,H,1.7,3.1,4.4,1.65,2.8,4.3
+SP2,29/10/00,Elche,Albacete,0,1,A,0,0,D,2.05,3,3.1,2,2.7,3.2
+SP2,29/10/00,Getafe,Lleida,2,1,H,2,0,H,2.15,2.9,3,2,2.7,3.2
+SP2,29/10/00,Jaen,Murcia,2,1,H,2,1,H,1.95,3,3.35,1.85,2.8,3.5
+SP2,29/10/00,Sp Gijon,Leganes,2,2,D,2,0,H,1.85,3.05,3.65,1.75,2.8,3.9
+SP2,01/11/00,Albacete,Sp Gijon,3,1,H,1,0,H,,,,,,
+SP2,01/11/00,Cordoba,Elche,0,1,A,0,0,D,,,,,,
+SP2,01/11/00,Eibar,Betis,0,0,D,0,0,D,,,,,,
+SP2,01/11/00,Extremadura,Ferrol,1,0,H,1,0,H,,,,,,
+SP2,01/11/00,Leganes,Getafe,2,3,A,0,1,A,,,,,,
+SP2,01/11/00,Lleida,Levante,3,3,D,2,1,H,,,,,,
+SP2,01/11/00,Murcia,Compostela,2,0,H,1,0,H,,,,,,
+SP2,01/11/00,Salamanca,Jaen,1,0,H,0,0,D,,,,,,
+SP2,01/11/00,Sevilla,Recreativo,0,0,D,0,0,D,,,,,,
+SP2,01/11/00,Tenerife,Badajoz,3,0,H,2,0,H,,,,,,
+SP2,01/11/00,U.Las Palmas,Ath Madrid,2,1,H,1,0,H,,,,,,
+SP2,04/11/00,Jaen,Sevilla,2,1,H,1,1,D,2.3,3.1,2.7,2.2,2.8,2.8
+SP2,05/11/00,Ath Madrid,Tenerife,1,2,A,0,0,D,2.05,2.9,3.3,2.1,2.9,2.9
+SP2,05/11/00,Badajoz,Extremadura,1,1,D,0,0,D,2.2,2.7,3.2,2.1,2.9,2.9
+SP2,05/11/00,Betis,Murcia,2,1,H,2,1,H,1.75,3.1,4.25,1.7,2.9,4
+SP2,05/11/00,Compostela,Salamanca,2,1,H,0,0,D,2.5,2.9,2.6,2.5,2.8,2.4
+SP2,05/11/00,Cordoba,U.Las Palmas,2,1,H,0,1,A,1.35,3.8,7.5,1.3,4,7
+SP2,05/11/00,Elche,Sp Gijon,2,2,D,0,2,A,2.25,3,2.8,2.1,2.9,2.9
+SP2,05/11/00,Getafe,Albacete,1,1,D,0,0,D,2.4,2.9,2.7,2.4,2.8,2.5
+SP2,05/11/00,Levante,Leganes,0,2,A,0,1,A,1.8,2.9,4.2,1.65,2.8,4.5
+SP2,05/11/00,Ferrol,Eibar,0,1,A,0,1,A,2.15,3.1,2.9,2.2,2.8,2.8
+SP2,05/11/00,Recreativo,Lleida,1,1,D,1,0,H,1.6,3.1,5.5,1.5,3.4,4.7
+SP2,11/11/00,Extremadura,Ath Madrid,0,1,A,0,1,A,2.1,3,3.15,2,3,2.9
+SP2,11/11/00,U.Las Palmas,Elche,2,2,D,1,1,D,2.65,2.8,2.45,,,
+SP2,12/11/00,Albacete,Levante,1,1,D,1,1,D,2.15,2.9,3.05,1.9,2.9,3.2
+SP2,12/11/00,Eibar,Badajoz,0,1,A,0,0,D,2.05,3,3.25,1.9,3,3.1
+SP2,12/11/00,Leganes,Recreativo,1,1,D,0,1,A,2.25,2.8,3.1,2.1,2.6,3.2
+SP2,12/11/00,Lleida,Jaen,5,2,H,2,1,H,2.6,2.9,2.5,2.4,2.9,2.4
+SP2,12/11/00,Murcia,Ferrol,1,1,D,0,1,A,1.65,3.1,4.6,1.5,3.4,4.7
+SP2,12/11/00,Salamanca,Betis,1,0,H,0,0,D,2.3,2.95,2.7,2.3,2.9,2.5
+SP2,12/11/00,Sevilla,Compostela,4,0,H,4,0,H,,,,1.45,3.5,5
+SP2,12/11/00,Sp Gijon,Getafe,3,1,H,2,0,H,1.75,3.05,4,1.65,3.1,4
+SP2,12/11/00,Tenerife,Cordoba,3,0,H,1,0,H,1.95,2.95,3.4,1.8,3,3.5
+SP2,18/11/00,Ath Madrid,Eibar,1,1,D,1,0,H,1.75,3.1,4.1,1.65,3.2,3.8
+SP2,18/11/00,Recreativo,Albacete,1,0,H,0,0,D,2.25,2.95,2.8,2.2,2.6,3.1
+SP2,18/11/00,U.Las Palmas,Tenerife,0,1,A,0,0,D,3.35,2.95,2,,,
+SP2,19/11/00,Badajoz,Murcia,1,1,D,0,0,D,2.2,2.85,3.05,2,2.9,3
+SP2,19/11/00,Betis,Sevilla,1,3,A,0,0,D,2.2,3,2.9,2.35,3,2.35
+SP2,19/11/00,Compostela,Lleida,2,1,H,2,0,H,1.95,2.95,3.5,1.8,3,3.5
+SP2,19/11/00,Cordoba,Extremadura,2,0,H,1,0,H,1.8,3.05,4.05,1.6,3.2,4.2
+SP2,19/11/00,Elche,Getafe,1,4,A,1,1,D,2.05,2.9,3.25,1.85,3,3.3
+SP2,19/11/00,Jaen,Leganes,0,0,D,0,0,D,1.9,3.05,3.5,1.65,3.1,4
+SP2,19/11/00,Levante,Sp Gijon,1,1,D,0,0,D,2,3,3.2,1.8,3,3.5
+SP2,19/11/00,Ferrol,Salamanca,0,1,A,0,0,D,2.45,2.95,2.55,2.35,2.9,2.35
+SP2,25/11/00,Extremadura,U.Las Palmas,2,1,H,2,0,H,1.55,3.4,5.6,,,
+SP2,25/11/00,Lleida,Betis,0,1,A,0,0,D,2.65,3,2.45,2.5,2.9,2.3
+SP2,26/11/00,Albacete,Jaen,2,1,H,1,1,D,1.85,3,4,1.8,2.9,3.6
+SP2,26/11/00,Eibar,Cordoba,3,0,H,0,0,D,2.45,2.9,2.7,2.4,2.9,2.4
+SP2,26/11/00,Getafe,Levante,1,2,A,1,1,D,2.3,3,2.8,2.4,2.7,2.6
+SP2,26/11/00,Leganes,Compostela,3,0,H,1,0,H,1.9,3,3.8,1.8,2.9,3.6
+SP2,26/11/00,Murcia,Ath Madrid,1,1,D,0,1,A,2.15,3.2,2.9,2.1,2.8,3
+SP2,26/11/00,Salamanca,Badajoz,1,1,D,0,0,D,1.85,3,4,1.8,2.9,3.6
+SP2,26/11/00,Sevilla,Ferrol,3,0,H,2,0,H,1.35,3.8,8,1.35,3.8,6.2
+SP2,26/11/00,Sp Gijon,Recreativo,0,1,A,0,1,A,1.95,3,3.5,1.8,2.8,3.7
+SP2,26/11/00,Tenerife,Elche,3,1,H,0,0,D,1.5,3.4,6,1.45,3.5,5
+SP2,02/12/00,Ath Madrid,Salamanca,3,0,H,2,0,H,,,,2,2.9,3
+SP2,02/12/00,Elche,Levante,1,1,D,0,0,D,,,,2.4,2.8,2.5
+SP2,02/12/00,Ferrol,Lleida,3,1,H,2,1,H,,,,2,2.9,3
+SP2,02/12/00,Recreativo,Getafe,0,0,D,0,0,D,,,,1.7,3.1,3.8
+SP2,02/12/00,U.Las Palmas,Eibar,0,0,D,0,0,D,,,,,,
+SP2,03/12/00,Badajoz,Sevilla,2,0,H,0,0,D,2.65,3.1,2.4,2.6,2.8,2.3
+SP2,03/12/00,Betis,Leganes,2,1,H,0,0,D,1.8,3.2,4,1.75,3.1,3.6
+SP2,03/12/00,Compostela,Albacete,0,2,A,0,0,D,2.3,3.2,2.7,2.3,2.9,2.5
+SP2,03/12/00,Cordoba,Murcia,1,3,A,1,1,D,1.75,3.2,4.2,1.6,3.2,4.2
+SP2,03/12/00,Jaen,Sp Gijon,0,2,A,0,0,D,1.95,2.9,3.8,1.85,3,3.3
+SP2,03/12/00,Tenerife,Extremadura,0,2,A,0,1,A,1.45,3.6,6.5,1.4,3.6,5.5
+SP2,09/12/00,Eibar,Tenerife,2,2,D,1,1,D,3.1,2.8,2.2,2.9,2.9,2.1
+SP2,09/12/00,Extremadura,Elche,1,2,A,0,1,A,1.8,3,3.8,1.7,3.1,3.8
+SP2,09/12/00,Getafe,Jaen,0,1,A,0,1,A,2.1,2.8,3.2,2.1,2.9,2.9
+SP2,09/12/00,Lleida,Badajoz,1,1,D,1,0,H,2.35,2.7,2.9,2.2,2.8,2.8
+SP2,09/12/00,Salamanca,Cordoba,1,1,D,1,0,H,1.9,2.8,3.8,1.8,3,3.5
+SP2,10/12/00,Albacete,Betis,0,0,D,0,0,D,2.1,2.8,3.2,2.2,2.8,2.8
+SP2,10/12/00,Leganes,Ferrol,1,1,D,1,0,H,1.6,3.2,4.8,1.55,3.3,4.5
+SP2,10/12/00,Levante,Recreativo,1,1,D,1,0,H,2,2.85,3.4,2,2.9,2.9
+SP2,10/12/00,Murcia,U.Las Palmas,1,1,D,0,0,D,1.5,3.2,6,,,
+SP2,10/12/00,Sevilla,Ath Madrid,3,1,H,2,0,H,1.65,3.5,4,1.75,3.1,3.6
+SP2,10/12/00,Sp Gijon,Compostela,5,2,H,3,2,H,1.6,3.15,5,1.7,3.2,3.6
+SP2,16/12/00,Jaen,Levante,0,1,A,0,1,A,2.1,2.8,3.4,2.1,2.8,3
+SP2,16/12/00,Tenerife,Murcia,1,0,H,1,0,H,1.6,3.2,5.2,1.6,3.2,4.2
+SP2,16/12/00,U.Las Palmas,Salamanca,1,3,A,1,1,D,2.7,3.2,2.25,,,
+SP2,17/12/00,Ath Madrid,Lleida,3,2,H,2,1,H,1.5,3.5,5.6,1.45,3.5,5
+SP2,17/12/00,Badajoz,Leganes,1,0,H,1,0,H,2.1,2.8,3.3,2.1,2.7,3.1
+SP2,17/12/00,Betis,Sp Gijon,1,0,H,1,0,H,1.8,3,4.2,1.8,3,3.5
+SP2,17/12/00,Compostela,Getafe,1,1,D,0,0,D,2,3,3.4,2,2.9,3
+SP2,17/12/00,Cordoba,Sevilla,0,1,A,0,1,A,2.3,3,2.8,2.2,2.9,2.7
+SP2,17/12/00,Elche,Recreativo,0,1,A,0,0,D,2.3,3.1,2.7,2.4,2.8,2.5
+SP2,17/12/00,Extremadura,Eibar,2,0,H,0,0,D,1.9,3.1,3.6,1.85,2.8,3.5
+SP2,20/12/00,Albacete,Badajoz,1,1,D,0,0,D,1.75,3,3.8,1.7,3.1,3.8
+SP2,20/12/00,Eibar,Elche,2,1,H,1,0,H,1.95,3,3.1,1.9,3,3.1
+SP2,20/12/00,Getafe,Betis,0,2,A,0,1,A,2.6,3,2.2,2.7,2.9,2.2
+SP2,20/12/00,Levante,Compostela,0,2,A,0,0,D,1.6,3.1,4.4,1.6,3.2,4.2
+SP2,20/12/00,Lleida,Cordoba,2,0,H,1,0,H,2.4,2.8,2.6,2.4,2.9,2.4
+SP2,20/12/00,Murcia,Extremadura,1,3,A,0,1,A,1.85,3,3.4,2,2.9,3
+SP2,20/12/00,Recreativo,Jaen,2,0,H,1,0,H,1.85,3,3.4,1.8,3,3.5
+SP2,20/12/00,Salamanca,Tenerife,3,1,H,2,0,H,2.35,2.85,2.55,2.4,2.9,2.4
+SP2,20/12/00,Sevilla,U.Las Palmas,2,2,D,0,1,A,1.25,4,8,1.25,4.3,8
+SP2,20/12/00,Sp Gijon,Ferrol,1,1,D,1,1,D,1.47,3.2,5.5,1.5,3.4,4.7
+SP2,21/12/00,Leganes,Ath Madrid,1,2,A,1,1,D,2.2,3,2.6,2.3,2.8,2.6
+SP2,06/01/01,Betis,Levante,1,0,H,1,0,H,1.73,3.1,4.2,1.75,2.9,3.8
+SP2,07/01/01,Ath Madrid,Albacete,0,0,D,0,0,D,1.9,3.05,3.5,1.8,3,3.5
+SP2,07/01/01,Badajoz,Sp Gijon,2,0,H,2,0,H,2.05,2.9,3.25,1.9,2.9,3.2
+SP2,07/01/01,Compostela,Recreativo,2,0,H,1,0,H,2.45,2.95,2.55,2.3,2.9,2.5
+SP2,07/01/01,Cordoba,Leganes,1,1,D,0,1,A,1.95,2.95,3.5,1.9,2.9,3.2
+SP2,07/01/01,Eibar,Murcia,0,1,A,0,0,D,2.15,2.8,3.15,2,2.8,3.1
+SP2,07/01/01,Elche,Jaen,0,0,D,0,0,D,2.05,2.9,3.25,2,2.8,3.1
+SP2,07/01/01,Extremadura,Salamanca,0,1,A,0,0,D,2.15,2.8,3.15,2.1,2.8,3
+SP2,07/01/01,Ferrol,Getafe,2,1,H,0,0,D,2.05,2.9,3.25,2.2,2.9,2.7
+SP2,07/01/01,Tenerife,Sevilla,1,2,A,0,1,A,2.1,2.8,3.25,2,2.9,3
+SP2,07/01/01,U.Las Palmas,Lleida,0,0,D,0,0,D,2.15,2.8,3.15,2,2.8,3.1
+SP2,13/01/01,Lleida,Tenerife,1,1,D,1,0,H,3.2,2.85,2.1,3,2.9,2
+SP2,13/01/01,Sevilla,Extremadura,3,0,H,2,0,H,1.6,3,5.3,1.55,3.3,4.5
+SP2,14/01/01,Albacete,Cordoba,0,0,D,0,0,D,1.8,3,4,1.7,2.9,4
+SP2,14/01/01,Elche,Murcia,1,1,D,1,1,D,2.25,3,2.8,2.45,2.8,2.45
+SP2,14/01/01,Getafe,Badajoz,2,1,H,1,0,H,2.6,2.9,2.4,2.8,2.8,2.3
+SP2,14/01/01,Jaen,Compostela,1,1,D,0,1,A,1.9,3,3.5,1.9,3,3.1
+SP2,14/01/01,Leganes,U.Las Palmas,1,1,D,0,1,A,1.6,3.1,5.2,1.7,2.9,4
+SP2,14/01/01,Levante,Ferrol,0,0,D,0,0,D,1.55,3.2,5.3,1.6,3,4.5
+SP2,14/01/01,Recreativo,Betis,1,1,D,0,1,A,2.35,2.8,2.75,2.3,2.8,2.8
+SP2,14/01/01,Salamanca,Eibar,0,2,A,0,1,A,1.65,3,5,1.7,2.9,4
+SP2,14/01/01,Sp Gijon,Ath Madrid,1,0,H,0,0,D,2.2,2.9,2.9,2.1,2.9,2.9
+SP2,20/01/01,Ath Madrid,Getafe,2,1,H,0,0,D,1.63,3.1,4.65,1.7,3.1,3.8
+SP2,20/01/01,Compostela,Elche,1,1,D,1,0,H,1.95,3,3.3,1.9,3,3.1
+SP2,20/01/01,Eibar,Sevilla,1,0,H,1,0,H,3.1,2.8,2.15,2.7,2.9,2.2
+SP2,20/01/01,U.Las Palmas,Albacete,1,0,H,0,0,D,3.1,2.8,2.15,,,
+SP2,21/01/01,Badajoz,Levante,1,1,D,0,0,D,2.15,2.8,3.15,2.1,2.7,3.1
+SP2,21/01/01,Betis,Jaen,1,0,H,0,0,D,1.37,3.6,6.7,1.45,3.5,5
+SP2,21/01/01,Cordoba,Sp Gijon,2,0,H,0,0,D,2.05,2.9,3.25,2.1,2.9,2.9
+SP2,21/01/01,Extremadura,Lleida,0,0,D,0,0,D,1.45,3.4,6,1.55,3.3,4.5
+SP2,21/01/01,Murcia,Salamanca,1,2,A,0,0,D,2.3,2.9,2.65,2.3,2.8,2.6
+SP2,21/01/01,Ferrol,Recreativo,1,0,H,1,0,H,2.75,2.9,2.25,2.6,2.8,2.3
+SP2,21/01/01,Tenerife,Leganes,3,2,H,1,0,H,1.43,3.4,6.2,1.55,3.3,4.5
+SP2,27/01/01,Ath Madrid,Levante,1,1,D,1,0,H,1.9,2.9,3.6,1.8,2.9,3.6
+SP2,27/01/01,Betis,Compostela,2,0,H,1,0,H,1.4,3.6,7.1,1.45,3.5,5
+SP2,28/01/01,Badajoz,Recreativo,1,1,D,1,0,H,2.15,2.8,3.25,1.9,3,3.1
+SP2,28/01/01,Cordoba,Getafe,4,1,H,3,1,H,1.75,3.1,4.25,1.7,2.9,4.1
+SP2,28/01/01,Eibar,Lleida,2,0,H,0,0,D,1.7,3.2,4.4,1.6,3,4.5
+SP2,28/01/01,Extremadura,Leganes,0,3,A,0,3,A,1.85,3,3.85,1.75,2.9,3.8
+SP2,28/01/01,Murcia,Sevilla,1,1,D,1,1,D,2.7,2.85,2.4,2.6,2.8,2.3
+SP2,28/01/01,Ferrol,Jaen,1,1,D,0,0,D,2.12,3,3.05,1.9,3,3.1
+SP2,28/01/01,Salamanca,Elche,2,0,H,0,0,D,1.65,3.2,4.7,1.6,3,4.5
+SP2,28/01/01,Tenerife,Albacete,1,0,H,0,0,D,1.72,3.2,4.2,1.65,2.9,4.2
+SP2,28/01/01,U.Las Palmas,Sp Gijon,0,2,A,0,1,A,2.85,2.8,2.35,2.4,2.8,2.5
+SP2,03/02/01,Recreativo,Ath Madrid,1,1,D,0,0,D,2.2,2.7,3.3,2.1,2.8,3
+SP2,04/02/01,Albacete,Extremadura,2,1,H,1,1,D,1.92,3,3.6,1.85,2.8,3.5
+SP2,04/02/01,Compostela,Ferrol,0,5,A,0,0,D,2,2.8,3.6,1.8,2.9,3.6
+SP2,04/02/01,Elche,Betis,1,1,D,1,0,H,3.15,2.8,2.2,3,2.8,2.1
+SP2,04/02/01,Getafe,U.Las Palmas,0,0,D,0,0,D,1.83,2.95,4,1.85,2.8,3.5
+SP2,04/02/01,Jaen,Badajoz,0,0,D,0,0,D,2.3,2.75,3,2.3,2.8,2.6
+SP2,04/02/01,Leganes,Eibar,1,1,D,0,0,D,2.42,2.75,2.8,2.4,2.8,2.5
+SP2,04/02/01,Levante,Cordoba,2,1,H,0,1,A,2.2,2.65,3.3,2.1,2.8,3
+SP2,04/02/01,Lleida,Murcia,0,1,A,0,0,D,2.45,2.75,2.8,2.3,2.8,2.6
+SP2,04/02/01,Sevilla,Salamanca,2,0,H,1,0,H,1.85,2.95,4,1.7,2.9,4
+SP2,04/02/01,Sp Gijon,Tenerife,0,0,D,0,0,D,2.55,2.75,2.65,2.3,2.8,2.6
+SP2,10/02/01,Sevilla,Elche,1,1,D,0,0,D,1.38,3.6,7.8,1.4,3.2,6
+SP2,11/02/01,Ath Madrid,Jaen,5,0,H,1,0,H,1.66,3.1,5,1.6,3,4.5
+SP2,11/02/01,Badajoz,Compostela,2,1,H,2,0,H,1.68,3.05,4.8,1.7,2.9,4
+SP2,11/02/01,Cordoba,Recreativo,1,3,A,1,1,D,2.1,2.9,3.2,2,2.8,3.1
+SP2,11/02/01,Eibar,Albacete,0,0,D,0,0,D,2,2.9,3.45,1.9,2.8,3.3
+SP2,11/02/01,Extremadura,Sp Gijon,1,2,A,0,0,D,2.2,2.9,3,2,2.8,3.1
+SP2,11/02/01,Murcia,Leganes,2,2,D,0,1,A,2.05,2.9,3.3,2,2.8,3.1
+SP2,11/02/01,Ferrol,Betis,0,1,A,0,1,A,2.9,2.9,2.25,2.8,2.8,2.2
+SP2,11/02/01,Salamanca,Lleida,2,0,H,1,0,H,1.44,3.4,6.8,1.45,3.2,5.5
+SP2,11/02/01,Tenerife,Getafe,3,0,H,0,0,D,1.42,3.4,7.5,1.4,3.6,5.5
+SP2,11/02/01,U.Las Palmas,Levante,2,2,D,2,0,H,2.65,2.8,2.5,2.5,2.7,2.5
+SP2,17/02/01,Compostela,Ath Madrid,2,3,A,2,0,H,2.68,2.85,2.43,2.5,2.8,2.4
+SP2,17/02/01,Jaen,Cordoba,0,0,D,0,0,D,2.2,2.85,3.05,2.3,2.8,2.6
+SP2,17/02/01,Recreativo,U.Las Palmas,4,1,H,2,0,H,1.55,3.25,5.5,,,
+SP2,18/02/01,Albacete,Murcia,2,1,H,1,0,H,2.03,2.9,3.37,1.85,2.8,3.5
+SP2,18/02/01,Betis,Badajoz,1,1,D,0,1,A,1.5,3.25,6.3,1.45,3.2,5.5
+SP2,18/02/01,Elche,Ferrol,2,0,H,1,0,H,2.22,3,2.85,2.2,2.8,2.8
+SP2,18/02/01,Getafe,Extremadura,0,1,A,0,0,D,2.27,2.85,2.9,2.2,2.8,2.8
+SP2,18/02/01,Leganes,Salamanca,0,1,A,0,0,D,2.77,2.8,2.4,2.4,2.9,2.4
+SP2,18/02/01,Levante,Tenerife,2,0,H,0,0,D,2.62,2.8,2.52,2.4,2.8,2.4
+SP2,18/02/01,Lleida,Sevilla,0,1,A,0,0,D,3.67,2.9,1.95,3.2,2.9,1.9
+SP2,18/02/01,Sp Gijon,Eibar,0,0,D,0,0,D,1.95,2.9,3.6,1.85,2.8,3.5
+SP2,21/02/01,Ferrol,Albacete,3,2,H,1,1,D,,,,,,
+SP2,24/02/01,Eibar,Getafe,0,0,D,0,0,D,1.67,3.15,4.55,1.6,3,4.5
+SP2,24/02/01,Lleida,Elche,1,1,D,1,0,H,2.25,2.95,2.85,2.3,2.8,2.8
+SP2,24/02/01,Tenerife,Recreativo,1,1,D,0,1,A,1.72,3,4.55,1.7,2.9,4
+SP2,25/02/01,Ath Madrid,Betis,2,1,H,1,1,D,2.2,2.92,2.95,2.3,2.8,2.6
+SP2,25/02/01,Badajoz,Ferrol,1,0,H,0,0,D,1.77,3,4.25,1.8,2.8,3.7
+SP2,25/02/01,Cordoba,Compostela,0,0,D,0,0,D,1.67,3.15,4.55,1.65,2.9,4.2
+SP2,25/02/01,Extremadura,Levante,2,1,H,2,0,H,2.35,2.8,2.85,2.4,2.8,2.5
+SP2,25/02/01,Murcia,Sp Gijon,5,0,H,0,0,D,2.25,2.95,2.85,2.3,2.8,2.6
+SP2,25/02/01,Salamanca,Albacete,1,2,A,0,1,A,1.7,3.1,4.5,1.65,2.9,4.2
+SP2,25/02/01,Sevilla,Leganes,4,2,H,3,2,H,1.4,3.6,7,1.35,3.8,6.2
+SP2,25/02/01,U.Las Palmas,Jaen,0,0,D,0,0,D,2.22,2.95,2.9,2.3,2.8,2.6
+SP2,03/03/01,Betis,Cordoba,1,1,D,1,0,H,1.45,3.45,6.5,1.4,3.3,6
+SP2,03/03/01,Compostela,U.Las Palmas,0,0,D,0,0,D,1.75,3.1,4.15,1.8,2.7,4
+SP2,03/03/01,Levante,Eibar,0,0,D,0,0,D,1.9,2.95,3.7,1.9,2.8,3.3
+SP2,04/03/01,Albacete,Sevilla,2,1,H,1,1,D,2.45,2.85,2.66,2.5,2.8,2.4
+SP2,04/03/01,Elche,Badajoz,0,0,D,0,0,D,2.3,2.8,2.8,2.4,2.8,2.5
+SP2,04/03/01,Getafe,Murcia,4,0,H,2,0,H,2.35,2.85,2.8,2.4,2.8,2.5
+SP2,04/03/01,Jaen,Tenerife,0,0,D,0,0,D,2.75,2.85,2.3,2.6,2.8,2.3
+SP2,04/03/01,Leganes,Lleida,0,0,D,0,0,D,1.75,3,4.35,1.75,2.8,4
+SP2,04/03/01,Ferrol,Ath Madrid,0,2,A,0,0,D,2.62,2.85,2.4,2.5,2.9,2.3
+SP2,04/03/01,Recreativo,Extremadura,3,1,H,1,0,H,1.75,3,4.1,1.7,2.8,4.3
+SP2,04/03/01,Sp Gijon,Salamanca,2,0,H,0,0,D,2.2,2.85,2.92,2.3,2.8,2.6
+SP2,10/03/01,Ath Madrid,Badajoz,2,0,H,1,0,H,1.67,3,4.9,1.65,2.9,4.4
+SP2,10/03/01,Sevilla,Sp Gijon,1,1,D,0,1,A,1.55,3.25,5.5,1.55,3.1,4.8
+SP2,11/03/01,Cordoba,Ferrol,0,1,A,0,1,A,1.77,3,4.25,1.7,3.1,3.8
+SP2,11/03/01,Eibar,Recreativo,2,1,H,1,1,D,2.45,2.7,2.8,2.3,2.6,2.8
+SP2,11/03/01,Extremadura,Jaen,2,0,H,0,0,D,1.83,2.95,4,1.75,2.9,3.8
+SP2,11/03/01,Leganes,Elche,2,0,H,1,0,H,2.3,2.75,2.97,2.3,2.6,2.8
+SP2,11/03/01,Lleida,Albacete,1,2,A,1,1,D,2.8,2.85,2.35,2.7,2.7,2.3
+SP2,11/03/01,Murcia,Levante,2,0,H,2,0,H,2.2,2.75,3.15,2.3,2.6,2.8
+SP2,11/03/01,Salamanca,Getafe,4,2,H,2,1,H,1.47,3.4,6.2,1.5,3.3,4.8
+SP2,11/03/01,Tenerife,Compostela,4,0,H,3,0,H,1.42,3.5,6.85,1.45,3.3,5.5
+SP2,11/03/01,U.Las Palmas,Betis,1,1,D,0,0,D,3.7,2.95,1.9,3.2,2.7,2
+SP2,17/03/01,Badajoz,Cordoba,0,0,D,0,0,D,1.75,3.25,4,1.8,2.7,3.9
+SP2,17/03/01,Elche,Ath Madrid,2,1,H,1,0,H,3.1,2.85,2.2,2.8,2.8,2.2
+SP2,18/03/01,Albacete,Leganes,0,0,D,0,0,D,1.55,3.25,5.5,1.6,2.9,4.7
+SP2,18/03/01,Betis,Tenerife,0,2,A,0,1,A,2,3,3.35,1.85,2.8,3.5
+SP2,18/03/01,Compostela,Extremadura,3,2,H,1,1,D,2.35,2.8,2.9,2.3,2.8,2.6
+SP2,18/03/01,Getafe,Sevilla,0,1,A,0,1,A,3.35,3,2,3.1,2.8,2
+SP2,18/03/01,Jaen,Eibar,1,0,H,1,0,H,2.3,2.8,3,2.3,2.8,2.6
+SP2,18/03/01,Levante,Salamanca,2,0,H,0,0,D,2.35,2.8,2.9,2.3,2.8,2.6
+SP2,18/03/01,Ferrol,U.Las Palmas,1,2,A,0,1,A,1.8,3,4.2,1.7,2.8,4.2
+SP2,18/03/01,Recreativo,Murcia,4,1,H,1,1,D,1.75,3.1,4.25,1.8,2.8,3.8
+SP2,18/03/01,Sp Gijon,Lleida,1,2,A,0,1,A,1.45,3.5,6.5,1.45,3,6
+SP2,24/03/01,Cordoba,Ath Madrid,1,1,D,0,1,A,2.75,2.8,2.45,2.4,2.9,2.4
+SP2,25/03/01,Albacete,Elche,2,0,H,0,0,D,1.6,3,5.85,1.6,3,4.5
+SP2,25/03/01,Eibar,Compostela,0,0,D,0,0,D,1.65,3,5.25,1.65,3,4.2
+SP2,25/03/01,Extremadura,Betis,1,0,H,1,0,H,2.7,2.6,2.65,2.45,2.8,2.45
+SP2,25/03/01,Leganes,Sp Gijon,0,1,A,0,1,A,2.4,2.65,3,2.3,2.8,2.6
+SP2,25/03/01,Lleida,Getafe,1,2,A,1,0,H,2.2,2.75,3.2,2.1,2.8,3
+SP2,25/03/01,Murcia,Jaen,2,2,D,0,2,A,1.75,2.95,4.6,1.7,2.9,4.2
+SP2,25/03/01,Salamanca,Recreativo,0,1,A,0,0,D,2,2.75,3.75,2,2.8,3.1
+SP2,25/03/01,Sevilla,Levante,3,2,H,2,1,H,1.5,3.2,6.5,1.55,3,5
+SP2,25/03/01,Tenerife,Ferrol,1,1,D,1,0,H,1.4,3.5,7.5,1.4,3.6,5.5
+SP2,25/03/01,U.Las Palmas,Badajoz,1,1,D,1,0,H,2.65,2.6,2.72,2.45,2.8,2.45
+SP2,31/03/01,Ath Madrid,U.Las Palmas,2,0,H,0,0,D,1.35,3.9,7.5,1.35,3.5,7
+SP2,31/03/01,Elche,Cordoba,1,2,A,1,0,H,2.15,2.75,3.3,2.1,2.8,3
+SP2,31/03/01,Getafe,Leganes,0,1,A,0,1,A,2.2,2.75,3.2,2.3,2.8,2.6
+SP2,31/03/01,Ferrol,Extremadura,1,1,D,0,1,A,2.24,2.7,3.2,2.3,2.8,2.6
+SP2,01/04/01,Badajoz,Tenerife,1,2,A,0,0,D,2.5,2.65,2.8,2.4,2.7,2.6
+SP2,01/04/01,Betis,Eibar,1,0,H,1,0,H,1.55,3.3,5.5,1.55,3,5
+SP2,01/04/01,Compostela,Murcia,2,0,H,1,0,H,2.25,2.75,3.15,2.2,2.8,2.8
+SP2,01/04/01,Jaen,Salamanca,2,1,H,1,0,H,2.55,2.75,2.65,2.5,2.7,2.5
+SP2,01/04/01,Levante,Lleida,3,2,H,2,1,H,1.5,3.5,5.5,1.55,3,5
+SP2,01/04/01,Recreativo,Sevilla,1,1,D,0,0,D,2.45,2.65,2.9,2.4,2.7,2.6
+SP2,01/04/01,Sp Gijon,Albacete,4,2,H,1,1,D,2.2,2.75,3.2,2.1,2.8,3
+SP2,07/04/01,Lleida,Recreativo,0,0,D,0,0,D,3.25,2.9,2.1,3,2.8,2.1
+SP2,07/04/01,Sevilla,Jaen,0,1,A,0,0,D,1.37,3.7,7.75,1.4,3.3,6
+SP2,07/04/01,U.Las Palmas,Cordoba,0,2,A,0,1,A,2.57,2.62,2.8,2.45,2.8,2.45
+SP2,08/04/01,Albacete,Getafe,2,1,H,0,1,A,1.47,3.4,6.5,1.5,3.2,5
+SP2,08/04/01,Eibar,Ferrol,1,1,D,1,1,D,1.75,3,4.45,1.8,2.9,3.6
+SP2,08/04/01,Extremadura,Badajoz,1,0,H,1,0,H,2.1,2.75,3.45,2,2.8,3.1
+SP2,08/04/01,Leganes,Levante,1,0,H,0,0,D,2.55,2.5,2.95,2.3,2.7,2.7
+SP2,08/04/01,Murcia,Betis,1,3,A,0,1,A,2.67,2.55,2.75,2.5,2.8,2.4
+SP2,08/04/01,Salamanca,Compostela,1,2,A,1,0,H,1.55,3.3,5.55,1.6,3,4.5
+SP2,08/04/01,Sp Gijon,Elche,2,1,H,1,0,H,1.65,3.1,5,1.6,3,4.5
+SP2,08/04/01,Tenerife,Ath Madrid,1,2,A,0,1,A,2,2.9,3.55,2.1,2.8,3
+SP2,14/04/01,Compostela,Sevilla,0,2,A,0,1,A,,,,,,
+SP2,14/04/01,Cordoba,Tenerife,1,0,H,0,0,D,,,,,,
+SP2,15/04/01,Ath Madrid,Extremadura,2,0,H,0,0,D,,,,,,
+SP2,15/04/01,Badajoz,Eibar,1,0,H,0,0,D,,,,,,
+SP2,15/04/01,Betis,Salamanca,2,1,H,1,1,D,,,,,,
+SP2,15/04/01,Elche,U.Las Palmas,0,1,A,0,0,D,,,,,,
+SP2,15/04/01,Getafe,Sp Gijon,3,1,H,2,0,H,,,,,,
+SP2,15/04/01,Jaen,Lleida,2,1,H,1,0,H,,,,,,
+SP2,15/04/01,Levante,Albacete,0,0,D,0,0,D,,,,,,
+SP2,15/04/01,Ferrol,Murcia,1,1,D,0,1,A,,,,,,
+SP2,15/04/01,Recreativo,Leganes,1,1,D,0,1,A,,,,,,
+SP2,21/04/01,Leganes,Jaen,0,0,D,0,0,D,2.1,2.8,3.35,2.1,2.8,3
+SP2,21/04/01,Tenerife,U.Las Palmas,2,0,H,0,0,D,1.37,3.75,7.25,1.4,3.6,5.5
+SP2,22/04/01,Albacete,Recreativo,0,2,A,0,1,A,2,2.75,3.7,2,2.8,3.1
+SP2,22/04/01,Eibar,Ath Madrid,2,1,H,2,0,H,3.15,2.7,2.25,3,2.8,2.1
+SP2,22/04/01,Extremadura,Cordoba,1,0,H,0,0,D,2.2,2.65,3.3,2.2,2.8,2.8
+SP2,22/04/01,Getafe,Elche,1,1,D,1,1,D,2.15,2.7,3.4,2,2.8,3.1
+SP2,22/04/01,Lleida,Compostela,1,2,A,1,1,D,2.55,2.75,2.65,2.45,2.8,2.45
+SP2,22/04/01,Murcia,Badajoz,0,0,D,0,0,D,2.2,2.65,3.3,2.2,2.8,2.8
+SP2,22/04/01,Salamanca,Ferrol,1,1,D,1,1,D,1.75,3,4.4,1.8,3,3.5
+SP2,22/04/01,Sevilla,Betis,1,1,D,1,0,H,2.2,2.8,3.1,2.4,2.8,2.5
+SP2,22/04/01,Sp Gijon,Levante,1,2,A,1,0,H,1.85,2.8,4.25,1.8,3,3.5
+SP2,28/04/01,Ath Madrid,Murcia,0,3,A,0,1,A,,,,,,
+SP2,28/04/01,Badajoz,Salamanca,0,1,A,0,0,D,,,,,,
+SP2,28/04/01,Betis,Lleida,4,1,H,2,1,H,,,,,,
+SP2,28/04/01,Compostela,Leganes,1,1,D,0,1,A,,,,,,
+SP2,29/04/01,Cordoba,Eibar,2,0,H,0,0,D,1.85,2.85,4.2,1.9,2.8,3.3
+SP2,29/04/01,Elche,Tenerife,0,2,A,0,0,D,3.33,2.75,2.15,2.8,2.8,2.2
+SP2,29/04/01,Jaen,Albacete,3,0,H,1,0,H,2.2,2.75,3.2,2.2,2.8,2.8
+SP2,29/04/01,Levante,Getafe,3,3,D,1,2,A,1.7,3,4.8,1.65,2.9,4.2
+SP2,29/04/01,Ferrol,Sevilla,1,1,D,1,0,H,3.45,2.7,2.12,3.1,2.8,2
+SP2,29/04/01,Recreativo,Sp Gijon,1,1,D,0,1,A,,,,,,
+SP2,29/04/01,U.Las Palmas,Extremadura,1,0,H,0,0,D,2.67,2.7,2.6,2.45,2.8,2.45
+SP2,05/05/01,Eibar,U.Las Palmas,3,0,H,1,0,H,,,,,,
+SP2,05/05/01,Getafe,Recreativo,0,1,A,0,0,D,,,,,,
+SP2,05/05/01,Levante,Elche,3,3,D,1,1,D,,,,,,
+SP2,05/05/01,Lleida,Ferrol,0,1,A,0,1,A,,,,,,
+SP2,06/05/01,Albacete,Compostela,2,0,H,1,0,H,1.6,3.2,5,1.55,3.1,4.7
+SP2,06/05/01,Extremadura,Tenerife,1,0,H,1,0,H,2.75,2.85,2.4,2.45,2.8,2.45
+SP2,06/05/01,Leganes,Betis,1,1,D,1,0,H,3,2.9,2.2,3.1,2.7,2.1
+SP2,06/05/01,Murcia,Cordoba,0,0,D,0,0,D,2.15,2.85,3.15,2.3,2.7,2.7
+SP2,06/05/01,Salamanca,Ath Madrid,1,3,A,0,2,A,2.5,2.85,2.6,2.5,2.7,2.5
+SP2,06/05/01,Sevilla,Badajoz,5,2,H,2,0,H,1.4,3.5,7.25,1.45,3,6
+SP2,06/05/01,Sp Gijon,Jaen,1,0,H,0,0,D,1.75,3.1,4.15,1.75,2.9,3.8
+SP2,12/05/01,Ath Madrid,Sevilla,2,0,H,0,0,D,2.1,2.8,3.3,2.2,2.8,2.8
+SP2,13/05/01,Badajoz,Lleida,1,0,H,1,0,H,1.5,3.15,6.4,1.4,3.6,5.5
+SP2,13/05/01,Betis,Albacete,1,2,A,0,1,A,1.58,3.1,5.5,1.6,3.2,4.2
+SP2,13/05/01,Compostela,Sp Gijon,1,2,A,0,1,A,2.28,2.7,3.1,2.4,2.8,2.5
+SP2,13/05/01,Cordoba,Salamanca,1,1,D,1,0,H,2.05,2.8,3.5,2,2.8,3.1
+SP2,13/05/01,Elche,Extremadura,3,1,H,1,0,H,2.15,2.8,3.2,2.3,2.8,2.6
+SP2,13/05/01,Jaen,Getafe,3,1,H,1,0,H,1.85,2.9,4,1.7,2.9,4
+SP2,13/05/01,Ferrol,Leganes,1,0,H,0,0,D,2.25,2.6,3.3,2.1,2.8,3
+SP2,13/05/01,Recreativo,Levante,1,1,D,1,1,D,1.7,2.8,5.2,1.75,2.7,4.2
+SP2,13/05/01,Tenerife,Eibar,0,0,D,0,0,D,1.4,3.5,7.05,1.45,3.5,5
+SP2,13/05/01,U.Las Palmas,Murcia,2,1,H,1,0,H,2.45,2.8,2.7,2.4,2.7,2.6
+SP2,19/05/01,Getafe,Compostela,2,1,H,0,0,D,,,,,,
+SP2,19/05/01,Murcia,Tenerife,0,1,A,0,0,D,,,,,,
+SP2,19/05/01,Sp Gijon,Betis,1,2,A,1,1,D,,,,,,
+SP2,20/05/01,Albacete,Ferrol,1,0,H,0,0,D,1.57,3.4,4.8,1.55,3.2,4.7
+SP2,20/05/01,Eibar,Extremadura,0,0,D,0,0,D,2,2.55,4,1.9,2.8,3.3
+SP2,20/05/01,Leganes,Badajoz,0,0,D,0,0,D,2.05,2.5,4,2.1,2.7,3.1
+SP2,20/05/01,Levante,Jaen,2,2,D,1,2,A,1.95,2.8,3.7,1.9,2.8,3.3
+SP2,20/05/01,Lleida,Ath Madrid,1,1,D,1,0,H,,,,4.7,3.4,1.5
+SP2,20/05/01,Recreativo,Elche,0,0,D,0,0,D,1.52,3.3,5.5,1.45,3,6
+SP2,20/05/01,Salamanca,U.Las Palmas,4,0,H,0,0,D,1.55,3.4,5,1.55,3.2,4.7
+SP2,20/05/01,Sevilla,Cordoba,2,0,H,1,0,H,1.4,3.65,6.5,1.4,3.3,6
+SP2,26/05/01,Elche,Eibar,2,0,H,1,0,H,1.9,2.8,3.85,,,
+SP2,26/05/01,Jaen,Recreativo,3,1,H,1,1,D,2.75,2.7,2.45,2.5,2.8,2.4
+SP2,26/05/01,Ferrol,Sp Gijon,2,3,A,0,1,A,2.2,3,2.85,2.2,2.8,2.8
+SP2,26/05/01,U.Las Palmas,Sevilla,1,3,A,1,2,A,3.3,2.85,2.05,,,
+SP2,27/05/01,Ath Madrid,Leganes,1,0,H,0,0,D,1.35,3.65,6.5,1.35,3.8,6.2
+SP2,27/05/01,Badajoz,Albacete,0,0,D,0,0,D,2.63,2.75,2.5,,,
+SP2,27/05/01,Betis,Getafe,1,0,H,0,0,D,1.35,3.8,7.25,1.35,3.8,6.2
+SP2,27/05/01,Compostela,Levante,1,1,D,0,0,D,1.9,2.9,3.45,,,
+SP2,27/05/01,Cordoba,Lleida,3,0,H,2,0,H,1.45,3.45,6.35,,,
+SP2,27/05/01,Extremadura,Murcia,2,0,H,1,0,H,1.95,2.7,3.85,1.9,2.4,4
+SP2,27/05/01,Tenerife,Salamanca,1,1,D,1,0,H,1.45,3.45,5.6,1.45,3.5,5
+SP2,02/06/01,Levante,Betis,3,2,H,2,0,H,3.05,2.9,2.15,,,
+SP2,03/06/01,Albacete,Ath Madrid,0,1,A,0,0,D,2.35,3.05,2.57,2.3,2.9,2.5
+SP2,03/06/01,Getafe,Ferrol,1,2,A,0,0,D,2.17,2.85,3.02,,,
+SP2,03/06/01,Jaen,Elche,3,1,H,0,1,A,2.17,3.2,2.62,,,
+SP2,03/06/01,Leganes,Cordoba,4,0,H,2,0,H,1.82,2.95,3.95,,,
+SP2,03/06/01,Lleida,U.Las Palmas,4,2,H,2,1,H,2.3,2.77,2.9,,,
+SP2,03/06/01,Murcia,Eibar,1,0,H,0,0,D,1.85,2.95,3.8,1.8,2.9,3.6
+SP2,03/06/01,Recreativo,Compostela,2,0,H,0,0,D,1.67,3.15,4.45,,,
+SP2,03/06/01,Salamanca,Extremadura,1,2,A,0,0,D,1.82,2.95,3.95,1.8,2.9,3.6
+SP2,03/06/01,Sevilla,Tenerife,1,0,H,0,0,D,2.05,2.85,3.3,2,2.8,3.1
+SP2,03/06/01,Sp Gijon,Badajoz,1,0,H,0,0,D,1.75,2.85,4.55,,,
+SP2,09/06/01,Extremadura,Sevilla,1,1,D,1,0,H,2.55,2.85,2.5,,,
+SP2,10/06/01,Ath Madrid,Sp Gijon,1,0,H,0,0,D,1.33,3.8,7,1.3,4,7
+SP2,10/06/01,Badajoz,Getafe,2,2,D,1,1,D,1.8,3,3.9,,,
+SP2,10/06/01,Betis,Recreativo,1,0,H,0,0,D,1.6,3.2,4.6,1.45,3.5,5
+SP2,10/06/01,Compostela,Jaen,0,0,D,0,0,D,1.7,3.25,3.95,,,
+SP2,10/06/01,Cordoba,Albacete,1,4,A,0,3,A,2.45,2.8,2.6,,,
+SP2,10/06/01,Eibar,Salamanca,1,3,A,0,0,D,2.15,2.9,3,2,2.9,3
+SP2,10/06/01,Murcia,Elche,0,1,A,0,1,A,2.45,2.85,2.45,,,
+SP2,10/06/01,Ferrol,Levante,1,1,D,1,1,D,2.15,2.5,3.55,,,
+SP2,10/06/01,Tenerife,Lleida,3,2,H,2,0,H,1.15,5.3,11,1.15,5.5,11
+SP2,10/06/01,U.Las Palmas,Leganes,2,1,H,1,1,D,2.75,2.6,2.55,,,
+SP2,16/06/01,Lleida,Extremadura,2,2,D,0,1,A,2.85,2.75,2.35,,,
+SP2,16/06/01,Recreativo,Ferrol,1,2,A,1,2,A,1.6,3.1,5.15,,,
+SP2,16/06/01,Salamanca,Murcia,1,2,A,0,1,A,1.7,3.05,4.5,,,
+SP2,16/06/01,Sevilla,Eibar,2,1,H,1,1,D,1.4,3.6,6.65,,,
+SP2,17/06/01,Albacete,U.Las Palmas,2,3,A,2,2,D,1.37,3.7,7.2,,,
+SP2,17/06/01,Elche,Compostela,2,2,D,1,2,A,1.82,3.1,3.7,,,
+SP2,17/06/01,Getafe,Ath Madrid,0,1,A,0,1,A,,,,,,
+SP2,17/06/01,Jaen,Betis,0,2,A,0,1,A,,,,,,
+SP2,17/06/01,Leganes,Tenerife,0,1,A,0,0,D,,,,,,
+SP2,17/06/01,Levante,Badajoz,2,1,H,1,0,H,2,2.65,3.8,,,
+SP2,17/06/01,Sp Gijon,Cordoba,2,2,D,0,0,D,1.72,3.05,4.3,,,

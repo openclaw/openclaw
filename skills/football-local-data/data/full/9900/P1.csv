@@ -1,0 +1,553 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HTR,,,,,,,,,,,
+P1,20/08/99,Setubal,Guimaraes,1,1,D,1,0,H,,,,,,,,,,,
+P1,21/08/99,Boavista,Porto,1,1,D,0,1,A,,,,,,,,,,,
+P1,21/08/99,Santa Clara,Sp Lisbon,2,2,D,2,0,H,,,,,,,,,,,
+P1,22/08/99,Alverca,Sp Braga,3,2,H,2,0,H,,,,,,,,,,,
+P1,22/08/99,Est Amadora,Belenenses,0,3,A,0,0,D,,,,,,,,,,,
+P1,22/08/99,Farense,Leiria,2,1,H,1,1,D,,,,,,,,,,,
+P1,22/08/99,Gil Vicente,Campomaiorense,3,0,H,0,0,D,,,,,,,,,,,
+P1,22/08/99,Rio Ave,Benfica,1,1,D,1,1,D,,,,,,,,,,,
+P1,22/08/99,Salgueiros,Maritimo,1,0,H,0,0,D,,,,,,,,,,,
+P1,27/08/99,Guimaraes,Farense,3,0,H,3,0,H,,,,,,,,,,,
+P1,28/08/99,Porto,Alverca,0,0,D,0,0,D,,,,,,,,,,,
+P1,29/08/99,Belenenses,Gil Vicente,1,1,D,0,1,A,,,,,,,,,,,
+P1,29/08/99,Benfica,Salgueiros,1,0,H,0,0,D,,,,,,,,,,,
+P1,29/08/99,Campomaiorense,Boavista,0,1,A,0,0,D,,,,,,,,,,,
+P1,29/08/99,Leiria,Est Amadora,1,1,D,0,1,A,,,,,,,,,,,
+P1,29/08/99,Maritimo,Santa Clara,0,0,D,0,0,D
+P1,29/08/99,Sp Braga,Rio Ave,0,1,A,0,1,A
+P1,30/08/99,Sp Lisbon,Setubal,2,1,H,0,1,A
+P1,10/09/99,Boavista,Belenenses,1,0,H,1,0,H
+P1,11/09/99,Sp Braga,Porto,0,1,A,0,0,D
+P1,12/09/99,Est Amadora,Guimaraes,2,2,D,1,0,H
+P1,12/09/99,Farense,Sp Lisbon,0,3,A,0,2,A
+P1,12/09/99,Gil Vicente,Leiria,2,0,H,0,0,D
+P1,12/09/99,Rio Ave,Salgueiros,4,1,H,1,0,H
+P1,12/09/99,Santa Clara,Benfica,0,3,A,0,3,A
+P1,12/09/99,Setubal,Maritimo,4,2,H,0,0,D
+P1,13/09/99,Alverca,Campomaiorense,1,0,H,0,0,D
+P1,17/09/99,Campomaiorense,Sp Braga,2,4,A,0,1,A
+P1,18/09/99,Leiria,Boavista,0,0,D,0,0,D
+P1,18/09/99,Porto,Rio Ave,4,1,H,1,1,D
+P1,19/09/99,Belenenses,Alverca,4,2,H,2,1,H
+P1,19/09/99,Guimaraes,Gil Vicente,1,0,H,0,0,D
+P1,19/09/99,Maritimo,Farense,3,0,H,1,0,H
+P1,19/09/99,Salgueiros,Santa Clara,2,0,H,1,0,H
+P1,20/09/99,Benfica,Setubal,3,0,H,2,0,H
+P1,20/09/99,Sp Lisbon,Est Amadora,1,1,D,0,1,A
+P1,24/09/99,Porto,Campomaiorense,2,0,H,1,0,H
+P1,25/09/99,Farense,Benfica,0,1,A,0,1,A
+P1,25/09/99,Gil Vicente,Sp Lisbon,1,1,D,1,0,H
+P1,26/09/99,Alverca,Leiria,0,0,D,0,0,D
+P1,26/09/99,Boavista,Guimaraes,2,0,H,0,0,D
+P1,26/09/99,Est Amadora,Maritimo,1,1,D,0,1,A
+P1,26/09/99,Rio Ave,Santa Clara,0,5,A,0,2,A
+P1,26/09/99,Setubal,Salgueiros,1,2,A,0,1,A
+P1,26/09/99,Sp Braga,Belenenses,0,0,D,0,0,D
+P1,02/10/99,Campomaiorense,Rio Ave,1,1,D,0,1,A
+P1,02/10/99,Guimaraes,Alverca,1,0,H,0,0,D
+P1,03/10/99,Leiria,Sp Braga,3,0,H,2,0,H
+P1,03/10/99,Maritimo,Gil Vicente,1,0,H,1,0,H
+P1,03/10/99,Salgueiros,Farense,0,0,D,0,0,D
+P1,04/10/99,Belenenses,Porto,0,0,D,0,0,D
+P1,04/10/99,Benfica,Est Amadora,2,0,H,0,0,D
+P1,04/10/99,Sp Lisbon,Boavista,2,0,H,1,0,H
+P1,05/10/99,Santa Clara,Setubal,2,1,H,2,1,H
+P1,14/10/99,Boavista,Maritimo,0,2,A,0,1,A
+P1,15/10/99,Porto,Leiria,4,2,H,1,1,D
+P1,16/10/99,Campomaiorense,Belenenses,2,1,H,0,1,A
+P1,16/10/99,Gil Vicente,Benfica,0,2,A,0,0,D
+P1,17/10/99,Alverca,Sp Lisbon,2,1,H,0,1,A
+P1,17/10/99,Est Amadora,Salgueiros,1,0,H,1,0,H
+P1,17/10/99,Farense,Santa Clara,2,2,D,0,1,A
+P1,17/10/99,Rio Ave,Setubal,1,1,D,0,1,A
+P1,17/10/99,Sp Braga,Guimaraes,2,4,A,1,0,H
+P1,22/10/99,Setubal,Farense,1,1,D,1,1,D
+P1,23/10/99,Guimaraes,Porto,1,1,D,0,0,D
+P1,23/10/99,Sp Lisbon,Sp Braga,2,0,H,0,0,D
+P1,24/10/99,Belenenses,Rio Ave,2,1,H,1,0,H
+P1,24/10/99,Benfica,Boavista,1,1,D,1,0,H
+P1,24/10/99,Leiria,Campomaiorense,1,2,A,0,1,A
+P1,24/10/99,Maritimo,Alverca,3,0,H,1,0,H
+P1,24/10/99,Salgueiros,Gil Vicente,1,2,A,1,1,D
+P1,24/10/99,Santa Clara,Est Amadora,1,1,D,1,0,H
+P1,29/10/99,Campomaiorense,Guimaraes,2,1,H,2,1,H
+P1,30/10/99,Boavista,Salgueiros,2,1,H,1,0,H
+P1,30/10/99,Porto,Sp Lisbon,3,0,H,1,0,H
+P1,31/10/99,Alverca,Benfica,3,1,H,1,1,D
+P1,31/10/99,Belenenses,Leiria,1,0,H,1,0,H
+P1,31/10/99,Gil Vicente,Santa Clara,3,1,H,1,0,H
+P1,31/10/99,Rio Ave,Farense,1,1,D,0,1,A
+P1,31/10/99,Sp Braga,Maritimo,1,2,A,1,0,H
+P1,01/11/99,Est Amadora,Setubal,3,0,H,2,0,H
+P1,05/11/99,Guimaraes,Belenenses,4,2,H,2,1,H
+P1,06/11/99,Sp Lisbon,Campomaiorense,1,0,H,0,0,D
+P1,07/11/99,Farense,Est Amadora,1,1,D,0,0,D
+P1,07/11/99,Leiria,Rio Ave,0,0,D,0,0,D
+P1,07/11/99,Salgueiros,Alverca,0,2,A,0,0,D
+P1,07/11/99,Setubal,Gil Vicente,0,1,A,0,0,D
+P1,08/11/99,Benfica,Sp Braga,2,1,H,1,0,H
+P1,08/11/99,Maritimo,Porto,2,1,H,1,0,H
+P1,08/11/99,Santa Clara,Boavista,0,1,A,0,0,D
+P1,20/11/99,Boavista,Setubal,1,0,H,1,0,H
+P1,20/11/99,Porto,Benfica,2,0,H,2,0,H
+P1,21/11/99,Alverca,Santa Clara,0,1,A,0,0,D
+P1,21/11/99,Campomaiorense,Maritimo,1,0,H,1,0,H
+P1,21/11/99,Gil Vicente,Farense,4,0,H,2,0,H
+P1,21/11/99,Rio Ave,Est Amadora,0,1,A,0,1,A
+P1,21/11/99,Sp Braga,Salgueiros,2,0,H,0,0,D
+P1,22/11/99,Belenenses,Sp Lisbon,0,1,A,0,1,A
+P1,22/11/99,Leiria,Guimaraes,1,0,H,1,0,H
+P1,26/11/99,Maritimo,Belenenses,0,0,D,0,0,D
+P1,27/11/99,Sp Lisbon,Leiria,2,0,H,0,0,D
+P1,28/11/99,Est Amadora,Gil Vicente,0,1,A,0,0,D
+P1,28/11/99,Guimaraes,Rio Ave,2,1,H,0,1,A
+P1,28/11/99,Salgueiros,Porto,0,4,A,0,1,A
+P1,28/11/99,Santa Clara,Sp Braga,1,2,A,0,1,A
+P1,28/11/99,Setubal,Alverca,1,0,H,1,0,H
+P1,29/11/99,Benfica,Campomaiorense,2,0,H,1,0,H
+P1,29/11/99,Farense,Boavista,0,2,A,0,1,A
+P1,03/12/99,Porto,Santa Clara,1,0,H,0,0,D
+P1,04/12/99,Alverca,Farense,0,1,A,0,0,D
+P1,04/12/99,Belenenses,Benfica,0,0,D,0,0,D
+P1,04/12/99,Guimaraes,Sp Lisbon,1,2,A,0,1,A
+P1,05/12/99,Boavista,Est Amadora,1,2,A,0,1,A
+P1,05/12/99,Campomaiorense,Salgueiros,0,1,A,0,0,D
+P1,05/12/99,Leiria,Maritimo,0,1,A,0,1,A
+P1,05/12/99,Rio Ave,Gil Vicente,3,1,H,2,0,H
+P1,05/12/99,Sp Braga,Setubal,3,0,H,1,0,H
+P1,10/12/99,Maritimo,Guimaraes,1,1,D,0,0,D
+P1,11/12/99,Est Amadora,Alverca,3,0,H,2,0,H
+P1,11/12/99,Gil Vicente,Boavista,1,3,A,1,1,D
+P1,12/12/99,Farense,Sp Braga,1,1,D,0,1,A
+P1,12/12/99,Salgueiros,Belenenses,0,0,D,0,0,D
+P1,12/12/99,Santa Clara,Campomaiorense,2,2,D,1,1,D
+P1,12/12/99,Sp Lisbon,Rio Ave,2,1,H,2,0,H
+P1,13/12/99,Benfica,Leiria,3,2,H,1,1,D
+P1,13/12/99,Setubal,Porto,1,4,A,0,1,A
+P1,17/12/99,Sp Braga,Est Amadora,0,1,A,0,0,D
+P1,18/12/99,Sp Lisbon,Maritimo,4,2,H,2,2,D
+P1,19/12/99,Alverca,Gil Vicente,4,2,H,0,0,D
+P1,19/12/99,Belenenses,Santa Clara,3,1,H,1,0,H
+P1,19/12/99,Campomaiorense,Setubal,0,1,A,0,0,D
+P1,19/12/99,Guimaraes,Benfica,2,1,H,1,1,D
+P1,19/12/99,Leiria,Salgueiros,1,4,A,1,1,D
+P1,19/12/99,Rio Ave,Boavista,2,1,H,2,1,H
+P1,20/12/99,Porto,Farense,5,0,H,4,0,H
+P1,07/01/00,Salgueiros,Guimaraes,0,1,A,0,0,D
+P1,08/01/00,Est Amadora,Porto,0,2,A,0,0,D
+P1,08/01/00,Farense,Campomaiorense,2,2,D,2,1,H
+P1,08/01/00,Rio Ave,Maritimo,0,2,A,0,1,A
+P1,08/01/00,Santa Clara,Leiria,1,1,D,0,1,A
+P1,08/01/00,Setubal,Belenenses,0,2,A,0,0,D
+P1,09/01/00,Benfica,Sp Lisbon,0,0,D,0,0,D
+P1,09/01/00,Boavista,Alverca,2,0,H,1,0,H
+P1,09/01/00,Gil Vicente,Sp Braga,0,0,D,0,0,D
+P1,15/01/00,Maritimo,Benfica,0,0,D,0,0,D
+P1,16/01/00,Alverca,Rio Ave,3,1,H,0,0,D
+P1,16/01/00,Belenenses,Farense,1,1,D,0,1,A
+P1,16/01/00,Campomaiorense,Est Amadora,2,1,H,0,0,D
+P1,16/01/00,Guimaraes,Santa Clara,2,1,H,0,1,A
+P1,16/01/00,Leiria,Setubal,0,0,D,0,0,D
+P1,16/01/00,Sp Braga,Boavista,1,0,H,0,0,D
+P1,16/01/00,Sp Lisbon,Salgueiros,2,0,H,1,0,H
+P1,17/01/00,Porto,Gil Vicente,2,0,H,1,0,H
+P1,21/01/00,Belenenses,Est Amadora,1,1,D,0,0,D
+P1,22/01/00,Benfica,Rio Ave,1,0,H,0,0,D
+P1,22/01/00,Campomaiorense,Gil Vicente,0,0,D,0,0,D
+P1,22/01/00,Guimaraes,Setubal,4,0,H,1,0,H
+P1,22/01/00,Sp Lisbon,Santa Clara,4,1,H,3,1,H
+P1,23/01/00,Leiria,Farense,2,0,H,1,0,H
+P1,23/01/00,Maritimo,Salgueiros,0,1,A,0,0,D
+P1,23/01/00,Porto,Boavista,1,0,H,0,0,D
+P1,23/01/00,Sp Braga,Alverca,3,1,H,1,0,H
+P1,29/01/00,Boavista,Campomaiorense,2,1,H,2,0,H
+P1,29/01/00,Farense,Guimaraes,2,1,H,2,1,H
+P1,30/01/00,Alverca,Porto,1,1,D,1,1,D
+P1,30/01/00,Est Amadora,Leiria,1,1,D,1,0,H
+P1,30/01/00,Gil Vicente,Belenenses,1,1,D,0,1,A
+P1,30/01/00,Rio Ave,Sp Braga,2,0,H,1,0,H
+P1,30/01/00,Salgueiros,Benfica,1,2,A,1,0,H
+P1,30/01/00,Santa Clara,Maritimo,0,0,D,0,0,D
+P1,31/01/00,Setubal,Sp Lisbon,1,2,A,1,0,H
+P1,04/02/00,Belenenses,Boavista,1,1,D,1,1,D
+P1,05/02/00,Campomaiorense,Alverca,0,0,D,0,0,D
+P1,05/02/00,Maritimo,Setubal,1,0,H,1,0,H
+P1,05/02/00,Porto,Sp Braga,3,0,H,1,0,H
+P1,05/02/00,Sp Lisbon,Farense,3,1,H,1,0,H
+P1,06/02/00,Benfica,Santa Clara,1,0,H,0,0,D
+P1,06/02/00,Guimaraes,Est Amadora,1,0,H,0,0,D
+P1,06/02/00,Leiria,Gil Vicente,1,1,D,0,0,D
+P1,06/02/00,Salgueiros,Rio Ave,1,1,D,0,1,A
+P1,12/02/00,Boavista,Leiria,0,1,A,0,0,D
+P1,12/02/00,Santa Clara,Salgueiros,0,0,D,0,0,D
+P1,13/02/00,Alverca,Belenenses,1,1,D,1,0,H
+P1,13/02/00,Est Amadora,Sp Lisbon,0,0,D,0,0,D
+P1,13/02/00,Farense,Maritimo,1,0,H,1,0,H
+P1,13/02/00,Gil Vicente,Guimaraes,1,0,H,1,0,H
+P1,13/02/00,Rio Ave,Porto,2,2,D,1,0,H
+P1,13/02/00,Sp Braga,Campomaiorense,4,1,H,1,1,D
+P1,14/02/00,Setubal,Benfica,1,2,A,0,1,A
+P1,18/02/00,Belenenses,Sp Braga,0,3,A,0,0,D
+P1,19/02/00,Campomaiorense,Porto,1,0,H,1,0,H
+P1,19/02/00,Santa Clara,Rio Ave,1,0,H,1,0,H
+P1,19/02/00,Sp Lisbon,Gil Vicente,1,1,D,0,1,A
+P1,20/02/00,Benfica,Farense,6,2,H,3,2,H
+P1,20/02/00,Guimaraes,Boavista,2,0,H,1,0,H
+P1,20/02/00,Leiria,Alverca,3,0,H,1,0,H
+P1,20/02/00,Maritimo,Est Amadora,2,2,D,1,2,A
+P1,20/02/00,Salgueiros,Setubal,1,0,H,0,0,D
+P1,25/02/00,Sp Braga,Leiria,0,2,A,0,1,A
+P1,26/02/00,Porto,Belenenses,2,1,H,2,1,H
+P1,27/02/00,Alverca,Guimaraes,2,1,H,1,0,H
+P1,27/02/00,Est Amadora,Benfica,3,0,H,1,0,H
+P1,27/02/00,Farense,Salgueiros,3,2,H,1,0,H
+P1,27/02/00,Gil Vicente,Maritimo,5,1,H,2,1,H
+P1,27/02/00,Rio Ave,Campomaiorense,1,0,H,0,0,D
+P1,27/02/00,Setubal,Santa Clara,1,0,H,1,0,H
+P1,28/02/00,Boavista,Sp Lisbon,0,1,A,0,1,A
+P1,03/03/00,Maritimo,Boavista,1,1,D,1,1,D
+P1,04/03/00,Benfica,Gil Vicente,3,0,H,2,0,H
+P1,04/03/00,Guimaraes,Sp Braga,1,0,H,0,0,D
+P1,04/03/00,Leiria,Porto,0,1,A,0,0,D
+P1,04/03/00,Salgueiros,Est Amadora,1,1,D,0,0,D
+P1,04/03/00,Santa Clara,Farense,1,2,A,0,2,A
+P1,04/03/00,Setubal,Rio Ave,2,0,H,2,0,H
+P1,04/03/00,Sp Lisbon,Alverca,1,1,D,1,0,H
+P1,06/03/00,Belenenses,Campomaiorense,2,2,D,1,1,D
+P1,10/03/00,Sp Braga,Sp Lisbon,0,2,A,0,0,D
+P1,11/03/00,Porto,Guimaraes,2,1,H,0,0,D
+P1,12/03/00,Alverca,Maritimo,1,1,D,1,1,D
+P1,12/03/00,Boavista,Benfica,1,1,D,0,1,A
+P1,12/03/00,Campomaiorense,Leiria,2,0,H,1,0,H
+P1,12/03/00,Farense,Setubal,0,0,D,0,0,D
+P1,12/03/00,Gil Vicente,Salgueiros,2,0,H,0,0,D
+P1,12/03/00,Rio Ave,Belenenses,3,0,H,1,0,H
+P1,13/03/00,Est Amadora,Santa Clara,0,0,D,0,0,D
+P1,17/03/00,Maritimo,Sp Braga,1,0,H,1,0,H
+P1,18/03/00,Salgueiros,Boavista,1,3,A,0,1,A
+P1,18/03/00,Sp Lisbon,Porto,2,0,H,2,0,H
+P1,19/03/00,Benfica,Alverca,3,2,H,2,1,H
+P1,19/03/00,Farense,Rio Ave,4,0,H,1,0,H
+P1,19/03/00,Guimaraes,Campomaiorense,4,1,H,1,1,D
+P1,19/03/00,Leiria,Belenenses,1,0,H,0,0,D
+P1,19/03/00,Santa Clara,Gil Vicente,0,0,D,0,0,D
+P1,19/03/00,Setubal,Est Amadora,1,0,H,0,0,D
+P1,24/03/00,Campomaiorense,Sp Lisbon,0,2,A,0,1,A
+P1,25/03/00,Belenenses,Guimaraes,2,0,H,1,0,H
+P1,25/03/00,Porto,Maritimo,3,2,H,2,2,D
+P1,25/03/00,Sp Braga,Benfica,3,2,H,1,1,D
+P1,26/03/00,Alverca,Salgueiros,2,0,H,2,0,H
+P1,26/03/00,Boavista,Santa Clara,2,1,H,2,0,H
+P1,26/03/00,Est Amadora,Farense,1,1,D,1,1,D
+P1,26/03/00,Gil Vicente,Setubal,2,0,H,1,0,H
+P1,26/03/00,Rio Ave,Leiria,0,0,D,0,0,D
+P1,31/03/00,Setubal,Boavista,2,1,H,1,0,H
+P1,01/04/00,Benfica,Porto,1,0,H,0,0,D
+P1,01/04/00,Santa Clara,Alverca,4,3,H,1,1,D
+P1,02/04/00,Est Amadora,Rio Ave,1,0,H,0,0,D
+P1,02/04/00,Guimaraes,Leiria,0,1,A,0,1,A
+P1,02/04/00,Maritimo,Campomaiorense,1,0,H,0,0,D
+P1,02/04/00,Salgueiros,Sp Braga,1,1,D,1,1,D
+P1,02/04/00,Sp Lisbon,Belenenses,1,0,H,0,0,D
+P1,03/04/00,Farense,Gil Vicente,0,3,A,0,2,A
+P1,07/04/00,Leiria,Sp Lisbon,1,1,D,0,1,A
+P1,07/04/00,Rio Ave,Guimaraes,1,1,D,0,0,D
+P1,08/04/00,Campomaiorense,Benfica,2,4,A,0,3,A
+P1,09/04/00,Alverca,Setubal,0,1,A,0,1,A
+P1,09/04/00,Belenenses,Maritimo,1,1,D,1,0,H
+P1,09/04/00,Gil Vicente,Est Amadora,2,2,D,0,0,D
+P1,09/04/00,Porto,Salgueiros,2,0,H,1,0,H
+P1,09/04/00,Sp Braga,Santa Clara,3,1,H,1,1,D
+P1,10/04/00,Boavista,Farense,2,1,H,1,0,H
+P1,14/04/00,Farense,Alverca,1,2,A,1,0,H
+P1,15/04/00,Santa Clara,Porto,0,2,A,0,1,A
+P1,16/04/00,Benfica,Belenenses,2,3,A,0,2,A
+P1,16/04/00,Gil Vicente,Rio Ave,4,0,H,2,0,H
+P1,16/04/00,Maritimo,Leiria,0,0,D,0,0,D
+P1,16/04/00,Salgueiros,Campomaiorense,2,1,H,1,0,H
+P1,16/04/00,Setubal,Sp Braga,0,2,A,0,1,A
+P1,16/04/00,Sp Lisbon,Guimaraes,1,0,H,1,0,H
+P1,17/04/00,Est Amadora,Boavista,1,2,A,1,0,H
+P1,21/04/00,Leiria,Benfica,2,1,H,0,1,A
+P1,21/04/00,Rio Ave,Sp Lisbon,1,2,A,1,1,D
+P1,22/04/00,Alverca,Est Amadora,0,1,A,0,0,D
+P1,22/04/00,Belenenses,Salgueiros,2,1,H,0,0,D
+P1,22/04/00,Boavista,Gil Vicente,2,0,H,1,0,H
+P1,22/04/00,Campomaiorense,Santa Clara,1,0,H,0,0,D
+P1,22/04/00,Porto,Setubal,4,1,H,2,0,H
+P1,22/04/00,Sp Braga,Farense,1,0,H,0,0,D
+P1,24/04/00,Guimaraes,Maritimo,1,3,A,0,2,A
+P1,28/04/00,Est Amadora,Sp Braga,3,3,D,0,2,A
+P1,29/04/00,Boavista,Rio Ave,2,0,H,0,0,D
+P1,29/04/00,Farense,Porto,3,3,D,1,3,A
+P1,30/04/00,Benfica,Guimaraes,3,0,H,2,0,H
+P1,30/04/00,Gil Vicente,Alverca,2,2,D,1,2,A
+P1,30/04/00,Maritimo,Sp Lisbon,0,2,A,0,0,D
+P1,30/04/00,Salgueiros,Leiria,3,0,H,1,0,H
+P1,30/04/00,Santa Clara,Belenenses,1,0,H,1,0,H
+P1,30/04/00,Setubal,Campomaiorense,1,2,A,0,2,A
+P1,05/05/00,Guimaraes,Salgueiros,2,2,D,1,0,H
+P1,06/05/00,Belenenses,Setubal,0,1,A,0,0,D
+P1,06/05/00,Sp Lisbon,Benfica,0,1,A,0,0,D
+P1,07/05/00,Alverca,Boavista,1,0,H,1,0,H
+P1,07/05/00,Campomaiorense,Farense,1,0,H,0,0,D
+P1,07/05/00,Leiria,Santa Clara,3,2,H,3,1,H
+P1,07/05/00,Maritimo,Rio Ave,5,2,H,2,1,H
+P1,07/05/00,Porto,Est Amadora,2,1,H,1,0,H
+P1,07/05/00,Sp Braga,Gil Vicente,0,0,D,0,0,D
+P1,14/05/00,Benfica,Maritimo,2,1,H,2,0,H
+P1,14/05/00,Boavista,Sp Braga,2,2,D,2,2,D
+P1,14/05/00,Est Amadora,Campomaiorense,3,0,H,3,0,H
+P1,14/05/00,Farense,Belenenses,2,1,H,0,0,D
+P1,14/05/00,Gil Vicente,Porto,2,1,H,1,0,H
+P1,14/05/00,Rio Ave,Alverca,2,0,H,0,0,D
+P1,14/05/00,Salgueiros,Sp Lisbon,0,4,A,0,0,D
+P1,14/05/00,Santa Clara,Guimaraes,3,2,H,0,0,D
+P1,14/05/00,Setubal,Leiria,0,0,D,0,0,D
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,

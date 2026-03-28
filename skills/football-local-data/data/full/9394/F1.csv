@@ -1,0 +1,553 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,,,,,,,,,,,,,,,,,,,,,
+F1,23/07/93,Nantes,Monaco,1,0,H,,,,,,,,,,,,,,,,,,,,,
+F1,24/07/93,Bordeaux,Paris SG,1,0,H,,,,,,,,,,,,,,,,,,,,,
+F1,24/07/93,Caen,Metz,1,1,D,,,,,,,,,,,,,,,,,,,,,
+F1,24/07/93,Lille,Martigues,1,1,D,,,,,,,,,,,,,,,,,,,,,
+F1,24/07/93,Marseille,Lens,1,0,H,,,,,,,,,,,,,,,,,,,,,
+F1,24/07/93,Montpellier,Lyon,1,1,D,,,,,,,,,,,,,,,,,,,,,
+F1,24/07/93,Sochaux,Angers,4,1,H,,,,,,,,,,,,,,,,,,,,,
+F1,24/07/93,St Etienne,Cannes,1,2,A,,,,,,,,,,,,,,,,,,,,,
+F1,24/07/93,Strasbourg,Auxerre,1,1,D,,,,,,,,,,,,,,,,,,,,,
+F1,24/07/93,Toulouse,Le Havre,0,0,D,,,,,,,,,,,,,,,,,,,,,
+F1,31/07/93,Auxerre,Montpellier,3,1,H,,,,,,,,,,,,,,,,,,,,,
+F1,31/07/93,Le Havre,Bordeaux,0,3,A,,,,,,,,,,,,,,,,,,,,,
+F1,31/07/93,Lens,Strasbourg,0,0,D,,,,,,,,,,,,,,,,,,,,,
+F1,31/07/93,Lyon,Caen,2,0,H,,,,,,,,,,,,,,,,,,,,,
+F1,31/07/93,Martigues,Sochaux,1,1,D,,,,,,,,,,,,,,,,,,,,,
+F1,31/07/93,Metz,Angers,2,0,H
+F1,31/07/93,Monaco,Toulouse,3,0,H
+F1,31/07/93,Nantes,St Etienne,1,0,H
+F1,31/07/93,Paris SG,Lille,2,1,H
+F1,01/08/93,Cannes,Marseille,2,1,H
+F1,06/08/93,Lille,Lens,0,0,D
+F1,07/08/93,Angers,Lyon,3,1,H
+F1,07/08/93,Bordeaux,Cannes,0,0,D
+F1,07/08/93,Caen,Auxerre,1,0,H
+F1,07/08/93,Marseille,Le Havre,1,1,D
+F1,07/08/93,Montpellier,Martigues,1,0,H
+F1,07/08/93,Sochaux,Metz,2,1,H
+F1,07/08/93,St Etienne,Monaco,2,0,H
+F1,07/08/93,Strasbourg,Paris SG,2,2,D
+F1,07/08/93,Toulouse,Nantes,0,3,A
+F1,10/08/93,Monaco,Bordeaux,3,2,H
+F1,11/08/93,Auxerre,Angers,0,0,D
+F1,11/08/93,Cannes,Lille,2,1,H
+F1,11/08/93,Le Havre,St Etienne,0,0,D
+F1,11/08/93,Lens,Montpellier,2,1,H
+F1,11/08/93,Lyon,Metz,2,0,H
+F1,11/08/93,Martigues,Caen,4,1,H
+F1,11/08/93,Nantes,Marseille,0,0,D
+F1,11/08/93,Paris SG,Sochaux,1,0,H
+F1,11/08/93,Toulouse,Strasbourg,0,0,D
+F1,14/08/93,Angers,Martigues,1,3,A
+F1,14/08/93,Bordeaux,Nantes,2,0,H
+F1,14/08/93,Caen,Lens,1,0,H
+F1,14/08/93,Lille,Le Havre,2,2,D
+F1,14/08/93,Metz,Auxerre,0,0,D
+F1,14/08/93,Montpellier,Monaco,0,3,A
+F1,14/08/93,Sochaux,Lyon,0,1,A
+F1,14/08/93,St Etienne,Toulouse,2,2,D
+F1,14/08/93,Strasbourg,Cannes,2,2,D
+F1,15/08/93,Marseille,Paris SG,1,0,H
+F1,27/08/93,Monaco,Marseille,0,0,D
+F1,28/08/93,Auxerre,Lyon,3,2,H
+F1,28/08/93,Cannes,Sochaux,1,1,D
+F1,28/08/93,Le Havre,Strasbourg,0,1,A
+F1,28/08/93,Lens,Angers,0,1,A
+F1,28/08/93,Martigues,Metz,1,1,D
+F1,28/08/93,Nantes,Montpellier,0,0,D
+F1,28/08/93,Paris SG,Caen,2,0,H
+F1,28/08/93,St Etienne,Bordeaux,0,0,D
+F1,28/08/93,Toulouse,Lille,1,1,D
+F1,31/08/93,Bordeaux,Toulouse,2,0,H
+F1,01/09/93,Angers,Paris SG,1,1,D
+F1,01/09/93,Caen,Cannes,1,1,D
+F1,01/09/93,Lille,Nantes,0,0,D
+F1,01/09/93,Lyon,Martigues,0,0,D
+F1,01/09/93,Marseille,St Etienne,3,1,H
+F1,01/09/93,Metz,Lens,2,1,H
+F1,01/09/93,Montpellier,Le Havre,2,1,H
+F1,01/09/93,Sochaux,Auxerre,1,0,H
+F1,01/09/93,Strasbourg,Monaco,1,1,D
+F1,10/09/93,Le Havre,Caen,1,2,A
+F1,11/09/93,Bordeaux,Metz,2,0,H
+F1,11/09/93,Cannes,Angers,4,3,H
+F1,11/09/93,Lens,Lyon,2,0,H
+F1,11/09/93,Martigues,Auxerre,0,1,A
+F1,11/09/93,Monaco,Lille,1,0,H
+F1,11/09/93,Nantes,Strasbourg,2,2,D
+F1,11/09/93,Paris SG,Montpellier,1,0,H
+F1,11/09/93,St Etienne,Sochaux,0,0,D
+F1,11/09/93,Toulouse,Marseille,0,0,D
+F1,18/09/93,Auxerre,Lens,1,0,H
+F1,18/09/93,Caen,Toulouse,1,0,H
+F1,18/09/93,Lille,St Etienne,0,2,A
+F1,18/09/93,Lyon,Paris SG,1,3,A
+F1,18/09/93,Marseille,Bordeaux,3,1,H
+F1,18/09/93,Metz,Le Havre,2,0,H
+F1,18/09/93,Montpellier,Cannes,2,1,H
+F1,18/09/93,Sochaux,Monaco,2,0,H
+F1,18/09/93,Strasbourg,Martigues,3,0,H
+F1,19/09/93,Angers,Nantes,0,0,D
+F1,23/09/93,Paris SG,Auxerre,4,0,H
+F1,24/09/93,Bordeaux,Lille,2,1,H
+F1,24/09/93,Cannes,Lyon,1,0,H
+F1,24/09/93,Le Havre,Sochaux,0,0,D
+F1,24/09/93,Lens,Martigues,1,1,D
+F1,24/09/93,Marseille,Metz,0,3,A
+F1,24/09/93,Monaco,Angers,3,0,H
+F1,24/09/93,Nantes,Caen,1,0,H
+F1,24/09/93,St Etienne,Strasbourg,0,0,D
+F1,24/09/93,Toulouse,Montpellier,0,0,D
+F1,02/10/93,Angers,Le Havre,0,0,D
+F1,02/10/93,Auxerre,Toulouse,5,1,H
+F1,02/10/93,Caen,Monaco,0,1,A
+F1,02/10/93,Lille,Marseille,1,2,A
+F1,02/10/93,Martigues,Paris SG,1,1,D
+F1,02/10/93,Metz,Cannes,0,0,D
+F1,02/10/93,Montpellier,St Etienne,3,0,H
+F1,02/10/93,Sochaux,Lens,1,1,D
+F1,02/10/93,Strasbourg,Bordeaux,0,2,A
+F1,03/10/93,Lyon,Nantes,2,1,H
+F1,05/10/93,Bordeaux,Montpellier,1,1,D
+F1,06/10/93,Cannes,Martigues,2,1,H
+F1,06/10/93,Le Havre,Auxerre,1,0,H
+F1,06/10/93,Lille,Sochaux,3,1,H
+F1,06/10/93,Marseille,Strasbourg,2,1,H
+F1,06/10/93,Monaco,Lyon,1,1,D
+F1,06/10/93,Nantes,Metz,2,0,H
+F1,06/10/93,Paris SG,Lens,1,0,H
+F1,06/10/93,St Etienne,Caen,5,0,H
+F1,06/10/93,Toulouse,Angers,2,1,H
+F1,16/10/93,Angers,St Etienne,1,1,D
+F1,16/10/93,Auxerre,Monaco,4,0,H
+F1,16/10/93,Caen,Bordeaux,1,0,H
+F1,16/10/93,Lens,Cannes,2,1,H
+F1,16/10/93,Lyon,Le Havre,1,1,D
+F1,16/10/93,Martigues,Toulouse,1,1,D
+F1,16/10/93,Metz,Paris SG,0,1,A
+F1,16/10/93,Strasbourg,Lille,1,1,D
+F1,17/10/93,Sochaux,Nantes,1,1,D
+F1,22/10/93,Strasbourg,Caen,3,0,H
+F1,23/10/93,Bordeaux,Angers,1,0,H
+F1,23/10/93,Cannes,Paris SG,0,1,A
+F1,23/10/93,Le Havre,Lens,1,1,D
+F1,23/10/93,Lille,Montpellier,0,0,D
+F1,23/10/93,Marseille,Sochaux,1,1,D
+F1,23/10/93,Monaco,Martigues,7,0,H
+F1,23/10/93,Nantes,Auxerre,1,2,A
+F1,23/10/93,St Etienne,Metz,1,0,H
+F1,23/10/93,Toulouse,Lyon,2,0,H
+F1,28/10/93,Auxerre,Cannes,0,0,D
+F1,29/10/93,Angers,Marseille,0,1,A
+F1,29/10/93,Caen,Lille,2,3,A
+F1,29/10/93,Lens,Monaco,3,3,D
+F1,29/10/93,Lyon,St Etienne,1,0,H
+F1,29/10/93,Martigues,Le Havre,3,0,H
+F1,29/10/93,Metz,Toulouse,1,0,H
+F1,29/10/93,Montpellier,Strasbourg,4,0,H
+F1,29/10/93,Paris SG,Nantes,1,0,H
+F1,29/10/93,Sochaux,Bordeaux,2,2,D
+F1,06/11/93,Bordeaux,Lyon,2,0,H
+F1,06/11/93,Le Havre,Cannes,3,1,H
+F1,06/11/93,Lille,Angers,1,1,D
+F1,06/11/93,Marseille,Caen,2,0,H
+F1,06/11/93,Monaco,Paris SG,1,1,D
+F1,06/11/93,Nantes,Martigues,2,1,H
+F1,06/11/93,St Etienne,Auxerre,1,0,H
+F1,06/11/93,Strasbourg,Sochaux,2,0,H
+F1,07/11/93,Montpellier,Metz,3,2,H
+F1,07/11/93,Toulouse,Lens,1,1,D
+F1,10/11/93,Angers,Strasbourg,1,3,A
+F1,10/11/93,Auxerre,Bordeaux,0,1,A
+F1,10/11/93,Caen,Montpellier,0,0,D
+F1,10/11/93,Cannes,Monaco,0,2,A
+F1,10/11/93,Lens,Nantes,1,1,D
+F1,10/11/93,Lyon,Marseille,1,0,H
+F1,10/11/93,Martigues,St Etienne,2,1,H
+F1,10/11/93,Metz,Lille,1,1,D
+F1,10/11/93,Paris SG,Le Havre,0,0,D
+F1,10/11/93,Sochaux,Toulouse,0,0,D
+F1,21/11/93,Bordeaux,Martigues,1,1,D
+F1,21/11/93,Caen,Sochaux,2,1,H
+F1,21/11/93,Lille,Lyon,2,1,H
+F1,21/11/93,Marseille,Auxerre,0,3,A
+F1,21/11/93,Monaco,Le Havre,1,1,D
+F1,21/11/93,Montpellier,Angers,2,1,H
+F1,21/11/93,Nantes,Cannes,0,0,D
+F1,21/11/93,St Etienne,Lens,0,0,D
+F1,21/11/93,Strasbourg,Metz,0,0,D
+F1,21/11/93,Toulouse,Paris SG,1,2,A
+F1,27/11/93,Angers,Caen,2,0,H
+F1,27/11/93,Auxerre,Lille,5,0,H
+F1,27/11/93,Cannes,Toulouse,2,1,H
+F1,27/11/93,Le Havre,Nantes,0,0,D
+F1,27/11/93,Lens,Bordeaux,1,0,H
+F1,27/11/93,Lyon,Strasbourg,2,1,H
+F1,27/11/93,Martigues,Marseille,0,3,A
+F1,27/11/93,Metz,Monaco,1,1,D
+F1,27/11/93,Paris SG,St Etienne,1,0,H
+F1,27/11/93,Sochaux,Montpellier,2,1,H
+F1,02/12/93,St Etienne,Nantes,1,1,D
+F1,03/12/93,Angers,Metz,1,2,A
+F1,03/12/93,Bordeaux,Le Havre,2,1,H
+F1,03/12/93,Caen,Lyon,1,0,H
+F1,03/12/93,Lille,Paris SG,0,2,A
+F1,03/12/93,Marseille,Cannes,3,1,H
+F1,03/12/93,Montpellier,Auxerre,1,0,H
+F1,03/12/93,Sochaux,Martigues,1,0,H
+F1,03/12/93,Strasbourg,Lens,2,0,H
+F1,03/12/93,Toulouse,Monaco,2,1,H
+F1,10/12/93,Lens,Lille,1,1,D
+F1,11/12/93,Auxerre,Caen,1,0,H
+F1,11/12/93,Cannes,Bordeaux,2,1,H
+F1,11/12/93,Le Havre,Marseille,1,3,A
+F1,11/12/93,Lyon,Angers,1,1,D
+F1,11/12/93,Martigues,Montpellier,1,1,D
+F1,11/12/93,Metz,Sochaux,1,1,D
+F1,11/12/93,Monaco,St Etienne,1,1,D
+F1,11/12/93,Nantes,Toulouse,4,0,H
+F1,11/12/93,Paris SG,Strasbourg,2,0,H
+F1,16/12/93,Montpellier,Marseille,0,2,A
+F1,18/12/93,Angers,Auxerre,2,2,D
+F1,18/12/93,Caen,Martigues,4,1,H
+F1,18/12/93,Lille,Cannes,1,0,H
+F1,18/12/93,Marseille,Nantes,3,1,H
+F1,18/12/93,Metz,Lyon,0,1,A
+F1,18/12/93,Montpellier,Lens,0,0,D
+F1,18/12/93,Sochaux,Paris SG,1,2,A
+F1,18/12/93,St Etienne,Le Havre,0,0,D
+F1,18/12/93,Strasbourg,Toulouse,1,0,H
+F1,19/12/93,Bordeaux,Monaco,1,0,H
+F1,14/01/94,Paris SG,Marseille,1,1,D
+F1,15/01/94,Auxerre,Metz,2,0,H
+F1,15/01/94,Cannes,Strasbourg,1,1,D
+F1,15/01/94,Le Havre,Lille,1,0,H
+F1,15/01/94,Lens,Caen,2,0,H
+F1,15/01/94,Lyon,Sochaux,1,0,H
+F1,15/01/94,Martigues,Angers,0,0,D
+F1,15/01/94,Monaco,Montpellier,1,2,A
+F1,15/01/94,Nantes,Bordeaux,4,1,H
+F1,15/01/94,Toulouse,St Etienne,1,2,A
+F1,28/01/94,Marseille,Monaco,2,1,H
+F1,29/01/94,Angers,Lens,1,2,A
+F1,29/01/94,Bordeaux,St Etienne,1,2,A
+F1,29/01/94,Caen,Paris SG,0,2,A
+F1,29/01/94,Lille,Toulouse,3,0,H
+F1,29/01/94,Lyon,Auxerre,1,0,H
+F1,29/01/94,Metz,Martigues,0,0,D
+F1,29/01/94,Montpellier,Nantes,1,0,H
+F1,29/01/94,Sochaux,Cannes,1,1,D
+F1,29/01/94,Strasbourg,Le Havre,0,3,A
+F1,04/02/94,Toulouse,Bordeaux,0,0,D
+F1,05/02/94,Auxerre,Sochaux,1,0,H
+F1,05/02/94,Cannes,Caen,3,0,H
+F1,05/02/94,Le Havre,Montpellier,0,0,D
+F1,05/02/94,Lens,Metz,2,0,H
+F1,05/02/94,Martigues,Lyon,0,1,A
+F1,05/02/94,Nantes,Lille,2,0,H
+F1,05/02/94,Paris SG,Angers,3,0,H
+F1,05/02/94,St Etienne,Marseille,0,0,D
+F1,06/02/94,Monaco,Strasbourg,2,1,H
+F1,08/02/94,Caen,Le Havre,1,1,D
+F1,09/02/94,Angers,Cannes,1,1,D
+F1,09/02/94,Auxerre,Martigues,3,0,H
+F1,09/02/94,Lille,Monaco,1,1,D
+F1,09/02/94,Lyon,Lens,1,2,A
+F1,09/02/94,Marseille,Toulouse,5,1,H
+F1,09/02/94,Metz,Bordeaux,1,0,H
+F1,09/02/94,Montpellier,Paris SG,0,0,D
+F1,09/02/94,Sochaux,St Etienne,3,2,H
+F1,09/02/94,Strasbourg,Nantes,0,3,A
+F1,19/02/94,Cannes,Montpellier,2,0,H
+F1,19/02/94,Le Havre,Metz,0,1,A
+F1,19/02/94,Lens,Auxerre,1,1,D
+F1,19/02/94,Martigues,Strasbourg,0,3,A
+F1,19/02/94,Monaco,Sochaux,2,0,H
+F1,19/02/94,Nantes,Angers,2,1,H
+F1,19/02/94,Paris SG,Lyon,0,0,D
+F1,19/02/94,St Etienne,Lille,2,1,H
+F1,19/02/94,Toulouse,Caen,0,1,A
+F1,20/02/94,Bordeaux,Marseille,1,0,H
+F1,24/02/94,Auxerre,Paris SG,0,0,D
+F1,25/02/94,Angers,Monaco,1,1,D
+F1,25/02/94,Caen,Nantes,0,0,D
+F1,25/02/94,Lille,Bordeaux,1,1,D
+F1,25/02/94,Lyon,Cannes,2,2,D
+F1,25/02/94,Martigues,Lens,1,2,A
+F1,25/02/94,Metz,Marseille,0,0,D
+F1,25/02/94,Montpellier,Toulouse,3,1,H
+F1,25/02/94,Sochaux,Le Havre,4,2,H
+F1,25/02/94,Strasbourg,St Etienne,2,0,H
+F1,05/03/94,Bordeaux,Strasbourg,2,0,H
+F1,05/03/94,Cannes,Metz,2,0,H
+F1,05/03/94,Le Havre,Angers,2,1,H
+F1,05/03/94,Lens,Sochaux,2,0,H
+F1,05/03/94,Marseille,Lille,3,2,H
+F1,05/03/94,Monaco,Caen,3,0,H
+F1,05/03/94,Nantes,Lyon,1,0,H
+F1,05/03/94,St Etienne,Montpellier,2,0,H
+F1,05/03/94,Toulouse,Auxerre,0,0,D
+F1,06/03/94,Paris SG,Martigues,2,2,D
+F1,11/03/94,Angers,Toulouse,0,0,D
+F1,11/03/94,Auxerre,Le Havre,3,0,H
+F1,11/03/94,Caen,St Etienne,1,0,H
+F1,11/03/94,Lens,Paris SG,1,2,A
+F1,11/03/94,Lyon,Monaco,1,0,H
+F1,11/03/94,Martigues,Cannes,4,0,H
+F1,11/03/94,Montpellier,Bordeaux,1,0,H
+F1,11/03/94,Sochaux,Lille,1,0,H
+F1,11/03/94,Strasbourg,Marseille,1,1,D
+F1,13/03/94,Metz,Nantes,2,0,H
+F1,25/03/94,Monaco,Auxerre,0,1,A
+F1,25/03/94,Paris SG,Metz,1,0,H
+F1,26/03/94,Bordeaux,Caen,3,0,H
+F1,26/03/94,Cannes,Lens,3,1,H
+F1,26/03/94,Le Havre,Lyon,0,1,A
+F1,26/03/94,Lille,Strasbourg,1,1,D
+F1,26/03/94,Marseille,Montpellier,1,1,D
+F1,26/03/94,Nantes,Sochaux,2,0,H
+F1,26/03/94,St Etienne,Angers,2,0,H
+F1,26/03/94,Toulouse,Martigues,2,2,D
+F1,01/04/94,Auxerre,Nantes,3,1,H
+F1,02/04/94,Angers,Bordeaux,1,3,A
+F1,02/04/94,Caen,Strasbourg,3,1,H
+F1,02/04/94,Lens,Le Havre,5,1,H
+F1,02/04/94,Lyon,Toulouse,1,0,H
+F1,02/04/94,Martigues,Monaco,1,3,A
+F1,02/04/94,Metz,St Etienne,0,1,A
+F1,02/04/94,Montpellier,Lille,1,3,A
+F1,02/04/94,Paris SG,Cannes,2,1,H
+F1,02/04/94,Sochaux,Marseille,1,1,D
+F1,05/04/94,Bordeaux,Sochaux,4,1,H
+F1,05/04/94,Cannes,Auxerre,2,1,H
+F1,05/04/94,Le Havre,Martigues,2,0,H
+F1,05/04/94,Lille,Caen,3,1,H
+F1,05/04/94,Marseille,Angers,2,1,H
+F1,05/04/94,Monaco,Lens,0,0,D
+F1,05/04/94,Nantes,Paris SG,3,0,H
+F1,05/04/94,Strasbourg,Montpellier,0,1,A
+F1,05/04/94,Toulouse,Metz,2,2,D
+F1,06/04/94,St Etienne,Lyon,3,0,H
+F1,12/04/94,Angers,Lille,1,2,A
+F1,12/04/94,Auxerre,St Etienne,3,0,H
+F1,12/04/94,Caen,Marseille,1,0,H
+F1,12/04/94,Cannes,Le Havre,1,0,H
+F1,12/04/94,Lens,Toulouse,4,0,H
+F1,12/04/94,Lyon,Bordeaux,4,2,H
+F1,12/04/94,Martigues,Nantes,1,2,A
+F1,12/04/94,Metz,Montpellier,1,1,D
+F1,12/04/94,Paris SG,Monaco,1,1,D
+F1,12/04/94,Sochaux,Strasbourg,1,3,A
+F1,22/04/94,Monaco,Cannes,2,0,H
+F1,26/04/94,Bordeaux,Auxerre,2,0,H
+F1,26/04/94,Le Havre,Paris SG,0,2,A
+F1,26/04/94,Lille,Metz,0,4,A
+F1,26/04/94,Marseille,Lyon,3,0,H
+F1,26/04/94,Montpellier,Caen,0,0,D
+F1,26/04/94,Nantes,Lens,2,1,H
+F1,26/04/94,St Etienne,Martigues,1,1,D
+F1,26/04/94,Strasbourg,Angers,2,2,D
+F1,26/04/94,Toulouse,Sochaux,3,2,H
+F1,29/04/94,Cannes,Nantes,4,0,H
+F1,30/04/94,Angers,Montpellier,2,3,A
+F1,30/04/94,Auxerre,Marseille,2,2,D
+F1,30/04/94,Le Havre,Monaco,1,0,H
+F1,30/04/94,Lens,St Etienne,3,1,H
+F1,30/04/94,Lyon,Lille,0,0,D
+F1,30/04/94,Martigues,Bordeaux,0,0,D
+F1,30/04/94,Metz,Strasbourg,2,1,H
+F1,30/04/94,Paris SG,Toulouse,1,0,H
+F1,30/04/94,Sochaux,Caen,0,0,D
+F1,07/05/94,Bordeaux,Lens,4,2,H
+F1,07/05/94,Caen,Angers,2,3,A
+F1,07/05/94,Lille,Auxerre,1,1,D
+F1,07/05/94,Marseille,Martigues,0,0,D
+F1,07/05/94,Monaco,Metz,1,1,D
+F1,07/05/94,Montpellier,Sochaux,1,0,H
+F1,07/05/94,Nantes,Le Havre,3,1,H
+F1,07/05/94,St Etienne,Paris SG,1,2,A
+F1,07/05/94,Strasbourg,Lyon,0,1,A
+F1,07/05/94,Toulouse,Cannes,1,2,A
+F1,21/05/94,Angers,Sochaux,1,2,A
+F1,21/05/94,Auxerre,Strasbourg,2,1,H
+F1,21/05/94,Cannes,St Etienne,0,0,D
+F1,21/05/94,Le Havre,Toulouse,1,1,D
+F1,21/05/94,Lens,Marseille,2,3,A
+F1,21/05/94,Lyon,Montpellier,3,2,H
+F1,21/05/94,Martigues,Lille,2,2,D
+F1,21/05/94,Metz,Caen,2,1,H
+F1,21/05/94,Monaco,Nantes,1,0,H
+F1,21/05/94,Paris SG,Bordeaux,4,1,H
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,

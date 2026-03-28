@@ -1,0 +1,15 @@
+[
+  { "minute": 2, "second": 10, "type": { "name": "Pass" }, "isHome": true, "team": "Red FC" },
+  { "minute": 3, "second": 0, "type": { "name": "Pass" }, "isHome": true },
+  {
+    "minute": 4,
+    "second": 12,
+    "type": { "name": "Foul" },
+    "isHome": false,
+    "qualifiers": [{ "name": "box" }]
+  },
+  { "minute": 12, "second": 0, "type": { "name": "Shot" }, "outcome": "On Target", "isHome": true },
+  { "minute": 23, "second": 40, "type": { "name": "Goal" }, "isHome": true },
+  { "minute": 67, "second": 5, "type": { "name": "Yellow Card" }, "isHome": false },
+  { "minute": 89, "second": 50, "type": { "name": "Substitution" }, "isHome": true }
+]

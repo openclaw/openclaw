@@ -1,0 +1,5 @@
+# Downloaded season CSVs and fetch manifests (run local-data-fetch / football-data-fetch locally).
+# Use ** so nested dirs (e.g. data/full/2526/) are ignored, not only data/*.csv.
+**/*.csv
+**/manifest.json
+**/index.json

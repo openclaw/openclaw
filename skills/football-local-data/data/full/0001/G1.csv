@@ -1,0 +1,241 @@
+Div,Date,HT,AT,FTHG,FTAG,FTR,HTHG,HTAG,HTR,GBH,GBD,GBA,IWH,IWD,IWA
+G1,16/09/00,Olympiakos,Eth Asteras,6,0,H,2,0,H,,,,,,
+G1,16/09/00,Panathinaikos,Yiannina,2,1,H,1,0,H,,,,,,
+G1,17/09/00,Ionikos,Athinaikos,1,0,H,1,0,H,,,,,,
+G1,17/09/00,Kalamata,PAOK,0,0,D,0,0,D,,,,,,
+G1,17/09/00,Panahaiki,Xanthi,1,1,D,1,0,H,,,,,,
+G1,17/09/00,Paniliakos,Panionios,1,1,D,1,1,D,,,,,,
+G1,18/09/00,AEK,Iraklis,2,0,H,1,0,H,,,,,,
+G1,18/09/00,OFI,Aris,2,3,A,2,1,H,,,,,,
+G1,23/09/00,Panionios,Panathinaikos,0,2,A,0,1,A,,,,,,
+G1,24/09/00,Aris,Paniliakos,1,0,H,1,0,H,,,,,,
+G1,24/09/00,Athinaikos,AEK,0,3,A,0,2,A,,,,,,
+G1,24/09/00,Eth Asteras,Ionikos,1,0,H,1,0,H,,,,,,
+G1,24/09/00,Iraklis,Panahaiki,2,0,H,0,0,D,,,,,,
+G1,24/09/00,OFI,Olympiakos,1,2,A,0,1,A,,,,,,
+G1,24/09/00,Yiannina,PAOK,1,3,A,1,2,A,,,,,,
+G1,25/09/00,Xanthi,Kalamata,2,1,H,2,0,H,,,,,,
+G1,30/09/00,Yiannina,Xanthi,1,1,D,0,1,A,,,,,,
+G1,01/10/00,AEK,Eth Asteras,2,2,D,2,0,H,,,,,,
+G1,01/10/00,Kalamata,Iraklis,0,0,D,0,0,D,,,,,,
+G1,01/10/00,Olympiakos,Ionikos,3,3,D,0,1,A,,,,,,
+G1,01/10/00,Panahaiki,Athinaikos,3,1,H,2,0,H,,,,,,
+G1,01/10/00,Panathinaikos,Aris,2,2,D,0,1,A,,,,,,
+G1,01/10/00,Paniliakos,OFI,0,0,D,0,0,D,,,,,,
+G1,02/10/00,PAOK,Panionios,1,1,D,1,0,H,,,,,,
+G1,29/10/00,Athinaikos,Kalamata,3,2,H,0,1,A,,,,,,
+G1,29/10/00,Ionikos,AEK,0,2,A,0,0,D,,,,,,
+G1,29/10/00,Iraklis,Yiannina,2,1,H,0,1,A,,,,,,
+G1,29/10/00,OFI,Panathinaikos,0,0,D,0,0,D,,,,,,
+G1,29/10/00,Paniliakos,Olympiakos,0,4,A,0,1,A,,,,,,
+G1,29/10/00,Panionios,Xanthi,0,0,D,0,0,D,,,,,,
+G1,30/10/00,Eth Asteras,Panahaiki,3,1,H,1,1,D,,,,,,
+G1,01/11/00,Aris,PAOK,4,0,H,2,0,H,,,,,,
+G1,04/11/00,Olympiakos,AEK,4,1,H,1,1,D,,,,,,
+G1,05/11/00,Kalamata,Eth Asteras,2,2,D,0,2,A,,,,,,
+G1,05/11/00,Panathinaikos,Paniliakos,2,0,H,0,0,D,,,,,,
+G1,05/11/00,Panionios,Iraklis,1,1,D,0,1,A,,,,,,
+G1,05/11/00,PAOK,OFI,4,1,H,2,0,H,,,,,,
+G1,05/11/00,Xanthi,Aris,1,0,H,1,0,H,,,,,,
+G1,05/11/00,Yiannina,Athinaikos,3,1,H,0,0,D,,,,,,
+G1,06/11/00,Panahaiki,Ionikos,2,3,A,0,1,A,,,,,,
+G1,11/11/00,Athinaikos,Panionios,2,0,H,0,0,D,,,,,,
+G1,12/11/00,AEK,Panahaiki,2,1,H,2,0,H,,,,,,
+G1,12/11/00,Aris,Iraklis,0,2,A,0,1,A,,,,,,
+G1,12/11/00,Eth Asteras,Yiannina,2,1,H,1,1,D,,,,,,
+G1,12/11/00,Ionikos,Kalamata,4,1,H,2,0,H,,,,,,
+G1,12/11/00,Panathinaikos,Olympiakos,0,0,D,0,0,D,,,,,,
+G1,12/11/00,Paniliakos,PAOK,1,1,D,1,0,H,,,,,,
+G1,13/11/00,OFI,Xanthi,0,1,A,0,0,D,,,,,,
+G1,18/11/00,PAOK,Panathinaikos,2,2,D,2,0,H,,,,,,
+G1,19/11/00,Aris,Athinaikos,2,0,H,0,0,D,,,,,,
+G1,19/11/00,Iraklis,OFI,3,0,H,0,0,D,,,,,,
+G1,19/11/00,Kalamata,AEK,3,1,H,1,0,H,,,,,,
+G1,19/11/00,Olympiakos,Panahaiki,3,0,H,2,0,H,,,,,,
+G1,19/11/00,Xanthi,Paniliakos,2,0,H,1,0,H,,,,,,
+G1,20/11/00,Panionios,Eth Asteras,4,3,H,3,0,H,,,,,,
+G1,20/11/00,Yiannina,Ionikos,1,1,D,1,0,H,,,,,,
+G1,25/11/00,Panathinaikos,Xanthi,3,0,H,1,0,H,,,,,,
+G1,26/11/00,Eth Asteras,Aris,1,0,H,1,0,H,,,,,,
+G1,26/11/00,Ionikos,Panionios,2,0,H,2,0,H,,,,,,
+G1,26/11/00,OFI,Athinaikos,5,3,H,2,1,H,,,,,,
+G1,26/11/00,Panahaiki,Kalamata,3,2,H,3,0,H,,,,,,
+G1,26/11/00,Paniliakos,Iraklis,1,2,A,1,1,D,,,,,,
+G1,27/11/00,AEK,Yiannina,4,2,H,2,1,H,,,,,,
+G1,27/11/00,PAOK,Olympiakos,2,4,A,0,1,A,,,,,,
+G1,02/12/00,Panionios,AEK,2,0,H,2,0,H,,,,,,
+G1,03/12/00,Aris,Ionikos,0,0,D,0,0,D,,,,,,
+G1,03/12/00,Eth Asteras,OFI,1,0,H,1,0,H,,,,,,
+G1,03/12/00,Iraklis,Panathinaikos,0,1,A,0,0,D,,,,,,
+G1,03/12/00,Olympiakos,Kalamata,5,2,H,2,0,H,,,,,,
+G1,03/12/00,Xanthi,PAOK,0,2,A,0,0,D,,,,,,
+G1,03/12/00,Yiannina,Panahaiki,1,1,D,1,0,H,,,,,,
+G1,04/12/00,Athinaikos,Paniliakos,1,1,D,1,0,H,,,,,,
+G1,09/12/00,Ionikos,OFI,1,0,H,0,0,D,,,,,,
+G1,10/12/00,AEK,Aris,3,1,H,2,1,H,,,,,,
+G1,10/12/00,Kalamata,Yiannina,3,4,A,0,2,A,,,,,,
+G1,10/12/00,Panahaiki,Panionios,1,1,D,0,0,D,,,,,,
+G1,10/12/00,Panathinaikos,Athinaikos,1,0,H,1,0,H,,,,,,
+G1,10/12/00,Paniliakos,Eth Asteras,1,0,H,0,0,D,,,,,,
+G1,10/12/00,PAOK,Iraklis,4,2,H,2,1,H,,,,,,
+G1,11/12/00,Xanthi,Olympiakos,0,3,A,0,1,A,,,,,,
+G1,16/12/00,Iraklis,Xanthi,1,0,H,0,0,D,,,,,,
+G1,17/12/00,Aris,Panahaiki,0,0,D,0,0,D,,,,,,
+G1,17/12/00,Athinaikos,PAOK,3,4,A,1,3,A,,,,,,
+G1,17/12/00,Eth Asteras,Panathinaikos,0,3,A,0,1,A,,,,,,
+G1,17/12/00,Ionikos,Paniliakos,3,1,H,2,1,H,,,,,,
+G1,17/12/00,Olympiakos,Yiannina,3,1,H,1,0,H,,,,,,
+G1,17/12/00,Panionios,Kalamata,1,1,D,1,0,H,,,,,,
+G1,18/12/00,OFI,AEK,3,3,D,3,1,H,,,,,,
+G1,03/01/01,AEK,Paniliakos,2,1,H,1,0,H,,,,,,
+G1,03/01/01,Iraklis,Olympiakos,2,1,H,0,0,D,,,,,,
+G1,03/01/01,Kalamata,Aris,1,1,D,1,0,H,,,,,,
+G1,03/01/01,Panahaiki,OFI,2,1,H,1,0,H,,,,,,
+G1,03/01/01,Panathinaikos,Ionikos,4,1,H,2,1,H,,,,,,
+G1,03/01/01,Xanthi,Athinaikos,1,0,H,0,0,D,,,,,,
+G1,04/01/01,PAOK,Eth Asteras,2,1,H,1,0,H,,,,,,
+G1,07/01/01,AEK,Panathinaikos,1,1,D,0,1,A,,,,,,
+G1,07/01/01,Aris,Yiannina,1,0,H,0,0,D,,,,,,
+G1,07/01/01,Athinaikos,Iraklis,2,0,H,1,0,H,,,,,,
+G1,07/01/01,OFI,Kalamata,1,1,D,1,1,D,,,,,,
+G1,07/01/01,Olympiakos,Panionios,2,0,H,2,0,H,,,,,,
+G1,07/01/01,Paniliakos,Panahaiki,2,2,D,1,0,H,,,,,,
+G1,08/01/01,Eth Asteras,Xanthi,1,0,H,1,0,H,,,,,,
+G1,08/01/01,Ionikos,PAOK,2,2,D,0,2,A,,,,,,
+G1,11/01/01,Yiannina,Panionios,2,2,D,1,1,D,,,,,,
+G1,13/01/01,Xanthi,Ionikos,0,1,A,0,0,D,,,,,,
+G1,14/01/01,Iraklis,Eth Asteras,4,0,H,2,0,H,,,,,,
+G1,14/01/01,Kalamata,Paniliakos,1,1,D,0,1,A,,,,,,
+G1,14/01/01,Panahaiki,Panathinaikos,1,2,A,1,0,H,,,,,,
+G1,14/01/01,Panionios,Aris,2,0,H,0,0,D,,,,,,
+G1,14/01/01,PAOK,AEK,2,1,H,0,1,A,,,,,,
+G1,14/01/01,Yiannina,OFI,1,2,A,0,0,D,,,,,,
+G1,15/01/01,Athinaikos,Olympiakos,1,5,A,1,2,A,,,,,,
+G1,20/01/01,Eth Asteras,Athinaikos,2,2,D,2,0,H,,,,,,
+G1,21/01/01,AEK,Xanthi,2,0,H,1,0,H,,,,,,
+G1,21/01/01,Ionikos,Iraklis,2,2,D,1,2,A,,,,,,
+G1,21/01/01,Olympiakos,Aris,4,1,H,2,0,H,,,,,,
+G1,21/01/01,Panahaiki,PAOK,1,2,A,0,1,A,,,,,,
+G1,21/01/01,Panathinaikos,Kalamata,1,0,H,1,0,H,,,,,,
+G1,21/01/01,Paniliakos,Yiannina,1,0,H,1,0,H,,,,,,
+G1,22/01/01,OFI,Panionios,1,1,D,0,0,D,,,,,,
+G1,27/01/01,Aris,OFI,2,0,H,0,0,D,,,,,,
+G1,28/01/01,Athinaikos,Ionikos,2,2,D,2,2,D,,,,,,
+G1,28/01/01,Eth Asteras,Olympiakos,0,1,A,0,0,D,,,,,,
+G1,28/01/01,Iraklis,AEK,1,2,A,0,0,D,,,,,,
+G1,28/01/01,Panionios,Paniliakos,0,1,A,0,1,A,,,,,,
+G1,28/01/01,PAOK,Kalamata,7,1,H,3,0,H,,,,,,
+G1,28/01/01,Xanthi,Panahaiki,1,0,H,0,0,D,,,,,,
+G1,28/01/01,Yiannina,Panathinaikos,0,4,A,0,3,A,,,,,,
+G1,03/02/01,Olympiakos,OFI,5,0,H,3,0,H,1.08,6.5,13.2,,,
+G1,04/02/01,Ionikos,Eth Asteras,2,1,H,0,0,D,1.43,3.4,6.3,,,
+G1,04/02/01,Kalamata,Xanthi,0,1,A,0,0,D,2.45,2.8,2.6,,,
+G1,04/02/01,Panahaiki,Iraklis,1,2,A,0,1,A,,,,,,
+G1,04/02/01,Panathinaikos,Panionios,0,1,A,0,0,D,1.1,5.8,12.2,,,
+G1,04/02/01,Paniliakos,Aris,1,2,A,1,1,D,,,,,,
+G1,04/02/01,PAOK,Yiannina,2,3,A,1,1,D,1.11,5.9,12,,,
+G1,05/02/01,AEK,Athinaikos,2,1,H,2,1,H,1.1,5.7,12.5,,,
+G1,10/02/01,Aris,Panathinaikos,1,0,H,1,0,H,3.8,3.1,1.7,3.1,3,1.9
+G1,11/02/01,Athinaikos,Panahaiki,3,1,H,1,1,D,1.65,3.2,3.85,1.65,3.2,3.8
+G1,11/02/01,Eth Asteras,AEK,0,3,A,0,1,A,2.9,3,1.9,2.7,2.9,2.2
+G1,11/02/01,Ionikos,Olympiakos,0,1,A,0,0,D,4.75,3.5,1.5,4,3.3,1.6
+G1,11/02/01,Iraklis,Kalamata,1,0,H,0,0,D,1.2,4.3,9,1.25,4.3,8
+G1,11/02/01,OFI,Paniliakos,2,2,D,0,2,A,1.75,3.2,3.45,1.8,3,3.5
+G1,11/02/01,Xanthi,Yiannina,0,0,D,0,0,D,1.35,3.8,5.8,1.45,3.5,5
+G1,12/02/01,Panionios,PAOK,1,1,D,0,1,A,3.35,3,1.85,3.2,3.1,1.85
+G1,17/02/01,Panathinaikos,OFI,2,0,H,0,0,D,1.12,5.5,11,1.2,4.7,9
+G1,17/02/01,PAOK,Aris,2,0,H,1,0,H,1.6,3.2,4.5,1.9,3,3.1
+G1,18/02/01,AEK,Ionikos,2,0,H,0,0,D,1.3,3.8,7.5,1.3,4,7
+G1,18/02/01,Olympiakos,Paniliakos,2,0,H,1,0,H,1.07,6.5,14,1.1,7,14
+G1,18/02/01,Panahaiki,Eth Asteras,1,0,H,0,0,D,,,,,,
+G1,18/02/01,Xanthi,Panionios,3,1,H,2,0,H,1.5,3.3,5.1,1.6,3.2,4.2
+G1,18/02/01,Yiannina,Iraklis,3,2,H,1,1,D,3,3.2,1.95,3,2.9,2
+G1,19/02/01,Kalamata,Athinaikos,2,2,D,1,0,H,1.6,3.3,4.2,1.7,2.9,4
+G1,24/02/01,Paniliakos,Panathinaikos,0,3,A,0,1,A,5.6,3.5,1.45,4.2,3.2,1.6
+G1,25/02/01,Aris,Xanthi,1,0,H,1,0,H,1.7,3.3,3.8,1.65,3.1,4
+G1,25/02/01,Athinaikos,Yiannina,0,1,A,0,1,A,1.65,3.3,4,1.55,3.3,4.5
+G1,25/02/01,Eth Asteras,Kalamata,1,3,A,1,0,H,1.4,3.5,6.45,1.35,3.8,6.2
+G1,25/02/01,Ionikos,Panahaiki,3,1,H,2,0,H,1.35,3.8,6.6,1.4,3.6,5.5
+G1,25/02/01,Iraklis,Panionios,4,3,H,2,3,A,1.4,3.5,6.5,1.4,3.6,5.5
+G1,25/02/01,OFI,PAOK,0,0,D,0,0,D,3.5,3.2,1.8,3.5,2.8,1.85
+G1,26/02/01,AEK,Olympiakos,1,2,A,1,2,A,2.6,3,2.25,2.7,2.9,2.2
+G1,03/03/01,Iraklis,Aris,1,2,A,0,1,A,1.8,3.2,3.5,2,3,2.9
+G1,04/03/01,Kalamata,Ionikos,2,1,H,1,1,D,2.85,3,2.1,3.1,2.7,2.1
+G1,04/03/01,Olympiakos,Panathinaikos,1,0,H,0,0,D,1.75,3,4,1.8,3,3.5
+G1,04/03/01,Panionios,Athinaikos,1,0,H,0,0,D,1.55,3.4,4.5,1.6,3.2,4.2
+G1,04/03/01,PAOK,Paniliakos,3,2,H,1,0,H,1.22,4.4,8.5,1.25,4.3,8
+G1,04/03/01,Xanthi,OFI,3,2,H,1,0,H,1.47,3.5,5.3,1.4,3.6,5.5
+G1,04/03/01,Yiannina,Eth Asteras,0,0,D,0,0,D,1.7,3.2,3.95,1.65,3.1,4
+G1,05/03/01,Panahaiki,AEK,1,0,H,1,0,H,,,,,,
+G1,10/03/01,Panathinaikos,PAOK,5,2,H,2,1,H,1.53,3.5,5.5,1.5,3.4,4.7
+G1,11/03/01,Athinaikos,Aris,2,0,H,1,0,H,2.9,3,2.25,2.4,2.9,2.4
+G1,11/03/01,Eth Asteras,Panionios,1,0,H,0,0,D,1.9,3.1,3.65,1.9,3,3.1
+G1,11/03/01,Ionikos,Yiannina,1,1,D,0,0,D,1.47,3.6,6.15,1.6,3.2,4.2
+G1,11/03/01,OFI,Iraklis,1,0,H,0,0,D,3.2,3,2.1,2.5,2.9,2.3
+G1,11/03/01,Panahaiki,Olympiakos,1,5,A,0,1,A,,,,,,
+G1,11/03/01,Paniliakos,Xanthi,1,0,H,1,0,H,2.3,3,2.8,2.3,3,2.4
+G1,12/03/01,AEK,Kalamata,3,0,H,1,0,H,1.18,5.3,11,1.2,4.7,9
+G1,17/03/01,Olympiakos,PAOK,1,0,H,1,0,H,,,,,,
+G1,17/03/01,Xanthi,Panathinaikos,0,2,A,0,2,A,,,,,,
+G1,18/03/01,Aris,Eth Asteras,2,0,H,1,0,H,,,,,,
+G1,18/03/01,Athinaikos,OFI,2,3,A,1,2,A,,,,,,
+G1,18/03/01,Iraklis,Paniliakos,1,0,H,0,0,D,,,,,,
+G1,18/03/01,Kalamata,Panahaiki,3,3,D,1,1,D,,,,,,
+G1,18/03/01,Panionios,Ionikos,4,0,H,0,0,D,,,,,,
+G1,19/03/01,Yiannina,AEK,2,2,D,0,1,A,,,,,,
+G1,31/03/01,Kalamata,Olympiakos,0,1,A,0,1,A,,,,,,
+G1,01/04/01,AEK,Panionios,5,1,H,3,1,H,,,,,,
+G1,01/04/01,OFI,Eth Asteras,2,2,D,0,2,A,,,,,,
+G1,01/04/01,Panahaiki,Yiannina,2,1,H,0,0,D,,,,,,
+G1,01/04/01,Panathinaikos,Iraklis,2,1,H,1,0,H,,,,,,
+G1,01/04/01,Paniliakos,Athinaikos,3,0,H,2,0,H,,,,,,
+G1,01/04/01,PAOK,Xanthi,3,0,H,1,0,H,,,,,,
+G1,02/04/01,Ionikos,Aris,2,1,H,2,0,H,1.75,3.2,3.7,1.8,3.2,3.3
+G1,07/04/01,Aris,AEK,0,3,A,0,1,A,2.1,3.1,2.8,2.1,2.9,2.9
+G1,08/04/01,Athinaikos,Panathinaikos,0,4,A,0,3,A,6.5,3.8,1.35,4.5,3.5,1.5
+G1,08/04/01,Eth Asteras,Paniliakos,1,1,D,0,0,D,1.65,3.3,4.1,1.6,3.2,4.2
+G1,08/04/01,Iraklis,PAOK,1,1,D,1,0,H,2.15,3.1,2.7,2.2,2.9,2.7
+G1,08/04/01,OFI,Ionikos,3,1,H,0,0,D,1.85,3.15,3.35,1.9,3.1,3
+G1,08/04/01,Olympiakos,Xanthi,4,0,H,2,0,H,1.15,5.4,10,1.15,5.5,11
+G1,08/04/01,Panionios,Panahaiki,2,0,H,1,0,H,1.65,3.3,4.1,1.7,3.1,3.8
+G1,08/04/01,Yiannina,Kalamata,2,0,H,1,0,H,1.75,3.2,3.7,1.75,3.1,3.6
+G1,21/04/01,Paniliakos,Ionikos,1,0,H,0,0,D,2.17,2.9,3,2.1,3,2.8
+G1,22/04/01,AEK,OFI,1,2,A,1,1,D,1.25,4.5,9,1.2,5,8
+G1,22/04/01,Panahaiki,Aris,4,1,H,2,1,H,,,,,,
+G1,22/04/01,Panathinaikos,Eth Asteras,2,0,H,0,0,D,1.15,5.75,11,1.15,5.5,11
+G1,22/04/01,PAOK,Athinaikos,3,1,H,1,1,D,1.17,5.2,10,1.2,5,8
+G1,22/04/01,Xanthi,Iraklis,1,0,H,0,0,D,2.2,3.05,2.9,2,3,2.9
+G1,22/04/01,Yiannina,Olympiakos,1,5,A,0,2,A,6.3,3.6,1.4,,,
+G1,23/04/01,Kalamata,Panionios,2,1,H,2,0,H,2.15,3.05,3.1,2,3,2.9
+G1,29/04/01,Aris,Kalamata,3,2,H,2,2,D,,,,,,
+G1,29/04/01,Athinaikos,Xanthi,2,2,D,1,1,D,2.35,2.85,2.75,,,
+G1,29/04/01,Eth Asteras,PAOK,3,3,D,1,2,A,2.55,3.2,2.25,,,
+G1,29/04/01,Ionikos,Panathinaikos,3,3,D,2,0,H,3.5,3.05,1.9,,,
+G1,29/04/01,OFI,Panahaiki,0,1,A,0,1,A,1.6,3.4,4.5,1.5,3.3,4.5
+G1,29/04/01,Paniliakos,AEK,0,3,A,0,1,A,,,,,,
+G1,29/04/01,Panionios,Yiannina,4,0,H,3,0,H,1.7,3.3,4,1.55,3.5,4.2
+G1,30/04/01,Olympiakos,Iraklis,3,1,H,0,1,A,,,,,,
+G1,06/05/01,Iraklis,Athinaikos,4,2,H,1,0,H,1.22,4.75,10,1.2,4.7,9
+G1,06/05/01,Kalamata,OFI,1,4,A,1,3,A,2.25,3,2.8,2.3,3.1,2.3
+G1,06/05/01,Panahaiki,Paniliakos,3,0,H,1,0,H,,,,,,
+G1,06/05/01,Panionios,Olympiakos,2,1,H,0,0,D,5.25,3.5,1.53,4.5,3.5,1.5
+G1,06/05/01,PAOK,Ionikos,1,2,A,0,2,A,1.33,4,7,1.4,3.6,5.5
+G1,06/05/01,Xanthi,Eth Asteras,3,1,H,1,0,H,1.57,3.5,4.75,,,
+G1,06/05/01,Yiannina,Aris,2,1,H,1,1,D,1.6,3.2,4.5,,,
+G1,07/05/01,Panathinaikos,AEK,0,1,A,0,0,D,,,,,,
+G1,19/05/01,AEK,PAOK,3,2,H,2,2,D,1.67,3.25,4.35,,,
+G1,20/05/01,Aris,Panionios,3,2,H,2,0,H,1.6,3.3,4.8,,,
+G1,20/05/01,Eth Asteras,Iraklis,2,0,H,2,0,H,1.85,3.15,3.55,,,
+G1,20/05/01,OFI,Yiannina,1,1,D,1,1,D,1.7,3.25,4.14,,,
+G1,20/05/01,Olympiakos,Athinaikos,1,0,H,1,0,H,1.15,5.75,11,,,
+G1,20/05/01,Panathinaikos,Panahaiki,4,0,H,2,0,H,1.2,5.15,9,,,
+G1,20/05/01,Paniliakos,Kalamata,3,1,H,1,1,D,1.58,3.5,4.75,,,
+G1,21/05/01,Ionikos,Xanthi,3,1,H,1,1,D,,,,,,
+G1,26/05/01,Iraklis,Ionikos,3,2,H,1,0,H,,,,,,
+G1,26/05/01,Xanthi,AEK,0,1,A,0,0,D,,,,,,
+G1,27/05/01,Aris,Olympiakos,2,2,D,2,1,H,,,,,,
+G1,27/05/01,Athinaikos,Eth Asteras,1,3,A,0,1,A,,,,,,
+G1,27/05/01,Kalamata,Panathinaikos,2,4,A,1,2,A,,,,,,
+G1,27/05/01,Panionios,OFI,0,2,A,0,1,A,,,,,,
+G1,27/05/01,PAOK,Panahaiki,5,1,H,1,0,H,,,,,,
+G1,27/05/01,Yiannina,Paniliakos,3,0,H,2,0,H,,,,,,

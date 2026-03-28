@@ -1,0 +1,381 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HTR,,,,,,,,,,,
+I2,05/09/98,Cremonese,Torino,3,2,H,2,1,H,,,,,,,,,,,
+I2,06/09/98,Atalanta,Genoa,1,0,H,0,0,D,,,,,,,,,,,
+I2,06/09/98,Brescia,Cesena,3,0,H,0,0,D,,,,,,,,,,,
+I2,06/09/98,Lecce,Reggina,1,0,H,1,0,H,,,,,,,,,,,
+I2,06/09/98,Monza,Lucchese,0,0,D,0,0,D,,,,,,,,,,,
+I2,06/09/98,Napoli,Cosenza,1,2,A,1,2,A,,,,,,,,,,,
+I2,06/09/98,Ravenna,F. Andria,3,0,H,2,0,H,,,,,,,,,,,
+I2,06/09/98,Ternana,Reggiana,0,0,D,0,0,D,,,,,,,,,,,
+I2,06/09/98,Treviso,Chievo,1,0,H,0,0,D,,,,,,,,,,,
+I2,06/09/98,Verona,Pescara,4,1,H,2,0,H,,,,,,,,,,,
+I2,12/09/98,Pescara,Napoli,0,1,A,0,0,D,,,,,,,,,,,
+I2,13/09/98,Cesena,Treviso,2,3,A,0,2,A,,,,,,,,,,,
+I2,13/09/98,Chievo,Atalanta,2,0,H,2,0,H,,,,,,,,,,,
+I2,13/09/98,Cosenza,Ternana,1,1,D,1,0,H,,,,,,,,,,,
+I2,13/09/98,F. Andria,Brescia,1,1,D,0,1,A,,,,,,,,,,,
+I2,13/09/98,Genoa,Lecce,0,1,A,0,1,A
+I2,13/09/98,Lucchese,Verona,1,2,A,0,1,A
+I2,13/09/98,Reggiana,Cremonese,1,1,D,0,0,D
+I2,13/09/98,Reggina,Monza,0,0,D,0,0,D
+I2,13/09/98,Torino,Ravenna,3,0,H,0,0,D
+I2,19/09/98,Verona,Reggiana,2,5,A,0,3,A
+I2,20/09/98,Cosenza,Chievo,2,1,H,1,0,H
+I2,20/09/98,Cremonese,F. Andria,2,1,H,1,0,H
+I2,20/09/98,Lecce,Treviso,0,1,A,0,0,D
+I2,20/09/98,Lucchese,Brescia,0,0,D,0,0,D
+I2,20/09/98,Monza,Genoa,0,2,A,0,0,D
+I2,20/09/98,Napoli,Reggina,1,1,D,1,0,H
+I2,20/09/98,Pescara,Atalanta,1,0,H,0,0,D
+I2,20/09/98,Ravenna,Cesena,2,1,H,1,1,D
+I2,20/09/98,Ternana,Torino,2,1,H,1,0,H
+I2,26/09/98,F. Andria,Lecce,0,0,D,0,0,D
+I2,27/09/98,Atalanta,Ternana,1,0,H,1,0,H
+I2,27/09/98,Brescia,Cremonese,1,0,H,1,0,H
+I2,27/09/98,Cesena,Monza,0,1,A,0,0,D
+I2,27/09/98,Chievo,Pescara,0,2,A,0,1,A
+I2,27/09/98,Genoa,Ravenna,1,3,A,0,2,A
+I2,27/09/98,Reggiana,Napoli,0,1,A,0,0,D
+I2,27/09/98,Reggina,Lucchese,2,1,H,1,0,H
+I2,27/09/98,Torino,Cosenza,1,0,H,0,0,D
+I2,27/09/98,Treviso,Verona,0,0,D,0,0,D
+I2,03/10/98,Napoli,Atalanta,0,0,D,0,0,D
+I2,04/10/98,Chievo,Brescia,0,2,A,0,1,A
+I2,04/10/98,Cosenza,F. Andria,2,0,H,2,0,H
+I2,04/10/98,Cremonese,Verona,0,0,D,0,0,D
+I2,04/10/98,Lecce,Torino,1,1,D,1,0,H
+I2,04/10/98,Lucchese,Cesena,0,0,D,0,0,D
+I2,04/10/98,Monza,Treviso,0,0,D,0,0,D
+I2,04/10/98,Pescara,Reggiana,1,0,H,1,0,H
+I2,04/10/98,Ravenna,Reggina,1,1,D,1,0,H
+I2,04/10/98,Ternana,Genoa,0,0,D,0,0,D
+I2,10/10/98,Genoa,Pescara,3,2,H,1,1,D
+I2,11/10/98,Atalanta,Ravenna,1,1,D,0,1,A
+I2,11/10/98,Brescia,Cosenza,0,0,D,0,0,D
+I2,11/10/98,Cesena,Napoli,0,0,D,0,0,D
+I2,11/10/98,F. Andria,Lucchese,1,0,H,0,0,D
+I2,11/10/98,Reggiana,Lecce,2,1,H,0,1,A
+I2,11/10/98,Ternana,Monza,2,1,H,1,0,H
+I2,11/10/98,Torino,Chievo,2,0,H,1,0,H
+I2,11/10/98,Treviso,Cremonese,3,1,H,1,1,D
+I2,11/10/98,Verona,Reggina,3,1,H,2,0,H
+I2,17/10/98,Torino,Genoa,3,0,H,1,0,H
+I2,18/10/98,Atalanta,Cesena,0,0,D,0,0,D
+I2,18/10/98,Chievo,Ternana,1,0,H,0,0,D
+I2,18/10/98,Cosenza,Verona,0,1,A,0,0,D
+I2,18/10/98,Lecce,Brescia,2,0,H,0,0,D
+I2,18/10/98,Monza,F. Andria,1,0,H,1,0,H
+I2,18/10/98,Napoli,Treviso,1,1,D,1,1,D
+I2,18/10/98,Pescara,Lucchese,0,0,D,0,0,D
+I2,18/10/98,Ravenna,Reggiana,1,0,H,1,0,H
+I2,18/10/98,Reggina,Cremonese,0,0,D,0,0,D
+I2,31/10/98,Treviso,Reggina,4,2,H,1,1,D
+I2,01/11/98,Cesena,Pescara,1,1,D,1,0,H
+I2,01/11/98,Cremonese,Lecce,0,2,A,0,1,A
+I2,01/11/98,F. Andria,Chievo,0,1,A,0,0,D
+I2,01/11/98,Genoa,Cosenza,0,0,D,0,0,D
+I2,01/11/98,Lucchese,Torino,0,1,A,0,0,D
+I2,01/11/98,Reggiana,Monza,1,1,D,0,0,D
+I2,01/11/98,Ternana,Napoli,2,1,H,1,0,H
+I2,01/11/98,Verona,Ravenna,4,0,H,2,0,H
+I2,03/11/98,Brescia,Atalanta,1,1,D,1,1,D
+I2,07/11/98,Lecce,Verona,0,2,A,0,1,A
+I2,08/11/98,Atalanta,Lucchese,1,0,H,1,0,H
+I2,08/11/98,Chievo,Genoa,1,1,D,0,1,A
+I2,08/11/98,Cremonese,Cesena,3,1,H,1,0,H
+I2,08/11/98,Monza,Torino,0,2,A,0,0,D
+I2,08/11/98,Napoli,F. Andria,1,1,D,0,0,D
+I2,08/11/98,Pescara,Ternana,5,1,H,3,0,H
+I2,08/11/98,Ravenna,Cosenza,2,1,H,0,1,A
+I2,08/11/98,Reggina,Reggiana,3,0,H,0,0,D
+I2,08/11/98,Treviso,Brescia,1,0,H,0,0,D
+I2,15/11/98,Brescia,Napoli,0,0,D,0,0,D
+I2,15/11/98,Cesena,Reggina,0,2,A,0,2,A
+I2,15/11/98,Cosenza,Monza,2,3,A,1,1,D
+I2,15/11/98,F. Andria,Treviso,1,3,A,1,1,D
+I2,15/11/98,Genoa,Cremonese,4,1,H,0,0,D
+I2,15/11/98,Lucchese,Lecce,2,2,D,1,1,D
+I2,15/11/98,Reggiana,Chievo,1,1,D,0,0,D
+I2,15/11/98,Ternana,Ravenna,2,2,D,2,1,H
+I2,15/11/98,Torino,Pescara,1,2,A,0,1,A
+I2,15/11/98,Verona,Atalanta,1,0,H,1,0,H
+I2,22/11/98,Atalanta,Cosenza,3,0,H,2,0,H
+I2,22/11/98,Cremonese,Ternana,1,1,D,0,0,D
+I2,22/11/98,Lecce,Cesena,2,1,H,1,0,H
+I2,22/11/98,Napoli,Genoa,2,1,H,1,1,D
+I2,22/11/98,Pescara,Monza,1,0,H,0,0,D
+I2,22/11/98,Ravenna,Chievo,0,0,D,0,0,D
+I2,22/11/98,Reggiana,Torino,1,1,D,1,0,H
+I2,22/11/98,Reggina,Brescia,0,0,D,0,0,D
+I2,22/11/98,Treviso,Lucchese,1,1,D,1,0,H
+I2,22/11/98,Verona,F. Andria,3,0,H,3,0,H
+I2,28/11/98,Torino,Atalanta,2,1,H,1,0,H
+I2,29/11/98,Brescia,Verona,0,2,A,0,1,A
+I2,29/11/98,Cesena,Reggiana,2,0,H,2,0,H
+I2,29/11/98,Chievo,Napoli,0,2,A,0,0,D
+I2,29/11/98,Cosenza,Pescara,1,5,A,1,2,A
+I2,29/11/98,F. Andria,Reggina,0,1,A,0,1,A
+I2,29/11/98,Genoa,Treviso,1,0,H,0,0,D
+I2,29/11/98,Lucchese,Cremonese,2,1,H,1,0,H
+I2,29/11/98,Monza,Ravenna,1,0,H,1,0,H
+I2,29/11/98,Ternana,Lecce,0,1,A,0,1,A
+I2,05/12/98,Napoli,Torino,0,0,D,0,0,D
+I2,06/12/98,Brescia,Genoa,3,1,H,3,0,H
+I2,06/12/98,Cremonese,Atalanta,1,3,A,0,1,A
+I2,06/12/98,Lecce,Monza,0,1,A,0,1,A
+I2,06/12/98,Lucchese,Ternana,1,1,D,0,1,A
+I2,06/12/98,Ravenna,Pescara,1,1,D,1,1,D
+I2,06/12/98,Reggiana,F. Andria,3,0,H,0,0,D
+I2,06/12/98,Reggina,Chievo,1,0,H,1,0,H
+I2,06/12/98,Treviso,Cosenza,5,1,H,2,0,H
+I2,06/12/98,Verona,Cesena,1,0,H,0,0,D
+I2,12/12/98,Cosenza,Lecce,1,1,D,1,0,H
+I2,13/12/98,Atalanta,Reggina,2,1,H,1,1,D
+I2,13/12/98,Cesena,F. Andria,1,1,D,1,1,D
+I2,13/12/98,Chievo,Lucchese,1,4,A,1,2,A
+I2,13/12/98,Genoa,Reggiana,1,1,D,0,0,D
+I2,13/12/98,Monza,Cremonese,0,0,D,0,0,D
+I2,13/12/98,Napoli,Ravenna,2,4,A,0,0,D
+I2,13/12/98,Pescara,Treviso,0,1,A,0,1,A
+I2,13/12/98,Ternana,Brescia,1,2,A,1,0,H
+I2,13/12/98,Torino,Verona,3,1,H,2,1,H
+I2,19/12/98,Verona,Chievo,0,0,D,0,0,D
+I2,20/12/98,Brescia,Monza,2,2,D,2,1,H
+I2,20/12/98,Cesena,Torino,0,1,A,0,0,D
+I2,20/12/98,Cremonese,Pescara,0,3,A,0,1,A
+I2,20/12/98,F. Andria,Genoa,1,1,D,0,1,A
+I2,20/12/98,Lecce,Napoli,3,1,H,0,0,D
+I2,20/12/98,Lucchese,Ravenna,0,1,A,0,1,A
+I2,20/12/98,Reggiana,Atalanta,0,0,D,0,0,D
+I2,20/12/98,Reggina,Cosenza,2,1,H,2,1,H
+I2,20/12/98,Treviso,Ternana,1,1,D,0,1,A
+I2,06/01/99,Atalanta,Lecce,2,1,H,0,1,A
+I2,06/01/99,Chievo,Cremonese,2,0,H,1,0,H
+I2,06/01/99,Cosenza,Reggiana,2,0,H,1,0,H
+I2,06/01/99,Genoa,Reggina,1,1,D,0,0,D
+I2,06/01/99,Monza,Verona,1,0,H,1,0,H
+I2,06/01/99,Napoli,Lucchese,2,1,H,0,0,D
+I2,06/01/99,Pescara,F. Andria,2,1,H,1,1,D
+I2,06/01/99,Ravenna,Brescia,1,1,D,1,1,D
+I2,06/01/99,Ternana,Cesena,1,1,D,1,1,D
+I2,06/01/99,Torino,Treviso,0,0,D,0,0,D
+I2,09/01/99,Brescia,Torino,2,1,H,1,0,H
+I2,10/01/99,Cesena,Chievo,0,0,D,0,0,D
+I2,10/01/99,Cremonese,Cosenza,0,3,A,0,1,A
+I2,10/01/99,F. Andria,Atalanta,0,1,A,0,0,D
+I2,10/01/99,Lecce,Ravenna,1,0,H,1,0,H
+I2,10/01/99,Lucchese,Genoa,1,0,H,1,0,H
+I2,10/01/99,Monza,Napoli,0,1,A,0,0,D
+I2,10/01/99,Reggina,Pescara,3,0,H,2,0,H
+I2,10/01/99,Treviso,Reggiana,3,2,H,1,1,D
+I2,10/01/99,Verona,Ternana,3,1,H,0,0,D
+I2,16/01/99,Napoli,Verona,0,0,D,0,0,D
+I2,17/01/99,Atalanta,Treviso,2,2,D,2,1,H
+I2,17/01/99,Chievo,Monza,3,2,H,1,2,A
+I2,17/01/99,Cosenza,Lucchese,0,0,D,0,0,D
+I2,17/01/99,Genoa,Cesena,4,1,H,1,0,H
+I2,17/01/99,Pescara,Lecce,0,0,D,0,0,D
+I2,17/01/99,Ravenna,Cremonese,2,0,H,0,0,D
+I2,17/01/99,Reggiana,Brescia,1,2,A,0,2,A
+I2,17/01/99,Ternana,Reggina,0,0,D,0,0,D
+I2,17/01/99,Torino,F. Andria,2,0,H,2,0,H
+I2,23/01/99,Monza,Atalanta,1,2,A,1,1,D
+I2,24/01/99,Brescia,Pescara,3,0,H,2,0,H
+I2,24/01/99,Cesena,Cosenza,3,0,H,2,0,H
+I2,24/01/99,Cremonese,Napoli,1,1,D,0,0,D
+I2,24/01/99,F. Andria,Ternana,2,0,H,2,0,H
+I2,24/01/99,Lecce,Chievo,2,2,D,0,2,A
+I2,24/01/99,Lucchese,Reggiana,2,0,H,0,0,D
+I2,24/01/99,Reggina,Torino,1,0,H,1,0,H
+I2,24/01/99,Treviso,Ravenna,1,1,D,0,0,D
+I2,24/01/99,Verona,Genoa,2,1,H,1,0,H
+I2,30/01/99,Chievo,Treviso,4,2,H,1,0,H
+I2,31/01/99,Cesena,Brescia,1,0,H,1,0,H
+I2,31/01/99,Cosenza,Napoli,1,0,H,0,0,D
+I2,31/01/99,F. Andria,Ravenna,3,2,H,2,2,D
+I2,31/01/99,Genoa,Atalanta,2,1,H,1,0,H
+I2,31/01/99,Lucchese,Monza,1,2,A,0,1,A
+I2,31/01/99,Pescara,Verona,1,1,D,1,1,D
+I2,31/01/99,Reggiana,Ternana,1,1,D,1,0,H
+I2,31/01/99,Reggina,Lecce,1,3,A,0,1,A
+I2,31/01/99,Torino,Cremonese,5,3,H,2,1,H
+I2,06/02/99,Verona,Lucchese,4,0,H,1,0,H
+I2,07/02/99,Atalanta,Chievo,1,1,D,0,0,D
+I2,07/02/99,Brescia,F. Andria,0,0,D,0,0,D
+I2,07/02/99,Cremonese,Reggiana,2,2,D,1,1,D
+I2,07/02/99,Lecce,Genoa,3,1,H,3,0,H
+I2,07/02/99,Monza,Reggina,1,1,D,0,1,A
+I2,07/02/99,Napoli,Pescara,2,0,H,1,0,H
+I2,07/02/99,Ravenna,Torino,1,0,H,0,0,D
+I2,07/02/99,Ternana,Cosenza,2,0,H,1,0,H
+I2,07/02/99,Treviso,Cesena,0,0,D,0,0,D
+I2,13/02/99,Cesena,Ravenna,4,2,H,2,1,H
+I2,14/02/99,Atalanta,Pescara,4,0,H,1,0,H
+I2,14/02/99,Brescia,Lucchese,2,1,H,2,0,H
+I2,14/02/99,Chievo,Cosenza,0,3,A,0,2,A
+I2,14/02/99,F. Andria,Cremonese,1,0,H,0,0,D
+I2,14/02/99,Genoa,Monza,2,1,H,1,1,D
+I2,14/02/99,Reggiana,Verona,1,1,D,0,1,A
+I2,14/02/99,Reggina,Napoli,2,1,H,2,0,H
+I2,14/02/99,Torino,Ternana,0,0,D,0,0,D
+I2,14/02/99,Treviso,Lecce,1,0,H,0,0,D
+I2,20/02/99,Verona,Treviso,1,1,D,0,0,D
+I2,21/02/99,Cosenza,Torino,1,2,A,1,2,A
+I2,21/02/99,Cremonese,Brescia,1,2,A,1,0,H
+I2,21/02/99,Lecce,F. Andria,1,0,H,0,0,D
+I2,21/02/99,Lucchese,Reggina,0,0,D,0,0,D
+I2,21/02/99,Monza,Cesena,0,1,A,0,1,A
+I2,21/02/99,Napoli,Reggiana,2,0,H,0,0,D
+I2,21/02/99,Pescara,Chievo,1,1,D,1,0,H
+I2,21/02/99,Ravenna,Genoa,2,1,H,1,0,H
+I2,21/02/99,Ternana,Atalanta,1,1,D,1,0,H
+I2,27/02/99,Brescia,Chievo,0,1,A,0,0,D
+I2,28/02/99,Atalanta,Napoli,1,1,D,0,0,D
+I2,28/02/99,Cesena,Lucchese,1,0,H,1,0,H
+I2,28/02/99,F. Andria,Cosenza,1,0,H,0,0,D
+I2,28/02/99,Genoa,Ternana,6,1,H,4,1,H
+I2,28/02/99,Reggiana,Pescara,0,2,A,0,1,A
+I2,28/02/99,Reggina,Ravenna,1,1,D,1,0,H
+I2,28/02/99,Torino,Lecce,3,1,H,1,0,H
+I2,28/02/99,Treviso,Monza,3,1,H,2,1,H
+I2,28/02/99,Verona,Cremonese,5,2,H,2,1,H
+I2,06/03/99,Lecce,Reggiana,1,0,H,0,0,D
+I2,07/03/99,Chievo,Torino,0,2,A,0,0,D
+I2,07/03/99,Cosenza,Brescia,1,1,D,0,1,A
+I2,07/03/99,Cremonese,Treviso,1,1,D,1,0,H
+I2,07/03/99,Lucchese,F. Andria,1,2,A,0,1,A
+I2,07/03/99,Monza,Ternana,1,1,D,1,1,D
+I2,07/03/99,Napoli,Cesena,1,0,H,1,0,H
+I2,07/03/99,Pescara,Genoa,4,1,H,1,0,H
+I2,07/03/99,Ravenna,Atalanta,0,0,D,0,0,D
+I2,07/03/99,Reggina,Verona,0,0,D,0,0,D
+I2,13/03/99,Genoa,Torino,1,0,H,0,0,D
+I2,14/03/99,Brescia,Lecce,0,0,D,0,0,D
+I2,14/03/99,Cesena,Atalanta,0,0,D,0,0,D
+I2,14/03/99,Cremonese,Reggina,0,2,A,0,1,A
+I2,14/03/99,F. Andria,Monza,0,0,D,0,0,D
+I2,14/03/99,Lucchese,Pescara,2,0,H,1,0,H
+I2,14/03/99,Reggiana,Ravenna,3,0,H,2,0,H
+I2,14/03/99,Ternana,Chievo,0,2,A,0,1,A
+I2,14/03/99,Treviso,Napoli,1,1,D,0,1,A
+I2,14/03/99,Verona,Cosenza,1,1,D,1,1,D
+I2,27/03/99,Monza,Reggiana,1,0,H,1,0,H
+I2,28/03/99,Atalanta,Brescia,1,1,D,0,0,D
+I2,28/03/99,Chievo,F. Andria,1,2,A,0,2,A
+I2,28/03/99,Cosenza,Genoa,2,2,D,1,1,D
+I2,28/03/99,Lecce,Cremonese,2,1,H,1,1,D
+I2,28/03/99,Napoli,Ternana,1,0,H,0,0,D
+I2,28/03/99,Pescara,Cesena,0,0,D,0,0,D
+I2,28/03/99,Ravenna,Verona,2,3,A,1,0,H
+I2,28/03/99,Reggina,Treviso,1,0,H,1,0,H
+I2,28/03/99,Torino,Lucchese,2,1,H,1,1,D
+I2,03/04/99,Brescia,Treviso,2,1,H,1,0,H
+I2,03/04/99,Cesena,Cremonese,1,1,D,0,0,D
+I2,03/04/99,Cosenza,Ravenna,3,1,H,1,0,H
+I2,03/04/99,F. Andria,Napoli,2,1,H,1,0,H
+I2,03/04/99,Genoa,Chievo,3,3,D,1,2,A
+I2,03/04/99,Lucchese,Atalanta,2,2,D,2,1,H
+I2,03/04/99,Reggiana,Reggina,1,1,D,1,1,D
+I2,03/04/99,Ternana,Pescara,2,2,D,1,1,D
+I2,03/04/99,Torino,Monza,3,3,D,1,3,A
+I2,03/04/99,Verona,Lecce,5,1,H,3,0,H
+I2,10/04/99,Napoli,Brescia,2,0,H,1,0,H
+I2,11/04/99,Atalanta,Verona,3,2,H,3,1,H
+I2,11/04/99,Chievo,Reggiana,0,0,D,0,0,D
+I2,11/04/99,Cremonese,Genoa,1,1,D,1,1,D
+I2,11/04/99,Lecce,Lucchese,1,0,H,1,0,H
+I2,11/04/99,Monza,Cosenza,3,0,H,1,0,H
+I2,11/04/99,Pescara,Torino,2,1,H,1,1,D
+I2,11/04/99,Ravenna,Ternana,0,2,A,0,1,A
+I2,11/04/99,Reggina,Cesena,3,1,H,1,1,D
+I2,11/04/99,Treviso,F. Andria,1,3,A,1,1,D
+I2,18/04/99,Brescia,Reggina,2,3,A,0,2,A
+I2,18/04/99,Cesena,Lecce,3,1,H,1,1,D
+I2,18/04/99,Chievo,Ravenna,1,1,D,1,1,D
+I2,18/04/99,Cosenza,Atalanta,2,2,D,0,0,D
+I2,18/04/99,F. Andria,Verona,1,1,D,0,1,A
+I2,18/04/99,Genoa,Napoli,1,1,D,1,0,H
+I2,18/04/99,Lucchese,Treviso,2,1,H,1,0,H
+I2,18/04/99,Monza,Pescara,0,2,A,0,1,A
+I2,18/04/99,Ternana,Cremonese,1,0,H,0,0,D
+I2,18/04/99,Torino,Reggiana,2,0,H,2,0,H
+I2,24/04/99,Treviso,Genoa,2,0,H,1,0,H
+I2,25/04/99,Atalanta,Torino,1,0,H,1,0,H
+I2,25/04/99,Cremonese,Lucchese,1,2,A,0,1,A
+I2,25/04/99,Lecce,Ternana,3,2,H,2,1,H
+I2,25/04/99,Napoli,Chievo,0,0,D,0,0,D
+I2,25/04/99,Pescara,Cosenza,1,0,H,1,0,H
+I2,25/04/99,Ravenna,Monza,0,0,D,0,0,D
+I2,25/04/99,Reggiana,Cesena,1,1,D,1,0,H
+I2,25/04/99,Reggina,F. Andria,1,1,D,1,1,D
+I2,25/04/99,Verona,Brescia,0,2,A,0,0,D
+I2,02/05/99,Atalanta,Cremonese,3,0,H,0,0,D
+I2,02/05/99,Cesena,Verona,2,0,H,1,0,H
+I2,02/05/99,Chievo,Reggina,3,0,H,1,0,H
+I2,02/05/99,Cosenza,Treviso,1,0,H,0,0,D
+I2,02/05/99,F. Andria,Reggiana,2,3,A,1,2,A
+I2,02/05/99,Genoa,Brescia,1,1,D,0,0,D
+I2,02/05/99,Monza,Lecce,1,1,D,1,1,D
+I2,02/05/99,Pescara,Ravenna,1,0,H,1,0,H
+I2,02/05/99,Ternana,Lucchese,1,0,H,1,0,H
+I2,02/05/99,Torino,Napoli,3,2,H,2,1,H
+I2,09/05/99,Brescia,Ternana,2,0,H,0,0,D
+I2,09/05/99,Cremonese,Monza,1,1,D,0,0,D
+I2,09/05/99,F. Andria,Cesena,1,1,D,0,1,A
+I2,09/05/99,Lecce,Cosenza,2,0,H,0,0,D
+I2,09/05/99,Lucchese,Chievo,1,1,D,1,1,D
+I2,09/05/99,Ravenna,Napoli,1,1,D,1,0,H
+I2,09/05/99,Reggiana,Genoa,1,3,A,0,1,A
+I2,09/05/99,Reggina,Atalanta,0,0,D,0,0,D
+I2,09/05/99,Treviso,Pescara,1,0,H,1,0,H
+I2,09/05/99,Verona,Torino,0,0,D,0,0,D
+I2,16/05/99,Atalanta,Reggiana,0,0,D,0,0,D
+I2,16/05/99,Chievo,Verona,2,0,H,1,0,H
+I2,16/05/99,Cosenza,Reggina,1,2,A,0,0,D
+I2,16/05/99,Genoa,F. Andria,0,0,D,0,0,D
+I2,16/05/99,Monza,Brescia,0,0,D,0,0,D
+I2,16/05/99,Napoli,Lecce,2,2,D,1,2,A
+I2,16/05/99,Pescara,Cremonese,1,0,H,0,0,D
+I2,16/05/99,Ravenna,Lucchese,3,0,H,0,0,D
+I2,16/05/99,Ternana,Treviso,3,2,H,2,1,H
+I2,16/05/99,Torino,Cesena,1,2,A,1,2,A
+I2,23/05/99,Brescia,Ravenna,3,0,H,3,0,H
+I2,23/05/99,Cesena,Ternana,2,1,H,0,0,D
+I2,23/05/99,Cremonese,Chievo,0,1,A,0,1,A
+I2,23/05/99,F. Andria,Pescara,2,2,D,1,0,H
+I2,23/05/99,Lecce,Atalanta,0,0,D,0,0,D
+I2,23/05/99,Lucchese,Napoli,3,2,H,2,1,H
+I2,23/05/99,Reggiana,Cosenza,3,2,H,1,0,H
+I2,23/05/99,Reggina,Genoa,0,0,D,0,0,D
+I2,23/05/99,Treviso,Torino,0,0,D,0,0,D
+I2,23/05/99,Verona,Monza,1,0,H,0,0,D
+I2,30/05/99,Atalanta,F. Andria,0,0,D,0,0,D
+I2,30/05/99,Chievo,Cesena,0,0,D,0,0,D
+I2,30/05/99,Cosenza,Cremonese,2,0,H,1,0,H
+I2,30/05/99,Genoa,Lucchese,1,1,D,0,0,D
+I2,30/05/99,Napoli,Monza,1,2,A,1,1,D
+I2,30/05/99,Pescara,Reggina,0,2,A,0,0,D
+I2,30/05/99,Ravenna,Lecce,1,2,A,1,1,D
+I2,30/05/99,Reggiana,Treviso,2,1,H,0,1,A
+I2,30/05/99,Ternana,Verona,2,0,H,2,0,H
+I2,30/05/99,Torino,Brescia,2,1,H,0,0,D
+I2,06/06/99,Brescia,Reggiana,0,1,A,0,1,A
+I2,06/06/99,Cesena,Genoa,2,2,D,0,1,A
+I2,06/06/99,Cremonese,Ravenna,0,2,A,0,2,A
+I2,06/06/99,F. Andria,Torino,1,4,A,0,2,A
+I2,06/06/99,Lecce,Pescara,0,1,A,0,1,A
+I2,06/06/99,Lucchese,Cosenza,0,0,D,0,0,D
+I2,06/06/99,Monza,Chievo,0,0,D,0,0,D
+I2,06/06/99,Reggina,Ternana,1,1,D,0,1,A
+I2,06/06/99,Treviso,Atalanta,1,1,D,0,1,A
+I2,06/06/99,Verona,Napoli,1,0,H,1,0,H
+I2,13/06/99,Atalanta,Monza,2,0,H,2,0,H
+I2,13/06/99,Chievo,Lecce,1,2,A,0,1,A
+I2,13/06/99,Cosenza,Cesena,2,1,H,2,0,H
+I2,13/06/99,Genoa,Verona,3,3,D,2,1,H
+I2,13/06/99,Napoli,Cremonese,2,1,H,1,0,H
+I2,13/06/99,Pescara,Brescia,3,2,H,1,0,H
+I2,13/06/99,Ravenna,Treviso,3,2,H,1,1,D
+I2,13/06/99,Reggiana,Lucchese,3,2,H,1,1,D
+I2,13/06/99,Ternana,F. Andria,2,1,H,1,1,D
+I2,13/06/99,Torino,Reggina,1,2,A,0,1,A

@@ -1,0 +1,553 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HTR,,,,,,,,,,,
+SP2,22/08/99,Albacete,Eibar,3,1,H,1,1,D,,,,,,,,,,,
+SP2,22/08/99,Badajoz,Getafe,2,1,H,0,1,A,,,,,,,,,,,
+SP2,22/08/99,Compostela,Recreativo,3,0,H,0,0,D,,,,,,,,,,,
+SP2,22/08/99,Cordoba,Sp Gijon,0,1,A,0,1,A,,,,,,,,,,,
+SP2,22/08/99,Extremadura,Ath Madrid B,1,0,H,0,0,D,,,,,,,,,,,
+SP2,22/08/99,Las Palmas,Tenerife,2,0,H,1,0,H,,,,,,,,,,,
+SP2,22/08/99,Leganes,Merida,1,1,D,0,0,D,,,,,,,,,,,
+SP2,22/08/99,Lleida,Villarreal,2,2,D,1,0,H,,,,,,,,,,,
+SP2,22/08/99,Logrones,Levante,3,3,D,2,0,H,,,,,,,,,,,
+SP2,22/08/99,Osasuna,Toledo,3,0,H,2,0,H,,,,,,,,,,,
+SP2,22/08/99,Salamanca,Elche,2,1,H,0,1,A,,,,,,,,,,,
+SP2,29/08/99,Ath Madrid B,Leganes,4,3,H,1,2,A,,,,,,,,,,,
+SP2,29/08/99,Eibar,Badajoz,0,0,D,0,0,D,,,,,,,,,,,
+SP2,29/08/99,Elche,Albacete,1,1,D,1,0,H,,,,,,,,,,,
+SP2,29/08/99,Getafe,Extremadura,1,2,A,0,0,D,,,,,,,,,,,
+SP2,29/08/99,Levante,Lleida,3,0,H,2,0,H
+SP2,29/08/99,Merida,Osasuna,2,0,H,2,0,H
+SP2,29/08/99,Recreativo,Cordoba,1,0,H,0,0,D
+SP2,29/08/99,Sp Gijon,Las Palmas,1,2,A,1,2,A
+SP2,29/08/99,Tenerife,Logrones,2,1,H,1,0,H
+SP2,29/08/99,Toledo,Compostela,0,1,A,0,0,D
+SP2,29/08/99,Villarreal,Salamanca,0,0,D,0,0,D
+SP2,04/09/99,Badajoz,Elche,1,1,D,1,0,H
+SP2,04/09/99,Compostela,Merida,1,2,A,0,0,D
+SP2,04/09/99,Extremadura,Leganes,2,0,H,2,0,H
+SP2,04/09/99,Osasuna,Ath Madrid B,1,0,H,1,0,H
+SP2,05/09/99,Albacete,Villarreal,0,2,A,0,0,D
+SP2,05/09/99,Cordoba,Toledo,0,2,A,0,0,D
+SP2,05/09/99,Getafe,Eibar,1,1,D,0,0,D
+SP2,05/09/99,Las Palmas,Recreativo,1,2,A,1,1,D
+SP2,05/09/99,Lleida,Tenerife,1,2,A,1,0,H
+SP2,05/09/99,Logrones,Sp Gijon,2,3,A,1,0,H
+SP2,05/09/99,Salamanca,Levante,3,0,H,0,0,D
+SP2,11/09/99,Ath Madrid B,Compostela,1,3,A,0,2,A
+SP2,11/09/99,Eibar,Extremadura,0,1,A,0,1,A
+SP2,11/09/99,Elche,Getafe,1,1,D,1,0,H
+SP2,11/09/99,Toledo,Las Palmas,1,3,A,1,1,D
+SP2,12/09/99,Leganes,Osasuna,0,1,A,0,1,A
+SP2,12/09/99,Levante,Albacete,2,0,H,1,0,H
+SP2,12/09/99,Merida,Cordoba,0,0,D,0,0,D
+SP2,12/09/99,Recreativo,Logrones,1,1,D,1,0,H
+SP2,12/09/99,Sp Gijon,Lleida,2,1,H,0,1,A
+SP2,12/09/99,Tenerife,Salamanca,1,1,D,1,1,D
+SP2,12/09/99,Villarreal,Badajoz,0,0,D,0,0,D
+SP2,18/09/99,Albacete,Tenerife,1,0,H,0,0,D
+SP2,18/09/99,Eibar,Elche,1,1,D,0,1,A
+SP2,18/09/99,Las Palmas,Merida,2,0,H,0,0,D
+SP2,18/09/99,Lleida,Recreativo,0,1,A,0,0,D
+SP2,18/09/99,Salamanca,Sp Gijon,3,2,H,3,0,H
+SP2,19/09/99,Badajoz,Levante,1,1,D,0,1,A
+SP2,19/09/99,Compostela,Leganes,0,0,D,0,0,D
+SP2,19/09/99,Cordoba,Ath Madrid B,3,0,H,1,0,H
+SP2,19/09/99,Extremadura,Osasuna,1,0,H,0,0,D
+SP2,19/09/99,Getafe,Villarreal,0,2,A,0,0,D
+SP2,19/09/99,Logrones,Toledo,2,1,H,2,0,H
+SP2,25/09/99,Ath Madrid B,Las Palmas,0,0,D,0,0,D
+SP2,25/09/99,Levante,Getafe,2,0,H,1,0,H
+SP2,26/09/99,Elche,Extremadura,1,1,D,0,0,D
+SP2,26/09/99,Leganes,Cordoba,1,1,D,1,0,H
+SP2,26/09/99,Merida,Logrones,2,2,D,2,1,H
+SP2,26/09/99,Osasuna,Compostela,2,2,D,2,1,H
+SP2,26/09/99,Recreativo,Salamanca,0,1,A,0,1,A
+SP2,26/09/99,Sp Gijon,Albacete,1,2,A,0,1,A
+SP2,26/09/99,Tenerife,Badajoz,0,1,A,0,1,A
+SP2,26/09/99,Toledo,Lleida,0,3,A,0,3,A
+SP2,26/09/99,Villarreal,Eibar,1,5,A,0,3,A
+SP2,02/10/99,Cordoba,Osasuna,2,1,H,1,1,D
+SP2,02/10/99,Getafe,Tenerife,2,2,D,0,1,A
+SP2,02/10/99,Las Palmas,Leganes,7,1,H,2,0,H
+SP2,03/10/99,Albacete,Recreativo,1,1,D,0,0,D
+SP2,03/10/99,Badajoz,Sp Gijon,2,1,H,0,0,D
+SP2,03/10/99,Eibar,Levante,4,2,H,2,2,D
+SP2,03/10/99,Elche,Villarreal,1,0,H,1,0,H
+SP2,03/10/99,Extremadura,Compostela,3,1,H,3,0,H
+SP2,03/10/99,Lleida,Merida,0,0,D,0,0,D
+SP2,03/10/99,Logrones,Ath Madrid B,1,1,D,0,0,D
+SP2,03/10/99,Salamanca,Toledo,0,0,D,0,0,D
+SP2,09/10/99,Ath Madrid B,Lleida,1,2,A,1,1,D
+SP2,09/10/99,Compostela,Cordoba,0,2,A,0,1,A
+SP2,09/10/99,Levante,Elche,2,1,H,1,1,D
+SP2,09/10/99,Osasuna,Las Palmas,1,0,H,1,0,H
+SP2,09/10/99,Recreativo,Badajoz,2,2,D,1,0,H
+SP2,09/10/99,Sp Gijon,Getafe,1,0,H,1,0,H
+SP2,09/10/99,Tenerife,Eibar,1,1,D,0,1,A
+SP2,09/10/99,Toledo,Albacete,0,2,A,0,2,A
+SP2,09/10/99,Villarreal,Extremadura,3,0,H,0,0,D
+SP2,10/10/99,Leganes,Logrones,0,0,D,0,0,D
+SP2,10/10/99,Merida,Salamanca,1,2,A,0,1,A
+SP2,12/10/99,Badajoz,Toledo,1,1,D,0,1,A
+SP2,12/10/99,Elche,Tenerife,1,3,A,1,1,D
+SP2,12/10/99,Extremadura,Cordoba,0,0,D,0,0,D
+SP2,12/10/99,Getafe,Recreativo,1,0,H,1,0,H
+SP2,12/10/99,Logrones,Osasuna,3,1,H,1,0,H
+SP2,12/10/99,Salamanca,Ath Madrid B,1,2,A,1,0,H
+SP2,12/10/99,Villarreal,Levante,1,1,D,1,1,D
+SP2,13/10/99,Albacete,Merida,0,2,A,0,0,D
+SP2,13/10/99,Eibar,Sp Gijon,1,1,D,1,1,D
+SP2,13/10/99,Las Palmas,Compostela,2,1,H,0,0,D
+SP2,13/10/99,Lleida,Leganes,2,0,H,0,0,D
+SP2,16/10/99,Leganes,Salamanca,1,2,A,0,1,A
+SP2,16/10/99,Recreativo,Eibar,0,1,A,0,0,D
+SP2,17/10/99,Ath Madrid B,Albacete,0,1,A,0,0,D
+SP2,17/10/99,Compostela,Logrones,1,0,H,1,0,H
+SP2,17/10/99,Cordoba,Las Palmas,1,2,A,0,1,A
+SP2,17/10/99,Levante,Extremadura,1,1,D,0,1,A
+SP2,17/10/99,Merida,Badajoz,0,0,D,0,0,D
+SP2,17/10/99,Osasuna,Lleida,3,1,H,0,0,D
+SP2,17/10/99,Sp Gijon,Elche,0,2,A,0,1,A
+SP2,17/10/99,Tenerife,Villarreal,3,1,H,1,0,H
+SP2,17/10/99,Toledo,Getafe,0,0,D,0,0,D
+SP2,23/10/99,Extremadura,Las Palmas,2,1,H,1,0,H
+SP2,24/10/99,Albacete,Leganes,0,0,D,0,0,D
+SP2,24/10/99,Badajoz,Ath Madrid B,1,1,D,1,0,H
+SP2,24/10/99,Eibar,Toledo,2,1,H,1,0,H
+SP2,24/10/99,Elche,Recreativo,3,1,H,0,1,A
+SP2,24/10/99,Getafe,Merida,1,0,H,0,0,D
+SP2,24/10/99,Levante,Tenerife,2,1,H,1,0,H
+SP2,24/10/99,Lleida,Compostela,3,1,H,1,0,H
+SP2,24/10/99,Logrones,Cordoba,2,2,D,0,0,D
+SP2,24/10/99,Salamanca,Osasuna,1,0,H,0,0,D
+SP2,24/10/99,Villarreal,Sp Gijon,1,2,A,1,2,A
+SP2,30/10/99,Cordoba,Lleida,1,4,A,1,1,D
+SP2,30/10/99,Las Palmas,Logrones,1,0,H,0,0,D
+SP2,31/10/99,Compostela,Salamanca,2,2,D,0,0,D
+SP2,31/10/99,Leganes,Badajoz,1,0,H,0,0,D
+SP2,31/10/99,Merida,Eibar,3,1,H,1,1,D
+SP2,31/10/99,Osasuna,Albacete,0,1,A,0,0,D
+SP2,31/10/99,Recreativo,Villarreal,0,4,A,0,1,A
+SP2,31/10/99,Sp Gijon,Levante,4,0,H,2,0,H
+SP2,31/10/99,Tenerife,Extremadura,3,0,H,1,0,H
+SP2,31/10/99,Toledo,Elche,2,0,H,1,0,H
+SP2,01/11/99,Ath Madrid B,Getafe,1,2,A,0,0,D
+SP2,06/11/99,Getafe,Leganes,0,1,A,0,1,A
+SP2,06/11/99,Salamanca,Cordoba,4,1,H,2,1,H
+SP2,07/11/99,Albacete,Compostela,2,2,D,0,0,D
+SP2,07/11/99,Badajoz,Osasuna,0,1,A,0,0,D
+SP2,07/11/99,Eibar,Ath Madrid B,2,0,H,0,0,D
+SP2,07/11/99,Elche,Merida,2,1,H,0,1,A
+SP2,07/11/99,Extremadura,Logrones,3,1,H,2,0,H
+SP2,07/11/99,Levante,Recreativo,2,0,H,0,0,D
+SP2,07/11/99,Lleida,Las Palmas,4,1,H,0,0,D
+SP2,07/11/99,Tenerife,Sp Gijon,2,1,H,0,0,D
+SP2,07/11/99,Villarreal,Toledo,4,1,H,2,1,H
+SP2,13/11/99,Leganes,Eibar,3,1,H,2,0,H
+SP2,13/11/99,Logrones,Lleida,1,0,H,0,0,D
+SP2,13/11/99,Recreativo,Tenerife,2,0,H,0,0,D
+SP2,14/11/99,Ath Madrid B,Elche,3,0,H,2,0,H
+SP2,14/11/99,Compostela,Badajoz,1,2,A,0,0,D
+SP2,14/11/99,Cordoba,Albacete,3,2,H,3,1,H
+SP2,14/11/99,Las Palmas,Salamanca,0,2,A,0,1,A
+SP2,14/11/99,Merida,Villarreal,1,1,D,1,0,H
+SP2,14/11/99,Osasuna,Getafe,0,1,A,0,0,D
+SP2,14/11/99,Sp Gijon,Extremadura,1,0,H,1,0,H
+SP2,14/11/99,Toledo,Levante,0,1,A,0,0,D
+SP2,20/11/99,Albacete,Las Palmas,1,1,D,1,1,D
+SP2,21/11/99,Badajoz,Cordoba,0,0,D,0,0,D
+SP2,21/11/99,Eibar,Osasuna,4,1,H,2,1,H
+SP2,21/11/99,Elche,Leganes,1,1,D,1,0,H
+SP2,21/11/99,Extremadura,Lleida,1,1,D,1,0,H
+SP2,21/11/99,Getafe,Compostela,4,1,H,1,0,H
+SP2,21/11/99,Levante,Merida,3,1,H,2,0,H
+SP2,21/11/99,Salamanca,Logrones,3,0,H,0,0,D
+SP2,21/11/99,Sp Gijon,Recreativo,3,1,H,1,1,D
+SP2,21/11/99,Tenerife,Toledo,3,0,H,1,0,H
+SP2,21/11/99,Villarreal,Ath Madrid B,1,2,A,0,1,A
+SP2,27/11/99,Compostela,Eibar,4,1,H,2,1,H
+SP2,27/11/99,Las Palmas,Badajoz,0,0,D,0,0,D
+SP2,27/11/99,Lleida,Salamanca,1,2,A,0,1,A
+SP2,28/11/99,Ath Madrid B,Levante,2,4,A,1,0,H
+SP2,28/11/99,Cordoba,Getafe,0,1,A,0,1,A
+SP2,28/11/99,Leganes,Villarreal,1,0,H,0,0,D
+SP2,28/11/99,Logrones,Albacete,4,1,H,2,0,H
+SP2,28/11/99,Merida,Tenerife,2,0,H,0,0,D
+SP2,28/11/99,Osasuna,Elche,0,1,A,0,1,A
+SP2,28/11/99,Recreativo,Extremadura,1,1,D,0,0,D
+SP2,28/11/99,Toledo,Sp Gijon,0,0,D,0,0,D
+SP2,04/12/99,Albacete,Lleida,2,2,D,0,1,A
+SP2,04/12/99,Tenerife,Ath Madrid B,2,1,H,1,0,H
+SP2,05/12/99,Badajoz,Logrones,2,1,H,1,1,D
+SP2,05/12/99,Eibar,Cordoba,1,1,D,0,1,A
+SP2,05/12/99,Elche,Compostela,1,1,D,1,0,H
+SP2,05/12/99,Extremadura,Salamanca,1,0,H,1,0,H
+SP2,05/12/99,Getafe,Las Palmas,2,1,H,0,0,D
+SP2,05/12/99,Levante,Leganes,5,2,H,2,1,H
+SP2,05/12/99,Recreativo,Toledo,3,0,H,1,0,H
+SP2,05/12/99,Sp Gijon,Merida,1,2,A,0,0,D
+SP2,05/12/99,Villarreal,Osasuna,1,0,H,0,0,D
+SP2,11/12/99,Ath Madrid B,Sp Gijon,0,1,A,0,0,D
+SP2,11/12/99,Compostela,Villarreal,1,1,D,0,0,D
+SP2,11/12/99,Las Palmas,Eibar,1,1,D,1,0,H
+SP2,11/12/99,Logrones,Getafe,1,0,H,0,0,D
+SP2,11/12/99,Osasuna,Levante,2,0,H,2,0,H
+SP2,11/12/99,Salamanca,Albacete,2,1,H,0,0,D
+SP2,12/12/99,Cordoba,Elche,2,1,H,1,1,D
+SP2,12/12/99,Leganes,Tenerife,0,4,A,0,2,A
+SP2,12/12/99,Lleida,Badajoz,2,2,D,0,0,D
+SP2,12/12/99,Merida,Recreativo,2,0,H,1,0,H
+SP2,12/12/99,Toledo,Extremadura,2,0,H,1,0,H
+SP2,18/12/99,Badajoz,Salamanca,2,2,D,2,0,H
+SP2,18/12/99,Eibar,Logrones,2,5,A,0,2,A
+SP2,18/12/99,Extremadura,Albacete,3,0,H,1,0,H
+SP2,19/12/99,Elche,Las Palmas,0,3,A,0,1,A
+SP2,19/12/99,Getafe,Lleida,2,1,H,1,0,H
+SP2,19/12/99,Levante,Compostela,0,0,D,0,0,D
+SP2,19/12/99,Recreativo,Ath Madrid B,1,2,A,1,1,D
+SP2,19/12/99,Sp Gijon,Leganes,3,0,H,2,0,H
+SP2,19/12/99,Tenerife,Osasuna,1,1,D,1,0,H
+SP2,19/12/99,Toledo,Merida,3,0,H,2,0,H
+SP2,19/12/99,Villarreal,Cordoba,2,1,H,1,0,H
+SP2,04/01/00,Cordoba,Levante,1,1,D,0,1,A
+SP2,04/01/00,Extremadura,Merida,0,0,D,0,0,D
+SP2,04/01/00,Las Palmas,Villarreal,2,1,H,2,1,H
+SP2,04/01/00,Lleida,Eibar,1,1,D,0,0,D
+SP2,04/01/00,Logrones,Elche,2,2,D,0,1,A
+SP2,04/01/00,Osasuna,Sp Gijon,1,0,H,0,0,D
+SP2,04/01/00,Salamanca,Getafe,1,1,D,1,1,D
+SP2,05/01/00,Albacete,Badajoz,0,1,A,0,1,A
+SP2,05/01/00,Ath Madrid B,Toledo,2,1,H,1,0,H
+SP2,05/01/00,Compostela,Tenerife,2,1,H,2,0,H
+SP2,05/01/00,Leganes,Recreativo,2,0,H,1,0,H
+SP2,08/01/00,Eibar,Salamanca,1,0,H,0,0,D
+SP2,08/01/00,Elche,Lleida,1,3,A,1,0,H
+SP2,08/01/00,Recreativo,Osasuna,0,1,A,0,0,D
+SP2,08/01/00,Toledo,Leganes,1,1,D,1,0,H
+SP2,08/01/00,Villarreal,Logrones,1,0,H,1,0,H
+SP2,09/01/00,Badajoz,Extremadura,2,0,H,1,0,H
+SP2,09/01/00,Getafe,Albacete,1,1,D,1,1,D
+SP2,09/01/00,Levante,Las Palmas,1,1,D,0,0,D
+SP2,09/01/00,Merida,Ath Madrid B,0,1,A,0,1,A
+SP2,09/01/00,Sp Gijon,Compostela,1,1,D,0,1,A
+SP2,09/01/00,Tenerife,Cordoba,1,1,D,0,0,D
+SP2,15/01/00,Ath Madrid B,Extremadura,4,2,H,1,0,H
+SP2,16/01/00,Eibar,Albacete,0,1,A,0,0,D
+SP2,16/01/00,Elche,Salamanca,2,2,D,1,2,A
+SP2,16/01/00,Getafe,Badajoz,0,2,A,0,1,A
+SP2,16/01/00,Levante,Logrones,1,0,H,1,0,H
+SP2,16/01/00,Merida,Leganes,0,4,A,0,2,A
+SP2,16/01/00,Recreativo,Compostela,0,0,D,0,0,D
+SP2,16/01/00,Sp Gijon,Cordoba,1,0,H,0,0,D
+SP2,16/01/00,Tenerife,Las Palmas,1,2,A,0,0,D
+SP2,16/01/00,Toledo,Osasuna,0,1,A,0,0,D
+SP2,16/01/00,Villarreal,Lleida,2,3,A,2,2,D
+SP2,22/01/00,Cordoba,Recreativo,2,1,H,1,1,D
+SP2,22/01/00,Las Palmas,Sp Gijon,1,1,D,1,0,H
+SP2,22/01/00,Leganes,Ath Madrid B,0,1,A,0,0,D
+SP2,22/01/00,Lleida,Levante,2,0,H,2,0,H
+SP2,23/01/00,Albacete,Elche,1,1,D,1,1,D
+SP2,23/01/00,Badajoz,Eibar,0,1,A,0,0,D
+SP2,23/01/00,Compostela,Toledo,0,0,D,0,0,D
+SP2,23/01/00,Extremadura,Getafe,1,0,H,1,0,H
+SP2,23/01/00,Logrones,Tenerife,0,0,D,0,0,D
+SP2,23/01/00,Osasuna,Merida,0,0,D,0,0,D
+SP2,23/01/00,Salamanca,Villarreal,0,2,A,0,1,A
+SP2,29/01/00,Merida,Compostela,0,1,A,0,0,D
+SP2,29/01/00,Recreativo,Las Palmas,0,2,A,0,1,A
+SP2,29/01/00,Villarreal,Albacete,2,0,H,1,0,H
+SP2,30/01/00,Ath Madrid B,Osasuna,1,1,D,0,0,D
+SP2,30/01/00,Eibar,Getafe,1,0,H,1,0,H
+SP2,30/01/00,Elche,Badajoz,0,0,D,0,0,D
+SP2,30/01/00,Leganes,Extremadura,0,0,D,0,0,D
+SP2,30/01/00,Levante,Salamanca,2,3,A,1,1,D
+SP2,30/01/00,Sp Gijon,Logrones,1,4,A,1,1,D
+SP2,30/01/00,Tenerife,Lleida,2,1,H,1,0,H
+SP2,30/01/00,Toledo,Cordoba,0,3,A,0,1,A
+SP2,05/02/00,Getafe,Elche,1,2,A,1,1,D
+SP2,05/02/00,Las Palmas,Toledo,0,0,D,0,0,D
+SP2,06/02/00,Albacete,Levante,2,0,H,1,0,H
+SP2,06/02/00,Badajoz,Villarreal,1,1,D,1,0,H
+SP2,06/02/00,Compostela,Ath Madrid B,1,1,D,0,1,A
+SP2,06/02/00,Cordoba,Merida,3,0,H,1,0,H
+SP2,06/02/00,Extremadura,Eibar,3,0,H,0,0,D
+SP2,06/02/00,Lleida,Sp Gijon,4,1,H,1,1,D
+SP2,06/02/00,Logrones,Recreativo,0,3,A,0,2,A
+SP2,06/02/00,Osasuna,Leganes,1,2,A,0,1,A
+SP2,06/02/00,Salamanca,Tenerife,3,0,H,1,0,H
+SP2,12/02/00,Levante,Badajoz,1,1,D,0,0,D
+SP2,12/02/00,Tenerife,Albacete,2,2,D,1,0,H
+SP2,13/02/00,Ath Madrid B,Cordoba,0,0,D,0,0,D
+SP2,13/02/00,Elche,Eibar,2,0,H,2,0,H
+SP2,13/02/00,Leganes,Compostela,3,1,H,2,1,H
+SP2,13/02/00,Merida,Las Palmas,3,0,H,1,0,H
+SP2,13/02/00,Osasuna,Extremadura,2,0,H,2,0,H
+SP2,13/02/00,Recreativo,Lleida,4,0,H,3,0,H
+SP2,13/02/00,Sp Gijon,Salamanca,2,0,H,1,0,H
+SP2,13/02/00,Toledo,Logrones,2,1,H,1,0,H
+SP2,13/02/00,Villarreal,Getafe,2,1,H,1,0,H
+SP2,19/02/00,Getafe,Levante,0,1,A,0,0,D
+SP2,19/02/00,Las Palmas,Ath Madrid B,1,1,D,1,0,H
+SP2,20/02/00,Albacete,Sp Gijon,1,2,A,0,1,A
+SP2,20/02/00,Badajoz,Tenerife,0,2,A,0,0,D
+SP2,20/02/00,Compostela,Osasuna,1,2,A,0,2,A
+SP2,20/02/00,Cordoba,Leganes,2,1,H,0,0,D
+SP2,20/02/00,Eibar,Villarreal,2,1,H,1,1,D
+SP2,20/02/00,Extremadura,Elche,1,1,D,1,1,D
+SP2,20/02/00,Lleida,Toledo,1,0,H,1,0,H
+SP2,20/02/00,Logrones,Merida,1,2,A,0,1,A
+SP2,20/02/00,Salamanca,Recreativo,0,1,A,0,0,D
+SP2,26/02/00,Sp Gijon,Badajoz,0,0,D,0,0,D
+SP2,27/02/00,Ath Madrid B,Logrones,0,1,A,0,0,D
+SP2,27/02/00,Compostela,Extremadura,2,0,H,1,0,H
+SP2,27/02/00,Leganes,Las Palmas,0,0,D,0,0,D
+SP2,27/02/00,Levante,Eibar,0,0,D,0,0,D
+SP2,27/02/00,Merida,Lleida,0,0,D,0,0,D
+SP2,27/02/00,Osasuna,Cordoba,0,2,A,0,1,A
+SP2,27/02/00,Recreativo,Albacete,3,3,D,2,2,D
+SP2,27/02/00,Tenerife,Getafe,4,0,H,3,0,H
+SP2,27/02/00,Toledo,Salamanca,3,0,H,0,0,D
+SP2,27/02/00,Villarreal,Elche,1,0,H,1,0,H
+SP2,04/03/00,Badajoz,Recreativo,0,0,D,0,0,D
+SP2,04/03/00,Eibar,Tenerife,0,1,A,0,1,A
+SP2,04/03/00,Elche,Levante,1,1,D,1,0,H
+SP2,05/03/00,Albacete,Toledo,2,1,H,1,0,H
+SP2,05/03/00,Cordoba,Compostela,1,0,H,0,0,D
+SP2,05/03/00,Extremadura,Villarreal,4,1,H,3,0,H
+SP2,05/03/00,Getafe,Sp Gijon,1,0,H,0,0,D
+SP2,05/03/00,Las Palmas,Osasuna,0,2,A,0,0,D
+SP2,05/03/00,Lleida,Ath Madrid B,3,0,H,0,0,D
+SP2,05/03/00,Logrones,Leganes,0,1,A,0,0,D
+SP2,05/03/00,Salamanca,Merida,0,0,D,0,0,D
+SP2,11/03/00,Ath Madrid B,Salamanca,2,1,H,0,0,D
+SP2,11/03/00,Compostela,Las Palmas,0,2,A,0,1,A
+SP2,11/03/00,Cordoba,Extremadura,2,1,H,1,0,H
+SP2,11/03/00,Merida,Albacete,1,1,D,1,0,H
+SP2,11/03/00,Osasuna,Logrones,2,0,H,1,0,H
+SP2,11/03/00,Recreativo,Getafe,2,4,A,0,3,A
+SP2,11/03/00,Tenerife,Elche,1,0,H,1,0,H
+SP2,12/03/00,Leganes,Lleida,1,0,H,0,0,D
+SP2,12/03/00,Levante,Villarreal,0,0,D,0,0,D
+SP2,12/03/00,Sp Gijon,Eibar,1,1,D,0,1,A
+SP2,12/03/00,Toledo,Badajoz,2,0,H,1,0,H
+SP2,18/03/00,Las Palmas,Cordoba,1,1,D,1,0,H
+SP2,19/03/00,Albacete,Ath Madrid B,1,0,H,1,0,H
+SP2,19/03/00,Badajoz,Merida,0,3,A,0,1,A
+SP2,19/03/00,Eibar,Recreativo,0,0,D,0,0,D
+SP2,19/03/00,Elche,Sp Gijon,2,1,H,1,1,D
+SP2,19/03/00,Extremadura,Levante,1,1,D,0,1,A
+SP2,19/03/00,Getafe,Toledo,2,0,H,0,0,D
+SP2,19/03/00,Lleida,Osasuna,1,0,H,0,0,D
+SP2,19/03/00,Logrones,Compostela,3,1,H,2,0,H
+SP2,19/03/00,Salamanca,Leganes,0,1,A,0,0,D
+SP2,19/03/00,Villarreal,Tenerife,0,0,D,0,0,D
+SP2,25/03/00,Cordoba,Logrones,1,0,H,0,0,D
+SP2,26/03/00,Ath Madrid B,Badajoz,0,0,D,0,0,D
+SP2,26/03/00,Compostela,Lleida,1,2,A,0,0,D
+SP2,26/03/00,Las Palmas,Extremadura,0,1,A,0,1,A
+SP2,26/03/00,Leganes,Albacete,1,0,H,0,0,D
+SP2,26/03/00,Merida,Getafe,1,0,H,0,0,D
+SP2,26/03/00,Osasuna,Salamanca,1,0,H,1,0,H
+SP2,26/03/00,Recreativo,Elche,1,2,A,0,1,A
+SP2,26/03/00,Sp Gijon,Villarreal,1,2,A,0,0,D
+SP2,26/03/00,Tenerife,Levante,1,1,D,1,0,H
+SP2,26/03/00,Toledo,Eibar,1,2,A,1,2,A
+SP2,01/04/00,Elche,Toledo,1,0,H,0,0,D
+SP2,01/04/00,Getafe,Ath Madrid B,2,0,H,1,0,H
+SP2,01/04/00,Logrones,Las Palmas,1,1,D,0,1,A
+SP2,02/04/00,Albacete,Osasuna,2,1,H,0,0,D
+SP2,02/04/00,Badajoz,Leganes,1,1,D,0,0,D
+SP2,02/04/00,Eibar,Merida,0,0,D,0,0,D
+SP2,02/04/00,Extremadura,Tenerife,0,0,D,0,0,D
+SP2,02/04/00,Levante,Sp Gijon,0,2,A,0,2,A
+SP2,02/04/00,Lleida,Cordoba,1,0,H,1,0,H
+SP2,02/04/00,Salamanca,Compostela,0,0,D,0,0,D
+SP2,02/04/00,Villarreal,Recreativo,1,1,D,0,0,D
+SP2,08/04/00,Las Palmas,Lleida,1,0,H,0,0,D
+SP2,08/04/00,Leganes,Getafe,0,0,D,0,0,D
+SP2,08/04/00,Logrones,Extremadura,1,1,D,1,0,H
+SP2,08/04/00,Sp Gijon,Tenerife,2,0,H,2,0,H
+SP2,09/04/00,Ath Madrid B,Eibar,2,0,H,2,0,H
+SP2,09/04/00,Compostela,Albacete,1,1,D,0,0,D
+SP2,09/04/00,Cordoba,Salamanca,0,0,D,0,0,D
+SP2,09/04/00,Merida,Elche,1,1,D,0,0,D
+SP2,09/04/00,Osasuna,Badajoz,0,0,D,0,0,D
+SP2,09/04/00,Recreativo,Levante,1,0,H,0,0,D
+SP2,09/04/00,Toledo,Villarreal,1,3,A,0,2,A
+SP2,15/04/00,Eibar,Leganes,0,0,D,0,0,D
+SP2,15/04/00,Lleida,Logrones,1,0,H,0,0,D
+SP2,16/04/00,Albacete,Cordoba,1,0,H,1,0,H
+SP2,16/04/00,Badajoz,Compostela,2,2,D,1,1,D
+SP2,16/04/00,Elche,Ath Madrid B,1,1,D,0,0,D
+SP2,16/04/00,Extremadura,Sp Gijon,2,2,D,2,0,H
+SP2,16/04/00,Getafe,Osasuna,0,0,D,0,0,D
+SP2,16/04/00,Levante,Toledo,1,0,H,1,0,H
+SP2,16/04/00,Salamanca,Las Palmas,0,2,A,0,0,D
+SP2,16/04/00,Tenerife,Recreativo,1,2,A,0,1,A
+SP2,16/04/00,Villarreal,Merida,1,0,H,1,0,H
+SP2,22/04/00,Cordoba,Badajoz,0,4,A,0,3,A
+SP2,22/04/00,Las Palmas,Albacete,2,1,H,0,0,D
+SP2,22/04/00,Leganes,Elche,0,0,D,0,0,D
+SP2,22/04/00,Merida,Levante,1,0,H,1,0,H
+SP2,22/04/00,Osasuna,Eibar,2,0,H,1,0,H
+SP2,22/04/00,Toledo,Tenerife,1,1,D,0,0,D
+SP2,23/04/00,Ath Madrid B,Villarreal,1,4,A,0,2,A
+SP2,23/04/00,Compostela,Getafe,3,2,H,2,1,H
+SP2,23/04/00,Lleida,Extremadura,2,3,A,1,1,D
+SP2,23/04/00,Logrones,Salamanca,0,0,D,0,0,D
+SP2,23/04/00,Recreativo,Sp Gijon,0,1,A,0,0,D
+SP2,29/04/00,Badajoz,Las Palmas,0,2,A,0,1,A
+SP2,29/04/00,Extremadura,Recreativo,1,0,H,0,0,D
+SP2,29/04/00,Levante,Ath Madrid B,3,0,H,0,0,D
+SP2,30/04/00,Albacete,Logrones,2,2,D,0,1,A
+SP2,30/04/00,Eibar,Compostela,0,0,D,0,0,D
+SP2,30/04/00,Elche,Osasuna,1,3,A,1,2,A
+SP2,30/04/00,Getafe,Cordoba,0,1,A,0,0,D
+SP2,30/04/00,Salamanca,Lleida,2,1,H,0,0,D
+SP2,30/04/00,Sp Gijon,Toledo,0,1,A,0,0,D
+SP2,30/04/00,Tenerife,Merida,0,1,A,0,1,A
+SP2,30/04/00,Villarreal,Leganes,2,0,H,1,0,H
+SP2,06/05/00,Ath Madrid B,Tenerife,2,1,H,1,1,D
+SP2,06/05/00,Cordoba,Eibar,1,1,D,1,1,D
+SP2,06/05/00,Las Palmas,Getafe,2,0,H,1,0,H
+SP2,06/05/00,Lleida,Albacete,2,2,D,1,2,A
+SP2,07/05/00,Compostela,Elche,1,1,D,1,0,H
+SP2,07/05/00,Leganes,Levante,2,0,H,1,0,H
+SP2,07/05/00,Logrones,Badajoz,2,0,H,0,0,D
+SP2,07/05/00,Merida,Sp Gijon,1,0,H,1,0,H
+SP2,07/05/00,Osasuna,Villarreal,3,1,H,2,0,H
+SP2,07/05/00,Salamanca,Extremadura,2,1,H,1,0,H
+SP2,07/05/00,Toledo,Recreativo,0,2,A,0,1,A
+SP2,13/05/00,Albacete,Salamanca,1,0,H,1,0,H
+SP2,13/05/00,Badajoz,Lleida,0,0,D,0,0,D
+SP2,13/05/00,Eibar,Las Palmas,4,1,H,1,0,H
+SP2,13/05/00,Elche,Cordoba,2,1,H,1,0,H
+SP2,13/05/00,Villarreal,Compostela,1,1,D,0,0,D
+SP2,14/05/00,Extremadura,Toledo,1,2,A,0,2,A
+SP2,14/05/00,Getafe,Logrones,2,2,D,0,1,A
+SP2,14/05/00,Levante,Osasuna,2,1,H,2,1,H
+SP2,14/05/00,Recreativo,Merida,0,3,A,0,2,A
+SP2,14/05/00,Sp Gijon,Ath Madrid B,3,1,H,1,0,H
+SP2,14/05/00,Tenerife,Leganes,0,0,D,0,0,D
+SP2,21/05/00,Albacete,Extremadura,3,1,H,1,0,H
+SP2,21/05/00,Ath Madrid B,Recreativo,1,0,H,0,0,D
+SP2,21/05/00,Compostela,Levante,4,1,H,2,1,H
+SP2,21/05/00,Cordoba,Villarreal,2,4,A,1,2,A
+SP2,21/05/00,Las Palmas,Elche,4,1,H,3,0,H
+SP2,21/05/00,Leganes,Sp Gijon,2,1,H,0,0,D
+SP2,21/05/00,Lleida,Getafe,3,0,H,1,0,H
+SP2,21/05/00,Logrones,Eibar,0,1,A,0,0,D
+SP2,21/05/00,Merida,Toledo,1,1,D,1,0,H
+SP2,21/05/00,Osasuna,Tenerife,5,0,H,3,0,H
+SP2,21/05/00,Salamanca,Badajoz,2,2,D,1,1,D
+SP2,27/05/00,Badajoz,Albacete,1,2,A,0,2,A
+SP2,28/05/00,Eibar,Lleida,2,0,H,0,0,D
+SP2,28/05/00,Elche,Logrones,2,1,H,1,0,H
+SP2,28/05/00,Getafe,Salamanca,1,3,A,0,2,A
+SP2,28/05/00,Levante,Cordoba,3,0,H,1,0,H
+SP2,28/05/00,Merida,Extremadura,1,0,H,1,0,H
+SP2,28/05/00,Recreativo,Leganes,1,0,H,0,0,D
+SP2,28/05/00,Sp Gijon,Osasuna,1,1,D,0,0,D
+SP2,28/05/00,Tenerife,Compostela,0,0,D,0,0,D
+SP2,28/05/00,Toledo,Ath Madrid B,1,1,D,1,0,H
+SP2,28/05/00,Villarreal,Las Palmas,1,1,D,1,0,H
+SP2,03/06/00,Leganes,Toledo,1,2,A,0,0,D
+SP2,03/06/00,Lleida,Elche,5,2,H,3,2,H
+SP2,04/06/00,Albacete,Getafe,0,1,A,0,0,D
+SP2,04/06/00,Ath Madrid B,Merida,0,0,D,0,0,D
+SP2,04/06/00,Compostela,Sp Gijon,1,1,D,1,0,H
+SP2,04/06/00,Cordoba,Tenerife,2,1,H,1,1,D
+SP2,04/06/00,Extremadura,Badajoz,2,2,D,2,2,D
+SP2,04/06/00,Las Palmas,Levante,2,1,H,1,0,H
+SP2,04/06/00,Logrones,Villarreal,1,0,H,1,0,H
+SP2,04/06/00,Osasuna,Recreativo,2,1,H,0,1,A
+SP2,04/06/00,Salamanca,Eibar,2,1,H,1,0,H
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,

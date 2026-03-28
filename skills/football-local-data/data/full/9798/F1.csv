@@ -1,0 +1,307 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HTR,,,,,,,,,,,
+F1,01/08/97,Bordeaux,Monaco,1,0,H,,,,,,,,,,,,,,
+F1,01/08/97,Toulouse,Rennes,1,0,H,,,,,,,,,,,,,,
+F1,02/08/97,Guingamp,Cannes,3,1,H,,,,,,,,,,,,,,
+F1,02/08/97,Lens,Auxerre,3,0,H,,,,,,,,,,,,,,
+F1,02/08/97,Lyon,Metz,0,1,A,,,,,,,,,,,,,,
+F1,02/08/97,Marseille,Le Havre,3,1,H,,,,,,,,,,,,,,
+F1,02/08/97,Montpellier,Strasbourg,1,1,D,,,,,,,,,,,,,,
+F1,02/08/97,Nantes,Bastia,0,1,A,,,,,,,,,,,,,,
+F1,02/08/97,Paris SG,Chateauroux,2,0,H,,,,,,,,,,,,,,
+F1,08/08/97,Auxerre,Paris SG,2,3,A,2,0,H,,,,,,,,,,,
+F1,08/08/97,Rennes,Lyon,0,3,A,,,,,,,,,,,,,,
+F1,09/08/97,Bastia,Guingamp,1,0,H,0,0,D,,,,,,,,,,,
+F1,09/08/97,Cannes,Toulouse,0,1,A,,,,,,,,,,,,,,
+F1,09/08/97,Le Havre,Montpellier,4,0,H,,,,,,,,,,,,,,
+F1,09/08/97,Marseille,Nantes,1,0,H,1,0,H,,,,,,,,,,,
+F1,09/08/97,Metz,Bordeaux,4,1,H,1,0,H
+F1,09/08/97,Monaco,Chateauroux,2,2,D,1,0,H
+F1,09/08/97,Strasbourg,Lens,2,1,H,0,0,D
+F1,15/08/97,Chateauroux,Metz,1,2,A,,,
+F1,15/08/97,Lens,Le Havre,0,0,D,0,0,D
+F1,16/08/97,Bordeaux,Rennes,2,2,D,,,
+F1,16/08/97,Guingamp,Strasbourg,0,0,D,0,0,D
+F1,16/08/97,Lyon,Monaco,0,3,A,,,
+F1,16/08/97,Montpellier,Marseille,0,0,D,0,0,D
+F1,16/08/97,Nantes,Auxerre,0,2,A,,,
+F1,16/08/97,Paris SG,Cannes,3,1,H,,,
+F1,16/08/97,Toulouse,Bastia,1,1,D,,,
+F1,21/08/97,Cannes,Bordeaux,0,2,A,,,
+F1,21/08/97,Strasbourg,Nantes,1,2,A,,,
+F1,22/08/97,Auxerre,Guingamp,1,0,H,,,
+F1,22/08/97,Bastia,Chateauroux,1,1,D,,,
+F1,22/08/97,Le Havre,Lyon,1,3,A,,,
+F1,22/08/97,Marseille,Lens,2,3,A,,,
+F1,22/08/97,Metz,Paris SG,2,1,H,,,
+F1,22/08/97,Montpellier,Toulouse,4,0,H,,,
+F1,22/08/97,Rennes,Monaco,2,1,H,,,
+F1,29/08/97,Guingamp,Marseille,1,1,D,0,1,A
+F1,29/08/97,Monaco,Metz,1,2,A,0,1,A
+F1,30/08/97,Bordeaux,Auxerre,3,2,H,1,2,A
+F1,30/08/97,Chateauroux,Cannes,1,2,A,,,
+F1,30/08/97,Lens,Montpellier,0,0,D,0,0,D
+F1,30/08/97,Lyon,Bastia,0,2,A,0,2,A
+F1,30/08/97,Nantes,Le Havre,2,0,H,2,0,H
+F1,30/08/97,Paris SG,Rennes,4,1,H,1,0,H
+F1,30/08/97,Toulouse,Strasbourg,1,1,D,,,
+F1,04/09/97,Le Havre,Toulouse,1,1,D,1,0,H
+F1,04/09/97,Marseille,Lyon,1,0,H,0,0,D
+F1,05/09/97,Auxerre,Chateauroux,5,0,H,2,0,H
+F1,05/09/97,Bastia,Bordeaux,4,1,H,2,1,H
+F1,05/09/97,Cannes,Monaco,1,2,A,0,0,D
+F1,05/09/97,Lens,Nantes,0,0,D,0,0,D
+F1,05/09/97,Montpellier,Guingamp,2,3,A,2,2,D
+F1,05/09/97,Rennes,Metz,2,2,D,2,1,H
+F1,05/09/97,Strasbourg,Paris SG,0,3,A,0,1,A
+F1,11/09/97,Chateauroux,Rennes,1,0,H,,,
+F1,11/09/97,Guingamp,Lens,2,1,H,,,
+F1,12/09/97,Bordeaux,Le Havre,2,1,H,0,1,A
+F1,12/09/97,Lyon,Strasbourg,3,1,H,1,1,D
+F1,12/09/97,Metz,Cannes,2,0,H,0,0,D
+F1,12/09/97,Monaco,Marseille,2,0,H,0,0,D
+F1,12/09/97,Nantes,Montpellier,1,1,D,,,
+F1,12/09/97,Paris SG,Bastia,2,0,H,1,0,H
+F1,12/09/97,Toulouse,Auxerre,2,1,H,1,1,D
+F1,20/09/97,Auxerre,Lyon,1,2,A,1,1,D
+F1,20/09/97,Cannes,Rennes,1,1,D,0,0,D
+F1,20/09/97,Guingamp,Nantes,1,0,H,0,0,D
+F1,20/09/97,Le Havre,Paris SG,1,1,D,1,1,D
+F1,20/09/97,Lens,Toulouse,2,0,H,1,0,H
+F1,20/09/97,Marseille,Chateauroux,2,0,H,1,0,H
+F1,20/09/97,Strasbourg,Bordeaux,0,0,D,0,0,D
+F1,21/09/97,Bastia,Metz,0,0,D,0,0,D
+F1,21/09/97,Montpellier,Monaco,0,2,A,0,1,A
+F1,25/09/97,Bordeaux,Marseille,2,0,H,1,0,H
+F1,25/09/97,Lyon,Lens,1,3,A,0,2,A
+F1,26/09/97,Chateauroux,Le Havre,2,1,H,,,
+F1,26/09/97,Metz,Auxerre,3,0,H,2,0,H
+F1,26/09/97,Monaco,Strasbourg,3,2,H,1,1,D
+F1,26/09/97,Nantes,Cannes,1,2,A,0,1,A
+F1,26/09/97,Paris SG,Montpellier,1,1,D,1,0,H
+F1,26/09/97,Rennes,Bastia,2,0,H,1,0,H
+F1,26/09/97,Toulouse,Guingamp,3,0,H,,,
+F1,04/10/97,Auxerre,Rennes,4,0,H,2,0,H
+F1,04/10/97,Bastia,Cannes,5,1,H,3,1,H
+F1,04/10/97,Guingamp,Lyon,0,1,A,0,1,A
+F1,04/10/97,Le Havre,Monaco,1,1,D,0,0,D
+F1,04/10/97,Lens,Chateauroux,1,0,H,1,0,H
+F1,04/10/97,Marseille,Toulouse,2,0,H,1,0,H
+F1,04/10/97,Montpellier,Bordeaux,0,1,A,0,0,D
+F1,05/10/97,Nantes,Paris SG,0,0,D,0,0,D
+F1,05/10/97,Strasbourg,Metz,2,0,H,0,0,D
+F1,07/10/97,Cannes,Auxerre,2,3,A,1,2,A
+F1,07/10/97,Monaco,Bastia,1,0,H,0,0,D
+F1,08/10/97,Bordeaux,Lens,3,0,H,2,0,H
+F1,08/10/97,Chateauroux,Strasbourg,2,0,H,1,0,H
+F1,08/10/97,Lyon,Montpellier,1,2,A,0,0,D
+F1,08/10/97,Metz,Le Havre,2,0,H,0,0,D
+F1,08/10/97,Paris SG,Guingamp,4,2,H,1,2,A
+F1,08/10/97,Rennes,Marseille,0,2,A,0,1,A
+F1,08/10/97,Toulouse,Nantes,1,0,H,1,0,H
+F1,16/10/97,Guingamp,Bordeaux,0,1,A,0,0,D
+F1,16/10/97,Marseille,Metz,2,0,H,2,0,H
+F1,17/10/97,Auxerre,Bastia,2,0,H,2,0,H
+F1,17/10/97,Le Havre,Rennes,1,1,D,1,1,D
+F1,17/10/97,Lens,Monaco,1,0,H,0,0,D
+F1,17/10/97,Montpellier,Chateauroux,1,0,H,1,0,H
+F1,17/10/97,Nantes,Lyon,3,2,H,0,1,A
+F1,17/10/97,Strasbourg,Cannes,2,0,H,0,0,D
+F1,17/10/97,Toulouse,Paris SG,0,2,A,0,1,A
+F1,25/10/97,Bastia,Marseille,1,1,D,1,0,H
+F1,25/10/97,Cannes,Le Havre,1,1,D,0,0,D
+F1,25/10/97,Chateauroux,Guingamp,2,2,D,0,0,D
+F1,25/10/97,Lyon,Toulouse,0,0,D,0,0,D
+F1,25/10/97,Metz,Montpellier,0,1,A,0,0,D
+F1,25/10/97,Paris SG,Lens,2,0,H,1,0,H
+F1,25/10/97,Rennes,Strasbourg,3,1,H,3,0,H
+F1,26/10/97,Bordeaux,Nantes,1,1,D,1,0,H
+F1,26/10/97,Monaco,Auxerre,0,1,A,0,1,A
+F1,31/10/97,Guingamp,Monaco,1,2,A,0,0,D
+F1,31/10/97,Le Havre,Bastia,2,1,H,2,0,H
+F1,31/10/97,Lens,Metz,1,1,D,1,1,D
+F1,31/10/97,Lyon,Paris SG,1,0,H,0,0,D
+F1,31/10/97,Marseille,Cannes,2,0,H,2,0,H
+F1,31/10/97,Nantes,Chateauroux,3,1,H,1,0,H
+F1,31/10/97,Strasbourg,Auxerre,1,1,D,1,1,D
+F1,02/11/97,Montpellier,Rennes,2,0,H,1,0,H
+F1,02/11/97,Toulouse,Bordeaux,2,2,D,2,0,H
+F1,08/11/97,Auxerre,Le Havre,0,0,D,0,0,D
+F1,08/11/97,Bastia,Strasbourg,2,0,H,0,0,D
+F1,08/11/97,Bordeaux,Lyon,0,0,D,0,0,D
+F1,08/11/97,Cannes,Montpellier,1,0,H,0,0,D
+F1,08/11/97,Chateauroux,Toulouse,2,1,H,0,1,A
+F1,08/11/97,Metz,Guingamp,2,1,H,1,0,H
+F1,08/11/97,Rennes,Lens,2,3,A,1,1,D
+F1,09/11/97,Monaco,Nantes,3,2,H,1,0,H
+F1,09/11/97,Paris SG,Marseille,1,2,A,1,1,D
+F1,14/11/97,Lyon,Chateauroux,2,1,H,1,0,H
+F1,15/11/97,Bordeaux,Paris SG,0,0,D,0,0,D
+F1,15/11/97,Lens,Cannes,5,4,H,4,1,H
+F1,15/11/97,Marseille,Auxerre,4,0,H,2,0,H
+F1,15/11/97,Montpellier,Bastia,1,1,D,1,0,H
+F1,15/11/97,Nantes,Metz,1,1,D,1,1,D
+F1,15/11/97,Toulouse,Monaco,1,3,A,0,1,A
+F1,16/11/97,Guingamp,Rennes,1,0,H,0,0,D
+F1,16/11/97,Le Havre,Strasbourg,1,1,D,0,0,D
+F1,20/11/97,Auxerre,Montpellier,3,1,H,1,0,H
+F1,20/11/97,Monaco,Paris SG,3,0,H,3,0,H
+F1,20/11/97,Strasbourg,Marseille,2,0,H,0,0,D
+F1,21/11/97,Bastia,Lens,1,0,H,0,0,D
+F1,21/11/97,Cannes,Lyon,1,0,H,1,0,H
+F1,21/11/97,Chateauroux,Bordeaux,1,0,H,0,0,D
+F1,21/11/97,Le Havre,Guingamp,0,0,D,0,0,D
+F1,21/11/97,Metz,Toulouse,2,1,H,1,0,H
+F1,21/11/97,Rennes,Nantes,3,0,H,1,0,H
+F1,29/11/97,Chateauroux,Monaco,0,2,A,0,1,A
+F1,29/11/97,Guingamp,Bastia,0,0,D,0,0,D
+F1,29/11/97,Lens,Strasbourg,3,2,H,2,1,H
+F1,29/11/97,Lyon,Rennes,3,1,H,2,0,H
+F1,29/11/97,Montpellier,Le Havre,1,1,D,0,0,D
+F1,29/11/97,Nantes,Marseille,1,0,H,0,0,D
+F1,29/11/97,Toulouse,Cannes,1,0,H,1,0,H
+F1,30/11/97,Bordeaux,Metz,2,2,D,1,1,D
+F1,30/11/97,Paris SG,Auxerre,1,0,H,0,0,D
+F1,04/12/97,Auxerre,Nantes,3,1,H,1,0,H
+F1,05/12/97,Cannes,Paris SG,0,1,A,0,0,D
+F1,05/12/97,Metz,Chateauroux,2,0,H,2,0,H
+F1,05/12/97,Monaco,Lyon,2,1,H,0,1,A
+F1,06/12/97,Le Havre,Lens,0,1,A,0,0,D
+F1,06/12/97,Rennes,Bordeaux,0,0,D,0,0,D
+F1,06/12/97,Strasbourg,Guingamp,0,1,A,0,1,A
+F1,07/12/97,Bastia,Toulouse,0,0,D,0,0,D
+F1,07/12/97,Marseille,Montpellier,0,0,D,0,0,D
+F1,13/12/97,Bordeaux,Cannes,0,1,A,0,1,A
+F1,13/12/97,Chateauroux,Bastia,1,1,D,0,1,A
+F1,13/12/97,Guingamp,Auxerre,1,1,D,1,1,D
+F1,13/12/97,Lens,Marseille,0,1,A,0,1,A
+F1,13/12/97,Lyon,Le Havre,0,1,A,0,0,D
+F1,13/12/97,Nantes,Strasbourg,2,1,H,1,0,H
+F1,13/12/97,Toulouse,Montpellier,1,1,D,1,0,H
+F1,14/12/97,Monaco,Rennes,1,0,H,0,0,D
+F1,14/12/97,Paris SG,Metz,1,1,D,0,0,D
+F1,19/12/97,Auxerre,Bordeaux,4,2,H,2,1,H
+F1,19/12/97,Bastia,Lyon,0,1,A,0,0,D
+F1,19/12/97,Le Havre,Nantes,1,0,H,0,0,D
+F1,19/12/97,Metz,Monaco,3,0,H,1,0,H
+F1,19/12/97,Montpellier,Lens,1,2,A,0,0,D
+F1,19/12/97,Rennes,Paris SG,1,2,A,0,1,A
+F1,19/12/97,Strasbourg,Toulouse,2,0,H,1,0,H
+F1,10/01/98,Bordeaux,Bastia,2,0,H,1,0,H
+F1,10/01/98,Chateauroux,Auxerre,3,2,H,0,1,A
+F1,10/01/98,Guingamp,Montpellier,1,2,A,0,0,D
+F1,10/01/98,Lyon,Marseille,2,1,H,0,1,A
+F1,10/01/98,Metz,Rennes,1,0,H,1,0,H
+F1,10/01/98,Monaco,Cannes,0,1,A,0,0,D
+F1,10/01/98,Toulouse,Le Havre,1,0,H,1,0,H
+F1,11/01/98,Nantes,Lens,1,0,H,0,0,D
+F1,11/01/98,Paris SG,Strasbourg,2,1,H,0,0,D
+F1,14/01/98,Cannes,Chateauroux,2,2,D,1,2,A
+F1,14/01/98,Marseille,Guingamp,3,0,H,3,0,H
+F1,20/01/98,Cannes,Metz,1,1,D,0,1,A
+F1,20/01/98,Marseille,Monaco,1,1,D,1,0,H
+F1,21/01/98,Auxerre,Toulouse,3,1,H,1,1,D
+F1,21/01/98,Bastia,Paris SG,2,0,H,1,0,H
+F1,21/01/98,Le Havre,Bordeaux,0,0,D,0,0,D
+F1,21/01/98,Lens,Guingamp,1,0,H,1,0,H
+F1,21/01/98,Montpellier,Nantes,2,0,H,2,0,H
+F1,21/01/98,Rennes,Chateauroux,3,0,H,0,0,D
+F1,21/01/98,Strasbourg,Lyon,1,2,A,0,2,A
+F1,24/01/98,Bordeaux,Strasbourg,4,4,D,2,2,D
+F1,24/01/98,Chateauroux,Marseille,0,3,A,0,1,A
+F1,24/01/98,Lyon,Auxerre,1,0,H,0,0,D
+F1,24/01/98,Metz,Bastia,0,1,A,0,1,A
+F1,24/01/98,Monaco,Montpellier,4,0,H,1,0,H
+F1,24/01/98,Nantes,Guingamp,2,0,H,0,0,D
+F1,24/01/98,Paris SG,Le Havre,0,2,A,0,1,A
+F1,24/01/98,Rennes,Cannes,2,0,H,0,0,D
+F1,24/01/98,Toulouse,Lens,1,2,A,0,1,A
+F1,03/02/98,Bastia,Rennes,0,0,D,0,0,D
+F1,03/02/98,Strasbourg,Monaco,0,0,D,0,0,D
+F1,04/02/98,Auxerre,Metz,0,0,D,0,0,D
+F1,04/02/98,Guingamp,Toulouse,2,0,H,2,0,H
+F1,04/02/98,Lens,Lyon,3,0,H,2,0,H
+F1,04/02/98,Marseille,Bordeaux,1,0,H,1,0,H
+F1,04/02/98,Montpellier,Paris SG,2,1,H,0,1,A
+F1,05/02/98,Cannes,Nantes,2,3,A,0,3,A
+F1,05/02/98,Le Havre,Chateauroux,5,0,H,2,0,H
+F1,12/02/98,Chateauroux,Lens,2,1,H,1,0,H
+F1,12/02/98,Rennes,Auxerre,1,1,D,1,0,H
+F1,13/02/98,Bordeaux,Montpellier,3,1,H,0,1,A
+F1,13/02/98,Cannes,Bastia,1,1,D,0,0,D
+F1,13/02/98,Lyon,Guingamp,1,0,H,0,0,D
+F1,13/02/98,Metz,Strasbourg,1,0,H,0,0,D
+F1,13/02/98,Monaco,Le Havre,2,0,H,0,0,D
+F1,13/02/98,Paris SG,Nantes,0,1,A,0,0,D
+F1,13/02/98,Toulouse,Marseille,0,4,A,0,1,A
+F1,20/02/98,Bastia,Monaco,1,0,H,0,0,D
+F1,20/02/98,Strasbourg,Chateauroux,2,0,H,1,0,H
+F1,21/02/98,Auxerre,Cannes,1,1,D,1,0,H
+F1,21/02/98,Guingamp,Paris SG,0,0,D,0,0,D
+F1,21/02/98,Le Havre,Metz,2,1,H,2,0,H
+F1,21/02/98,Lens,Bordeaux,1,0,H,0,0,D
+F1,21/02/98,Marseille,Rennes,0,1,A,0,0,D
+F1,21/02/98,Montpellier,Lyon,1,1,D,0,1,A
+F1,21/02/98,Nantes,Toulouse,0,1,A,0,1,A
+F1,07/03/98,Bastia,Auxerre,1,2,A,1,0,H
+F1,07/03/98,Bordeaux,Guingamp,4,2,H,2,1,H
+F1,07/03/98,Cannes,Strasbourg,1,0,H,0,0,D
+F1,07/03/98,Chateauroux,Montpellier,0,1,A,0,0,D
+F1,07/03/98,Lyon,Nantes,0,0,D,0,0,D
+F1,07/03/98,Metz,Marseille,3,2,H,1,0,H
+F1,07/03/98,Monaco,Lens,0,1,A,0,0,D
+F1,07/03/98,Paris SG,Toulouse,1,1,D,0,0,D
+F1,07/03/98,Rennes,Le Havre,2,2,D,1,1,D
+F1,13/03/98,Auxerre,Monaco,3,1,H,1,0,H
+F1,13/03/98,Guingamp,Chateauroux,0,0,D,0,0,D
+F1,13/03/98,Le Havre,Cannes,2,0,H,0,0,D
+F1,13/03/98,Montpellier,Metz,0,1,A,0,0,D
+F1,13/03/98,Nantes,Bordeaux,1,2,A,0,1,A
+F1,13/03/98,Strasbourg,Rennes,3,1,H,0,0,D
+F1,13/03/98,Toulouse,Lyon,0,2,A,0,2,A
+F1,15/03/98,Lens,Paris SG,3,0,H,2,0,H
+F1,15/03/98,Marseille,Bastia,1,0,H,0,0,D
+F1,28/03/98,Auxerre,Strasbourg,1,2,A,1,1,D
+F1,28/03/98,Bastia,Le Havre,2,0,H,2,0,H
+F1,28/03/98,Bordeaux,Toulouse,3,1,H,2,0,H
+F1,28/03/98,Chateauroux,Nantes,1,2,A,0,0,D
+F1,28/03/98,Monaco,Guingamp,1,0,H,0,0,D
+F1,28/03/98,Paris SG,Lyon,3,0,H,2,0,H
+F1,28/03/98,Rennes,Montpellier,2,0,H,0,0,D
+F1,29/03/98,Cannes,Marseille,3,3,D,2,1,H
+F1,29/03/98,Metz,Lens,0,2,A,0,2,A
+F1,07/04/98,Le Havre,Auxerre,2,2,D,1,1,D
+F1,07/04/98,Lens,Rennes,3,0,H,1,0,H
+F1,07/04/98,Lyon,Bordeaux,1,1,D,1,0,H
+F1,07/04/98,Montpellier,Cannes,1,0,H,0,0,D
+F1,07/04/98,Nantes,Monaco,1,1,D,0,0,D
+F1,07/04/98,Strasbourg,Bastia,1,1,D,1,0,H
+F1,07/04/98,Toulouse,Chateauroux,1,1,D,1,1,D
+F1,08/04/98,Guingamp,Metz,0,1,A,0,1,A
+F1,08/04/98,Marseille,Paris SG,0,0,D,0,0,D
+F1,17/04/98,Cannes,Lens,0,2,A,0,0,D
+F1,17/04/98,Metz,Nantes,3,2,H,1,1,D
+F1,18/04/98,Auxerre,Marseille,2,1,H,1,1,D
+F1,18/04/98,Bastia,Montpellier,2,1,H,1,1,D
+F1,18/04/98,Chateauroux,Lyon,2,3,A,0,1,A
+F1,18/04/98,Monaco,Toulouse,0,1,A,0,1,A
+F1,18/04/98,Paris SG,Bordeaux,0,1,A,0,1,A
+F1,18/04/98,Rennes,Guingamp,1,2,A,1,0,H
+F1,18/04/98,Strasbourg,Le Havre,0,1,A,0,0,D
+F1,25/04/98,Bordeaux,Chateauroux,1,0,H,1,0,H
+F1,25/04/98,Guingamp,Le Havre,1,2,A,1,1,D
+F1,25/04/98,Lens,Bastia,5,1,H,1,0,H
+F1,25/04/98,Lyon,Cannes,2,0,H,0,0,D
+F1,25/04/98,Marseille,Strasbourg,0,0,D,0,0,D
+F1,25/04/98,Montpellier,Auxerre,1,1,D,1,1,D
+F1,25/04/98,Nantes,Rennes,1,1,D,1,0,H
+F1,25/04/98,Paris SG,Monaco,1,2,A,1,1,D
+F1,25/04/98,Toulouse,Metz,0,1,A,0,0,D
+F1,09/05/98,Auxerre,Lens,1,1,D,1,0,H
+F1,09/05/98,Bastia,Nantes,2,1,H,2,1,H
+F1,09/05/98,Cannes,Guingamp,1,3,A,1,0,H
+F1,09/05/98,Chateauroux,Paris SG,2,1,H,1,1,D
+F1,09/05/98,Le Havre,Marseille,1,1,D,1,1,D
+F1,09/05/98,Metz,Lyon,1,0,H,1,0,H
+F1,09/05/98,Monaco,Bordeaux,5,2,H,4,1,H
+F1,09/05/98,Rennes,Toulouse,1,0,H,0,0,D
+F1,09/05/98,Strasbourg,Montpellier,3,0,H,1,0,H

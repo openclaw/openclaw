@@ -1,0 +1,553 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HTR,,,,,,,,,,,
+N1,20/08/98,Heerenveen,Twente,1,0,H,1,0,H,,,,,,,,,,,
+N1,21/08/98,For Sittard,Feyenoord,1,2,A,0,0,D,,,,,,,,,,,
+N1,22/08/98,AZ Alkmaar,Sparta,2,0,H,1,0,H,,,,,,,,,,,
+N1,22/08/98,Cambuur,PSV Eindhoven,1,1,D,0,1,A,,,,,,,,,,,
+N1,22/08/98,MVV Maastricht,Graafschap,1,2,A,1,1,D,,,,,,,,,,,
+N1,22/08/98,Vitesse,Roda JC,1,0,H,0,0,D,,,,,,,,,,,
+N1,22/08/98,Waalwijk,Nijmegen,0,1,A,0,1,A,,,,,,,,,,,
+N1,23/08/98,Ajax,Willem II,2,0,H,2,0,H,,,,,,,,,,,
+N1,23/08/98,NAC Breda,Utrecht,2,4,A,1,1,D,,,,,,,,,,,
+N1,28/08/98,Roda JC,Ajax,0,2,A,0,0,D,,,,,,,,,,,
+N1,29/08/98,AZ Alkmaar,Vitesse,0,0,D,0,0,D,,,,,,,,,,,
+N1,29/08/98,PSV Eindhoven,Heerenveen,1,2,A,0,1,A,,,,,,,,,,,
+N1,29/08/98,Willem II,For Sittard,1,0,H,1,0,H,,,,,,,,,,,
+N1,30/08/98,Feyenoord,MVV Maastricht,3,1,H,1,0,H,,,,,,,,,,,
+N1,30/08/98,Nijmegen,NAC Breda,1,1,D,1,0,H,,,,,,,,,,,
+N1,30/08/98,Twente,Sparta,1,0,H,1,0,H
+N1,30/08/98,Utrecht,Cambuur,3,0,H,1,0,H
+N1,05/09/98,Graafschap,Waalwijk,2,2,D,1,1,D
+N1,06/09/98,Sparta,Roda JC,1,1,D,0,1,A
+N1,08/09/98,Feyenoord,Graafschap,5,0,H,1,0,H
+N1,08/09/98,Heerenveen,Willem II,2,2,D,1,0,H
+N1,08/09/98,Waalwijk,PSV Eindhoven,3,4,A,2,3,A
+N1,09/09/98,Ajax,AZ Alkmaar,5,1,H,2,0,H
+N1,09/09/98,Cambuur,Nijmegen,2,2,D,1,0,H
+N1,09/09/98,For Sittard,Vitesse,0,2,A,0,0,D
+N1,09/09/98,MVV Maastricht,Utrecht,1,4,A,1,2,A
+N1,09/09/98,NAC Breda,Twente,1,1,D,1,1,D
+N1,11/09/98,Heerenveen,Feyenoord,0,1,A,0,0,D
+N1,12/09/98,For Sittard,AZ Alkmaar,2,2,D,0,0,D
+N1,12/09/98,PSV Eindhoven,MVV Maastricht,2,0,H,1,0,H
+N1,12/09/98,Roda JC,NAC Breda,3,1,H,2,0,H
+N1,12/09/98,Vitesse,Cambuur,4,2,H,3,1,H
+N1,12/09/98,Willem II,Sparta,3,2,H,2,1,H
+N1,13/09/98,Graafschap,Nijmegen,2,1,H,1,0,H
+N1,13/09/98,Twente,Waalwijk,1,0,H,1,0,H
+N1,13/09/98,Utrecht,Ajax,2,2,D,1,1,D
+N1,18/09/98,Nijmegen,Roda JC,3,1,H,1,1,D
+N1,19/09/98,AZ Alkmaar,Willem II,1,1,D,1,1,D
+N1,19/09/98,Cambuur,Twente,0,2,A,0,0,D
+N1,19/09/98,MVV Maastricht,Vitesse,4,2,H,0,1,A
+N1,20/09/98,Ajax,Graafschap,1,1,D,1,1,D
+N1,20/09/98,Sparta,NAC Breda,0,2,A,0,0,D
+N1,20/09/98,Utrecht,For Sittard,1,1,D,0,0,D
+N1,20/09/98,Waalwijk,Heerenveen,0,4,A,0,0,D
+N1,22/09/98,PSV Eindhoven,Feyenoord,1,2,A,1,1,D
+N1,23/09/98,For Sittard,Ajax,1,0,H,0,0,D
+N1,23/09/98,Graafschap,Sparta,0,3,A,0,2,A
+N1,23/09/98,Heerenveen,Utrecht,1,0,H,1,0,H
+N1,23/09/98,NAC Breda,AZ Alkmaar,1,1,D,0,1,A
+N1,23/09/98,Twente,MVV Maastricht,2,1,H,0,0,D
+N1,23/09/98,Vitesse,Waalwijk,2,0,H,1,0,H
+N1,23/09/98,Willem II,Cambuur,2,1,H,2,1,H
+N1,26/09/98,Cambuur,Graafschap,2,0,H,1,0,H
+N1,26/09/98,Feyenoord,Willem II,3,2,H,1,1,D
+N1,26/09/98,For Sittard,MVV Maastricht,0,1,A,0,1,A
+N1,26/09/98,Nijmegen,Heerenveen,2,0,H,1,0,H
+N1,26/09/98,Roda JC,Waalwijk,0,0,D,0,0,D
+N1,26/09/98,Vitesse,Sparta,5,1,H,2,0,H
+N1,27/09/98,Ajax,NAC Breda,1,0,H,0,0,D
+N1,27/09/98,AZ Alkmaar,PSV Eindhoven,4,1,H,2,1,H
+N1,27/09/98,Utrecht,Twente,0,3,A,0,2,A
+N1,03/10/98,MVV Maastricht,Cambuur,3,0,H,2,0,H
+N1,03/10/98,PSV Eindhoven,For Sittard,2,0,H,1,0,H
+N1,03/10/98,Willem II,Roda JC,1,2,A,0,1,A
+N1,04/10/98,Graafschap,Vitesse,0,0,D,0,0,D
+N1,04/10/98,Heerenveen,NAC Breda,2,1,H,1,1,D
+N1,04/10/98,Sparta,Ajax,2,0,H,1,0,H
+N1,04/10/98,Twente,Feyenoord,1,1,D,0,0,D
+N1,04/10/98,Utrecht,Nijmegen,2,3,A,0,2,A
+N1,04/10/98,Waalwijk,AZ Alkmaar,2,3,A,2,1,H
+N1,16/10/98,AZ Alkmaar,Heerenveen,1,3,A,1,1,D
+N1,17/10/98,Cambuur,Waalwijk,1,1,D,0,1,A
+N1,17/10/98,Feyenoord,Roda JC,0,0,D,0,0,D
+N1,17/10/98,For Sittard,Sparta,2,1,H,2,1,H
+N1,17/10/98,NAC Breda,MVV Maastricht,2,0,H,1,0,H
+N1,17/10/98,Vitesse,Willem II,3,2,H,3,2,H
+N1,18/10/98,Ajax,Twente,5,0,H,3,0,H
+N1,18/10/98,Graafschap,Utrecht,0,0,D,0,0,D
+N1,18/10/98,Nijmegen,PSV Eindhoven,2,2,D,1,0,H
+N1,23/10/98,Nijmegen,AZ Alkmaar,2,2,D,1,1,D
+N1,23/10/98,Roda JC,For Sittard,5,3,H,1,1,D
+N1,24/10/98,MVV Maastricht,Waalwijk,1,0,H,1,0,H
+N1,24/10/98,Twente,Graafschap,2,1,H,0,1,A
+N1,25/10/98,Ajax,Cambuur,4,0,H,1,0,H
+N1,25/10/98,Sparta,Heerenveen,3,1,H,1,0,H
+N1,25/10/98,Utrecht,Feyenoord,2,3,A,2,1,H
+N1,25/10/98,Willem II,PSV Eindhoven,4,2,H,2,1,H
+N1,30/10/98,For Sittard,Twente,0,3,A,0,2,A
+N1,31/10/98,Cambuur,NAC Breda,3,1,H,2,1,H
+N1,31/10/98,Feyenoord,AZ Alkmaar,1,2,A,0,1,A
+N1,31/10/98,Heerenveen,Vitesse,2,1,H,1,0,H
+N1,31/10/98,MVV Maastricht,Willem II,1,1,D,0,0,D
+N1,31/10/98,PSV Eindhoven,Sparta,4,0,H,4,0,H
+N1,01/11/98,Nijmegen,Ajax,0,4,A,0,2,A
+N1,01/11/98,Utrecht,Roda JC,0,3,A,0,1,A
+N1,01/11/98,Waalwijk,Graafschap,1,2,A,1,0,H
+N1,06/11/98,Waalwijk,Utrecht,2,5,A,1,1,D
+N1,07/11/98,Graafschap,Willem II,2,2,D,0,0,D
+N1,07/11/98,Roda JC,Cambuur,1,0,H,1,0,H
+N1,08/11/98,AZ Alkmaar,Ajax,1,1,D,0,1,A
+N1,08/11/98,Heerenveen,For Sittard,2,0,H,2,0,H
+N1,08/11/98,Sparta,MVV Maastricht,0,0,D,0,0,D
+N1,08/11/98,Twente,PSV Eindhoven,2,2,D,1,1,D
+N1,08/11/98,Vitesse,Nijmegen,1,0,H,0,0,D
+N1,11/11/98,Ajax,Roda JC,2,1,H,2,0,H
+N1,11/11/98,Cambuur,AZ Alkmaar,0,0,D,0,0,D
+N1,11/11/98,For Sittard,Graafschap,0,0,D,0,0,D
+N1,11/11/98,MVV Maastricht,Feyenoord,1,3,A,0,2,A
+N1,11/11/98,NAC Breda,Nijmegen,1,2,A,1,2,A
+N1,11/11/98,Twente,Heerenveen,1,2,A,0,1,A
+N1,11/11/98,Willem II,Waalwijk,3,0,H,1,0,H
+N1,12/11/98,PSV Eindhoven,Vitesse,3,1,H,2,0,H
+N1,14/11/98,Graafschap,Roda JC,2,3,A,0,1,A
+N1,14/11/98,MVV Maastricht,AZ Alkmaar,2,1,H,1,0,H
+N1,14/11/98,Nijmegen,Twente,2,2,D,1,2,A
+N1,15/11/98,Ajax,PSV Eindhoven,2,2,D,1,2,A
+N1,15/11/98,Feyenoord,For Sittard,4,1,H,1,1,D
+N1,15/11/98,Vitesse,Utrecht,2,0,H,1,0,H
+N1,15/11/98,Waalwijk,Sparta,5,1,H,3,1,H
+N1,15/11/98,Willem II,NAC Breda,2,1,H,2,0,H
+N1,20/11/98,MVV Maastricht,Nijmegen,0,3,A,0,0,D
+N1,21/11/98,Feyenoord,Cambuur,4,0,H,2,0,H
+N1,21/11/98,Graafschap,Heerenveen,1,1,D,0,0,D
+N1,21/11/98,NAC Breda,For Sittard,1,1,D,0,1,A
+N1,21/11/98,Roda JC,Vitesse,3,1,H,1,1,D
+N1,21/11/98,Twente,Willem II,5,1,H,2,0,H
+N1,22/11/98,PSV Eindhoven,Utrecht,5,0,H,2,0,H
+N1,22/11/98,Sparta,AZ Alkmaar,0,0,D,0,0,D
+N1,22/11/98,Waalwijk,Ajax,0,1,A,0,1,A
+N1,24/11/98,Heerenveen,Cambuur,1,1,D,1,0,H
+N1,27/11/98,Cambuur,For Sittard,3,1,H,0,1,A
+N1,27/11/98,Roda JC,MVV Maastricht,2,1,H,0,1,A
+N1,28/11/98,PSV Eindhoven,Graafschap,2,2,D,2,1,H
+N1,29/11/98,Sparta,Feyenoord,1,2,A,0,1,A
+N1,29/11/98,Utrecht,Willem II,2,0,H,0,0,D
+N1,29/11/98,Vitesse,Ajax,3,2,H,3,0,H
+N1,01/12/98,Heerenveen,PSV Eindhoven,3,3,D,0,2,A
+N1,02/12/98,AZ Alkmaar,Roda JC,1,0,H,1,0,H
+N1,02/12/98,Cambuur,Utrecht,1,1,D,1,0,H
+N1,02/12/98,Nijmegen,Sparta,3,1,H,2,1,H
+N1,03/12/98,For Sittard,Waalwijk,3,2,H,0,0,D
+N1,04/12/98,Willem II,Vitesse,3,5,A,1,0,H
+N1,06/12/98,Ajax,MVV Maastricht,1,1,D,0,0,D
+N1,06/12/98,AZ Alkmaar,Twente,1,1,D,1,1,D
+N1,06/12/98,Feyenoord,Nijmegen,1,0,H,0,0,D
+N1,06/12/98,NAC Breda,PSV Eindhoven,3,4,A,2,2,D
+N1,06/12/98,Sparta,Cambuur,1,2,A,1,2,A
+N1,06/12/98,Utrecht,Graafschap,2,1,H,1,1,D
+N1,09/12/98,NAC Breda,Vitesse,0,2,A,0,1,A
+N1,10/12/98,Waalwijk,Feyenoord,0,5,A,0,2,A
+N1,11/12/98,MVV Maastricht,For Sittard,3,3,D,2,1,H
+N1,12/12/98,PSV Eindhoven,Roda JC,3,3,D,1,1,D
+N1,12/12/98,Willem II,Nijmegen,1,0,H,0,0,D
+N1,13/12/98,Ajax,Heerenveen,0,0,D,0,0,D
+N1,13/12/98,AZ Alkmaar,Utrecht,4,3,H,1,1,D
+N1,13/12/98,Graafschap,NAC Breda,0,1,A,0,1,A
+N1,13/12/98,Sparta,Twente,4,2,H,1,1,D
+N1,13/12/98,Vitesse,Feyenoord,1,1,D,0,0,D
+N1,16/12/98,NAC Breda,Cambuur,2,3,A,0,2,A
+N1,16/12/98,Nijmegen,Waalwijk,1,1,D,1,1,D
+N1,16/12/98,Roda JC,Twente,2,0,H,0,0,D
+N1,18/12/98,Heerenveen,MVV Maastricht,1,1,D,0,0,D
+N1,19/12/98,Graafschap,AZ Alkmaar,1,1,D,1,1,D
+N1,19/12/98,PSV Eindhoven,Willem II,1,0,H,0,0,D
+N1,19/12/98,Twente,Vitesse,0,0,D,0,0,D
+N1,20/12/98,Feyenoord,Ajax,1,1,D,0,1,A
+N1,20/12/98,Nijmegen,For Sittard,0,3,A,0,2,A
+N1,20/12/98,Utrecht,Sparta,4,1,H,3,0,H
+N1,20/12/98,Waalwijk,NAC Breda,2,1,H,1,1,D
+N1,05/02/99,Nijmegen,Graafschap,1,1,D,0,0,D
+N1,06/02/99,For Sittard,NAC Breda,2,0,H,0,0,D
+N1,06/02/99,Twente,AZ Alkmaar,0,3,A,0,2,A
+N1,06/02/99,Willem II,Heerenveen,3,2,H,0,0,D
+N1,07/02/99,Waalwijk,MVV Maastricht,2,2,D,2,1,H
+N1,09/02/99,Roda JC,Nijmegen,5,2,H,3,2,H
+N1,14/02/99,Sparta,Utrecht,0,1,A,0,0,D
+N1,14/02/99,Twente,Ajax,2,1,H,1,1,D
+N1,17/02/99,Heerenveen,Ajax,2,2,D,1,0,H
+N1,17/02/99,Nijmegen,Willem II,0,3,A,0,1,A
+N1,17/02/99,Vitesse,NAC Breda,3,1,H,2,1,H
+N1,17/02/99,Waalwijk,For Sittard,0,0,D,0,0,D
+N1,18/02/99,PSV Eindhoven,Twente,3,0,H,0,0,D
+N1,20/02/99,AZ Alkmaar,Waalwijk,2,1,H,0,1,A
+N1,20/02/99,For Sittard,Cambuur,2,0,H,1,0,H
+N1,20/02/99,Roda JC,Sparta,1,0,H,0,0,D
+N1,20/02/99,Vitesse,MVV Maastricht,2,1,H,1,1,D
+N1,21/02/99,Feyenoord,PSV Eindhoven,3,1,H,2,0,H
+N1,21/02/99,Graafschap,Twente,0,2,A,0,2,A
+N1,21/02/99,Utrecht,Heerenveen,2,2,D,1,1,D
+N1,24/02/99,Feyenoord,Waalwijk,1,0,H,0,0,D
+N1,24/02/99,NAC Breda,Graafschap,0,1,A,0,0,D
+N1,26/02/99,Cambuur,Vitesse,2,2,D,2,1,H
+N1,27/02/99,Nijmegen,MVV Maastricht,1,1,D,0,1,A
+N1,27/02/99,PSV Eindhoven,NAC Breda,2,0,H,1,0,H
+N1,27/02/99,Roda JC,AZ Alkmaar,8,2,H,6,0,H
+N1,27/02/99,Willem II,Utrecht,1,0,H,0,0,D
+N1,28/02/99,Ajax,Sparta,5,1,H,2,1,H
+N1,28/02/99,Feyenoord,Heerenveen,2,1,H,0,0,D
+N1,05/03/99,Roda JC,PSV Eindhoven,1,3,A,0,1,A
+N1,06/03/99,AZ Alkmaar,Cambuur,3,1,H,1,1,D
+N1,06/03/99,MVV Maastricht,Twente,2,5,A,0,0,D
+N1,06/03/99,NAC Breda,Heerenveen,2,2,D,1,1,D
+N1,06/03/99,Vitesse,For Sittard,1,2,A,0,1,A
+N1,07/03/99,Ajax,Utrecht,5,2,H,2,0,H
+N1,07/03/99,Graafschap,Feyenoord,3,4,A,2,1,H
+N1,07/03/99,Sparta,Nijmegen,1,0,H,0,0,D
+N1,07/03/99,Waalwijk,Willem II,1,3,A,0,1,A
+N1,13/03/99,Heerenveen,Waalwijk,2,0,H,2,0,H
+N1,13/03/99,PSV Eindhoven,Cambuur,3,0,H,1,0,H
+N1,13/03/99,Willem II,Graafschap,2,0,H,1,0,H
+N1,14/03/99,Sparta,Vitesse,1,3,A,0,3,A
+N1,14/03/99,Twente,Roda JC,0,0,D,0,0,D
+N1,14/03/99,Utrecht,AZ Alkmaar,2,2,D,1,1,D
+N1,16/03/99,MVV Maastricht,Ajax,1,4,A,0,3,A
+N1,17/03/99,Cambuur,Feyenoord,1,5,A,1,5,A
+N1,17/03/99,For Sittard,Utrecht,3,2,H,3,1,H
+N1,17/03/99,NAC Breda,Waalwijk,0,2,A,0,1,A
+N1,18/03/99,Roda JC,Willem II,0,2,A,0,1,A
+N1,19/03/99,Twente,Nijmegen,2,0,H,1,0,H
+N1,20/03/99,AZ Alkmaar,For Sittard,0,3,A,0,2,A
+N1,20/03/99,Cambuur,MVV Maastricht,1,0,H,0,0,D
+N1,20/03/99,Heerenveen,Graafschap,4,1,H,2,0,H
+N1,21/03/99,Ajax,Vitesse,0,1,A,0,1,A
+N1,21/03/99,Sparta,PSV Eindhoven,0,5,A,0,1,A
+N1,21/03/99,Utrecht,NAC Breda,2,0,H,0,0,D
+N1,21/03/99,Willem II,Feyenoord,4,1,H,3,0,H
+N1,23/03/99,Roda JC,Heerenveen,2,1,H,1,0,H
+N1,27/03/99,Graafschap,MVV Maastricht,3,1,H,1,0,H
+N1,01/04/99,MVV Maastricht,Roda JC,0,0,D,0,0,D
+N1,02/04/99,AZ Alkmaar,Feyenoord,0,2,A,0,1,A
+N1,02/04/99,For Sittard,Heerenveen,1,0,H,0,0,D
+N1,02/04/99,Nijmegen,Cambuur,1,0,H,1,0,H
+N1,02/04/99,Sparta,Graafschap,2,3,A,1,1,D
+N1,03/04/99,Waalwijk,Vitesse,0,2,A,0,2,A
+N1,04/04/99,NAC Breda,Willem II,2,2,D,1,2,A
+N1,04/04/99,PSV Eindhoven,Ajax,3,1,H,0,1,A
+N1,05/04/99,Feyenoord,Sparta,1,0,H,1,0,H
+N1,05/04/99,Twente,Utrecht,1,1,D,1,0,H
+N1,06/04/99,Cambuur,Roda JC,1,1,D,0,0,D
+N1,07/04/99,For Sittard,Willem II,1,2,A,1,0,H
+N1,09/04/99,MVV Maastricht,PSV Eindhoven,1,1,D,0,1,A
+N1,09/04/99,Sparta,Waalwijk,0,1,A,0,0,D
+N1,10/04/99,Graafschap,For Sittard,0,0,D,0,0,D
+N1,10/04/99,Heerenveen,Nijmegen,3,2,H,0,0,D
+N1,10/04/99,NAC Breda,Roda JC,0,0,D,0,0,D
+N1,10/04/99,Vitesse,Twente,1,1,D,1,0,H
+N1,10/04/99,Willem II,AZ Alkmaar,2,0,H,1,0,H
+N1,11/04/99,Cambuur,Ajax,4,1,H,2,1,H
+N1,11/04/99,Feyenoord,Utrecht,4,2,H,2,2,D
+N1,13/04/99,AZ Alkmaar,NAC Breda,3,0,H,0,0,D
+N1,16/04/99,Vitesse,Heerenveen,1,2,A,1,1,D
+N1,17/04/99,AZ Alkmaar,Graafschap,1,3,A,0,2,A
+N1,17/04/99,MVV Maastricht,Sparta,1,1,D,0,0,D
+N1,17/04/99,PSV Eindhoven,Nijmegen,2,0,H,1,0,H
+N1,17/04/99,Twente,Cambuur,0,0,D,0,0,D
+N1,18/04/99,Ajax,For Sittard,1,3,A,0,0,D
+N1,18/04/99,NAC Breda,Feyenoord,0,1,A,0,1,A
+N1,18/04/99,Utrecht,Waalwijk,1,1,D,1,1,D
+N1,20/04/99,Vitesse,PSV Eindhoven,3,3,D,2,1,H
+N1,21/04/99,Ajax,Nijmegen,3,0,H,2,0,H
+N1,23/04/99,Graafschap,PSV Eindhoven,1,0,H,1,0,H
+N1,24/04/99,Cambuur,Sparta,2,4,A,2,1,H
+N1,24/04/99,Heerenveen,AZ Alkmaar,2,1,H,0,0,D
+N1,25/04/99,Feyenoord,NAC Breda,2,2,D,2,1,H
+N1,25/04/99,For Sittard,Roda JC,0,1,A,0,0,D
+N1,25/04/99,Nijmegen,Vitesse,3,1,H,0,0,D
+N1,25/04/99,Utrecht,MVV Maastricht,0,2,A,0,1,A
+N1,25/04/99,Waalwijk,Twente,2,2,D,2,1,H
+N1,25/04/99,Willem II,Ajax,3,1,H,1,0,H
+N1,30/04/99,MVV Maastricht,NAC Breda,3,3,D,1,1,D
+N1,01/05/99,Cambuur,Heerenveen,0,0,D,0,0,D
+N1,01/05/99,PSV Eindhoven,Waalwijk,2,2,D,1,0,H
+N1,01/05/99,Roda JC,Graafschap,3,1,H,1,0,H
+N1,01/05/99,Twente,For Sittard,2,2,D,1,1,D
+N1,01/05/99,Vitesse,AZ Alkmaar,0,1,A,0,1,A
+N1,02/05/99,Ajax,Feyenoord,6,0,H,1,0,H
+N1,02/05/99,Nijmegen,Utrecht,0,1,A,0,1,A
+N1,02/05/99,Sparta,Willem II,0,4,A,0,2,A
+N1,07/05/99,For Sittard,PSV Eindhoven,6,4,H,3,1,H
+N1,08/05/99,AZ Alkmaar,Nijmegen,1,1,D,0,0,D
+N1,08/05/99,Heerenveen,Roda JC,2,2,D,1,1,D
+N1,08/05/99,NAC Breda,Sparta,5,0,H,2,0,H
+N1,08/05/99,Willem II,MVV Maastricht,4,1,H,2,0,H
+N1,09/05/99,Feyenoord,Twente,3,1,H,2,0,H
+N1,09/05/99,Graafschap,Ajax,1,3,A,1,0,H
+N1,09/05/99,Utrecht,Vitesse,1,2,A,0,1,A
+N1,09/05/99,Waalwijk,Cambuur,4,1,H,3,1,H
+N1,12/05/99,Roda JC,Feyenoord,1,0,H,0,0,D
+N1,16/05/99,Ajax,Waalwijk,2,0,H,1,0,H
+N1,16/05/99,Cambuur,Willem II,0,2,A,0,0,D
+N1,16/05/99,MVV Maastricht,Heerenveen,1,0,H,1,0,H
+N1,16/05/99,Nijmegen,Feyenoord,0,3,A,0,1,A
+N1,16/05/99,PSV Eindhoven,AZ Alkmaar,7,1,H,4,0,H
+N1,16/05/99,Roda JC,Utrecht,3,0,H,1,0,H
+N1,16/05/99,Sparta,For Sittard,5,0,H,2,0,H
+N1,16/05/99,Twente,NAC Breda,2,2,D,1,1,D
+N1,16/05/99,Vitesse,Graafschap,2,1,H,1,0,H
+N1,21/05/99,For Sittard,Nijmegen,2,3,A,1,0,H
+N1,22/05/99,Graafschap,Cambuur,2,2,D,0,1,A
+N1,23/05/99,AZ Alkmaar,MVV Maastricht,4,2,H,1,0,H
+N1,23/05/99,Feyenoord,Vitesse,2,1,H,0,1,A
+N1,23/05/99,Heerenveen,Sparta,0,0,D,0,0,D
+N1,23/05/99,NAC Breda,Ajax,2,2,D,0,0,D
+N1,23/05/99,Utrecht,PSV Eindhoven,2,3,A,2,0,H
+N1,23/05/99,Waalwijk,Roda JC,4,1,H,1,1,D
+N1,23/05/99,Willem II,Twente,1,2,A,1,0,H
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,

@@ -1,0 +1,553 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HTR,,,,,,,,,,,
+B1,04/08/95,Aalst,Anderlecht,3,1,H,1,1,D,,,,,,,,,,,
+B1,05/08/95,Cercle Brugge,Antwerp,3,2,H,0,2,A,,,,,,,,,,,
+B1,05/08/95,Charleroi,Mechelen,4,2,H,1,0,H,,,,,,,,,,,
+B1,05/08/95,Lierse,Harelbeke,0,1,A,0,0,D,,,,,,,,,,,
+B1,05/08/95,Molenbeek,Beveren,1,0,H,0,0,D,,,,,,,,,,,
+B1,05/08/95,St Truiden,Seraing,4,1,H,2,0,H,,,,,,,,,,,
+B1,05/08/95,Standard,Lommel,1,0,H,0,0,D,,,,,,,,,,,
+B1,05/08/95,Waregem,Gent,2,2,D,0,1,A,,,,,,,,,,,
+B1,06/08/95,Germinal,Club Brugge,1,2,A,0,1,A,,,,,,,,,,,
+B1,11/08/95,Club Brugge,St Truiden,2,0,H,1,0,H,,,,,,,,,,,
+B1,12/08/95,Anderlecht,Charleroi,0,2,A,0,1,A,,,,,,,,,,,
+B1,12/08/95,Antwerp,Lierse,3,1,H,2,1,H,,,,,,,,,,,
+B1,12/08/95,Beveren,Aalst,0,2,A,0,1,A,,,,,,,,,,,
+B1,12/08/95,Gent,Standard,2,4,A,0,0,D,,,,,,,,,,,
+B1,12/08/95,Lommel,Cercle Brugge,0,1,A,0,1,A,,,,,,,,,,,
+B1,12/08/95,Mechelen,Germinal,1,1,D,0,1,A
+B1,12/08/95,Seraing,Waregem,0,2,A,0,0,D
+B1,13/08/95,Harelbeke,Molenbeek,4,2,H,2,0,H
+B1,16/08/95,Aalst,Harelbeke,2,0,H,2,0,H
+B1,16/08/95,Cercle Brugge,Gent,0,0,D,0,0,D
+B1,16/08/95,Charleroi,Beveren,3,1,H,2,0,H
+B1,16/08/95,Lierse,Lommel,3,1,H,2,0,H
+B1,16/08/95,Molenbeek,Antwerp,0,0,D,0,0,D
+B1,16/08/95,Seraing,Club Brugge,1,1,D,0,1,A
+B1,16/08/95,St Truiden,Mechelen,2,2,D,0,1,A
+B1,16/08/95,Waregem,Standard,0,4,A,0,2,A
+B1,20/08/95,Anderlecht,St Truiden,4,0,H,1,0,H
+B1,20/08/95,Antwerp,Aalst,0,1,A,0,0,D
+B1,20/08/95,Beveren,Germinal,3,2,H,2,1,H
+B1,20/08/95,Gent,Lierse,0,2,A,0,0,D
+B1,20/08/95,Lommel,Molenbeek,0,1,A,0,0,D
+B1,20/08/95,Mechelen,Seraing,1,4,A,1,1,D
+B1,20/08/95,Standard,Cercle Brugge,4,0,H,1,0,H
+B1,21/08/95,Club Brugge,Waregem,3,1,H,2,0,H
+B1,21/08/95,Harelbeke,Charleroi,4,0,H,3,0,H
+B1,27/08/95,Aalst,Lommel,4,1,H,2,0,H
+B1,27/08/95,Charleroi,Antwerp,2,0,H,1,0,H
+B1,27/08/95,Club Brugge,Mechelen,6,0,H,3,0,H
+B1,27/08/95,Germinal,Harelbeke,1,1,D,0,0,D
+B1,27/08/95,Lierse,Standard,0,0,D,0,0,D
+B1,27/08/95,Molenbeek,Gent,1,0,H,0,0,D
+B1,27/08/95,Seraing,Anderlecht,2,1,H,1,0,H
+B1,27/08/95,St Truiden,Beveren,0,2,A,0,1,A
+B1,27/08/95,Waregem,Cercle Brugge,1,1,D,0,0,D
+B1,29/08/95,Anderlecht,Club Brugge,2,1,H,0,0,D
+B1,29/08/95,Beveren,Seraing,1,0,H,0,0,D
+B1,29/08/95,Cercle Brugge,Lierse,2,3,A,1,1,D
+B1,29/08/95,Gent,Aalst,3,1,H,0,1,A
+B1,29/08/95,Harelbeke,St Truiden,3,0,H,2,0,H
+B1,29/08/95,Lommel,Charleroi,1,1,D,0,1,A
+B1,29/08/95,Mechelen,Waregem,3,0,H,2,0,H
+B1,29/08/95,Standard,Molenbeek,1,1,D,0,0,D
+B1,10/09/95,Aalst,Standard,1,1,D,0,0,D
+B1,10/09/95,Charleroi,Gent,3,3,D,2,2,D
+B1,10/09/95,Club Brugge,Beveren,3,1,H,3,0,H
+B1,10/09/95,Germinal,Lommel,1,2,A,0,1,A
+B1,10/09/95,Mechelen,Anderlecht,1,3,A,0,1,A
+B1,10/09/95,Molenbeek,Cercle Brugge,2,2,D,0,1,A
+B1,10/09/95,Seraing,Harelbeke,0,1,A,0,0,D
+B1,10/09/95,St Truiden,Antwerp,2,3,A,2,1,H
+B1,10/09/95,Waregem,Lierse,1,3,A,1,1,D
+B1,17/09/95,Anderlecht,Waregem,2,0,H,0,0,D
+B1,17/09/95,Antwerp,Seraing,4,2,H,1,2,A
+B1,17/09/95,Beveren,Mechelen,1,1,D,0,1,A
+B1,17/09/95,Cercle Brugge,Aalst,1,1,D,1,0,H
+B1,17/09/95,Gent,Germinal,0,2,A,0,1,A
+B1,17/09/95,Lierse,Molenbeek,1,1,D,0,0,D
+B1,17/09/95,Lommel,St Truiden,2,3,A,1,2,A
+B1,17/09/95,Standard,Charleroi,2,2,D,0,1,A
+B1,18/09/95,Harelbeke,Club Brugge,0,2,A,0,1,A
+B1,20/09/95,Aalst,Lierse,1,2,A,0,1,A
+B1,20/09/95,Anderlecht,Beveren,1,0,H,0,0,D
+B1,20/09/95,Charleroi,Cercle Brugge,1,1,D,0,1,A
+B1,20/09/95,Club Brugge,Antwerp,2,0,H,0,0,D
+B1,20/09/95,Germinal,Standard,2,0,H,1,0,H
+B1,20/09/95,Mechelen,Harelbeke,1,0,H,1,0,H
+B1,20/09/95,Seraing,Lommel,2,1,H,0,0,D
+B1,20/09/95,St Truiden,Gent,1,0,H,0,0,D
+B1,20/09/95,Waregem,Molenbeek,0,1,A,0,1,A
+B1,24/09/95,Antwerp,Mechelen,1,2,A,1,1,D
+B1,24/09/95,Beveren,Waregem,5,1,H,1,0,H
+B1,24/09/95,Cercle Brugge,Germinal,2,2,D,0,1,A
+B1,24/09/95,Gent,Seraing,4,2,H,3,0,H
+B1,24/09/95,Harelbeke,Anderlecht,0,4,A,0,1,A
+B1,24/09/95,Lierse,Charleroi,2,1,H,1,1,D
+B1,24/09/95,Lommel,Club Brugge,2,2,D,0,2,A
+B1,24/09/95,Molenbeek,Aalst,0,0,D,0,0,D
+B1,24/09/95,Standard,St Truiden,1,1,D,1,0,H
+B1,30/09/95,Anderlecht,Antwerp,1,1,D,0,1,A
+B1,30/09/95,Beveren,Harelbeke,0,0,D,0,0,D
+B1,30/09/95,Charleroi,Molenbeek,2,2,D,2,0,H
+B1,30/09/95,Club Brugge,Gent,3,0,H,1,0,H
+B1,30/09/95,Germinal,Lierse,1,1,D,0,0,D
+B1,30/09/95,Mechelen,Lommel,2,0,H,1,0,H
+B1,30/09/95,Seraing,Standard,0,0,D,0,0,D
+B1,30/09/95,St Truiden,Cercle Brugge,1,1,D,0,0,D
+B1,30/09/95,Waregem,Aalst,0,0,D,0,0,D
+B1,07/10/95,Germinal,Anderlecht,2,2,D,1,2,A
+B1,15/10/95,Aalst,Charleroi,3,4,A,0,2,A
+B1,15/10/95,Cercle Brugge,Seraing,0,0,D,0,0,D
+B1,15/10/95,Gent,Mechelen,0,0,D,0,0,D
+B1,15/10/95,Lierse,St Truiden,3,0,H,1,0,H
+B1,15/10/95,Lommel,Anderlecht,2,2,D,1,2,A
+B1,15/10/95,Molenbeek,Germinal,1,0,H,0,0,D
+B1,15/10/95,Standard,Club Brugge,1,0,H,0,0,D
+B1,16/10/95,Antwerp,Beveren,1,1,D,0,1,A
+B1,16/10/95,Harelbeke,Waregem,2,1,H,0,0,D
+B1,22/10/95,Anderlecht,Gent,3,0,H,2,0,H
+B1,22/10/95,Beveren,Lommel,0,1,A,0,0,D
+B1,22/10/95,Club Brugge,Cercle Brugge,2,2,D,0,1,A
+B1,22/10/95,Germinal,Aalst,5,1,H,1,0,H
+B1,22/10/95,Harelbeke,Antwerp,3,1,H,1,0,H
+B1,22/10/95,Mechelen,Standard,2,0,H,1,0,H
+B1,22/10/95,Seraing,Lierse,1,3,A,1,2,A
+B1,22/10/95,St Truiden,Molenbeek,0,1,A,0,1,A
+B1,23/10/95,Waregem,Charleroi,4,1,H,4,0,H
+B1,29/10/95,Aalst,St Truiden,0,0,D,0,0,D
+B1,29/10/95,Antwerp,Waregem,2,0,H,1,0,H
+B1,29/10/95,Cercle Brugge,Mechelen,3,2,H,1,2,A
+B1,29/10/95,Charleroi,Germinal,1,1,D,0,0,D
+B1,29/10/95,Gent,Beveren,3,0,H,2,0,H
+B1,29/10/95,Lierse,Club Brugge,2,2,D,1,2,A
+B1,29/10/95,Lommel,Harelbeke,2,0,H,1,0,H
+B1,29/10/95,Molenbeek,Seraing,4,0,H,2,0,H
+B1,29/10/95,Standard,Anderlecht,2,4,A,1,2,A
+B1,05/11/95,Anderlecht,Cercle Brugge,3,0,H,0,0,D
+B1,05/11/95,Antwerp,Lommel,4,1,H,2,0,H
+B1,05/11/95,Beveren,Standard,0,0,D,0,0,D
+B1,05/11/95,Club Brugge,Molenbeek,3,0,H,2,0,H
+B1,05/11/95,Harelbeke,Gent,0,1,A,0,0,D
+B1,05/11/95,Mechelen,Lierse,0,0,D,0,0,D
+B1,05/11/95,Seraing,Aalst,2,4,A,1,1,D
+B1,05/11/95,St Truiden,Charleroi,4,1,H,2,0,H
+B1,05/11/95,Waregem,Germinal,1,0,H,0,0,D
+B1,11/11/95,Antwerp,Germinal,0,2,A,0,1,A
+B1,19/11/95,Aalst,Club Brugge,0,2,A,0,0,D
+B1,19/11/95,Cercle Brugge,Beveren,2,0,H,1,0,H
+B1,19/11/95,Charleroi,Seraing,4,2,H,2,0,H
+B1,19/11/95,Gent,Antwerp,1,0,H,1,0,H
+B1,19/11/95,Germinal,St Truiden,3,1,H,2,1,H
+B1,19/11/95,Lierse,Anderlecht,3,2,H,3,1,H
+B1,19/11/95,Molenbeek,Mechelen,0,1,A,0,1,A
+B1,19/11/95,Standard,Harelbeke,2,1,H,1,0,H
+B1,19/11/95,Waregem,Lommel,1,3,A,1,2,A
+B1,24/11/95,Club Brugge,Charleroi,0,0,D,0,0,D
+B1,25/11/95,Anderlecht,Molenbeek,1,0,H,0,0,D
+B1,25/11/95,Beveren,Lierse,2,2,D,1,0,H
+B1,25/11/95,Lommel,Gent,1,1,D,1,0,H
+B1,25/11/95,Mechelen,Aalst,1,0,H,0,0,D
+B1,25/11/95,Seraing,Germinal,1,1,D,1,1,D
+B1,25/11/95,St Truiden,Waregem,1,1,D,1,0,H
+B1,26/11/95,Antwerp,Standard,3,2,H,2,1,H
+B1,26/11/95,Harelbeke,Cercle Brugge,0,2,A,0,0,D
+B1,02/12/95,Anderlecht,Aalst,4,0,H,2,0,H
+B1,03/12/95,Antwerp,Cercle Brugge,0,1,A,0,1,A
+B1,03/12/95,Beveren,Molenbeek,1,1,D,1,0,H
+B1,03/12/95,Club Brugge,Germinal,3,1,H,0,0,D
+B1,03/12/95,Gent,Waregem,0,0,D,0,0,D
+B1,03/12/95,Harelbeke,Lierse,2,3,A,0,1,A
+B1,03/12/95,Lommel,Standard,1,0,H,0,0,D
+B1,03/12/95,Mechelen,Charleroi,1,2,A,0,2,A
+B1,03/12/95,Seraing,St Truiden,1,2,A,0,2,A
+B1,17/12/95,Aalst,Beveren,5,1,H,2,1,H
+B1,17/12/95,Cercle Brugge,Lommel,0,1,A,0,0,D
+B1,17/12/95,Charleroi,Anderlecht,1,3,A,1,3,A
+B1,17/12/95,Germinal,Mechelen,1,0,H,0,0,D
+B1,17/12/95,Lierse,Antwerp,1,2,A,1,1,D
+B1,17/12/95,Molenbeek,Harelbeke,3,1,H,3,1,H
+B1,17/12/95,St Truiden,Club Brugge,2,4,A,2,2,D
+B1,17/12/95,Standard,Gent,1,1,D,1,1,D
+B1,17/12/95,Waregem,Seraing,0,3,A,0,2,A
+B1,23/12/95,Anderlecht,Germinal,4,2,H,1,0,H
+B1,23/12/95,Antwerp,Molenbeek,1,1,D,1,0,H
+B1,23/12/95,Beveren,Charleroi,1,1,D,0,0,D
+B1,23/12/95,Club Brugge,Seraing,3,1,H,1,1,D
+B1,23/12/95,Gent,Cercle Brugge,1,5,A,0,2,A
+B1,23/12/95,Harelbeke,Aalst,2,1,H,0,1,A
+B1,23/12/95,Lommel,Lierse,0,0,D,0,0,D
+B1,23/12/95,Mechelen,St Truiden,2,0,H,1,0,H
+B1,23/12/95,Standard,Waregem,1,1,D,1,0,H
+B1,28/01/96,Aalst,Antwerp,0,0,D,0,0,D
+B1,28/01/96,Cercle Brugge,Standard,2,3,A,1,2,A
+B1,28/01/96,Charleroi,Harelbeke,0,0,D,0,0,D
+B1,28/01/96,Germinal,Beveren,1,0,H,1,0,H
+B1,28/01/96,Lierse,Gent,2,3,A,0,1,A
+B1,28/01/96,Molenbeek,Lommel,0,2,A,0,0,D
+B1,28/01/96,Seraing,Mechelen,2,1,H,1,0,H
+B1,28/01/96,St Truiden,Anderlecht,0,5,A,0,4,A
+B1,28/01/96,Waregem,Club Brugge,2,5,A,0,2,A
+B1,04/02/96,Anderlecht,Seraing,7,0,H,4,0,H
+B1,04/02/96,Antwerp,Charleroi,1,0,H,0,0,D
+B1,04/02/96,Beveren,St Truiden,0,2,A,0,0,D
+B1,04/02/96,Cercle Brugge,Waregem,4,1,H,2,0,H
+B1,04/02/96,Gent,Molenbeek,2,0,H,0,0,D
+B1,04/02/96,Harelbeke,Germinal,1,2,A,0,1,A
+B1,04/02/96,Lommel,Aalst,1,0,H,0,0,D
+B1,04/02/96,Mechelen,Club Brugge,0,2,A,0,1,A
+B1,04/02/96,Standard,Lierse,2,0,H,1,0,H
+B1,11/02/96,Aalst,Gent,2,2,D,1,1,D
+B1,11/02/96,Charleroi,Lommel,5,0,H,2,0,H
+B1,11/02/96,Club Brugge,Anderlecht,2,1,H,0,1,A
+B1,11/02/96,Germinal,Antwerp,2,0,H,0,0,D
+B1,11/02/96,Lierse,Cercle Brugge,0,1,A,0,1,A
+B1,11/02/96,Molenbeek,Standard,3,1,H,0,0,D
+B1,11/02/96,Seraing,Beveren,1,0,H,0,0,D
+B1,11/02/96,St Truiden,Harelbeke,2,0,H,2,0,H
+B1,11/02/96,Waregem,Mechelen,0,1,A,0,0,D
+B1,18/02/96,Anderlecht,Mechelen,3,1,H,2,1,H
+B1,18/02/96,Antwerp,St Truiden,1,1,D,1,1,D
+B1,18/02/96,Beveren,Club Brugge,3,5,A,2,2,D
+B1,18/02/96,Cercle Brugge,Molenbeek,1,1,D,0,1,A
+B1,18/02/96,Gent,Charleroi,1,0,H,0,0,D
+B1,18/02/96,Harelbeke,Seraing,2,1,H,0,0,D
+B1,18/02/96,Lierse,Waregem,1,1,D,1,1,D
+B1,18/02/96,Lommel,Germinal,2,1,H,1,1,D
+B1,18/02/96,Standard,Aalst,2,1,H,1,0,H
+B1,01/03/96,Beveren,Anderlecht,0,2,A,0,0,D
+B1,02/03/96,Gent,St Truiden,0,1,A,0,0,D
+B1,02/03/96,Lierse,Aalst,3,1,H,1,0,H
+B1,02/03/96,Lommel,Seraing,0,1,A,0,0,D
+B1,02/03/96,Molenbeek,Waregem,4,1,H,0,1,A
+B1,02/03/96,Standard,Germinal,0,0,D,0,0,D
+B1,03/03/96,Antwerp,Club Brugge,0,3,A,0,0,D
+B1,03/03/96,Cercle Brugge,Charleroi,0,2,A,0,1,A
+B1,03/03/96,Harelbeke,Mechelen,0,0,D,0,0,D
+B1,10/03/96,Aalst,Molenbeek,1,1,D,0,0,D
+B1,11/03/96,Anderlecht,Harelbeke,1,3,A,1,2,A
+B1,11/03/96,Charleroi,Lierse,1,1,D,1,0,H
+B1,11/03/96,Club Brugge,Lommel,2,0,H,0,0,D
+B1,11/03/96,Germinal,Cercle Brugge,1,0,H,0,0,D
+B1,11/03/96,Mechelen,Antwerp,0,1,A,0,0,D
+B1,11/03/96,Seraing,Gent,2,2,D,1,1,D
+B1,11/03/96,St Truiden,Standard,3,1,H,1,0,H
+B1,11/03/96,Waregem,Beveren,1,4,A,0,1,A
+B1,15/03/96,Molenbeek,Charleroi,3,1,H,1,0,H
+B1,16/03/96,Lierse,Germinal,2,1,H,1,0,H
+B1,16/03/96,Lommel,Mechelen,2,1,H,1,1,D
+B1,16/03/96,Standard,Seraing,3,0,H,1,0,H
+B1,17/03/96,Aalst,Waregem,1,1,D,0,0,D
+B1,17/03/96,Antwerp,Anderlecht,1,1,D,0,0,D
+B1,17/03/96,Cercle Brugge,St Truiden,2,1,H,0,1,A
+B1,17/03/96,Gent,Club Brugge,0,2,A,0,1,A
+B1,17/03/96,Harelbeke,Beveren,1,0,H,0,0,D
+B1,22/03/96,Charleroi,Standard,2,2,D,2,2,D
+B1,23/03/96,Mechelen,Beveren,2,1,H,1,0,H
+B1,23/03/96,Molenbeek,Lierse,0,0,D,0,0,D
+B1,23/03/96,Seraing,Antwerp,0,1,A,0,1,A
+B1,23/03/96,St Truiden,Lommel,0,2,A,0,1,A
+B1,24/03/96,Aalst,Cercle Brugge,4,3,H,2,1,H
+B1,24/03/96,Club Brugge,Harelbeke,2,0,H,0,0,D
+B1,24/03/96,Germinal,Gent,2,0,H,2,0,H
+B1,24/03/96,Waregem,Anderlecht,1,4,A,1,1,D
+B1,30/03/96,Anderlecht,Lommel,3,2,H,3,1,H
+B1,30/03/96,Beveren,Antwerp,4,0,H,1,0,H
+B1,30/03/96,Charleroi,Aalst,2,0,H,1,0,H
+B1,30/03/96,Mechelen,Gent,0,0,D,0,0,D
+B1,30/03/96,Seraing,Cercle Brugge,1,0,H,1,0,H
+B1,30/03/96,St Truiden,Lierse,3,1,H,1,0,H
+B1,31/03/96,Club Brugge,Standard,6,1,H,0,1,A
+B1,31/03/96,Germinal,Molenbeek,1,0,H,1,0,H
+B1,31/03/96,Waregem,Harelbeke,1,2,A,1,0,H
+B1,05/04/96,Cercle Brugge,Club Brugge,1,2,A,1,1,D
+B1,05/04/96,Charleroi,Waregem,1,0,H,0,0,D
+B1,06/04/96,Aalst,Germinal,2,0,H,1,0,H
+B1,06/04/96,Antwerp,Harelbeke,2,3,A,1,0,H
+B1,06/04/96,Gent,Anderlecht,1,3,A,0,1,A
+B1,06/04/96,Lierse,Seraing,4,0,H,2,0,H
+B1,06/04/96,Lommel,Beveren,2,0,H,0,0,D
+B1,06/04/96,Molenbeek,St Truiden,2,0,H,0,0,D
+B1,06/04/96,Standard,Mechelen,2,1,H,2,1,H
+B1,12/04/96,Anderlecht,Standard,2,1,H,1,1,D
+B1,13/04/96,Beveren,Gent,2,2,D,0,1,A
+B1,13/04/96,Germinal,Charleroi,3,1,H,0,0,D
+B1,13/04/96,Harelbeke,Lommel,0,3,A,0,2,A
+B1,13/04/96,Mechelen,Cercle Brugge,2,1,H,1,0,H
+B1,13/04/96,Seraing,Molenbeek,0,1,A,0,1,A
+B1,13/04/96,St Truiden,Aalst,2,2,D,1,1,D
+B1,14/04/96,Club Brugge,Lierse,2,1,H,0,0,D
+B1,14/04/96,Waregem,Antwerp,1,1,D,0,0,D
+B1,21/04/96,Aalst,Seraing,5,0,H,2,0,H
+B1,21/04/96,Cercle Brugge,Anderlecht,2,1,H,1,0,H
+B1,21/04/96,Charleroi,St Truiden,4,0,H,2,0,H
+B1,21/04/96,Gent,Harelbeke,1,0,H,0,0,D
+B1,21/04/96,Germinal,Waregem,2,0,H,1,0,H
+B1,21/04/96,Lierse,Mechelen,0,3,A,0,0,D
+B1,21/04/96,Lommel,Antwerp,0,0,D,0,0,D
+B1,21/04/96,Molenbeek,Club Brugge,0,0,D,0,0,D
+B1,21/04/96,Standard,Beveren,2,2,D,2,1,H
+B1,05/05/96,Anderlecht,Lierse,3,1,H,2,0,H
+B1,05/05/96,Antwerp,Gent,2,1,H,0,0,D
+B1,05/05/96,Beveren,Cercle Brugge,1,3,A,1,0,H
+B1,05/05/96,Club Brugge,Aalst,1,3,A,1,1,D
+B1,05/05/96,Harelbeke,Standard,2,3,A,0,1,A
+B1,05/05/96,Lommel,Waregem,2,1,H,0,0,D
+B1,05/05/96,Mechelen,Molenbeek,1,1,D,1,1,D
+B1,05/05/96,Seraing,Charleroi,2,3,A,2,1,H
+B1,05/05/96,St Truiden,Germinal,2,1,H,0,0,D
+B1,12/05/96,Aalst,Mechelen,3,2,H,0,2,A
+B1,12/05/96,Cercle Brugge,Harelbeke,2,1,H,0,1,A
+B1,12/05/96,Charleroi,Club Brugge,1,3,A,0,1,A
+B1,12/05/96,Gent,Lommel,2,0,H,1,0,H
+B1,12/05/96,Germinal,Seraing,5,0,H,3,0,H
+B1,12/05/96,Lierse,Beveren,3,1,H,0,1,A
+B1,12/05/96,Molenbeek,Anderlecht,0,0,D,0,0,D
+B1,12/05/96,Standard,Antwerp,1,0,H,0,0,D
+B1,12/05/96,Waregem,St Truiden,2,1,H,1,1,D
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,

@@ -1,0 +1,553 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,,,,,,,,,,,,,,,,,,,,,
+P1,20/08/94,Farense,Sp Lisbon,0,2,A,,,,,,,,,,,,,,,,,,,,,
+P1,21/08/94,Belenenses,Est Amadora,0,0,D,,,,,,,,,,,,,,,,,,,,,
+P1,21/08/94,Benfica,Beira Mar,2,0,H,,,,,,,,,,,,,,,,,,,,,
+P1,21/08/94,Desp. Chaves,Salgueiros,0,1,A,,,,,,,,,,,,,,,,,,,,,
+P1,21/08/94,Gil Vicente,Tirsense,0,1,A,,,,,,,,,,,,,,,,,,,,,
+P1,21/08/94,Guimaraes,Boavista,2,0,H,,,,,,,,,,,,,,,,,,,,,
+P1,21/08/94,Leiria,Madeira,1,2,A,,,,,,,,,,,,,,,,,,,,,
+P1,21/08/94,Maritimo,Setubal,3,2,H,,,,,,,,,,,,,,,,,,,,,
+P1,21/08/94,Porto,Sp Braga,2,0,H,,,,,,,,,,,,,,,,,,,,,
+P1,27/08/94,Sp Lisbon,Belenenses,2,1,H,,,,,,,,,,,,,,,,,,,,,
+P1,28/08/94,Beira Mar,Porto,0,2,A,,,,,,,,,,,,,,,,,,,,,
+P1,28/08/94,Boavista,Farense,2,1,H,,,,,,,,,,,,,,,,,,,,,
+P1,28/08/94,Est Amadora,Maritimo,1,1,D,,,,,,,,,,,,,,,,,,,,,
+P1,28/08/94,Madeira,Benfica,0,2,A,,,,,,,,,,,,,,,,,,,,,
+P1,28/08/94,Salgueiros,Guimaraes,0,0,D,,,,,,,,,,,,,,,,,,,,,
+P1,28/08/94,Setubal,Leiria,2,2,D
+P1,28/08/94,Sp Braga,Gil Vicente,1,1,D
+P1,28/08/94,Tirsense,Desp. Chaves,0,1,A
+P1,09/09/94,Maritimo,Leiria,2,0,H
+P1,10/09/94,Belenenses,Boavista,3,1,H
+P1,10/09/94,Benfica,Setubal,1,0,H
+P1,10/09/94,Est Amadora,Sp Lisbon,0,2,A
+P1,11/09/94,Desp. Chaves,Sp Braga,1,0,H
+P1,11/09/94,Farense,Salgueiros,1,0,H
+P1,11/09/94,Gil Vicente,Beira Mar,0,1,A
+P1,11/09/94,Guimaraes,Tirsense,1,0,H
+P1,11/09/94,Porto,Madeira,3,0,H
+P1,17/09/94,Beira Mar,Desp. Chaves,4,2,H
+P1,17/09/94,Boavista,Est Amadora,2,1,H
+P1,17/09/94,Leiria,Benfica,1,0,H
+P1,17/09/94,Madeira,Gil Vicente,2,0,H
+P1,17/09/94,Salgueiros,Belenenses,1,0,H
+P1,17/09/94,Setubal,Porto,2,3,A
+P1,17/09/94,Sp Braga,Guimaraes,3,1,H
+P1,17/09/94,Sp Lisbon,Maritimo,2,0,H
+P1,17/09/94,Tirsense,Farense,3,0,H
+P1,24/09/94,Belenenses,Tirsense,0,1,A
+P1,24/09/94,Desp. Chaves,Madeira,5,1,H
+P1,24/09/94,Est Amadora,Salgueiros,4,0,H
+P1,24/09/94,Farense,Sp Braga,0,1,A
+P1,24/09/94,Gil Vicente,Setubal,3,0,H
+P1,24/09/94,Guimaraes,Beira Mar,1,0,H
+P1,24/09/94,Porto,Leiria,2,0,H
+P1,24/09/94,Sp Lisbon,Boavista,2,2,D
+P1,01/10/94,Beira Mar,Farense,1,3,A
+P1,01/10/94,Benfica,Porto,1,1,D
+P1,01/10/94,Boavista,Maritimo,1,0,H
+P1,01/10/94,Leiria,Gil Vicente,3,0,H
+P1,01/10/94,Madeira,Guimaraes,3,3,D
+P1,01/10/94,Salgueiros,Sp Lisbon,2,3,A
+P1,01/10/94,Setubal,Desp. Chaves,0,1,A
+P1,01/10/94,Sp Braga,Belenenses,4,2,H
+P1,01/10/94,Tirsense,Est Amadora,3,1,H
+P1,15/10/94,Belenenses,Beira Mar,3,0,H
+P1,15/10/94,Boavista,Salgueiros,1,0,H
+P1,15/10/94,Desp. Chaves,Leiria,1,1,D
+P1,15/10/94,Est Amadora,Sp Braga,4,0,H
+P1,15/10/94,Farense,Madeira,2,1,H
+P1,15/10/94,Gil Vicente,Benfica,1,0,H
+P1,15/10/94,Guimaraes,Setubal,1,1,D
+P1,15/10/94,Maritimo,Porto,2,1,H
+P1,15/10/94,Sp Lisbon,Tirsense,2,0,H
+P1,22/10/94,Sp Braga,Sp Lisbon,0,2,A
+P1,23/10/94,Beira Mar,Est Amadora,2,0,H
+P1,23/10/94,Benfica,Desp. Chaves,5,0,H
+P1,23/10/94,Leiria,Guimaraes,2,1,H
+P1,23/10/94,Madeira,Belenenses,0,1,A
+P1,23/10/94,Porto,Gil Vicente,1,0,H
+P1,23/10/94,Salgueiros,Maritimo,0,0,D
+P1,23/10/94,Setubal,Farense,1,1,D
+P1,23/10/94,Tirsense,Boavista,2,1,H
+P1,30/10/94,Belenenses,Setubal,1,0,H
+P1,30/10/94,Boavista,Sp Braga,0,0,D
+P1,30/10/94,Desp. Chaves,Porto,0,4,A
+P1,30/10/94,Est Amadora,Madeira,1,1,D
+P1,30/10/94,Farense,Leiria,1,1,D
+P1,30/10/94,Guimaraes,Benfica,1,3,A
+P1,30/10/94,Maritimo,Gil Vicente,1,0,H
+P1,30/10/94,Salgueiros,Tirsense,0,2,A
+P1,30/10/94,Sp Lisbon,Beira Mar,2,0,H
+P1,05/11/94,Beira Mar,Boavista,3,1,H
+P1,05/11/94,Benfica,Farense,2,1,H
+P1,05/11/94,Gil Vicente,Desp. Chaves,2,0,H
+P1,05/11/94,Leiria,Belenenses,1,0,H
+P1,05/11/94,Madeira,Sp Lisbon,1,1,D
+P1,05/11/94,Porto,Guimaraes,3,0,H
+P1,05/11/94,Setubal,Est Amadora,0,0,D
+P1,05/11/94,Sp Braga,Salgueiros,2,1,H
+P1,05/11/94,Tirsense,Maritimo,0,1,A
+P1,19/11/94,Belenenses,Benfica,1,1,D
+P1,20/11/94,Boavista,Madeira,3,1,H
+P1,20/11/94,Est Amadora,Leiria,2,3,A
+P1,20/11/94,Farense,Porto,0,3,A
+P1,20/11/94,Guimaraes,Gil Vicente,3,1,H
+P1,20/11/94,Maritimo,Desp. Chaves,4,1,H
+P1,20/11/94,Salgueiros,Beira Mar,2,1,H
+P1,20/11/94,Sp Lisbon,Setubal,2,2,D
+P1,20/11/94,Tirsense,Sp Braga,1,0,H
+P1,26/11/94,Beira Mar,Tirsense,1,0,H
+P1,26/11/94,Benfica,Est Amadora,3,1,H
+P1,26/11/94,Desp. Chaves,Guimaraes,1,1,D
+P1,26/11/94,Gil Vicente,Farense,1,1,D
+P1,26/11/94,Leiria,Sp Lisbon,0,3,A
+P1,26/11/94,Madeira,Salgueiros,0,4,A
+P1,26/11/94,Porto,Belenenses,1,0,H
+P1,26/11/94,Setubal,Boavista,1,3,A
+P1,26/11/94,Sp Braga,Maritimo,2,2,D
+P1,03/12/94,Belenenses,Gil Vicente,1,1,D
+P1,03/12/94,Boavista,Leiria,2,0,H
+P1,03/12/94,Est Amadora,Porto,0,1,A
+P1,03/12/94,Farense,Desp. Chaves,2,0,H
+P1,03/12/94,Maritimo,Guimaraes,2,3,A
+P1,03/12/94,Salgueiros,Setubal,3,2,H
+P1,03/12/94,Sp Braga,Beira Mar,1,0,H
+P1,03/12/94,Sp Lisbon,Benfica,1,0,H
+P1,03/12/94,Tirsense,Madeira,2,0,H
+P1,10/12/94,Beira Mar,Maritimo,1,0,H
+P1,10/12/94,Benfica,Boavista,4,1,H
+P1,10/12/94,Desp. Chaves,Belenenses,0,0,D
+P1,10/12/94,Gil Vicente,Est Amadora,1,1,D
+P1,10/12/94,Guimaraes,Farense,2,0,H
+P1,10/12/94,Leiria,Salgueiros,2,1,H
+P1,10/12/94,Madeira,Sp Braga,0,0,D
+P1,10/12/94,Porto,Sp Lisbon,1,1,D
+P1,10/12/94,Setubal,Tirsense,1,2,A
+P1,29/12/94,Est Amadora,Desp. Chaves,1,1,D
+P1,30/12/94,Salgueiros,Benfica,1,2,A
+P1,30/12/94,Sp Lisbon,Gil Vicente,1,0,H
+P1,31/12/94,Beira Mar,Madeira,1,1,D
+P1,31/12/94,Belenenses,Guimaraes,1,2,A
+P1,31/12/94,Boavista,Porto,1,2,A
+P1,31/12/94,Tirsense,Leiria,2,1,H
+P1,01/01/95,Maritimo,Farense,2,1,H
+P1,01/01/95,Sp Braga,Setubal,2,1,H
+P1,04/01/95,Maritimo,Benfica,0,3,A
+P1,08/01/95,Benfica,Tirsense,1,0,H
+P1,08/01/95,Desp. Chaves,Sp Lisbon,1,2,A
+P1,08/01/95,Farense,Belenenses,1,0,H
+P1,08/01/95,Gil Vicente,Boavista,1,2,A
+P1,08/01/95,Guimaraes,Est Amadora,1,0,H
+P1,08/01/95,Leiria,Sp Braga,2,1,H
+P1,08/01/95,Maritimo,Madeira,1,0,H
+P1,08/01/95,Porto,Salgueiros,5,2,H
+P1,08/01/95,Setubal,Beira Mar,1,0,H
+P1,14/01/95,Beira Mar,Leiria,2,2,D
+P1,14/01/95,Belenenses,Maritimo,1,0,H
+P1,14/01/95,Boavista,Desp. Chaves,1,4,A
+P1,14/01/95,Est Amadora,Farense,2,1,H
+P1,14/01/95,Madeira,Setubal,3,0,H
+P1,14/01/95,Salgueiros,Gil Vicente,1,1,D
+P1,14/01/95,Sp Braga,Benfica,0,2,A
+P1,14/01/95,Sp Lisbon,Guimaraes,2,0,H
+P1,14/01/95,Tirsense,Porto,0,2,A
+P1,21/01/95,Beira Mar,Benfica,1,2,A
+P1,21/01/95,Boavista,Guimaraes,1,1,D
+P1,21/01/95,Est Amadora,Belenenses,2,3,A
+P1,21/01/95,Madeira,Leiria,1,0,H
+P1,21/01/95,Salgueiros,Desp. Chaves,3,1,H
+P1,21/01/95,Setubal,Maritimo,0,0,D
+P1,21/01/95,Sp Braga,Porto,1,4,A
+P1,21/01/95,Sp Lisbon,Farense,1,1,D
+P1,21/01/95,Tirsense,Gil Vicente,3,1,H
+P1,05/02/95,Belenenses,Sp Lisbon,0,1,A
+P1,05/02/95,Benfica,Madeira,3,1,H
+P1,05/02/95,Desp. Chaves,Tirsense,0,0,D
+P1,05/02/95,Farense,Boavista,1,0,H
+P1,05/02/95,Gil Vicente,Sp Braga,3,2,H
+P1,05/02/95,Guimaraes,Salgueiros,3,1,H
+P1,05/02/95,Leiria,Setubal,1,0,H
+P1,05/02/95,Maritimo,Est Amadora,0,0,D
+P1,05/02/95,Porto,Beira Mar,3,0,H
+P1,11/02/95,Beira Mar,Gil Vicente,0,0,D
+P1,11/02/95,Boavista,Belenenses,1,0,H
+P1,11/02/95,Leiria,Maritimo,2,2,D
+P1,11/02/95,Madeira,Porto,0,0,D
+P1,11/02/95,Salgueiros,Farense,0,3,A
+P1,11/02/95,Setubal,Benfica,1,2,A
+P1,11/02/95,Sp Braga,Desp. Chaves,1,0,H
+P1,11/02/95,Sp Lisbon,Est Amadora,0,1,A
+P1,11/02/95,Tirsense,Guimaraes,3,3,D
+P1,18/02/95,Est Amadora,Boavista,1,0,H
+P1,19/02/95,Belenenses,Salgueiros,1,0,H
+P1,19/02/95,Benfica,Leiria,1,1,D
+P1,19/02/95,Desp. Chaves,Beira Mar,3,2,H
+P1,19/02/95,Farense,Tirsense,1,0,H
+P1,19/02/95,Gil Vicente,Madeira,0,0,D
+P1,19/02/95,Guimaraes,Sp Braga,4,2,H
+P1,19/02/95,Maritimo,Sp Lisbon,0,2,A
+P1,19/02/95,Porto,Setubal,1,0,H
+P1,28/02/95,Beira Mar,Guimaraes,2,3,A
+P1,28/02/95,Benfica,Maritimo,3,0,H
+P1,28/02/95,Boavista,Sp Lisbon,1,1,D
+P1,28/02/95,Leiria,Porto,0,2,A
+P1,28/02/95,Madeira,Desp. Chaves,0,1,A
+P1,28/02/95,Salgueiros,Est Amadora,6,0,H
+P1,28/02/95,Setubal,Gil Vicente,0,1,A
+P1,28/02/95,Sp Braga,Farense,0,0,D
+P1,28/02/95,Tirsense,Belenenses,3,0,H
+P1,04/03/95,Belenenses,Sp Braga,0,1,A
+P1,04/03/95,Desp. Chaves,Setubal,0,0,D
+P1,04/03/95,Est Amadora,Tirsense,0,0,D
+P1,04/03/95,Farense,Beira Mar,3,0,H
+P1,04/03/95,Gil Vicente,Leiria,1,1,D
+P1,04/03/95,Guimaraes,Madeira,2,1,H
+P1,04/03/95,Maritimo,Boavista,2,0,H
+P1,04/03/95,Porto,Benfica,2,1,H
+P1,04/03/95,Sp Lisbon,Salgueiros,1,0,H
+P1,11/03/95,Benfica,Gil Vicente,0,1,A
+P1,11/03/95,Tirsense,Sp Lisbon,1,1,D
+P1,12/03/95,Beira Mar,Belenenses,3,2,H
+P1,12/03/95,Leiria,Desp. Chaves,1,0,H
+P1,12/03/95,Madeira,Farense,3,0,H
+P1,12/03/95,Porto,Maritimo,4,1,H
+P1,12/03/95,Salgueiros,Boavista,2,1,H
+P1,12/03/95,Setubal,Guimaraes,1,0,H
+P1,12/03/95,Sp Braga,Est Amadora,2,0,H
+P1,19/03/95,Belenenses,Madeira,3,0,H
+P1,19/03/95,Boavista,Tirsense,2,0,H
+P1,19/03/95,Desp. Chaves,Benfica,0,1,A
+P1,19/03/95,Est Amadora,Beira Mar,1,1,D
+P1,19/03/95,Farense,Setubal,2,0,H
+P1,19/03/95,Guimaraes,Leiria,3,0,H
+P1,19/03/95,Maritimo,Salgueiros,2,2,D
+P1,19/03/95,Sp Lisbon,Sp Braga,3,1,H
+P1,20/03/95,Gil Vicente,Porto,0,1,A
+P1,26/03/95,Beira Mar,Sp Lisbon,0,1,A
+P1,26/03/95,Benfica,Guimaraes,1,3,A
+P1,26/03/95,Gil Vicente,Maritimo,3,2,H
+P1,26/03/95,Leiria,Farense,5,0,H
+P1,26/03/95,Madeira,Est Amadora,0,1,A
+P1,26/03/95,Porto,Desp. Chaves,2,0,H
+P1,26/03/95,Setubal,Belenenses,0,0,D
+P1,26/03/95,Sp Braga,Boavista,1,2,A
+P1,26/03/95,Tirsense,Salgueiros,1,3,A
+P1,02/04/95,Belenenses,Leiria,0,0,D
+P1,02/04/95,Boavista,Beira Mar,1,0,H
+P1,02/04/95,Desp. Chaves,Gil Vicente,2,1,H
+P1,02/04/95,Est Amadora,Setubal,0,0,D
+P1,02/04/95,Farense,Benfica,4,1,H
+P1,02/04/95,Guimaraes,Porto,0,1,A
+P1,02/04/95,Maritimo,Tirsense,1,0,H
+P1,02/04/95,Salgueiros,Sp Braga,0,0,D
+P1,02/04/95,Sp Lisbon,Madeira,4,0,H
+P1,09/04/95,Beira Mar,Salgueiros,1,2,A
+P1,09/04/95,Benfica,Belenenses,2,1,H
+P1,09/04/95,Desp. Chaves,Maritimo,1,1,D
+P1,09/04/95,Gil Vicente,Guimaraes,2,2,D
+P1,09/04/95,Leiria,Est Amadora,1,0,H
+P1,09/04/95,Madeira,Boavista,1,1,D
+P1,09/04/95,Porto,Farense,2,0,H
+P1,09/04/95,Setubal,Sp Lisbon,1,1,D
+P1,09/04/95,Sp Braga,Tirsense,0,0,D
+P1,16/04/95,Belenenses,Porto,0,2,A
+P1,16/04/95,Boavista,Setubal,0,0,D
+P1,16/04/95,Est Amadora,Benfica,0,0,D
+P1,16/04/95,Farense,Gil Vicente,2,0,H
+P1,16/04/95,Guimaraes,Desp. Chaves,1,0,H
+P1,16/04/95,Maritimo,Sp Braga,1,1,D
+P1,16/04/95,Salgueiros,Madeira,0,2,A
+P1,16/04/95,Sp Lisbon,Leiria,4,0,H
+P1,16/04/95,Tirsense,Beira Mar,2,0,H
+P1,30/04/95,Beira Mar,Sp Braga,2,0,H
+P1,30/04/95,Desp. Chaves,Farense,1,2,A
+P1,30/04/95,Gil Vicente,Belenenses,1,1,D
+P1,30/04/95,Guimaraes,Maritimo,0,0,D
+P1,30/04/95,Leiria,Boavista,1,1,D
+P1,30/04/95,Madeira,Tirsense,1,1,D
+P1,30/04/95,Porto,Est Amadora,0,0,D
+P1,30/04/95,Setubal,Salgueiros,1,2,A
+P1,07/05/95,Belenenses,Desp. Chaves,3,1,H
+P1,07/05/95,Boavista,Benfica,1,3,A
+P1,07/05/95,Est Amadora,Gil Vicente,1,1,D
+P1,07/05/95,Farense,Guimaraes,3,0,H
+P1,07/05/95,Maritimo,Beira Mar,3,2,H
+P1,07/05/95,Salgueiros,Leiria,2,2,D
+P1,07/05/95,Sp Braga,Madeira,2,0,H
+P1,07/05/95,Sp Lisbon,Porto,0,1,A
+P1,07/05/95,Tirsense,Setubal,1,0,H
+P1,14/05/95,Benfica,Salgueiros,3,0,H
+P1,14/05/95,Desp. Chaves,Est Amadora,1,0,H
+P1,14/05/95,Farense,Maritimo,4,0,H
+P1,14/05/95,Gil Vicente,Sp Lisbon,1,2,A
+P1,14/05/95,Guimaraes,Belenenses,3,0,H
+P1,14/05/95,Leiria,Tirsense,1,0,H
+P1,14/05/95,Madeira,Beira Mar,1,0,H
+P1,14/05/95,Porto,Boavista,4,2,H
+P1,14/05/95,Setubal,Sp Braga,0,0,D
+P1,21/05/95,Beira Mar,Setubal,1,1,D
+P1,21/05/95,Belenenses,Farense,1,0,H
+P1,21/05/95,Boavista,Gil Vicente,1,1,D
+P1,21/05/95,Est Amadora,Guimaraes,1,1,D
+P1,21/05/95,Madeira,Maritimo,2,2,D
+P1,21/05/95,Salgueiros,Porto,1,2,A
+P1,21/05/95,Sp Braga,Leiria,2,0,H
+P1,21/05/95,Sp Lisbon,Desp. Chaves,1,0,H
+P1,21/05/95,Tirsense,Benfica,1,3,A
+P1,28/05/95,Benfica,Sp Braga,1,1,D
+P1,28/05/95,Desp. Chaves,Boavista,3,1,H
+P1,28/05/95,Farense,Est Amadora,2,0,H
+P1,28/05/95,Gil Vicente,Salgueiros,0,0,D
+P1,28/05/95,Guimaraes,Sp Lisbon,2,2,D
+P1,28/05/95,Leiria,Beira Mar,3,1,H
+P1,28/05/95,Maritimo,Belenenses,3,0,H
+P1,28/05/95,Porto,Tirsense,4,0,H
+P1,28/05/95,Setubal,Madeira,4,1,H
+P1,15/06/95,Benfica,Sp Lisbon,2,0,H
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,

@@ -1,0 +1,381 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,,,,,,,,,,,,,,,,,,,,,
+I2,31/08/97,Ancona,Torino,1,0,H,,,,,,,,,,,,,,,,,,,,,
+I2,31/08/97,Cagliari,Treviso,2,0,H,,,,,,,,,,,,,,,,,,,,,
+I2,31/08/97,Chievo,Reggina,1,0,H,,,,,,,,,,,,,,,,,,,,,
+I2,31/08/97,Lucchese,Ravenna,2,1,H,,,,,,,,,,,,,,,,,,,,,
+I2,31/08/97,Monza,Pescara,1,1,D,,,,,,,,,,,,,,,,,,,,,
+I2,31/08/97,Padova,C. Sangro,0,1,A,,,,,,,,,,,,,,,,,,,,,
+I2,31/08/97,Perugia,F. Andria,4,1,H,,,,,,,,,,,,,,,,,,,,,
+I2,31/08/97,Reggiana,Foggia,1,0,H,,,,,,,,,,,,,,,,,,,,,
+I2,31/08/97,Salernitana,Verona,2,0,H,,,,,,,,,,,,,,,,,,,,,
+I2,31/08/97,Venezia,Genoa,2,0,H,,,,,,,,,,,,,,,,,,,,,
+I2,07/09/97,C. Sangro,Ancona,1,1,D,,,,,,,,,,,,,,,,,,,,,
+I2,07/09/97,F. Andria,Chievo,1,0,H,,,,,,,,,,,,,,,,,,,,,
+I2,07/09/97,Foggia,Venezia,1,2,A,,,,,,,,,,,,,,,,,,,,,
+I2,07/09/97,Genoa,Lucchese,1,1,D,,,,,,,,,,,,,,,,,,,,,
+I2,07/09/97,Pescara,Cagliari,0,1,A,,,,,,,,,,,,,,,,,,,,,
+I2,07/09/97,Ravenna,Perugia,0,0,D
+I2,07/09/97,Reggina,Reggiana,1,0,H
+I2,07/09/97,Torino,Padova,2,1,H
+I2,07/09/97,Treviso,Salernitana,1,1,D
+I2,07/09/97,Verona,Monza,3,2,H
+I2,14/09/97,Ancona,Genoa,4,3,H
+I2,14/09/97,Cagliari,C. Sangro,1,1,D
+I2,14/09/97,Chievo,Salernitana,1,1,D
+I2,14/09/97,F. Andria,Pescara,3,0,H
+I2,14/09/97,Monza,Venezia,1,0,H
+I2,14/09/97,Padova,Verona,0,0,D
+I2,14/09/97,Perugia,Lucchese,1,0,H
+I2,14/09/97,Reggiana,Ravenna,1,1,D
+I2,14/09/97,Reggina,Treviso,0,0,D
+I2,14/09/97,Torino,Foggia,1,1,D
+I2,21/09/97,C. Sangro,F. Andria,3,3,D
+I2,21/09/97,Foggia,Reggina,3,2,H
+I2,21/09/97,Genoa,Chievo,0,1,A
+I2,21/09/97,Lucchese,Padova,2,0,H
+I2,21/09/97,Pescara,Torino,3,0,H
+I2,21/09/97,Ravenna,Ancona,2,0,H
+I2,21/09/97,Salernitana,Reggiana,4,0,H
+I2,21/09/97,Treviso,Monza,3,0,H
+I2,21/09/97,Venezia,Perugia,2,0,H
+I2,21/09/97,Verona,Cagliari,2,1,H
+I2,28/09/97,Ancona,Venezia,0,1,A
+I2,28/09/97,C. Sangro,Ravenna,2,1,H
+I2,28/09/97,Cagliari,Foggia,1,1,D
+I2,28/09/97,Chievo,Reggiana,1,0,H
+I2,28/09/97,F. Andria,Lucchese,3,0,H
+I2,28/09/97,Padova,Salernitana,0,0,D
+I2,28/09/97,Perugia,Treviso,2,1,H
+I2,28/09/97,Pescara,Verona,1,1,D
+I2,28/09/97,Reggina,Monza,1,0,H
+I2,28/09/97,Torino,Genoa,2,1,H
+I2,05/10/97,Ancona,Reggina,2,3,A
+I2,05/10/97,Foggia,Pescara,1,0,H
+I2,05/10/97,Genoa,Cagliari,1,3,A
+I2,05/10/97,Lucchese,C. Sangro,1,0,H
+I2,05/10/97,Monza,F. Andria,1,1,D
+I2,05/10/97,Ravenna,Chievo,2,0,H
+I2,05/10/97,Reggiana,Treviso,1,0,H
+I2,05/10/97,Salernitana,Perugia,2,0,H
+I2,05/10/97,Venezia,Padova,3,0,H
+I2,05/10/97,Verona,Torino,4,0,H
+I2,12/10/97,C. Sangro,Salernitana,3,5,A
+I2,12/10/97,Cagliari,Monza,2,2,D
+I2,12/10/97,F. Andria,Ancona,1,1,D
+I2,12/10/97,Genoa,Foggia,3,2,H
+I2,12/10/97,Padova,Reggiana,0,0,D
+I2,12/10/97,Pescara,Lucchese,2,1,H
+I2,12/10/97,Reggina,Perugia,0,1,A
+I2,12/10/97,Torino,Venezia,0,4,A
+I2,12/10/97,Treviso,Ravenna,3,0,H
+I2,12/10/97,Verona,Chievo,4,0,H
+I2,19/10/97,Ancona,Treviso,4,4,D
+I2,19/10/97,Chievo,C. Sangro,1,1,D
+I2,19/10/97,Foggia,F. Andria,2,1,H
+I2,19/10/97,Lucchese,Reggina,0,1,A
+I2,19/10/97,Monza,Torino,1,1,D
+I2,19/10/97,Perugia,Padova,1,3,A
+I2,19/10/97,Ravenna,Cagliari,0,0,D
+I2,19/10/97,Reggiana,Genoa,0,1,A
+I2,19/10/97,Salernitana,Pescara,5,1,H
+I2,19/10/97,Venezia,Verona,1,0,H
+I2,26/10/97,Cagliari,Salernitana,1,1,D
+I2,26/10/97,F. Andria,Torino,0,2,A
+I2,26/10/97,Lucchese,Reggiana,2,1,H
+I2,26/10/97,Monza,C. Sangro,2,2,D
+I2,26/10/97,Padova,Chievo,3,2,H
+I2,26/10/97,Perugia,Ancona,1,1,D
+I2,26/10/97,Pescara,Genoa,1,0,H
+I2,26/10/97,Reggina,Ravenna,1,0,H
+I2,26/10/97,Treviso,Venezia,1,1,D
+I2,26/10/97,Verona,Foggia,3,2,H
+I2,09/11/97,Ancona,Verona,0,0,D
+I2,09/11/97,C. Sangro,Reggina,1,1,D
+I2,09/11/97,Chievo,Monza,1,1,D
+I2,09/11/97,Foggia,Treviso,0,0,D
+I2,09/11/97,Genoa,F. Andria,2,1,H
+I2,09/11/97,Ravenna,Padova,1,0,H
+I2,09/11/97,Reggiana,Perugia,2,0,H
+I2,09/11/97,Salernitana,Lucchese,1,1,D
+I2,09/11/97,Torino,Cagliari,3,0,H
+I2,09/11/97,Venezia,Pescara,3,0,H
+I2,16/11/97,Cagliari,F. Andria,3,0,H
+I2,16/11/97,Lucchese,Chievo,1,2,A
+I2,16/11/97,Monza,Foggia,1,1,D
+I2,16/11/97,Padova,Ancona,0,1,A
+I2,16/11/97,Perugia,C. Sangro,1,0,H
+I2,16/11/97,Reggiana,Venezia,2,0,H
+I2,16/11/97,Reggina,Torino,2,2,D
+I2,16/11/97,Salernitana,Ravenna,1,0,H
+I2,16/11/97,Treviso,Pescara,2,1,H
+I2,16/11/97,Verona,Genoa,4,0,H
+I2,30/11/97,Ancona,Salernitana,3,3,D
+I2,30/11/97,C. Sangro,Reggiana,2,2,D
+I2,30/11/97,Cagliari,Reggina,2,0,H
+I2,30/11/97,Chievo,Perugia,1,1,D
+I2,30/11/97,F. Andria,Verona,1,0,H
+I2,30/11/97,Foggia,Lucchese,2,2,D
+I2,30/11/97,Genoa,Monza,5,1,H
+I2,30/11/97,Pescara,Padova,4,0,H
+I2,30/11/97,Torino,Treviso,4,0,H
+I2,30/11/97,Venezia,Ravenna,2,1,H
+I2,07/12/97,C. Sangro,Pescara,1,1,D
+I2,07/12/97,Chievo,Venezia,1,1,D
+I2,07/12/97,Lucchese,Monza,0,0,D
+I2,07/12/97,Padova,Foggia,3,0,H
+I2,07/12/97,Perugia,Cagliari,1,1,D
+I2,07/12/97,Ravenna,Torino,1,1,D
+I2,07/12/97,Reggiana,Ancona,1,0,H
+I2,07/12/97,Reggina,F. Andria,2,3,A
+I2,07/12/97,Salernitana,Genoa,2,1,H
+I2,07/12/97,Treviso,Verona,1,0,H
+I2,14/12/97,Ancona,Lucchese,0,1,A
+I2,14/12/97,Cagliari,Reggiana,0,0,D
+I2,14/12/97,F. Andria,Treviso,0,0,D
+I2,14/12/97,Foggia,Chievo,0,1,A
+I2,14/12/97,Genoa,Reggina,0,0,D
+I2,14/12/97,Monza,Padova,2,0,H
+I2,14/12/97,Pescara,Ravenna,1,1,D
+I2,14/12/97,Torino,C. Sangro,4,1,H
+I2,14/12/97,Venezia,Salernitana,0,3,A
+I2,14/12/97,Verona,Perugia,0,1,A
+I2,21/12/97,C. Sangro,Venezia,1,3,A
+I2,21/12/97,Chievo,Ancona,0,1,A
+I2,21/12/97,Lucchese,Cagliari,1,2,A
+I2,21/12/97,Padova,F. Andria,0,0,D
+I2,21/12/97,Perugia,Foggia,2,2,D
+I2,21/12/97,Ravenna,Monza,1,1,D
+I2,21/12/97,Reggiana,Verona,0,1,A
+I2,21/12/97,Reggina,Pescara,0,0,D
+I2,21/12/97,Salernitana,Torino,2,1,H
+I2,21/12/97,Treviso,Genoa,2,1,H
+I2,04/01/98,Cagliari,Padova,1,0,H
+I2,04/01/98,F. Andria,Ravenna,0,0,D
+I2,04/01/98,Foggia,C. Sangro,2,0,H
+I2,04/01/98,Genoa,Perugia,2,0,H
+I2,04/01/98,Monza,Salernitana,1,1,D
+I2,04/01/98,Pescara,Ancona,3,2,H
+I2,04/01/98,Torino,Reggiana,1,0,H
+I2,04/01/98,Treviso,Chievo,0,0,D
+I2,04/01/98,Venezia,Lucchese,0,0,D
+I2,04/01/98,Verona,Reggina,1,1,D
+I2,11/01/98,Ancona,Monza,0,1,A
+I2,11/01/98,C. Sangro,Genoa,3,3,D
+I2,11/01/98,Chievo,Torino,0,2,A
+I2,11/01/98,Lucchese,Verona,1,0,H
+I2,11/01/98,Padova,Treviso,0,0,D
+I2,11/01/98,Perugia,Pescara,1,1,D
+I2,11/01/98,Ravenna,Foggia,3,1,H
+I2,11/01/98,Reggiana,F. Andria,1,0,H
+I2,11/01/98,Salernitana,Reggina,2,0,H
+I2,11/01/98,Venezia,Cagliari,2,2,D
+I2,18/01/98,Cagliari,Ancona,3,0,H
+I2,18/01/98,F. Andria,Venezia,1,1,D
+I2,18/01/98,Foggia,Salernitana,2,0,H
+I2,18/01/98,Genoa,Ravenna,1,0,H
+I2,18/01/98,Monza,Reggiana,0,0,D
+I2,18/01/98,Pescara,Chievo,3,1,H
+I2,18/01/98,Reggina,Padova,3,0,H
+I2,18/01/98,Torino,Perugia,0,0,D
+I2,18/01/98,Treviso,Lucchese,3,0,H
+I2,18/01/98,Verona,C. Sangro,0,0,D
+I2,25/01/98,Ancona,Foggia,3,2,H
+I2,25/01/98,C. Sangro,Treviso,0,0,D
+I2,25/01/98,Chievo,Cagliari,2,1,H
+I2,25/01/98,Lucchese,Torino,3,1,H
+I2,25/01/98,Padova,Genoa,1,1,D
+I2,25/01/98,Perugia,Monza,3,2,H
+I2,25/01/98,Ravenna,Verona,1,1,D
+I2,25/01/98,Reggiana,Pescara,1,0,H
+I2,25/01/98,Salernitana,F. Andria,1,1,D
+I2,25/01/98,Venezia,Reggina,4,0,H
+I2,01/02/98,C. Sangro,Padova,1,1,D
+I2,01/02/98,F. Andria,Perugia,1,1,D
+I2,01/02/98,Foggia,Reggiana,0,2,A
+I2,01/02/98,Genoa,Venezia,3,1,H
+I2,01/02/98,Pescara,Monza,2,2,D
+I2,01/02/98,Ravenna,Lucchese,2,1,H
+I2,01/02/98,Reggina,Chievo,0,0,D
+I2,01/02/98,Torino,Ancona,1,1,D
+I2,01/02/98,Treviso,Cagliari,0,1,A
+I2,01/02/98,Verona,Salernitana,0,2,A
+I2,08/02/98,Ancona,C. Sangro,1,1,D
+I2,08/02/98,Cagliari,Pescara,2,0,H
+I2,08/02/98,Chievo,F. Andria,1,1,D
+I2,08/02/98,Lucchese,Genoa,2,3,A
+I2,08/02/98,Monza,Verona,5,1,H
+I2,08/02/98,Padova,Torino,2,1,H
+I2,08/02/98,Perugia,Ravenna,2,1,H
+I2,08/02/98,Reggiana,Reggina,1,1,D
+I2,08/02/98,Salernitana,Treviso,4,0,H
+I2,08/02/98,Venezia,Foggia,1,0,H
+I2,14/02/98,Treviso,Reggina,2,0,H
+I2,15/02/98,C. Sangro,Cagliari,0,3,A
+I2,15/02/98,Foggia,Torino,0,3,A
+I2,15/02/98,Genoa,Ancona,2,1,H
+I2,15/02/98,Lucchese,Perugia,0,0,D
+I2,15/02/98,Pescara,F. Andria,0,2,A
+I2,15/02/98,Ravenna,Reggiana,2,3,A
+I2,15/02/98,Salernitana,Chievo,2,3,A
+I2,15/02/98,Venezia,Monza,4,2,H
+I2,15/02/98,Verona,Padova,5,1,H
+I2,21/02/98,Monza,Treviso,1,1,D
+I2,22/02/98,Ancona,Ravenna,0,2,A
+I2,22/02/98,Cagliari,Verona,2,1,H
+I2,22/02/98,Chievo,Genoa,0,1,A
+I2,22/02/98,F. Andria,C. Sangro,1,0,H
+I2,22/02/98,Padova,Lucchese,1,1,D
+I2,22/02/98,Perugia,Venezia,2,0,H
+I2,22/02/98,Reggiana,Salernitana,0,1,A
+I2,22/02/98,Reggina,Foggia,0,0,D
+I2,22/02/98,Torino,Pescara,0,1,A
+I2,28/02/98,Genoa,Torino,2,2,D
+I2,01/03/98,Foggia,Cagliari,1,1,D
+I2,01/03/98,Lucchese,F. Andria,1,0,H
+I2,01/03/98,Monza,Reggina,0,1,A
+I2,01/03/98,Ravenna,C. Sangro,1,3,A
+I2,01/03/98,Reggiana,Chievo,2,2,D
+I2,01/03/98,Salernitana,Padova,2,0,H
+I2,01/03/98,Treviso,Perugia,2,1,H
+I2,01/03/98,Venezia,Ancona,1,1,D
+I2,01/03/98,Verona,Pescara,2,0,H
+I2,08/03/98,C. Sangro,Lucchese,0,2,A
+I2,08/03/98,Cagliari,Genoa,1,1,D
+I2,08/03/98,Chievo,Ravenna,2,0,H
+I2,08/03/98,F. Andria,Monza,1,3,A
+I2,08/03/98,Padova,Venezia,0,0,D
+I2,08/03/98,Perugia,Salernitana,1,1,D
+I2,08/03/98,Pescara,Foggia,1,0,H
+I2,08/03/98,Reggina,Ancona,2,1,H
+I2,08/03/98,Torino,Verona,2,1,H
+I2,08/03/98,Treviso,Reggiana,0,5,A
+I2,14/03/98,Chievo,Verona,2,0,H
+I2,15/03/98,Ancona,F. Andria,2,0,H
+I2,15/03/98,Foggia,Genoa,3,1,H
+I2,15/03/98,Lucchese,Pescara,0,3,A
+I2,15/03/98,Monza,Cagliari,0,0,D
+I2,15/03/98,Perugia,Reggina,0,1,A
+I2,15/03/98,Ravenna,Treviso,2,0,H
+I2,15/03/98,Reggiana,Padova,0,2,A
+I2,15/03/98,Salernitana,C. Sangro,1,0,H
+I2,15/03/98,Venezia,Torino,0,0,D
+I2,21/03/98,Verona,Venezia,0,1,A
+I2,22/03/98,C. Sangro,Chievo,0,4,A
+I2,22/03/98,Cagliari,Ravenna,2,1,H
+I2,22/03/98,F. Andria,Foggia,2,0,H
+I2,22/03/98,Genoa,Reggiana,2,2,D
+I2,22/03/98,Padova,Perugia,3,1,H
+I2,22/03/98,Pescara,Salernitana,0,0,D
+I2,22/03/98,Reggina,Lucchese,0,0,D
+I2,22/03/98,Torino,Monza,1,0,H
+I2,22/03/98,Treviso,Ancona,5,0,H
+I2,04/04/98,Salernitana,Cagliari,1,0,H
+I2,05/04/98,Ancona,Perugia,2,2,D
+I2,05/04/98,C. Sangro,Monza,1,1,D
+I2,05/04/98,Chievo,Padova,1,1,D
+I2,05/04/98,Foggia,Verona,0,0,D
+I2,05/04/98,Genoa,Pescara,4,0,H
+I2,05/04/98,Ravenna,Reggina,2,2,D
+I2,05/04/98,Reggiana,Lucchese,3,0,H
+I2,05/04/98,Torino,F. Andria,2,1,H
+I2,05/04/98,Venezia,Treviso,0,0,D
+I2,11/04/98,Cagliari,Torino,2,2,D
+I2,11/04/98,F. Andria,Genoa,2,0,H
+I2,11/04/98,Lucchese,Salernitana,1,1,D
+I2,11/04/98,Monza,Chievo,1,0,H
+I2,11/04/98,Padova,Ravenna,0,0,D
+I2,11/04/98,Perugia,Reggiana,2,0,H
+I2,11/04/98,Pescara,Venezia,2,1,H
+I2,11/04/98,Reggina,C. Sangro,2,1,H
+I2,11/04/98,Treviso,Foggia,3,3,D
+I2,11/04/98,Verona,Ancona,2,0,H
+I2,18/04/98,Genoa,Verona,1,0,H
+I2,19/04/98,Ancona,Padova,0,0,D
+I2,19/04/98,C. Sangro,Perugia,1,1,D
+I2,19/04/98,Chievo,Lucchese,3,1,H
+I2,19/04/98,F. Andria,Cagliari,1,1,D
+I2,19/04/98,Foggia,Monza,5,1,H
+I2,19/04/98,Pescara,Treviso,1,0,H
+I2,19/04/98,Ravenna,Salernitana,0,0,D
+I2,19/04/98,Torino,Reggina,2,0,H
+I2,19/04/98,Venezia,Reggiana,2,1,H
+I2,25/04/98,Reggina,Cagliari,2,2,D
+I2,26/04/98,Lucchese,Foggia,2,0,H
+I2,26/04/98,Monza,Genoa,0,0,D
+I2,26/04/98,Padova,Pescara,1,0,H
+I2,26/04/98,Perugia,Chievo,3,0,H
+I2,26/04/98,Ravenna,Venezia,1,0,H
+I2,26/04/98,Reggiana,C. Sangro,1,0,H
+I2,26/04/98,Salernitana,Ancona,3,2,H
+I2,26/04/98,Treviso,Torino,0,0,D
+I2,26/04/98,Verona,F. Andria,2,1,H
+I2,02/05/98,Ancona,Reggiana,1,1,D
+I2,03/05/98,Cagliari,Perugia,0,0,D
+I2,03/05/98,F. Andria,Reggina,0,2,A
+I2,03/05/98,Foggia,Padova,2,0,H
+I2,03/05/98,Genoa,Salernitana,1,1,D
+I2,03/05/98,Monza,Lucchese,3,1,H
+I2,03/05/98,Pescara,C. Sangro,1,2,A
+I2,03/05/98,Torino,Ravenna,1,0,H
+I2,03/05/98,Venezia,Chievo,2,0,H
+I2,03/05/98,Verona,Treviso,1,1,D
+I2,10/05/98,C. Sangro,Torino,2,1,H
+I2,10/05/98,Chievo,Foggia,1,1,D
+I2,10/05/98,Lucchese,Ancona,1,1,D
+I2,10/05/98,Padova,Monza,1,2,A
+I2,10/05/98,Perugia,Verona,2,1,H
+I2,10/05/98,Ravenna,Pescara,2,1,H
+I2,10/05/98,Reggiana,Cagliari,0,0,D
+I2,10/05/98,Reggina,Genoa,2,0,H
+I2,10/05/98,Salernitana,Venezia,0,0,D
+I2,10/05/98,Treviso,F. Andria,1,1,D
+I2,17/05/98,Ancona,Chievo,3,2,H
+I2,17/05/98,Cagliari,Lucchese,3,1,H
+I2,17/05/98,F. Andria,Padova,2,0,H
+I2,17/05/98,Foggia,Perugia,1,1,D
+I2,17/05/98,Genoa,Treviso,0,1,A
+I2,17/05/98,Monza,Ravenna,1,2,A
+I2,17/05/98,Pescara,Reggina,1,1,D
+I2,17/05/98,Torino,Salernitana,1,0,H
+I2,17/05/98,Venezia,C. Sangro,3,0,H
+I2,17/05/98,Verona,Reggiana,0,1,A
+I2,24/05/98,Ancona,Pescara,0,0,D
+I2,24/05/98,C. Sangro,Foggia,0,1,A
+I2,24/05/98,Chievo,Treviso,1,0,H
+I2,24/05/98,Lucchese,Venezia,2,0,H
+I2,24/05/98,Padova,Cagliari,1,2,A
+I2,24/05/98,Perugia,Genoa,1,0,H
+I2,24/05/98,Ravenna,F. Andria,0,1,A
+I2,24/05/98,Reggiana,Torino,0,1,A
+I2,24/05/98,Reggina,Verona,0,3,A
+I2,24/05/98,Salernitana,Monza,4,1,H
+I2,31/05/98,Cagliari,Venezia,1,1,D
+I2,31/05/98,F. Andria,Reggiana,1,1,D
+I2,31/05/98,Foggia,Ravenna,2,2,D
+I2,31/05/98,Genoa,C. Sangro,2,1,H
+I2,31/05/98,Monza,Ancona,3,3,D
+I2,31/05/98,Pescara,Perugia,1,2,A
+I2,31/05/98,Reggina,Salernitana,1,0,H
+I2,31/05/98,Torino,Chievo,1,1,D
+I2,31/05/98,Treviso,Padova,3,2,H
+I2,31/05/98,Verona,Lucchese,2,0,H
+I2,07/06/98,Ancona,Cagliari,4,1,H
+I2,07/06/98,C. Sangro,Verona,0,2,A
+I2,07/06/98,Chievo,Pescara,2,2,D
+I2,07/06/98,Lucchese,Treviso,0,0,D
+I2,07/06/98,Padova,Reggina,3,1,H
+I2,07/06/98,Perugia,Torino,2,1,H
+I2,07/06/98,Ravenna,Genoa,3,0,H
+I2,07/06/98,Reggiana,Monza,0,2,A
+I2,07/06/98,Salernitana,Foggia,3,2,H
+I2,07/06/98,Venezia,F. Andria,1,1,D
+I2,14/06/98,Cagliari,Chievo,2,2,D
+I2,14/06/98,F. Andria,Salernitana,2,2,D
+I2,14/06/98,Foggia,Ancona,2,2,D
+I2,14/06/98,Genoa,Padova,1,0,H
+I2,14/06/98,Monza,Perugia,0,2,A
+I2,14/06/98,Pescara,Reggiana,2,0,H
+I2,14/06/98,Reggina,Venezia,1,1,D
+I2,14/06/98,Torino,Lucchese,1,0,H
+I2,14/06/98,Treviso,C. Sangro,3,2,H
+I2,14/06/98,Verona,Ravenna,4,2,H

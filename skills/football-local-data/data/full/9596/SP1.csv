@@ -1,0 +1,553 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HTR,,,,,,,,,,,
+SP1,02/09/95,La Coruna,Valencia,3,0,H,2,0,H,,,,,,,,,,,
+SP1,02/09/95,Sp Gijon,Albacete,3,0,H,3,0,H,,,,,,,,,,,
+SP1,03/09/95,Ath Bilbao,Santander,4,0,H,2,0,H,,,,,,,,,,,
+SP1,03/09/95,Ath Madrid,Sociedad,4,1,H,1,1,D,,,,,,,,,,,
+SP1,03/09/95,Celta,Compostela,0,1,A,0,0,D,,,,,,,,,,,
+SP1,03/09/95,Espanol,Salamanca,3,1,H,2,1,H,,,,,,,,,,,
+SP1,03/09/95,Merida,Betis,1,1,D,1,1,D,,,,,,,,,,,
+SP1,03/09/95,Sevilla,Tenerife,0,1,A,0,0,D,,,,,,,,,,,
+SP1,03/09/95,Valladolid,Barcelona,0,2,A,0,0,D,,,,,,,,,,,
+SP1,03/09/95,Vallecano,Real Madrid,1,5,A,0,1,A,,,,,,,,,,,
+SP1,03/09/95,Zaragoza,Oviedo,1,0,H,1,0,H,,,,,,,,,,,
+SP1,09/09/95,Albacete,Sevilla,3,2,H,2,1,H,,,,,,,,,,,
+SP1,09/09/95,Barcelona,Merida,2,2,D,1,1,D,,,,,,,,,,,
+SP1,09/09/95,Betis,Zaragoza,3,1,H,2,0,H,,,,,,,,,,,
+SP1,09/09/95,Real Madrid,Ath Bilbao,1,2,A,0,0,D,,,,,,,,,,,
+SP1,10/09/95,Compostela,La Coruna,4,0,H,2,0,H
+SP1,10/09/95,Oviedo,Vallecano,2,0,H,1,0,H
+SP1,10/09/95,Salamanca,Celta,0,1,A,0,0,D
+SP1,10/09/95,Santander,Ath Madrid,0,4,A,0,0,D
+SP1,10/09/95,Sociedad,Sp Gijon,2,0,H,1,0,H
+SP1,10/09/95,Tenerife,Espanol,1,4,A,0,2,A
+SP1,10/09/95,Valencia,Valladolid,1,0,H,0,0,D
+SP1,16/09/95,Ath Bilbao,Ath Madrid,0,2,A,0,1,A
+SP1,17/09/95,Celta,Tenerife,2,2,D,2,2,D
+SP1,17/09/95,Espanol,Albacete,1,0,H,0,0,D
+SP1,17/09/95,La Coruna,Salamanca,2,0,H,1,0,H
+SP1,17/09/95,Merida,Valencia,0,2,A,0,0,D
+SP1,17/09/95,Real Madrid,Oviedo,2,3,A,2,2,D
+SP1,17/09/95,Sevilla,Sociedad,2,1,H,1,1,D
+SP1,17/09/95,Sp Gijon,Santander,4,2,H,2,1,H
+SP1,17/09/95,Valladolid,Compostela,0,0,D,0,0,D
+SP1,17/09/95,Vallecano,Betis,1,2,A,1,1,D
+SP1,17/09/95,Zaragoza,Barcelona,0,3,A,0,0,D
+SP1,23/09/95,Barcelona,Vallecano,2,0,H,1,0,H
+SP1,23/09/95,Betis,Real Madrid,0,0,D,0,0,D
+SP1,23/09/95,Santander,Sevilla,1,1,D,1,1,D
+SP1,24/09/95,Albacete,Celta,4,0,H,0,0,D
+SP1,24/09/95,Ath Madrid,Sp Gijon,2,0,H,1,0,H
+SP1,24/09/95,Compostela,Merida,1,0,H,1,0,H
+SP1,24/09/95,Oviedo,Ath Bilbao,0,0,D,0,0,D
+SP1,24/09/95,Salamanca,Valladolid,0,0,D,0,0,D
+SP1,24/09/95,Sociedad,Espanol,0,1,A,0,1,A
+SP1,24/09/95,Tenerife,La Coruna,1,1,D,0,0,D
+SP1,24/09/95,Valencia,Zaragoza,0,0,D,0,0,D
+SP1,30/09/95,Ath Bilbao,Sp Gijon,2,1,H,1,0,H
+SP1,30/09/95,Real Madrid,Barcelona,1,1,D,1,1,D
+SP1,01/10/95,Celta,Sociedad,1,1,D,1,1,D
+SP1,01/10/95,Espanol,Santander,1,0,H,0,0,D
+SP1,01/10/95,La Coruna,Albacete,5,0,H,1,0,H
+SP1,01/10/95,Merida,Salamanca,0,0,D,0,0,D
+SP1,01/10/95,Oviedo,Betis,0,1,A,0,1,A
+SP1,01/10/95,Sevilla,Ath Madrid,0,0,D,0,0,D
+SP1,01/10/95,Valladolid,Tenerife,3,0,H,2,0,H
+SP1,01/10/95,Vallecano,Valencia,3,2,H,0,0,D
+SP1,01/10/95,Zaragoza,Compostela,1,0,H,1,0,H
+SP1,04/10/95,Albacete,Valladolid,4,2,H,2,1,H
+SP1,04/10/95,Barcelona,Oviedo,4,1,H,3,0,H
+SP1,04/10/95,Betis,Ath Bilbao,0,0,D,0,0,D
+SP1,04/10/95,Compostela,Vallecano,1,0,H,1,0,H
+SP1,04/10/95,Salamanca,Zaragoza,0,1,A,0,1,A
+SP1,04/10/95,Santander,Celta,2,1,H,1,1,D
+SP1,04/10/95,Sociedad,La Coruna,2,1,H,1,1,D
+SP1,04/10/95,Sp Gijon,Sevilla,3,1,H,1,1,D
+SP1,04/10/95,Tenerife,Merida,1,0,H,1,0,H
+SP1,04/10/95,Valencia,Real Madrid,4,3,H,3,0,H
+SP1,05/10/95,Ath Madrid,Espanol,2,1,H,1,1,D
+SP1,07/10/95,Betis,Barcelona,1,5,A,0,2,A
+SP1,08/10/95,Ath Bilbao,Sevilla,1,1,D,0,0,D
+SP1,08/10/95,Celta,Ath Madrid,0,3,A,0,1,A
+SP1,08/10/95,Espanol,Sp Gijon,0,0,D,0,0,D
+SP1,08/10/95,La Coruna,Santander,2,3,A,0,1,A
+SP1,08/10/95,Merida,Albacete,1,1,D,0,0,D
+SP1,08/10/95,Oviedo,Valencia,0,1,A,0,0,D
+SP1,08/10/95,Real Madrid,Compostela,2,1,H,2,1,H
+SP1,08/10/95,Valladolid,Sociedad,3,0,H,0,0,D
+SP1,08/10/95,Vallecano,Salamanca,1,4,A,0,0,D
+SP1,08/10/95,Zaragoza,Tenerife,0,2,A,0,0,D
+SP1,14/10/95,Ath Madrid,La Coruna,1,0,H,1,0,H
+SP1,14/10/95,Barcelona,Ath Bilbao,4,1,H,1,0,H
+SP1,14/10/95,Sevilla,Espanol,0,3,A,0,2,A
+SP1,14/10/95,Valencia,Betis,1,1,D,1,1,D
+SP1,15/10/95,Albacete,Zaragoza,0,1,A,0,0,D
+SP1,15/10/95,Compostela,Oviedo,4,1,H,2,1,H
+SP1,15/10/95,Salamanca,Real Madrid,0,2,A,0,1,A
+SP1,15/10/95,Santander,Valladolid,0,0,D,0,0,D
+SP1,15/10/95,Sociedad,Merida,1,2,A,0,1,A
+SP1,15/10/95,Sp Gijon,Celta,1,0,H,0,0,D
+SP1,15/10/95,Tenerife,Vallecano,2,2,D,0,0,D
+SP1,21/10/95,Valladolid,Ath Madrid,0,1,A,0,0,D
+SP1,22/10/95,Ath Bilbao,Espanol,0,0,D,0,0,D
+SP1,22/10/95,Barcelona,Valencia,1,0,H,0,0,D
+SP1,22/10/95,Betis,Compostela,5,0,H,2,0,H
+SP1,22/10/95,Celta,Sevilla,4,0,H,1,0,H
+SP1,22/10/95,La Coruna,Sp Gijon,1,0,H,1,0,H
+SP1,22/10/95,Merida,Santander,3,1,H,3,1,H
+SP1,22/10/95,Oviedo,Salamanca,2,2,D,1,0,H
+SP1,22/10/95,Real Madrid,Tenerife,2,0,H,1,0,H
+SP1,22/10/95,Vallecano,Albacete,2,0,H,0,0,D
+SP1,22/10/95,Zaragoza,Sociedad,1,2,A,0,1,A
+SP1,28/10/95,Albacete,Real Madrid,1,1,D,0,1,A
+SP1,28/10/95,Compostela,Barcelona,2,1,H,0,1,A
+SP1,28/10/95,Sevilla,La Coruna,0,0,D,0,0,D
+SP1,29/10/95,Ath Madrid,Merida,1,1,D,0,1,A
+SP1,29/10/95,Espanol,Celta,2,2,D,1,0,H
+SP1,29/10/95,Salamanca,Betis,2,1,H,1,1,D
+SP1,29/10/95,Santander,Zaragoza,0,0,D,0,0,D
+SP1,29/10/95,Sociedad,Vallecano,2,1,H,1,0,H
+SP1,29/10/95,Sp Gijon,Valladolid,4,2,H,1,2,A
+SP1,29/10/95,Tenerife,Oviedo,3,3,D,1,0,H
+SP1,29/10/95,Valencia,Ath Bilbao,3,1,H,2,0,H
+SP1,04/11/95,Real Madrid,Sociedad,3,2,H,1,0,H
+SP1,05/11/95,Ath Bilbao,Celta,3,0,H,2,0,H
+SP1,05/11/95,Barcelona,Salamanca,4,1,H,3,0,H
+SP1,05/11/95,Betis,Tenerife,3,3,D,2,1,H
+SP1,05/11/95,La Coruna,Espanol,0,1,A,0,0,D
+SP1,05/11/95,Merida,Sp Gijon,1,0,H,1,0,H
+SP1,05/11/95,Oviedo,Albacete,1,0,H,0,0,D
+SP1,05/11/95,Valencia,Compostela,5,2,H,2,1,H
+SP1,05/11/95,Valladolid,Sevilla,3,3,D,2,2,D
+SP1,05/11/95,Vallecano,Santander,1,2,A,0,1,A
+SP1,05/11/95,Zaragoza,Ath Madrid,0,1,A,0,0,D
+SP1,11/11/95,Celta,La Coruna,0,0,D,0,0,D
+SP1,12/11/95,Albacete,Betis,0,0,D,0,0,D
+SP1,12/11/95,Ath Madrid,Vallecano,0,0,D,0,0,D
+SP1,12/11/95,Compostela,Ath Bilbao,2,1,H,0,1,A
+SP1,12/11/95,Espanol,Valladolid,2,0,H,2,0,H
+SP1,12/11/95,Salamanca,Valencia,4,0,H,2,0,H
+SP1,12/11/95,Santander,Real Madrid,2,0,H,2,0,H
+SP1,12/11/95,Sevilla,Merida,3,0,H,1,0,H
+SP1,12/11/95,Sociedad,Oviedo,1,1,D,1,0,H
+SP1,12/11/95,Sp Gijon,Zaragoza,4,1,H,3,0,H
+SP1,12/11/95,Tenerife,Barcelona,1,1,D,0,1,A
+SP1,18/11/95,Barcelona,Albacete,3,0,H,1,0,H
+SP1,18/11/95,Betis,Sociedad,3,1,H,1,0,H
+SP1,18/11/95,Real Madrid,Ath Madrid,1,0,H,1,0,H
+SP1,18/11/95,Zaragoza,Sevilla,0,1,A,0,0,D
+SP1,19/11/95,Ath Bilbao,La Coruna,1,0,H,,,
+SP1,19/11/95,Compostela,Salamanca,0,0,D,0,0,D
+SP1,19/11/95,Merida,Espanol,0,1,A,0,0,D
+SP1,19/11/95,Oviedo,Santander,2,1,H,0,1,A
+SP1,19/11/95,Valencia,Tenerife,2,2,D,0,1,A
+SP1,19/11/95,Valladolid,Celta,1,1,D,0,0,D
+SP1,19/11/95,Vallecano,Sp Gijon,2,0,H,1,0,H
+SP1,25/11/95,Sociedad,Barcelona,1,1,D,0,1,A
+SP1,26/11/95,Albacete,Valencia,1,3,A,0,1,A
+SP1,26/11/95,Ath Madrid,Oviedo,3,0,H,1,0,H
+SP1,26/11/95,Celta,Merida,2,0,H,1,0,H
+SP1,26/11/95,Espanol,Zaragoza,1,1,D,0,1,A
+SP1,26/11/95,La Coruna,Valladolid,3,1,H,1,0,H
+SP1,26/11/95,Salamanca,Ath Bilbao,2,1,H,1,0,H
+SP1,26/11/95,Santander,Betis,0,0,D,0,0,D
+SP1,26/11/95,Sevilla,Vallecano,1,0,H,0,0,D
+SP1,26/11/95,Sp Gijon,Real Madrid,0,0,D,0,0,D
+SP1,26/11/95,Tenerife,Compostela,1,1,D,0,1,A
+SP1,02/12/95,Barcelona,Santander,1,1,D,1,1,D
+SP1,02/12/95,Real Madrid,Sevilla,4,1,H,3,0,H
+SP1,02/12/95,Vallecano,Espanol,1,0,H,1,0,H
+SP1,03/12/95,Ath Bilbao,Valladolid,2,1,H,1,1,D
+SP1,03/12/95,Betis,Ath Madrid,2,1,H,2,1,H
+SP1,03/12/95,Compostela,Albacete,3,1,H,2,0,H
+SP1,03/12/95,Merida,La Coruna,0,2,A,0,1,A
+SP1,03/12/95,Oviedo,Sp Gijon,1,0,H,0,0,D
+SP1,03/12/95,Salamanca,Tenerife,1,2,A,1,1,D
+SP1,03/12/95,Valencia,Sociedad,0,1,A,0,0,D
+SP1,03/12/95,Zaragoza,Celta,0,0,D,0,0,D
+SP1,09/12/95,Ath Madrid,Barcelona,3,1,H,2,0,H
+SP1,09/12/95,Santander,Valencia,0,3,A,0,2,A
+SP1,10/12/95,Albacete,Salamanca,3,3,D,1,1,D
+SP1,10/12/95,Celta,Vallecano,2,0,H,1,0,H
+SP1,10/12/95,Espanol,Real Madrid,3,1,H,1,0,H
+SP1,10/12/95,La Coruna,Zaragoza,2,3,A,1,2,A
+SP1,10/12/95,Sevilla,Oviedo,1,1,D,0,1,A
+SP1,10/12/95,Sociedad,Compostela,0,1,A,0,1,A
+SP1,10/12/95,Sp Gijon,Betis,2,3,A,1,0,H
+SP1,10/12/95,Tenerife,Ath Bilbao,3,2,H,2,1,H
+SP1,10/12/95,Valladolid,Merida,1,1,D,1,1,D
+SP1,16/12/95,Barcelona,Sp Gijon,1,0,H,1,0,H
+SP1,16/12/95,Betis,Sevilla,1,1,D,0,0,D
+SP1,17/12/95,Ath Bilbao,Merida,1,1,D,0,0,D
+SP1,17/12/95,Compostela,Santander,2,0,H,0,0,D
+SP1,17/12/95,Oviedo,Espanol,1,2,A,1,1,D
+SP1,17/12/95,Real Madrid,Celta,1,0,H,1,0,H
+SP1,17/12/95,Salamanca,Sociedad,3,3,D,3,1,H
+SP1,17/12/95,Tenerife,Albacete,1,3,A,1,1,D
+SP1,17/12/95,Valencia,Ath Madrid,0,1,A,0,0,D
+SP1,17/12/95,Vallecano,La Coruna,0,6,A,0,3,A
+SP1,17/12/95,Zaragoza,Valladolid,5,3,H,3,1,H
+SP1,20/12/95,Albacete,Ath Bilbao,2,0,H,0,0,D
+SP1,20/12/95,Ath Madrid,Compostela,3,0,H,1,0,H
+SP1,20/12/95,Celta,Oviedo,1,0,H,0,0,D
+SP1,20/12/95,Espanol,Betis,1,1,D,1,0,H
+SP1,20/12/95,Merida,Zaragoza,1,1,D,1,0,H
+SP1,20/12/95,Santander,Salamanca,2,1,H,1,1,D
+SP1,20/12/95,Sevilla,Barcelona,1,0,H,1,0,H
+SP1,20/12/95,Sociedad,Tenerife,0,1,A,0,0,D
+SP1,20/12/95,Sp Gijon,Valencia,1,3,A,0,1,A
+SP1,20/12/95,Valladolid,Vallecano,1,1,D,0,0,D
+SP1,21/12/95,La Coruna,Real Madrid,3,0,H,3,0,H
+SP1,03/01/96,Albacete,Sociedad,3,5,A,2,3,A
+SP1,03/01/96,Ath Bilbao,Zaragoza,1,0,H,0,0,D
+SP1,03/01/96,Betis,Celta,0,3,A,0,0,D
+SP1,03/01/96,Compostela,Sp Gijon,1,0,H,1,0,H
+SP1,03/01/96,Oviedo,La Coruna,0,2,A,0,0,D
+SP1,03/01/96,Real Madrid,Valladolid,4,1,H,3,1,H
+SP1,03/01/96,Salamanca,Ath Madrid,1,3,A,0,0,D
+SP1,03/01/96,Tenerife,Santander,2,0,H,1,0,H
+SP1,03/01/96,Valencia,Sevilla,1,0,H,0,0,D
+SP1,03/01/96,Vallecano,Merida,4,1,H,3,0,H
+SP1,04/01/96,Barcelona,Espanol,2,1,H,1,0,H
+SP1,06/01/96,Ath Bilbao,Sociedad,0,0,D,0,0,D
+SP1,06/01/96,Ath Madrid,Tenerife,3,1,H,1,0,H
+SP1,07/01/96,Celta,Barcelona,1,0,H,0,0,D
+SP1,07/01/96,Espanol,Valencia,2,0,H,1,0,H
+SP1,07/01/96,La Coruna,Betis,0,0,D,0,0,D
+SP1,07/01/96,Merida,Real Madrid,2,2,D,1,2,A
+SP1,07/01/96,Santander,Albacete,5,5,D,2,2,D
+SP1,07/01/96,Sevilla,Compostela,0,1,A,0,0,D
+SP1,07/01/96,Sp Gijon,Salamanca,3,2,H,2,1,H
+SP1,07/01/96,Valladolid,Oviedo,2,2,D,2,2,D
+SP1,07/01/96,Zaragoza,Vallecano,1,1,D,1,0,H
+SP1,13/01/96,Albacete,Ath Madrid,1,1,D,0,0,D
+SP1,13/01/96,Betis,Valladolid,3,0,H,0,0,D
+SP1,14/01/96,Barcelona,La Coruna,1,1,D,0,1,A
+SP1,14/01/96,Compostela,Espanol,2,1,H,1,1,D
+SP1,14/01/96,Oviedo,Merida,0,0,D,0,0,D
+SP1,14/01/96,Real Madrid,Zaragoza,2,2,D,0,1,A
+SP1,14/01/96,Salamanca,Sevilla,4,1,H,2,0,H
+SP1,14/01/96,Sociedad,Santander,2,1,H,1,0,H
+SP1,14/01/96,Tenerife,Sp Gijon,3,0,H,1,0,H
+SP1,14/01/96,Valencia,Celta,3,0,H,1,0,H
+SP1,14/01/96,Vallecano,Ath Bilbao,2,2,D,0,1,A
+SP1,20/01/96,Valencia,La Coruna,2,1,H,0,1,A
+SP1,21/01/96,Albacete,Sp Gijon,1,3,A,1,2,A
+SP1,21/01/96,Barcelona,Valladolid,1,0,H,0,0,D
+SP1,21/01/96,Betis,Merida,0,1,A,0,0,D
+SP1,21/01/96,Compostela,Celta,1,1,D,1,1,D
+SP1,21/01/96,Oviedo,Zaragoza,1,1,D,1,1,D
+SP1,21/01/96,Real Madrid,Vallecano,1,2,A,1,1,D
+SP1,21/01/96,Salamanca,Espanol,2,2,D,1,0,H
+SP1,21/01/96,Santander,Ath Bilbao,1,1,D,1,0,H
+SP1,21/01/96,Sociedad,Ath Madrid,1,0,H,1,0,H
+SP1,21/01/96,Tenerife,Sevilla,4,2,H,2,0,H
+SP1,24/01/96,Ath Bilbao,Real Madrid,0,5,A,0,1,A
+SP1,24/01/96,Ath Madrid,Santander,2,0,H,1,0,H
+SP1,24/01/96,Celta,Salamanca,2,1,H,2,1,H
+SP1,24/01/96,Espanol,Tenerife,2,1,H,0,1,A
+SP1,24/01/96,La Coruna,Compostela,2,0,H,1,0,H
+SP1,24/01/96,Sevilla,Albacete,1,1,D,1,0,H
+SP1,24/01/96,Sp Gijon,Sociedad,1,1,D,0,1,A
+SP1,24/01/96,Valladolid,Valencia,2,5,A,0,3,A
+SP1,24/01/96,Vallecano,Oviedo,1,2,A,0,1,A
+SP1,24/01/96,Zaragoza,Betis,1,2,A,0,1,A
+SP1,25/01/96,Merida,Barcelona,0,0,D,0,0,D
+SP1,27/01/96,Salamanca,La Coruna,0,5,A,0,3,A
+SP1,28/01/96,Albacete,Espanol,0,0,D,0,0,D
+SP1,28/01/96,Ath Madrid,Ath Bilbao,4,1,H,2,1,H
+SP1,28/01/96,Barcelona,Zaragoza,3,1,H,1,0,H
+SP1,28/01/96,Betis,Vallecano,0,0,D,0,0,D
+SP1,28/01/96,Compostela,Valladolid,1,3,A,0,2,A
+SP1,28/01/96,Oviedo,Real Madrid,1,2,A,1,1,D
+SP1,28/01/96,Santander,Sp Gijon,1,1,D,1,1,D
+SP1,28/01/96,Sociedad,Sevilla,1,0,H,1,0,H
+SP1,28/01/96,Tenerife,Celta,1,0,H,1,0,H
+SP1,28/01/96,Valencia,Merida,4,1,H,2,0,H
+SP1,03/02/96,Sp Gijon,Ath Madrid,1,2,A,0,1,A
+SP1,03/02/96,Zaragoza,Valencia,4,1,H,1,0,H
+SP1,04/02/96,Ath Bilbao,Oviedo,0,1,A,0,1,A
+SP1,04/02/96,Celta,Albacete,2,2,D,1,0,H
+SP1,04/02/96,Espanol,Sociedad,0,0,D,0,0,D
+SP1,04/02/96,La Coruna,Tenerife,1,1,D,0,1,A
+SP1,04/02/96,Merida,Compostela,0,2,A,0,0,D
+SP1,04/02/96,Real Madrid,Betis,4,2,H,2,2,D
+SP1,04/02/96,Sevilla,Santander,0,1,A,0,1,A
+SP1,04/02/96,Valladolid,Salamanca,1,0,H,0,0,D
+SP1,04/02/96,Vallecano,Barcelona,1,1,D,1,0,H
+SP1,10/02/96,Ath Madrid,Sevilla,0,1,A,0,0,D
+SP1,10/02/96,Barcelona,Real Madrid,3,0,H,1,0,H
+SP1,10/02/96,Valencia,Vallecano,3,0,H,2,0,H
+SP1,11/02/96,Albacete,La Coruna,1,0,H,1,0,H
+SP1,11/02/96,Betis,Oviedo,2,1,H,1,0,H
+SP1,11/02/96,Compostela,Zaragoza,3,2,H,0,2,A
+SP1,11/02/96,Salamanca,Merida,2,2,D,1,0,H
+SP1,11/02/96,Santander,Espanol,1,1,D,1,0,H
+SP1,11/02/96,Sociedad,Celta,3,1,H,1,0,H
+SP1,11/02/96,Sp Gijon,Ath Bilbao,1,2,A,0,1,A
+SP1,11/02/96,Tenerife,Valladolid,1,0,H,1,0,H
+SP1,17/02/96,Real Madrid,Valencia,0,0,D,0,0,D
+SP1,17/02/96,Zaragoza,Salamanca,1,1,D,1,1,D
+SP1,18/02/96,Ath Bilbao,Betis,0,1,A,0,0,D
+SP1,18/02/96,Celta,Santander,0,0,D,0,0,D
+SP1,18/02/96,Espanol,Ath Madrid,0,2,A,0,1,A
+SP1,18/02/96,La Coruna,Sociedad,1,1,D,0,1,A
+SP1,18/02/96,Merida,Tenerife,2,0,H,2,0,H
+SP1,18/02/96,Oviedo,Barcelona,1,2,A,1,1,D
+SP1,18/02/96,Sevilla,Sp Gijon,2,0,H,0,0,D
+SP1,18/02/96,Valladolid,Albacete,3,0,H,1,0,H
+SP1,18/02/96,Vallecano,Compostela,0,1,A,0,1,A
+SP1,24/02/96,Santander,La Coruna,2,1,H,1,0,H
+SP1,25/02/96,Albacete,Merida,2,0,H,1,0,H
+SP1,25/02/96,Ath Madrid,Celta,3,2,H,2,2,D
+SP1,25/02/96,Barcelona,Betis,1,0,H,0,0,D
+SP1,25/02/96,Compostela,Real Madrid,3,3,D,1,1,D
+SP1,25/02/96,Salamanca,Vallecano,1,2,A,0,1,A
+SP1,25/02/96,Sevilla,Ath Bilbao,1,1,D,1,0,H
+SP1,25/02/96,Sociedad,Valladolid,1,0,H,0,0,D
+SP1,25/02/96,Sp Gijon,Espanol,2,3,A,1,1,D
+SP1,25/02/96,Tenerife,Zaragoza,1,2,A,1,1,D
+SP1,25/02/96,Valencia,Oviedo,3,1,H,1,1,D
+SP1,02/03/96,Ath Bilbao,Barcelona,0,0,D,0,0,D
+SP1,02/03/96,Espanol,Sevilla,0,1,A,0,0,D
+SP1,02/03/96,Merida,Sociedad,1,2,A,0,1,A
+SP1,02/03/96,Real Madrid,Salamanca,5,0,H,2,0,H
+SP1,02/03/96,Valladolid,Santander,3,1,H,1,0,H
+SP1,03/03/96,Betis,Valencia,3,0,H,0,0,D
+SP1,03/03/96,Celta,Sp Gijon,0,0,D,0,0,D
+SP1,03/03/96,La Coruna,Ath Madrid,2,2,D,0,1,A
+SP1,03/03/96,Oviedo,Compostela,3,1,H,1,1,D
+SP1,03/03/96,Vallecano,Tenerife,2,4,A,0,1,A
+SP1,03/03/96,Zaragoza,Albacete,3,1,H,1,1,D
+SP1,09/03/96,Valencia,Barcelona,4,1,H,2,0,H
+SP1,10/03/96,Albacete,Vallecano,1,2,A,1,1,D
+SP1,10/03/96,Ath Madrid,Valladolid,0,2,A,0,0,D
+SP1,10/03/96,Compostela,Betis,1,2,A,0,0,D
+SP1,10/03/96,Espanol,Ath Bilbao,3,0,H,1,0,H
+SP1,10/03/96,Salamanca,Oviedo,0,1,A,0,0,D
+SP1,10/03/96,Santander,Merida,2,0,H,0,0,D
+SP1,10/03/96,Sevilla,Celta,0,0,D,0,0,D
+SP1,10/03/96,Sociedad,Zaragoza,3,1,H,1,1,D
+SP1,10/03/96,Sp Gijon,La Coruna,1,1,D,1,0,H
+SP1,10/03/96,Tenerife,Real Madrid,3,0,H,1,0,H
+SP1,16/03/96,Barcelona,Compostela,1,0,H,1,0,H
+SP1,16/03/96,Real Madrid,Albacete,2,0,H,1,0,H
+SP1,16/03/96,Zaragoza,Santander,1,2,A,1,2,A
+SP1,17/03/96,Ath Bilbao,Valencia,0,1,A,0,0,D
+SP1,17/03/96,Betis,Salamanca,4,0,H,1,0,H
+SP1,17/03/96,Celta,Espanol,4,2,H,4,0,H
+SP1,17/03/96,La Coruna,Sevilla,3,2,H,2,1,H
+SP1,17/03/96,Merida,Ath Madrid,0,1,A,0,0,D
+SP1,17/03/96,Oviedo,Tenerife,1,3,A,0,1,A
+SP1,17/03/96,Valladolid,Sp Gijon,1,0,H,0,0,D
+SP1,17/03/96,Vallecano,Sociedad,2,0,H,1,0,H
+SP1,23/03/96,Sp Gijon,Merida,3,1,H,1,1,D
+SP1,23/03/96,Tenerife,Betis,1,2,A,1,0,H
+SP1,24/03/96,Albacete,Oviedo,0,1,A,0,0,D
+SP1,24/03/96,Ath Madrid,Zaragoza,1,1,D,1,1,D
+SP1,24/03/96,Celta,Ath Bilbao,3,1,H,3,1,H
+SP1,24/03/96,Compostela,Valencia,0,4,A,0,2,A
+SP1,24/03/96,Espanol,La Coruna,0,0,D,0,0,D
+SP1,24/03/96,Salamanca,Barcelona,1,3,A,1,3,A
+SP1,24/03/96,Santander,Vallecano,1,2,A,0,0,D
+SP1,24/03/96,Sevilla,Valladolid,1,1,D,1,0,H
+SP1,24/03/96,Sociedad,Real Madrid,1,1,D,1,1,D
+SP1,27/03/96,Ath Bilbao,Compostela,0,0,D,0,0,D
+SP1,27/03/96,Barcelona,Tenerife,2,2,D,2,2,D
+SP1,27/03/96,Betis,Albacete,2,3,A,2,1,H
+SP1,27/03/96,La Coruna,Celta,2,1,H,1,0,H
+SP1,27/03/96,Merida,Sevilla,3,2,H,2,0,H
+SP1,27/03/96,Real Madrid,Santander,1,2,A,0,0,D
+SP1,27/03/96,Valencia,Salamanca,2,0,H,1,0,H
+SP1,27/03/96,Valladolid,Espanol,0,0,D,0,0,D
+SP1,27/03/96,Vallecano,Ath Madrid,0,3,A,0,1,A
+SP1,27/03/96,Zaragoza,Sp Gijon,1,1,D,1,1,D
+SP1,28/03/96,Oviedo,Sociedad,0,0,D,0,0,D
+SP1,31/03/96,Albacete,Barcelona,0,1,A,0,0,D
+SP1,31/03/96,Ath Madrid,Real Madrid,1,2,A,0,1,A
+SP1,31/03/96,Celta,Valladolid,1,1,D,1,0,H
+SP1,31/03/96,Espanol,Merida,3,0,H,0,0,D
+SP1,31/03/96,La Coruna,Ath Bilbao,0,0,D,0,0,D
+SP1,31/03/96,Salamanca,Compostela,1,0,H,0,0,D
+SP1,31/03/96,Santander,Oviedo,0,0,D,0,0,D
+SP1,31/03/96,Sevilla,Zaragoza,1,1,D,0,1,A
+SP1,31/03/96,Sociedad,Betis,1,1,D,0,1,A
+SP1,31/03/96,Sp Gijon,Vallecano,3,1,H,2,1,H
+SP1,31/03/96,Tenerife,Valencia,2,1,H,0,1,A
+SP1,06/04/96,Barcelona,Sociedad,1,0,H,1,0,H
+SP1,06/04/96,Oviedo,Ath Madrid,1,1,D,0,1,A
+SP1,06/04/96,Zaragoza,Espanol,1,1,D,1,1,D
+SP1,07/04/96,Ath Bilbao,Salamanca,3,1,H,1,0,H
+SP1,07/04/96,Betis,Santander,2,2,D,1,0,H
+SP1,07/04/96,Compostela,Tenerife,0,2,A,0,2,A
+SP1,07/04/96,Merida,Celta,2,0,H,1,0,H
+SP1,07/04/96,Real Madrid,Sp Gijon,0,1,A,0,1,A
+SP1,07/04/96,Valencia,Albacete,1,0,H,0,0,D
+SP1,07/04/96,Valladolid,La Coruna,2,2,D,2,1,H
+SP1,07/04/96,Vallecano,Sevilla,0,0,D,0,0,D
+SP1,13/04/96,Santander,Barcelona,1,1,D,0,1,A
+SP1,13/04/96,Sevilla,Real Madrid,0,1,A,0,0,D
+SP1,14/04/96,Albacete,Compostela,2,1,H,1,0,H
+SP1,14/04/96,Ath Madrid,Betis,1,1,D,1,1,D
+SP1,14/04/96,Celta,Zaragoza,1,1,D,1,0,H
+SP1,14/04/96,Espanol,Vallecano,4,2,H,1,1,D
+SP1,14/04/96,La Coruna,Merida,2,1,H,0,0,D
+SP1,14/04/96,Sociedad,Valencia,5,2,H,4,0,H
+SP1,14/04/96,Sp Gijon,Oviedo,0,1,A,0,1,A
+SP1,14/04/96,Tenerife,Salamanca,4,0,H,2,0,H
+SP1,14/04/96,Valladolid,Ath Bilbao,1,1,D,0,0,D
+SP1,20/04/96,Barcelona,Ath Madrid,1,3,A,1,1,D
+SP1,20/04/96,Valencia,Santander,2,1,H,2,1,H
+SP1,21/04/96,Ath Bilbao,Tenerife,2,0,H,1,0,H
+SP1,21/04/96,Betis,Sp Gijon,2,5,A,1,3,A
+SP1,21/04/96,Compostela,Sociedad,2,0,H,1,0,H
+SP1,21/04/96,Merida,Valladolid,1,0,H,0,0,D
+SP1,21/04/96,Oviedo,Sevilla,2,3,A,1,0,H
+SP1,21/04/96,Real Madrid,Espanol,1,2,A,0,0,D
+SP1,21/04/96,Salamanca,Albacete,2,4,A,1,2,A
+SP1,21/04/96,Vallecano,Celta,1,3,A,1,3,A
+SP1,21/04/96,Zaragoza,La Coruna,2,3,A,1,2,A
+SP1,27/04/96,Ath Madrid,Valencia,2,3,A,1,1,D
+SP1,28/04/96,Albacete,Tenerife,0,0,D,0,0,D
+SP1,28/04/96,Celta,Real Madrid,1,1,D,1,1,D
+SP1,28/04/96,La Coruna,Vallecano,1,0,H,0,0,D
+SP1,28/04/96,Merida,Ath Bilbao,1,0,H,0,0,D
+SP1,28/04/96,Santander,Compostela,1,0,H,1,0,H
+SP1,28/04/96,Sevilla,Betis,1,0,H,1,0,H
+SP1,28/04/96,Sociedad,Salamanca,1,0,H,1,0,H
+SP1,28/04/96,Sp Gijon,Barcelona,0,3,A,0,3,A
+SP1,28/04/96,Valladolid,Zaragoza,0,0,D,0,0,D
+SP1,04/05/96,Compostela,Ath Madrid,1,3,A,0,1,A
+SP1,04/05/96,Valencia,Sp Gijon,1,0,H,0,0,D
+SP1,05/05/96,Ath Bilbao,Albacete,2,2,D,1,0,H
+SP1,05/05/96,Barcelona,Sevilla,1,1,D,0,1,A
+SP1,05/05/96,Betis,Espanol,2,3,A,1,2,A
+SP1,05/05/96,Oviedo,Celta,1,1,D,0,1,A
+SP1,05/05/96,Real Madrid,La Coruna,1,0,H,0,0,D
+SP1,05/05/96,Salamanca,Santander,5,0,H,4,0,H
+SP1,05/05/96,Tenerife,Sociedad,1,0,H,0,0,D
+SP1,05/05/96,Vallecano,Valladolid,0,2,A,0,0,D
+SP1,05/05/96,Zaragoza,Merida,3,1,H,1,1,D
+SP1,08/05/96,Espanol,Oviedo,5,0,H,2,0,H
+SP1,12/05/96,Ath Madrid,Salamanca,2,1,H,1,0,H
+SP1,12/05/96,Celta,Betis,2,0,H,0,0,D
+SP1,12/05/96,La Coruna,Oviedo,0,4,A,0,1,A
+SP1,12/05/96,Merida,Vallecano,0,1,A,0,0,D
+SP1,12/05/96,Santander,Tenerife,1,2,A,1,0,H
+SP1,12/05/96,Sevilla,Valencia,1,2,A,0,1,A
+SP1,12/05/96,Sociedad,Albacete,8,1,H,3,1,H
+SP1,12/05/96,Sp Gijon,Compostela,2,1,H,1,1,D
+SP1,12/05/96,Valladolid,Real Madrid,0,3,A,0,0,D
+SP1,12/05/96,Zaragoza,Ath Bilbao,1,0,H,0,0,D
+SP1,15/05/96,Espanol,Barcelona,1,1,D,0,0,D
+SP1,18/05/96,Tenerife,Ath Madrid,1,1,D,0,0,D
+SP1,19/05/96,Albacete,Santander,2,2,D,0,2,A
+SP1,19/05/96,Barcelona,Celta,3,2,H,0,1,A
+SP1,19/05/96,Betis,La Coruna,1,0,H,1,0,H
+SP1,19/05/96,Compostela,Sevilla,0,0,D,0,0,D
+SP1,19/05/96,Oviedo,Valladolid,3,8,A,2,1,H
+SP1,19/05/96,Real Madrid,Merida,4,0,H,3,0,H
+SP1,19/05/96,Salamanca,Sp Gijon,3,0,H,3,0,H
+SP1,19/05/96,Sociedad,Ath Bilbao,2,2,D,2,1,H
+SP1,19/05/96,Valencia,Espanol,1,0,H,0,0,D
+SP1,19/05/96,Vallecano,Zaragoza,4,3,H,1,0,H
+SP1,25/05/96,Ath Bilbao,Vallecano,3,1,H,0,0,D
+SP1,25/05/96,Ath Madrid,Albacete,2,0,H,2,0,H
+SP1,25/05/96,Celta,Valencia,1,1,D,0,1,A
+SP1,25/05/96,Espanol,Compostela,0,0,D,0,0,D
+SP1,25/05/96,Santander,Sociedad,2,3,A,2,2,D
+SP1,25/05/96,Sevilla,Salamanca,3,1,H,1,0,H
+SP1,25/05/96,Sp Gijon,Tenerife,0,2,A,0,1,A
+SP1,25/05/96,Valladolid,Betis,3,1,H,2,0,H
+SP1,25/05/96,Zaragoza,Real Madrid,0,1,A,0,1,A
+SP1,26/05/96,La Coruna,Barcelona,2,2,D,1,0,H
+SP1,26/05/96,Merida,Oviedo,3,1,H,1,0,H
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,

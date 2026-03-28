@@ -1,0 +1,553 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HTR,,,,,,,,,,,
+SP1,21/08/99,Ath Bilbao,Betis,1,0,H,0,0,D,,,,,,,,,,,
+SP1,21/08/99,Mallorca,Real Madrid,1,2,A,0,0,D,,,,,,,,,,,
+SP1,21/08/99,Valencia,Santander,1,2,A,0,1,A,,,,,,,,,,,
+SP1,22/08/99,Ath Madrid,Vallecano,0,2,A,0,1,A,,,,,,,,,,,
+SP1,22/08/99,Barcelona,Zaragoza,2,0,H,0,0,D,,,,,,,,,,,
+SP1,22/08/99,La Coruna,Alaves,4,1,H,3,1,H,,,,,,,,,,,
+SP1,22/08/99,Malaga,Espanol,1,0,H,0,0,D,,,,,,,,,,,
+SP1,22/08/99,Numancia,Valladolid,1,0,H,1,0,H,,,,,,,,,,,
+SP1,22/08/99,Oviedo,Celta,1,0,H,0,0,D,,,,,,,,,,,
+SP1,22/08/99,Sevilla,Sociedad,2,2,D,2,1,H,,,,,,,,,,,
+SP1,28/08/99,Sociedad,Ath Madrid,4,1,H,0,1,A,,,,,,,,,,,
+SP1,29/08/99,Alaves,Malaga,2,1,H,0,1,A,,,,,,,,,,,
+SP1,29/08/99,Betis,La Coruna,0,0,D,0,0,D,,,,,,,,,,,
+SP1,29/08/99,Celta,Sevilla,2,1,H,1,0,H,,,,,,,,,,,
+SP1,29/08/99,Espanol,Valencia,3,2,H,2,0,H,,,,,,,,,,,
+SP1,29/08/99,Real Madrid,Numancia,4,1,H,0,0,D
+SP1,29/08/99,Santander,Barcelona,1,2,A,0,2,A
+SP1,29/08/99,Valladolid,Ath Bilbao,1,0,H,1,0,H
+SP1,29/08/99,Vallecano,Mallorca,2,1,H,0,1,A
+SP1,29/08/99,Zaragoza,Oviedo,4,0,H,2,0,H
+SP1,11/09/99,Barcelona,Espanol,3,0,H,0,0,D
+SP1,11/09/99,La Coruna,Valladolid,2,0,H,2,0,H
+SP1,11/09/99,Valencia,Alaves,0,2,A,0,0,D
+SP1,12/09/99,Ath Bilbao,Real Madrid,2,2,D,2,1,H
+SP1,12/09/99,Ath Madrid,Celta,1,2,A,1,1,D
+SP1,12/09/99,Malaga,Betis,3,0,H,1,0,H
+SP1,12/09/99,Mallorca,Numancia,3,0,H,3,0,H
+SP1,12/09/99,Oviedo,Santander,1,2,A,0,2,A
+SP1,12/09/99,Sevilla,Zaragoza,0,0,D,0,0,D
+SP1,12/09/99,Vallecano,Sociedad,2,1,H,1,0,H
+SP1,18/09/99,Alaves,Barcelona,2,1,H,1,1,D
+SP1,18/09/99,Betis,Valencia,1,0,H,1,0,H
+SP1,18/09/99,Espanol,Oviedo,2,1,H,0,1,A
+SP1,18/09/99,Real Madrid,La Coruna,1,1,D,0,0,D
+SP1,18/09/99,Valladolid,Malaga,4,2,H,1,1,D
+SP1,19/09/99,Celta,Vallecano,0,1,A,0,0,D
+SP1,19/09/99,Numancia,Ath Bilbao,1,1,D,1,1,D
+SP1,19/09/99,Santander,Sevilla,2,2,D,1,2,A
+SP1,19/09/99,Sociedad,Mallorca,2,1,H,1,0,H
+SP1,19/09/99,Zaragoza,Ath Madrid,1,1,D,1,1,D
+SP1,25/09/99,Barcelona,Betis,4,1,H,2,1,H
+SP1,25/09/99,Malaga,Real Madrid,1,1,D,0,1,A
+SP1,25/09/99,Sociedad,Celta,0,2,A,0,0,D
+SP1,25/09/99,Valencia,Valladolid,0,0,D,0,0,D
+SP1,26/09/99,Ath Madrid,Santander,2,0,H,0,0,D
+SP1,26/09/99,La Coruna,Numancia,0,2,A,0,1,A
+SP1,26/09/99,Mallorca,Ath Bilbao,2,1,H,1,0,H
+SP1,26/09/99,Oviedo,Alaves,1,0,H,1,0,H
+SP1,26/09/99,Sevilla,Espanol,1,2,A,1,1,D
+SP1,26/09/99,Vallecano,Zaragoza,0,1,A,0,0,D
+SP1,02/10/99,Numancia,Malaga,1,1,D,0,1,A
+SP1,02/10/99,Valladolid,Barcelona,0,2,A,0,1,A
+SP1,03/10/99,Alaves,Sevilla,0,0,D,0,0,D
+SP1,03/10/99,Ath Bilbao,La Coruna,2,3,A,0,1,A
+SP1,03/10/99,Betis,Oviedo,1,0,H,1,0,H
+SP1,03/10/99,Celta,Mallorca,1,0,H,0,0,D
+SP1,03/10/99,Espanol,Ath Madrid,3,1,H,1,1,D
+SP1,03/10/99,Real Madrid,Valencia,2,3,A,0,3,A
+SP1,03/10/99,Santander,Vallecano,1,1,D,0,0,D
+SP1,03/10/99,Zaragoza,Sociedad,2,0,H,0,0,D
+SP1,11/10/99,Ath Madrid,Alaves,1,0,H,0,0,D
+SP1,12/10/99,Malaga,Ath Bilbao,3,4,A,1,1,D
+SP1,12/10/99,Mallorca,La Coruna,2,2,D,0,0,D
+SP1,12/10/99,Sevilla,Betis,3,0,H,1,0,H
+SP1,13/10/99,Barcelona,Real Madrid,2,2,D,1,1,D
+SP1,13/10/99,Celta,Zaragoza,2,1,H,1,1,D
+SP1,13/10/99,Oviedo,Valladolid,1,1,D,1,0,H
+SP1,13/10/99,Sociedad,Santander,2,5,A,1,0,H
+SP1,13/10/99,Valencia,Numancia,4,0,H,1,0,H
+SP1,13/10/99,Vallecano,Espanol,2,1,H,0,0,D
+SP1,16/10/99,Ath Bilbao,Valencia,1,0,H,1,0,H
+SP1,16/10/99,La Coruna,Malaga,4,1,H,1,1,D
+SP1,16/10/99,Numancia,Barcelona,3,3,D,0,1,A
+SP1,16/10/99,Real Madrid,Oviedo,2,2,D,2,1,H
+SP1,16/10/99,Santander,Celta,3,0,H,3,0,H
+SP1,17/10/99,Alaves,Vallecano,0,1,A,0,0,D
+SP1,17/10/99,Betis,Ath Madrid,2,1,H,1,1,D
+SP1,17/10/99,Espanol,Sociedad,0,0,D,0,0,D
+SP1,17/10/99,Valladolid,Sevilla,2,1,H,1,1,D
+SP1,17/10/99,Zaragoza,Mallorca,3,0,H,0,0,D
+SP1,23/10/99,Barcelona,Ath Bilbao,4,0,H,1,0,H
+SP1,23/10/99,Sevilla,Real Madrid,1,1,D,1,0,H
+SP1,23/10/99,Valencia,La Coruna,2,0,H,1,0,H
+SP1,24/10/99,Ath Madrid,Valladolid,3,1,H,1,0,H
+SP1,24/10/99,Celta,Espanol,2,1,H,1,1,D
+SP1,24/10/99,Mallorca,Malaga,2,1,H,2,0,H
+SP1,24/10/99,Oviedo,Numancia,1,0,H,0,0,D
+SP1,24/10/99,Sociedad,Alaves,1,1,D,1,1,D
+SP1,24/10/99,Vallecano,Betis,1,3,A,0,0,D
+SP1,24/10/99,Zaragoza,Santander,4,1,H,1,0,H
+SP1,30/10/99,La Coruna,Barcelona,2,1,H,2,0,H
+SP1,30/10/99,Malaga,Valencia,1,1,D,1,0,H
+SP1,30/10/99,Real Madrid,Ath Madrid,1,3,A,1,3,A
+SP1,31/10/99,Alaves,Celta,1,0,H,0,0,D
+SP1,31/10/99,Ath Bilbao,Oviedo,1,1,D,1,1,D
+SP1,31/10/99,Betis,Sociedad,1,0,H,1,0,H
+SP1,31/10/99,Espanol,Zaragoza,1,1,D,0,1,A
+SP1,31/10/99,Numancia,Sevilla,2,0,H,1,0,H
+SP1,31/10/99,Santander,Mallorca,1,1,D,0,0,D
+SP1,31/10/99,Valladolid,Vallecano,1,2,A,0,1,A
+SP1,06/11/99,Vallecano,Real Madrid,2,3,A,2,0,H
+SP1,07/11/99,Ath Madrid,Numancia,2,2,D,2,0,H
+SP1,07/11/99,Barcelona,Malaga,1,2,A,1,2,A
+SP1,07/11/99,Celta,Betis,5,1,H,3,1,H
+SP1,07/11/99,Mallorca,Valencia,1,0,H,0,0,D
+SP1,07/11/99,Oviedo,La Coruna,0,1,A,0,0,D
+SP1,07/11/99,Santander,Espanol,2,2,D,1,1,D
+SP1,07/11/99,Sevilla,Ath Bilbao,0,0,D,0,0,D
+SP1,07/11/99,Sociedad,Valladolid,3,0,H,2,0,H
+SP1,07/11/99,Zaragoza,Alaves,2,1,H,1,0,H
+SP1,20/11/99,Ath Bilbao,Ath Madrid,4,2,H,2,1,H
+SP1,20/11/99,Valencia,Barcelona,3,1,H,2,1,H
+SP1,21/11/99,Betis,Zaragoza,2,0,H,1,0,H
+SP1,21/11/99,Espanol,Mallorca,1,2,A,0,2,A
+SP1,21/11/99,Malaga,Oviedo,4,0,H,2,0,H
+SP1,21/11/99,Numancia,Vallecano,3,1,H,0,0,D
+SP1,21/11/99,Real Madrid,Sociedad,1,1,D,0,0,D
+SP1,21/11/99,Valladolid,Celta,1,3,A,0,1,A
+SP1,22/11/99,La Coruna,Sevilla,5,2,H,2,1,H
+SP1,27/11/99,Sevilla,Malaga,0,0,D,0,0,D
+SP1,28/11/99,Ath Madrid,La Coruna,1,3,A,0,3,A
+SP1,28/11/99,Celta,Real Madrid,1,0,H,1,0,H
+SP1,28/11/99,Espanol,Alaves,2,3,A,1,2,A
+SP1,28/11/99,Mallorca,Barcelona,3,2,H,2,1,H
+SP1,28/11/99,Oviedo,Valencia,0,0,D,0,0,D
+SP1,28/11/99,Santander,Betis,1,1,D,1,1,D
+SP1,28/11/99,Sociedad,Numancia,2,1,H,0,1,A
+SP1,28/11/99,Vallecano,Ath Bilbao,1,2,A,0,2,A
+SP1,28/11/99,Zaragoza,Valladolid,1,1,D,1,0,H
+SP1,04/12/99,Ath Bilbao,Sociedad,1,1,D,1,0,H
+SP1,04/12/99,Barcelona,Oviedo,3,2,H,3,0,H
+SP1,04/12/99,Real Madrid,Zaragoza,1,5,A,0,3,A
+SP1,04/12/99,Valencia,Sevilla,2,0,H,1,0,H
+SP1,05/12/99,Alaves,Mallorca,2,2,D,1,0,H
+SP1,05/12/99,Betis,Espanol,2,5,A,1,0,H
+SP1,05/12/99,La Coruna,Vallecano,3,2,H,3,1,H
+SP1,05/12/99,Malaga,Ath Madrid,2,3,A,1,2,A
+SP1,05/12/99,Numancia,Celta,3,1,H,1,0,H
+SP1,05/12/99,Valladolid,Santander,1,0,H,1,0,H
+SP1,08/12/99,Alaves,Santander,2,1,H,1,0,H
+SP1,11/12/99,Sevilla,Barcelona,3,2,H,1,1,D
+SP1,12/12/99,Alaves,Betis,2,0,H,1,0,H
+SP1,12/12/99,Ath Madrid,Valencia,1,2,A,1,1,D
+SP1,12/12/99,Celta,Ath Bilbao,1,1,D,1,0,H
+SP1,12/12/99,Espanol,Valladolid,1,1,D,1,0,H
+SP1,12/12/99,Mallorca,Oviedo,1,1,D,0,0,D
+SP1,12/12/99,Santander,Real Madrid,1,1,D,0,1,A
+SP1,12/12/99,Sociedad,La Coruna,0,1,A,0,1,A
+SP1,12/12/99,Vallecano,Malaga,4,1,H,2,1,H
+SP1,12/12/99,Zaragoza,Numancia,3,3,D,1,1,D
+SP1,18/12/99,La Coruna,Celta,1,0,H,0,0,D
+SP1,18/12/99,Real Madrid,Espanol,2,1,H,1,1,D
+SP1,18/12/99,Valladolid,Alaves,1,1,D,0,1,A
+SP1,19/12/99,Ath Bilbao,Zaragoza,2,2,D,2,2,D
+SP1,19/12/99,Barcelona,Ath Madrid,2,1,H,1,1,D
+SP1,19/12/99,Betis,Mallorca,1,0,H,0,0,D
+SP1,19/12/99,Malaga,Sociedad,0,0,D,0,0,D
+SP1,19/12/99,Numancia,Santander,2,1,H,1,0,H
+SP1,19/12/99,Oviedo,Sevilla,4,2,H,1,1,D
+SP1,19/12/99,Valencia,Vallecano,3,1,H,1,0,H
+SP1,21/12/99,Alaves,Real Madrid,1,3,A,0,1,A
+SP1,22/12/99,Ath Madrid,Oviedo,5,0,H,3,0,H
+SP1,22/12/99,Betis,Valladolid,0,1,A,0,0,D
+SP1,22/12/99,Celta,Malaga,2,4,A,1,1,D
+SP1,22/12/99,Espanol,Numancia,3,1,H,0,1,A
+SP1,22/12/99,Mallorca,Sevilla,3,1,H,0,0,D
+SP1,22/12/99,Santander,Ath Bilbao,2,2,D,1,1,D
+SP1,22/12/99,Sociedad,Valencia,0,0,D,0,0,D
+SP1,22/12/99,Vallecano,Barcelona,1,1,D,1,0,H
+SP1,22/12/99,Zaragoza,La Coruna,2,1,H,1,0,H
+SP1,04/01/00,Valencia,Celta,1,1,D,1,0,H
+SP1,05/01/00,Ath Bilbao,Espanol,2,1,H,1,1,D
+SP1,05/01/00,Barcelona,Sociedad,3,1,H,2,0,H
+SP1,05/01/00,La Coruna,Santander,0,3,A,0,1,A
+SP1,05/01/00,Malaga,Zaragoza,0,0,D,0,0,D
+SP1,05/01/00,Mallorca,Valladolid,0,0,D,0,0,D
+SP1,05/01/00,Numancia,Alaves,0,0,D,0,0,D
+SP1,05/01/00,Oviedo,Vallecano,2,0,H,1,0,H
+SP1,05/01/00,Sevilla,Ath Madrid,2,1,H,2,0,H
+SP1,08/01/00,Espanol,La Coruna,0,0,D,0,0,D
+SP1,09/01/00,Alaves,Ath Bilbao,1,2,A,1,1,D
+SP1,09/01/00,Ath Madrid,Mallorca,1,0,H,0,0,D
+SP1,09/01/00,Betis,Numancia,1,2,A,1,0,H
+SP1,09/01/00,Celta,Barcelona,0,2,A,0,1,A
+SP1,09/01/00,Santander,Malaga,2,3,A,1,1,D
+SP1,09/01/00,Sociedad,Oviedo,0,0,D,0,0,D
+SP1,09/01/00,Vallecano,Sevilla,2,0,H,1,0,H
+SP1,09/01/00,Zaragoza,Valencia,4,2,H,2,1,H
+SP1,15/01/00,Vallecano,Ath Madrid,1,1,D,1,1,D
+SP1,16/01/00,Alaves,La Coruna,2,1,H,1,0,H
+SP1,16/01/00,Betis,Ath Bilbao,2,1,H,1,0,H
+SP1,16/01/00,Celta,Oviedo,5,3,H,4,2,H
+SP1,16/01/00,Espanol,Malaga,0,2,A,0,0,D
+SP1,16/01/00,Santander,Valencia,1,1,D,0,1,A
+SP1,16/01/00,Sociedad,Sevilla,1,1,D,0,1,A
+SP1,16/01/00,Valladolid,Numancia,2,0,H,0,0,D
+SP1,16/01/00,Zaragoza,Barcelona,0,0,D,0,0,D
+SP1,17/01/00,Real Madrid,Mallorca,2,1,H,0,1,A
+SP1,22/01/00,La Coruna,Betis,2,0,H,1,0,H
+SP1,23/01/00,Ath Bilbao,Valladolid,1,0,H,1,0,H
+SP1,23/01/00,Ath Madrid,Sociedad,1,1,D,1,0,H
+SP1,23/01/00,Barcelona,Santander,1,0,H,1,0,H
+SP1,23/01/00,Malaga,Alaves,0,1,A,0,1,A
+SP1,23/01/00,Mallorca,Vallecano,2,1,H,1,0,H
+SP1,23/01/00,Numancia,Real Madrid,0,0,D,0,0,D
+SP1,23/01/00,Oviedo,Zaragoza,1,0,H,0,0,D
+SP1,23/01/00,Sevilla,Celta,0,1,A,0,0,D
+SP1,23/01/00,Valencia,Espanol,1,2,A,1,1,D
+SP1,26/01/00,Real Madrid,Betis,2,1,H,0,0,D
+SP1,29/01/00,Celta,Ath Madrid,0,1,A,0,1,A
+SP1,29/01/00,Espanol,Barcelona,1,1,D,1,1,D
+SP1,30/01/00,Alaves,Valencia,0,1,A,0,0,D
+SP1,30/01/00,Betis,Malaga,0,0,D,0,0,D
+SP1,30/01/00,Numancia,Mallorca,3,1,H,3,1,H
+SP1,30/01/00,Real Madrid,Ath Bilbao,3,1,H,1,1,D
+SP1,30/01/00,Santander,Oviedo,3,1,H,2,0,H
+SP1,30/01/00,Sociedad,Vallecano,2,1,H,2,0,H
+SP1,30/01/00,Valladolid,La Coruna,4,1,H,1,0,H
+SP1,30/01/00,Zaragoza,Sevilla,2,1,H,1,0,H
+SP1,05/02/00,Valencia,Betis,3,1,H,1,0,H
+SP1,06/02/00,Ath Bilbao,Numancia,2,1,H,1,1,D
+SP1,06/02/00,Ath Madrid,Zaragoza,2,2,D,1,0,H
+SP1,06/02/00,Barcelona,Alaves,0,1,A,0,1,A
+SP1,06/02/00,La Coruna,Real Madrid,5,2,H,2,1,H
+SP1,06/02/00,Malaga,Valladolid,0,0,D,0,0,D
+SP1,06/02/00,Mallorca,Sociedad,2,1,H,1,0,H
+SP1,06/02/00,Oviedo,Espanol,1,0,H,0,0,D
+SP1,06/02/00,Sevilla,Santander,1,0,H,0,0,D
+SP1,06/02/00,Vallecano,Celta,1,0,H,1,0,H
+SP1,12/02/00,Ath Bilbao,Mallorca,1,1,D,0,1,A
+SP1,12/02/00,Real Madrid,Malaga,1,0,H,0,0,D
+SP1,12/02/00,Valladolid,Valencia,0,0,D,0,0,D
+SP1,13/02/00,Alaves,Oviedo,1,0,H,1,0,H
+SP1,13/02/00,Betis,Barcelona,2,1,H,1,0,H
+SP1,13/02/00,Celta,Sociedad,4,1,H,0,1,A
+SP1,13/02/00,Espanol,Sevilla,2,2,D,1,1,D
+SP1,13/02/00,Numancia,La Coruna,1,0,H,0,0,D
+SP1,13/02/00,Santander,Ath Madrid,2,1,H,1,1,D
+SP1,13/02/00,Zaragoza,Vallecano,1,1,D,1,0,H
+SP1,15/02/00,Valladolid,Real Madrid,0,1,A,0,0,D
+SP1,19/02/00,La Coruna,Ath Bilbao,2,0,H,1,0,H
+SP1,20/02/00,Ath Madrid,Espanol,1,1,D,1,0,H
+SP1,20/02/00,Barcelona,Valladolid,4,0,H,2,0,H
+SP1,20/02/00,Malaga,Numancia,3,1,H,1,1,D
+SP1,20/02/00,Mallorca,Celta,1,0,H,0,0,D
+SP1,20/02/00,Oviedo,Betis,1,1,D,0,1,A
+SP1,20/02/00,Sevilla,Alaves,2,2,D,1,1,D
+SP1,20/02/00,Sociedad,Zaragoza,2,1,H,1,0,H
+SP1,20/02/00,Valencia,Real Madrid,1,1,D,1,0,H
+SP1,20/02/00,Vallecano,Santander,1,2,A,1,1,D
+SP1,26/02/00,Numancia,Valencia,1,2,A,0,1,A
+SP1,26/02/00,Real Madrid,Barcelona,3,0,H,2,0,H
+SP1,27/02/00,Alaves,Ath Madrid,2,0,H,0,0,D
+SP1,27/02/00,Ath Bilbao,Malaga,2,2,D,1,2,A
+SP1,27/02/00,Betis,Sevilla,1,1,D,1,1,D
+SP1,27/02/00,Espanol,Vallecano,5,1,H,2,1,H
+SP1,27/02/00,La Coruna,Mallorca,2,1,H,1,0,H
+SP1,27/02/00,Santander,Sociedad,0,0,D,0,0,D
+SP1,27/02/00,Valladolid,Oviedo,2,1,H,1,0,H
+SP1,27/02/00,Zaragoza,Celta,2,1,H,0,1,A
+SP1,04/03/00,Barcelona,Numancia,4,0,H,1,0,H
+SP1,04/03/00,Oviedo,Real Madrid,1,1,D,0,0,D
+SP1,04/03/00,Valencia,Ath Bilbao,2,0,H,0,0,D
+SP1,05/03/00,Ath Madrid,Betis,0,0,D,0,0,D
+SP1,05/03/00,Celta,Santander,2,0,H,1,0,H
+SP1,05/03/00,Malaga,La Coruna,1,0,H,1,0,H
+SP1,05/03/00,Mallorca,Zaragoza,1,1,D,1,0,H
+SP1,05/03/00,Sevilla,Valladolid,0,1,A,0,0,D
+SP1,05/03/00,Sociedad,Espanol,1,0,H,1,0,H
+SP1,05/03/00,Vallecano,Alaves,0,1,A,0,0,D
+SP1,11/03/00,Ath Bilbao,Barcelona,0,4,A,0,2,A
+SP1,11/03/00,Betis,Vallecano,1,1,D,1,0,H
+SP1,11/03/00,Real Madrid,Sevilla,3,1,H,3,0,H
+SP1,12/03/00,Alaves,Sociedad,2,1,H,0,1,A
+SP1,12/03/00,Espanol,Celta,3,0,H,0,0,D
+SP1,12/03/00,La Coruna,Valencia,2,0,H,1,0,H
+SP1,12/03/00,Malaga,Mallorca,0,0,D,0,0,D
+SP1,12/03/00,Numancia,Oviedo,1,1,D,0,1,A
+SP1,12/03/00,Santander,Zaragoza,1,2,A,1,0,H
+SP1,12/03/00,Valladolid,Ath Madrid,1,0,H,1,0,H
+SP1,18/03/00,Ath Madrid,Real Madrid,1,1,D,0,1,A
+SP1,18/03/00,Barcelona,La Coruna,2,1,H,2,0,H
+SP1,18/03/00,Valencia,Malaga,2,2,D,0,0,D
+SP1,19/03/00,Celta,Alaves,1,1,D,0,0,D
+SP1,19/03/00,Mallorca,Santander,1,2,A,0,1,A
+SP1,19/03/00,Oviedo,Ath Bilbao,1,0,H,1,0,H
+SP1,19/03/00,Sevilla,Numancia,4,0,H,1,0,H
+SP1,19/03/00,Sociedad,Betis,1,0,H,0,0,D
+SP1,19/03/00,Vallecano,Valladolid,4,1,H,1,0,H
+SP1,19/03/00,Zaragoza,Espanol,1,1,D,1,0,H
+SP1,25/03/00,Alaves,Zaragoza,0,2,A,0,0,D
+SP1,25/03/00,Ath Bilbao,Sevilla,1,1,D,1,0,H
+SP1,25/03/00,Espanol,Santander,1,0,H,0,0,D
+SP1,25/03/00,Malaga,Barcelona,1,2,A,1,0,H
+SP1,25/03/00,Numancia,Ath Madrid,3,0,H,1,0,H
+SP1,25/03/00,Real Madrid,Vallecano,0,0,D,0,0,D
+SP1,25/03/00,Valencia,Mallorca,1,0,H,0,0,D
+SP1,25/03/00,Valladolid,Sociedad,2,1,H,0,1,A
+SP1,26/03/00,Betis,Celta,0,0,D,0,0,D
+SP1,26/03/00,La Coruna,Oviedo,3,1,H,2,0,H
+SP1,01/04/00,Sociedad,Real Madrid,1,1,D,0,1,A
+SP1,02/04/00,Ath Madrid,Ath Bilbao,1,2,A,1,1,D
+SP1,02/04/00,Barcelona,Valencia,3,0,H,0,0,D
+SP1,02/04/00,Celta,Valladolid,1,1,D,1,0,H
+SP1,02/04/00,Mallorca,Espanol,1,3,A,1,1,D
+SP1,02/04/00,Oviedo,Malaga,2,2,D,2,1,H
+SP1,02/04/00,Santander,Alaves,0,0,D,0,0,D
+SP1,02/04/00,Sevilla,La Coruna,1,3,A,1,2,A
+SP1,02/04/00,Vallecano,Numancia,0,0,D,0,0,D
+SP1,02/04/00,Zaragoza,Betis,1,0,H,0,0,D
+SP1,08/04/00,La Coruna,Ath Madrid,4,1,H,3,0,H
+SP1,09/04/00,Alaves,Espanol,0,0,D,0,0,D
+SP1,09/04/00,Ath Bilbao,Vallecano,1,2,A,0,2,A
+SP1,09/04/00,Barcelona,Mallorca,0,3,A,0,1,A
+SP1,09/04/00,Betis,Santander,2,2,D,1,0,H
+SP1,09/04/00,Malaga,Sevilla,3,0,H,0,0,D
+SP1,09/04/00,Numancia,Sociedad,1,2,A,0,0,D
+SP1,09/04/00,Real Madrid,Celta,1,0,H,0,0,D
+SP1,09/04/00,Valencia,Oviedo,6,2,H,2,0,H
+SP1,09/04/00,Valladolid,Zaragoza,1,1,D,0,0,D
+SP1,15/04/00,Oviedo,Barcelona,3,0,H,1,0,H
+SP1,15/04/00,Sevilla,Valencia,1,2,A,0,0,D
+SP1,15/04/00,Zaragoza,Real Madrid,0,1,A,0,0,D
+SP1,16/04/00,Ath Madrid,Malaga,2,2,D,1,1,D
+SP1,16/04/00,Celta,Numancia,0,0,D,0,0,D
+SP1,16/04/00,Espanol,Betis,3,0,H,0,0,D
+SP1,16/04/00,Mallorca,Alaves,2,0,H,1,0,H
+SP1,16/04/00,Santander,Valladolid,1,1,D,1,0,H
+SP1,16/04/00,Sociedad,Ath Bilbao,4,1,H,1,1,D
+SP1,16/04/00,Vallecano,La Coruna,2,0,H,1,0,H
+SP1,22/04/00,Ath Bilbao,Celta,1,0,H,0,0,D
+SP1,22/04/00,Barcelona,Sevilla,2,0,H,1,0,H
+SP1,22/04/00,Malaga,Vallecano,2,0,H,1,0,H
+SP1,22/04/00,Numancia,Zaragoza,1,2,A,1,2,A
+SP1,22/04/00,Real Madrid,Santander,2,4,A,1,2,A
+SP1,22/04/00,Valencia,Ath Madrid,2,0,H,1,0,H
+SP1,22/04/00,Valladolid,Espanol,1,0,H,0,0,D
+SP1,23/04/00,Betis,Alaves,0,1,A,0,0,D
+SP1,23/04/00,La Coruna,Sociedad,2,0,H,2,0,H
+SP1,23/04/00,Oviedo,Mallorca,0,0,D,0,0,D
+SP1,29/04/00,Ath Madrid,Barcelona,0,3,A,0,1,A
+SP1,29/04/00,Espanol,Real Madrid,0,2,A,0,0,D
+SP1,29/04/00,Vallecano,Valencia,1,3,A,0,2,A
+SP1,30/04/00,Alaves,Valladolid,1,0,H,1,0,H
+SP1,30/04/00,Celta,La Coruna,2,1,H,1,0,H
+SP1,30/04/00,Mallorca,Betis,4,0,H,3,0,H
+SP1,30/04/00,Santander,Numancia,1,1,D,1,0,H
+SP1,30/04/00,Sevilla,Oviedo,2,3,A,0,1,A
+SP1,30/04/00,Sociedad,Malaga,2,2,D,1,0,H
+SP1,30/04/00,Zaragoza,Ath Bilbao,0,0,D,0,0,D
+SP1,06/05/00,Barcelona,Vallecano,0,2,A,0,1,A
+SP1,06/05/00,Numancia,Espanol,2,0,H,1,0,H
+SP1,06/05/00,Real Madrid,Alaves,0,1,A,0,0,D
+SP1,06/05/00,Valencia,Sociedad,4,0,H,1,0,H
+SP1,07/05/00,Ath Bilbao,Santander,2,2,D,2,2,D
+SP1,07/05/00,La Coruna,Zaragoza,2,2,D,0,0,D
+SP1,07/05/00,Malaga,Celta,0,1,A,0,1,A
+SP1,07/05/00,Oviedo,Ath Madrid,2,2,D,1,0,H
+SP1,07/05/00,Sevilla,Mallorca,0,4,A,0,1,A
+SP1,07/05/00,Valladolid,Betis,0,3,A,0,1,A
+SP1,13/05/00,Ath Madrid,Sevilla,1,1,D,1,1,D
+SP1,14/05/00,Alaves,Numancia,2,2,D,0,1,A
+SP1,14/05/00,Betis,Real Madrid,0,2,A,0,1,A
+SP1,14/05/00,Celta,Valencia,0,0,D,0,0,D
+SP1,14/05/00,Espanol,Ath Bilbao,0,0,D,0,0,D
+SP1,14/05/00,Santander,La Coruna,0,0,D,0,0,D
+SP1,14/05/00,Sociedad,Barcelona,0,0,D,0,0,D
+SP1,14/05/00,Valladolid,Mallorca,2,1,H,0,0,D
+SP1,14/05/00,Vallecano,Oviedo,1,2,A,1,1,D
+SP1,14/05/00,Zaragoza,Malaga,3,2,H,1,1,D
+SP1,19/05/00,Ath Bilbao,Alaves,2,1,H,1,1,D
+SP1,19/05/00,Barcelona,Celta,2,2,D,0,2,A
+SP1,19/05/00,La Coruna,Espanol,2,0,H,2,0,H
+SP1,19/05/00,Mallorca,Ath Madrid,1,2,A,1,2,A
+SP1,19/05/00,Real Madrid,Valladolid,0,1,A,0,1,A
+SP1,19/05/00,Sevilla,Vallecano,2,3,A,1,2,A
+SP1,19/05/00,Valencia,Zaragoza,2,1,H,0,1,A
+SP1,20/05/00,Malaga,Santander,0,0,D,0,0,D
+SP1,20/05/00,Numancia,Betis,1,2,A,0,0,D
+SP1,20/05/00,Oviedo,Sociedad,0,1,A,0,0,D
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,

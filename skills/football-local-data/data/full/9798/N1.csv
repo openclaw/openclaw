@@ -1,0 +1,307 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HTR,,,,,,,,,,,
+N1,19/08/97,Ajax,Vitesse,5,0,H,2,0,H,,,,,,,,,,,
+N1,19/08/97,Twente,For Sittard,4,1,H,1,0,H,,,,,,,,,,,
+N1,20/08/97,Groningen,Volendam,3,0,H,1,0,H,,,,,,,,,,,
+N1,20/08/97,Heerenveen,NAC Breda,3,1,H,0,1,A,,,,,,,,,,,
+N1,20/08/97,PSV Eindhoven,Waalwijk,5,1,H,1,0,H,,,,,,,,,,,
+N1,20/08/97,Roda JC,Utrecht,1,0,H,0,0,D,,,,,,,,,,,
+N1,20/08/97,Sparta,Graafschap,1,1,D,0,0,D,,,,,,,,,,,
+N1,20/08/97,Willem II,Nijmegen,1,2,A,0,0,D,,,,,,,,,,,
+N1,21/08/97,MVV Maastricht,Feyenoord,0,3,A,0,1,A,,,,,,,,,,,
+N1,22/08/97,For Sittard,Ajax,0,5,A,0,2,A,,,,,,,,,,,
+N1,23/08/97,Graafschap,Willem II,3,1,H,1,0,H,,,,,,,,,,,
+N1,23/08/97,Nijmegen,Heerenveen,0,1,A,0,0,D,,,,,,,,,,,
+N1,24/08/97,Feyenoord,Sparta,3,1,H,2,0,H,,,,,,,,,,,
+N1,24/08/97,NAC Breda,PSV Eindhoven,3,3,D,3,1,H,,,,,,,,,,,
+N1,24/08/97,Utrecht,MVV Maastricht,6,1,H,3,0,H,,,,,,,,,,,
+N1,24/08/97,Vitesse,Roda JC,3,1,H,1,0,H
+N1,24/08/97,Volendam,Twente,0,0,D,0,0,D
+N1,24/08/97,Waalwijk,Groningen,1,1,D,0,0,D
+N1,30/08/97,For Sittard,Waalwijk,0,3,A,0,2,A
+N1,30/08/97,Heerenveen,MVV Maastricht,3,1,H,1,1,D
+N1,30/08/97,NAC Breda,Nijmegen,0,1,A,0,1,A
+N1,30/08/97,PSV Eindhoven,Willem II,3,0,H,2,0,H
+N1,30/08/97,Roda JC,Groningen,4,1,H,2,0,H
+N1,31/08/97,Feyenoord,Graafschap,2,0,H,0,0,D
+N1,31/08/97,Twente,Sparta,2,1,H,1,0,H
+N1,31/08/97,Utrecht,Ajax,1,7,A,1,2,A
+N1,02/09/97,Volendam,Vitesse,1,1,D,0,1,A
+N1,08/09/97,MVV Maastricht,NAC Breda,0,1,A,0,0,D
+N1,09/09/97,Ajax,Waalwijk,3,0,H,1,0,H
+N1,09/09/97,Groningen,Nijmegen,4,0,H,0,0,D
+N1,09/09/97,Roda JC,Volendam,0,2,A,0,2,A
+N1,10/09/97,PSV Eindhoven,Graafschap,0,0,D,0,0,D
+N1,10/09/97,Sparta,For Sittard,1,1,D,1,0,H
+N1,10/09/97,Utrecht,Twente,1,1,D,1,1,D
+N1,10/09/97,Vitesse,Willem II,3,1,H,2,0,H
+N1,11/09/97,Heerenveen,Feyenoord,0,0,D,0,0,D
+N1,12/09/97,Ajax,Groningen,4,1,H,2,1,H
+N1,12/09/97,MVV Maastricht,Roda JC,1,2,A,1,1,D
+N1,13/09/97,Nijmegen,Twente,1,2,A,1,2,A
+N1,13/09/97,Sparta,Volendam,5,0,H,2,0,H
+N1,13/09/97,Vitesse,Utrecht,5,0,H,3,0,H
+N1,13/09/97,Willem II,For Sittard,0,0,D,0,0,D
+N1,14/09/97,Feyenoord,PSV Eindhoven,1,1,D,1,0,H
+N1,14/09/97,Graafschap,NAC Breda,0,1,A,0,0,D
+N1,14/09/97,Waalwijk,Heerenveen,1,1,D,0,0,D
+N1,19/09/97,For Sittard,Graafschap,1,0,H,1,0,H
+N1,20/09/97,PSV Eindhoven,Sparta,4,2,H,2,0,H
+N1,20/09/97,Willem II,Volendam,5,2,H,2,1,H
+N1,21/09/97,Groningen,Vitesse,1,1,D,0,1,A
+N1,21/09/97,Nijmegen,Ajax,1,4,A,1,3,A
+N1,21/09/97,Roda JC,Heerenveen,0,2,A,0,0,D
+N1,21/09/97,Twente,MVV Maastricht,1,0,H,0,0,D
+N1,21/09/97,Waalwijk,Utrecht,3,1,H,0,0,D
+N1,23/09/97,PSV Eindhoven,For Sittard,3,2,H,2,1,H
+N1,24/09/97,Ajax,MVV Maastricht,7,0,H,4,0,H
+N1,24/09/97,Feyenoord,Vitesse,5,1,H,1,0,H
+N1,24/09/97,Heerenveen,Twente,2,1,H,0,0,D
+N1,24/09/97,NAC Breda,Groningen,0,0,D,0,0,D
+N1,24/09/97,Roda JC,Nijmegen,4,0,H,2,0,H
+N1,24/09/97,Volendam,Graafschap,0,5,A,0,3,A
+N1,24/09/97,Willem II,Waalwijk,3,2,H,0,1,A
+N1,25/09/97,Sparta,Utrecht,4,2,H,0,2,A
+N1,27/09/97,For Sittard,Vitesse,1,7,A,1,5,A
+N1,27/09/97,Graafschap,Waalwijk,1,0,H,1,0,H
+N1,27/09/97,Heerenveen,Ajax,0,1,A,0,0,D
+N1,27/09/97,MVV Maastricht,Nijmegen,2,0,H,1,0,H
+N1,27/09/97,Twente,NAC Breda,1,1,D,0,1,A
+N1,28/09/97,Groningen,Feyenoord,2,0,H,2,0,H
+N1,28/09/97,Sparta,Roda JC,3,1,H,,,
+N1,28/09/97,Utrecht,Willem II,2,2,D,2,1,H
+N1,28/09/97,Volendam,PSV Eindhoven,0,6,A,0,4,A
+N1,03/10/97,MVV Maastricht,Sparta,2,2,D,0,0,D
+N1,04/10/97,Nijmegen,Volendam,4,1,H,2,1,H
+N1,04/10/97,PSV Eindhoven,Heerenveen,3,1,H,1,0,H
+N1,05/10/97,Feyenoord,NAC Breda,2,1,H,1,1,D
+N1,05/10/97,Graafschap,Utrecht,0,1,A,0,1,A
+N1,05/10/97,Twente,Groningen,2,0,H,1,0,H
+N1,05/10/97,Vitesse,Waalwijk,3,2,H,1,2,A
+N1,05/10/97,Willem II,Ajax,0,1,A,0,1,A
+N1,14/10/97,Feyenoord,MVV Maastricht,2,1,H,2,0,H
+N1,14/10/97,Groningen,Willem II,2,2,D,0,2,A
+N1,14/10/97,Volendam,For Sittard,0,3,A,0,1,A
+N1,15/10/97,Ajax,NAC Breda,1,0,H,0,0,D
+N1,15/10/97,Graafschap,Sparta,2,2,D,1,1,D
+N1,15/10/97,Roda JC,PSV Eindhoven,2,2,D,1,1,D
+N1,15/10/97,Utrecht,Heerenveen,2,4,A,2,2,D
+N1,15/10/97,Waalwijk,Nijmegen,0,0,D,0,0,D
+N1,17/10/97,For Sittard,Groningen,4,1,H,2,0,H
+N1,18/10/97,Heerenveen,Sparta,1,1,D,1,0,H
+N1,18/10/97,NAC Breda,Waalwijk,4,0,H,2,0,H
+N1,18/10/97,Roda JC,Vitesse,1,1,D,1,1,D
+N1,18/10/97,Twente,Graafschap,1,1,D,1,1,D
+N1,19/10/97,Nijmegen,PSV Eindhoven,0,4,A,0,2,A
+N1,19/10/97,Willem II,Feyenoord,2,0,H,0,0,D
+N1,24/10/97,Graafschap,Heerenveen,1,2,A,1,2,A
+N1,25/10/97,PSV Eindhoven,MVV Maastricht,5,0,H,2,0,H
+N1,26/10/97,Ajax,Feyenoord,4,0,H,2,0,H
+N1,26/10/97,Sparta,Groningen,1,1,D,0,0,D
+N1,26/10/97,Twente,Roda JC,1,2,A,0,0,D
+N1,26/10/97,Utrecht,Nijmegen,2,4,A,1,3,A
+N1,26/10/97,Vitesse,For Sittard,1,0,H,1,0,H
+N1,26/10/97,Waalwijk,Volendam,1,1,D,1,0,H
+N1,29/10/97,Feyenoord,For Sittard,1,3,A,0,0,D
+N1,29/10/97,Nijmegen,Graafschap,0,4,A,0,0,D
+N1,30/10/97,Roda JC,Ajax,1,1,D,1,1,D
+N1,31/10/97,Heerenveen,PSV Eindhoven,1,1,D,0,1,A
+N1,31/10/97,MVV Maastricht,Willem II,1,0,H,0,0,D
+N1,01/11/97,For Sittard,Nijmegen,0,2,A,0,1,A
+N1,01/11/97,NAC Breda,Graafschap,2,0,H,0,0,D
+N1,01/11/97,Twente,Vitesse,1,1,D,0,1,A
+N1,02/11/97,Feyenoord,Waalwijk,2,1,H,1,0,H
+N1,02/11/97,Volendam,Utrecht,0,1,A,0,0,D
+N1,05/11/97,MVV Maastricht,Volendam,4,1,H,2,1,H
+N1,08/11/97,Vitesse,Heerenveen,4,2,H,3,1,H
+N1,09/11/97,PSV Eindhoven,NAC Breda,5,1,H,4,0,H
+N1,09/11/97,Sparta,Ajax,0,5,A,0,2,A
+N1,09/11/97,Utrecht,Groningen,2,0,H,0,0,D
+N1,09/11/97,Volendam,Feyenoord,0,0,D,0,0,D
+N1,09/11/97,Waalwijk,Roda JC,3,3,D,2,2,D
+N1,12/11/97,Ajax,Twente,1,0,H,1,0,H
+N1,12/11/97,Heerenveen,Volendam,3,1,H,0,1,A
+N1,12/11/97,Nijmegen,Roda JC,2,1,H,2,0,H
+N1,12/11/97,Vitesse,Sparta,2,0,H,1,0,H
+N1,13/11/97,Graafschap,MVV Maastricht,1,2,A,1,0,H
+N1,15/11/97,For Sittard,Heerenveen,3,1,H,1,1,D
+N1,15/11/97,Willem II,Twente,3,1,H,1,0,H
+N1,16/11/97,Graafschap,Feyenoord,0,0,D,0,0,D
+N1,16/11/97,Groningen,PSV Eindhoven,1,1,D,0,0,D
+N1,16/11/97,Nijmegen,Vitesse,0,2,A,0,0,D
+N1,16/11/97,Sparta,MVV Maastricht,4,0,H,,,
+N1,16/11/97,Utrecht,Waalwijk,6,1,H,3,0,H
+N1,18/11/97,NAC Breda,Willem II,0,2,A,0,1,A
+N1,21/11/97,Roda JC,Willem II,0,1,A,0,0,D
+N1,22/11/97,Ajax,Graafschap,1,0,H,0,0,D
+N1,22/11/97,MVV Maastricht,Waalwijk,1,1,D,0,0,D
+N1,22/11/97,NAC Breda,For Sittard,3,1,H,1,0,H
+N1,22/11/97,PSV Eindhoven,Twente,3,0,H,1,0,H
+N1,22/11/97,Vitesse,Groningen,5,1,H,3,1,H
+N1,23/11/97,Feyenoord,Utrecht,3,1,H,2,0,H
+N1,27/11/97,Volendam,Groningen,3,1,H,2,1,H
+N1,27/11/97,Waalwijk,NAC Breda,1,0,H,1,0,H
+N1,30/11/97,Ajax,For Sittard,2,0,H,0,0,D
+N1,30/11/97,Graafschap,Nijmegen,3,2,H,1,2,A
+N1,30/11/97,Sparta,Feyenoord,0,3,A,0,2,A
+N1,30/11/97,Twente,Volendam,1,1,D,0,0,D
+N1,30/11/97,Utrecht,Roda JC,1,0,H,0,0,D
+N1,30/11/97,Vitesse,PSV Eindhoven,2,2,D,0,2,A
+N1,30/11/97,Willem II,NAC Breda,2,0,H,1,0,H
+N1,02/12/97,Groningen,Heerenveen,0,1,A,0,1,A
+N1,03/12/97,For Sittard,Volendam,3,0,H,2,0,H
+N1,03/12/97,MVV Maastricht,Ajax,0,3,A,0,1,A
+N1,03/12/97,NAC Breda,Roda JC,1,0,H,0,0,D
+N1,03/12/97,Waalwijk,Sparta,1,3,A,1,3,A
+N1,04/12/97,Nijmegen,Willem II,0,3,A,0,2,A
+N1,06/12/97,Ajax,Roda JC,1,0,H,1,0,H
+N1,06/12/97,For Sittard,Twente,1,0,H,1,0,H
+N1,06/12/97,Heerenveen,Graafschap,0,0,D,0,0,D
+N1,06/12/97,NAC Breda,Sparta,1,2,A,0,0,D
+N1,07/12/97,Groningen,MVV Maastricht,2,3,A,1,3,A
+N1,07/12/97,Nijmegen,Feyenoord,3,2,H,2,1,H
+N1,07/12/97,Utrecht,Vitesse,5,3,H,1,2,A
+N1,07/12/97,Willem II,PSV Eindhoven,4,1,H,2,1,H
+N1,12/12/97,Roda JC,MVV Maastricht,3,0,H,2,0,H
+N1,12/12/97,Sparta,Willem II,4,1,H,3,0,H
+N1,13/12/97,Heerenveen,Vitesse,3,2,H,0,2,A
+N1,14/12/97,Feyenoord,Twente,2,2,D,0,1,A
+N1,14/12/97,Groningen,NAC Breda,1,1,D,1,0,H
+N1,14/12/97,Volendam,Ajax,0,3,A,0,1,A
+N1,14/12/97,Waalwijk,For Sittard,1,2,A,0,0,D
+N1,19/12/97,For Sittard,Roda JC,1,1,D,0,1,A
+N1,20/12/97,Graafschap,Groningen,2,3,A,0,1,A
+N1,20/12/97,MVV Maastricht,Utrecht,0,0,D,0,0,D
+N1,20/12/97,Nijmegen,Sparta,2,0,H,0,0,D
+N1,21/12/97,Ajax,PSV Eindhoven,3,4,A,1,1,D
+N1,21/12/97,Feyenoord,Willem II,4,2,H,1,0,H
+N1,21/12/97,Vitesse,Twente,2,1,H,1,1,D
+N1,21/12/97,Volendam,NAC Breda,0,3,A,0,1,A
+N1,05/02/98,For Sittard,Sparta,2,1,H,2,0,H
+N1,06/02/98,MVV Maastricht,Groningen,1,0,H,1,0,H
+N1,06/02/98,Twente,Nijmegen,1,0,H,0,0,D
+N1,07/02/98,NAC Breda,Heerenveen,0,2,A,0,0,D
+N1,07/02/98,Willem II,Vitesse,1,0,H,0,0,D
+N1,08/02/98,Graafschap,PSV Eindhoven,1,2,A,1,0,H
+N1,08/02/98,Utrecht,Feyenoord,2,3,A,1,2,A
+N1,08/02/98,Volendam,Roda JC,1,4,A,0,2,A
+N1,08/02/98,Waalwijk,Ajax,1,5,A,0,2,A
+N1,11/02/98,PSV Eindhoven,Utrecht,4,1,H,2,1,H
+N1,13/02/98,For Sittard,Willem II,2,1,H,2,0,H
+N1,14/02/98,Graafschap,Vitesse,3,3,D,3,2,H
+N1,14/02/98,NAC Breda,MVV Maastricht,2,0,H,0,0,D
+N1,14/02/98,Nijmegen,Groningen,0,2,A,0,0,D
+N1,14/02/98,Roda JC,Waalwijk,1,2,A,0,2,A
+N1,15/02/98,PSV Eindhoven,Ajax,1,1,D,0,1,A
+N1,15/02/98,Sparta,Heerenveen,2,4,A,0,2,A
+N1,15/02/98,Twente,Feyenoord,0,0,D,0,0,D
+N1,15/02/98,Utrecht,Volendam,4,1,H,2,1,H
+N1,22/02/98,Groningen,Graafschap,0,3,A,0,1,A
+N1,25/02/98,Heerenveen,Roda JC,3,1,H,1,1,D
+N1,27/02/98,Waalwijk,Vitesse,0,1,A,0,1,A
+N1,28/02/98,Ajax,Nijmegen,3,0,H,3,0,H
+N1,28/02/98,Graafschap,For Sittard,1,0,H,1,0,H
+N1,28/02/98,MVV Maastricht,Twente,2,2,D,2,2,D
+N1,01/03/98,Feyenoord,Heerenveen,2,0,H,2,0,H
+N1,01/03/98,Groningen,Sparta,1,1,D,0,0,D
+N1,01/03/98,Utrecht,NAC Breda,1,3,A,0,3,A
+N1,01/03/98,Volendam,Willem II,4,1,H,2,0,H
+N1,04/03/98,Twente,Waalwijk,2,0,H,0,0,D
+N1,06/03/98,For Sittard,MVV Maastricht,4,1,H,2,0,H
+N1,07/03/98,Heerenveen,Nijmegen,0,3,A,0,3,A
+N1,07/03/98,Willem II,Graafschap,1,1,D,0,0,D
+N1,08/03/98,Groningen,Waalwijk,3,1,H,2,0,H
+N1,08/03/98,Utrecht,PSV Eindhoven,0,1,A,0,1,A
+N1,08/03/98,Volendam,Sparta,1,1,D,1,0,H
+N1,09/03/98,Roda JC,Feyenoord,1,2,A,0,1,A
+N1,13/03/98,Heerenveen,Willem II,1,3,A,1,1,D
+N1,13/03/98,Roda JC,For Sittard,0,0,D,0,0,D
+N1,14/03/98,Ajax,Volendam,6,1,H,2,0,H
+N1,14/03/98,NAC Breda,Twente,1,0,H,1,0,H
+N1,14/03/98,Nijmegen,MVV Maastricht,2,1,H,2,0,H
+N1,15/03/98,Utrecht,Sparta,3,0,H,2,0,H
+N1,15/03/98,Waalwijk,PSV Eindhoven,0,1,A,0,1,A
+N1,20/03/98,For Sittard,Utrecht,3,1,H,0,0,D
+N1,21/03/98,Graafschap,Volendam,2,1,H,1,0,H
+N1,21/03/98,PSV Eindhoven,Vitesse,3,2,H,1,2,A
+N1,21/03/98,Willem II,MVV Maastricht,2,0,H,0,0,D
+N1,22/03/98,Groningen,Twente,0,1,A,0,0,D
+N1,22/03/98,NAC Breda,Ajax,0,2,A,0,0,D
+N1,22/03/98,Sparta,Waalwijk,1,0,H,0,0,D
+N1,25/03/98,For Sittard,Feyenoord,0,2,A,0,1,A
+N1,25/03/98,MVV Maastricht,Graafschap,2,1,H,0,0,D
+N1,25/03/98,PSV Eindhoven,Roda JC,2,0,H,1,0,H
+N1,25/03/98,Vitesse,NAC Breda,4,1,H,3,1,H
+N1,25/03/98,Volendam,Nijmegen,2,0,H,0,0,D
+N1,25/03/98,Waalwijk,Twente,5,1,H,1,1,D
+N1,25/03/98,Willem II,Groningen,4,2,H,1,1,D
+N1,26/03/98,Heerenveen,Utrecht,1,0,H,0,0,D
+N1,28/03/98,PSV Eindhoven,Nijmegen,2,1,H,1,0,H
+N1,28/03/98,Roda JC,NAC Breda,0,0,D,0,0,D
+N1,28/03/98,Sparta,Vitesse,1,1,D,0,1,A
+N1,29/03/98,Feyenoord,Volendam,5,0,H,1,0,H
+N1,29/03/98,Twente,Ajax,1,2,A,1,1,D
+N1,29/03/98,Waalwijk,Graafschap,4,1,H,1,0,H
+N1,29/03/98,Willem II,Utrecht,3,2,H,1,1,D
+N1,01/04/98,Feyenoord,Groningen,3,0,H,1,0,H
+N1,03/04/98,Sparta,NAC Breda,1,1,D,0,0,D
+N1,04/04/98,MVV Maastricht,Heerenveen,1,2,A,1,1,D
+N1,05/04/98,Feyenoord,Ajax,0,1,A,0,0,D
+N1,05/04/98,Groningen,Roda JC,1,1,D,0,0,D
+N1,05/04/98,Twente,Utrecht,1,2,A,0,1,A
+N1,05/04/98,Vitesse,Nijmegen,2,1,H,1,0,H
+N1,05/04/98,Volendam,Waalwijk,3,4,A,1,2,A
+N1,07/04/98,MVV Maastricht,PSV Eindhoven,2,1,H,0,1,A
+N1,08/04/98,Ajax,Sparta,4,0,H,1,0,H
+N1,08/04/98,Graafschap,Roda JC,2,0,H,2,0,H
+N1,08/04/98,Heerenveen,Groningen,1,1,D,0,1,A
+N1,08/04/98,Nijmegen,Waalwijk,2,1,H,1,1,D
+N1,08/04/98,Twente,Willem II,2,0,H,1,0,H
+N1,08/04/98,Utrecht,For Sittard,1,0,H,0,0,D
+N1,08/04/98,Vitesse,Volendam,6,0,H,2,0,H
+N1,11/04/98,Ajax,Heerenveen,7,2,H,3,0,H
+N1,11/04/98,NAC Breda,Utrecht,2,1,H,1,1,D
+N1,11/04/98,Nijmegen,For Sittard,2,2,D,1,0,H
+N1,11/04/98,Roda JC,Twente,2,0,H,2,0,H
+N1,11/04/98,Vitesse,Graafschap,4,1,H,3,1,H
+N1,12/04/98,Sparta,PSV Eindhoven,3,1,H,,,
+N1,12/04/98,Waalwijk,Feyenoord,3,2,H,1,1,D
+N1,14/04/98,Vitesse,MVV Maastricht,3,1,H,0,1,A
+N1,17/04/98,MVV Maastricht,For Sittard,1,4,A,0,1,A
+N1,18/04/98,PSV Eindhoven,Volendam,10,0,H,3,0,H
+N1,18/04/98,Sparta,Nijmegen,1,0,H,0,0,D
+N1,18/04/98,Willem II,Heerenveen,5,2,H,2,0,H
+N1,19/04/98,Groningen,Ajax,2,4,A,0,3,A
+N1,19/04/98,NAC Breda,Feyenoord,1,3,A,0,1,A
+N1,19/04/98,Utrecht,Graafschap,0,0,D,0,0,D
+N1,22/04/98,Feyenoord,Roda JC,1,0,H,0,0,D
+N1,22/04/98,For Sittard,PSV Eindhoven,1,2,A,1,1,D
+N1,22/04/98,NAC Breda,Vitesse,1,3,A,1,1,D
+N1,22/04/98,Twente,Heerenveen,3,1,H,1,1,D
+N1,23/04/98,Ajax,Willem II,6,1,H,5,0,H
+N1,24/04/98,Volendam,MVV Maastricht,1,2,A,1,1,D
+N1,25/04/98,Heerenveen,For Sittard,2,2,D,0,0,D
+N1,25/04/98,Nijmegen,NAC Breda,2,0,H,1,0,H
+N1,25/04/98,Roda JC,Sparta,2,0,H,0,0,D
+N1,26/04/98,Graafschap,Twente,2,1,H,1,0,H
+N1,26/04/98,Groningen,Utrecht,1,2,A,0,0,D
+N1,26/04/98,PSV Eindhoven,Feyenoord,3,3,D,3,0,H
+N1,26/04/98,Vitesse,Ajax,2,0,H,1,0,H
+N1,26/04/98,Waalwijk,Willem II,1,4,A,0,3,A
+N1,03/05/98,For Sittard,NAC Breda,4,1,H,3,0,H
+N1,03/05/98,Graafschap,Ajax,1,8,A,0,2,A
+N1,03/05/98,Nijmegen,Utrecht,1,0,H,1,0,H
+N1,03/05/98,PSV Eindhoven,Groningen,6,2,H,1,2,A
+N1,03/05/98,Sparta,Twente,1,1,D,,,
+N1,03/05/98,Vitesse,Feyenoord,2,1,H,2,0,H
+N1,03/05/98,Volendam,Heerenveen,4,1,H,2,0,H
+N1,03/05/98,Waalwijk,MVV Maastricht,1,1,D,1,0,H
+N1,03/05/98,Willem II,Roda JC,2,4,A,1,2,A
+N1,10/05/98,Ajax,Utrecht,1,2,A,0,2,A
+N1,10/05/98,Feyenoord,Nijmegen,0,2,A,0,1,A
+N1,10/05/98,Groningen,For Sittard,1,0,H,0,0,D
+N1,10/05/98,Heerenveen,Waalwijk,3,2,H,1,0,H
+N1,10/05/98,MVV Maastricht,Vitesse,1,3,A,1,0,H
+N1,10/05/98,NAC Breda,Volendam,4,1,H,3,1,H
+N1,10/05/98,Roda JC,Graafschap,1,2,A,0,1,A
+N1,10/05/98,Twente,PSV Eindhoven,3,0,H,2,0,H
+N1,10/05/98,Willem II,Sparta,3,0,H,1,0,H

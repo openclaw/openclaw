@@ -1,0 +1,240 @@
+{
+  "fetchedAt": "2026-03-28T09:49:43.919Z",
+  "source": "football-data.co.uk",
+  "outDir": "skills/football-data-co-uk/data/full",
+  "seasons": [
+    "9394",
+    "9495",
+    "9596",
+    "9697",
+    "9798",
+    "9899",
+    "9900",
+    "0001",
+    "0102",
+    "0203",
+    "0304",
+    "0405",
+    "0506",
+    "0607",
+    "0708",
+    "0809",
+    "0910",
+    "1011",
+    "1112",
+    "1213",
+    "1314",
+    "1415",
+    "1516",
+    "1617",
+    "1718",
+    "1819",
+    "1920",
+    "2021",
+    "2122",
+    "2223",
+    "2324",
+    "2425",
+    "2526"
+  ],
+  "batches": [
+    {
+      "season": "9394",
+      "dir": "skills/football-data-co-uk/data/full/9394",
+      "files": 22,
+      "ok": 13
+    },
+    {
+      "season": "9495",
+      "dir": "skills/football-data-co-uk/data/full/9495",
+      "files": 22,
+      "ok": 16
+    },
+    {
+      "season": "9596",
+      "dir": "skills/football-data-co-uk/data/full/9596",
+      "files": 22,
+      "ok": 17
+    },
+    {
+      "season": "9697",
+      "dir": "skills/football-data-co-uk/data/full/9697",
+      "files": 22,
+      "ok": 18
+    },
+    {
+      "season": "9798",
+      "dir": "skills/football-data-co-uk/data/full/9798",
+      "files": 22,
+      "ok": 21
+    },
+    {
+      "season": "9899",
+      "dir": "skills/football-data-co-uk/data/full/9899",
+      "files": 22,
+      "ok": 21
+    },
+    {
+      "season": "9900",
+      "dir": "skills/football-data-co-uk/data/full/9900",
+      "files": 22,
+      "ok": 21
+    },
+    {
+      "season": "0001",
+      "dir": "skills/football-data-co-uk/data/full/0001",
+      "files": 22,
+      "ok": 21
+    },
+    {
+      "season": "0102",
+      "dir": "skills/football-data-co-uk/data/full/0102",
+      "files": 22,
+      "ok": 21
+    },
+    {
+      "season": "0203",
+      "dir": "skills/football-data-co-uk/data/full/0203",
+      "files": 22,
+      "ok": 21
+    },
+    {
+      "season": "0304",
+      "dir": "skills/football-data-co-uk/data/full/0304",
+      "files": 22,
+      "ok": 21
+    },
+    {
+      "season": "0405",
+      "dir": "skills/football-data-co-uk/data/full/0405",
+      "files": 22,
+      "ok": 21
+    },
+    {
+      "season": "0506",
+      "dir": "skills/football-data-co-uk/data/full/0506",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "0607",
+      "dir": "skills/football-data-co-uk/data/full/0607",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "0708",
+      "dir": "skills/football-data-co-uk/data/full/0708",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "0809",
+      "dir": "skills/football-data-co-uk/data/full/0809",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "0910",
+      "dir": "skills/football-data-co-uk/data/full/0910",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "1011",
+      "dir": "skills/football-data-co-uk/data/full/1011",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "1112",
+      "dir": "skills/football-data-co-uk/data/full/1112",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "1213",
+      "dir": "skills/football-data-co-uk/data/full/1213",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "1314",
+      "dir": "skills/football-data-co-uk/data/full/1314",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "1415",
+      "dir": "skills/football-data-co-uk/data/full/1415",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "1516",
+      "dir": "skills/football-data-co-uk/data/full/1516",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "1617",
+      "dir": "skills/football-data-co-uk/data/full/1617",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "1718",
+      "dir": "skills/football-data-co-uk/data/full/1718",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "1819",
+      "dir": "skills/football-data-co-uk/data/full/1819",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "1920",
+      "dir": "skills/football-data-co-uk/data/full/1920",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "2021",
+      "dir": "skills/football-data-co-uk/data/full/2021",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "2122",
+      "dir": "skills/football-data-co-uk/data/full/2122",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "2223",
+      "dir": "skills/football-data-co-uk/data/full/2223",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "2324",
+      "dir": "skills/football-data-co-uk/data/full/2324",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "2425",
+      "dir": "skills/football-data-co-uk/data/full/2425",
+      "files": 22,
+      "ok": 22
+    },
+    {
+      "season": "2526",
+      "dir": "skills/football-data-co-uk/data/full/2526",
+      "files": 22,
+      "ok": 22
+    }
+  ]
+}

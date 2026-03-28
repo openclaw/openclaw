@@ -1,0 +1,553 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,,,,,,,,,,,,,,,,,,,,,
+G1,23/08/98,Apollon,Olympiakos,2,5,A,,,,,,,,,,,,,,,,,,,,,
+G1,23/08/98,Aris,Ethnikos Asteras,2,0,H,,,,,,,,,,,,,,,,,,,,,
+G1,23/08/98,Eleysina,Xanthi,0,0,D,,,,,,,,,,,,,,,,,,,,,
+G1,23/08/98,Ionikos,PAOK,1,0,H,,,,,,,,,,,,,,,,,,,,,
+G1,23/08/98,Kavala,Proodeytiki,2,1,H,,,,,,,,,,,,,,,,,,,,,
+G1,23/08/98,OFI,Ethnikos Piraeus,3,0,H,,,,,,,,,,,,,,,,,,,,,
+G1,23/08/98,Panathinaikos,Paniliakos,2,1,H,,,,,,,,,,,,,,,,,,,,,
+G1,23/08/98,Panionios,AEK,1,3,A,,,,,,,,,,,,,,,,,,,,,
+G1,23/08/98,Veroia,Iraklis,0,2,A,,,,,,,,,,,,,,,,,,,,,
+G1,30/08/98,AEK,Apollon,3,1,H,,,,,,,,,,,,,,,,,,,,,
+G1,30/08/98,Ethnikos Asteras,Kavala,3,2,H,,,,,,,,,,,,,,,,,,,,,
+G1,30/08/98,Ionikos,Panionios,4,3,H,,,,,,,,,,,,,,,,,,,,,
+G1,30/08/98,Iraklis,OFI,3,0,H,,,,,,,,,,,,,,,,,,,,,
+G1,30/08/98,Olympiakos,Eleysina,1,1,D,,,,,,,,,,,,,,,,,,,,,
+G1,30/08/98,Paniliakos,Ethnikos Piraeus,2,0,H,,,,,,,,,,,,,,,,,,,,,
+G1,30/08/98,PAOK,Aris,1,4,A
+G1,30/08/98,Proodeytiki,Panathinaikos,1,2,A
+G1,30/08/98,Xanthi,Veroia,2,0,H
+G1,13/09/98,Aris,Ionikos,1,1,D
+G1,13/09/98,Eleysina,AEK,0,0,D
+G1,13/09/98,Ethnikos Piraeus,Proodeytiki,0,2,A
+G1,13/09/98,Kavala,PAOK,1,1,D
+G1,13/09/98,OFI,Xanthi,4,2,H
+G1,13/09/98,Panathinaikos,Ethnikos Asteras,4,1,H
+G1,13/09/98,Paniliakos,Iraklis,2,1,H
+G1,13/09/98,Panionios,Apollon,4,2,H
+G1,13/09/98,Veroia,Olympiakos,0,3,A
+G1,20/09/98,AEK,Veroia,2,0,H
+G1,20/09/98,Apollon,Eleysina,1,1,D
+G1,20/09/98,Ethnikos Asteras,Ethnikos Piraeus,1,0,H
+G1,20/09/98,Ionikos,Kavala,4,2,H
+G1,20/09/98,Olympiakos,OFI,3,0,H
+G1,20/09/98,PAOK,Panathinaikos,2,0,H
+G1,20/09/98,Proodeytiki,Iraklis,0,0,D
+G1,20/09/98,Xanthi,Paniliakos,2,1,H
+G1,21/09/98,Aris,Panionios,2,1,H
+G1,25/09/98,OFI,AEK,0,1,A
+G1,26/09/98,Panathinaikos,Ionikos,2,1,H
+G1,26/09/98,Paniliakos,Olympiakos,1,0,H
+G1,27/09/98,Ethnikos Piraeus,PAOK,1,1,D
+G1,27/09/98,Iraklis,Ethnikos Asteras,1,1,D
+G1,27/09/98,Kavala,Aris,3,1,H
+G1,27/09/98,Panionios,Eleysina,3,0,H
+G1,27/09/98,Proodeytiki,Xanthi,1,2,A
+G1,27/09/98,Veroia,Apollon,1,1,D
+G1,04/10/98,AEK,Paniliakos,3,1,H
+G1,04/10/98,Apollon,OFI,1,0,H
+G1,04/10/98,Eleysina,Veroia,2,0,H
+G1,04/10/98,Ethnikos Asteras,Xanthi,0,1,A
+G1,04/10/98,Ionikos,Ethnikos Piraeus,5,0,H
+G1,04/10/98,Olympiakos,Proodeytiki,6,1,H
+G1,04/10/98,PAOK,Iraklis,2,1,H
+G1,05/10/98,Aris,Panathinaikos,0,1,A
+G1,05/10/98,Kavala,Panionios,1,5,A
+G1,24/10/98,Ethnikos Piraeus,Aris,1,1,D
+G1,25/10/98,Ethnikos Asteras,Olympiakos,1,3,A
+G1,25/10/98,Iraklis,Ionikos,2,1,H
+G1,25/10/98,OFI,Eleysina,3,0,H
+G1,25/10/98,Paniliakos,Apollon,3,1,H
+G1,25/10/98,Proodeytiki,AEK,1,1,D
+G1,25/10/98,Xanthi,PAOK,0,1,A
+G1,26/10/98,Panathinaikos,Kavala,6,2,H
+G1,26/10/98,Panionios,Veroia,0,0,D
+G1,31/10/98,Panathinaikos,Panionios,2,1,H
+G1,31/10/98,PAOK,Olympiakos,0,2,A
+G1,01/11/98,AEK,Ethnikos Asteras,3,1,H
+G1,01/11/98,Apollon,Proodeytiki,2,2,D
+G1,01/11/98,Aris,Iraklis,2,1,H
+G1,01/11/98,Eleysina,Paniliakos,1,2,A
+G1,01/11/98,Ionikos,Xanthi,0,1,A
+G1,01/11/98,Kavala,Ethnikos Piraeus,3,0,H
+G1,01/11/98,Veroia,OFI,0,0,D
+G1,08/11/98,Ethnikos Asteras,Apollon,5,1,H
+G1,08/11/98,Ethnikos Piraeus,Panathinaikos,0,0,D
+G1,08/11/98,Iraklis,Kavala,2,2,D
+G1,08/11/98,Paniliakos,Veroia,0,0,D
+G1,08/11/98,Panionios,OFI,0,1,A
+G1,08/11/98,PAOK,AEK,2,1,H
+G1,08/11/98,Proodeytiki,Eleysina,0,1,A
+G1,08/11/98,Xanthi,Aris,2,0,H
+G1,09/11/98,Olympiakos,Ionikos,2,0,H
+G1,22/11/98,AEK,Ionikos,2,1,H
+G1,22/11/98,Apollon,PAOK,1,4,A
+G1,22/11/98,Aris,Olympiakos,1,0,H
+G1,22/11/98,Eleysina,Ethnikos Asteras,1,2,A
+G1,22/11/98,Ethnikos Piraeus,Panionios,0,4,A
+G1,22/11/98,Kavala,Xanthi,1,1,D
+G1,22/11/98,OFI,Paniliakos,3,1,H
+G1,22/11/98,Panathinaikos,Iraklis,3,2,H
+G1,22/11/98,Veroia,Proodeytiki,3,1,H
+G1,29/11/98,AEK,Aris,6,0,H
+G1,29/11/98,Ethnikos Asteras,Veroia,4,0,H
+G1,29/11/98,Ionikos,Apollon,3,0,H
+G1,29/11/98,Iraklis,Ethnikos Piraeus,4,0,H
+G1,29/11/98,Olympiakos,Kavala,4,1,H
+G1,29/11/98,Panionios,Paniliakos,5,2,H
+G1,29/11/98,PAOK,Eleysina,3,1,H
+G1,29/11/98,Proodeytiki,OFI,0,1,A
+G1,30/11/98,Xanthi,Panathinaikos,1,0,H
+G1,05/12/98,Panathinaikos,Olympiakos,2,4,A
+G1,06/12/98,Apollon,Aris,1,3,A
+G1,06/12/98,Ethnikos Piraeus,Xanthi,1,1,D
+G1,06/12/98,Iraklis,Panionios,2,0,H
+G1,06/12/98,Kavala,AEK,2,1,H
+G1,06/12/98,OFI,Ethnikos Asteras,1,1,D
+G1,06/12/98,Paniliakos,Proodeytiki,1,2,A
+G1,06/12/98,Veroia,PAOK,1,2,A
+G1,07/12/98,Eleysina,Ionikos,1,1,D
+G1,12/12/98,Xanthi,Iraklis,0,0,D
+G1,13/12/98,AEK,Panathinaikos,2,0,H
+G1,13/12/98,Apollon,Kavala,1,1,D
+G1,13/12/98,Aris,Eleysina,0,0,D
+G1,13/12/98,Ethnikos Asteras,Paniliakos,1,0,H
+G1,13/12/98,Ionikos,Veroia,1,0,H
+G1,13/12/98,Panionios,Proodeytiki,0,0,D
+G1,13/12/98,PAOK,OFI,3,1,H
+G1,14/12/98,Olympiakos,Ethnikos Piraeus,2,0,H
+G1,20/12/98,Eleysina,Kavala,1,1,D
+G1,20/12/98,OFI,Ionikos,2,1,H
+G1,20/12/98,Panathinaikos,Apollon,5,0,H
+G1,20/12/98,Paniliakos,PAOK,1,2,A
+G1,20/12/98,Proodeytiki,Ethnikos Asteras,3,0,H
+G1,21/12/98,Ethnikos Piraeus,AEK,1,4,A
+G1,21/12/98,Iraklis,Olympiakos,0,2,A
+G1,21/12/98,Veroia,Aris,0,1,A
+G1,21/12/98,Xanthi,Panionios,1,0,H
+G1,16/01/99,Aris,OFI,3,1,H
+G1,17/01/99,AEK,Iraklis,2,2,D
+G1,17/01/99,Apollon,Ethnikos Piraeus,4,0,H
+G1,17/01/99,Ionikos,Paniliakos,1,1,D
+G1,17/01/99,Kavala,Veroia,2,1,H
+G1,17/01/99,Olympiakos,Xanthi,3,1,H
+G1,17/01/99,Panionios,Ethnikos Asteras,2,0,H
+G1,17/01/99,PAOK,Proodeytiki,1,0,H
+G1,18/01/99,Eleysina,Panathinaikos,1,2,A
+G1,24/01/99,Ethnikos Asteras,PAOK,1,0,H
+G1,24/01/99,Ethnikos Piraeus,Eleysina,2,2,D
+G1,24/01/99,Iraklis,Apollon,2,0,H
+G1,24/01/99,OFI,Kavala,4,0,H
+G1,24/01/99,Olympiakos,Panionios,5,0,H
+G1,24/01/99,Paniliakos,Aris,3,1,H
+G1,24/01/99,Proodeytiki,Ionikos,0,0,D
+G1,24/01/99,Veroia,Panathinaikos,0,1,A
+G1,24/01/99,Xanthi,AEK,2,1,H
+G1,31/01/99,AEK,Olympiakos,2,0,H
+G1,31/01/99,Apollon,Xanthi,2,1,H
+G1,31/01/99,Eleysina,Iraklis,0,0,D
+G1,31/01/99,Ionikos,Ethnikos Asteras,5,0,H
+G1,31/01/99,Kavala,Paniliakos,1,1,D
+G1,31/01/99,Panathinaikos,OFI,1,0,H
+G1,31/01/99,Panionios,PAOK,0,1,A
+G1,31/01/99,Veroia,Ethnikos Piraeus,4,3,H
+G1,07/02/99,Ethnikos Asteras,Aris,0,1,A
+G1,07/02/99,Iraklis,Veroia,2,0,H
+G1,07/02/99,Paniliakos,Panathinaikos,1,2,A
+G1,07/02/99,PAOK,Ionikos,0,0,D
+G1,07/02/99,Proodeytiki,Kavala,1,0,H
+G1,07/02/99,Xanthi,Eleysina,0,0,D
+G1,08/02/99,AEK,Panionios,3,0,H
+G1,08/02/99,Ethnikos Piraeus,OFI,1,3,A
+G1,08/02/99,Olympiakos,Apollon,0,0,D
+G1,10/02/99,Aris,Proodeytiki,1,0,H
+G1,13/02/99,OFI,Iraklis,3,1,H
+G1,14/02/99,Apollon,AEK,1,1,D
+G1,14/02/99,Eleysina,Olympiakos,0,2,A
+G1,14/02/99,Ethnikos Piraeus,Paniliakos,1,1,D
+G1,14/02/99,Kavala,Ethnikos Asteras,3,0,H
+G1,14/02/99,Panionios,Ionikos,0,2,A
+G1,15/02/99,Aris,PAOK,2,0,H
+G1,15/02/99,Panathinaikos,Proodeytiki,1,0,H
+G1,15/02/99,Veroia,Xanthi,2,0,H
+G1,20/02/99,Ionikos,Aris,3,0,H
+G1,21/02/99,AEK,Eleysina,6,2,H
+G1,21/02/99,Apollon,Panionios,0,0,D
+G1,21/02/99,Ethnikos Asteras,Panathinaikos,0,1,A
+G1,21/02/99,Iraklis,Paniliakos,3,1,H
+G1,21/02/99,PAOK,Kavala,1,0,H
+G1,21/02/99,Proodeytiki,Ethnikos Piraeus,0,0,D
+G1,21/02/99,Xanthi,OFI,3,1,H
+G1,22/02/99,Olympiakos,Veroia,5,0,H
+G1,27/02/99,OFI,Olympiakos,1,2,A
+G1,28/02/99,Eleysina,Apollon,1,0,H
+G1,28/02/99,Ethnikos Piraeus,Ethnikos Asteras,1,2,A
+G1,28/02/99,Iraklis,Proodeytiki,0,1,A
+G1,28/02/99,Kavala,Ionikos,1,3,A
+G1,28/02/99,Panathinaikos,PAOK,0,1,A
+G1,28/02/99,Paniliakos,Xanthi,1,0,H
+G1,28/02/99,Panionios,Aris,3,2,H
+G1,01/03/99,Veroia,AEK,0,3,A
+G1,06/03/99,Apollon,Veroia,2,0,H
+G1,07/03/99,AEK,OFI,2,0,H
+G1,07/03/99,Aris,Kavala,3,1,H
+G1,07/03/99,Ethnikos Asteras,Iraklis,1,0,H
+G1,07/03/99,Ionikos,Panathinaikos,4,4,D
+G1,07/03/99,PAOK,Ethnikos Piraeus,0,0,D
+G1,07/03/99,Xanthi,Proodeytiki,4,1,H
+G1,08/03/99,Eleysina,Panionios,1,0,H
+G1,08/03/99,Olympiakos,Paniliakos,3,0,H
+G1,13/03/99,Proodeytiki,Olympiakos,0,1,A
+G1,14/03/99,Ethnikos Piraeus,Ionikos,1,2,A
+G1,14/03/99,Iraklis,PAOK,1,0,H
+G1,14/03/99,OFI,Apollon,0,1,A
+G1,14/03/99,Panathinaikos,Aris,3,1,H
+G1,14/03/99,Panionios,Kavala,1,2,A
+G1,14/03/99,Veroia,Eleysina,0,1,A
+G1,14/03/99,Xanthi,Ethnikos Asteras,0,1,A
+G1,15/03/99,Paniliakos,AEK,0,1,A
+G1,20/03/99,Kavala,Panathinaikos,2,1,H
+G1,21/03/99,AEK,Proodeytiki,1,0,H
+G1,21/03/99,Apollon,Paniliakos,5,0,H
+G1,21/03/99,Aris,Ethnikos Piraeus,4,0,H
+G1,21/03/99,Eleysina,OFI,1,2,A
+G1,21/03/99,Ionikos,Iraklis,0,2,A
+G1,21/03/99,PAOK,Xanthi,0,0,D
+G1,22/03/99,Olympiakos,Ethnikos Asteras,4,2,H
+G1,22/03/99,Veroia,Panionios,3,1,H
+G1,03/04/99,Panionios,Panathinaikos,0,2,A
+G1,04/04/99,Ethnikos Asteras,AEK,2,3,A
+G1,04/04/99,Ethnikos Piraeus,Kavala,0,2,A
+G1,04/04/99,Iraklis,Aris,2,1,H
+G1,04/04/99,OFI,Veroia,3,0,H
+G1,04/04/99,Olympiakos,PAOK,2,1,H
+G1,04/04/99,Paniliakos,Eleysina,2,0,H
+G1,04/04/99,Proodeytiki,Apollon,0,1,A
+G1,04/04/99,Xanthi,Ionikos,2,2,D
+G1,17/04/99,Apollon,Ethnikos Asteras,2,2,D
+G1,18/04/99,AEK,PAOK,2,0,H
+G1,18/04/99,Aris,Xanthi,1,2,A
+G1,18/04/99,Eleysina,Proodeytiki,0,1,A
+G1,18/04/99,Ionikos,Olympiakos,1,3,A
+G1,18/04/99,Kavala,Iraklis,2,0,H
+G1,18/04/99,OFI,Panionios,2,0,H
+G1,18/04/99,Veroia,Paniliakos,0,0,D
+G1,19/04/99,Panathinaikos,Ethnikos Piraeus,5,1,H
+G1,24/04/99,Paniliakos,OFI,1,2,A
+G1,25/04/99,Ethnikos Asteras,Eleysina,0,0,D
+G1,25/04/99,Ionikos,AEK,2,1,H
+G1,25/04/99,Iraklis,Panathinaikos,3,3,D
+G1,25/04/99,Olympiakos,Aris,1,0,H
+G1,25/04/99,PAOK,Apollon,3,1,H
+G1,25/04/99,Proodeytiki,Veroia,1,0,H
+G1,25/04/99,Xanthi,Kavala,4,1,H
+G1,26/04/99,Panionios,Ethnikos Piraeus,2,0,H
+G1,01/05/99,Eleysina,PAOK,0,4,A
+G1,02/05/99,Apollon,Ionikos,1,1,D
+G1,02/05/99,Aris,AEK,2,0,H
+G1,02/05/99,Ethnikos Piraeus,Iraklis,1,2,A
+G1,02/05/99,Kavala,Olympiakos,0,2,A
+G1,02/05/99,OFI,Proodeytiki,0,0,D
+G1,02/05/99,Panathinaikos,Xanthi,2,1,H
+G1,02/05/99,Paniliakos,Panionios,2,0,H
+G1,03/05/99,Veroia,Ethnikos Asteras,3,1,H
+G1,09/05/99,AEK,Kavala,4,0,H
+G1,09/05/99,Aris,Apollon,2,1,H
+G1,09/05/99,Ethnikos Asteras,OFI,1,0,H
+G1,09/05/99,Ionikos,Eleysina,3,0,H
+G1,09/05/99,Olympiakos,Panathinaikos,0,0,D
+G1,09/05/99,Panionios,Iraklis,3,2,H
+G1,09/05/99,PAOK,Veroia,2,0,H
+G1,09/05/99,Proodeytiki,Paniliakos,2,0,H
+G1,09/05/99,Xanthi,Ethnikos Piraeus,2,0,H
+G1,12/05/99,Eleysina,Aris,0,1,A
+G1,12/05/99,Ethnikos Piraeus,Olympiakos,0,3,A
+G1,12/05/99,Iraklis,Xanthi,2,2,D
+G1,12/05/99,Kavala,Apollon,0,1,A
+G1,12/05/99,OFI,PAOK,3,2,H
+G1,12/05/99,Panathinaikos,AEK,0,0,D
+G1,12/05/99,Paniliakos,Ethnikos Asteras,1,0,H
+G1,12/05/99,Veroia,Ionikos,0,2,A
+G1,13/05/99,Proodeytiki,Panionios,0,0,D
+G1,16/05/99,AEK,Ethnikos Piraeus,2,0,H
+G1,16/05/99,Apollon,Panathinaikos,1,3,A
+G1,16/05/99,Aris,Veroia,2,0,H
+G1,16/05/99,Ethnikos Asteras,Proodeytiki,2,2,D
+G1,16/05/99,Ionikos,OFI,2,0,H
+G1,16/05/99,Kavala,Eleysina,3,0,H
+G1,16/05/99,Olympiakos,Iraklis,3,2,H
+G1,16/05/99,Panionios,Xanthi,0,2,A
+G1,16/05/99,PAOK,Paniliakos,2,0,H
+G1,19/05/99,Ethnikos Asteras,Panionios,2,2,D
+G1,19/05/99,Iraklis,AEK,2,3,A
+G1,19/05/99,OFI,Aris,2,4,A
+G1,19/05/99,Panathinaikos,Eleysina,2,0,H
+G1,19/05/99,Paniliakos,Ionikos,1,4,A
+G1,19/05/99,Proodeytiki,PAOK,2,1,H
+G1,19/05/99,Xanthi,Olympiakos,0,2,A
+G1,20/05/99,Ethnikos Piraeus,Apollon,2,3,A
+G1,20/05/99,Veroia,Kavala,0,2,A
+G1,23/05/99,AEK,Xanthi,2,1,H
+G1,23/05/99,Apollon,Iraklis,1,3,A
+G1,23/05/99,Aris,Paniliakos,3,1,H
+G1,23/05/99,Eleysina,Ethnikos Piraeus,3,0,H
+G1,23/05/99,Ionikos,Proodeytiki,2,0,H
+G1,23/05/99,Kavala,OFI,0,2,A
+G1,23/05/99,Panathinaikos,Veroia,1,0,H
+G1,23/05/99,Panionios,Olympiakos,1,4,A
+G1,23/05/99,PAOK,Ethnikos Asteras,5,1,H
+G1,30/05/99,Ethnikos Asteras,Ionikos,1,1,D
+G1,30/05/99,Ethnikos Piraeus,Veroia,0,2,A
+G1,30/05/99,Iraklis,Eleysina,2,3,A
+G1,30/05/99,OFI,Panathinaikos,2,3,A
+G1,30/05/99,Olympiakos,AEK,0,0,D
+G1,30/05/99,Paniliakos,Kavala,2,0,H
+G1,30/05/99,PAOK,Panionios,3,0,H
+G1,30/05/99,Proodeytiki,Aris,2,1,H
+G1,30/05/99,Xanthi,Apollon,1,0,H
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+,,,,,,

@@ -1,0 +1,4 @@
+# Optional: Kaggle API CLI for scripts/kaggle-fetch.mjs
+#   pip install -r skills/football-match-analyst/requirements-kaggle.txt
+# Auth: KAGGLE_USERNAME + KAGGLE_KEY in env, or ~/.kaggle/kaggle.json (kaggle.com → Account → API)
+kaggle>=1.6.0

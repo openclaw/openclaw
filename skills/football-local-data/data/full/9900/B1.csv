@@ -1,0 +1,553 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HTR,,,,,,,,,,,
+B1,06/08/99,Geel,Gent,1,5,A,0,1,A,,,,,,,,,,,
+B1,07/08/99,Beveren,Aalst,0,2,A,0,1,A,,,,,,,,,,,
+B1,07/08/99,Charleroi,Harelbeke,2,1,H,0,0,D,,,,,,,,,,,
+B1,07/08/99,Lierse,Germinal,3,1,H,1,0,H,,,,,,,,,,,
+B1,07/08/99,Lommel,Lokeren,1,0,H,0,0,D,,,,,,,,,,,
+B1,07/08/99,Standard,Mechelen,2,1,H,0,1,A,,,,,,,,,,,
+B1,07/08/99,Westerlo,Genk,6,6,D,3,2,H,,,,,,,,,,,
+B1,08/08/99,Anderlecht,Mouscron,3,2,H,0,1,A,,,,,,,,,,,
+B1,08/08/99,Club Brugge,St Truiden,4,0,H,1,0,H,,,,,,,,,,,
+B1,14/08/99,Gent,Genk,0,2,A,0,1,A,,,,,,,,,,,
+B1,14/08/99,Germinal,Lommel,3,1,H,2,0,H,,,,,,,,,,,
+B1,14/08/99,Mechelen,Charleroi,2,1,H,1,0,H,,,,,,,,,,,
+B1,14/08/99,St Truiden,Geel,1,1,D,1,0,H,,,,,,,,,,,
+B1,14/08/99,Westerlo,Standard,2,1,H,1,1,D,,,,,,,,,,,
+B1,15/08/99,Aalst,Lierse,2,3,A,1,0,H,,,,,,,,,,,
+B1,15/08/99,Anderlecht,Beveren,5,2,H,2,0,H
+B1,15/08/99,Harelbeke,Mouscron,1,1,D,0,0,D
+B1,15/08/99,Lokeren,Club Brugge,2,5,A,1,3,A
+B1,21/08/99,Beveren,Harelbeke,2,2,D,2,0,H
+B1,21/08/99,Charleroi,Westerlo,1,2,A,1,0,H
+B1,21/08/99,Geel,Genk,1,1,D,0,0,D
+B1,21/08/99,Mouscron,Mechelen,2,0,H,0,0,D
+B1,21/08/99,St Truiden,Lokeren,1,1,D,0,1,A
+B1,21/08/99,Standard,Gent,0,2,A,0,0,D
+B1,22/08/99,Club Brugge,Germinal,2,0,H,1,0,H
+B1,22/08/99,Lierse,Anderlecht,0,3,A,0,2,A
+B1,22/08/99,Lommel,Aalst,3,3,D,1,2,A
+B1,28/08/99,Gent,Charleroi,3,2,H,2,1,H
+B1,28/08/99,Germinal,St Truiden,3,1,H,3,0,H
+B1,28/08/99,Lokeren,Geel,0,0,D,0,0,D
+B1,28/08/99,Mechelen,Beveren,3,1,H,2,1,H
+B1,28/08/99,Westerlo,Mouscron,3,0,H,1,0,H
+B1,29/08/99,Aalst,Club Brugge,0,2,A,0,1,A
+B1,29/08/99,Anderlecht,Lommel,3,3,D,1,1,D
+B1,29/08/99,Genk,Standard,4,0,H,4,0,H
+B1,29/08/99,Harelbeke,Lierse,0,3,A,0,0,D
+B1,11/09/99,Charleroi,Genk,2,1,H,1,1,D
+B1,11/09/99,Geel,Standard,0,0,D,0,0,D
+B1,11/09/99,Lierse,Mechelen,5,1,H,2,0,H
+B1,11/09/99,Lokeren,Germinal,1,1,D,0,1,A
+B1,11/09/99,Lommel,Harelbeke,0,2,A,0,1,A
+B1,11/09/99,Mouscron,Gent,5,3,H,2,1,H
+B1,11/09/99,St Truiden,Aalst,1,5,A,1,0,H
+B1,17/09/99,Standard,Charleroi,1,3,A,1,2,A
+B1,18/09/99,Genk,Mouscron,2,2,D,1,2,A
+B1,18/09/99,Gent,Beveren,4,1,H,2,0,H
+B1,18/09/99,Germinal,Geel,4,1,H,2,1,H
+B1,18/09/99,Mechelen,Lommel,1,0,H,0,0,D
+B1,19/09/99,Aalst,Lokeren,1,0,H,1,0,H
+B1,19/09/99,Anderlecht,St Truiden,2,1,H,1,0,H
+B1,19/09/99,Harelbeke,Club Brugge,1,1,D,1,1,D
+B1,19/09/99,Westerlo,Lierse,0,2,A,0,0,D
+B1,24/09/99,Mouscron,Standard,1,3,A,1,1,D
+B1,25/09/99,Beveren,Genk,1,4,A,0,1,A
+B1,25/09/99,Germinal,Aalst,3,2,H,2,0,H
+B1,25/09/99,Lierse,Gent,2,1,H,2,1,H
+B1,25/09/99,Lokeren,Anderlecht,2,3,A,1,2,A
+B1,25/09/99,Lommel,Westerlo,2,2,D,0,1,A
+B1,25/09/99,St Truiden,Harelbeke,2,0,H,2,0,H
+B1,26/09/99,Club Brugge,Mechelen,6,0,H,4,0,H
+B1,26/09/99,Geel,Charleroi,0,0,D,0,0,D
+B1,01/10/99,Charleroi,Mouscron,2,1,H,1,1,D
+B1,02/10/99,Gent,Lommel,6,2,H,3,1,H
+B1,02/10/99,Mechelen,St Truiden,3,2,H,2,1,H
+B1,02/10/99,Standard,Beveren,3,1,H,0,0,D
+B1,03/10/99,Aalst,Geel,1,0,H,1,0,H
+B1,03/10/99,Anderlecht,Germinal,2,2,D,1,0,H
+B1,03/10/99,Genk,Lierse,2,2,D,0,0,D
+B1,03/10/99,Harelbeke,Lokeren,2,3,A,1,2,A
+B1,03/10/99,Westerlo,Club Brugge,1,0,H,0,0,D
+B1,13/10/99,Aalst,Anderlecht,2,3,A,1,1,D
+B1,13/10/99,Beveren,Charleroi,1,1,D,1,0,H
+B1,13/10/99,Club Brugge,Gent,1,3,A,0,1,A
+B1,13/10/99,Geel,Mouscron,1,4,A,0,3,A
+B1,13/10/99,Germinal,Harelbeke,1,0,H,1,0,H
+B1,13/10/99,Lierse,Standard,1,0,H,1,0,H
+B1,13/10/99,Lokeren,Mechelen,0,2,A,0,1,A
+B1,13/10/99,Lommel,Genk,0,1,A,0,0,D
+B1,13/10/99,St Truiden,Westerlo,2,1,H,1,0,H
+B1,23/10/99,Charleroi,Lierse,1,1,D,0,1,A
+B1,23/10/99,Gent,St Truiden,4,2,H,2,2,D
+B1,23/10/99,Mechelen,Germinal,2,0,H,1,0,H
+B1,23/10/99,Standard,Lommel,4,1,H,1,0,H
+B1,23/10/99,Westerlo,Lokeren,3,3,D,1,2,A
+B1,24/10/99,Anderlecht,Geel,4,0,H,1,0,H
+B1,24/10/99,Genk,Club Brugge,1,0,H,0,0,D
+B1,24/10/99,Harelbeke,Aalst,1,1,D,1,0,H
+B1,24/10/99,Mouscron,Beveren,3,0,H,0,0,D
+B1,28/10/99,Anderlecht,Harelbeke,2,0,H,0,0,D
+B1,30/10/99,Club Brugge,Standard,5,2,H,4,0,H
+B1,30/10/99,Geel,Beveren,1,1,D,0,1,A
+B1,30/10/99,Germinal,Westerlo,3,2,H,3,2,H
+B1,30/10/99,Lierse,Mouscron,1,0,H,0,0,D
+B1,30/10/99,Lokeren,Gent,0,4,A,0,2,A
+B1,30/10/99,Lommel,Charleroi,1,1,D,1,0,H
+B1,30/10/99,St Truiden,Genk,0,5,A,0,3,A
+B1,31/10/99,Aalst,Mechelen,2,0,H,1,0,H
+B1,05/11/99,Charleroi,Club Brugge,0,2,A,0,1,A
+B1,06/11/99,Beveren,Lierse,1,1,D,0,0,D
+B1,06/11/99,Genk,Lokeren,1,1,D,0,1,A
+B1,06/11/99,Gent,Germinal,1,3,A,1,3,A
+B1,06/11/99,Mechelen,Anderlecht,2,5,A,1,4,A
+B1,06/11/99,Mouscron,Lommel,0,0,D,0,0,D
+B1,06/11/99,Standard,St Truiden,2,1,H,2,1,H
+B1,06/11/99,Westerlo,Aalst,3,2,H,0,1,A
+B1,07/11/99,Harelbeke,Geel,3,0,H,1,0,H
+B1,10/11/99,Aalst,Gent,4,2,H,2,1,H
+B1,10/11/99,Anderlecht,Westerlo,3,0,H,1,0,H
+B1,10/11/99,Club Brugge,Mouscron,1,2,A,0,0,D
+B1,10/11/99,Geel,Lierse,2,1,H,0,1,A
+B1,10/11/99,Genk,Germinal,4,0,H,1,0,H
+B1,10/11/99,Harelbeke,Mechelen,5,2,H,4,1,H
+B1,10/11/99,Lokeren,Standard,5,3,H,2,0,H
+B1,10/11/99,Lommel,Beveren,0,0,D,0,0,D
+B1,10/11/99,St Truiden,Charleroi,2,2,D,0,2,A
+B1,19/11/99,Gent,Anderlecht,0,3,A,0,1,A
+B1,20/11/99,Beveren,Club Brugge,2,3,A,0,2,A
+B1,20/11/99,Charleroi,Lokeren,2,4,A,0,2,A
+B1,20/11/99,Genk,Aalst,2,1,H,1,1,D
+B1,20/11/99,Lierse,Lommel,4,0,H,1,0,H
+B1,20/11/99,Mechelen,Geel,1,1,D,0,0,D
+B1,20/11/99,Mouscron,St Truiden,3,0,H,1,0,H
+B1,20/11/99,Standard,Germinal,1,0,H,1,0,H
+B1,21/11/99,Westerlo,Harelbeke,4,1,H,1,0,H
+B1,26/11/99,Club Brugge,Lierse,1,0,H,0,0,D
+B1,27/11/99,Geel,Lommel,0,0,D,0,0,D
+B1,27/11/99,Lokeren,Mouscron,3,2,H,1,1,D
+B1,27/11/99,Mechelen,Westerlo,2,2,D,1,2,A
+B1,27/11/99,St Truiden,Beveren,0,2,A,0,1,A
+B1,28/11/99,Aalst,Standard,1,2,A,0,0,D
+B1,28/11/99,Anderlecht,Genk,1,3,A,0,1,A
+B1,28/11/99,Germinal,Charleroi,3,0,H,0,0,D
+B1,28/11/99,Harelbeke,Gent,1,2,A,0,1,A
+B1,04/12/99,Beveren,Lokeren,2,1,H,1,1,D
+B1,04/12/99,Charleroi,Aalst,0,1,A,0,1,A
+B1,04/12/99,Geel,Westerlo,2,3,A,2,0,H
+B1,04/12/99,Lierse,St Truiden,0,0,D,0,0,D
+B1,04/12/99,Lommel,Club Brugge,0,0,D,0,0,D
+B1,04/12/99,Mouscron,Germinal,1,1,D,0,1,A
+B1,05/12/99,Genk,Harelbeke,4,3,H,1,1,D
+B1,05/12/99,Gent,Mechelen,6,1,H,2,0,H
+B1,05/12/99,Standard,Anderlecht,0,0,D,0,0,D
+B1,08/12/99,Beveren,Westerlo,4,0,H,0,0,D
+B1,11/12/99,Anderlecht,Charleroi,3,0,H,1,0,H
+B1,11/12/99,Club Brugge,Geel,4,0,H,2,0,H
+B1,11/12/99,Germinal,Beveren,2,0,H,1,0,H
+B1,11/12/99,Lokeren,Lierse,5,1,H,0,0,D
+B1,11/12/99,Mechelen,Genk,2,0,H,1,0,H
+B1,11/12/99,St Truiden,Lommel,2,0,H,0,0,D
+B1,11/12/99,Westerlo,Gent,4,2,H,1,1,D
+B1,12/12/99,Aalst,Mouscron,2,5,A,0,2,A
+B1,12/12/99,Harelbeke,Standard,3,4,A,2,2,D
+B1,11/01/00,Mouscron,Anderlecht,0,2,A,0,1,A
+B1,12/01/00,Aalst,Beveren,2,4,A,1,2,A
+B1,12/01/00,Genk,Westerlo,1,1,D,0,0,D
+B1,12/01/00,Gent,Geel,1,1,D,0,1,A
+B1,12/01/00,Germinal,Lierse,1,1,D,0,0,D
+B1,12/01/00,Harelbeke,Charleroi,4,1,H,2,0,H
+B1,12/01/00,Lokeren,Lommel,2,1,H,0,0,D
+B1,12/01/00,Mechelen,Standard,2,4,A,1,1,D
+B1,12/01/00,St Truiden,Club Brugge,0,1,A,0,1,A
+B1,15/01/00,Beveren,Anderlecht,0,0,D,0,0,D
+B1,15/01/00,Charleroi,Mechelen,1,4,A,0,3,A
+B1,15/01/00,Geel,St Truiden,1,2,A,1,0,H
+B1,15/01/00,Genk,Gent,0,1,A,0,0,D
+B1,15/01/00,Lommel,Germinal,2,2,D,1,1,D
+B1,15/01/00,Mouscron,Harelbeke,4,2,H,2,0,H
+B1,16/01/00,Club Brugge,Lokeren,6,1,H,4,1,H
+B1,16/01/00,Lierse,Aalst,5,2,H,3,2,H
+B1,16/01/00,Standard,Westerlo,4,0,H,1,0,H
+B1,21/01/00,Germinal,Club Brugge,5,3,H,5,1,H
+B1,22/01/00,Genk,Geel,1,0,H,1,0,H
+B1,22/01/00,Gent,Standard,1,5,A,0,3,A
+B1,22/01/00,Lokeren,St Truiden,3,0,H,1,0,H
+B1,22/01/00,Mechelen,Mouscron,1,3,A,0,1,A
+B1,23/01/00,Aalst,Lommel,3,1,H,0,0,D
+B1,23/01/00,Anderlecht,Lierse,2,0,H,0,0,D
+B1,23/01/00,Harelbeke,Beveren,0,5,A,,,
+B1,23/01/00,Westerlo,Charleroi,1,1,D,1,1,D
+B1,28/01/00,Standard,Genk,5,1,H,1,0,H
+B1,29/01/00,Beveren,Mechelen,2,1,H,1,0,H
+B1,29/01/00,Charleroi,Gent,1,2,A,1,0,H
+B1,29/01/00,Geel,Lokeren,3,0,H,1,0,H
+B1,29/01/00,Lommel,Anderlecht,3,3,D,1,1,D
+B1,29/01/00,St Truiden,Germinal,2,0,H,1,0,H
+B1,30/01/00,Club Brugge,Aalst,3,0,H,1,0,H
+B1,30/01/00,Lierse,Harelbeke,2,0,H,1,0,H
+B1,30/01/00,Mouscron,Westerlo,2,1,H,1,1,D
+B1,05/02/00,Genk,Charleroi,1,2,A,1,0,H
+B1,05/02/00,Gent,Mouscron,2,3,A,0,1,A
+B1,05/02/00,Mechelen,Lierse,4,3,H,2,2,D
+B1,05/02/00,Westerlo,Beveren,3,2,H,2,1,H
+B1,06/02/00,Aalst,St Truiden,2,0,H,0,0,D
+B1,06/02/00,Anderlecht,Club Brugge,1,1,D,0,0,D
+B1,06/02/00,Harelbeke,Lommel,5,1,H,2,1,H
+B1,06/02/00,Standard,Geel,3,0,H,2,0,H
+B1,11/02/00,Mouscron,Genk,5,0,H,2,0,H
+B1,12/02/00,Beveren,Gent,0,1,A,0,0,D
+B1,12/02/00,Geel,Germinal,0,2,A,0,1,A
+B1,12/02/00,Lierse,Westerlo,7,0,H,2,0,H
+B1,12/02/00,Lokeren,Aalst,5,1,H,1,0,H
+B1,12/02/00,Lommel,Mechelen,0,2,A,0,1,A
+B1,12/02/00,St Truiden,Anderlecht,0,4,A,0,2,A
+B1,13/02/00,Charleroi,Standard,1,4,A,0,2,A
+B1,13/02/00,Club Brugge,Harelbeke,1,2,A,0,2,A
+B1,18/02/00,Gent,Lierse,2,0,H,1,0,H
+B1,18/02/00,Standard,Mouscron,2,0,H,1,0,H
+B1,19/02/00,Anderlecht,Lokeren,5,0,H,1,0,H
+B1,19/02/00,Charleroi,Geel,1,3,A,0,0,D
+B1,19/02/00,Mechelen,Club Brugge,0,0,D,0,0,D
+B1,19/02/00,Westerlo,Lommel,1,0,H,1,0,H
+B1,20/02/00,Aalst,Germinal,1,2,A,0,1,A
+B1,20/02/00,Genk,Beveren,4,1,H,2,1,H
+B1,20/02/00,Harelbeke,St Truiden,3,2,H,1,2,A
+B1,27/02/00,Club Brugge,Anderlecht,0,2,A,0,0,D
+B1,01/03/00,Germinal,Lokeren,0,0,D,0,0,D
+B1,04/03/00,Beveren,Standard,0,2,A,0,0,D
+B1,04/03/00,Geel,Aalst,1,2,A,0,0,D
+B1,04/03/00,Lierse,Genk,5,0,H,4,0,H
+B1,04/03/00,Lokeren,Harelbeke,2,0,H,0,0,D
+B1,04/03/00,Lommel,Gent,1,3,A,0,1,A
+B1,04/03/00,Mouscron,Charleroi,2,1,H,0,0,D
+B1,04/03/00,St Truiden,Mechelen,3,1,H,1,0,H
+B1,05/03/00,Club Brugge,Westerlo,2,0,H,2,0,H
+B1,05/03/00,Germinal,Anderlecht,1,3,A,0,1,A
+B1,10/03/00,Gent,Club Brugge,2,0,H,1,0,H
+B1,11/03/00,Anderlecht,Aalst,4,1,H,3,1,H
+B1,11/03/00,Genk,Lommel,1,2,A,0,1,A
+B1,11/03/00,Mouscron,Geel,3,1,H,0,1,A
+B1,11/03/00,Standard,Lierse,3,1,H,1,1,D
+B1,11/03/00,Westerlo,St Truiden,3,2,H,1,1,D
+B1,12/03/00,Charleroi,Beveren,2,3,A,1,0,H
+B1,12/03/00,Harelbeke,Germinal,1,0,H,0,0,D
+B1,12/03/00,Mechelen,Lokeren,0,0,D,0,0,D
+B1,18/03/00,Geel,Anderlecht,0,0,D,0,0,D
+B1,18/03/00,Germinal,Mechelen,0,0,D,0,0,D
+B1,18/03/00,Lierse,Charleroi,2,0,H,0,0,D
+B1,18/03/00,Lokeren,Westerlo,0,0,D,0,0,D
+B1,18/03/00,St Truiden,Gent,0,0,D,0,0,D
+B1,19/03/00,Aalst,Harelbeke,3,0,H,2,0,H
+B1,19/03/00,Beveren,Mouscron,1,1,D,1,1,D
+B1,19/03/00,Club Brugge,Genk,2,0,H,2,0,H
+B1,19/03/00,Lommel,Standard,2,1,H,1,1,D
+B1,24/03/00,Standard,Club Brugge,0,1,A,0,1,A
+B1,25/03/00,Beveren,Geel,1,1,D,1,0,H
+B1,25/03/00,Charleroi,Lommel,1,1,D,0,1,A
+B1,25/03/00,Genk,St Truiden,0,2,A,0,1,A
+B1,25/03/00,Mechelen,Aalst,2,0,H,1,0,H
+B1,25/03/00,Mouscron,Lierse,3,3,D,1,2,A
+B1,25/03/00,Westerlo,Germinal,3,2,H,0,1,A
+B1,26/03/00,Gent,Lokeren,1,1,D,0,1,A
+B1,26/03/00,Harelbeke,Anderlecht,2,2,D,1,1,D
+B1,01/04/00,Aalst,Westerlo,1,1,D,0,0,D
+B1,01/04/00,Anderlecht,Mechelen,5,0,H,2,0,H
+B1,01/04/00,Club Brugge,Charleroi,3,1,H,2,0,H
+B1,01/04/00,Germinal,Gent,2,0,H,1,0,H
+B1,01/04/00,Lierse,Beveren,1,3,A,1,0,H
+B1,01/04/00,Lokeren,Genk,1,2,A,1,2,A
+B1,01/04/00,Lommel,Mouscron,0,4,A,0,1,A
+B1,02/04/00,Geel,Harelbeke,3,2,H,1,1,D
+B1,02/04/00,St Truiden,Standard,2,0,H,1,0,H
+B1,07/04/00,Lierse,Geel,2,2,D,1,2,A
+B1,07/04/00,Mouscron,Club Brugge,1,2,A,0,1,A
+B1,07/04/00,Standard,Lokeren,1,2,A,0,0,D
+B1,08/04/00,Charleroi,St Truiden,1,1,D,0,1,A
+B1,08/04/00,Germinal,Genk,3,0,H,2,0,H
+B1,08/04/00,Westerlo,Anderlecht,5,0,H,2,0,H
+B1,09/04/00,Beveren,Lommel,1,0,H,0,0,D
+B1,09/04/00,Gent,Aalst,4,0,H,2,0,H
+B1,09/04/00,Mechelen,Harelbeke,4,0,H,3,0,H
+B1,15/04/00,Aalst,Genk,1,3,A,1,1,D
+B1,15/04/00,Germinal,Standard,2,0,H,1,0,H
+B1,15/04/00,Lokeren,Charleroi,1,1,D,1,0,H
+B1,15/04/00,Lommel,Lierse,1,0,H,1,0,H
+B1,15/04/00,St Truiden,Mouscron,0,0,D,0,0,D
+B1,16/04/00,Anderlecht,Gent,1,2,A,1,0,H
+B1,16/04/00,Club Brugge,Beveren,3,1,H,2,0,H
+B1,16/04/00,Geel,Mechelen,3,0,H,1,0,H
+B1,16/04/00,Harelbeke,Westerlo,3,1,H,1,1,D
+B1,21/04/00,Lierse,Club Brugge,1,0,H,0,0,D
+B1,22/04/00,Beveren,St Truiden,3,4,A,0,2,A
+B1,22/04/00,Charleroi,Germinal,3,0,H,2,0,H
+B1,22/04/00,Genk,Anderlecht,1,4,A,0,2,A
+B1,22/04/00,Gent,Harelbeke,4,2,H,1,2,A
+B1,22/04/00,Lommel,Geel,1,1,D,1,0,H
+B1,22/04/00,Mouscron,Lokeren,0,0,D,0,0,D
+B1,22/04/00,Standard,Aalst,3,1,H,1,1,D
+B1,22/04/00,Westerlo,Mechelen,8,0,H,4,0,H
+B1,06/05/00,Aalst,Charleroi,0,3,A,0,1,A
+B1,06/05/00,Anderlecht,Standard,2,0,H,0,0,D
+B1,06/05/00,Club Brugge,Lommel,3,1,H,0,0,D
+B1,06/05/00,Germinal,Mouscron,0,1,A,0,0,D
+B1,06/05/00,Harelbeke,Genk,1,2,A,0,1,A
+B1,06/05/00,Lokeren,Beveren,5,2,H,2,0,H
+B1,06/05/00,Mechelen,Gent,0,2,A,0,2,A
+B1,06/05/00,St Truiden,Lierse,2,1,H,2,1,H
+B1,06/05/00,Westerlo,Geel,4,1,H,1,0,H
+B1,11/05/00,Beveren,Germinal,1,4,A,0,4,A
+B1,11/05/00,Charleroi,Anderlecht,1,1,D,0,1,A
+B1,11/05/00,Geel,Club Brugge,0,2,A,0,1,A
+B1,11/05/00,Genk,Mechelen,3,1,H,2,0,H
+B1,11/05/00,Gent,Westerlo,2,3,A,1,2,A
+B1,11/05/00,Lierse,Lokeren,1,2,A,1,0,H
+B1,11/05/00,Lommel,St Truiden,4,1,H,1,0,H
+B1,11/05/00,Mouscron,Aalst,1,1,D,0,0,D
+B1,11/05/00,Standard,Harelbeke,1,3,A,0,1,A
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,

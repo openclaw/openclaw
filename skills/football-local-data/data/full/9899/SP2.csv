@@ -1,0 +1,463 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HTR,,,,,,,,,,,
+SP2,29/08/98,Ath Madrid B,Hercules,2,3,A,2,0,H,,,,,,,,,,,
+SP2,29/08/98,Las Palmas,Albacete,2,1,H,1,1,D,,,,,,,,,,,
+SP2,29/08/98,Lleida,Leganes,1,4,A,0,3,A,,,,,,,,,,,
+SP2,29/08/98,Numancia,Merida,2,1,H,1,0,H,,,,,,,,,,,
+SP2,30/08/98,Compostela,Recreativo,0,0,D,0,0,D,,,,,,,,,,,
+SP2,30/08/98,Logrones,Badajoz,1,0,H,0,0,D,,,,,,,,,,,
+SP2,30/08/98,Malaga,Eibar,2,1,H,0,1,A,,,,,,,,,,,
+SP2,30/08/98,Mallorca B,Barcelona B,4,1,H,2,1,H,,,,,,,,,,,
+SP2,30/08/98,Sevilla,Ourense,3,0,H,1,0,H,,,,,,,,,,,
+SP2,30/08/98,Sp Gijon,Toledo,0,0,D,0,0,D,,,,,,,,,,,
+SP2,30/08/98,Vallecano,Osasuna,1,1,D,1,0,H,,,,,,,,,,,
+SP2,05/09/98,Barcelona B,Ath Madrid B,1,1,D,0,1,A,,,,,,,,,,,
+SP2,05/09/98,Hercules,Vallecano,1,1,D,0,1,A,,,,,,,,,,,
+SP2,05/09/98,Osasuna,Logrones,1,1,D,0,1,A,,,,,,,,,,,
+SP2,05/09/98,Ourense,Malaga,0,1,A,0,0,D,,,,,,,,,,,
+SP2,06/09/98,Albacete,Mallorca B,0,2,A,0,2,A
+SP2,06/09/98,Badajoz,Lleida,1,2,A,0,1,A
+SP2,06/09/98,Eibar,Sp Gijon,2,1,H,1,1,D
+SP2,06/09/98,Leganes,Numancia,0,5,A,0,0,D
+SP2,06/09/98,Merida,Compostela,0,1,A,0,0,D
+SP2,06/09/98,Recreativo,Sevilla,0,1,A,0,0,D
+SP2,06/09/98,Toledo,Las Palmas,2,0,H,0,0,D
+SP2,12/09/98,Compostela,Leganes,4,1,H,0,1,A
+SP2,12/09/98,Las Palmas,Eibar,3,0,H,2,0,H
+SP2,12/09/98,Vallecano,Barcelona B,0,0,D,0,0,D
+SP2,13/09/98,Ath Madrid B,Albacete,0,0,D,0,0,D
+SP2,13/09/98,Lleida,Osasuna,1,0,H,0,0,D
+SP2,13/09/98,Logrones,Hercules,2,1,H,1,0,H
+SP2,13/09/98,Malaga,Sp Gijon,1,1,D,1,1,D
+SP2,13/09/98,Numancia,Badajoz,2,1,H,0,1,A
+SP2,13/09/98,Ourense,Recreativo,1,0,H,1,0,H
+SP2,13/09/98,Sevilla,Merida,0,0,D,0,0,D
+SP2,14/09/98,Mallorca B,Toledo,0,1,A,0,1,A
+SP2,19/09/98,Barcelona B,Logrones,1,2,A,1,1,D
+SP2,19/09/98,Eibar,Mallorca B,0,1,A,0,1,A
+SP2,19/09/98,Hercules,Lleida,0,3,A,0,1,A
+SP2,19/09/98,Recreativo,Malaga,2,2,D,1,1,D
+SP2,20/09/98,Albacete,Vallecano,2,2,D,1,1,D
+SP2,20/09/98,Badajoz,Compostela,2,2,D,0,2,A
+SP2,20/09/98,Leganes,Sevilla,0,1,A,0,1,A
+SP2,20/09/98,Merida,Ourense,1,1,D,1,1,D
+SP2,20/09/98,Osasuna,Numancia,0,1,A,0,0,D
+SP2,20/09/98,Sp Gijon,Las Palmas,0,2,A,0,1,A
+SP2,20/09/98,Toledo,Ath Madrid B,2,0,H,1,0,H
+SP2,26/09/98,Compostela,Osasuna,0,2,A,0,0,D
+SP2,26/09/98,Lleida,Barcelona B,2,3,A,2,0,H
+SP2,26/09/98,Vallecano,Toledo,1,1,D,1,0,H
+SP2,27/09/98,Ath Madrid B,Eibar,2,1,H,1,0,H
+SP2,27/09/98,Logrones,Albacete,0,1,A,0,0,D
+SP2,27/09/98,Malaga,Las Palmas,0,0,D,0,0,D
+SP2,27/09/98,Numancia,Hercules,2,0,H,0,0,D
+SP2,27/09/98,Ourense,Leganes,1,0,H,0,0,D
+SP2,27/09/98,Recreativo,Merida,0,0,D,0,0,D
+SP2,27/09/98,Sevilla,Badajoz,0,0,D,0,0,D
+SP2,28/09/98,Mallorca B,Sp Gijon,2,0,H,1,0,H
+SP2,03/10/98,Barcelona B,Numancia,0,4,A,0,0,D
+SP2,03/10/98,Eibar,Vallecano,1,2,A,0,1,A
+SP2,03/10/98,Hercules,Compostela,3,2,H,3,1,H
+SP2,03/10/98,Leganes,Recreativo,1,0,H,0,0,D
+SP2,04/10/98,Albacete,Lleida,0,1,A,0,1,A
+SP2,04/10/98,Badajoz,Ourense,2,0,H,0,0,D
+SP2,04/10/98,Las Palmas,Mallorca B,4,2,H,1,0,H
+SP2,04/10/98,Merida,Malaga,1,4,A,1,2,A
+SP2,04/10/98,Osasuna,Sevilla,2,1,H,1,0,H
+SP2,04/10/98,Sp Gijon,Ath Madrid B,0,3,A,0,1,A
+SP2,04/10/98,Toledo,Logrones,4,1,H,3,0,H
+SP2,10/10/98,Compostela,Barcelona B,2,1,H,1,0,H
+SP2,10/10/98,Logrones,Eibar,1,1,D,1,0,H
+SP2,10/10/98,Sevilla,Hercules,1,0,H,0,0,D
+SP2,10/10/98,Vallecano,Sp Gijon,2,1,H,0,0,D
+SP2,11/10/98,Ath Madrid B,Las Palmas,2,1,H,1,0,H
+SP2,11/10/98,Lleida,Toledo,3,1,H,1,1,D
+SP2,11/10/98,Malaga,Mallorca B,2,1,H,1,0,H
+SP2,11/10/98,Merida,Leganes,2,0,H,2,0,H
+SP2,11/10/98,Numancia,Albacete,1,1,D,1,0,H
+SP2,11/10/98,Ourense,Osasuna,1,4,A,0,2,A
+SP2,11/10/98,Recreativo,Badajoz,1,0,H,0,0,D
+SP2,17/10/98,Barcelona B,Sevilla,2,2,D,0,0,D
+SP2,17/10/98,Las Palmas,Vallecano,3,0,H,1,0,H
+SP2,18/10/98,Albacete,Compostela,1,0,H,1,0,H
+SP2,18/10/98,Badajoz,Merida,0,0,D,0,0,D
+SP2,18/10/98,Eibar,Lleida,1,1,D,0,0,D
+SP2,18/10/98,Hercules,Ourense,0,2,A,0,0,D
+SP2,18/10/98,Leganes,Malaga,0,2,A,0,2,A
+SP2,18/10/98,Osasuna,Recreativo,0,0,D,0,0,D
+SP2,18/10/98,Sp Gijon,Logrones,0,1,A,0,0,D
+SP2,18/10/98,Toledo,Numancia,1,1,D,1,0,H
+SP2,19/10/98,Mallorca B,Ath Madrid B,3,4,A,1,1,D
+SP2,24/10/98,Malaga,Ath Madrid B,0,3,A,0,1,A
+SP2,24/10/98,Ourense,Barcelona B,2,0,H,1,0,H
+SP2,25/10/98,Compostela,Toledo,1,1,D,1,1,D
+SP2,25/10/98,Leganes,Badajoz,1,0,H,0,0,D
+SP2,25/10/98,Lleida,Sp Gijon,0,1,A,0,1,A
+SP2,25/10/98,Logrones,Las Palmas,1,1,D,1,0,H
+SP2,25/10/98,Merida,Osasuna,1,0,H,1,0,H
+SP2,25/10/98,Numancia,Eibar,2,1,H,1,0,H
+SP2,25/10/98,Recreativo,Hercules,1,0,H,1,0,H
+SP2,25/10/98,Sevilla,Albacete,2,1,H,0,1,A
+SP2,25/10/98,Vallecano,Mallorca B,2,1,H,1,1,D
+SP2,31/10/98,Albacete,Ourense,2,1,H,1,1,D
+SP2,31/10/98,Barcelona B,Recreativo,1,2,A,1,0,H
+SP2,31/10/98,Las Palmas,Lleida,0,0,D,0,0,D
+SP2,01/11/98,Ath Madrid B,Vallecano,1,2,A,1,1,D
+SP2,01/11/98,Badajoz,Malaga,2,0,H,1,0,H
+SP2,01/11/98,Eibar,Compostela,1,3,A,0,1,A
+SP2,01/11/98,Hercules,Merida,0,0,D,0,0,D
+SP2,01/11/98,Mallorca B,Logrones,1,1,D,0,0,D
+SP2,01/11/98,Osasuna,Leganes,1,0,H,1,0,H
+SP2,01/11/98,Sp Gijon,Numancia,0,2,A,0,1,A
+SP2,01/11/98,Toledo,Sevilla,2,0,H,0,0,D
+SP2,07/11/98,Compostela,Sp Gijon,2,2,D,1,0,H
+SP2,07/11/98,Lleida,Mallorca B,1,0,H,1,0,H
+SP2,07/11/98,Numancia,Las Palmas,0,0,D,0,0,D
+SP2,07/11/98,Recreativo,Albacete,1,0,H,0,0,D
+SP2,08/11/98,Badajoz,Osasuna,0,1,A,0,1,A
+SP2,08/11/98,Leganes,Hercules,2,2,D,2,2,D
+SP2,08/11/98,Logrones,Ath Madrid B,2,3,A,2,0,H
+SP2,08/11/98,Malaga,Vallecano,1,3,A,1,1,D
+SP2,08/11/98,Merida,Barcelona B,4,2,H,3,0,H
+SP2,08/11/98,Ourense,Toledo,0,1,A,0,0,D
+SP2,08/11/98,Sevilla,Eibar,2,0,H,1,0,H
+SP2,14/11/98,Barcelona B,Leganes,0,2,A,0,2,A
+SP2,14/11/98,Eibar,Ourense,2,1,H,1,0,H
+SP2,14/11/98,Las Palmas,Compostela,1,1,D,1,0,H
+SP2,15/11/98,Albacete,Merida,0,2,A,0,2,A
+SP2,15/11/98,Ath Madrid B,Lleida,2,2,D,1,1,D
+SP2,15/11/98,Hercules,Badajoz,2,0,H,1,0,H
+SP2,15/11/98,Mallorca B,Numancia,0,3,A,0,1,A
+SP2,15/11/98,Osasuna,Malaga,1,0,H,1,0,H
+SP2,15/11/98,Sp Gijon,Sevilla,2,2,D,0,0,D
+SP2,15/11/98,Toledo,Recreativo,1,0,H,1,0,H
+SP2,15/11/98,Vallecano,Logrones,2,1,H,1,0,H
+SP2,21/11/98,Lleida,Vallecano,0,0,D,0,0,D
+SP2,21/11/98,Osasuna,Hercules,0,0,D,0,0,D
+SP2,22/11/98,Badajoz,Barcelona B,1,0,H,1,0,H
+SP2,22/11/98,Compostela,Mallorca B,2,0,H,1,0,H
+SP2,22/11/98,Leganes,Albacete,0,0,D,0,0,D
+SP2,22/11/98,Malaga,Logrones,3,2,H,2,0,H
+SP2,22/11/98,Merida,Toledo,1,1,D,1,1,D
+SP2,22/11/98,Numancia,Ath Madrid B,2,1,H,0,0,D
+SP2,22/11/98,Ourense,Sp Gijon,1,2,A,1,1,D
+SP2,22/11/98,Recreativo,Eibar,2,0,H,1,0,H
+SP2,22/11/98,Sevilla,Las Palmas,1,3,A,0,2,A
+SP2,28/11/98,Barcelona B,Osasuna,4,0,H,2,0,H
+SP2,28/11/98,Hercules,Malaga,0,3,A,0,0,D
+SP2,28/11/98,Las Palmas,Ourense,6,0,H,3,0,H
+SP2,28/11/98,Toledo,Leganes,3,3,D,3,2,H
+SP2,29/11/98,Albacete,Badajoz,0,1,A,0,0,D
+SP2,29/11/98,Ath Madrid B,Compostela,0,0,D,0,0,D
+SP2,29/11/98,Eibar,Merida,1,0,H,0,0,D
+SP2,29/11/98,Logrones,Lleida,1,1,D,0,0,D
+SP2,29/11/98,Mallorca B,Sevilla,0,0,D,0,0,D
+SP2,29/11/98,Sp Gijon,Recreativo,0,1,A,0,1,A
+SP2,29/11/98,Vallecano,Numancia,1,1,D,0,1,A
+SP2,05/12/98,Ourense,Mallorca B,1,2,A,1,0,H
+SP2,05/12/98,Recreativo,Las Palmas,0,0,D,0,0,D
+SP2,06/12/98,Badajoz,Toledo,0,1,A,0,1,A
+SP2,06/12/98,Compostela,Vallecano,1,3,A,1,3,A
+SP2,06/12/98,Hercules,Barcelona B,1,2,A,0,0,D
+SP2,06/12/98,Leganes,Eibar,2,0,H,1,0,H
+SP2,06/12/98,Malaga,Lleida,0,0,D,0,0,D
+SP2,06/12/98,Merida,Sp Gijon,0,1,A,0,0,D
+SP2,06/12/98,Numancia,Logrones,2,3,A,1,0,H
+SP2,06/12/98,Osasuna,Albacete,1,0,H,1,0,H
+SP2,06/12/98,Sevilla,Ath Madrid B,2,2,D,0,1,A
+SP2,12/12/98,Barcelona B,Malaga,1,1,D,0,1,A
+SP2,12/12/98,Las Palmas,Merida,1,0,H,0,0,D
+SP2,12/12/98,Mallorca B,Recreativo,2,1,H,0,0,D
+SP2,13/12/98,Albacete,Hercules,3,1,H,2,1,H
+SP2,13/12/98,Ath Madrid B,Ourense,2,1,H,1,1,D
+SP2,13/12/98,Eibar,Badajoz,0,1,A,0,0,D
+SP2,13/12/98,Lleida,Numancia,2,1,H,2,1,H
+SP2,13/12/98,Logrones,Compostela,0,3,A,0,2,A
+SP2,13/12/98,Sp Gijon,Leganes,0,0,D,0,0,D
+SP2,13/12/98,Toledo,Osasuna,1,4,A,0,1,A
+SP2,13/12/98,Vallecano,Sevilla,1,4,A,0,1,A
+SP2,19/12/98,Barcelona B,Albacete,0,1,A,0,0,D
+SP2,19/12/98,Merida,Mallorca B,3,0,H,1,0,H
+SP2,19/12/98,Osasuna,Eibar,3,0,H,2,0,H
+SP2,20/12/98,Badajoz,Sp Gijon,2,0,H,1,0,H
+SP2,20/12/98,Compostela,Lleida,1,1,D,1,0,H
+SP2,20/12/98,Hercules,Toledo,1,0,H,0,0,D
+SP2,20/12/98,Leganes,Las Palmas,0,0,D,0,0,D
+SP2,20/12/98,Malaga,Numancia,2,1,H,1,1,D
+SP2,20/12/98,Ourense,Vallecano,1,2,A,0,2,A
+SP2,20/12/98,Recreativo,Ath Madrid B,1,0,H,1,0,H
+SP2,20/12/98,Sevilla,Logrones,0,3,A,0,1,A
+SP2,02/01/99,Eibar,Hercules,1,0,H,0,0,D
+SP2,02/01/99,Mallorca B,Leganes,2,1,H,1,0,H
+SP2,02/01/99,Toledo,Barcelona B,2,1,H,1,0,H
+SP2,03/01/99,Albacete,Malaga,2,2,D,1,2,A
+SP2,03/01/99,Ath Madrid B,Merida,0,1,A,0,1,A
+SP2,03/01/99,Las Palmas,Badajoz,1,1,D,0,1,A
+SP2,03/01/99,Lleida,Sevilla,3,0,H,2,0,H
+SP2,03/01/99,Logrones,Ourense,2,2,D,0,1,A
+SP2,03/01/99,Numancia,Compostela,1,0,H,0,0,D
+SP2,03/01/99,Sp Gijon,Osasuna,1,1,D,0,0,D
+SP2,03/01/99,Vallecano,Recreativo,2,1,H,1,0,H
+SP2,09/01/99,Barcelona B,Eibar,0,0,D,0,0,D
+SP2,09/01/99,Leganes,Ath Madrid B,1,1,D,1,1,D
+SP2,09/01/99,Ourense,Lleida,1,1,D,1,0,H
+SP2,09/01/99,Recreativo,Logrones,1,2,A,0,0,D
+SP2,10/01/99,Albacete,Toledo,0,2,A,0,1,A
+SP2,10/01/99,Badajoz,Mallorca B,0,1,A,0,0,D
+SP2,10/01/99,Hercules,Sp Gijon,1,0,H,1,0,H
+SP2,10/01/99,Malaga,Compostela,2,1,H,0,1,A
+SP2,10/01/99,Merida,Vallecano,4,2,H,2,1,H
+SP2,10/01/99,Osasuna,Las Palmas,4,0,H,2,0,H
+SP2,10/01/99,Sevilla,Numancia,1,0,H,0,0,D
+SP2,16/01/99,Lleida,Recreativo,0,2,A,0,2,A
+SP2,16/01/99,Logrones,Merida,2,1,H,0,0,D
+SP2,16/01/99,Vallecano,Leganes,1,0,H,1,0,H
+SP2,17/01/99,Ath Madrid B,Badajoz,1,1,D,0,1,A
+SP2,17/01/99,Compostela,Sevilla,1,0,H,1,0,H
+SP2,17/01/99,Eibar,Albacete,0,1,A,0,0,D
+SP2,17/01/99,Las Palmas,Hercules,4,2,H,3,0,H
+SP2,17/01/99,Malaga,Toledo,3,0,H,3,0,H
+SP2,17/01/99,Mallorca B,Osasuna,1,1,D,0,1,A
+SP2,17/01/99,Numancia,Ourense,4,0,H,2,0,H
+SP2,17/01/99,Sp Gijon,Barcelona B,2,1,H,0,0,D
+SP2,23/01/99,Barcelona B,Las Palmas,1,2,A,1,1,D
+SP2,23/01/99,Leganes,Logrones,1,1,D,0,0,D
+SP2,23/01/99,Ourense,Compostela,0,2,A,0,1,A
+SP2,24/01/99,Albacete,Sp Gijon,0,0,D,0,0,D
+SP2,24/01/99,Badajoz,Vallecano,2,2,D,0,1,A
+SP2,24/01/99,Hercules,Mallorca B,2,1,H,2,1,H
+SP2,24/01/99,Merida,Lleida,1,0,H,0,0,D
+SP2,24/01/99,Osasuna,Ath Madrid B,2,2,D,1,0,H
+SP2,24/01/99,Recreativo,Numancia,3,2,H,1,1,D
+SP2,24/01/99,Sevilla,Malaga,2,3,A,1,2,A
+SP2,24/01/99,Toledo,Eibar,1,2,A,0,2,A
+SP2,30/01/99,Barcelona B,Mallorca B,1,2,A,1,0,H
+SP2,30/01/99,Eibar,Malaga,0,0,D,0,0,D
+SP2,30/01/99,Leganes,Lleida,1,0,H,1,0,H
+SP2,30/01/99,Recreativo,Compostela,1,1,D,0,0,D
+SP2,31/01/99,Albacete,Las Palmas,1,0,H,0,0,D
+SP2,31/01/99,Badajoz,Logrones,2,1,H,2,1,H
+SP2,31/01/99,Hercules,Ath Madrid B,1,3,A,1,1,D
+SP2,31/01/99,Merida,Numancia,2,0,H,1,0,H
+SP2,31/01/99,Osasuna,Vallecano,1,1,D,0,1,A
+SP2,31/01/99,Ourense,Sevilla,2,3,A,0,2,A
+SP2,31/01/99,Toledo,Sp Gijon,2,5,A,0,1,A
+SP2,06/02/99,Ath Madrid B,Barcelona B,2,0,H,1,0,H
+SP2,06/02/99,Compostela,Merida,0,0,D,0,0,D
+SP2,06/02/99,Las Palmas,Toledo,0,0,D,0,0,D
+SP2,07/02/99,Lleida,Badajoz,0,0,D,0,0,D
+SP2,07/02/99,Logrones,Osasuna,0,0,D,0,0,D
+SP2,07/02/99,Malaga,Ourense,1,1,D,0,0,D
+SP2,07/02/99,Mallorca B,Albacete,0,0,D,0,0,D
+SP2,07/02/99,Numancia,Leganes,1,1,D,1,0,H
+SP2,07/02/99,Sevilla,Recreativo,1,0,H,0,0,D
+SP2,07/02/99,Sp Gijon,Eibar,3,1,H,2,1,H
+SP2,07/02/99,Vallecano,Hercules,3,0,H,1,0,H
+SP2,13/02/99,Albacete,Ath Madrid B,0,0,D,0,0,D
+SP2,13/02/99,Badajoz,Numancia,2,1,H,1,0,H
+SP2,13/02/99,Eibar,Las Palmas,0,1,A,0,1,A
+SP2,13/02/99,Osasuna,Lleida,2,0,H,1,0,H
+SP2,13/02/99,Toledo,Mallorca B,1,0,H,0,0,D
+SP2,14/02/99,Barcelona B,Vallecano,1,0,H,0,0,D
+SP2,14/02/99,Hercules,Logrones,1,1,D,0,0,D
+SP2,14/02/99,Leganes,Compostela,2,2,D,1,2,A
+SP2,14/02/99,Merida,Sevilla,3,3,D,1,1,D
+SP2,14/02/99,Recreativo,Ourense,2,0,H,1,0,H
+SP2,14/02/99,Sp Gijon,Malaga,1,1,D,1,1,D
+SP2,20/02/99,Compostela,Badajoz,1,0,H,0,0,D
+SP2,20/02/99,Las Palmas,Sp Gijon,3,0,H,1,0,H
+SP2,20/02/99,Lleida,Hercules,1,0,H,1,0,H
+SP2,20/02/99,Malaga,Recreativo,3,1,H,1,0,H
+SP2,20/02/99,Mallorca B,Eibar,0,1,A,0,0,D
+SP2,20/02/99,Numancia,Osasuna,3,0,H,1,0,H
+SP2,20/02/99,Vallecano,Albacete,2,0,H,1,0,H
+SP2,21/02/99,Ath Madrid B,Toledo,2,1,H,1,0,H
+SP2,21/02/99,Logrones,Barcelona B,0,1,A,0,0,D
+SP2,21/02/99,Ourense,Merida,0,1,A,0,1,A
+SP2,21/02/99,Sevilla,Leganes,1,0,H,0,0,D
+SP2,27/02/99,Barcelona B,Lleida,1,2,A,0,1,A
+SP2,27/02/99,Osasuna,Compostela,2,1,H,0,1,A
+SP2,27/02/99,Toledo,Vallecano,0,1,A,0,0,D
+SP2,28/02/99,Albacete,Logrones,2,0,H,1,0,H
+SP2,28/02/99,Badajoz,Sevilla,1,0,H,0,0,D
+SP2,28/02/99,Eibar,Ath Madrid B,3,1,H,0,0,D
+SP2,28/02/99,Hercules,Numancia,0,0,D,0,0,D
+SP2,28/02/99,Las Palmas,Malaga,1,1,D,0,0,D
+SP2,28/02/99,Leganes,Ourense,3,0,H,2,0,H
+SP2,28/02/99,Merida,Recreativo,0,0,D,0,0,D
+SP2,28/02/99,Sp Gijon,Mallorca B,3,2,H,2,1,H
+SP2,06/03/99,Compostela,Hercules,3,1,H,1,0,H
+SP2,06/03/99,Malaga,Merida,4,3,H,1,2,A
+SP2,06/03/99,Mallorca B,Las Palmas,2,0,H,1,0,H
+SP2,06/03/99,Numancia,Barcelona B,0,2,A,0,0,D
+SP2,07/03/99,Ath Madrid B,Sp Gijon,1,0,H,0,0,D
+SP2,07/03/99,Lleida,Albacete,0,0,D,0,0,D
+SP2,07/03/99,Logrones,Toledo,1,0,H,0,0,D
+SP2,07/03/99,Ourense,Badajoz,1,1,D,0,0,D
+SP2,07/03/99,Recreativo,Leganes,0,0,D,0,0,D
+SP2,07/03/99,Sevilla,Osasuna,4,0,H,1,0,H
+SP2,07/03/99,Vallecano,Eibar,3,0,H,1,0,H
+SP2,14/03/99,Albacete,Numancia,1,1,D,0,0,D
+SP2,14/03/99,Badajoz,Recreativo,0,3,A,0,0,D
+SP2,14/03/99,Barcelona B,Compostela,1,0,H,0,0,D
+SP2,14/03/99,Eibar,Logrones,2,2,D,0,1,A
+SP2,14/03/99,Hercules,Sevilla,0,0,D,0,0,D
+SP2,14/03/99,Las Palmas,Ath Madrid B,0,1,A,0,0,D
+SP2,14/03/99,Leganes,Merida,1,1,D,1,0,H
+SP2,14/03/99,Mallorca B,Malaga,0,1,A,0,0,D
+SP2,14/03/99,Osasuna,Ourense,2,1,H,0,0,D
+SP2,14/03/99,Sp Gijon,Vallecano,0,0,D,0,0,D
+SP2,14/03/99,Toledo,Lleida,2,1,H,2,0,H
+SP2,21/03/99,Ath Madrid B,Mallorca B,2,1,H,2,0,H
+SP2,21/03/99,Compostela,Albacete,3,1,H,2,0,H
+SP2,21/03/99,Lleida,Eibar,3,2,H,2,0,H
+SP2,21/03/99,Logrones,Sp Gijon,0,2,A,0,1,A
+SP2,21/03/99,Malaga,Leganes,3,0,H,1,0,H
+SP2,21/03/99,Merida,Badajoz,1,0,H,1,0,H
+SP2,21/03/99,Numancia,Toledo,0,2,A,0,1,A
+SP2,21/03/99,Ourense,Hercules,1,2,A,1,1,D
+SP2,21/03/99,Recreativo,Osasuna,0,0,D,0,0,D
+SP2,21/03/99,Sevilla,Barcelona B,0,3,A,0,1,A
+SP2,21/03/99,Vallecano,Las Palmas,2,2,D,2,1,H
+SP2,27/03/99,Ath Madrid B,Malaga,5,3,H,2,3,A
+SP2,27/03/99,Barcelona B,Ourense,5,0,H,1,0,H
+SP2,27/03/99,Eibar,Numancia,1,2,A,1,1,D
+SP2,27/03/99,Las Palmas,Logrones,2,1,H,0,1,A
+SP2,28/03/99,Albacete,Sevilla,3,1,H,1,1,D
+SP2,28/03/99,Badajoz,Leganes,1,0,H,1,0,H
+SP2,28/03/99,Hercules,Recreativo,0,0,D,0,0,D
+SP2,28/03/99,Mallorca B,Vallecano,4,4,D,2,1,H
+SP2,28/03/99,Osasuna,Merida,0,0,D,0,0,D
+SP2,28/03/99,Sp Gijon,Lleida,0,1,A,0,1,A
+SP2,28/03/99,Toledo,Compostela,2,2,D,1,0,H
+SP2,04/04/99,Compostela,Eibar,1,0,H,0,0,D
+SP2,04/04/99,Leganes,Osasuna,3,1,H,1,1,D
+SP2,04/04/99,Lleida,Las Palmas,1,1,D,1,0,H
+SP2,04/04/99,Logrones,Mallorca B,0,1,A,0,0,D
+SP2,04/04/99,Malaga,Badajoz,1,2,A,1,2,A
+SP2,04/04/99,Merida,Hercules,3,1,H,0,1,A
+SP2,04/04/99,Numancia,Sp Gijon,1,1,D,0,0,D
+SP2,04/04/99,Ourense,Albacete,2,2,D,1,0,H
+SP2,04/04/99,Recreativo,Barcelona B,5,0,H,1,0,H
+SP2,04/04/99,Sevilla,Toledo,2,2,D,1,2,A
+SP2,04/04/99,Vallecano,Ath Madrid B,3,0,H,2,0,H
+SP2,11/04/99,Albacete,Recreativo,0,0,D,0,0,D
+SP2,11/04/99,Ath Madrid B,Logrones,3,2,H,2,2,D
+SP2,11/04/99,Barcelona B,Merida,3,1,H,0,1,A
+SP2,11/04/99,Eibar,Sevilla,1,3,A,0,0,D
+SP2,11/04/99,Hercules,Leganes,0,1,A,0,0,D
+SP2,11/04/99,Las Palmas,Numancia,0,2,A,0,1,A
+SP2,11/04/99,Mallorca B,Lleida,1,1,D,1,0,H
+SP2,11/04/99,Osasuna,Badajoz,2,0,H,1,0,H
+SP2,11/04/99,Sp Gijon,Compostela,3,1,H,0,1,A
+SP2,11/04/99,Toledo,Ourense,2,0,H,2,0,H
+SP2,11/04/99,Vallecano,Malaga,0,2,A,0,2,A
+SP2,17/04/99,Compostela,Las Palmas,0,1,A,0,0,D
+SP2,17/04/99,Leganes,Barcelona B,2,0,H,1,0,H
+SP2,17/04/99,Logrones,Vallecano,1,0,H,0,0,D
+SP2,18/04/99,Badajoz,Hercules,1,1,D,1,1,D
+SP2,18/04/99,Lleida,Ath Madrid B,3,0,H,1,0,H
+SP2,18/04/99,Malaga,Osasuna,3,0,H,1,0,H
+SP2,18/04/99,Merida,Albacete,3,0,H,0,0,D
+SP2,18/04/99,Numancia,Mallorca B,4,1,H,0,0,D
+SP2,18/04/99,Ourense,Eibar,4,2,H,2,1,H
+SP2,18/04/99,Recreativo,Toledo,2,2,D,1,1,D
+SP2,18/04/99,Sevilla,Sp Gijon,2,0,H,0,0,D
+SP2,25/04/99,Albacete,Leganes,0,0,D,0,0,D
+SP2,25/04/99,Ath Madrid B,Numancia,3,1,H,1,0,H
+SP2,25/04/99,Barcelona B,Badajoz,0,1,A,0,1,A
+SP2,25/04/99,Eibar,Recreativo,0,0,D,0,0,D
+SP2,25/04/99,Hercules,Osasuna,1,1,D,1,0,H
+SP2,25/04/99,Las Palmas,Sevilla,2,2,D,1,2,A
+SP2,25/04/99,Logrones,Malaga,1,1,D,1,1,D
+SP2,25/04/99,Sp Gijon,Ourense,1,0,H,0,0,D
+SP2,25/04/99,Toledo,Merida,1,0,H,0,0,D
+SP2,25/04/99,Vallecano,Lleida,4,1,H,3,1,H
+SP2,26/04/99,Mallorca B,Compostela,1,1,D,0,1,A
+SP2,02/05/99,Badajoz,Albacete,0,0,D,0,0,D
+SP2,02/05/99,Compostela,Ath Madrid B,0,3,A,0,0,D
+SP2,02/05/99,Leganes,Toledo,1,2,A,1,1,D
+SP2,02/05/99,Lleida,Logrones,2,1,H,2,0,H
+SP2,02/05/99,Malaga,Hercules,2,1,H,1,1,D
+SP2,02/05/99,Merida,Eibar,0,2,A,0,1,A
+SP2,02/05/99,Numancia,Vallecano,2,1,H,1,0,H
+SP2,02/05/99,Osasuna,Barcelona B,1,2,A,0,2,A
+SP2,02/05/99,Ourense,Las Palmas,4,1,H,2,0,H
+SP2,02/05/99,Recreativo,Sp Gijon,0,0,D,0,0,D
+SP2,02/05/99,Sevilla,Mallorca B,3,1,H,1,1,D
+SP2,09/05/99,Albacete,Osasuna,2,0,H,0,0,D
+SP2,09/05/99,Ath Madrid B,Sevilla,0,1,A,0,0,D
+SP2,09/05/99,Barcelona B,Hercules,4,1,H,1,0,H
+SP2,09/05/99,Eibar,Leganes,0,0,D,0,0,D
+SP2,09/05/99,Las Palmas,Recreativo,0,0,D,0,0,D
+SP2,09/05/99,Lleida,Malaga,0,2,A,0,0,D
+SP2,09/05/99,Logrones,Numancia,1,0,H,1,0,H
+SP2,09/05/99,Sp Gijon,Merida,2,0,H,1,0,H
+SP2,09/05/99,Toledo,Badajoz,1,1,D,1,1,D
+SP2,09/05/99,Vallecano,Compostela,1,2,A,1,0,H
+SP2,10/05/99,Mallorca B,Ourense,2,0,H,0,0,D
+SP2,16/05/99,Badajoz,Eibar,1,1,D,1,0,H
+SP2,16/05/99,Compostela,Logrones,3,1,H,2,1,H
+SP2,16/05/99,Hercules,Albacete,2,1,H,0,1,A
+SP2,16/05/99,Leganes,Sp Gijon,0,1,A,0,0,D
+SP2,16/05/99,Malaga,Barcelona B,2,0,H,1,0,H
+SP2,16/05/99,Merida,Las Palmas,1,1,D,1,0,H
+SP2,16/05/99,Numancia,Lleida,2,2,D,1,2,A
+SP2,16/05/99,Osasuna,Toledo,0,1,A,0,1,A
+SP2,16/05/99,Ourense,Ath Madrid B,0,4,A,0,2,A
+SP2,16/05/99,Recreativo,Mallorca B,3,2,H,0,2,A
+SP2,16/05/99,Sevilla,Vallecano,4,1,H,3,0,H
+SP2,23/05/99,Albacete,Barcelona B,3,0,H,1,0,H
+SP2,23/05/99,Ath Madrid B,Recreativo,3,1,H,1,0,H
+SP2,23/05/99,Eibar,Osasuna,2,0,H,0,0,D
+SP2,23/05/99,Las Palmas,Leganes,1,1,D,1,0,H
+SP2,23/05/99,Lleida,Compostela,2,3,A,1,1,D
+SP2,23/05/99,Logrones,Sevilla,0,1,A,0,0,D
+SP2,23/05/99,Numancia,Malaga,0,0,D,0,0,D
+SP2,23/05/99,Sp Gijon,Badajoz,1,0,H,0,0,D
+SP2,23/05/99,Toledo,Hercules,1,2,A,0,0,D
+SP2,23/05/99,Vallecano,Ourense,2,0,H,1,0,H
+SP2,24/05/99,Mallorca B,Merida,0,0,D,0,0,D
+SP2,30/05/99,Badajoz,Las Palmas,0,0,D,0,0,D
+SP2,30/05/99,Barcelona B,Toledo,0,3,A,0,2,A
+SP2,30/05/99,Compostela,Numancia,0,1,A,0,1,A
+SP2,30/05/99,Hercules,Eibar,1,3,A,1,2,A
+SP2,30/05/99,Leganes,Mallorca B,0,0,D,0,0,D
+SP2,30/05/99,Malaga,Albacete,3,2,H,3,1,H
+SP2,30/05/99,Merida,Ath Madrid B,1,1,D,1,0,H
+SP2,30/05/99,Osasuna,Sp Gijon,0,4,A,0,2,A
+SP2,30/05/99,Ourense,Logrones,1,0,H,1,0,H
+SP2,30/05/99,Recreativo,Vallecano,0,0,D,0,0,D
+SP2,30/05/99,Sevilla,Lleida,2,2,D,0,0,D
+SP2,05/06/99,Ath Madrid B,Leganes,1,1,D,1,0,H
+SP2,05/06/99,Compostela,Malaga,3,3,D,1,2,A
+SP2,05/06/99,Las Palmas,Osasuna,1,0,H,0,0,D
+SP2,06/06/99,Eibar,Barcelona B,2,0,H,0,0,D
+SP2,06/06/99,Lleida,Ourense,2,1,H,0,1,A
+SP2,06/06/99,Logrones,Recreativo,4,1,H,1,0,H
+SP2,06/06/99,Mallorca B,Badajoz,3,3,D,1,1,D
+SP2,06/06/99,Numancia,Sevilla,3,2,H,2,0,H
+SP2,06/06/99,Sp Gijon,Hercules,2,0,H,0,0,D
+SP2,06/06/99,Toledo,Albacete,0,2,A,0,1,A
+SP2,06/06/99,Vallecano,Merida,1,0,H,0,0,D
+SP2,13/06/99,Albacete,Eibar,0,1,A,0,0,D
+SP2,13/06/99,Badajoz,Ath Madrid B,1,2,A,1,2,A
+SP2,13/06/99,Barcelona B,Sp Gijon,4,0,H,4,0,H
+SP2,13/06/99,Hercules,Las Palmas,0,2,A,0,1,A
+SP2,13/06/99,Leganes,Vallecano,0,2,A,0,1,A
+SP2,13/06/99,Merida,Logrones,2,1,H,1,0,H
+SP2,13/06/99,Osasuna,Mallorca B,3,2,H,2,1,H
+SP2,13/06/99,Ourense,Numancia,0,2,A,0,2,A
+SP2,13/06/99,Recreativo,Lleida,2,1,H,0,0,D
+SP2,13/06/99,Sevilla,Compostela,5,1,H,1,0,H
+SP2,13/06/99,Toledo,Malaga,1,2,A,1,1,D
+SP2,19/06/99,Compostela,Ourense,3,0,H,1,0,H
+SP2,19/06/99,Lleida,Merida,2,3,A,2,2,D
+SP2,20/06/99,Ath Madrid B,Osasuna,4,0,H,3,0,H
+SP2,20/06/99,Eibar,Toledo,3,0,H,1,0,H
+SP2,20/06/99,Las Palmas,Barcelona B,4,1,H,1,0,H
+SP2,20/06/99,Logrones,Leganes,0,0,D,0,0,D
+SP2,20/06/99,Malaga,Sevilla,0,1,A,0,0,D
+SP2,20/06/99,Mallorca B,Hercules,1,3,A,0,2,A
+SP2,20/06/99,Numancia,Recreativo,3,0,H,1,0,H
+SP2,20/06/99,Sp Gijon,Albacete,4,2,H,1,1,D
+SP2,20/06/99,Vallecano,Badajoz,1,1,D,0,0,D

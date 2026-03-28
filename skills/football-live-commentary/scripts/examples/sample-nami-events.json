@@ -1,0 +1,27 @@
+[
+  {
+    "minute": 0,
+    "second": 0,
+    "event_name": "开球",
+    "home_away": 1
+  },
+  {
+    "minute": 14,
+    "second": 22,
+    "event_name": "射门",
+    "outcome": "射正",
+    "home_away": 2
+  },
+  {
+    "minute": 31,
+    "second": 0,
+    "event_name": "进球",
+    "home_away": 1
+  },
+  {
+    "minute": 76,
+    "second": 0,
+    "event_name": "黄牌",
+    "home_away": 2
+  }
+]

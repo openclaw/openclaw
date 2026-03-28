@@ -1,0 +1,5 @@
+# Optional: FBref export (scripts/fbref-fetch.py). Install with:
+#   pip install -r skills/football-local-data/requirements-fbref.txt
+# Pinned to avoid pip backtracking for minutes on pandas version resolution.
+soccerdata==1.8.8
+pandas==2.2.3

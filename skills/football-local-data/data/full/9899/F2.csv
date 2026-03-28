@@ -1,0 +1,553 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HTR,,,,,,,,,,,
+F2,08/08/98,Gueugnon,Caen,2,1,H,1,1,D,,,,,,,,,,,
+F2,08/08/98,Laval,Ajaccio,2,1,H,2,1,H,,,,,,,,,,,
+F2,08/08/98,Le Mans,Beauvais,1,1,D,0,0,D,,,,,,,,,,,
+F2,08/08/98,Lille,Guingamp,1,2,A,0,1,A,,,,,,,,,,,
+F2,08/08/98,Nice,Chateauroux,1,1,D,1,0,H,,,,,,,,,,,
+F2,08/08/98,Nimes,Niort,1,1,D,0,0,D,,,,,,,,,,,
+F2,08/08/98,Red Star 93,Wasquehal,0,0,D,0,0,D,,,,,,,,,,,
+F2,08/08/98,St Etienne,Sedan,1,1,D,0,0,D,,,,,,,,,,,
+F2,08/08/98,Troyes,Cannes,2,1,H,0,0,D,,,,,,,,,,,
+F2,08/08/98,Valence,Amiens,1,1,D,0,0,D,,,,,,,,,,,
+F2,15/08/98,Amiens,Ajaccio,0,2,A,0,1,A,,,,,,,,,,,
+F2,15/08/98,Beauvais,Troyes,0,3,A,0,2,A,,,,,,,,,,,
+F2,15/08/98,Caen,St Etienne,1,1,D,0,1,A,,,,,,,,,,,
+F2,15/08/98,Cannes,Red Star 93,1,1,D,1,1,D,,,,,,,,,,,
+F2,15/08/98,Chateauroux,Valence,5,0,H,3,0,H,,,,,,,,,,,
+F2,15/08/98,Guingamp,Laval,1,3,A,0,2,A
+F2,15/08/98,Le Mans,Nimes,4,0,H,3,0,H
+F2,15/08/98,Niort,Lille,0,0,D,0,0,D
+F2,15/08/98,Sedan,Nice,4,0,H,1,0,H
+F2,15/08/98,Wasquehal,Gueugnon,1,0,H,1,0,H
+F2,22/08/98,Ajaccio,Chateauroux,1,0,H,1,0,H
+F2,22/08/98,Gueugnon,Cannes,1,0,H,0,0,D
+F2,22/08/98,Laval,Amiens,1,0,H,0,0,D
+F2,22/08/98,Lille,Caen,0,0,D,0,0,D
+F2,22/08/98,Nice,Wasquehal,0,2,A,0,0,D
+F2,22/08/98,Nimes,Beauvais,4,0,H,1,0,H
+F2,22/08/98,Red Star 93,Niort,2,0,H,1,0,H
+F2,22/08/98,St Etienne,Guingamp,0,0,D,0,0,D
+F2,22/08/98,Troyes,Le Mans,2,1,H,0,0,D
+F2,22/08/98,Valence,Sedan,1,1,D,1,1,D
+F2,29/08/98,Beauvais,Gueugnon,1,1,D,1,0,H
+F2,29/08/98,Caen,Nice,2,0,H,1,0,H
+F2,29/08/98,Cannes,Nimes,1,0,H,1,0,H
+F2,29/08/98,Chateauroux,Amiens,0,0,D,0,0,D
+F2,29/08/98,Guingamp,Valence,0,2,A,0,0,D
+F2,29/08/98,Le Mans,Red Star 93,1,2,A,0,0,D
+F2,29/08/98,Niort,Laval,0,0,D,0,0,D
+F2,29/08/98,Sedan,Ajaccio,3,0,H,2,0,H
+F2,29/08/98,Troyes,St Etienne,1,1,D,0,0,D
+F2,29/08/98,Wasquehal,Lille,0,1,A,0,1,A
+F2,04/09/98,Ajaccio,Wasquehal,1,1,D,0,1,A
+F2,04/09/98,Amiens,Sedan,3,1,H,2,0,H
+F2,04/09/98,Gueugnon,Le Mans,1,1,D,0,1,A
+F2,04/09/98,Laval,Chateauroux,1,2,A,1,1,D
+F2,04/09/98,Lille,Cannes,0,2,A,0,1,A
+F2,04/09/98,Nice,Guingamp,0,0,D,0,0,D
+F2,04/09/98,Nimes,Troyes,2,2,D,1,1,D
+F2,04/09/98,Red Star 93,Beauvais,4,3,H,3,1,H
+F2,04/09/98,St Etienne,Niort,2,0,H,1,0,H
+F2,04/09/98,Valence,Caen,0,1,A,0,1,A
+F2,10/09/98,Wasquehal,Valence,1,0,H,1,0,H
+F2,12/09/98,Beauvais,Lille,1,0,H,0,0,D
+F2,12/09/98,Caen,Ajaccio,1,1,D,0,0,D
+F2,12/09/98,Cannes,St Etienne,0,0,D,0,0,D
+F2,12/09/98,Guingamp,Amiens,2,2,D,1,1,D
+F2,12/09/98,Le Mans,Nice,1,0,H,1,0,H
+F2,12/09/98,Nimes,Laval,0,1,A,0,1,A
+F2,12/09/98,Niort,Gueugnon,3,1,H,2,1,H
+F2,12/09/98,Sedan,Chateauroux,1,1,D,0,0,D
+F2,12/09/98,Troyes,Red Star 93,3,1,H,1,0,H
+F2,19/09/98,Ajaccio,Guingamp,1,3,A,1,1,D
+F2,19/09/98,Amiens,Caen,3,1,H,1,1,D
+F2,19/09/98,Chateauroux,Wasquehal,0,0,D,0,0,D
+F2,19/09/98,Gueugnon,Troyes,1,0,H,1,0,H
+F2,19/09/98,Laval,Sedan,0,0,D,0,0,D
+F2,19/09/98,Lille,Le Mans,3,3,D,0,1,A
+F2,19/09/98,Nice,Cannes,0,3,A,0,2,A
+F2,19/09/98,Red Star 93,Nimes,1,2,A,0,1,A
+F2,19/09/98,St Etienne,Beauvais,2,1,H,1,0,H
+F2,19/09/98,Valence,Niort,2,0,H,1,0,H
+F2,23/09/98,Beauvais,Nice,0,3,A,0,2,A
+F2,23/09/98,Caen,Chateauroux,1,0,H,1,0,H
+F2,23/09/98,Cannes,Amiens,1,0,H,0,0,D
+F2,23/09/98,Guingamp,Sedan,2,1,H,1,1,D
+F2,23/09/98,Le Mans,St Etienne,1,2,A,1,0,H
+F2,23/09/98,Nimes,Gueugnon,0,0,D,0,0,D
+F2,23/09/98,Niort,Ajaccio,1,4,A,1,3,A
+F2,23/09/98,Red Star 93,Valence,1,2,A,0,0,D
+F2,23/09/98,Troyes,Lille,1,0,H,0,0,D
+F2,23/09/98,Wasquehal,Laval,0,0,D,0,0,D
+F2,26/09/98,Ajaccio,Le Mans,4,1,H,1,0,H
+F2,26/09/98,Amiens,Troyes,0,2,A,0,0,D
+F2,26/09/98,Chateauroux,Guingamp,2,1,H,0,0,D
+F2,26/09/98,Gueugnon,Red Star 93,1,1,D,0,1,A
+F2,26/09/98,Laval,Caen,2,1,H,1,0,H
+F2,26/09/98,Lille,Nimes,3,0,H,1,0,H
+F2,26/09/98,Nice,Niort,0,0,D,0,0,D
+F2,26/09/98,Sedan,Beauvais,1,2,A,1,2,A
+F2,26/09/98,St Etienne,Wasquehal,3,0,H,2,0,H
+F2,26/09/98,Valence,Cannes,1,3,A,0,0,D
+F2,03/10/98,Beauvais,Ajaccio,3,1,H,1,1,D
+F2,03/10/98,Caen,Guingamp,4,1,H,1,0,H
+F2,03/10/98,Cannes,Laval,0,0,D,0,0,D
+F2,03/10/98,Gueugnon,Amiens,1,0,H,1,0,H
+F2,03/10/98,Le Mans,Valence,6,0,H,2,0,H
+F2,03/10/98,Nimes,St Etienne,3,3,D,0,2,A
+F2,03/10/98,Niort,Chateauroux,3,0,H,2,0,H
+F2,03/10/98,Red Star 93,Lille,2,3,A,0,2,A
+F2,03/10/98,Troyes,Nice,2,0,H,2,0,H
+F2,03/10/98,Wasquehal,Sedan,0,1,A,0,1,A
+F2,09/10/98,Ajaccio,Cannes,0,0,D,0,0,D
+F2,09/10/98,Amiens,Niort,0,2,A,0,2,A
+F2,09/10/98,Chateauroux,Le Mans,1,1,D,1,0,H
+F2,09/10/98,Guingamp,Wasquehal,0,1,A,0,1,A
+F2,09/10/98,Laval,Beauvais,2,1,H,0,0,D
+F2,09/10/98,Lille,Gueugnon,1,0,H,1,0,H
+F2,09/10/98,Nice,Nimes,2,1,H,1,1,D
+F2,09/10/98,Sedan,Caen,0,1,A,0,1,A
+F2,09/10/98,St Etienne,Red Star 93,2,1,H,2,0,H
+F2,09/10/98,Valence,Troyes,0,3,A,0,1,A
+F2,17/10/98,Beauvais,Chateauroux,2,2,D,2,1,H
+F2,17/10/98,Cannes,Sedan,2,1,H,0,0,D
+F2,17/10/98,Gueugnon,Laval,1,1,D,0,0,D
+F2,17/10/98,Le Mans,Amiens,1,0,H,0,0,D
+F2,17/10/98,Lille,St Etienne,1,2,A,0,2,A
+F2,17/10/98,Nimes,Valence,3,0,H,2,0,H
+F2,17/10/98,Niort,Guingamp,1,1,D,0,0,D
+F2,17/10/98,Red Star 93,Nice,3,2,H,1,1,D
+F2,17/10/98,Troyes,Ajaccio,0,4,A,0,1,A
+F2,17/10/98,Wasquehal,Caen,0,0,D,0,0,D
+F2,23/10/98,Laval,Red Star 93,4,2,H,1,2,A
+F2,24/10/98,Ajaccio,Nimes,2,1,H,1,1,D
+F2,24/10/98,Amiens,Wasquehal,2,5,A,1,1,D
+F2,24/10/98,Caen,Niort,3,1,H,2,0,H
+F2,24/10/98,Chateauroux,Cannes,1,1,D,0,0,D
+F2,24/10/98,Guingamp,Le Mans,1,1,D,1,0,H
+F2,24/10/98,Nice,Lille,0,0,D,0,0,D
+F2,24/10/98,St Etienne,Gueugnon,3,0,H,0,0,D
+F2,24/10/98,Valence,Beauvais,3,2,H,1,1,D
+F2,25/10/98,Sedan,Troyes,1,1,D,1,0,H
+F2,30/10/98,Beauvais,Guingamp,0,2,A,0,0,D
+F2,31/10/98,Cannes,Caen,1,1,D,1,0,H
+F2,31/10/98,Gueugnon,Nice,2,0,H,0,0,D
+F2,31/10/98,Le Mans,Sedan,1,2,A,1,1,D
+F2,31/10/98,Lille,Laval,2,1,H,1,0,H
+F2,31/10/98,Nimes,Amiens,3,0,H,3,0,H
+F2,31/10/98,Niort,Wasquehal,1,1,D,1,0,H
+F2,31/10/98,St Etienne,Valence,1,0,H,0,0,D
+F2,31/10/98,Troyes,Chateauroux,0,0,D,0,0,D
+F2,01/11/98,Red Star 93,Ajaccio,1,1,D,0,0,D
+F2,07/11/98,Ajaccio,Gueugnon,1,3,A,1,2,A
+F2,07/11/98,Amiens,Red Star 93,3,0,H,0,0,D
+F2,07/11/98,Caen,Beauvais,2,0,H,0,0,D
+F2,07/11/98,Chateauroux,Nimes,1,0,H,1,0,H
+F2,07/11/98,Guingamp,Cannes,0,0,D,0,0,D
+F2,07/11/98,Laval,Troyes,0,1,A,0,1,A
+F2,07/11/98,Nice,St Etienne,0,1,A,0,1,A
+F2,07/11/98,Sedan,Niort,2,0,H,2,0,H
+F2,07/11/98,Valence,Lille,1,2,A,1,1,D
+F2,07/11/98,Wasquehal,Le Mans,1,0,H,1,0,H
+F2,11/11/98,Beauvais,Wasquehal,1,0,H,0,0,D
+F2,11/11/98,Cannes,Niort,0,3,A,0,0,D
+F2,11/11/98,Le Mans,Caen,2,1,H,0,1,A
+F2,11/11/98,Lille,Ajaccio,1,3,A,1,0,H
+F2,11/11/98,Nice,Amiens,0,0,D,0,0,D
+F2,11/11/98,Nimes,Sedan,1,1,D,1,0,H
+F2,11/11/98,Red Star 93,Chateauroux,1,1,D,0,0,D
+F2,11/11/98,St Etienne,Laval,1,1,D,0,1,A
+F2,11/11/98,Troyes,Guingamp,2,1,H,0,0,D
+F2,14/11/98,Ajaccio,St Etienne,1,1,D,0,1,A
+F2,14/11/98,Amiens,Lille,1,3,A,1,3,A
+F2,14/11/98,Caen,Troyes,2,0,H,2,0,H
+F2,14/11/98,Chateauroux,Gueugnon,2,1,H,2,0,H
+F2,14/11/98,Guingamp,Nimes,0,0,D,0,0,D
+F2,14/11/98,Laval,Le Mans,0,0,D,0,0,D
+F2,14/11/98,Niort,Beauvais,4,0,H,1,0,H
+F2,14/11/98,Sedan,Red Star 93,5,0,H,4,0,H
+F2,14/11/98,Valence,Nice,0,0,D,0,0,D
+F2,14/11/98,Wasquehal,Cannes,1,1,D,1,1,D
+F2,17/11/98,Le Mans,Niort,0,0,D,0,0,D
+F2,17/11/98,Troyes,Wasquehal,3,0,H,1,0,H
+F2,18/11/98,Beauvais,Cannes,3,1,H,1,1,D
+F2,18/11/98,Gueugnon,Sedan,1,1,D,1,0,H
+F2,18/11/98,Lille,Chateauroux,2,2,D,1,0,H
+F2,18/11/98,Nice,Ajaccio,3,0,H,0,0,D
+F2,18/11/98,Nimes,Caen,3,1,H,1,1,D
+F2,18/11/98,Red Star 93,Guingamp,0,0,D,0,0,D
+F2,18/11/98,St Etienne,Amiens,0,0,D,0,0,D
+F2,18/11/98,Valence,Laval,2,1,H,0,1,A
+F2,21/11/98,Ajaccio,Valence,0,0,D,0,0,D
+F2,21/11/98,Amiens,Beauvais,1,1,D,1,1,D
+F2,21/11/98,Caen,Red Star 93,3,1,H,2,1,H
+F2,21/11/98,Cannes,Le Mans,1,0,H,1,0,H
+F2,21/11/98,Chateauroux,St Etienne,0,2,A,0,1,A
+F2,21/11/98,Laval,Nice,1,0,H,0,0,D
+F2,21/11/98,Niort,Troyes,1,1,D,0,1,A
+F2,21/11/98,Sedan,Lille,1,1,D,1,1,D
+F2,21/11/98,Wasquehal,Nimes,0,1,A,0,1,A
+F2,22/11/98,Guingamp,Gueugnon,0,2,A,0,0,D
+F2,24/11/98,Gueugnon,Valence,2,1,H,0,0,D
+F2,01/12/98,St Etienne,Caen,2,0,H,1,0,H
+F2,02/12/98,Ajaccio,Amiens,1,1,D,1,1,D
+F2,02/12/98,Gueugnon,Wasquehal,1,0,H,1,0,H
+F2,02/12/98,Laval,Guingamp,0,1,A,0,1,A
+F2,02/12/98,Lille,Niort,1,0,H,1,0,H
+F2,02/12/98,Nice,Sedan,0,0,D,0,0,D
+F2,02/12/98,Nimes,Le Mans,1,1,D,1,1,D
+F2,02/12/98,Red Star 93,Cannes,1,1,D,0,0,D
+F2,02/12/98,Troyes,Beauvais,2,1,H,0,1,A
+F2,02/12/98,Valence,Chateauroux,1,2,A,0,0,D
+F2,05/12/98,Beauvais,Nimes,3,1,H,0,1,A
+F2,05/12/98,Caen,Lille,0,1,A,0,1,A
+F2,05/12/98,Cannes,Gueugnon,0,0,D,0,0,D
+F2,05/12/98,Chateauroux,Ajaccio,0,1,A,0,1,A
+F2,05/12/98,Guingamp,St Etienne,1,0,H,1,0,H
+F2,05/12/98,Le Mans,Troyes,2,2,D,1,1,D
+F2,05/12/98,Niort,Red Star 93,3,1,H,2,0,H
+F2,05/12/98,Sedan,Valence,3,1,H,1,1,D
+F2,05/12/98,Wasquehal,Nice,2,2,D,1,0,H
+F2,06/12/98,Amiens,Laval,1,1,D,0,0,D
+F2,12/12/98,Ajaccio,Sedan,2,2,D,0,2,A
+F2,12/12/98,Amiens,Chateauroux,3,0,H,1,0,H
+F2,12/12/98,Gueugnon,Beauvais,1,0,H,0,0,D
+F2,12/12/98,Laval,Niort,1,1,D,0,0,D
+F2,12/12/98,Lille,Wasquehal,1,1,D,0,0,D
+F2,12/12/98,Nice,Caen,0,0,D,0,0,D
+F2,12/12/98,Nimes,Cannes,4,1,H,2,1,H
+F2,12/12/98,Red Star 93,Le Mans,1,0,H,0,0,D
+F2,12/12/98,St Etienne,Troyes,0,0,D,0,0,D
+F2,12/12/98,Valence,Guingamp,2,0,H,2,0,H
+F2,16/12/98,Beauvais,Red Star 93,1,1,D,1,0,H
+F2,16/12/98,Caen,Valence,1,1,D,0,1,A
+F2,16/12/98,Cannes,Lille,1,0,H,0,0,D
+F2,16/12/98,Chateauroux,Laval,1,0,H,0,0,D
+F2,16/12/98,Guingamp,Nice,2,0,H,1,0,H
+F2,16/12/98,Le Mans,Gueugnon,2,2,D,1,1,D
+F2,16/12/98,Niort,St Etienne,1,0,H,0,0,D
+F2,16/12/98,Sedan,Amiens,1,0,H,1,0,H
+F2,16/12/98,Troyes,Nimes,1,0,H,1,0,H
+F2,16/12/98,Wasquehal,Ajaccio,4,0,H,2,0,H
+F2,16/01/99,Ajaccio,Caen,2,1,H,1,1,D
+F2,16/01/99,Amiens,Guingamp,1,0,H,0,0,D
+F2,16/01/99,Chateauroux,Sedan,1,0,H,1,0,H
+F2,16/01/99,Lille,Beauvais,1,0,H,1,0,H
+F2,16/01/99,Nice,Le Mans,2,0,H,1,0,H
+F2,16/01/99,Red Star 93,Troyes,2,2,D,0,0,D
+F2,16/01/99,St Etienne,Cannes,6,1,H,4,1,H
+F2,17/01/99,Gueugnon,Niort,1,1,D,0,1,A
+F2,17/01/99,Laval,Nimes,2,1,H,1,1,D
+F2,17/01/99,Valence,Wasquehal,2,0,H,0,0,D
+F2,30/01/99,Beauvais,St Etienne,1,2,A,0,2,A
+F2,30/01/99,Caen,Amiens,0,0,D,0,0,D
+F2,30/01/99,Cannes,Nice,0,1,A,0,0,D
+F2,30/01/99,Guingamp,Ajaccio,1,2,A,1,1,D
+F2,30/01/99,Le Mans,Lille,2,1,H,1,1,D
+F2,30/01/99,Nimes,Red Star 93,2,0,H,0,0,D
+F2,30/01/99,Niort,Valence,1,0,H,0,0,D
+F2,30/01/99,Sedan,Laval,1,0,H,0,0,D
+F2,30/01/99,Troyes,Gueugnon,0,0,D,0,0,D
+F2,30/01/99,Wasquehal,Chateauroux,1,0,H,0,0,D
+F2,06/02/99,Ajaccio,Niort,1,1,D,0,0,D
+F2,06/02/99,Amiens,Cannes,2,0,H,1,0,H
+F2,06/02/99,Chateauroux,Caen,2,1,H,1,1,D
+F2,06/02/99,Gueugnon,Nimes,2,2,D,2,1,H
+F2,06/02/99,Laval,Wasquehal,1,0,H,0,0,D
+F2,06/02/99,Lille,Troyes,1,0,H,0,0,D
+F2,06/02/99,Nice,Beauvais,1,1,D,1,0,H
+F2,06/02/99,Sedan,Guingamp,2,0,H,0,0,D
+F2,06/02/99,St Etienne,Le Mans,1,0,H,1,0,H
+F2,06/02/99,Valence,Red Star 93,1,1,D,0,0,D
+F2,13/02/99,Beauvais,Sedan,0,2,A,0,1,A
+F2,13/02/99,Caen,Laval,2,1,H,1,1,D
+F2,13/02/99,Cannes,Valence,1,1,D,1,1,D
+F2,13/02/99,Guingamp,Chateauroux,1,4,A,1,1,D
+F2,13/02/99,Le Mans,Ajaccio,0,0,D,0,0,D
+F2,13/02/99,Nimes,Lille,3,0,H,2,0,H
+F2,13/02/99,Niort,Nice,1,0,H,1,0,H
+F2,13/02/99,Red Star 93,Gueugnon,2,2,D,1,0,H
+F2,13/02/99,Troyes,Amiens,3,0,H,1,0,H
+F2,13/02/99,Wasquehal,St Etienne,1,3,A,1,2,A
+F2,27/02/99,Ajaccio,Beauvais,2,1,H,1,1,D
+F2,27/02/99,Amiens,Gueugnon,1,0,H,0,0,D
+F2,27/02/99,Chateauroux,Niort,2,1,H,1,1,D
+F2,27/02/99,Guingamp,Caen,0,0,D,0,0,D
+F2,27/02/99,Laval,Cannes,1,2,A,1,1,D
+F2,27/02/99,Lille,Red Star 93,2,0,H,1,0,H
+F2,27/02/99,Nice,Troyes,0,0,D,0,0,D
+F2,27/02/99,Sedan,Wasquehal,2,0,H,1,0,H
+F2,27/02/99,Valence,Le Mans,0,1,A,0,0,D
+F2,05/03/99,St Etienne,Nimes,3,1,H,2,1,H
+F2,10/03/99,Beauvais,Laval,1,1,D,0,1,A
+F2,10/03/99,Cannes,Ajaccio,1,0,H,1,0,H
+F2,10/03/99,Gueugnon,Lille,0,1,A,0,1,A
+F2,10/03/99,Le Mans,Chateauroux,1,1,D,1,0,H
+F2,10/03/99,Nimes,Nice,0,1,A,0,1,A
+F2,10/03/99,Niort,Amiens,1,0,H,1,0,H
+F2,10/03/99,Red Star 93,St Etienne,1,2,A,0,2,A
+F2,10/03/99,Troyes,Valence,0,0,D,0,0,D
+F2,10/03/99,Wasquehal,Guingamp,1,2,A,1,1,D
+F2,20/03/99,Ajaccio,Troyes,0,3,A,0,2,A
+F2,20/03/99,Amiens,Le Mans,0,2,A,0,0,D
+F2,20/03/99,Caen,Wasquehal,2,0,H,1,0,H
+F2,20/03/99,Chateauroux,Beauvais,1,1,D,0,0,D
+F2,20/03/99,Guingamp,Niort,2,0,H,0,0,D
+F2,20/03/99,Laval,Gueugnon,1,1,D,1,1,D
+F2,20/03/99,Nice,Red Star 93,3,0,H,1,0,H
+F2,20/03/99,Sedan,Cannes,3,1,H,2,0,H
+F2,20/03/99,St Etienne,Lille,3,2,H,2,1,H
+F2,20/03/99,Valence,Nimes,1,1,D,0,0,D
+F2,26/03/99,Beauvais,Valence,0,5,A,0,3,A
+F2,26/03/99,Gueugnon,St Etienne,4,1,H,1,0,H
+F2,26/03/99,Le Mans,Guingamp,0,1,A,0,0,D
+F2,26/03/99,Lille,Nice,2,0,H,0,0,D
+F2,26/03/99,Nimes,Ajaccio,2,1,H,1,0,H
+F2,26/03/99,Niort,Caen,1,2,A,0,1,A
+F2,26/03/99,Red Star 93,Laval,3,1,H,2,1,H
+F2,26/03/99,Troyes,Sedan,0,2,A,0,0,D
+F2,26/03/99,Wasquehal,Amiens,0,0,D,0,0,D
+F2,27/03/99,Cannes,Chateauroux,0,1,A,0,1,A
+F2,03/04/99,Ajaccio,Red Star 93,4,3,H,2,1,H
+F2,03/04/99,Amiens,Nimes,1,1,D,1,1,D
+F2,03/04/99,Caen,Cannes,1,0,H,0,0,D
+F2,03/04/99,Chateauroux,Troyes,0,1,A,0,0,D
+F2,03/04/99,Guingamp,Beauvais,3,0,H,1,0,H
+F2,03/04/99,Laval,Lille,1,0,H,1,0,H
+F2,03/04/99,Nice,Gueugnon,4,0,H,1,0,H
+F2,03/04/99,Sedan,Le Mans,1,0,H,0,0,D
+F2,03/04/99,Valence,St Etienne,2,2,D,2,1,H
+F2,03/04/99,Wasquehal,Niort,1,1,D,0,1,A
+F2,14/04/99,Beauvais,Caen,3,1,H,1,1,D
+F2,14/04/99,Cannes,Guingamp,0,1,A,0,1,A
+F2,14/04/99,Gueugnon,Ajaccio,3,1,H,0,1,A
+F2,14/04/99,Le Mans,Wasquehal,1,1,D,1,1,D
+F2,14/04/99,Lille,Valence,2,1,H,0,1,A
+F2,14/04/99,Nimes,Chateauroux,0,0,D,0,0,D
+F2,14/04/99,Niort,Sedan,1,1,D,0,0,D
+F2,14/04/99,Red Star 93,Amiens,1,4,A,0,2,A
+F2,14/04/99,St Etienne,Nice,0,2,A,0,0,D
+F2,14/04/99,Troyes,Laval,1,1,D,1,1,D
+F2,17/04/99,Caen,Sedan,1,3,A,0,3,A
+F2,24/04/99,Ajaccio,Lille,0,2,A,0,0,D
+F2,24/04/99,Amiens,Nice,0,1,A,0,1,A
+F2,24/04/99,Caen,Le Mans,3,2,H,1,2,A
+F2,24/04/99,Chateauroux,Red Star 93,1,4,A,0,2,A
+F2,24/04/99,Guingamp,Troyes,2,0,H,0,0,D
+F2,24/04/99,Laval,St Etienne,1,1,D,0,1,A
+F2,24/04/99,Niort,Cannes,3,2,H,2,0,H
+F2,24/04/99,Sedan,Nimes,1,1,D,0,0,D
+F2,24/04/99,Valence,Gueugnon,1,2,A,1,1,D
+F2,24/04/99,Wasquehal,Beauvais,1,0,H,0,0,D
+F2,01/05/99,Beauvais,Niort,3,2,H,1,1,D
+F2,01/05/99,Cannes,Wasquehal,3,2,H,2,1,H
+F2,01/05/99,Gueugnon,Chateauroux,2,1,H,1,1,D
+F2,01/05/99,Le Mans,Laval,0,0,D,0,0,D
+F2,01/05/99,Lille,Amiens,0,1,A,0,0,D
+F2,01/05/99,Nice,Valence,2,0,H,1,0,H
+F2,01/05/99,Nimes,Guingamp,0,0,D,0,0,D
+F2,01/05/99,Red Star 93,Sedan,3,2,H,0,2,A
+F2,01/05/99,St Etienne,Ajaccio,2,2,D,1,1,D
+F2,01/05/99,Troyes,Caen,0,1,A,0,1,A
+F2,07/05/99,Ajaccio,Nice,0,0,D,0,0,D
+F2,07/05/99,Amiens,St Etienne,3,0,H,2,0,H
+F2,07/05/99,Caen,Nimes,3,2,H,3,1,H
+F2,07/05/99,Cannes,Beauvais,1,0,H,1,0,H
+F2,07/05/99,Chateauroux,Lille,0,1,A,0,0,D
+F2,07/05/99,Guingamp,Red Star 93,2,1,H,1,0,H
+F2,07/05/99,Laval,Valence,0,1,A,0,1,A
+F2,07/05/99,Niort,Le Mans,0,0,D,0,0,D
+F2,07/05/99,Sedan,Gueugnon,2,1,H,2,1,H
+F2,07/05/99,Wasquehal,Troyes,2,1,H,2,0,H
+F2,22/05/99,Beauvais,Amiens,3,2,H,1,1,D
+F2,22/05/99,Gueugnon,Guingamp,0,0,D,0,0,D
+F2,22/05/99,Le Mans,Cannes,1,0,H,0,0,D
+F2,22/05/99,Lille,Sedan,1,0,H,0,0,D
+F2,22/05/99,Nice,Laval,1,3,A,0,0,D
+F2,22/05/99,Nimes,Wasquehal,1,2,A,1,1,D
+F2,22/05/99,Red Star 93,Caen,0,0,D,0,0,D
+F2,22/05/99,St Etienne,Chateauroux,0,0,D,0,0,D
+F2,22/05/99,Troyes,Niort,1,1,D,0,1,A
+F2,22/05/99,Valence,Ajaccio,4,1,H,0,1,A
+F2,29/05/99,Ajaccio,Laval,1,0,H,1,0,H
+F2,29/05/99,Amiens,Valence,3,1,H,0,0,D
+F2,29/05/99,Beauvais,Le Mans,2,0,H,1,0,H
+F2,29/05/99,Caen,Gueugnon,1,1,D,0,1,A
+F2,29/05/99,Cannes,Troyes,0,2,A,0,0,D
+F2,29/05/99,Chateauroux,Nice,0,0,D,0,0,D
+F2,29/05/99,Guingamp,Lille,0,2,A,0,1,A
+F2,29/05/99,Niort,Nimes,0,1,A,0,1,A
+F2,29/05/99,Sedan,St Etienne,3,0,H,2,0,H
+F2,29/05/99,Wasquehal,Red Star 93,2,3,A,1,3,A
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,

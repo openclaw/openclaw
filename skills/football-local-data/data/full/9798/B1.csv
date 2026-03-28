@@ -1,0 +1,307 @@
+Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HTR,,,,,,,,,,,
+B1,08/08/97,Standard,Mouscron,1,1,D,0,0,D,,,,,,,,,,,
+B1,09/08/97,Beveren,Aalst,0,0,D,0,0,D,,,,,,,,,,,
+B1,09/08/97,Genk,Charleroi,4,0,H,2,0,H,,,,,,,,,,,
+B1,09/08/97,Gent,Club Brugge,0,4,A,0,2,A,,,,,,,,,,,
+B1,09/08/97,Germinal,Molenbeek,3,1,H,1,0,H,,,,,,,,,,,
+B1,09/08/97,Lierse,Lokeren,3,0,H,2,0,H,,,,,,,,,,,
+B1,09/08/97,Westerlo,St Truiden,4,1,H,2,0,H,,,,,,,,,,,
+B1,10/08/97,Harelbeke,Lommel,1,1,D,0,0,D,,,,,,,,,,,
+B1,16/08/97,Anderlecht,Molenbeek,0,2,A,0,1,A,,,,,,,,,,,
+B1,16/08/97,Lokeren,Genk,1,5,A,0,2,A,,,,,,,,,,,
+B1,16/08/97,Lommel,Beveren,3,1,H,2,1,H,,,,,,,,,,,
+B1,16/08/97,Mouscron,Gent,1,1,D,1,0,H,,,,,,,,,,,
+B1,16/08/97,St Truiden,Harelbeke,1,2,A,1,1,D,,,,,,,,,,,
+B1,17/08/97,Aalst,Antwerp,2,0,H,0,0,D,,,,,,,,,,,
+B1,17/08/97,Charleroi,Standard,2,1,H,0,1,A,,,,,,,,,,,
+B1,17/08/97,Club Brugge,Westerlo,3,1,H,1,0,H
+B1,17/08/97,Germinal,Lierse,1,1,D,1,1,D
+B1,22/08/97,Lierse,Anderlecht,0,1,A,0,0,D
+B1,23/08/97,Antwerp,Lommel,2,5,A,0,2,A
+B1,23/08/97,Beveren,St Truiden,1,1,D,0,1,A
+B1,23/08/97,Genk,Germinal,4,2,H,2,1,H
+B1,23/08/97,Gent,Westerlo,6,0,H,2,0,H
+B1,23/08/97,Harelbeke,Club Brugge,0,1,A,0,1,A
+B1,23/08/97,Mouscron,Charleroi,0,0,D,0,0,D
+B1,23/08/97,Standard,Lokeren,1,3,A,0,2,A
+B1,24/08/97,Molenbeek,Aalst,1,1,D,0,1,A
+B1,30/08/97,Anderlecht,Genk,0,2,A,0,0,D
+B1,30/08/97,Charleroi,Gent,1,1,D,0,1,A
+B1,30/08/97,Lokeren,Mouscron,2,1,H,2,1,H
+B1,30/08/97,Lommel,Molenbeek,3,1,H,2,1,H
+B1,30/08/97,St Truiden,Antwerp,1,0,H,0,0,D
+B1,30/08/97,Westerlo,Harelbeke,2,2,D,1,0,H
+B1,31/08/97,Aalst,Lierse,1,3,A,0,2,A
+B1,31/08/97,Club Brugge,Beveren,3,1,H,2,0,H
+B1,31/08/97,Germinal,Standard,0,3,A,0,1,A
+B1,13/09/97,Standard,Anderlecht,1,2,A,0,0,D
+B1,14/09/97,Beveren,Westerlo,2,0,H,1,0,H
+B1,14/09/97,Charleroi,Lokeren,2,0,H,1,0,H
+B1,14/09/97,Genk,Aalst,3,2,H,3,0,H
+B1,14/09/97,Gent,Harelbeke,0,0,D,0,0,D
+B1,14/09/97,Lierse,Lommel,1,4,A,0,1,A
+B1,14/09/97,Molenbeek,St Truiden,2,0,H,2,0,H
+B1,14/09/97,Mouscron,Germinal,0,1,A,0,1,A
+B1,19/09/97,Anderlecht,Mouscron,1,2,A,1,1,D
+B1,20/09/97,Lokeren,Gent,3,2,H,1,1,D
+B1,20/09/97,Lommel,Genk,3,1,H,1,0,H
+B1,20/09/97,St Truiden,Lierse,0,5,A,0,2,A
+B1,20/09/97,Westerlo,Antwerp,5,2,H,4,2,H
+B1,21/09/97,Aalst,Standard,1,1,D,0,1,A
+B1,21/09/97,Club Brugge,Molenbeek,4,0,H,1,0,H
+B1,21/09/97,Germinal,Charleroi,5,0,H,0,0,D
+B1,21/09/97,Harelbeke,Beveren,1,1,D,0,0,D
+B1,27/09/97,Charleroi,Anderlecht,3,0,H,0,0,D
+B1,27/09/97,Genk,St Truiden,0,0,D,0,0,D
+B1,27/09/97,Gent,Beveren,3,2,H,3,0,H
+B1,27/09/97,Lierse,Club Brugge,2,4,A,2,2,D
+B1,27/09/97,Molenbeek,Westerlo,1,2,A,1,1,D
+B1,27/09/97,Mouscron,Aalst,2,0,H,1,0,H
+B1,27/09/97,Standard,Lommel,1,0,H,0,0,D
+B1,28/09/97,Antwerp,Harelbeke,1,3,A,1,1,D
+B1,28/09/97,Lokeren,Germinal,1,3,A,1,0,H
+B1,04/10/97,Anderlecht,Lokeren,5,0,H,2,0,H
+B1,04/10/97,Beveren,Antwerp,0,2,A,0,1,A
+B1,04/10/97,Club Brugge,Genk,2,0,H,2,0,H
+B1,04/10/97,Lommel,Mouscron,1,0,H,0,0,D
+B1,04/10/97,St Truiden,Standard,0,0,D,0,0,D
+B1,04/10/97,Westerlo,Lierse,1,1,D,1,0,H
+B1,05/10/97,Aalst,Charleroi,7,2,H,3,1,H
+B1,05/10/97,Germinal,Gent,1,3,A,1,3,A
+B1,05/10/97,Harelbeke,Molenbeek,4,1,H,0,0,D
+B1,17/10/97,Standard,Club Brugge,0,3,A,0,2,A
+B1,18/10/97,Charleroi,Lommel,1,2,A,0,1,A
+B1,18/10/97,Genk,Westerlo,5,5,D,2,3,A
+B1,18/10/97,Germinal,Anderlecht,1,0,H,0,0,D
+B1,18/10/97,Lierse,Harelbeke,1,1,D,1,0,H
+B1,18/10/97,Lokeren,Aalst,4,1,H,2,1,H
+B1,18/10/97,Molenbeek,Beveren,1,1,D,1,0,H
+B1,18/10/97,Mouscron,St Truiden,1,3,A,1,1,D
+B1,19/10/97,Gent,Antwerp,0,0,D,0,0,D
+B1,01/11/97,Anderlecht,Gent,2,2,D,0,1,A
+B1,01/11/97,Lommel,Lokeren,1,5,A,0,4,A
+B1,02/11/97,Aalst,Germinal,1,3,A,1,1,D
+B1,02/11/97,Harelbeke,Genk,2,0,H,1,0,H
+B1,08/11/97,Anderlecht,Aalst,3,1,H,1,0,H
+B1,08/11/97,Charleroi,Club Brugge,2,2,D,1,0,H
+B1,08/11/97,Genk,Beveren,3,0,H,0,0,D
+B1,08/11/97,Gent,Molenbeek,3,4,A,2,3,A
+B1,08/11/97,Lierse,Antwerp,2,1,H,0,1,A
+B1,08/11/97,Lokeren,St Truiden,0,2,A,0,0,D
+B1,08/11/97,Mouscron,Westerlo,0,2,A,0,0,D
+B1,08/11/97,Standard,Harelbeke,0,1,A,0,0,D
+B1,09/11/97,Germinal,Lommel,1,0,H,0,0,D
+B1,14/11/97,Antwerp,Molenbeek,3,4,A,2,1,H
+B1,18/11/97,Lommel,Anderlecht,2,2,D,1,1,D
+B1,19/11/97,Aalst,Gent,2,0,H,1,0,H
+B1,19/11/97,Antwerp,Genk,2,1,H,1,1,D
+B1,19/11/97,Beveren,Standard,2,3,A,2,2,D
+B1,19/11/97,Club Brugge,Lokeren,5,0,H,2,0,H
+B1,19/11/97,Harelbeke,Mouscron,5,1,H,1,0,H
+B1,19/11/97,Molenbeek,Lierse,0,3,A,0,2,A
+B1,19/11/97,St Truiden,Germinal,2,0,H,1,0,H
+B1,19/11/97,Westerlo,Charleroi,1,1,D,1,0,H
+B1,22/11/97,Anderlecht,St Truiden,1,0,H,0,0,D
+B1,22/11/97,Charleroi,Harelbeke,3,3,D,2,2,D
+B1,22/11/97,Genk,Molenbeek,3,0,H,2,0,H
+B1,22/11/97,Gent,Lierse,1,0,H,0,0,D
+B1,22/11/97,Lokeren,Westerlo,3,0,H,2,0,H
+B1,22/11/97,Mouscron,Beveren,1,1,D,0,0,D
+B1,22/11/97,Standard,Antwerp,2,2,D,0,1,A
+B1,23/11/97,Aalst,Lommel,2,1,H,1,1,D
+B1,23/11/97,Germinal,Club Brugge,2,2,D,1,1,D
+B1,29/11/97,Antwerp,Mouscron,1,2,A,0,1,A
+B1,29/11/97,Beveren,Charleroi,1,0,H,0,0,D
+B1,29/11/97,Lierse,Genk,1,2,A,1,1,D
+B1,29/11/97,Lommel,Gent,0,1,A,0,1,A
+B1,29/11/97,Molenbeek,Standard,1,4,A,1,3,A
+B1,29/11/97,St Truiden,Aalst,2,0,H,1,0,H
+B1,29/11/97,Westerlo,Germinal,1,1,D,0,0,D
+B1,30/11/97,Club Brugge,Anderlecht,2,1,H,2,1,H
+B1,30/11/97,Harelbeke,Lokeren,3,2,H,1,1,D
+B1,03/12/97,Antwerp,Anderlecht,0,1,A,0,0,D
+B1,03/12/97,Beveren,Lierse,2,3,A,1,1,D
+B1,03/12/97,Club Brugge,Mouscron,1,0,H,0,0,D
+B1,03/12/97,St Truiden,Charleroi,2,0,H,1,0,H
+B1,03/12/97,Westerlo,Standard,2,0,H,1,0,H
+B1,05/12/97,Germinal,Harelbeke,0,2,A,0,1,A
+B1,06/12/97,Anderlecht,Westerlo,1,0,H,0,0,D
+B1,06/12/97,Charleroi,Antwerp,2,1,H,1,1,D
+B1,06/12/97,Gent,Genk,1,2,A,0,0,D
+B1,06/12/97,Lokeren,Beveren,1,2,A,0,1,A
+B1,06/12/97,Lommel,St Truiden,1,1,D,1,0,H
+B1,06/12/97,Standard,Lierse,0,0,D,0,0,D
+B1,07/12/97,Aalst,Club Brugge,1,4,A,0,2,A
+B1,07/12/97,Mouscron,Molenbeek,4,0,H,1,0,H
+B1,13/12/97,Antwerp,Lokeren,1,2,A,0,1,A
+B1,13/12/97,Beveren,Germinal,0,1,A,0,0,D
+B1,13/12/97,Gent,St Truiden,1,1,D,0,0,D
+B1,13/12/97,Lierse,Mouscron,2,0,H,1,0,H
+B1,13/12/97,Molenbeek,Charleroi,1,2,A,0,2,A
+B1,13/12/97,Westerlo,Aalst,0,3,A,0,1,A
+B1,14/12/97,Club Brugge,Lommel,2,0,H,0,0,D
+B1,14/12/97,Genk,Standard,1,1,D,1,1,D
+B1,14/12/97,Harelbeke,Anderlecht,1,1,D,0,0,D
+B1,17/12/97,Antwerp,Club Brugge,0,1,A,0,1,A
+B1,19/12/97,Charleroi,Lierse,3,0,H,2,0,H
+B1,20/12/97,Anderlecht,Beveren,2,0,H,2,0,H
+B1,20/12/97,Lokeren,Molenbeek,5,0,H,2,0,H
+B1,20/12/97,Lommel,Westerlo,2,1,H,0,0,D
+B1,20/12/97,Mouscron,Genk,0,2,A,0,1,A
+B1,20/12/97,St Truiden,Club Brugge,0,2,A,0,1,A
+B1,20/12/97,Standard,Gent,3,3,D,2,3,A
+B1,21/12/97,Aalst,Harelbeke,3,2,H,0,2,A
+B1,21/12/97,Germinal,Antwerp,2,0,H,2,0,H
+B1,17/01/98,Aalst,Beveren,3,0,H,0,0,D
+B1,17/01/98,Anderlecht,Antwerp,2,2,D,0,1,A
+B1,17/01/98,Charleroi,Genk,1,2,A,1,1,D
+B1,17/01/98,Lokeren,Lierse,4,2,H,0,2,A
+B1,17/01/98,St Truiden,Westerlo,0,0,D,0,0,D
+B1,18/01/98,Club Brugge,Gent,2,1,H,2,0,H
+B1,18/01/98,Lommel,Harelbeke,0,0,D,0,0,D
+B1,18/01/98,Molenbeek,Germinal,0,4,A,0,2,A
+B1,18/01/98,Mouscron,Standard,3,2,H,1,1,D
+B1,23/01/98,Molenbeek,Anderlecht,2,2,D,1,2,A
+B1,24/01/98,Antwerp,Aalst,1,1,D,1,0,H
+B1,24/01/98,Genk,Lokeren,1,0,H,0,0,D
+B1,24/01/98,Gent,Mouscron,0,0,D,0,0,D
+B1,24/01/98,Lierse,Germinal,1,1,D,0,0,D
+B1,24/01/98,Standard,Charleroi,2,0,H,0,0,D
+B1,24/01/98,Westerlo,Club Brugge,2,2,D,1,1,D
+B1,25/01/98,Beveren,Lommel,2,2,D,2,1,H
+B1,25/01/98,Harelbeke,St Truiden,3,1,H,1,0,H
+B1,30/01/98,Anderlecht,Lierse,2,0,H,0,0,D
+B1,31/01/98,Charleroi,Mouscron,3,0,H,2,0,H
+B1,31/01/98,Lokeren,Standard,1,3,A,1,2,A
+B1,31/01/98,Lommel,Antwerp,1,2,A,0,0,D
+B1,31/01/98,St Truiden,Beveren,0,0,D,0,0,D
+B1,31/01/98,Westerlo,Gent,0,1,A,0,1,A
+B1,01/02/98,Aalst,Molenbeek,0,2,A,0,0,D
+B1,01/02/98,Club Brugge,Harelbeke,2,1,H,1,1,D
+B1,01/02/98,Germinal,Genk,4,3,H,2,0,H
+B1,07/02/98,Antwerp,St Truiden,0,4,A,0,2,A
+B1,07/02/98,Beveren,Club Brugge,1,2,A,1,0,H
+B1,07/02/98,Gent,Charleroi,3,1,H,1,0,H
+B1,07/02/98,Lierse,Aalst,1,1,D,0,0,D
+B1,07/02/98,Molenbeek,Lommel,1,2,A,0,1,A
+B1,07/02/98,Standard,Germinal,0,2,A,0,1,A
+B1,08/02/98,Genk,Anderlecht,2,1,H,0,1,A
+B1,08/02/98,Harelbeke,Westerlo,0,0,D,0,0,D
+B1,08/02/98,Mouscron,Lokeren,1,3,A,1,1,D
+B1,13/02/98,Anderlecht,Standard,2,0,H,1,0,H
+B1,14/02/98,Lokeren,Charleroi,3,2,H,2,0,H
+B1,14/02/98,Lommel,Lierse,1,2,A,0,2,A
+B1,14/02/98,St Truiden,Molenbeek,1,1,D,1,0,H
+B1,14/02/98,Westerlo,Beveren,3,0,H,1,0,H
+B1,15/02/98,Aalst,Genk,1,1,D,0,1,A
+B1,15/02/98,Club Brugge,Antwerp,3,2,H,2,2,D
+B1,15/02/98,Germinal,Mouscron,2,2,D,1,1,D
+B1,15/02/98,Harelbeke,Gent,3,0,H,0,0,D
+B1,20/02/98,Mouscron,Anderlecht,2,2,D,0,0,D
+B1,21/02/98,Antwerp,Westerlo,0,0,D,0,0,D
+B1,21/02/98,Beveren,Harelbeke,1,0,H,0,0,D
+B1,21/02/98,Charleroi,Germinal,3,2,H,1,1,D
+B1,21/02/98,Genk,Lommel,3,0,H,0,0,D
+B1,21/02/98,Gent,Lokeren,1,1,D,0,1,A
+B1,21/02/98,Lierse,St Truiden,1,0,H,1,0,H
+B1,21/02/98,Molenbeek,Club Brugge,0,2,A,0,0,D
+B1,22/02/98,Standard,Aalst,3,0,H,3,0,H
+B1,28/02/98,Aalst,Mouscron,1,3,A,0,1,A
+B1,28/02/98,Anderlecht,Charleroi,3,1,H,1,0,H
+B1,28/02/98,Beveren,Gent,1,1,D,1,0,H
+B1,28/02/98,Germinal,Lokeren,4,2,H,1,2,A
+B1,28/02/98,Harelbeke,Antwerp,2,0,H,1,0,H
+B1,28/02/98,Lommel,Standard,2,2,D,1,2,A
+B1,28/02/98,St Truiden,Genk,0,2,A,0,1,A
+B1,28/02/98,Westerlo,Molenbeek,5,1,H,3,1,H
+B1,01/03/98,Club Brugge,Lierse,2,1,H,1,1,D
+B1,06/03/98,Genk,Club Brugge,3,0,H,3,0,H
+B1,07/03/98,Antwerp,Beveren,1,0,H,0,0,D
+B1,07/03/98,Charleroi,Aalst,1,1,D,1,1,D
+B1,07/03/98,Gent,Germinal,0,2,A,0,1,A
+B1,07/03/98,Lokeren,Anderlecht,2,1,H,0,0,D
+B1,07/03/98,Molenbeek,Harelbeke,0,1,A,0,1,A
+B1,07/03/98,Mouscron,Lommel,2,1,H,0,0,D
+B1,07/03/98,Standard,St Truiden,2,0,H,1,0,H
+B1,08/03/98,Lierse,Westerlo,3,1,H,2,0,H
+B1,13/03/98,Beveren,Molenbeek,1,0,H,0,0,D
+B1,14/03/98,Anderlecht,Germinal,4,0,H,3,0,H
+B1,14/03/98,Antwerp,Gent,0,0,D,0,0,D
+B1,14/03/98,Lommel,Charleroi,2,1,H,1,0,H
+B1,14/03/98,St Truiden,Mouscron,1,0,H,0,0,D
+B1,14/03/98,Westerlo,Genk,0,2,A,0,1,A
+B1,15/03/98,Aalst,Lokeren,1,5,A,0,3,A
+B1,15/03/98,Club Brugge,Standard,0,0,D,0,0,D
+B1,15/03/98,Harelbeke,Lierse,0,2,A,0,1,A
+B1,20/03/98,Mouscron,Club Brugge,0,1,A,0,1,A
+B1,21/03/98,Charleroi,St Truiden,0,0,D,0,0,D
+B1,21/03/98,Gent,Anderlecht,1,1,D,0,0,D
+B1,21/03/98,Germinal,Aalst,2,3,A,0,1,A
+B1,21/03/98,Lierse,Beveren,2,0,H,0,0,D
+B1,21/03/98,Molenbeek,Antwerp,2,0,H,0,0,D
+B1,21/03/98,Standard,Westerlo,2,2,D,0,2,A
+B1,22/03/98,Genk,Harelbeke,1,0,H,0,0,D
+B1,22/03/98,Lokeren,Lommel,2,1,H,2,0,H
+B1,03/04/98,Harelbeke,Standard,2,0,H,1,0,H
+B1,04/04/98,Aalst,Anderlecht,2,3,A,1,1,D
+B1,04/04/98,Antwerp,Lierse,3,2,H,2,1,H
+B1,04/04/98,Beveren,Genk,0,2,A,0,2,A
+B1,04/04/98,Lommel,Germinal,1,1,D,0,0,D
+B1,04/04/98,Molenbeek,Gent,0,2,A,0,1,A
+B1,05/04/98,Club Brugge,Charleroi,3,2,H,1,1,D
+B1,05/04/98,St Truiden,Lokeren,2,2,D,0,1,A
+B1,05/04/98,Westerlo,Mouscron,2,1,H,2,0,H
+B1,10/04/98,Anderlecht,Lommel,2,0,H,1,0,H
+B1,11/04/98,Charleroi,Westerlo,1,1,D,0,1,A
+B1,11/04/98,Genk,Antwerp,1,1,D,1,0,H
+B1,11/04/98,Gent,Aalst,0,0,D,0,0,D
+B1,11/04/98,Germinal,St Truiden,1,0,H,1,0,H
+B1,11/04/98,Lierse,Molenbeek,1,1,D,0,1,A
+B1,11/04/98,Lokeren,Club Brugge,1,1,D,1,1,D
+B1,11/04/98,Mouscron,Harelbeke,1,0,H,0,0,D
+B1,11/04/98,Standard,Beveren,1,2,A,1,0,H
+B1,18/04/98,Beveren,Mouscron,1,1,D,1,0,H
+B1,18/04/98,Lierse,Gent,1,2,A,0,0,D
+B1,18/04/98,Molenbeek,Genk,1,1,D,1,0,H
+B1,18/04/98,St Truiden,Anderlecht,1,1,D,1,0,H
+B1,18/04/98,Westerlo,Lokeren,3,3,D,0,2,A
+B1,19/04/98,Antwerp,Standard,3,5,A,2,2,D
+B1,19/04/98,Club Brugge,Germinal,1,3,A,0,2,A
+B1,19/04/98,Harelbeke,Charleroi,0,0,D,0,0,D
+B1,19/04/98,Lommel,Aalst,2,2,D,0,0,D
+B1,25/04/98,Charleroi,Beveren,0,0,D,0,0,D
+B1,25/04/98,Gent,Lommel,2,0,H,0,0,D
+B1,25/04/98,Germinal,Westerlo,1,0,H,1,0,H
+B1,25/04/98,Lokeren,Harelbeke,1,0,H,1,0,H
+B1,25/04/98,Mouscron,Antwerp,2,0,H,1,0,H
+B1,25/04/98,Standard,Molenbeek,4,0,H,4,0,H
+B1,26/04/98,Aalst,St Truiden,3,2,H,1,1,D
+B1,26/04/98,Anderlecht,Club Brugge,0,1,A,0,0,D
+B1,26/04/98,Genk,Lierse,1,3,A,1,1,D
+B1,28/04/98,Harelbeke,Germinal,3,1,H,2,0,H
+B1,29/04/98,Antwerp,Charleroi,2,4,A,1,2,A
+B1,29/04/98,Beveren,Lokeren,3,0,H,1,0,H
+B1,29/04/98,Club Brugge,Aalst,4,1,H,3,1,H
+B1,29/04/98,Genk,Gent,2,1,H,0,1,A
+B1,29/04/98,Lierse,Standard,3,1,H,1,0,H
+B1,29/04/98,Molenbeek,Mouscron,2,1,H,0,1,A
+B1,29/04/98,St Truiden,Lommel,0,0,D,0,0,D
+B1,29/04/98,Westerlo,Anderlecht,2,2,D,1,0,H
+B1,03/05/98,Aalst,Westerlo,2,3,A,0,2,A
+B1,03/05/98,Anderlecht,Harelbeke,1,0,H,0,0,D
+B1,03/05/98,Charleroi,Molenbeek,1,1,D,1,0,H
+B1,03/05/98,Germinal,Beveren,1,1,D,1,0,H
+B1,03/05/98,Lokeren,Antwerp,5,0,H,2,0,H
+B1,03/05/98,Lommel,Club Brugge,1,1,D,1,1,D
+B1,03/05/98,Mouscron,Lierse,2,0,H,1,0,H
+B1,03/05/98,St Truiden,Gent,3,3,D,1,0,H
+B1,03/05/98,Standard,Genk,3,0,H,2,0,H
+B1,10/05/98,Antwerp,Germinal,3,2,H,1,0,H
+B1,10/05/98,Beveren,Anderlecht,0,1,A,0,0,D
+B1,10/05/98,Club Brugge,St Truiden,6,0,H,3,0,H
+B1,10/05/98,Genk,Mouscron,0,2,A,0,1,A
+B1,10/05/98,Gent,Standard,4,1,H,2,1,H
+B1,10/05/98,Harelbeke,Aalst,2,1,H,1,1,D
+B1,10/05/98,Lierse,Charleroi,1,1,D,1,1,D
+B1,10/05/98,Molenbeek,Lokeren,5,1,H,3,0,H
+B1,10/05/98,Westerlo,Lommel,1,1,D,1,1,D
