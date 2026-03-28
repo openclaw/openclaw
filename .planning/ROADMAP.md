@@ -16,7 +16,7 @@
 - [x] **Phase 7: Gateway Service** - ProjectService lifecycle, WebSocket RPC methods, event broadcasting (completed 2026-03-28)
 - [x] **Phase 8: CLI Commands** - create, list, status, reindex, validate commands (completed 2026-03-28)
 - [x] **Phase 9: Project Views & Dashboard** - Sidebar tab, project list, dashboard widgets, WebSocket live updates, sub-project nav (completed 2026-03-28)
-- [ ] **Phase 10: Kanban Board & Agent Indicators** - Read-only kanban with live agent badges and session peek
+- [x] **Phase 10: Kanban Board & Agent Indicators** - Read-only kanban with live agent badges and session peek (completed 2026-03-28)
 
 ## Phase Details
 
@@ -198,9 +198,12 @@
 2. Kanban columns match the project's configured column names (or defaults: Backlog, In Progress, Review, Done)
 3. Tasks claimed by an agent show a pulsing badge with the agent name
 4. Hovering or clicking an agent indicator shows the current task checkpoint and recent log entries
-   **Plans**: TBD
-   **UI hint**: yes
-   **Estimated complexity**: M
+   **Plans:** 2/2 plans complete
+   Plans:
+
+- [x] 10-01-PLAN.md — Gateway extensions, state fields, CSS, URL routing
+- [x] 10-02-PLAN.md — Kanban board view, tab bar, session peek panels
+      **Estimated complexity**: M
 
 ## Dependency Graph
 
