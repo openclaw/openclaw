@@ -1,7 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import WebSocket from "ws";
-import { sendStartupGreetings, type AdminResolverContext } from "./admin-resolver.js";
 import {
   getAccessToken,
   getGatewayUrl,
@@ -92,10 +91,6 @@ export interface GatewayContext {
     debug?: (msg: string) => void;
   };
 }
-
-// Process-wide flag so startup greetings only run after a process restart,
-// not after health-monitor reconnects.
-let isFirstReadyGlobal = true;
 
 /**
  * Start the Gateway WebSocket connection with automatic reconnect support.
@@ -196,13 +191,6 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
   let isConnecting = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let shouldRefreshToken = false;
-
-  const adminCtx: AdminResolverContext = {
-    accountId: account.accountId,
-    appId: account.appId,
-    clientSecret: account.clientSecret,
-    log,
-  };
 
   // Restore a persisted session when it still matches the current appId.
   const savedSession = loadSession(account.accountId, account.appId);
@@ -1237,22 +1225,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                   appId: account.appId,
                 });
                 onReady?.(d);
-
-                if (!isFirstReadyGlobal) {
-                  log?.info(
-                    `[qqbot:${account.accountId}] Skipping startup greeting (reconnect READY, not first startup)`,
-                  );
-                } else {
-                  isFirstReadyGlobal = false;
-                  sendStartupGreetings(adminCtx, "READY");
-                }
               } else if (t === "RESUMED") {
                 log?.info(`[qqbot:${account.accountId}] Session resumed`);
                 onReady?.(d); // Notify the framework so health monitoring sees the connection as recovered.
-                if (isFirstReadyGlobal) {
-                  isFirstReadyGlobal = false;
-                  sendStartupGreetings(adminCtx, "RESUMED");
-                }
                 if (sessionId) {
                   saveSession({
                     sessionId,
