@@ -126,6 +126,36 @@
   user-select: all;
 }
 
+.login-gate__command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 2px;
+  padding: 5px 8px 5px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--fg);
+  cursor: copy;
+}
+
+.login-gate__command:hover {
+  border-color: var(--accent);
+}
+
+.login-gate__command:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.login-gate__command code {
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
 .login-gate__docs {
   margin-top: 10px;
   font-size: 11px;
