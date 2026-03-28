@@ -59,25 +59,43 @@ type TransientErrorOpts = {
   sessionKey?: string;
 };
 
-function buildTransientErrorContext(opts?: TransientErrorOpts): string {
-  if (!opts) {
-    return "";
+function extractRequestId(raw: string): string | undefined {
+  if (!raw) {
+    return undefined;
   }
+  const match = raw.match(/"request_id"\s*:\s*"([^"]+)"/);
+  return match?.[1];
+}
+
+// Strip control characters and escape sequences that could corrupt single-line log output.
+function sanitizeContextValue(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[\x00-\x1f\x7f]|\x1b\][^]*?[\x07\x1b\\]/g, "").trim();
+}
+
+function buildTransientErrorContext(raw: string, opts?: TransientErrorOpts): string {
   const parts: string[] = [];
-  if (opts.provider || opts.model) {
-    const providerModel = [opts.provider, opts.model].filter(Boolean).join("/");
+  if (opts?.provider || opts?.model) {
+    const providerModel = [opts.provider, opts.model]
+      .filter(Boolean)
+      .map((s) => sanitizeContextValue(s!))
+      .join("/");
     if (providerModel) {
       parts.push(providerModel);
     }
   }
-  if (opts.profileId) {
-    parts.push(`profile=${opts.profileId}`);
+  if (opts?.profileId) {
+    parts.push(`profile=${sanitizeContextValue(opts.profileId)}`);
   }
-  if (opts.trigger) {
-    parts.push(`trigger=${opts.trigger}`);
+  if (opts?.trigger) {
+    parts.push(`trigger=${sanitizeContextValue(opts.trigger)}`);
   }
-  if (opts.sessionKey) {
-    parts.push(`session=${opts.sessionKey}`);
+  if (opts?.sessionKey) {
+    parts.push(`session=${sanitizeContextValue(opts.sessionKey)}`);
+  }
+  const requestId = extractRequestId(raw);
+  if (requestId) {
+    parts.push(`req=${sanitizeContextValue(requestId)}`);
   }
   return parts.length > 0 ? ` [${parts.join(", ")}]` : "";
 }
@@ -86,7 +104,7 @@ function formatRateLimitOrOverloadedErrorCopy(
   raw: string,
   opts?: TransientErrorOpts,
 ): string | undefined {
-  const ctx = buildTransientErrorContext(opts);
+  const ctx = buildTransientErrorContext(raw, opts);
   if (isRateLimitErrorMessage(raw)) {
     return `⚠️ API rate limit reached. Please try again later.${ctx}`;
   }
@@ -96,18 +114,39 @@ function formatRateLimitOrOverloadedErrorCopy(
   return undefined;
 }
 
-function formatTransportErrorCopy(raw: string): string | undefined {
+function extractRawErrorReason(raw: string): string | undefined {
+  // Pull the most useful short clause from a raw Node/fetch error string.
+  // e.g. "TypeError: fetch failed" → undefined (too generic)
+  // e.g. "FetchError: request to https://api.anthropic.com failed, reason: connect ECONNREFUSED 127.0.0.1:443" → "connect ECONNREFUSED 127.0.0.1:443"
+  const reasonMatch = raw.match(/reason:\s*(.{4,80}?)(?:\s*$|\n)/i);
+  if (reasonMatch?.[1]) {
+    return reasonMatch[1].trim();
+  }
+  // Surface the cause clause from "Error: ... caused by: ..."
+  const causedByMatch = raw.match(/caused by[:\s]+(.{4,80}?)(?:\s*$|\n)/i);
+  if (causedByMatch?.[1]) {
+    return causedByMatch[1].trim();
+  }
+  return undefined;
+}
+
+function formatTransportErrorCopy(raw: string, opts?: TransientErrorOpts): string | undefined {
   if (!raw) {
     return undefined;
   }
   const lower = raw.toLowerCase();
+  const ctx = buildTransientErrorContext(raw, opts);
 
   if (
     /\beconnrefused\b/i.test(raw) ||
     lower.includes("connection refused") ||
     lower.includes("actively refused")
   ) {
-    return "LLM request failed: connection refused by the provider endpoint.";
+    return (
+      `LLM request failed: the provider API refused the connection.${ctx} ` +
+      `This usually means the provider endpoint is down or a local proxy/firewall is blocking it. ` +
+      `Check your internet connection and provider status page, or add a fallback model.`
+    );
   }
 
   if (
@@ -116,7 +155,11 @@ function formatTransportErrorCopy(raw: string): string | undefined {
     lower.includes("connection reset") ||
     lower.includes("connection aborted")
   ) {
-    return "LLM request failed: network connection was interrupted.";
+    return (
+      `LLM request failed: the connection to the provider was dropped mid-request.${ctx} ` +
+      `Often a transient network hiccup — retry usually works. ` +
+      `If it persists, check your network stability or add a fallback model.`
+    );
   }
 
   if (
@@ -125,7 +168,10 @@ function formatTransportErrorCopy(raw: string): string | undefined {
     lower.includes("no such host") ||
     lower.includes("dns")
   ) {
-    return "LLM request failed: DNS lookup for the provider endpoint failed.";
+    return (
+      `LLM request failed: DNS lookup for the provider endpoint failed.${ctx} ` +
+      `The provider hostname could not be resolved — check your internet/DNS, or verify the API base URL in your config.`
+    );
   }
 
   if (
@@ -133,7 +179,10 @@ function formatTransportErrorCopy(raw: string): string | undefined {
     lower.includes("network is unreachable") ||
     lower.includes("host is unreachable")
   ) {
-    return "LLM request failed: the provider endpoint is unreachable from this host.";
+    return (
+      `LLM request failed: the provider endpoint is unreachable.${ctx} ` +
+      `This host may be offline or the route is blocked. Check your network connection.`
+    );
   }
 
   if (
@@ -141,7 +190,13 @@ function formatTransportErrorCopy(raw: string): string | undefined {
     lower.includes("connection error") ||
     lower.includes("network request failed")
   ) {
-    return "LLM request failed: network connection error.";
+    const reason = extractRawErrorReason(raw);
+    const reasonSuffix = reason ? ` (${reason})` : "";
+    return (
+      `LLM request failed: network connection error${reasonSuffix}.${ctx} ` +
+      `Could not reach the provider — check your internet connection or provider status. ` +
+      `Adding a fallback model can help ride out transient outages.`
+    );
   }
 
   return undefined;
@@ -661,7 +716,13 @@ export function formatAssistantErrorText(
     return transientCopy;
   }
 
-  const transportCopy = formatTransportErrorCopy(raw);
+  const transportCopy = formatTransportErrorCopy(raw, {
+    provider: opts?.provider,
+    model: opts?.model ?? msg.model,
+    profileId: opts?.profileId,
+    trigger: opts?.trigger,
+    sessionKey: opts?.sessionKey,
+  });
   if (transportCopy) {
     return transportCopy;
   }

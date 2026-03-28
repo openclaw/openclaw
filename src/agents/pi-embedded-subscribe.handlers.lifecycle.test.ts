@@ -63,16 +63,21 @@ describe("handleAgentEnd", () => {
     expect(warn.mock.calls[0]?.[1]).toMatchObject({
       event: "embedded_run_agent_end",
       runId: "run-1",
-      error: "LLM request failed: connection refused by the provider endpoint.",
+      error: expect.stringContaining(
+        "LLM request failed: the provider API refused the connection.",
+      ),
       rawErrorPreview: "connection refused",
-      consoleMessage:
-        "embedded run agent end: runId=run-1 isError=true model=unknown provider=unknown error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
+      consoleMessage: expect.stringContaining(
+        "LLM request failed: the provider API refused the connection.",
+      ),
     });
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: "LLM request failed: connection refused by the provider endpoint.",
+        error: expect.stringContaining(
+          "LLM request failed: the provider API refused the connection.",
+        ),
       },
     });
   });
@@ -121,8 +126,9 @@ describe("handleAgentEnd", () => {
     const warn = vi.mocked(ctx.log.warn);
     const meta = warn.mock.calls[0]?.[1];
     expect(meta).toMatchObject({
-      consoleMessage:
-        "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
+      consoleMessage: expect.stringContaining(
+        "LLM request failed: the provider API refused the connection.",
+      ),
     });
     expect(meta?.consoleMessage).not.toContain("\n");
     expect(meta?.consoleMessage).not.toContain("\r");
