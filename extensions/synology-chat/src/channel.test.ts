@@ -34,7 +34,8 @@ vi.mock("./webhook-handler.js", () => ({
   createWebhookHandler: vi.fn(() => vi.fn()),
 }));
 
-const { createSynologyChatPlugin } = await import("./channel.js");
+const freshChannelModulePath = "./channel.js?channel-test";
+const { createSynologyChatPlugin } = await import(freshChannelModulePath);
 
 describe("createSynologyChatPlugin", () => {
   beforeEach(() => {
@@ -548,19 +549,15 @@ describe("createSynologyChatPlugin", () => {
         abortSignal: abortCtrl.signal,
       });
 
-      // Start first account (returns a pending promise)
       const firstPromise = plugin.gateway.startAccount(makeCtx(abortFirst));
-      // Start second account on same path — should deregister the first route
       const secondPromise = plugin.gateway.startAccount(makeCtx(abortSecond));
 
-      // Give microtasks time to settle
       await new Promise((r) => setTimeout(r, 10));
 
       expect(registerMock).toHaveBeenCalledTimes(2);
       expect(unregisterFirst).not.toHaveBeenCalled();
       expect(unregisterSecond).not.toHaveBeenCalled();
 
-      // Clean up: abort both to resolve promises and prevent test leak
       abortFirst.abort();
       abortSecond.abort();
       await Promise.allSettled([firstPromise, secondPromise]);
