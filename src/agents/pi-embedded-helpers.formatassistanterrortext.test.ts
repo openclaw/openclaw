@@ -228,6 +228,10 @@ describe("formatRawAssistantErrorForUi", () => {
     );
   });
 
+  it("formats colon-delimited HTTP status lines", () => {
+    expect(formatRawAssistantErrorForUi("HTTP 410: No body")).toBe("HTTP 410: No body");
+  });
+
   it("sanitizes HTML error pages into a clean unavailable message", () => {
     const htmlError = `521 <!DOCTYPE html>
 <html lang="en-US">
