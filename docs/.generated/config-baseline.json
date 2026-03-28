@@ -16723,7 +16723,7 @@
         "network"
       ],
       "label": "Google Chat",
-      "help": "Google Workspace Chat app via HTTP webhooks.",
+      "help": "Google Workspace Chat app with HTTP webhook.",
       "hasChildren": true
     },
     {
@@ -20991,7 +20991,7 @@
         "network"
       ],
       "label": "LINE",
-      "help": "LINE Messaging API bot for Japan/Taiwan/Thailand markets.",
+      "help": "LINE Messaging API webhook bot.",
       "hasChildren": true
     },
     {

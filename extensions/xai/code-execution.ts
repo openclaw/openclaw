@@ -23,11 +23,12 @@ type XaiPluginConfig = NonNullable<
   ? Config
   : undefined;
 
-type CodeExecutionConfig = XaiPluginConfig extends infer Config
-  ? Config extends { codeExecution?: infer CodeExecution }
-    ? CodeExecution
-    : undefined
-  : undefined;
+type CodeExecutionConfig = {
+  enabled?: boolean;
+  model?: string;
+  maxTurns?: number;
+  timeoutSeconds?: number;
+};
 
 function readCodeExecutionConfigRecord(
   config?: CodeExecutionConfig,
