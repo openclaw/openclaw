@@ -62,6 +62,7 @@ import { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
 import {
+  buildTelegramRoutingTarget,
   buildTelegramThreadParams,
   buildSenderName,
   buildTelegramGroupFrom,
@@ -642,6 +643,7 @@ export const registerTelegramNativeCommands = ({
         }
         const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
         const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
+        const originatingTo = buildTelegramRoutingTarget(chatId, threadSpec);
         const executionCfg = getRuntimeConfigSnapshot() ?? cfg;
 
         const commandDefinition = findCommandByNativeName(command.name, "telegram");
@@ -768,7 +770,7 @@ export const registerTelegramNativeCommands = ({
           IsForum: isForum,
           // Originating context for sub-agent announce routing
           OriginatingChannel: "telegram" as const,
-          OriginatingTo: `telegram:${chatId}`,
+          OriginatingTo: originatingTo,
         });
 
         await recordInboundSessionMetaSafe({

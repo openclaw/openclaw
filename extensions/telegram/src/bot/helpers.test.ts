@@ -1,6 +1,7 @@
 import type { Message } from "grammy/types";
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildTelegramRoutingTarget,
   buildTelegramThreadParams,
   buildTypingThreadParams,
   describeReplyTarget,
@@ -89,6 +90,31 @@ describe("buildTelegramThreadParams", () => {
     { input: { id: 0, scope: "none" as const }, expected: { message_thread_id: 0 } },
   ])("builds thread params", ({ input, expected }) => {
     expect(buildTelegramThreadParams(input)).toEqual(expected);
+  });
+});
+
+describe("buildTelegramRoutingTarget", () => {
+  it.each([
+    {
+      name: "keeps General forum topic chat-scoped",
+      chatId: -100123,
+      thread: { id: 1, scope: "forum" as const },
+      expected: "telegram:-100123",
+    },
+    {
+      name: "includes real forum topic ids",
+      chatId: -100123,
+      thread: { id: 42, scope: "forum" as const },
+      expected: "telegram:-100123:topic:42",
+    },
+    {
+      name: "falls back to bare chat when thread is missing",
+      chatId: -100123,
+      thread: null,
+      expected: "telegram:-100123",
+    },
+  ])("$name", ({ chatId, thread, expected }) => {
+    expect(buildTelegramRoutingTarget(chatId, thread)).toBe(expected);
   });
 });
 
