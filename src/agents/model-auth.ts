@@ -6,7 +6,6 @@ import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { formatApiKeyPreview } from "../plugins/provider-auth-input.js";
 import {
   buildProviderMissingAuthMessageWithPlugin,
   resolveProviderSyntheticAuthWithPlugin,
@@ -34,27 +33,13 @@ import {
   type ResolvedProviderAuth,
 } from "./model-auth-runtime-shared.js";
 import { normalizeProviderId } from "./model-selection.js";
+import { shouldTraceProviderAuth, summarizeProviderAuthKey } from "./xai-auth-trace.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 export { requireApiKey, resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
 export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 
 const log = createSubsystemLogger("model-auth");
-
-function shouldTraceProviderAuth(provider: string): boolean {
-  return normalizeProviderId(provider) === "xai";
-}
-
-function summarizeProviderAuthKey(apiKey: string | undefined): string {
-  const trimmed = apiKey?.trim() ?? "";
-  if (!trimmed) {
-    return "missing";
-  }
-  if (isNonSecretApiKeyMarker(trimmed)) {
-    return `marker:${trimmed}`;
-  }
-  return formatApiKeyPreview(trimmed);
-}
 
 function logProviderAuthDecision(params: {
   provider: string;
