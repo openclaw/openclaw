@@ -426,24 +426,32 @@ export async function getReplyFromConfig(
         const primaryTrimmed = imageModelPrimary?.trim() ?? "";
         const primaryHasProvider = primaryTrimmed.includes("/");
 
-        if (imageModelPrimary && channelAliasIndex && defaultProvider) {
-          if (primaryHasProvider) {
-            // Primary has explicit provider - resolve it directly
-            const resolved = resolveModelRefFromString({
-              raw: primaryTrimmed,
-              defaultProvider,
-              aliasIndex: channelAliasIndex,
-            });
-            if (resolved) {
-              imageModelDefaultProvider = resolved.ref.provider;
-            }
-          } else {
-            // Primary is providerless - first try to resolve it (handles aliases).
-            // Only use the resolved provider if primary is an alias.
-            // If primary is providerless and NOT an alias (e.g., "gpt-4o"),
-            // resolveModelRefFromString would return defaultProvider which is wrong
-            // in mixed-provider configs. In that case, leave imageModelDefaultProvider
-            // at defaultProvider so fallback derivation can set the correct provider.
+        // Derive imageModelDefaultProvider from primary if it has an explicit provider.
+        if (imageModelPrimary && channelAliasIndex && defaultProvider && primaryHasProvider) {
+          const resolved = resolveModelRefFromString({
+            raw: primaryTrimmed,
+            defaultProvider,
+            aliasIndex: channelAliasIndex,
+          });
+          if (resolved) {
+            imageModelDefaultProvider = resolved.ref.provider;
+          }
+        }
+
+        // If no primary was configured, primary is providerless, or primary resolution
+        // didn't determine provider, derive imageModelDefaultProvider from fallbacks.
+        // This handles:
+        // 1. Fallback-only configs (e.g., imageModel.fallbacks: ["openai/gpt-4.1"])
+        // 2. Providerless primary with fallbacks (e.g., primary: "gpt-4o", fallbacks: ["openai/gpt-4.1"])
+        // 3. Providerless primary alias that resolved to defaultProvider
+        if (
+          (!imageModelPrimary || !primaryHasProvider || imageModelDefaultProvider === defaultProvider) &&
+          channelAliasIndex &&
+          defaultProvider
+        ) {
+          // First pass: if primary is providerless, try to resolve it as an alias.
+          // Only use the resolved provider if primary is actually an alias.
+          if (!primaryHasProvider && imageModelPrimary) {
             const resolved = resolveModelRefFromString({
               raw: primaryTrimmed,
               defaultProvider,
@@ -452,37 +460,36 @@ export async function getReplyFromConfig(
             if (resolved?.alias && resolved.ref.provider) {
               imageModelDefaultProvider = resolved.ref.provider;
             }
+          }
 
-            // If primary resolution didn't determine provider (no alias), derive from fallbacks
-            if (imageModelDefaultProvider === defaultProvider) {
-              // Scan fallbacks for first with explicit provider
-              for (const fb of fallbacks) {
-                if (!fb?.trim()) {
-                  continue;
-                }
-                const slash = fb.indexOf("/");
-                if (slash > 0) {
-                  imageModelDefaultProvider = fb.slice(0, slash).trim();
-                  break;
-                }
+          // Second pass: scan fallbacks for first with explicit provider
+          if (imageModelDefaultProvider === defaultProvider) {
+            for (const fb of fallbacks) {
+              if (!fb?.trim()) {
+                continue;
               }
+              const slash = fb.indexOf("/");
+              if (slash > 0) {
+                imageModelDefaultProvider = fb.slice(0, slash).trim();
+                break;
+              }
+            }
+          }
 
-              // If still not found, try alias resolution on fallbacks
-              if (imageModelDefaultProvider === defaultProvider) {
-                for (const fb of fallbacks) {
-                  if (!fb?.trim()) {
-                    continue;
-                  }
-                  const fbResolved = resolveModelRefFromString({
-                    raw: fb.trim(),
-                    defaultProvider,
-                    aliasIndex: channelAliasIndex,
-                  });
-                  if (fbResolved?.ref.provider) {
-                    imageModelDefaultProvider = fbResolved.ref.provider;
-                    break;
-                  }
-                }
+          // Third pass: if still not found, try alias resolution on fallbacks
+          if (imageModelDefaultProvider === defaultProvider) {
+            for (const fb of fallbacks) {
+              if (!fb?.trim()) {
+                continue;
+              }
+              const fbResolved = resolveModelRefFromString({
+                raw: fb.trim(),
+                defaultProvider,
+                aliasIndex: channelAliasIndex,
+              });
+              if (fbResolved?.ref.provider) {
+                imageModelDefaultProvider = fbResolved.ref.provider;
+                break;
               }
             }
           }
