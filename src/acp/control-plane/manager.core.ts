@@ -1473,7 +1473,7 @@ export class AcpSessionManager {
   }
 
   private isRecoverableAcpxExitError(message: string): boolean {
-    return /^acpx exited with code \d+/i.test(message.trim());
+    return /^acpx exited with (code \d+|signal [a-z0-9]+)/i.test(message.trim());
   }
 
   private async evictIdleRuntimeHandles(params: { cfg: OpenClawConfig }): Promise<void> {
