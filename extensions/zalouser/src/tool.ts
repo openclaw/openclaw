@@ -63,15 +63,23 @@ function resolveAmbientZalouserTarget(context?: ZalouserToolContext): {
   threadId?: string;
   isGroup?: boolean;
 } {
-  const rawTarget = context?.deliveryContext?.to;
-  if (typeof rawTarget === "string" && rawTarget.trim()) {
+  const deliveryContext = context?.deliveryContext;
+  const rawTarget = deliveryContext?.to;
+  if (
+    (deliveryContext?.channel === undefined || deliveryContext.channel === "zalouser") &&
+    typeof rawTarget === "string" &&
+    rawTarget.trim()
+  ) {
     try {
       return parseZalouserOutboundTarget(rawTarget);
     } catch {
       // Ignore unrelated delivery targets; explicit tool params still win.
     }
   }
-  const ambientThreadId = context?.deliveryContext?.threadId;
+  if (deliveryContext?.channel && deliveryContext.channel !== "zalouser") {
+    return {};
+  }
+  const ambientThreadId = deliveryContext?.threadId;
   if (typeof ambientThreadId === "string" && ambientThreadId.trim()) {
     return { threadId: ambientThreadId.trim() };
   }

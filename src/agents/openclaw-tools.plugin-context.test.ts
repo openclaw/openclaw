@@ -127,7 +127,7 @@ describe("createOpenClawTools plugin context", () => {
     );
   });
 
-  it("injects ambient thread defaults without mutating shared plugin tool instances", async () => {
+  it("does not inject ambient thread defaults into plugin tools", async () => {
     const executeMock = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "ok" }],
       details: {},
@@ -157,18 +157,17 @@ describe("createOpenClawTools plugin context", () => {
 
     expect(first).toBeDefined();
     expect(second).toBeDefined();
-    expect(first).not.toBe(sharedTool);
-    expect(second).not.toBe(sharedTool);
-    expect(first).not.toBe(second);
+    expect(first).toBe(sharedTool);
+    expect(second).toBe(sharedTool);
 
     await first?.execute("call-1", {});
     await second?.execute("call-2", {});
 
-    expect(executeMock).toHaveBeenNthCalledWith(1, "call-1", { threadId: "111.222" });
-    expect(executeMock).toHaveBeenNthCalledWith(2, "call-2", { threadId: "333.444" });
+    expect(executeMock).toHaveBeenNthCalledWith(1, "call-1", {});
+    expect(executeMock).toHaveBeenNthCalledWith(2, "call-2", {});
   });
 
-  it("injects messageThreadId defaults for missing params objects", async () => {
+  it("does not inject messageThreadId defaults for missing params objects", async () => {
     const executeMock = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "ok" }],
       details: {},
@@ -194,10 +193,10 @@ describe("createOpenClawTools plugin context", () => {
 
     await wrapped?.execute("call-1", undefined);
 
-    expect(executeMock).toHaveBeenCalledWith("call-1", { messageThreadId: 77 });
+    expect(executeMock).toHaveBeenCalledWith("call-1", undefined);
   });
 
-  it("preserves string thread ids for tools that declare string thread parameters", async () => {
+  it("does not infer string thread ids for tools that declare thread parameters", async () => {
     const executeMock = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "ok" }],
       details: {},
@@ -223,10 +222,10 @@ describe("createOpenClawTools plugin context", () => {
 
     await wrapped?.execute("call-1", {});
 
-    expect(executeMock).toHaveBeenCalledWith("call-1", { threadId: "77" });
+    expect(executeMock).toHaveBeenCalledWith("call-1", {});
   });
 
-  it("does not override explicit thread params when ambient defaults exist", async () => {
+  it("preserves explicit thread params when ambient defaults exist", async () => {
     const executeMock = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "ok" }],
       details: {},
