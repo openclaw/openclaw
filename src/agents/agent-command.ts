@@ -78,8 +78,8 @@ type TranscriptResolveRuntime = typeof import("../config/sessions/transcript-res
 type CliDepsRuntime = typeof import("../cli/deps.js");
 type ExecDefaultsRuntime = typeof import("./exec-defaults.js");
 type SkillsRuntime = typeof import("./skills.js");
-type SkillsFilterRuntime = typeof import("./skills/filter.js");
 type SkillsRefreshStateRuntime = typeof import("./skills/refresh-state.js");
+type SkillsSnapshotCacheRuntime = typeof import("./skills/snapshot-cache.js");
 type SkillsRemoteRuntime = typeof import("../infra/skills-remote.js");
 
 let attemptExecutionRuntimePromise: Promise<AttemptExecutionRuntime> | undefined;
@@ -94,8 +94,8 @@ let transcriptResolveRuntimePromise: Promise<TranscriptResolveRuntime> | undefin
 let cliDepsRuntimePromise: Promise<CliDepsRuntime> | undefined;
 let execDefaultsRuntimePromise: Promise<ExecDefaultsRuntime> | undefined;
 let skillsRuntimePromise: Promise<SkillsRuntime> | undefined;
-let skillsFilterRuntimePromise: Promise<SkillsFilterRuntime> | undefined;
 let skillsRefreshStateRuntimePromise: Promise<SkillsRefreshStateRuntime> | undefined;
+let skillsSnapshotCacheRuntimePromise: Promise<SkillsSnapshotCacheRuntime> | undefined;
 let skillsRemoteRuntimePromise: Promise<SkillsRemoteRuntime> | undefined;
 
 function loadAttemptExecutionRuntime(): Promise<AttemptExecutionRuntime> {
@@ -158,14 +158,14 @@ function loadSkillsRuntime(): Promise<SkillsRuntime> {
   return skillsRuntimePromise;
 }
 
-function loadSkillsFilterRuntime(): Promise<SkillsFilterRuntime> {
-  skillsFilterRuntimePromise ??= import("./skills/filter.js");
-  return skillsFilterRuntimePromise;
-}
-
 function loadSkillsRefreshStateRuntime(): Promise<SkillsRefreshStateRuntime> {
   skillsRefreshStateRuntimePromise ??= import("./skills/refresh-state.js");
   return skillsRefreshStateRuntimePromise;
+}
+
+function loadSkillsSnapshotCacheRuntime(): Promise<SkillsSnapshotCacheRuntime> {
+  skillsSnapshotCacheRuntimePromise ??= import("./skills/snapshot-cache.js");
+  return skillsSnapshotCacheRuntimePromise;
 }
 
 function loadSkillsRemoteRuntime(): Promise<SkillsRemoteRuntime> {
@@ -588,16 +588,21 @@ async function agentCommandInternal(
       });
     }
 
-    const [{ getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion }, { matchesSkillFilter }] =
-      await Promise.all([loadSkillsRefreshStateRuntime(), loadSkillsFilterRuntime()]);
+    const [{ getSkillsSnapshotVersion }, { canReuseSkillSnapshot }] = await Promise.all([
+      loadSkillsRefreshStateRuntime(),
+      loadSkillsSnapshotCacheRuntime(),
+    ]);
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
     const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
     const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
-    const shouldRefreshSkillsSnapshot =
-      !currentSkillsSnapshot ||
-      shouldRefreshSnapshotForVersion(currentSkillsSnapshot.version, skillsSnapshotVersion) ||
-      !matchesSkillFilter(currentSkillsSnapshot.skillFilter, skillFilter);
-    const needsSkillsSnapshot = isNewSession || shouldRefreshSkillsSnapshot;
+    const needsSkillsSnapshot =
+      isNewSession ||
+      !canReuseSkillSnapshot({
+        snapshot: currentSkillsSnapshot,
+        snapshotVersion: skillsSnapshotVersion,
+        config: cfg,
+        skillFilter,
+      });
     const skillsSnapshot = needsSkillsSnapshot
       ? await (async () => {
           const [

@@ -4,12 +4,9 @@ import path from "node:path";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import { matchesSkillFilter } from "../../agents/skills/filter.js";
-import {
-  getSkillsSnapshotVersion,
-  shouldRefreshSnapshotForVersion,
-} from "../../agents/skills/refresh-state.js";
+import { getSkillsSnapshotVersion } from "../../agents/skills/refresh-state.js";
 import { ensureSkillsWatcher } from "../../agents/skills/refresh.js";
+import { canReuseSkillSnapshot } from "../../agents/skills/snapshot-cache.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -145,9 +142,12 @@ export async function ensureSkillSnapshot(params: {
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   const existingSnapshot = nextEntry?.skillsSnapshot;
   ensureSkillsWatcher({ workspaceDir, config: cfg });
-  const shouldRefreshSnapshot =
-    shouldRefreshSnapshotForVersion(existingSnapshot?.version, snapshotVersion) ||
-    !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter);
+  const shouldRefreshSnapshot = !canReuseSkillSnapshot({
+    snapshot: existingSnapshot,
+    snapshotVersion,
+    config: cfg,
+    skillFilter,
+  });
   const buildSnapshot = () =>
     buildWorkspaceSkillSnapshot(workspaceDir, {
       config: cfg,

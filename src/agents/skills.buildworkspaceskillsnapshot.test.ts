@@ -5,11 +5,13 @@ import { withPathResolutionEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { writeSkill, writeWorkspaceSkills } from "./skills.e2e-test-helpers.js";
+import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
 } from "./skills/home-env.test-support.js";
+import type { SkillEntry } from "./skills/types.js";
 import { buildWorkspaceSkillSnapshot, buildWorkspaceSkillsPrompt } from "./skills/workspace.js";
 
 vi.mock("./skills/plugin-skills.js", () => ({
@@ -96,6 +98,41 @@ function expectSnapshotNamesAndPrompt(
     expect(snapshot.skills.map((skill) => skill.name)).not.toContain(name);
     expect(snapshot.prompt).not.toContain(name);
   }
+}
+
+function extractPromptSkillNames(prompt: string): string[] {
+  return Array.from(prompt.matchAll(/<name>([^<]+)<\/name>/g), (match) => match[1] ?? "");
+}
+
+function createEntry(
+  workspaceDir: string,
+  name: string,
+  options?: {
+    skillKey?: string;
+    primaryEnv?: string;
+    disableModelInvocation?: boolean;
+  },
+): SkillEntry {
+  const dir = path.join(workspaceDir, "skills", name);
+  return {
+    skill: createCanonicalFixtureSkill({
+      name,
+      description: `${name} description`,
+      filePath: path.join(dir, "SKILL.md"),
+      baseDir: dir,
+      source: "workspace",
+      disableModelInvocation: options?.disableModelInvocation,
+    }),
+    frontmatter: {},
+    ...(options?.skillKey || options?.primaryEnv
+      ? {
+          metadata: {
+            ...(options?.skillKey ? { skillKey: options.skillKey } : {}),
+            ...(options?.primaryEnv ? { primaryEnv: options.primaryEnv } : {}),
+          },
+        }
+      : {}),
+  };
 }
 
 describe("buildWorkspaceSkillSnapshot", () => {
@@ -222,6 +259,154 @@ describe("buildWorkspaceSkillSnapshot", () => {
       "github",
     ]);
     expect(snapshot.skillFilter).toEqual(["docs-search", "github"]);
+  });
+
+  it("puts priority skills first so they survive low maxSkillsInPrompt limits", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    for (const [name, description] of [
+      ["alpha-skill", "Alpha"],
+      ["beta-skill", "Beta"],
+      ["wechat-reader", "Read WeChat chats"],
+    ] as const) {
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", name),
+        name,
+        description,
+      });
+    }
+
+    const snapshot = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillSnapshot(workspaceDir, {
+        config: {
+          skills: {
+            priority: ["wechat-reader", "beta-skill"],
+            limits: {
+              maxSkillsInPrompt: 2,
+              maxSkillsPromptChars: 5_000,
+            },
+          },
+        },
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      }),
+    );
+
+    expect(extractPromptSkillNames(snapshot.prompt)).toEqual(["wechat-reader", "beta-skill"]);
+    expect(snapshot.prompt).not.toContain("<name>alpha-skill</name>");
+  });
+
+  it("preserves the existing entry order when skills.priority is unset", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const snapshot = buildSnapshot(workspaceDir, {
+      entries: [
+        createEntry(workspaceDir, "zeta-skill"),
+        createEntry(workspaceDir, "alpha-skill"),
+        createEntry(workspaceDir, "beta-skill"),
+      ],
+      config: {
+        skills: {
+          limits: {
+            maxSkillsInPrompt: 10,
+            maxSkillsPromptChars: 5_000,
+          },
+        },
+      },
+    });
+
+    expect(extractPromptSkillNames(snapshot.prompt)).toEqual([
+      "zeta-skill",
+      "alpha-skill",
+      "beta-skill",
+    ]);
+  });
+
+  it("keeps non-priority skills alphabetized after the pinned skills", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    for (const [name, description] of [
+      ["delta-skill", "Delta"],
+      ["alpha-skill", "Alpha"],
+      ["wechat-reader", "Read WeChat chats"],
+      ["charlie-skill", "Charlie"],
+    ] as const) {
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", name),
+        name,
+        description,
+      });
+    }
+
+    const snapshot = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillSnapshot(workspaceDir, {
+        config: {
+          skills: {
+            priority: ["wechat-reader"],
+            limits: {
+              maxSkillsInPrompt: 10,
+              maxSkillsPromptChars: 5_000,
+            },
+          },
+        },
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      }),
+    );
+
+    expect(extractPromptSkillNames(snapshot.prompt)).toEqual([
+      "wechat-reader",
+      "alpha-skill",
+      "charlie-skill",
+      "delta-skill",
+    ]);
+  });
+
+  it("prefers exact skill names over colliding aliases", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const snapshot = buildSnapshot(workspaceDir, {
+      entries: [
+        createEntry(workspaceDir, "github"),
+        createEntry(workspaceDir, "internal-helper", {
+          skillKey: "github",
+        }),
+      ],
+      config: {
+        skills: {
+          priority: ["github"],
+          limits: {
+            maxSkillsInPrompt: 10,
+            maxSkillsPromptChars: 5_000,
+          },
+        },
+      },
+    });
+
+    expect(extractPromptSkillNames(snapshot.prompt)).toEqual(["github", "internal-helper"]);
+    expect(snapshot.skills.map((skill) => skill.name)).toEqual(["github", "internal-helper"]);
+  });
+
+  it("keeps persisted snapshot skill order aligned with prompt priority", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const snapshot = buildSnapshot(workspaceDir, {
+      entries: [
+        createEntry(workspaceDir, "alpha-skill", {
+          primaryEnv: "OPENAI_API_KEY",
+        }),
+        createEntry(workspaceDir, "beta-skill", {
+          primaryEnv: "OPENAI_API_KEY",
+        }),
+      ],
+      config: {
+        skills: {
+          priority: ["beta-skill"],
+          limits: {
+            maxSkillsInPrompt: 10,
+            maxSkillsPromptChars: 5_000,
+          },
+        },
+      },
+    });
+
+    expect(extractPromptSkillNames(snapshot.prompt)).toEqual(["beta-skill", "alpha-skill"]);
+    expect(snapshot.skills.map((skill) => skill.name)).toEqual(["beta-skill", "alpha-skill"]);
   });
 
   it("limits discovery for nested repo-style skills roots (dir/skills/*)", async () => {

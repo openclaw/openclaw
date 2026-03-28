@@ -15,11 +15,17 @@ import {
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";
 import { normalizeSkillFilter } from "./filter.js";
-import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
+import {
+  parseFrontmatter,
+  resolveOpenClawMetadata,
+  resolveSkillKey,
+  resolveSkillInvocationPolicy,
+} from "./frontmatter.js";
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import { resolveSkillsSnapshotConfigKey } from "./snapshot-cache.js";
 import type {
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
@@ -716,19 +722,66 @@ function applySkillsPromptLimits(params: {
   return { skillsForPrompt, truncated, compact };
 }
 
+function orderSkillEntriesForPrompt(entries: SkillEntry[], priority?: string[]): SkillEntry[] {
+  if (entries.length <= 1) {
+    return entries.slice();
+  }
+
+  const orderedPriority = (priority ?? []).map((name) => name.trim()).filter(Boolean);
+  if (orderedPriority.length === 0) {
+    return entries.slice();
+  }
+
+  const entriesByKey = new Map<string, SkillEntry>();
+  for (const entry of entries) {
+    entriesByKey.set(entry.skill.name, entry);
+  }
+  for (const entry of entries) {
+    // Allow alias-based pinning without letting aliases override another
+    // skill's exact name match when identifiers collide.
+    const skillKey = resolveSkillKey(entry.skill, entry);
+    if (!skillKey || skillKey === entry.skill.name || entriesByKey.has(skillKey)) {
+      continue;
+    }
+    entriesByKey.set(skillKey, entry);
+  }
+  const seen = new Set<string>();
+  const prioritized: SkillEntry[] = [];
+
+  for (const key of orderedPriority) {
+    const entry = entriesByKey.get(key);
+    if (!entry || seen.has(entry.skill.name)) {
+      continue;
+    }
+    prioritized.push(entry);
+    seen.add(entry.skill.name);
+  }
+
+  const remaining = entries
+    .filter((entry) => !seen.has(entry.skill.name))
+    .sort((a, b) => a.skill.name.localeCompare(b.skill.name));
+
+  return [...prioritized, ...remaining];
+}
+
 export function buildWorkspaceSkillSnapshot(
   workspaceDir: string,
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): SkillSnapshot {
   const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
+  const orderedEligibleEntries = orderSkillEntriesForPrompt(
+    eligible,
+    opts?.config?.skills?.priority,
+  );
   const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   return {
     prompt,
-    skills: eligible.map((entry) => ({
+    skills: orderedEligibleEntries.map((entry) => ({
       name: entry.skill.name,
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
+    configKey: resolveSkillsSnapshotConfigKey(opts?.config),
     ...(skillFilter === undefined ? {} : { skillFilter }),
     resolvedSkills,
     version: opts?.snapshotVersion,
@@ -781,7 +834,13 @@ function resolveWorkspaceSkillPromptState(
     effectiveSkillFilter,
     opts?.eligibility,
   );
-  const promptEntries = eligible.filter((entry) => isSkillVisibleInAvailableSkillsPrompt(entry));
+  const orderedEligibleEntries = orderSkillEntriesForPrompt(
+    eligible,
+    opts?.config?.skills?.priority,
+  );
+  const promptEntries = orderedEligibleEntries.filter((entry) =>
+    isSkillVisibleInAvailableSkillsPrompt(entry),
+  );
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
   // Derive prompt-facing skills with compacted paths (e.g. ~/...) once.
