@@ -51,6 +51,7 @@ export class OpenClawChannelBridge {
   private closed = false;
   private ready = false;
   private started = false;
+  private eventQueue: Promise<void> = Promise.resolve();
   private readonly readyPromise: Promise<void>;
   private resolveReady!: () => void;
   private rejectReady!: (error: Error) => void;
@@ -119,7 +120,11 @@ export class OpenClawChannelBridge {
       mode: GATEWAY_CLIENT_MODES.CLI,
       scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
       onEvent: (event) => {
-        void this.handleGatewayEvent(event);
+        // Serialize event handling so concurrent async handlers don't
+        // interleave mutations to queue/pendingWaiters across await points.
+        this.eventQueue = this.eventQueue
+          .then(() => this.handleGatewayEvent(event))
+          .catch(() => {});
       },
       onHelloOk: () => {
         void this.handleHelloOk();
@@ -147,13 +152,15 @@ export class OpenClawChannelBridge {
     }
     this.closed = true;
     this.resolveReadyOnce();
-    for (const waiter of this.pendingWaiters) {
+    // Snapshot before iterating — resolve() mutates the Set via delete().
+    const waiters = Array.from(this.pendingWaiters);
+    this.pendingWaiters.clear();
+    for (const waiter of waiters) {
       if (waiter.timeout) {
         clearTimeout(waiter.timeout);
       }
       waiter.resolve(null);
     }
-    this.pendingWaiters.clear();
     const gateway = this.gateway;
     this.gateway = null;
     await gateway?.stopAndWait().catch(() => undefined);
@@ -361,7 +368,9 @@ export class OpenClawChannelBridge {
     while (this.queue.length > QUEUE_LIMIT) {
       this.queue.shift();
     }
-    for (const waiter of this.pendingWaiters) {
+    // Snapshot the Set before iterating — waiter.resolve() deletes from
+    // pendingWaiters, and mutating a Set during iteration is undefined behavior.
+    for (const waiter of Array.from(this.pendingWaiters)) {
       if (!matchEventFilter(event, waiter.filter)) {
         continue;
       }
