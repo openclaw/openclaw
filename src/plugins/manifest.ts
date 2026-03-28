@@ -46,6 +46,12 @@ export type PluginManifest = {
    * compat wiring, and contract coverage without importing plugin runtime.
    */
   contracts?: PluginManifestContracts;
+  /**
+   * Declared runtime capabilities for this plugin.
+   * When present, undeclared capabilities may be denied at runtime.
+   * Plugins without this field run in legacy unrestricted mode.
+   */
+  capabilities?: PluginCapabilities;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
 
@@ -55,6 +61,24 @@ export type PluginManifestContracts = {
   imageGenerationProviders?: string[];
   webSearchProviders?: string[];
   tools?: string[];
+};
+
+export type PluginRuntimeCapabilities = {
+  "config.read"?: boolean;
+  "config.write"?: boolean;
+  "system.exec"?: boolean;
+  modelAuth?: string[] | boolean;
+  subagent?: boolean;
+  media?: boolean;
+  state?: boolean;
+};
+
+export type PluginCapabilities = {
+  tools?: string[];
+  hooks?: string[];
+  httpRoutes?: boolean;
+  gatewayMethods?: string[];
+  runtime?: PluginRuntimeCapabilities;
 };
 
 export type PluginManifestProviderAuthChoice = {
@@ -190,6 +214,68 @@ function normalizeProviderAuthChoices(
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeRuntimeCapabilities(value: unknown): PluginRuntimeCapabilities | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const result: PluginRuntimeCapabilities = {};
+  if (typeof value["config.read"] === "boolean") {
+    result["config.read"] = value["config.read"];
+  }
+  if (typeof value["config.write"] === "boolean") {
+    result["config.write"] = value["config.write"];
+  }
+  if (typeof value["system.exec"] === "boolean") {
+    result["system.exec"] = value["system.exec"];
+  }
+  if (typeof value.subagent === "boolean") {
+    result.subagent = value.subagent;
+  }
+  if (typeof value.media === "boolean") {
+    result.media = value.media;
+  }
+  if (typeof value.state === "boolean") {
+    result.state = value.state;
+  }
+  const modelAuth = value.modelAuth;
+  if (typeof modelAuth === "boolean") {
+    result.modelAuth = modelAuth;
+  } else if (Array.isArray(modelAuth)) {
+    const providers = normalizeStringList(modelAuth);
+    if (providers.length > 0) {
+      result.modelAuth = providers;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function normalizeCapabilities(value: unknown): PluginCapabilities | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const result: PluginCapabilities = {};
+  const tools = normalizeStringList(value.tools);
+  if (tools.length > 0) {
+    result.tools = tools;
+  }
+  const hooks = normalizeStringList(value.hooks);
+  if (hooks.length > 0) {
+    result.hooks = hooks;
+  }
+  if (value.httpRoutes === true) {
+    result.httpRoutes = true;
+  }
+  const gatewayMethods = normalizeStringList(value.gatewayMethods);
+  if (gatewayMethods.length > 0) {
+    result.gatewayMethods = gatewayMethods;
+  }
+  const runtime = normalizeRuntimeCapabilities(value.runtime);
+  if (runtime) {
+    result.runtime = runtime;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 function normalizeChannelConfigs(
   value: unknown,
 ): Record<string, PluginManifestChannelConfig> | undefined {
@@ -298,6 +384,7 @@ export function loadPluginManifest(
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const skills = normalizeStringList(raw.skills);
   const contracts = normalizeManifestContracts(raw.contracts);
+  const capabilities = normalizeCapabilities(raw.capabilities);
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 
   let uiHints: Record<string, PluginConfigUiHint> | undefined;
@@ -327,6 +414,7 @@ export function loadPluginManifest(
       version,
       uiHints,
       contracts,
+      capabilities,
       channelConfigs,
     },
     manifestPath,
