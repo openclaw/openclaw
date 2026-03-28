@@ -5,6 +5,7 @@ import {
   createInternalHookEvent,
   getRegisteredEventKeys,
   isAgentBootstrapEvent,
+  isAgentTurnEndEvent,
   isGatewayStartupEvent,
   isMessageReceivedEvent,
   isMessageSentEvent,
@@ -12,6 +13,7 @@ import {
   triggerInternalHook,
   unregisterInternalHook,
   type AgentBootstrapHookContext,
+  type AgentTurnEndHookContext,
   type GatewayStartupHookContext,
   type MessageReceivedHookContext,
   type MessageSentHookContext,
@@ -208,6 +210,51 @@ describe("hooks", () => {
       expected: boolean;
     }>)("$name", ({ event, expected }) => {
       expect(isAgentBootstrapEvent(event)).toBe(expected);
+    });
+  });
+
+  describe("isAgentTurnEndEvent", () => {
+    it.each([
+      {
+        name: "returns true for a successful agent:turn:end event",
+        event: createInternalHookEvent("agent", "turn:end", "test-session", {
+          sessionKey: "agent:jonathan:telegram:direct:123",
+          success: true,
+          durationMs: 1234,
+        } satisfies AgentTurnEndHookContext),
+        expected: true,
+      },
+      {
+        name: "returns true for a failed agent:turn:end event",
+        event: createInternalHookEvent("agent", "turn:end", "test-session", {
+          sessionKey: "agent:jonathan:telegram:direct:123",
+          success: false,
+          durationMs: 567,
+        } satisfies AgentTurnEndHookContext),
+        expected: true,
+      },
+      {
+        name: "returns false for non-turn:end events",
+        event: createInternalHookEvent("agent", "bootstrap", "test-session", {
+          workspaceDir: "/tmp",
+          bootstrapFiles: [],
+        } satisfies AgentBootstrapHookContext),
+        expected: false,
+      },
+      {
+        name: "returns false when context is missing required fields",
+        event: createInternalHookEvent("agent", "turn:end", "test-session", {
+          sessionKey: "agent:jonathan:telegram:direct:123",
+          // success and durationMs missing
+        }),
+        expected: false,
+      },
+    ] satisfies Array<{
+      name: string;
+      event: ReturnType<typeof createInternalHookEvent>;
+      expected: boolean;
+    }>)("$name", ({ event, expected }) => {
+      expect(isAgentTurnEndEvent(event)).toBe(expected);
     });
   });
 

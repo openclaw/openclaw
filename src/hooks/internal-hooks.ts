@@ -159,6 +159,26 @@ export type MessagePreprocessedHookEvent = InternalHookEvent & {
   context: MessagePreprocessedHookContext;
 };
 
+/**
+ * Context provided to `agent:turn:end` hook handlers.
+ * Fired after each completed agent turn cycle, for both successful and failed turns.
+ */
+export type AgentTurnEndHookContext = {
+  /** Session key identifying the agent session that completed the turn. */
+  sessionKey: string;
+  /** Whether the turn completed successfully (`true`) or failed (`false`). */
+  success: boolean;
+  /** Wall-clock duration of the turn in milliseconds. */
+  durationMs: number;
+};
+
+/** Internal hook event emitted after each agent turn cycle completes. */
+export type AgentTurnEndHookEvent = InternalHookEvent & {
+  type: "agent";
+  action: "turn:end";
+  context: AgentTurnEndHookContext;
+};
+
 export type SessionPatchHookContext = {
   sessionEntry: SessionEntry;
   patch: SessionsPatchParams;
@@ -361,6 +381,13 @@ function hasBooleanContextField<T extends Record<string, unknown>>(
   return typeof context[key] === "boolean";
 }
 
+function hasNumberContextField<T extends Record<string, unknown>>(
+  context: Partial<T>,
+  key: keyof T,
+): boolean {
+  return typeof context[key] === "number";
+}
+
 export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {
   if (!isHookEventTypeAndAction(event, "agent", "bootstrap")) {
     return false;
@@ -436,6 +463,21 @@ export function isMessagePreprocessedEvent(
     return false;
   }
   return hasStringContextField(context, "channelId");
+}
+
+export function isAgentTurnEndEvent(
+  event: InternalHookEvent,
+): event is AgentTurnEndHookEvent {
+  if (!isHookEventTypeAndAction(event, "agent", "turn:end")) {
+    return false;
+  }
+  const context = getHookContext<AgentTurnEndHookContext>(event);
+  if (!context) return false;
+  return (
+    hasStringContextField(context, "sessionKey") &&
+    hasBooleanContextField(context, "success") &&
+    hasNumberContextField(context, "durationMs")
+  );
 }
 
 export function isSessionPatchEvent(event: InternalHookEvent): event is SessionPatchHookEvent {

@@ -1,4 +1,10 @@
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
+import {
+  type AgentTurnEndHookContext,
+  createInternalHookEvent,
+  triggerInternalHook,
+} from "../../hooks/internal-hooks.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -732,6 +738,7 @@ export class AcpSessionManager {
               throw streamError;
             }
             this.recordTurnCompletion({
+              sessionKey,
               startedAt: turnStartedAt,
             });
             await this.setSessionState({
@@ -759,6 +766,7 @@ export class AcpSessionManager {
               continue;
             }
             this.recordTurnCompletion({
+              sessionKey,
               startedAt: turnStartedAt,
               errorCode: acpError.code,
             });
@@ -1436,16 +1444,26 @@ export class AcpSessionManager {
     }
   }
 
-  private recordTurnCompletion(params: { startedAt: number; errorCode?: AcpRuntimeError["code"] }) {
+  private recordTurnCompletion(params: { sessionKey: string; startedAt: number; errorCode?: AcpRuntimeError["code"] }) {
     const durationMs = Math.max(0, Date.now() - params.startedAt);
     this.turnLatencyStats.totalMs += durationMs;
     this.turnLatencyStats.maxMs = Math.max(this.turnLatencyStats.maxMs, durationMs);
     if (params.errorCode) {
       this.turnLatencyStats.failed += 1;
       this.recordErrorCode(params.errorCode);
-      return;
+    } else {
+      this.turnLatencyStats.completed += 1;
     }
-    this.turnLatencyStats.completed += 1;
+    fireAndForgetHook(
+      triggerInternalHook(
+        createInternalHookEvent("agent", "turn:end", params.sessionKey, {
+          sessionKey: params.sessionKey,
+          success: !params.errorCode,
+          durationMs,
+        } satisfies AgentTurnEndHookContext),
+      ),
+      "agent:turn:end internal hook failed",
+    );
   }
 
   private recordErrorCode(code: string): void {
