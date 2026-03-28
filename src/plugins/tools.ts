@@ -71,7 +71,7 @@ export function resolvePluginTools(params: {
 
   const activeRegistry = getActivePluginRegistry();
   const registry =
-    getActivePluginRegistryKey() && activeRegistry
+    getActivePluginRegistryKey() && activeRegistry && effectiveConfig === baseConfig
       ? activeRegistry
       : loadOpenClawPlugins({
           config: effectiveConfig,
