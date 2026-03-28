@@ -19,7 +19,8 @@ import {
   getAgentScopedMediaLocalRoots,
   getAgentScopedMediaLocalRootsForSources,
 } from "../../media/local-roots.js";
-import { hasPollCreationParams } from "../../poll-params.js";
+import { hasPollCreationParams, POLL_CREATION_PARAM_NAMES } from "../../poll-params.ts";
+import { toSnakeCaseKey } from "../../param-key.ts";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -721,6 +722,27 @@ export async function runMessageAction(
     toolContext: input.toolContext,
   });
 
+  // For non-poll actions, check for poll intent early to provide clear errors
+  if (action === "send" && hasPollCreationParams(params)) {
+    throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');
+  }
+
+  // Clean up poll creation params if action is not poll to avoid false positives from wrappers
+  if (action !== "poll") {
+    const keysToRemove = new Set<string>();
+    for (const key of POLL_CREATION_PARAM_NAMES) {
+      keysToRemove.add(key);
+      keysToRemove.add(toSnakeCaseKey(key));
+    }
+    const filtered: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(params)) {
+      if (!keysToRemove.has(key)) {
+        filtered[key] = value;
+      }
+    }
+    params = filtered;
+  }
+
   const channel = await resolveChannel(cfg, params, input.toolContext);
   let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   if (!accountId && resolvedAgentId) {
@@ -780,10 +802,6 @@ export async function runMessageAction(
     cfg,
   });
 
-  if (action === "send" && hasPollCreationParams(params)) {
-    throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');
-  }
-
   const gateway = resolveGateway(input);
 
   if (action === "send") {
@@ -829,3 +847,4 @@ export async function runMessageAction(
     abortSignal: input.abortSignal,
   });
 }
+
