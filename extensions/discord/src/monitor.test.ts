@@ -905,8 +905,8 @@ const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
   })),
 }));
 
-const infraRuntimeModule = await import("openclaw/plugin-sdk/infra-runtime");
-vi.spyOn(infraRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueSystemEventSpy);
+const channelRuntimeModule = await import("openclaw/plugin-sdk/channel-runtime");
+vi.spyOn(channelRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueSystemEventSpy);
 
 const routingModule = await import("openclaw/plugin-sdk/routing");
 vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRouteMock);
