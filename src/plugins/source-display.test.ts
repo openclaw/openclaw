@@ -3,24 +3,11 @@ import { describe, expect, it } from "vitest";
 import { withPathResolutionEnv } from "../test-utils/env.js";
 import { formatPluginSourceForTable, resolvePluginSourceRoots } from "./source-display.js";
 
-function createPluginSourceRoots() {
-  const stockRoot = path.resolve(
-    path.sep,
-    "opt",
-    "homebrew",
-    "lib",
-    "node_modules",
-    "openclaw",
-    "extensions",
-  );
-  const globalRoot = path.resolve(path.sep, "Users", "x", ".openclaw", "extensions");
-  const workspaceRoot = path.resolve(path.sep, "Users", "x", "ws", ".openclaw", "extensions");
-  return {
-    stock: stockRoot,
-    global: globalRoot,
-    workspace: workspaceRoot,
-  };
-}
+const PLUGIN_SOURCE_ROOTS = {
+  stock: path.resolve(path.sep, "opt", "homebrew", "lib", "node_modules", "openclaw", "extensions"),
+  global: path.resolve(path.sep, "Users", "x", ".openclaw", "extensions"),
+  workspace: path.resolve(path.sep, "Users", "x", "ws", ".openclaw", "extensions"),
+};
 
 function expectFormattedSource(params: {
   origin: "bundled" | "workspace" | "global";
@@ -30,13 +17,12 @@ function expectFormattedSource(params: {
   expectedValue: string;
   expectedRootKey: "stock" | "workspace" | "global";
 }) {
-  const roots = createPluginSourceRoots();
   const out = formatPluginSourceForTable(
     {
       origin: params.origin,
-      source: path.join(roots[params.sourceKey], params.dirName, params.fileName),
+      source: path.join(PLUGIN_SOURCE_ROOTS[params.sourceKey], params.dirName, params.fileName),
     },
-    roots,
+    PLUGIN_SOURCE_ROOTS,
   );
   expect(out.value).toBe(params.expectedValue);
   expect(out.rootKey).toBe(params.expectedRootKey);

@@ -63,6 +63,11 @@ describe("applyExclusiveSlotSelection", () => {
     }
   }
 
+  function expectUnchangedSelection(result: ReturnType<typeof applyExclusiveSlotSelection>) {
+    expect(result.changed).toBe(false);
+    expect(result.warnings).toHaveLength(0);
+  }
+
   it("selects the slot and disables other entries for the same kind", () => {
     const config = createMemoryConfig({
       slots: { memory: "memory-core" },
@@ -94,8 +99,7 @@ describe("applyExclusiveSlotSelection", () => {
       registry: { plugins: [{ id: "memory", kind: "memory" }] },
     });
 
-    expect(result.changed).toBe(false);
-    expect(result.warnings).toHaveLength(0);
+    expectUnchangedSelection(result);
     expect(result.config).toBe(config);
   });
 
@@ -140,8 +144,7 @@ describe("applyExclusiveSlotSelection", () => {
       selectedId: "custom",
     });
 
-    expect(result.changed).toBe(false);
-    expect(result.warnings).toHaveLength(0);
+    expectUnchangedSelection(result);
     expect(result.config).toBe(config);
   });
 });

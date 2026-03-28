@@ -72,6 +72,10 @@ function expectStartupPluginIds(config: OpenClawConfig, expected: readonly strin
   ).toEqual(expected);
 }
 
+function expectManifestRegistryFixture() {
+  expect(loadPluginManifestRegistry).toHaveBeenCalled();
+}
+
 describe("resolveGatewayStartupPluginIds", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockReturnValue(["demo-channel"]);
@@ -119,5 +123,6 @@ describe("resolveGatewayStartupPluginIds", () => {
     ],
   ] as const)("%s", (_name, config, expected) => {
     expectStartupPluginIds(config, expected);
+    expectManifestRegistryFixture();
   });
 });
