@@ -4,11 +4,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
+  ClawHubRequestError,
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
+  RATE_LIMIT_LOGIN_HINT,
   resolveClawHubAuthToken,
   resolveLatestVersionFromPackage,
   satisfiesGatewayMinimum,
@@ -221,6 +223,60 @@ describe("clawhub helpers", () => {
 
     await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toEqual([]);
   });
+
+  it("appends login hint to 429 errors when unauthenticated", async () => {
+    delete process.env.OPENCLAW_CLAWHUB_TOKEN;
+    delete process.env.CLAWHUB_TOKEN;
+    delete process.env.CLAWHUB_AUTH_TOKEN;
+    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = "/nonexistent/config.json";
+
+    const fetchImpl = async () => new Response("Rate limit exceeded", { status: 429 });
+
+    const result = searchClawHubSkills({ query: "weather", fetchImpl });
+    await expect(result).rejects.toThrow(ClawHubRequestError);
+    const err = await result.catch((error: unknown) => error);
+
+    expect(err).toBeInstanceOf(ClawHubRequestError);
+    const error = err as ClawHubRequestError;
+    expect(error.status).toBe(429);
+    expect(error.message).toContain("Rate limit exceeded");
+    expect(error.message).toContain(RATE_LIMIT_LOGIN_HINT);
+  });
+
+  it("does not append login hint to 429 errors when authenticated", async () => {
+    process.env.OPENCLAW_CLAWHUB_TOKEN = "valid-token";
+
+    const fetchImpl = async () => new Response("Rate limit exceeded", { status: 429 });
+
+    const result = searchClawHubSkills({ query: "weather", fetchImpl });
+    await expect(result).rejects.toThrow(ClawHubRequestError);
+    const err = await result.catch((error: unknown) => error);
+
+    expect(err).toBeInstanceOf(ClawHubRequestError);
+    const error = err as ClawHubRequestError;
+    expect(error.status).toBe(429);
+    expect(error.message).toContain("Rate limit exceeded");
+    expect(error.message).not.toContain(RATE_LIMIT_LOGIN_HINT);
+  });
+
+  it("does not append login hint to non-429 errors", async () => {
+    delete process.env.OPENCLAW_CLAWHUB_TOKEN;
+    delete process.env.CLAWHUB_TOKEN;
+    delete process.env.CLAWHUB_AUTH_TOKEN;
+    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = "/nonexistent/config.json";
+
+    const fetchImpl = async () => new Response("Internal Server Error", { status: 500 });
+
+    const result = searchClawHubSkills({ query: "weather", fetchImpl });
+    await expect(result).rejects.toThrow(ClawHubRequestError);
+    const err = await result.catch((error: unknown) => error);
+
+    expect(err).toBeInstanceOf(ClawHubRequestError);
+    const error = err as ClawHubRequestError;
+    expect(error.status).toBe(500);
+    expect(error.message).not.toContain(RATE_LIMIT_LOGIN_HINT);
+  });
+
   it("downloads package archives to sanitized temp paths and cleans them up", async () => {
     const archive = await downloadClawHubPackageArchive({
       name: "@hyf/zai-external-alpha",
