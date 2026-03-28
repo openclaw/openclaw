@@ -477,6 +477,9 @@ export async function getReplyFromConfig(
           }
 
           // Third pass: if still not found, try alias resolution on fallbacks
+          // Only use provider from fallbacks that are actual aliases.
+          // Providerless non-alias fallbacks (e.g., "gpt-4.1") would resolve to
+          // defaultProvider which is wrong in mixed-provider configs.
           if (imageModelDefaultProvider === defaultProvider) {
             for (const fb of fallbacks) {
               if (!fb?.trim()) {
@@ -487,7 +490,7 @@ export async function getReplyFromConfig(
                 defaultProvider,
                 aliasIndex: channelAliasIndex,
               });
-              if (fbResolved?.ref.provider) {
+              if (fbResolved?.alias && fbResolved.ref.provider) {
                 imageModelDefaultProvider = fbResolved.ref.provider;
                 break;
               }
