@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
+import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
 import type { SkillEntry } from "./skills/types.js";
 
 describe("buildWorkspaceSkillStatus", () => {
@@ -48,12 +49,5 @@ function createFixtureSkill(params: {
   baseDir: string;
   source: string;
 }): SkillEntry["skill"] {
-  return {
-    name: params.name,
-    description: params.description,
-    filePath: params.filePath,
-    baseDir: params.baseDir,
-    source: params.source,
-    disableModelInvocation: false,
-  };
+  return createCanonicalFixtureSkill(params);
 }
