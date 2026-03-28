@@ -60,6 +60,7 @@ export const HookMappingSchema = z
         z.literal("signal"),
         z.literal("imessage"),
         z.literal("msteams"),
+        z.literal("feishu"),
       ])
       .optional(),
     to: z.string().optional(),
