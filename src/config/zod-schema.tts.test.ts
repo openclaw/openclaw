@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { TtsConfigSchema } from "./zod-schema.core.js";
 
-describe("TtsConfigSchema openai speed and instructions", () => {
-  it("accepts speed and instructions in openai section", () => {
+describe("TtsConfigSchema", () => {
+  it("accepts provider-scoped openai speed and instructions", () => {
     expect(() =>
       TtsConfigSchema.parse({
         providers: {
@@ -16,25 +16,25 @@ describe("TtsConfigSchema openai speed and instructions", () => {
     ).not.toThrow();
   });
 
-  it("rejects out-of-range openai speed", () => {
+  it("accepts legacy messages.tts.edge config for migration compatibility", () => {
     expect(() =>
       TtsConfigSchema.parse({
-        providers: {
-          openai: {
-            speed: 5.0,
-          },
+        provider: "edge",
+        edge: {
+          voice: "en-US-AvaMultilingualNeural",
+          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
         },
       }),
     ).not.toThrow();
   });
 
-  it("rejects openai speed below minimum", () => {
+  it("accepts legacy messages.tts.microsoft config for migration compatibility", () => {
     expect(() =>
       TtsConfigSchema.parse({
-        providers: {
-          openai: {
-            speed: 0.1,
-          },
+        provider: "microsoft",
+        microsoft: {
+          voice: "en-US-AvaMultilingualNeural",
+          rate: "+10%",
         },
       }),
     ).not.toThrow();
