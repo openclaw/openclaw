@@ -170,6 +170,10 @@ describe("stripReasoningTagsFromText", () => {
           input: "A <THINK>hidden</THINK> <Thinking>also hidden</Thinking> B",
           expected: "A   B",
         },
+        {
+          input: "Before <think signature='gemini'/> after",
+          expected: "Before  after",
+        },
       ] as const;
       for (const { input, expected } of cases) {
         expect(stripReasoningTagsFromText(input)).toBe(expected);

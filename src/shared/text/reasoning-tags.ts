@@ -6,6 +6,10 @@ const QUICK_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking|final)\b/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\b[^<>]*>/gi;
 const THINKING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
 
+function isSelfClosingReasoningTag(tag: string, leadingSlash: string): boolean {
+  return leadingSlash !== "/" && /\/\s*>$/.test(tag);
+}
+
 function applyTrim(value: string, mode: ReasoningTagTrim): string {
   if (mode === "none") {
     return value;
@@ -67,6 +71,7 @@ export function stripReasoningTagsFromText(
   for (const match of cleaned.matchAll(THINKING_TAG_RE)) {
     const idx = match.index ?? 0;
     const isClose = match[1] === "/";
+    const isSelfClosing = isSelfClosingReasoningTag(match[0], match[1] ?? "");
 
     if (isInsideCode(idx, codeRegions)) {
       continue;
@@ -74,7 +79,7 @@ export function stripReasoningTagsFromText(
 
     if (!inThinking) {
       result += cleaned.slice(lastIndex, idx);
-      if (!isClose) {
+      if (!isClose && !isSelfClosing) {
         inThinking = true;
       }
     } else if (isClose) {

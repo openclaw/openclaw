@@ -21,9 +21,13 @@ import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.t
 import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
-const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
+const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
 const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\b[^<>]*>/gi;
 const log = createSubsystemLogger("agent/embedded");
+
+function isSelfClosingReasoningTag(tag: string, leadingSlash: string): boolean {
+  return leadingSlash !== "/" && /\/\s*>$/.test(tag);
+}
 
 export type {
   BlockReplyChunking,
@@ -386,11 +390,14 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       if (codeSpans.isInside(idx)) {
         continue;
       }
+      const isSelfClosing = isSelfClosingReasoningTag(match[0], match[1] ?? "");
       if (!inThinking) {
         processed += text.slice(lastIndex, idx);
       }
       const isClose = match[1] === "/";
-      inThinking = !isClose;
+      if (!isSelfClosing) {
+        inThinking = !isClose;
+      }
       lastIndex = idx + match[0].length;
     }
     if (!inThinking) {
@@ -421,7 +428,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       if (finalCodeSpans.isInside(idx)) {
         continue;
       }
+      const isSelfClosing = isSelfClosingReasoningTag(match[0], match[1] ?? "");
       const isClose = match[1] === "/";
+
+      if (isSelfClosing) {
+        continue;
+      }
 
       if (!inFinal && !isClose) {
         // Found <final> start tag.
