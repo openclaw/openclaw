@@ -45,6 +45,12 @@ function expectProviderModels(
   expect(providers?.[providerId]).toMatchObject(expected);
 }
 
+function expectDefaultPrimaryModel(cfg: OpenClawConfig, modelRef: string) {
+  expect(cfg.agents?.defaults?.model).toEqual({
+    primary: modelRef,
+  });
+}
+
 function createDemoProviderParams(params?: {
   providerId?: string;
   baseUrl?: string;
@@ -135,9 +141,7 @@ describe("provider onboarding preset appliers", () => {
           { id: "b", name: "Model B" },
         ],
       });
-      expect(cfg.agents?.defaults?.model).toEqual({
-        primary: "demo/a",
-      });
+      expectDefaultPrimaryModel(cfg, "demo/a");
       return;
     }
 

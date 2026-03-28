@@ -105,6 +105,46 @@ function setBundledCapabilityFixture(contractKey: string) {
   });
 }
 
+function setActiveSpeechCapabilityRegistry(providerId: string) {
+  const active = createEmptyPluginRegistry();
+  active.speechProviders.push({
+    pluginId: providerId,
+    pluginName: "OpenAI",
+    source: "test",
+    provider: {
+      id: providerId,
+      label: "OpenAI",
+      isConfigured: () => true,
+      synthesize: async () => ({
+        audioBuffer: Buffer.from("x"),
+        outputFormat: "mp3",
+        voiceCompatible: false,
+        fileExtension: ".mp3",
+      }),
+    },
+  });
+  setActivePluginRegistry(active);
+}
+
+function expectCompatChainApplied(params: {
+  key: "speechProviders" | "mediaUnderstandingProviders" | "imageGenerationProviders";
+  contractKey: string;
+  cfg: OpenClawConfig;
+  allowlistCompat: { plugins: { allow: string[] } };
+  enablementCompat: {
+    plugins: {
+      allow: string[];
+      entries: { openai: { enabled: boolean } };
+    };
+  };
+}) {
+  setBundledCapabilityFixture(params.contractKey);
+  mocks.withBundledPluginAllowlistCompat.mockReturnValue(params.allowlistCompat);
+  mocks.withBundledPluginEnablementCompat.mockReturnValue(params.enablementCompat);
+  mocks.withBundledPluginVitestCompat.mockReturnValue(params.enablementCompat);
+  resolvePluginCapabilityProviders({ key: params.key, cfg: params.cfg });
+  expectBundledCompatLoadPath(params);
+}
 describe("resolvePluginCapabilityProviders", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -154,14 +194,9 @@ describe("resolvePluginCapabilityProviders", () => {
     ["imageGenerationProviders", "imageGenerationProviders"],
   ] as const)("applies bundled compat before fallback loading for %s", (key, contractKey) => {
     const { cfg, allowlistCompat, enablementCompat } = createCompatChainConfig();
-    setBundledCapabilityFixture(contractKey);
-    mocks.withBundledPluginAllowlistCompat.mockReturnValue(allowlistCompat);
-    mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
-    mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);
-
-    resolvePluginCapabilityProviders({ key, cfg });
-
-    expectBundledCompatLoadPath({
+    expectCompatChainApplied({
+      key,
+      contractKey,
       cfg,
       allowlistCompat,
       enablementCompat,

@@ -37,6 +37,22 @@ function createOwnedAdapterEntry(id: string) {
   };
 }
 
+function expectRegisteredProviderState(params: {
+  entry: {
+    adapter: MemoryEmbeddingProviderAdapter;
+    ownerPluginId?: string;
+  };
+  expectedList?: Array<{
+    adapter: MemoryEmbeddingProviderAdapter;
+    ownerPluginId?: string;
+  }>;
+}) {
+  expectRegisteredProviderEntry(params.entry.adapter.id, params.entry);
+  if (params.expectedList) {
+    expect(listRegisteredMemoryEmbeddingProviders()).toEqual(params.expectedList);
+  }
+}
+
 function expectMemoryEmbeddingProviderIds(expectedIds: readonly string[]) {
   expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([...expectedIds]);
 }
@@ -81,14 +97,11 @@ describe("memory embedding provider registry", () => {
       expectList: false,
     },
   ] as const)("$name", ({ entry, setup, expectList }) => {
-    const expectedEntry = entry;
-
     setup(entry);
-
-    expectRegisteredProviderEntry(entry.adapter.id, expectedEntry);
-    if (expectList) {
-      expect(listRegisteredMemoryEmbeddingProviders()).toEqual([expectedEntry]);
-    }
+    expectRegisteredProviderState({
+      entry,
+      ...(expectList ? { expectedList: [entry] } : {}),
+    });
   });
 
   it("clears the registry", () => {
