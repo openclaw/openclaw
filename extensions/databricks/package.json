@@ -1,0 +1,12 @@
+{
+  "name": "@kansodata/databricks",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Databricks skill pack plugin for OpenClaw.",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

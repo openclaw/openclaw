@@ -1,0 +1,11 @@
+{
+  "id": "databricks",
+  "name": "Databricks",
+  "description": "Databricks skill pack for SQL operations, jobs orchestration, and Unity Catalog governance workflows.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

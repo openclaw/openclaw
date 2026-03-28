@@ -246,6 +246,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/deepseek/**"
+"extensions: databricks":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/databricks/**"
 "extensions: anthropic":
   - changed-files:
       - any-glob-to-any-file:
