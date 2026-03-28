@@ -1,48 +1,43 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
-
-const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
-const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-
-vi.mock("../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/config.js")>()),
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
-  writeConfigFile: writeConfigFileMock,
-}));
+import { createBindingResolverTestPlugin } from "../test-utils/channel-plugins.js";
+import {
+  loadFreshAgentsCommandModuleForTest,
+  readConfigFileSnapshotMock,
+  resetAgentsBindTestHarness,
+  runtime,
+  writeConfigFileMock,
+} from "./agents.bind.test-support.js";
+import { baseConfigSnapshot } from "./test-runtime-config-helpers.js";
 
 vi.mock("../channels/plugins/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../channels/plugins/index.js")>();
-  const knownChannels = new Set(["discord", "matrix", "telegram"]);
-  const createPlugin = (id: "discord" | "matrix" | "telegram") => ({
-    id,
-    meta: {
-      id,
-      label: id,
-      selectionLabel: id,
-      docsPath: `/channels/${id}`,
-      blurb: `${id} test plugin`,
-    },
-    capabilities: {},
-    config: {
-      listAccountIds: () => [],
-    },
-  });
+  const knownChannels = new Map([
+    [
+      "discord",
+      createBindingResolverTestPlugin({ id: "discord", config: { listAccountIds: () => [] } }),
+    ],
+    [
+      "matrix",
+      createBindingResolverTestPlugin({
+        id: "matrix",
+        config: { listAccountIds: () => [] },
+        resolveBindingAccountId: ({ agentId }) => agentId.toLowerCase(),
+      }),
+    ],
+    [
+      "telegram",
+      createBindingResolverTestPlugin({ id: "telegram", config: { listAccountIds: () => [] } }),
+    ],
+  ]);
   return {
     ...actual,
     getChannelPlugin: (channel: string) => {
       const normalized = channel.trim().toLowerCase();
-      if (!knownChannels.has(normalized)) {
-        return actual.getChannelPlugin(channel);
+      const plugin = knownChannels.get(normalized);
+      if (plugin) {
+        return plugin;
       }
-      if (normalized === "matrix") {
-        return {
-          ...createPlugin("matrix"),
-          setup: {
-            resolveBindingAccountId: ({ agentId }: { agentId: string }) => agentId.toLowerCase(),
-          },
-        };
-      }
-      return createPlugin(normalized as "discord" | "telegram");
+      return actual.getChannelPlugin(channel);
     },
     normalizeChannelId: (channel: string) => {
       const normalized = channel.trim().toLowerCase();
@@ -58,18 +53,11 @@ let agentsBindCommand: typeof import("./agents.js").agentsBindCommand;
 let agentsBindingsCommand: typeof import("./agents.js").agentsBindingsCommand;
 let agentsUnbindCommand: typeof import("./agents.js").agentsUnbindCommand;
 
-const runtime = createTestRuntime();
-
 describe("agents bind/unbind commands", () => {
   beforeEach(async () => {
-    vi.resetModules();
     ({ agentsBindCommand, agentsBindingsCommand, agentsUnbindCommand } =
-      await import("./agents.js"));
-    readConfigFileSnapshotMock.mockClear();
-    writeConfigFileMock.mockClear();
-    runtime.log.mockClear();
-    runtime.error.mockClear();
-    runtime.exit.mockClear();
+      await loadFreshAgentsCommandModuleForTest());
+    resetAgentsBindTestHarness();
   });
 
   it("lists all bindings by default", async () => {
