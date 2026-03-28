@@ -25,6 +25,7 @@ describe("resolvePluginProviders", () => {
     loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
         { id: "google", providers: ["google"], origin: "bundled" },
+        { id: "browser", providers: [], origin: "bundled" },
         { id: "kilocode", providers: ["kilocode"], origin: "bundled" },
         { id: "moonshot", providers: ["moonshot"], origin: "bundled" },
         { id: "google-gemini-cli-auth", providers: [], origin: "bundled" },
@@ -189,6 +190,18 @@ describe("resolvePluginProviders", () => {
     const allow = call?.config?.plugins?.allow;
     expect(allow).not.toContain("google");
     expect(allow).not.toContain("kilocode");
+  });
+
+  it("loads only provider plugins on the provider runtime path", () => {
+    resolvePluginProviders({
+      bundledProviderAllowlistCompat: true,
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["google", "kilocode", "moonshot"],
+      }),
+    );
   });
 
   it("maps provider ids to owning plugin ids via manifests", () => {

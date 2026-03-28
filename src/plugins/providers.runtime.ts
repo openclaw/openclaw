@@ -6,6 +6,7 @@ import {
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import {
+  resolveEnabledProviderPluginIds,
   resolveBundledProviderCompatPluginIds,
   withBundledProviderVitestCompat,
 } from "./providers.js";
@@ -54,11 +55,17 @@ export function resolvePluginProviders(params: {
         env: params.env,
       })
     : allowlistCompatConfig;
-  const registry = loadOpenClawPlugins({
+  const providerPluginIds = resolveEnabledProviderPluginIds({
     config,
     workspaceDir: params.workspaceDir,
     env,
     onlyPluginIds: params.onlyPluginIds,
+  });
+  const registry = loadOpenClawPlugins({
+    config,
+    workspaceDir: params.workspaceDir,
+    env,
+    onlyPluginIds: providerPluginIds,
     pluginSdkResolution: params.pluginSdkResolution,
     cache: params.cache ?? false,
     activate: params.activate ?? false,
