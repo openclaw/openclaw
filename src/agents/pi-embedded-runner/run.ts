@@ -73,8 +73,8 @@ import {
   buildErrorAgentMeta,
   buildUsageAgentMetaFields,
   createCompactionDiagId,
-  OVERLOAD_FAILOVER_BACKOFF_POLICY,
   resolveActiveErrorContext,
+  resolveOverloadFailoverBackoffPolicy,
   resolveMaxRunRetryIterations,
   type RuntimeAuthState,
   scrubAnthropicRefusalMagic,
@@ -311,6 +311,9 @@ export async function runEmbeddedPiAgent(
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
       let timeoutCompactionAttempts = 0;
+      const overloadFailoverBackoffPolicy = resolveOverloadFailoverBackoffPolicy(
+        params.config?.agents?.defaults?.embeddedPi?.overloadBackoffMaxMs,
+      );
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -347,7 +350,7 @@ export async function runEmbeddedPiAgent(
           return;
         }
         overloadFailoverAttempts += 1;
-        const delayMs = computeBackoff(OVERLOAD_FAILOVER_BACKOFF_POLICY, overloadFailoverAttempts);
+        const delayMs = computeBackoff(overloadFailoverBackoffPolicy, overloadFailoverAttempts);
         log.warn(
           `overload backoff before failover for ${provider}/${modelId}: attempt=${overloadFailoverAttempts} delayMs=${delayMs}`,
         );

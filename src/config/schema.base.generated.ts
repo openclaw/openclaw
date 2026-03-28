@@ -2433,6 +2433,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     ],
                   },
+                  overloadBackoffMaxMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
                 },
                 additionalProperties: false,
               },
@@ -13984,6 +13989,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Embedded Pi Project Settings Policy",
       help: 'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
       tags: ["access"],
+    },
+    "agents.defaults.embeddedPi.overloadBackoffMaxMs": {
+      label: "Embedded Pi Overload Backoff Max (ms)",
+      help: "Maximum delay in ms for embedded Pi overload failover retries. Increase this to slow repeated overload fallback churn; values below the initial retry delay clamp up automatically.",
+      tags: ["reliability", "performance"],
     },
     "agents.defaults.heartbeat.directPolicy": {
       label: "Heartbeat Direct Policy",
