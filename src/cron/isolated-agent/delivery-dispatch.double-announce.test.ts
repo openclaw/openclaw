@@ -469,14 +469,16 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   it("does not cache partial bestEffort delivery replays as delivered", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
-    vi.mocked(deliverOutboundPayloads).mockImplementation(async (params: {
-      payloads?: unknown[];
-      onError?: (err: unknown, payload: unknown) => void;
-    }) => {
-      const failedPayload = Array.isArray(params.payloads) ? params.payloads[0] : undefined;
-      params.onError?.(new Error("payload failed"), failedPayload as never);
-      return [{ ok: true } as never];
-    });
+    vi.mocked(deliverOutboundPayloads).mockImplementation(
+      async (params: Parameters<typeof deliverOutboundPayloads>[0]) => {
+        const failedPayload = {
+          text: params.payloads[0]?.text ?? "",
+          mediaUrls: [] as string[],
+        };
+        params.onError?.(new Error("payload failed"), failedPayload);
+        return [{ ok: true } as never];
+      },
+    );
 
     const params = makeBaseParams({ synthesizedText: "Partial bestEffort replay." }) as Record<
       string,
