@@ -112,6 +112,8 @@ export type WebhooksConfig = {
   presets?: string[];
   /** Webhook presets that should receive raw JSON payloads instead of formatted messages. */
   rawMode?: string[];
+  /** Map preset names to specific agent IDs for routing (e.g. { "shopify": "peterino" }). */
+  agentRoutes?: Record<string, string>;
 };
 
 export type HooksConfig = {
