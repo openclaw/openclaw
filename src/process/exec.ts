@@ -330,7 +330,7 @@ export async function runCommandWithTimeout(
         child.stderr?.destroy();
       }, 250);
     });
-    child.on("close", (code, signal) => {
+    const resolveFromClose = (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) {
         return;
       }
@@ -363,6 +363,19 @@ export async function runCommandWithTimeout(
         termination,
         noOutputTimedOut,
       });
+    };
+    child.on("close", (code, signal) => {
+      if (
+        childExitState == null &&
+        code == null &&
+        signal == null &&
+        child.exitCode == null &&
+        child.signalCode == null
+      ) {
+        setImmediate(() => resolveFromClose(code, signal));
+        return;
+      }
+      resolveFromClose(code, signal);
     });
   });
 }
