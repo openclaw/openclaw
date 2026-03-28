@@ -201,6 +201,15 @@ export function createSessionsListTool(opts?: {
           key: displayKey,
           kind,
           channel: derivedChannel,
+          origin:
+            originChannel ||
+            (typeof entryOrigin?.accountId === "string" ? entryOrigin.accountId : undefined)
+              ? {
+                  provider: originChannel,
+                  accountId:
+                    typeof entryOrigin?.accountId === "string" ? entryOrigin.accountId : undefined,
+                }
+              : undefined,
           spawnedBy:
             typeof entry.spawnedBy === "string"
               ? resolveDisplaySessionKey({
