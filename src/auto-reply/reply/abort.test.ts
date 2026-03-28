@@ -54,7 +54,7 @@ vi.mock("../../agents/subagent-registry.js", () => ({
 
 const acpManagerMocks = vi.hoisted(() => ({
   resolveSession: vi.fn<
-    () =>
+    (params?: { sessionKey?: string }) =>
       | { kind: "none" }
       | {
           kind: "ready";
@@ -585,6 +585,50 @@ describe("abort detection", () => {
     expectSessionLaneCleared(childKey);
   });
 
+  it("fast-abort cascades ACP cancel to active child sessions", async () => {
+    const sessionKey = "telegram:parent";
+    const childKey = "agent:main:subagent:child-1";
+    const sessionId = "session-parent";
+    const childSessionId = "session-child";
+    const { cfg } = await createAbortConfig({
+      sessionIdsByKey: {
+        [sessionKey]: sessionId,
+        [childKey]: childSessionId,
+      },
+    });
+
+    subagentRegistryMocks.listSubagentRunsForRequester.mockReturnValueOnce([
+      {
+        runId: "run-1",
+        childSessionKey: childKey,
+        requesterSessionKey: sessionKey,
+        requesterDisplayKey: "telegram:parent",
+        task: "do work",
+        cleanup: "keep",
+        createdAt: Date.now(),
+      },
+    ]);
+    acpManagerMocks.resolveSession.mockImplementation(({ sessionKey }) =>
+      sessionKey === childKey ? { kind: "ready", sessionKey: childKey, meta: {} } : { kind: "none" },
+    );
+
+    const result = await runStopCommand({
+      cfg,
+      sessionKey,
+      from: "telegram:parent",
+      to: "telegram:parent",
+    });
+
+    expect(result.stoppedSubagents).toBe(1);
+    expect(acpManagerMocks.cancelSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        sessionKey: childKey,
+        reason: "subagent-stop",
+      }),
+    );
+  });
+
   it("cascade stop kills depth-2 children when stopping depth-1 agent", async () => {
     const sessionKey = "telegram:parent";
     const depth1Key = "agent:main:subagent:child-1";
@@ -864,7 +908,7 @@ describe("abort detection", () => {
       return null;
     });
 
-    const result = stopSubagentsForRequester({
+    const result = await stopSubagentsForRequester({
       cfg: {} as OpenClawConfig,
       requesterSessionKey: oldParentKey,
     });

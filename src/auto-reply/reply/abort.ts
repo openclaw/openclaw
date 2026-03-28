@@ -136,10 +136,10 @@ function normalizeRequesterSessionKey(
   return resolveInternalSessionKey({ key: cleaned, alias, mainKey });
 }
 
-export function stopSubagentsForRequester(params: {
+export async function stopSubagentsForRequester(params: {
   cfg: OpenClawConfig;
   requesterSessionKey?: string;
-}): { stopped: number } {
+}): Promise<{ stopped: number }> {
   const requesterKey = normalizeRequesterSessionKey(params.cfg, params.requesterSessionKey);
   if (!requesterKey) {
     return { stopped: 0 };
@@ -169,6 +169,7 @@ export function stopSubagentsForRequester(params: {
   const storeCache = new Map<string, Record<string, SessionEntry>>();
   const seenChildKeys = new Set<string>();
   let stopped = 0;
+  const acpManager = abortDeps.getAcpSessionManager();
 
   for (const run of runs) {
     const childKey = run.childSessionKey?.trim();
@@ -186,8 +187,27 @@ export function stopSubagentsForRequester(params: {
         store = loadSessionStore(storePath);
         storeCache.set(storePath, store);
       }
-      const entry = store[childKey];
+      const { entry, key, legacyKeys } = resolveSessionEntryForKey(store, childKey);
       const sessionId = entry?.sessionId;
+      let acpCancelled = false;
+      const acpResolution = acpManager.resolveSession({
+        cfg: params.cfg,
+        sessionKey: childKey,
+      });
+      if (acpResolution.kind !== "none") {
+        try {
+          await acpManager.cancelSession({
+            cfg: params.cfg,
+            sessionKey: childKey,
+            reason: "subagent-stop",
+          });
+          acpCancelled = true;
+        } catch (error) {
+          logVerbose(
+            `abort: ACP cancel failed for child ${childKey}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
       const aborted = sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false;
       const markedTerminated =
         abortDeps.markSubagentRunTerminated({
@@ -196,13 +216,44 @@ export function stopSubagentsForRequester(params: {
           reason: "killed",
         }) > 0;
 
-      if (markedTerminated || aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+      if (entry && key) {
+        entry.abortedLastRun = true;
+        entry.updatedAt = Date.now();
+        store[key] = entry;
+        for (const legacyKey of legacyKeys ?? []) {
+          if (legacyKey !== key) {
+            delete store[legacyKey];
+          }
+        }
+        await updateSessionStore(storePath, (nextStore) => {
+          const nextEntry = nextStore[key] ?? entry;
+          if (!nextEntry) {
+            return;
+          }
+          nextEntry.abortedLastRun = true;
+          nextEntry.updatedAt = Date.now();
+          nextStore[key] = nextEntry;
+          for (const legacyKey of legacyKeys ?? []) {
+            if (legacyKey !== key) {
+              delete nextStore[legacyKey];
+            }
+          }
+        });
+      }
+
+      if (
+        markedTerminated ||
+        aborted ||
+        acpCancelled ||
+        cleared.followupCleared > 0 ||
+        cleared.laneCleared > 0
+      ) {
         stopped += 1;
       }
     }
 
     // Cascade: also stop any sub-sub-agents spawned by this child.
-    const cascadeResult = stopSubagentsForRequester({
+    const cascadeResult = await stopSubagentsForRequester({
       cfg: params.cfg,
       requesterSessionKey: childKey,
     });
@@ -312,13 +363,13 @@ export async function tryFastAbortFromMessage(params: {
     } else if (abortKey) {
       setAbortMemory(abortKey, true);
     }
-    const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
+    const { stopped } = await stopSubagentsForRequester({ cfg, requesterSessionKey });
     return { handled: true, aborted, stoppedSubagents: stopped };
   }
 
   if (abortKey) {
     setAbortMemory(abortKey, true);
   }
-  const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
+  const { stopped } = await stopSubagentsForRequester({ cfg, requesterSessionKey });
   return { handled: true, aborted: false, stoppedSubagents: stopped };
 }
