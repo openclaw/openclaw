@@ -91,7 +91,7 @@
           "exportName": "ChannelConfigSchema",
           "kind": "type",
           "source": {
-            "line": 68,
+            "line": 69,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
@@ -100,7 +100,7 @@
           "exportName": "ChannelConfigUiHint",
           "kind": "type",
           "source": {
-            "line": 37,
+            "line": 38,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
@@ -181,7 +181,7 @@
           "exportName": "ChannelPlugin",
           "kind": "type",
           "source": {
-            "line": 76,
+            "line": 77,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
@@ -2220,7 +2220,7 @@
           "exportName": "ChannelPlugin",
           "kind": "type",
           "source": {
-            "line": 76,
+            "line": 77,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
@@ -2274,7 +2274,7 @@
           "exportName": "ChannelSecurityAdapter",
           "kind": "type",
           "source": {
-            "line": 606,
+            "line": 610,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -3333,7 +3333,7 @@
           "exportName": "createChannelPluginBase",
           "kind": "function",
           "source": {
-            "line": 530,
+            "line": 534,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3666,7 +3666,7 @@
           "exportName": "ChannelConfigUiHint",
           "kind": "type",
           "source": {
-            "line": 37,
+            "line": 38,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
@@ -3711,7 +3711,7 @@
           "exportName": "ChannelPlugin",
           "kind": "type",
           "source": {
-            "line": 76,
+            "line": 77,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
