@@ -58,6 +58,7 @@ export type ResolvedTtsConfig = {
   maxTextLength: number;
   timeoutMs: number;
   rawConfig?: TtsConfig;
+  sourceConfig?: OpenClawConfig;
 };
 
 type TtsUserPrefs = {
@@ -216,15 +217,16 @@ function resolveLazyProviderConfig(
   const canonical =
     normalizeConfiguredSpeechProviderId(providerId) ?? providerId.trim().toLowerCase();
   const existing = config.providerConfigs[canonical];
-  if (existing) {
+  const effectiveCfg = cfg ?? config.sourceConfig;
+  if (existing && !effectiveCfg) {
     return existing;
   }
   const rawConfig = resolveRawProviderConfig(config.rawConfig, canonical);
-  const resolvedProvider = getSpeechProvider(canonical, cfg);
+  const resolvedProvider = getSpeechProvider(canonical, effectiveCfg);
   const next =
-    cfg && resolvedProvider?.resolveConfig
+    effectiveCfg && resolvedProvider?.resolveConfig
       ? resolvedProvider.resolveConfig({
-          cfg,
+          cfg: effectiveCfg,
           rawConfig: {
             ...(config.rawConfig as Record<string, unknown> | undefined),
             providers: asProviderConfigMap(config.rawConfig?.providers),
@@ -299,6 +301,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs,
     rawConfig: raw,
+    sourceConfig: cfg,
   };
 }
 
