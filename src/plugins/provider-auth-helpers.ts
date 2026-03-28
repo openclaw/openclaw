@@ -4,7 +4,7 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
 import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
-import { findNormalizedProviderKey, normalizeProviderIdForAuth } from "../agents/provider-id.js";
+import { normalizeProviderIdForAuth } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -131,9 +131,13 @@ export function applyAuthProfileConfig(
 
   // Maintain `auth.order` when it already exists. Additionally, if we detect
   // mixed auth modes for the same provider, keep the newly selected profile first.
-  const existingProviderKey = findNormalizedProviderKey(cfg.auth?.order, normalizedProvider);
+  const matchingProviderOrderEntries = Object.entries(cfg.auth?.order ?? {}).filter(
+    ([providerId]) => normalizeProviderIdForAuth(providerId) === normalizedProvider,
+  );
   const existingProviderOrder =
-    existingProviderKey !== undefined ? cfg.auth?.order?.[existingProviderKey] : undefined;
+    matchingProviderOrderEntries.length > 0
+      ? [...new Set(matchingProviderOrderEntries.flatMap(([, order]) => order))]
+      : undefined;
   const preferProfileFirst = params.preferProfileFirst ?? true;
   const reorderedProviderOrder =
     existingProviderOrder && preferProfileFirst
@@ -155,10 +159,10 @@ export function applyAuthProfileConfig(
         ]
       : undefined;
   const baseOrder =
-    existingProviderKey && existingProviderKey !== normalizedProvider
+    matchingProviderOrderEntries.length > 0
       ? Object.fromEntries(
           Object.entries(cfg.auth?.order ?? {}).filter(
-            ([providerId]) => providerId !== existingProviderKey,
+            ([providerId]) => normalizeProviderIdForAuth(providerId) !== normalizedProvider,
           ),
         )
       : cfg.auth?.order;
