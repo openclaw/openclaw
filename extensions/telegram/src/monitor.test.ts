@@ -286,19 +286,12 @@ vi.mock("@grammyjs/runner", () => ({
   run: runSpy,
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
-  return {
-    ...actual,
-    computeBackoff,
-    sleepWithAbort,
-  };
-});
-
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
   return {
     ...actual,
+    computeBackoff,
+    sleepWithAbort,
     registerUnhandledRejectionHandler: registerUnhandledRejectionHandlerMock,
   };
 });
